@@ -28,9 +28,17 @@
 //! [`FleetForm::clear_invite`] are about: it comes down when it expires rather than sitting there
 //! as a code somebody keeps scanning, and it is dropped when the page is left.
 //!
+//! **Pairing also *ends* here, from the other side.** §8's handshake is symmetric — one side mints
+//! and accepts, the other spends and dials — and until [`join_panel`] this page could only ever do
+//! the first half. That made a terminal the price of being the dialling machine, which is exactly
+//! the machine whose operator is least likely to have one: a laptop handed to somebody who was
+//! sent an invite. So the paste field is the same act as `adi-mono mesh join <token>`, and it
+//! answers the way that command does — with the password the handshake minted, once, because
+//! neither machine keeps it.
+//!
 //! [`FleetForm::clear_invite`]: crate::state::FleetForm::clear_invite
 
-use adi_ui::{Row as TableRow, Table};
+use adi_ui::{Icon, IconSize, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{FleetNode, FleetState, GRANT_PLACEHOLDER, MESH_CLIENT_URL};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -71,9 +79,9 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Paired nodes"</h2>
-                <span class="adi-chip adi-mono" title="Nodes paired with this machine">
+                <span class="adi-updated" title="Nodes paired with this machine">
                     {move || fleet.get().map_or_else(|| "\u{2014}".to_string(),
-                        |f| f.nodes.len().to_string())}
+                        |f| format!("{} paired", f.nodes.len()))}
                 </span>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(fleet, state.secs_since)}</span>
@@ -81,7 +89,9 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
 
             <Table state=state.tables.fleet>{move || node_rows(state)}</Table>
 
-            <form class="adi-form" on:submit=move |ev| {
+            // The grant row: a node, a grant, one plain button. The action lives under the table
+            // it changes, and the page's main action is pairing, which is why this is not it.
+            <form class="adi-fleet-grantrow" on:submit=move |ev| {
                 ev.prevent_default();
                 let (node, grant) = (form.grant_node.get(), form.grant.get().trim().to_string());
                 if node.is_empty() || grant.is_empty() {
@@ -99,27 +109,27 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
             }>
                 {node_picker(state, form)}
                 <TextField id="fleet-grant" label="Grant" placeholder=GRANT_PLACEHOLDER
-                    wide=true mono=true field_class="adi-field--grow" value=form.grant />
-                <button class="adi-btn adi-btn--primary" type="submit"
-                    prop:disabled=move || form.busy.get()>
+                    wide=true mono=true value=form.grant />
+                <button class="adi-btn" type="submit" prop:disabled=move || form.busy.get()>
                     "Grant"
                 </button>
             </form>
             <div class="adi-hint">
                 "A paired node reaches nothing here until a grant says otherwise. "
-                <span class="adi-mono">"http:<service>"</span>" opens one service (or "
-                <span class="adi-mono">"http:*"</span>" all of them), and that is the whole of it — "
-                <span class="adi-mono">"tcp:"</span>" and "<span class="adi-mono">"ctl:"</span>
-                " still parse for old files but nothing enforces them, so neither opens anything."
+                <code>"http:<service>"</code>" opens one service (or "<code>"http:*"</code>
+                " all of them), and that is the whole of it — "<code>"tcp:"</code>" and "
+                <code>"ctl:"</code>" still parse for old files but nothing enforces them, so
+                 neither opens anything."
             </div>
         </section>
 
         {pairing_panel(state, form)}
+        {join_panel(state, form)}
     }
     .into_any()
 }
 
-/// The panel above the table: one line per node that now calls itself something else, with the
+/// The section above the table: one line per node that now calls itself something else, with the
 /// only two answers there are — adopt the declared name (the petname moves with it) or keep the
 /// local one (we acknowledge the change and stop being told). Renders nothing when nothing is
 /// pending, so the page is quiet until a node actually renames itself.
@@ -135,13 +145,13 @@ fn name_changes(state: State) -> AnyView {
     if changes.is_empty() {
         return ().into_any();
     }
+    let count = changes.len();
     let rows: Vec<AnyView> = changes.into_iter().map(|n| change_row(state, &n)).collect();
-    let count = rows.len().to_string();
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Name changes"</h2>
-                <span class="adi-chip adi-mono">{count}</span>
+                <span class="adi-updated">{format!("{count} waiting on you")}</span>
             </div>
             {rows}
             <div class="adi-hint">
@@ -154,7 +164,8 @@ fn name_changes(state: State) -> AnyView {
     .into_any()
 }
 
-/// One pending rename, said as a sentence, with its two decisions.
+/// One pending rename, said as a sentence, with its two decisions. Adopting is the change and
+/// takes the page's ink; keeping is the quiet answer.
 fn change_row(state: State, node: &FleetNode) -> AnyView {
     let declared = node.pending_nickname.clone().unwrap_or_default();
     let petname = node.petname.clone();
@@ -164,10 +175,9 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
     let (accept_name, accept_declared) = (petname.clone(), declared.clone());
     let keep_name = petname.clone();
     view! {
-        <div class="adi-form adi-form--toolbar">
+        <div class="adi-fleet-change">
             <span>
-                "The node you call "<strong class="adi-mono">{petname}</strong>
-                " now calls itself "<strong class="adi-mono">{declared}</strong>"."
+                "The node you call "<b>{petname}</b>" now calls itself "<b>{declared}</b>"."
             </span>
             <span class="adi-spacer"></span>
             <button class="adi-btn adi-btn--primary" type="button"
@@ -196,13 +206,13 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 }
 
 /// Rows for the nodes table: a placeholder while loading or when nothing is paired, else one row
-/// per node with its grants and the actions that change them.
+/// per node with its grants and the ⋯ menu that changes them.
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
     let mut nodes = match rows_or_placeholder(
         table,
         state.fleet.get().map(|v| v.nodes),
-        "No nodes paired yet — press “Show pairing QR” below.",
+        "No nodes paired yet — mint a pairing code below.",
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -236,14 +246,19 @@ fn node_rows(state: State) -> AnyView {
 /// lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
     match col {
+        // The key is the identity of record, shortened to its ends: mono, one step dimmer than
+        // the name, the whole of it in the hover.
         "Key" => view! {
-            <span class="font-mono text-meta" title=n.key.clone()>{n.key_short()}</span>
+            <span class="adi-mono adi-muted" title=n.key.clone()>{n.key_short()}</span>
         }
         .into_any(),
         "Grants" => view! { <span>{grants_cell(state, n)}</span> }.into_any(),
         "Password" => view! { <span>{password_cell(n.has_password)}</span> }.into_any(),
+        // A date is not a machine string: sans, and dimmed, since it says the same kind of thing
+        // in every row.
         "Paired" => view! {
-            <span class="font-mono text-meta" title="When this machine pinned the name to the key">
+            <span class="adi-muted adi-tabnums"
+                title="When this machine pinned the name to the key">
                 {fmt_date(n.paired_at)}
             </span>
         }
@@ -265,11 +280,9 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
                 None => view! { <span>{n.petname.clone()}</span> }.into_any(),
             };
             view! {
-                <span>
-                    <div>{name}</div>
-                    <div class="adi-muted">
-                        "calls itself "<span class="adi-mono">{n.nickname.clone()}</span>
-                    </div>
+                <span class="adi-fleet-node">
+                    <b>{name}</b>
+                    <span>{format!("calls itself {}", n.nickname)}</span>
                     {pending_marker(n)}
                 </span>
             }
@@ -279,25 +292,24 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
 }
 
 /// The row's own copy of an unacknowledged rename, so a node reads as unsettled wherever it is
-/// looked at — the panel at the top is where it gets resolved.
+/// looked at — the section at the top is where it gets resolved.
 fn pending_marker(n: &FleetNode) -> AnyView {
     let Some(declared) = n.pending_nickname.clone() else {
         return ().into_any();
     };
     view! {
-        <div>
-            <span class="adi-chip adi-mono"
-                title="This node declared a new nickname. It changes nothing until you accept it.">
-                {format!("\u{2192} {declared}?")}
-            </span>
-        </div>
+        <span class="adi-fleet-node__pending"
+            title="This node declared a new nickname. It changes nothing until you accept it.">
+            {format!("now calls itself {declared}?")}
+        </span>
     }
     .into_any()
 }
 
-/// A node's grants, one per line with a Revoke beside it, or the default-deny note when it holds
-/// none. Said in words: an empty cell would read as "no restrictions", which is the opposite of
-/// what an empty grant list means.
+/// A node's grants as pills, each with its × inside — the remove action lives in the object, so
+/// the word "Revoke" is never repeated per row (§6) — or the default-deny note when it holds none.
+/// Said in words: an empty cell would read as "no restrictions", which is the opposite of what an
+/// empty grant list means.
 fn grants_cell(state: State, n: &FleetNode) -> AnyView {
     if n.grants.is_empty() {
         return view! {
@@ -307,71 +319,62 @@ fn grants_cell(state: State, n: &FleetNode) -> AnyView {
         }
         .into_any();
     }
-    n.grants
+    let pills = n
+        .grants
         .iter()
         .map(|g| {
             let (petname, grant) = (n.petname.clone(), g.clone());
+            let label = format!("Revoke {g}");
             view! {
-                <div>
-                    <span class="adi-chip adi-mono">{g.clone()}</span>
-                    " "
-                    <button class="adi-btn adi-btn--link" type="button"
-                        title=format!("Revoke {g}")
+                <span class="adi-fleet-grant">
+                    {g.clone()}
+                    <button type="button" title=label.clone() aria-label=label
                         on:click=move |_| {
                             apply_fleet(state, None,
                                 format!("Revoked {grant} from {petname}."),
                                 fetch::fleet_revoke(petname.clone(), grant.clone()));
                         }>
-                        "Revoke"
+                        <Icon icon=Lucide::X size=IconSize::Sm/>
                     </button>
-                </div>
+                </span>
             }
-            .into_any()
         })
-        .collect::<Vec<_>>()
-        .into_any()
+        .collect::<Vec<_>>();
+    view! { <span class="adi-fleet-grants">{pills}</span> }.into_any()
 }
 
 /// Whether the node's Basic-auth credential is configured — never anything about the credential
-/// itself, which the API deliberately never sends.
+/// itself, which the API deliberately never sends. A green dot and `set`, or a dash: the absence
+/// is the thing to notice, and the hover says why.
 fn password_cell(has_password: bool) -> AnyView {
-    let (state_attr, label, title) = if has_password {
-        (
-            "online",
-            "set",
-            "Requests from this node into this machine must carry its Basic-auth password.",
-        )
-    } else {
-        (
-            "down",
-            "none",
-            "No password: the mesh grant is all that stands between this node and what it may \
-             reach here \u{2014} and a grant is machine-scoped, so it covers every process on it.",
-        )
-    };
+    if has_password {
+        return view! {
+            <span class="adi-status" data-state="online"
+                title="Requests from this node into this machine must carry its Basic-auth password.">
+                <span class="adi-status__led"></span><span>"set"</span>
+            </span>
+        }
+        .into_any();
+    }
     view! {
-        <span class="adi-status" data-state=state_attr title=title>
-            <span class="adi-status__led"></span><span>{label}</span>
+        <span class="adi-muted"
+            title="No password: the mesh grant is all that stands between this node and what it may \
+                   reach here \u{2014} and a grant is machine-scoped, so it covers every process on it.">
+            "\u{2014}"
         </span>
     }
     .into_any()
 }
 
-/// The row's trailing controls: Rename inline (the local rename of §2 rule 5), and a kebab with
-/// Unpair — plus the two answers to a declared rename, when one is outstanding, so the row can
-/// settle it without scrolling back to the panel above.
+/// The row's ⋯ menu: Rename (the local rename of §2 rule 5), the two answers to a declared rename
+/// when one is outstanding — so the row can settle it without scrolling back to the section above
+/// — and Unpair.
 fn row_action(state: State, n: &FleetNode) -> AnyView {
     let petname = n.petname.clone();
     let rename_from = petname.clone();
-    let rename = view! {
-        <button class="adi-btn adi-btn--link" type="button"
-            title="Rename it here only — the node is not involved, and its key does not change."
-            on:click=move |_| start_rename(state, &rename_from)>
-            "Rename"
-        </button>
-    };
-
-    let mut items = Vec::new();
+    let mut items = vec![menu_item(state, "Rename\u{2026}", false, move || {
+        start_rename(state, &rename_from);
+    })];
     if let Some(declared) = n.pending_nickname.clone() {
         let (adopt, keep) = (petname.clone(), petname.clone());
         let declared_label = declared.clone();
@@ -413,7 +416,7 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
         );
     }));
 
-    row_actions(state, format!("fleet:{petname}"), rename, items)
+    row_actions(state, format!("fleet:{petname}"), (), items)
 }
 
 /// Ask for the new petname and post it. A prompt rather than a form field: a rename names the row
@@ -442,10 +445,10 @@ fn node_picker(state: State, form: FleetForm) -> AnyView {
     view! {
         <div class="adi-field">
             <label class="adi-field__label" for="fleet-grant-node">"Node"</label>
-            <select class="adi-input" id="fleet-grant-node"
+            <select class="adi-input adi-input--wide" id="fleet-grant-node"
                 on:change=move |ev| form.grant_node.set(event_target_value(&ev))>
                 <option value="" selected=move || form.grant_node.get().is_empty()>
-                    "\u{2014} pick a node \u{2014}"
+                    "Pick a node"
                 </option>
                 {move || {
                     let current = form.grant_node.get();
@@ -460,65 +463,161 @@ fn node_picker(state: State, form: FleetForm) -> AnyView {
     .into_any()
 }
 
-/// How a node joins: a button that mints an invite and shows it as a QR, and under it the two
-/// commands for a machine with no camera. Always shown — with nothing paired it is the whole page,
-/// and with a fleet already running it is still how the next node arrives.
+/// How a node joins: the one card on the page (§5 — a pairing block is genuinely detachable).
+/// Its head carries the countdown and the button that mints; its body is the QR beside what to do
+/// with it, once one is minted; its foot is the two commands for a machine with no camera.
+/// Always shown — with nothing paired it is the whole page, and with a fleet already running it is
+/// still how the next node arrives.
 fn pairing_panel(state: State, form: FleetForm) -> AnyView {
     view! {
-        <section class="adi-panel">
-            <div class="adi-panel__head">
-                <h2 class="adi-panel__title">
+        <div class="adi-fleet-card">
+            <div class="adi-fleet-card__head">
+                <span>
                     {move || match state.fleet.get() {
                         Some(f) if f.nodes.is_empty() => "Pair your first node",
                         _ => "Pair another node",
                     }}
-                </h2>
-                <span class="adi-spacer"></span>
-                {move || countdown(state, form).map(|left| view! {
-                    <span class="adi-chip adi-mono"
-                        title="A pairing code is single-use and short-lived. When it runs out, mint another.">
-                        {format!("expires in {left}")}
-                    </span>
-                })}
-                <button class="adi-btn adi-btn--primary" type="button"
-                    title="Mint a single-use invite and show it as a QR code to point a phone at."
-                    prop:disabled=move || form.minting.get()
-                    on:click=move |_| mint(state, form)>
-                    {move || if form.invite.with(Option::is_some) {
-                        "New code"
-                    } else {
-                        "Show pairing QR"
-                    }}
-                </button>
-            </div>
-            <div class="adi-panel__body">
-                {move || invite_view(form)}
-                <div class="adi-field">
-                    <label class="adi-field__label">"No camera? Pair from a terminal instead"</label>
-                    <div class="adi-mono">"adi-mono mesh invite"</div>
-                    <div class="adi-field__note">
-                        "The same token this button mints, printed on this machine. Then, on the
-                         node: "<span class="adi-mono">"adi-mono mesh join <token>"</span>" — it
-                         dials out, so nothing needs to be open on it. It offers a nickname, and if
-                         that name is free here it becomes the petname; a clash is answered with a
-                         suggestion, never a refused connection."
-                    </div>
+                </span>
+                <div class="adi-fleet-card__meta">
+                    {move || countdown(state, form).map(|left| view! {
+                        <span title="A pairing code is single-use and short-lived. When it runs out, mint another.">
+                            {format!("expires in {left}")}
+                        </span>
+                    })}
+                    <button class="adi-btn" type="button"
+                        title="Mint a single-use invite and show it as a QR code to point a phone at."
+                        prop:disabled=move || form.minting.get()
+                        on:click=move |_| mint(state, form)>
+                        {move || if form.invite.with(Option::is_some) {
+                            "New code"
+                        } else {
+                            "Show pairing code"
+                        }}
+                    </button>
                 </div>
             </div>
-            <div class="adi-hint">
-                "Once paired, the node's services are yours at "
-                <span class="adi-mono">"<service>.<node>.n.adi"</span>" — its control panel at "
-                <span class="adi-mono">"app.<node>.n.adi"</span>". Grant it what it may reach here
-                 from the table above; it starts able to reach nothing."
+            {move || invite_view(form)}
+            <div class="adi-fleet-card__foot">
+                <span class="adi-field__label">"No camera? Pair from a terminal instead"</span>
+                <p>
+                    <code>"adi-mono mesh invite"</code>" prints the same token this card mints. Then,
+                     on the node: "<code>"adi-mono mesh join <token>"</code>" — it dials out, so
+                     nothing needs to be open on it. It offers a nickname, and if that name is free
+                     here it becomes the petname; a clash is answered with a suggestion, never a
+                     refused connection."
+                </p>
+                <p>
+                    "Once paired, the node's services are yours at "
+                    <code>"<service>.<node>.n.adi"</code>" — its control panel at "
+                    <code>"app.<node>.n.adi"</code>". Grant it what it may reach here from the
+                     table above; it starts able to reach nothing."
+                </p>
             </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// The other direction: an invite minted somewhere else, pasted here and spent.
+///
+/// A section of its own rather than a second button in [`pairing_panel`], because it is the
+/// opposite act on the opposite machine — this one is not enrolling a node, it is *being*
+/// enrolled — and the two are one mistaken click apart. The distinction the operator has to hold
+/// is which machine can be dialled: whoever can be, mints (§8).
+fn join_panel(state: State, form: FleetForm) -> AnyView {
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Join a fleet"</h2>
+                <span class="adi-spacer"></span>
+                {move || form.joining.get().then(|| view! {
+                    <span class="adi-updated"
+                        title="Dialling the machine that minted this invite, over the mesh.">
+                        "dialling\u{2026}"
+                    </span>
+                })}
+            </div>
+            <form class="adi-fleet-joinrow" on:submit=move |ev| {
+                ev.prevent_default();
+                join(state, form);
+            }>
+                <TextField id="fleet-join" label="Invite token"
+                    placeholder="adi-invite:\u{2026}" wide=true mono=true value=form.join_token />
+                <button class="adi-btn adi-btn--primary" type="submit"
+                    prop:disabled=move || form.joining.get()
+                        || form.join_token.with(|t| t.trim().is_empty())>
+                    "Join"
+                </button>
+            </form>
+            <div class="adi-hint">
+                "Minted on the machine you want to pair with \u{2014} its own Fleet page, or "
+                <code>"adi-mono mesh invite"</code>" there. This machine dials out, so nothing has
+                 to be open here. Same token either way: this field is "
+                <code>"adi-mono mesh join"</code>" without the terminal. Pairing is mutual: the far
+                 side files this machine with "<code>"http:app"</code>" \u{2014} its panel, and
+                 nothing else here \u{2014} and this machine files it the same way, under the name
+                 it appears by in the table above. Both directions are gated by the one password
+                 below."
+            </div>
+            {move || joined_view(form)}
         </section>
+    }
+    .into_any()
+}
+
+/// What the last spent invite bought: the two names, the credential, and the link it opens.
+///
+/// Rendered only after a join, and never re-fetched — there is nothing to re-fetch. The password
+/// exists in plaintext exactly once, in this response, on this screen; both machines keep only a
+/// salted verifier. So this says so in as many words rather than leaving an operator to discover
+/// it by navigating away.
+fn joined_view(form: FleetForm) -> AnyView {
+    let Some(joined) = form.joined.get() else {
+        return ().into_any();
+    };
+    // A ref per render, as in `invite_view`: it reaches only the field drawn beside it, which is
+    // the one holding the credential now on screen.
+    let field = NodeRef::new();
+    let password = joined.password.clone();
+    let host = joined.app_host();
+    let url = format!("http://{host}/");
+    let shown = url.clone();
+    view! {
+        <div class="adi-fleet-joined">
+            <p>
+                "Paired with "<b>{joined.viewer.clone()}</b>", which files this machine as "
+                <code>{joined.petname.clone()}</code>"."
+            </p>
+            <div class="adi-field">
+                <span class="adi-field__label">
+                    {format!("Password for {} at {host}", joined.username)}
+                </span>
+                {copy_row(field, move || password.clone())}
+                <div class="adi-field__note">
+                    "Copy it now: it is stored nowhere, on either machine \u{2014} only a salted
+                     verifier is. Lose it and you re-pair, which mints a new one."
+                </div>
+            </div>
+            <div class="adi-field">
+                <span class="adi-field__label">"Its control panel"</span>
+                <div>
+                    <a href=url target="_blank" rel="noreferrer" class="adi-mono">{shown}</a>
+                </div>
+                <div class="adi-field__note">
+                    "Give it about five seconds \u{2014} the far side's gateway serves from a
+                     snapshot of its registry and re-reads it on an interval, so the first request
+                     can arrive before the pairing does. "<code>"https://"</code>" warns until this
+                     machine's front door is next started; "<code>"http://"</code>" works now."
+                </div>
+            </div>
+        </div>
     }
     .into_any()
 }
 
 /// The minted invite: the code to point a phone at, what to point at it, and the token itself.
 ///
-/// Renders nothing until something is minted — the panel is an instruction either way, and a QR
+/// Renders nothing until something is minted — the card is an instruction either way, and a QR
 /// drawn before it is asked for would be a live credential on screen for anyone who walked past.
 fn invite_view(form: FleetForm) -> AnyView {
     let Some(invite) = form.invite.get() else {
@@ -529,33 +628,31 @@ fn invite_view(form: FleetForm) -> AnyView {
     let field = NodeRef::new();
     let token = invite.token.clone();
     view! {
-        <div class="adi-pair">
+        <div class="adi-fleet-card__body">
             // The server drew this, from the token, as a self-contained <svg> with no script and
             // no external reference — see `adi-webapp-api`'s `handlers::qr`. Inlined rather than
             // dropped in an <img src="data:…">, so it scales with the page and costs no request.
-            <div class="adi-qr" inner_html=invite.svg></div>
-            <div class="adi-pair__say">
-                <p class="adi-pair__lede">
+            <div class="adi-fleet-qr" inner_html=invite.svg></div>
+            <div class="adi-fleet-say">
+                <p>
                     "On the phone, open "
                     <a href=MESH_CLIENT_URL target="_blank" rel="noreferrer">
                         "mono-mesh-client.withadi.dev"</a>
-                    ", press "<strong>"Scan"</strong>", and point it at this code."
+                    ", press "<b>"Scan"</b>", and point it at this code."
                 </p>
-                <div class="adi-field__note">
-                    // Said out loud because the failure is silent and looks like a broken QR: the
-                    // code carries the token and not a URL, on purpose — a URL would put a live
-                    // credential in an address bar and a history entry.
+                // Said out loud because the failure is silent and looks like a broken QR: the
+                // code carries the token and not a URL, on purpose — a URL would put a live
+                // credential in an address bar and a history entry.
+                <p class="adi-fleet-say__sm">
                     "A phone's own camera app will only offer to copy this — it has to be the
                      client's own Scan button."
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label">"Or hand over the token"</label>
-                    {copy_row(field, move || token.clone())}
-                    <div class="adi-field__note">
-                        "Single-use, and good for one machine only \u{2014} hand it over the way you
-                         would a password."
-                    </div>
-                </div>
+                </p>
+                <span class="adi-field__label adi-fleet-say__label">"Or hand over the token"</span>
+                {copy_row(field, move || token.clone())}
+                <p class="adi-fleet-say__sm">
+                    "Single-use, and good for one machine only \u{2014} hand it over the way you
+                     would a password."
+                </p>
             </div>
         </div>
     }
@@ -610,6 +707,39 @@ pub(crate) fn mint(state: State, form: FleetForm) {
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
         form.minting.set(false);
+    });
+}
+
+/// Spend the pasted invite.
+///
+/// Written out rather than run through [`apply_mutation`] for the same shape of reason as [`mint`],
+/// with one addition: the answer carries *two* things — the fresh registry, which belongs in
+/// `state.fleet` like any other mutation's, and a credential, which belongs on screen and nowhere
+/// else. The token field is cleared on success and only on success: a spent invite cannot be spent
+/// again, while a refused one is usually worth a second press (the mesh was still starting, the
+/// far side was not up yet), and clearing it would make the operator go and ask for the token
+/// again.
+fn join(state: State, form: FleetForm) {
+    let token = form.join_token.get_untracked().trim().to_string();
+    if token.is_empty() || form.joining.get_untracked() {
+        return;
+    }
+    form.joining.set(true);
+    // A previous credential belongs to a previous pairing: leaving it under a form that is now
+    // dialling somewhere else would attach it to the wrong machine.
+    form.joined.set(None);
+    spawn_local(async move {
+        match fetch::fleet_join(token).await {
+            Ok(joined) => {
+                let msg = format!("Joined {}'s fleet as {}.", joined.viewer, joined.petname);
+                state.fleet.set(Some(joined.fleet.clone()));
+                form.join_token.set(String::new());
+                form.joined.set(Some(joined));
+                state.flash.set(Some(Flash::ok(msg)));
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        form.joining.set(false);
     });
 }
 

@@ -16,7 +16,8 @@
 
 use leptos::prelude::*;
 
-use crate::{Badge, BadgeTone, Empty, chat::Invoke, merge};
+use crate::icon::{Icon, IconSize, Lucide};
+use crate::{Empty, chat::Invoke, merge};
 
 /// One thing emitted into the open turn.
 ///
@@ -98,15 +99,15 @@ pub fn TurnBlocks(
             .into_any()
     };
 
-    view! { <div class=merge("flex flex-col gap-2", class)>{rows}</div> }
+    view! { <div class=merge("flex flex-col", class)>{rows}</div> }
 }
 
-/// One staged block: what it is, and a way to take it back.
+/// One staged block: a row under a hairline — what it is, and a way to take it back.
 #[component]
 fn Staged(i: usize, block: Block, on_drop: Option<Callback<usize>>) -> impl IntoView {
-    let (kind, tone) = match &block {
-        Block::Text(_) => ("text", BadgeTone::Neutral),
-        Block::Call { .. } => ("call", BadgeTone::Accent),
+    let kind = match &block {
+        Block::Text(_) => "text",
+        Block::Call { .. } => "call",
     };
     let name = match &block {
         Block::Text(_) => String::new(),
@@ -114,46 +115,42 @@ fn Staged(i: usize, block: Block, on_drop: Option<Callback<usize>>) -> impl Into
     };
 
     view! {
-        <div class="island bg-card">
-            <div class="flex items-center gap-2 border-b border-divider px-2.5 py-1.5">
-                <span class="caps w-4 shrink-0 text-right tabular-nums text-fainter">
+        <div class="border-t border-line py-3 first:border-t-0 first:pt-0">
+            <div class="mb-2 flex items-center gap-2">
+                <span class="w-4 shrink-0 text-right text-label text-ink-3 tabular-nums">
                     {i + 1}
                 </span>
-                <Badge tone=tone mono=true>{kind}</Badge>
+                <span class="rounded-full bg-chip px-2 py-0.5 text-label text-ink-2">{kind}</span>
                 {(!name.is_empty()).then(|| view! {
-                    <span class="truncate font-mono text-mini text-syn-func">{name}</span>
+                    <span class="truncate font-mono text-mono text-code">{name}</span>
                 })}
                 {on_drop.map(|cb| view! {
                     <button
-                        class="ml-auto shrink-0 cursor-pointer rounded-sm px-1 py-0.5 \
-                               leading-none text-faint hover:text-err focus-visible:outline-2 \
-                               focus-visible:outline-offset-1 focus-visible:outline-accent"
+                        class="ml-auto grid size-6 shrink-0 cursor-pointer place-items-center \
+                               rounded-md text-ink-3 hover:bg-hover hover:text-ink"
                         type="button"
                         title="drop this block"
-                        aria-label="Drop this block"
                         on:click=move |_| cb.run(i)
                     >
-                        "\u{2715}"
+                        <Icon icon=Lucide::X size=IconSize::Sm label="Drop this block"/>
                     </button>
                 })}
             </div>
-            <div class="p-2.5">
-                {match block {
-                    Block::Text(body) => view! {
-                        <div class="font-mono text-mini leading-[1.55] whitespace-pre-wrap \
-                                    [word-break:break-word] text-body">
-                            {body}
-                        </div>
-                    }
-                    .into_any(),
-                    // The same block a real call is drawn as, from the same component — see
-                    // [`Invoke`](crate::chat::Invoke).
-                    Block::Call { name, params } => view! {
-                        <Invoke name=name params=params/>
-                    }
-                    .into_any(),
-                }}
-            </div>
+            {match block {
+                Block::Text(body) => view! {
+                    <div class="font-mono text-mono leading-[1.6] whitespace-pre-wrap \
+                                [word-break:break-word] text-code">
+                        {body}
+                    </div>
+                }
+                .into_any(),
+                // The same block a real call is drawn as, from the same component — see
+                // [`Invoke`](crate::chat::Invoke).
+                Block::Call { name, params } => view! {
+                    <Invoke name=name params=params/>
+                }
+                .into_any(),
+            }}
         </div>
     }
 }
@@ -211,21 +208,14 @@ impl Stop {
             Self::EndTurn
         }
     }
-
-    fn tone(self) -> BadgeTone {
-        match self {
-            Self::ToolUse => BadgeTone::Accent,
-            Self::EndTurn => BadgeTone::Warn,
-        }
-    }
 }
 
 /// How the last turn ended, drawn as a rule across the conversation.
 ///
-/// **Deliberately not mono, and deliberately not in a box.** A stop reason is response
+/// **Deliberately not mono prose, and deliberately not in a box.** A stop reason is response
 /// metadata — the model never sees it, it is never in anybody's prompt, and no token was spent
-/// on it. Everything in this screen that is set in mono on a panel is text the model was
-/// actually handed, and the moment this joined that set a reader would start believing the
+/// on it. Everything in this screen that is set in mono on a raised surface is text the model
+/// was actually handed, and the moment this joined that set a reader would start believing the
 /// model was told how its own turn ended. So it is a hairline and a chip in the margin between
 /// documents, which is what it is.
 ///
@@ -240,18 +230,20 @@ pub fn StopLine(
 ) -> impl IntoView {
     view! {
         <div
-            class=merge("flex items-center gap-2 py-1", class)
+            class=merge("flex items-center gap-2 py-1 text-label text-ink-3", class)
             role="separator"
             aria-label=format!("stop reason {}", stop.wire())
         >
-            <span class="h-px w-4 shrink-0 bg-divider" aria-hidden="true"></span>
-            <span class="caps shrink-0 text-fainter">"stop_reason"</span>
-            <Badge tone=stop.tone() mono=true>{stop.wire()}</Badge>
-            <span class="hidden shrink-0 font-mono text-caps text-fainter sm:inline">
+            <span class="h-px w-4 shrink-0 bg-line" aria-hidden="true"></span>
+            <span class="shrink-0">"stop reason"</span>
+            <span class="shrink-0 rounded-full bg-chip px-2 py-0.5 font-mono text-code">
+                {stop.wire()}
+            </span>
+            <span class="hidden shrink-0 font-mono sm:inline">
                 {format!("openai: {}", stop.openai())}
             </span>
-            <span class="truncate text-mini text-meta">{stop.says()}</span>
-            <span class="h-px flex-1 bg-divider" aria-hidden="true"></span>
+            <span class="truncate">{stop.says()}</span>
+            <span class="h-px flex-1 bg-line" aria-hidden="true"></span>
         </div>
     }
 }

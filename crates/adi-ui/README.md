@@ -1,59 +1,53 @@
 # adi-ui
 
 The **adi component library** — [Leptos](https://leptos.dev) components styled with
-[Tailwind](https://tailwindcss.com) utilities over its own design tokens.
+[Tailwind](https://tailwindcss.com) utilities that resolve to the product's design tokens.
 
-It is self-contained: tokens, reset, type scale and utilities all come from
-[`styles/ui.css`](./styles/ui.css), and nothing here depends on
-[`adi-css`](../adi-css). That crate still owns the `adi-*` BEM layer every existing screen
-is written against and is untouched by anything in here.
+The rules are [`design/DESIGN.md`](../../design/DESIGN.md); the values are
+[`design/tokens.css`](../../design/tokens.css). This crate holds neither: it names the tokens
+for Tailwind ([`styles/ui.css`](./styles/ui.css)), draws the components against them, and
+ships the two things a stylesheet cannot — the fonts and the icons. Read `DESIGN.md` before
+touching a component; the checklist in its §7 is what "done" means here.
 
-**The two do share a page**, and `adi-webapp` is where: its title bars are built from this
-crate while everything under them is still `adi-*`. That works because of load order and
-one property of the reset — see
-[`adi-webapp/styles/tailwind.css`](../adi-webapp/styles/tailwind.css). In short: this
-stylesheet is linked *first*, so where the two name the same token (`--ink`, `--accent`,
-`--on-accent`, `--shadow`) adi-css wins and nothing that already exists changes colour;
-everything only this crate names (`--card`, `--bar`, `--edge`, …) comes from here. The
-reset lives in `@layer base` and adi-css is unlayered, so adi-css outranks it wherever they
-overlap. Migrate a screen by rewriting it, not by hoping the palettes meet in the middle.
+It shares a page with [`adi-css`](../adi-css), the `adi-*` BEM layer the control panel's
+workbench is written against. Both resolve to the same token file, so the two never disagree
+on a colour; where they overlap, the one linked second (adi-css) wins on the reset, and
+nothing else is shared.
 
 ## What's in it
 
 | Component | Notes |
 | --- | --- |
-| `Button` | 5 variants × 2 sizes; `submit`, `disabled`, and an `icon` drawn in `currentColor` at the size the button picks. Handlers attach as `on:click`, not a prop |
-| `Badge` | 5 status tones, `mono` for ids/ports/counts |
-| `Panel` | titled surface with optional header `actions`; `flush` for a child that owns its edges |
-| `Form` / `Hint` | the strip that closes a panel; `toolbar` for bare controls. Stacks below 620px |
-| `Field` | label + a `?` that explains the control without costing the row any height |
-| `Input` / `Textarea` / `Select` | one shared frame; optional two-way binding to an `RwSignal<String>` |
-| `Flash` / `Empty` | inline or card feedback in 3 kinds; the quiet line an empty list shows |
-| `TopBar` | the window's lid: the wordmark (a link home when given one), a middle slot for where you are, actions right. Wall to wall and `sticky` — the one component that is not an island |
-| `Modal` | a dialog over a scrim, with three ways out: the close button, the scrim, `Escape` |
-| `Faq` / `Qna` | questions folded up under themselves, on native `<details>`. Answers are Markdown |
-| `Crumbs` / `Crumb` | the path to what is open, for the bar's middle slot. The last segment is never a link |
-| `PathPicker` / `DirEntry` / `PathRoot` | a directory, typed **or** browsed to — one value, so pasting a path lands you in it and clicking a folder grows the text. Filters as you type, completes on `Tab`, walks on `↓↑`. Lists nothing itself: it names the one directory it wants read, the caller reads it |
-| `Tree` / `TreeNode` / `TreeState` | an IDE tree from one flat, depth-annotated list: indent rails, a turning chevron, selection, keyboard activation. Knows nothing about files |
-| `CodeEditor` | a painted `<pre>` under a transparent `<textarea>` — the browser keeps the caret, undo, IME and paste. `Lang::from_path` picks the scanner: Rust, TOML, JSON, YAML, TS, shell, SQL, Markdown |
-| `CodeFrame` | the card a file is read in: the name on the left, `actions` on the right, whatever is showing the file underneath. Not part of `CodeEditor`, so a preview wears the same chrome |
-| `Markdown` | the rendered half of a `.md` — and of anything an agent says. Renders through views, never `inner_html`, and allow-lists link schemes |
-| `Rail` / `RailGroup` / `RailCard` | the column down either side of a chat: a title, an optional filter box that sticks while the title scrolls away, labelled bands, and the card every row is. Knows nothing about what a row holds |
-| `SessionItem` / `SessionState` | a conversation, as a row in the left rail: done, waiting, error, working |
-| `Kbd` | a shortcut, as a key cap. A hint on a row that already does the thing, so it is drawn quiet. Renders the text it is given and translates nothing — the platform's spelling is the call site's business |
-| `AppItem` / `AppState` / `RowMenu` | a **living app**, as a row in the right rail: its favicon leads, the band is its project, the name under its title is the fleet node it runs on. Live, offline, view-only — and the state says its own words, so no row can put an age there |
-| `TokenStream` / `PromptText` / `Token` | one prompt, two readings: every split shown as its own chip, or the string as a person reads it with only the template's control tokens marked. A newline is drawn `⏎` **and** still taken. Tokenizes nothing — the ranks stay server-side and the caller is handed the split, the way `PathPicker` is handed a listing |
-| `ToolForm` / `Param` / `ParamKind` | a tool's parameters as a form, built from the tool's own declaration, so a parameter added to the tool cannot go quietly missing. Wide controls take their own row. Builds no JSON: the values are signals the caller owns, because a call's wire shape belongs to whoever is about to send it |
-| `TurnBlocks` / `Block` | what has been emitted into the **open turn** — prose and calls, in the order written, each droppable. A staging area, not a transcript: nothing in it has happened. Calls are drawn by the same component the transcript draws real ones with |
-| `StopLine` / `Stop` | how the last turn ended: `tool_use` (results append, the loop runs again) or `end_turn` (the run yields), with the OpenAI spelling beside it. A hairline rather than a card, because a stop reason is response metadata and no model was ever handed one |
-| `FlagMark` / `FlagList` / `Flag` | select a passage and mark what is wrong with it. The offer follows the selection; the quote is a **copy**, not an offset, so a flag survives the document being edited under it |
-| `Simulator` / `ToolDecl` | the screen where a person takes the model's seat: what the model sees on the left, what it does on the right. Purely presentational — every value is a signal in, every action a callback out, so the prompt, the tools and the execution all stay the runner's |
-| `PairCard` / `Pair` / `PairSide` / `Relation` / `Verdict` / `Ruling` | two facts the base found near each other, and the four ways to rule on them. Equal weight, equal size, side by side, because deciding between them means reading both; `merge` opens a box, `supersede` makes you point at the sentence that wins, and `c` `m` `s` `d` rule it while it has focus. The strength is a small plain number and never a bar — above 0.80 this base holds more contradictions than duplicates, so a meter would claim a calibration the cosine does not have. The classifier's reason sits under the facts, labelled as its opinion: below the top of the queue it routinely explains a pair it was not given |
-| `PairQueue` / `Truncated` | the triage inbox — filter by kind, or lead with conflicts, because rank is similarity and not importance. **Resolves nothing in bulk, deliberately:** the highest-ranked pair in the measured base was a carve-out an "accept all" would have deleted. Says what it did *not* examine — a silent cap reads as "nothing else to see", which is the one lie this interface must never tell |
-| `TxPanel` | the open transaction: what is staged, what is still open, and the commit that is off until nothing is. Knows nothing about pairs — the pending list is its `children` — and it says why the commit is off rather than only going grey |
-| `Fact` / `FactRow` / `FactCard` / `NodeKind` | one sentence, with **both** its names on it: whose meaning it is, and whose hand wrote the record. Never shows one of the two, and never shows the id without the version beside it, because a reference is only checkable against both |
-| `StaleList` / `Stale` / `Moved` | what an edit left out of date — as **was/now**, not as a list of ids: which fact moved says nothing about whether the text built on it needs rewriting, and the two sentences say it in one read. Computes no staleness itself; that is one join and an integer comparison, server-side |
-| `FactHistory` / `Change` | v1 created, v2 superseded and by whom, was/now for each step — and the sentence a reader has to be *told*, because nothing on screen shows it: the id still resolves, and no longer means what it did |
+| `Icon` / `IconSize` / `Lucide` | One Lucide glyph, drawn the one way §9 allows: stroke 1.5, sizes 14/16/20/24, `currentColor`. `Lucide` is generated from `icons/*.svg` — an icon not in the set is a compile error, never a blank |
+| `Mark` / `MarkVariant` | The three hexagons (§10). Monochrome by default; `accent` is the coloured build, for the app icon and the landing only. No gloss, no gradient, no motion |
+| `Button` | `Default` (translucent), `Primary` (**the** orange — one per screen), `Strong` (ink fill, the main action when orange is spent), `Ghost` (quiet), `Danger` (red text), `Link`; two sizes; an optional `Lucide` icon |
+| `Badge` / `BadgeTone` | A pill on a 12% tint — `set`, `idle`, `blocked`. Never a filled block, never orange |
+| `Dot` / `DotTone` | The 6px dot before a word: `Ok`, `Live` (orange — the one live state), `Warn`, `Err`, `Idle` |
+| `Panel` | A section, not a card: a 16px/600 title line, a hairline, the content. Flush |
+| `Form` / `Hint` | The strip of controls under a section — a hairline above, fields aligned on their inputs; stacks below 620px. `toolbar` for bare controls |
+| `Field` | Label above in 13px `ink-2`, an optional `?` whose text opens on hover or focus |
+| `Input` / `Textarea` / `Select` | The raised frame with a strong hairline. **Sans by default**; `mono=true` when the value is a machine value. `Select` draws its own Lucide chevron |
+| `Flash` / `Empty` | One line of 13px text — `Ok` in `ok`, `Err` in `err`, `Info` in `ink-2`; and the quiet line an empty list shows |
+| `TopBar` / `Crumbs` / `Crumb` | 48px on `bg-side` with a hairline under it. The monochrome mark at 18px, `adi` in 15px/600 sans, the path in 13px sans (a location is not a machine string) |
+| `Modal` | A card over a scrim; three ways out. No blur, no shadow, no fade |
+| `Faq` / `Qna` | Questions folded under themselves, on native `<details>` |
+| `PathPicker` / `DirEntry` / `PathRoot` | A directory, typed or browsed to. Names in mono, the sheet raised, the confirm `Strong` |
+| `Tree` / `TreeNode` / `TreeState` | The explorer: rows in `ink-2`, the open row `bg-active` with a 3px `accent` marker, glyphs at 14 in `ink-3`, a Lucide chevron for the twisty. Knows nothing about files |
+| `CodeEditor` / `CodeFrame` / `CodeLog` | A code block you can type in: `bg-raise`, hairline, radius 10, mono 12.5/1.6 |
+| `Markdown` | The rendered half of a `.md` and of anything an agent says; transcript type, 80ch |
+| `Rail` / `RailGroup` / `RailCard` | The column down either side of a chat. **Flush**: it draws no edge and no radius — the pane it sits in owns the surface and the hairline. 15px title, 12px sentence-case bands, `7px 8px` rows on `bg-hover`/`bg-active` |
+| `SessionItem` / `SessionState` | A conversation as a row: title in `ink`, meta in `ink-3` with the agent in `ink-2`, a 6px dot for the states that have one, the keyboard `shortcut` shown on hover and on the open row |
+| `Kbd` | A shortcut, as quiet 12px `ink-3` text |
+| `AppItem` / `AppState` / `RowMenu` | A living app as a row in the right rail; its state is a dot and its own words |
+| `Chat` / `Composer` / `Ask` / `Attached` / `MicButton` / `TurnBlocks` / `StopLine` | The transcript and the box you type in: `bg` under the words, 15.5px/1.6 at 80ch, tool calls collapsed to a receipt, the send button the screen's one orange |
+| `TokenStream` / `PromptText` / `Token` | One prompt, two readings; template seams marked by weight, not colour |
+| `ToolForm` / `Param` / `ParamKind` | A tool's parameters as a form, from its own declaration |
+| `Simulator` / `ToolDecl` | The screen where a person takes the model's seat |
+| `PairCard` / `PairQueue` / `Pair` / `Verdict` / `Ruling` | Two facts side by side and the four ways to rule on them; `Verdict::title()` for a button, `label()` for a pill |
+| `Fact` / `FactRow` / `FactCard` / `StaleList` / `FactHistory` | One sentence with both its names on it, and what an edit left out of date, as was/now |
+| `FlagMark` / `FlagList` / `Flag` | Select a passage and mark what is wrong with it |
+| `TxPanel` | The open transaction and the commit that is off until nothing is |
+| `Table` / `Column` / `Row` / `EmptyRow` / `TableState` | No card. 12px `ink-3` headers over a strong hairline, the sorted column in `ink-2` with its arrow, hairlines between rows, `bg-hover`, the first cell flush left, the column picker behind a `Settings2` gear |
 
 ## Develop here
 
@@ -62,54 +56,38 @@ cd crates/adi-ui && trunk serve --open      # http://127.0.0.1:9081
 ```
 
 That is the **playground** ([`playground/main.rs`](./playground/main.rs)): every component,
-every variant, one page, hot-reloaded. It runs standalone — no API, no `adi-app`, nothing
-to start first — and it is deliberately not port `9080`, so it can run beside
-`scripts/dev.sh`'s webapp server.
+every variant, one page, hot-reloaded. It runs standalone — no API, no `adi-app` — and is
+deliberately not port `9080`, so it can run beside `scripts/dev.sh`'s webapp server.
 
-Its first two panels are the design system itself — the type scale and the whole palette,
-rendered from the live tokens. A wrong value in `tokens.css` shows up there rather than
-three components deep.
-
-The header toggle switches OS / light / dark. Check a component in all three before calling
-it done.
+Its first panels are the design system itself — the type scale, the surface ladder, the
+inks, the accent and the semantic colours, rendered from the live tokens, then the whole icon
+set. A wrong value in `design/tokens.css` shows up there rather than three components deep.
 
 **When you add a component, add a row to the playground showing every arm of every enum it
 takes.** A variant nothing renders is a variant nobody notices is broken.
 
-## The style: islands
+## The style: surfaces, not boxes
 
-**A screen is a few distinct objects floating on the canvas, not one edge-to-edge plane cut
-into regions by hairlines.** The rail is an island, the panel is an island, the editor is an
-island; between them is canvas, and the gap is what says they are separate things. Nothing
-here is full-bleed and nothing is divided by a bare border down the middle of the window.
+**Grouping is done with background tone and hairlines, never with cards** (§2.5). A sidebar
+is `bg-side`; the page and the transcript are `bg`; an input or a code block is `bg-raise`; a
+hovered row is `bg-hover`, the open one `bg-active`. Panels are flush to the edges — no
+radius, no border, a 1px `border-line` where two meet. Nothing casts a shadow, and nothing
+blurs.
 
-The shape is a utility, so it is written once:
+A **card** (`island`: a `border-line` hairline and `rounded-lg`) is for a genuinely
+detachable thing — a pairing block with a QR, a dialog, a code block. Never around a table,
+never inside another card, never for a stat.
 
-```css
-@utility island {
-  border-radius: var(--radius-md);   /* 8px */
-  border: 1px solid var(--edge);
-  box-shadow: var(--shadow);         /* a hairline — depth is a line, not a lift */
-}
-```
+**One orange per screen** (§2.4). `text-accent` / `bg-accent` fill exactly one element: the
+most important action or live state. `ButtonVariant::Primary` is that element; every other
+main action is `Strong`. Orange is never a selected state, an outline, a link, or a heading.
 
-Two things it deliberately leaves alone:
+**Mono means machine** (§2.3). `font-mono` — or the `mono` utility, or a component's `mono`
+prop — is for paths, hashes, commands, ids, config values, model ids. Names, counts, dates,
+labels and tool names are sans.
 
-- **No fill.** The surface is still yours: `island bg-panel` for a rail, `island bg-card`
-  for a panel. That is what lets a rail sit a shade behind the panel next to it.
-- **No `overflow`.** A [`Field`](./src/field.rs)'s hint bubble has to be able to leave the
-  panel it is anchored in. An island whose children must be clipped to its corners — a
-  header strip's fill, a scrolling body — adds `overflow-hidden` itself, as
-  [`CodeFrame`](./src/code.rs) and [`Rail`](./src/rail.rs) do.
-
-**The one exception is [`TopBar`](./src/topbar.rs).** It goes wall to wall on `bg-bar` with a
-hairline under it, because it is the screen's own edge rather than an object on the screen —
-an edge that floats reads as a card stuck to the ceiling. Everything below it is islands.
-
-**A component that is a thing draws its own island.** `Rail` does not wait for a
-caller to put a border around it; a rail is an object on the screen, not a region of one, and
-the wrapper that used to draw it was the same four utilities at every call site. A component
-that is *part* of a thing — a row, a group, a form strip — draws nothing.
+**Sentence case, always** (§2.6). A label is 12px `ink-3` sentence case; the `label` utility
+says so. There is no uppercase utility any more, on purpose.
 
 ## The one rule
 
@@ -120,101 +98,98 @@ utility. It never runs the code, so it cannot see a name that only exists at run
 
 ```rust
 // found — the literal is right there
-Self::Primary => "bg-accent-fill text-on-accent hover:opacity-90",
+Self::Primary => "bg-accent text-on-accent hover:bg-accent-hover",
 
 // NOT found — no `.bg-accent` is ever generated, and the element renders unstyled
 let class = format!("bg-{}", tone.name());
 ```
 
 Write the complete list per branch, as [`ButtonVariant::classes`](./src/button.rs) does.
-This is the single most common way to get a component that looks right in one place and
-unstyled in another.
 
 ## Tokens
 
-[`styles/tokens.css`](./styles/tokens.css) is the palette. Every token is a single
-`light-dark()` declaration rather than the usual four blocks (OS light, OS dark, and an
-explicit override each way): `color-scheme` picks the half, so the theme toggle only flips
-that one property and a token cannot drift between copies it does not have.
+[`styles/tokens.css`](./styles/tokens.css) holds nothing of its own: it imports
+`design/tokens.css` and the self-hosted faces, and sets the app to dark. **The app is dark**
+(§3); light mode is for the landing and docs, which opt in with `.light` themselves. There is
+no theme toggle and there are no `dark:` variants — a token is already the app's value.
 
-> **There are no `dark:` variants in this crate, and there should never be one.**
-> `bg-card` compiles to `background-color: var(--card)`, and that token is already both
-> themes.
-
-**The dark half is the specified palette; the light half is derived from it** — same
-green-tinted neutrals and mint accent, darkened where a value has to carry text on white.
-Correct any of them in `tokens.css` and every component follows.
+[`styles/ui.css`](./styles/ui.css) maps the tokens onto Tailwind's theme and wipes everything
+else — Tailwind's palette, its type scale, its radii, its shadows — so the design system
+cannot be worked around by accident.
 
 ### Colour
 
 | Group | Utilities |
 | --- | --- |
-| surfaces | `canvas` `stage` `panel` `panel-alt` `bar` `card` `bubble` `selected` |
-| lines | `divider` `frame` `edge` `edge-2` `dim` |
-| text | `ink` `body` `secondary` `meta` `placeholder` `faint` `fainter` |
-| accent | `accent` `accent-fill` `on-accent` `accent-soft` `accent-soft-edge` `tip` `tip-edge` |
-| states | `err` `err-btn` `err-bg` `err-bg-2` `err-edge` `err-edge-2` `queue` `queue-ink` `queue-bg` `queue-edge` `attention` |
-| syntax | `syn-plain` `syn-comment` `syn-str` `syn-num` `syn-key` `syn-kw` `syn-func` `syn-punct` |
+| surfaces | `bg` `side` `hover` `raise` `active` |
+| lines | `line` `line-strong` |
+| ink | `ink` `ink-2` `ink-3` `code` |
+| accent | `accent` `accent-hover` `on-accent` |
+| semantic | `ok` `warn` `err` and their 12% tints `ok-soft` `warn-soft` `err-soft` |
+| fills | `chip` `chip-hover` (tags, pills) · `btn` `btn-hover` (the default button) · `scrim` |
+| syntax | `syn-plain` `syn-comment` `syn-str` `syn-num` `syn-key` `syn-kw` `syn-func` `syn-punct` — the code view's own palette, the one place a hue steps outside the greys |
 
-The `syn-*` family is the code view's own palette, and the only place a hue steps outside
-the green-tinted system: five colours have to stay apart at a glance inside a file. It is
-what [`Tok::classes`](./src/highlight.rs) returns, so correcting one value in `tokens.css`
-recolours every editor.
-
-Each works everywhere Tailwind takes a colour — `bg-card`, `text-meta`, `border-edge`,
-`bg-accent/12`. Tailwind's own 22-family palette is removed, so these are the only colours
-reachable.
+Each works everywhere Tailwind takes a colour: `bg-side`, `text-ink-3`, `border-line`,
+`bg-ink/10`.
 
 ### Type
 
-Named by role, not by size — there is no `text-lg` to reach for when what you meant was a
-metric.
+Named by role, not by size — there is no `text-lg` to reach for.
 
 | Utility | Size | For |
 | --- | --- | --- |
-| `text-caps` | 10.5px | small caps labels |
-| `text-mini` | 12px | meta and secondary |
-| `text-row` | 13.5px | list rows and buttons |
-| `text-msg` | 14.5px | chat body |
-| `text-sub` | 17px | an answer's subheading |
-| `text-title` | 20px | screen titles |
-| `text-metric` | 23px | metric numbers |
+| `text-label` | 12px | field labels, table headers, section dividers — `ink-3`, sentence case |
+| `text-mini` | 12px | meta lines, timestamps, second lines |
+| `text-mono` | 12.5px | paths, hashes, commands, ids |
+| `text-small` | 13px | help text, notices — `ink-2` |
+| `text-row` | 13.5px | list items, buttons (500) |
+| `text-ui` | 14px | inputs, table cells |
+| `text-body` | 15.5px / 1.6 | the transcript, at most 80ch |
+| `text-section` | 16px | panel headers, form sections, card titles (600) |
+| `text-title` | 22px | one per page (600) |
+| `text-metric` | 20px | the number in a stats row (500) |
 
-Three composite utilities bundle what a role always wants together:
+Four composite utilities: **`label`** (12px sentence case, sets no colour), **`mono`** (the
+machine face at 12.5px in `code`), **`metric`** (sans 20px/500, tabular figures, so a counter
+ticking upward never shifts the layout), and **`island`** (a card — see above).
 
-- **`caps`** — mono, 10.5px, `0.12em` tracking, uppercase. Sets no colour, so it composes
-  with `text-faint` / `text-meta`.
-- **`metric`** — mono, 23px, tabular figures, so a counter ticking upward never shifts the
-  layout under it.
-- **`attention-pulse`** — a 12% `--attention` wash on a `::before`, breathing between 40%
-  and 100% opacity every 5s. For the one row that is waiting on *you*. It is a wash rather
-  than a background, so the element keeps its own fill and its own `hover:`; it inherits
-  the radius, so it composes with any card; and `prefers-reduced-motion` holds it still
-  rather than dropping it, because the tint is the state and only the motion is decoration.
-
-Spacing is `--spacing: 4px`, so `p-1/2/3/4` is the 4/8/12/16 rhythm with everything between
-still available. Radii are `rounded-sm` (5px) and `rounded-md` (8px).
+Spacing is `--spacing: 4px`, so `p-1/2/3/4/6/8/12` is the 4/8/12/16/24/32/48 scale (§5).
+Radii are `rounded-sm` (4, inline code and seg-control items), `rounded-md` (6, the default),
+`rounded-lg` (10, cards and code blocks) and `rounded-full` (pills). Shadows are gone from
+the theme; `shadow-*` generates nothing.
 
 ### Fonts
 
-**IBM Plex Sans** (`font-sans`) for interface text and **JetBrains Mono** (`font-mono`) for
-the logo, agent and machine names, commands, metric digits and caps labels.
+**Geist** (`font-sans`) for everything people read, **Geist Mono** (`font-mono`) for
+everything machines wrote, and **Bricolage Grotesque** (`font-display`) for landing headlines
+only — all three self-hosted from [`fonts/`](./fonts) as per-script variable woff2 subsets,
+so the control panel makes no third-party request and the installed app keeps its type
+offline. Cyrillic is included: transcripts are read in Russian as often as in English.
 
-Both are **self-hosted** from [`fonts/`](./fonts) — no third-party request, and the PWA
-keeps its typography offline. Both are variable fonts, so one 119 KB + 53 KB pair covers
-every weight; `@font-face` declares a weight *range* and the browser interpolates 500 out
-of the same file it used for 400. Latin, Cyrillic and Greek all survive intact — nothing
-was subsetted. [`fonts/README.md`](./fonts/README.md) records how they were built and their
-OFL licences.
+`scripts/fonts.sh` refetches them and rewrites `fonts/fonts.css`; [`fonts/README.md`](./fonts/README.md)
+has the table and the licences.
 
-No italics are shipped; a browser synthesises an oblique where markdown asks for emphasis.
+### Icons
+
+**Lucide, and only Lucide** (§9). The set is [`icons/`](./icons) — one SVG per name, verbatim,
+licence header included — and `build.rs` turns the directory into the `Lucide` enum, so
+adding an icon is:
+
+```sh
+scripts/lucide.sh add arrow-up-right      # checks the name against lucide.dev, fetches it
+```
+
+and then `Lucide::ArrowUpRight` exists. Never draw a glyph by hand, never use a Unicode
+character as an icon (`⋯`, `★`, `▸`, `×` — those are `Ellipsis`, `Star`, `ChevronRight`,
+`X`), and never paste a path. The noun → icon map in `DESIGN.md` §9 decides which glyph a
+thing gets; pick from it, not per screen.
 
 ## Using it from another crate
 
 Three lines, no build-script changes. In the consumer's Tailwind entry:
 
 ```css
-@import "../../adi-ui/styles/ui.css";   /* Tailwind, tokens, reset, and adi-ui's own @source */
+@import "../../adi-ui/styles/ui.css";   /* Tailwind, tokens, fonts, reset, and adi-ui's own @source */
 @source "../src";                        /* plus the consumer's own components */
 ```
 
@@ -228,27 +203,24 @@ then in its `index.html`:
 
 and in its `Cargo.toml`, `adi-ui = { workspace = true }`.
 
-`ui.css` scans **its own** `src/` through a path relative to itself, so the consumer gets
-the components' classes generated without knowing where this crate lives. Do not import
-`tailwindcss` separately — `ui.css` already does, and twice would duplicate the whole
-utility layer. The tokens and the reset travel with the stylesheet; the fonts are the one
-thing that does not, because they are files rather than CSS — hence the `copy-dir` above.
-Without it everything still works, in the system font stack.
+`ui.css` scans **its own** `src/` through a path relative to itself, so the consumer gets the
+components' classes generated without knowing where this crate lives. Do not import
+`tailwindcss` separately — `ui.css` already does, and twice would duplicate the whole utility
+layer.
 
 ## Notes
 
 - Targets `wasm32-unknown-unknown` and is **excluded from the workspace's
   `default-members`**, so a bare `cargo build`/`cargo test` skips it. Build it with
-  `cargo build -p adi-ui --target wasm32-unknown-unknown`, or just run Trunk.
+  `cargo build -p adi-ui --target wasm32-unknown-unknown`, or just run Trunk. `cargo test -p
+  adi-ui` runs the host-side tests (the mark's geometry, the icon set, the highlighter, the
+  table's sort and layout).
 - [`Trunk.toml`](./Trunk.toml) pins **`tailwindcss = "4.2.1"`**. Trunk's default is 3.3.5,
-  which cannot parse a v4 stylesheet — it dies inside `postcss-import` on the first
-  `@import`. Pinned, Trunk downloads and caches the binary itself: no Node, no npm, nothing
-  to preinstall, and CI needs no new step.
+  which cannot parse a v4 stylesheet. Pinned, Trunk downloads and caches the binary itself:
+  no Node, no npm, nothing to preinstall.
 - Utilities are **unlayered** on purpose. Unlayered CSS beats layered CSS whatever the
   specificity, so `@layer utilities` would lose to any stray unlayered rule in a host page.
 - The reset strips a control's **own border and background** (`border: 0 solid`,
-  `background-color: transparent`), the way Tailwind's preflight does. Without it a
-  `<button>` keeps the platform's `outset` border on every side a utility does not set, so
-  a *partial* border — the sessions row's `border-l-2` — comes out as a 3D box. Every
-  component sets its own fill and its own lines; nothing should inherit either.
+  `background-color: transparent`), the way Tailwind's preflight does, so a component may set
+  a *partial* border without the platform drawing the other three sides in `outset`.
 - `dist/` is a dev artifact and is not committed.

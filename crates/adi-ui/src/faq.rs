@@ -2,6 +2,7 @@
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::{Markdown, merge};
 
 /// One question and its answer.
@@ -25,7 +26,7 @@ impl Qna {
     }
 }
 
-/// A list of questions, each folded up until it is asked for.
+/// A list of questions, each folded up until it is asked for, separated by hairlines.
 ///
 /// Built on `<details>`, which is the browser's own disclosure: it opens on click *and* on
 /// Enter, it is findable by the page's own find-in-page in browsers that search closed
@@ -44,7 +45,7 @@ pub fn Faq(
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
-        <div class=merge("flex flex-col gap-2", class)>
+        <div class=merge("flex flex-col", class)>
             {move || items
                 .get()
                 .into_iter()
@@ -52,30 +53,22 @@ pub fn Faq(
                     // `group` so the chevron can turn on the parent's own `open` state —
                     // no signal, no handler, and it stays right if the browser opens the
                     // details itself (find-in-page does).
-                    <details class="group island overflow-hidden bg-card">
-                        <summary class="flex cursor-pointer list-none items-center gap-2 px-3 \
-                                        py-2 text-row font-medium text-ink select-none \
-                                        hover:bg-bubble \
-                                        focus-visible:outline-2 \
+                    <details class="group border-b border-line last:border-b-0">
+                        <summary class="flex cursor-pointer list-none items-center gap-2 py-2.5 \
+                                        text-row font-medium text-ink select-none \
+                                        focus-visible:outline-[1.5px] \
                                         focus-visible:outline-offset-[-2px] \
-                                        focus-visible:outline-accent \
+                                        focus-visible:outline-focus \
                                         [&::-webkit-details-marker]:hidden">
-                            <svg
-                                class="size-3 shrink-0 text-meta transition-transform \
-                                       duration-100 group-open:rotate-90"
-                                viewBox="0 0 12 12"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.6"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                aria-hidden="true"
-                            >
-                                <path d="M4.5 2.5 8 6l-3.5 3.5"></path>
-                            </svg>
+                            <Icon
+                                icon=Lucide::ChevronRight
+                                size=IconSize::Sm
+                                class="text-ink-3 transition-transform duration-100 \
+                                       group-open:rotate-90"
+                            />
                             <span class="min-w-0">{qna.question}</span>
                         </summary>
-                        <div class="border-t border-divider px-3 py-2.5">
+                        <div class="pb-3 pl-6">
                             <Markdown source=qna.answer/>
                         </div>
                     </details>

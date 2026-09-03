@@ -28,11 +28,11 @@ mod ui;
 mod update;
 mod voice;
 
-// The component library. The titlebar is the first thing on this page built from it; the
-// rest of the screen is still the `adi-*` layer, and the two share a page by load order
-// (see `styles/tailwind.css`).
+// The component library: the mark, the icons and the explorer tree come from it; the shell
+// around them is the `adi-*` layer, and the two share a page by load order (see
+// `styles/tailwind.css`).
 use adi_ui::{
-    Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Mark, MarkVariant, TopBar, Tree, TreeNode,
+    Button, ButtonSize, ButtonVariant, Icon, IconSize, Lucide, Mark, MarkVariant, Tree, TreeNode,
     TreeState,
 };
 use adi_webapp_api::types::{
@@ -66,11 +66,10 @@ use state::{
     SecretsForm, SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor,
     ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
 };
-use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
+use ui::fmt_uptime;
 
 fn main() {
     console_error_panic_hook::set_once();
-    apply_saved_theme();
     // Open the live channel before anything mounts, so the first subscription a page makes goes
     // out on a socket that is already connecting rather than waiting for one to be asked for.
     live::start();
@@ -113,8 +112,8 @@ fn boot_splash() -> AnyView {
         <div class="adi-boot">
             // Solid rather than cut: the splash never draws the mark below 72px, and above ~64
             // the lobes are told apart by their tones without hairline gaps.
-            <Mark variant=MarkVariant::Solid accent=true class="adi-boot__mark"/>
-            <span class="adi-boot__logo">"adi"<span class="adi-boot__dot">"."</span></span>
+            <Mark variant=MarkVariant::Solid class="adi-boot__mark"/>
+            <span class="adi-boot__logo">"adi"</span>
         </div>
     }
     .into_any()
@@ -125,9 +124,9 @@ fn boot_splash() -> AnyView {
 /// stepper, setup form); **once the agent exists the app is the chat** — its sessions on the
 /// left, the conversation in the centre, dashboards on the right (see [`chat_home_view`]).
 ///
-/// Neither of those wears a bar. Both are drawn under the floating mark instead ([`launcher`]),
-/// which is where everything that is about the app rather than about the screen now lives —
-/// the way back to the setup form among them ([`root_actions`]).
+/// Neither of those wears a bar. What one would have carried is in the `⌘K` menu instead
+/// ([`launcher`]) — the way back to the setup form among them ([`root_actions`]). The chat
+/// opens it from the line above its sessions rail, the wizard from a mark in the corner.
 #[component]
 fn Home() -> impl IntoView {
     let state = State::fresh();
@@ -338,7 +337,7 @@ fn Home() -> impl IntoView {
             };
             if m.agent.is_some() && !onb.reconfiguring.get() {
                 view! {
-                    <div class="adi-chome-root">{chat_home_view(state, watch)}</div>
+                    <div class="adi-chome-root">{chat_home_view(state, watch, launcher)}</div>
                 }
                 .into_any()
             } else {
@@ -347,20 +346,24 @@ fn Home() -> impl IntoView {
                         <main class="adi-onb__body">
                             <div class="adi-onb__panel">{onboarding_view(state, onb, m)}</div>
                         </main>
+                        // The wizard has no rail to dock the mark at the head of, so here it
+                        // is the corner one. The chat draws its own (`launcher::brand`).
+                        {launcher::floating(launcher)}
                     </div>
                 }
                 .into_any()
             }
         }}
 
-        // Over whichever of those is up, rather than inside any one of them — the mark is the
-        // one thing on these screens that does not belong to the screen. Held back until
-        // `/api/meta` answers, so the boot splash stays the single wordmark it was drawn as
-        // and the menu never opens onto rows that are about an agent we do not know exists.
+        // Over whichever of those is up, rather than inside any one of them: the screen under
+        // the menu swaps between the chat and the wizard, and a menu that closed itself every
+        // time that happened would be one nobody could use during a reconfigure. Held back
+        // until `/api/meta` answers, so the boot splash stays the single wordmark it was drawn
+        // as and the menu never opens onto rows about an agent we do not know exists.
         {move || {
             meta.get().is_some().then(|| {
                 view! {
-                    {launcher::launcher(launcher, move || {
+                    {launcher::overlay(launcher, move || {
                         root_actions(state, watch, onb, updates, can_install)
                     })}
                     // *What's new*: the version pill used to carry this dialog, and the menu
@@ -378,7 +381,7 @@ fn Home() -> impl IntoView {
 /// [`menu::rows`] — the same list the panel's own menu is built from, so the two can never come
 /// to disagree about what this app can do.
 ///
-/// Rebuilt on every draw (see [`launcher::launcher`]), which is what lets it be honest about
+/// Rebuilt on every draw (see [`launcher::overlay`]), which is what lets it be honest about
 /// the moment. Reading signals here is therefore deliberate — it is what makes the menu track
 /// them.
 fn root_actions(
@@ -495,8 +498,11 @@ fn EmbedDashboardAgent() -> impl IntoView {
             <header class="adi-embed__head">
                 <span class="adi-embed__brand">"adi\u{00b7}agent"</span>
                 {(!ctx_label.is_empty()).then(|| view! {
-                    <span class="adi-embed__ctx adi-mono" title=ctx_label.clone()>
-                        {format!("\u{270e} {}", ctx_label.chars().take(8).collect::<String>())}
+                    <span class="adi-embed__ctx" title=ctx_label.clone()>
+                        <Icon icon=Lucide::LayoutDashboard size=IconSize::Sm/>
+                        <span class="adi-mono">
+                            {ctx_label.chars().take(8).collect::<String>()}
+                        </span>
                     </span>
                 })}
             </header>
@@ -815,7 +821,7 @@ fn App() -> impl IntoView {
     // than landing beside the button and leaving it to be found (see [`menu::consume_pair_intent`]).
     menu::consume_pair_intent(state, fleet_form, route);
 
-    // The same floating mark the root screens wear, and the same rows behind it. Without it, ⌘K
+    // The same corner mark the setup wizard wears, and the same rows behind it. Without it, ⌘K
     // would stop answering on the very page it was used to reach.
     let launcher = Launcher::workbench();
 
@@ -967,10 +973,11 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::Secrets | Route::ProjectDetail) {
             secrets_form.clear_revealed();
         }
-        // Same rule for a pairing invite: it is a bearer token until it is spent, and the screen
-        // it was drawn on is the only place it was meant to exist.
+        // Same rule for pairing: the invite minted here, the one pasted in to be spent, and the
+        // password that spending it bought are all bearer secrets, and the screen they were drawn
+        // on is the only place any of them was meant to exist.
         if !matches!(route.get(), Route::Fleet) {
-            fleet_form.clear_invite();
+            fleet_form.clear_pairing();
         }
     });
 
@@ -1042,70 +1049,40 @@ fn App() -> impl IntoView {
 
     view! {
         <div class="adi-workbench">
-        // The frame's lid — the first thing on this page built from `adi-ui` rather than
-        // from the `adi-*` layer around it. Identity on the left, where you are next to it,
-        // and the ways out on the right.
-        <TopBar
-            logo="adi"
-            // The mark is the way home: `/` is the chat, and the control panel is the
-            // room you stepped into from it.
-            home="/"
-            actions=move || {
-                view! {
-                    // The way back out of the control panel. The root bar offers
-                    // "extended →" in the other direction, so the trip is round rather than
-                    // one-way; a plain link, since `/` is a different document than the
-                    // workbench and not an SPA route.
-                    <a
-                        class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini \
-                               font-medium text-meta no-underline hover:bg-card hover:text-ink \
-                               hover:no-underline"
-                        href="/"
-                        title="Back to the simple chat view"
-                    >
-                        <span aria-hidden="true">"\u{2190}"</span>
-                        <span>"simple"</span>
-                    </a>
-                    // What this machine is on, and the way to the next version — the same
-                    // control the root bar carries, so the answer is in the same place
-                    // whichever of the two documents you are in.
-                    {update::version_pill(updates)}
-                    {move || can_install.get().then(|| view! {
-                        <Button
-                            size=ButtonSize::Small
-                            variant=ButtonVariant::Ghost
-                            icon=icons::Icon::Download.path()
-                            attr:title="Install adi as an app in its own window"
-                            on:click=move |_| pwa::install()
-                        >
-                            "Install"
-                        </Button>
-                    })}
-                    // Icon only, so it says what it is to a screen reader rather than
-                    // nothing at all.
-                    <Button
-                        size=ButtonSize::Small
-                        variant=ButtonVariant::Ghost
-                        icon=icons::Icon::Contrast.path()
-                        attr:title="Toggle theme"
-                        attr:aria-label="Toggle theme"
-                        on:click=move |_| toggle_theme()
-                    />
-                }
-                .into_any()
-            }
-        >
-            // Where you are, read left to right from the mark — the natural reading order,
-            // and it keeps the bar from being two clumps with a void between them.
-            <Crumbs items=Signal::derive(move || {
-                let mut items = vec![Crumb::new(route.get().title())];
-                let id = state.current_project.get();
-                if matches!(route.get(), Route::ProjectDetail) && !id.is_empty() {
-                    items.push(Crumb::new(id));
-                }
-                items
-            })/>
-        </TopBar>
+        // The frame's lid: identity on the left, where you are next to it, and the ways out
+        // on the right (design/examples/setup-agents-fleet.html, `.bar`).
+        <header class="adi-titlebar">
+            // The mark is the way home: `/` is the chat, and the control panel is the room
+            // you stepped into from it.
+            <a class="adi-logo" href="/" title="Home">
+                <Mark/>
+                "adi"
+            </a>
+            {move || crumbs(route.get(), state.current_project.get())}
+            <span class="adi-spacer"></span>
+            // The way back out of the control panel. A plain link, since `/` is a different
+            // document than the workbench and not an SPA route.
+            <a class="adi-btn adi-btn--link" href="/" title="Back to the simple chat view">
+                <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
+                "simple"
+            </a>
+            // What this machine is on, and the way to the next version — the same control
+            // the root screen's menu carries, so the answer is in the same place whichever
+            // of the two documents you are in. The update button, when there is one, is this
+            // screen's one orange.
+            {update::version_pill(updates)}
+            {move || can_install.get().then(|| view! {
+                <Button
+                    size=ButtonSize::Small
+                    variant=ButtonVariant::Ghost
+                    icon=icons::Icon::Download.lucide()
+                    attr:title="Install adi as an app in its own window"
+                    on:click=move |_| pwa::install()
+                >
+                    "Install"
+                </Button>
+            })}
+        </header>
 
         <div class="adi-shell">
 
@@ -1118,7 +1095,9 @@ fn App() -> impl IntoView {
                     <span class="adi-spacer"></span>
                     <a class="adi-btn adi-btn--icon-sm" href=Route::Projects.path()
                         title="Manage projects" aria-label="Manage projects"
-                        on:click=move |ev| spa_click(&ev, route, Route::Projects)>"+"</a>
+                        on:click=move |ev| spa_click(&ev, route, Route::Projects)>
+                        <Icon icon=Lucide::Plus/>
+                    </a>
                 </div>
                 <div class="adi-explorer__body">
                     {move || explorer_tree(state, explorer, route)}
@@ -1133,10 +1112,12 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         // These pages render their own headings — no generic page title.
                         // StoreFile is a full-bleed editor: its head carries the file path.
-                        // The agent editor's head names the agent and links back to the list.
+                        // The agent editor's head names the agent and links back to the list;
+                        // the agents list's carries its counts and its one action.
                         Route::PortsManager
                         | Route::ProjectDetail
                         | Route::StoreFile
+                        | Route::Agents
                         | Route::AgentDetail => None,
                         other => Some(view! {
                             <header class="adi-bar">
@@ -1196,7 +1177,8 @@ fn App() -> impl IntoView {
         // belongs to no column of the frame. *What's new* is not mounted beside it here — the
         // version pill in the bar above already carries that dialog, and a second copy would
         // open two.
-        {launcher::launcher(launcher, move || {
+        {launcher::floating(launcher)}
+        {launcher::overlay(launcher, move || {
             menu::rows(
                 menu::Shell::Panel { route, fleet: fleet_form },
                 state,
@@ -1205,6 +1187,53 @@ fn App() -> impl IntoView {
             )
         })}
     }
+}
+
+/// Where you are, read left to right from the mark: `/ Settings / Fleet`, `/ Projects / api`.
+/// Sans, in the bar's own grey, with the current segment in ink — a location is not a machine
+/// string. Every segment but the last is somewhere you can go back to.
+fn crumbs(route: Route, project: String) -> AnyView {
+    let mut path: Vec<(String, Option<String>)> = Vec::new();
+    match route {
+        Route::Hive | Route::PortsManager | Route::Mesh | Route::Fleet => {
+            path.push(("Settings".to_string(), None));
+        }
+        Route::ProjectDetail if !project.is_empty() => {
+            path.push((
+                "Projects".to_string(),
+                Some(Route::Projects.path().to_string()),
+            ));
+            path.push((project, None));
+            return crumb_nav(path);
+        }
+        _ => {}
+    }
+    path.push((route.title().to_string(), None));
+    crumb_nav(path)
+}
+
+fn crumb_nav(path: Vec<(String, Option<String>)>) -> AnyView {
+    let last = path.len().saturating_sub(1);
+    view! {
+        <nav class="adi-crumbs" aria-label="Breadcrumb">
+            {path
+                .into_iter()
+                .enumerate()
+                .map(|(i, (label, href))| view! {
+                    <span class="adi-crumbs__sep" aria-hidden="true">"/"</span>
+                    {match href {
+                        Some(href) if i != last => view! { <a href=href>{label}</a> }.into_any(),
+                        _ if i == last => {
+                            view! { <span class="adi-crumbs__here" aria-current="page">{label}</span> }
+                                .into_any()
+                        }
+                        _ => view! { <span>{label}</span> }.into_any(),
+                    }}
+                })
+                .collect::<Vec<_>>()}
+        </nav>
+    }
+    .into_any()
 }
 
 /// The workbench's standing advice, one line above every page: the ordinary way to change this
@@ -1224,16 +1253,18 @@ fn agent_advice(hidden: RwSignal<bool>, route: Route) -> Option<AnyView> {
         view! {
             <div class="adi-advice">
                 <span class="adi-advice__text">
-                    <strong>"Recommended: "</strong>
-                    "let " <strong>"adi-agent"</strong> " manage this — say what you want in chat
-                     and it sets up projects, services, tools and secrets the way this store
-                     expects. These panels are for the careful case: seeing exactly what is there,
-                     or changing one thing precisely."
+                    <b>"Recommended:"</b>
+                    " let adi-agent manage this — say what you want in chat and it sets up
+                     projects, services, tools and secrets the way this store expects. These
+                     panels are for the careful case: seeing exactly what is there, or changing
+                     one thing precisely."
                 </span>
-                <a class="adi-advice__link" href="/" title="ask the agent instead">"Open chat"</a>
-                <button class="adi-advice__hide" type="button" aria-label="Hide this recommendation"
-                    title="hide this — it stays hidden on this browser"
-                    on:click=move |_| ui::hide_advice(hidden)>"\u{2715}"</button>
+                <a class="adi-advice__link" href="/" title="Ask the agent instead">"Open chat"</a>
+                <button class="adi-advice__hide" type="button" aria-label="Dismiss"
+                    title="Hide this — it stays hidden on this browser"
+                    on:click=move |_| ui::hide_advice(hidden)>
+                    <Icon icon=Lucide::X size=IconSize::Sm/>
+                </button>
             </div>
         }
         .into_any(),
@@ -1309,21 +1340,18 @@ fn explorer_tree(state: State, explorer: TreeState, route: RwSignal<Route>) -> A
             TreeNode::new(format!("scope:{label}"), 0, label)
                 .children(true)
                 .container(true)
-                .icon(scope_icon(label).path()),
+                .icon(scope_icon(label).lucide()),
         );
         for r in routes {
             nodes.push(
                 TreeNode::new(format!("route:{}", r.path()), 1, r.title())
-                    .icon(icons::route_icon(*r).path()),
+                    .icon(icons::route_icon(*r).lucide()),
             );
         }
     }
 
     let Some(projects) = state.projects.get() else {
-        return view! {
-            <Tree nodes=nodes state=explorer empty="Loading…" class="adi-ui-type"/>
-        }
-        .into_any();
+        return view! { <Tree nodes=nodes state=explorer empty="Loading…"/> }.into_any();
     };
     let rows = pages::project_tree_rows(
         projects
@@ -1353,7 +1381,7 @@ fn explorer_tree(state: State, explorer: TreeState, route: RwSignal<Route>) -> A
             TreeNode::new(format!("proj:{}", p.id), *depth, p.name.clone())
                 // Always a branch: even a project with no sub-projects holds its sections.
                 .children(true)
-                .icon(icons::Icon::Folder.path())
+                .icon(icons::Icon::Folder.lucide())
                 .emphasis(true)
                 .separated(first_child)
                 .maybe_badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
@@ -1366,7 +1394,7 @@ fn explorer_tree(state: State, explorer: TreeState, route: RwSignal<Route>) -> A
                     depth + 1,
                     section.title(),
                 )
-                .icon(icons::section_icon(section).path()),
+                .icon(icons::section_icon(section).lucide()),
             );
         }
     }
@@ -1381,14 +1409,6 @@ fn explorer_tree(state: State, explorer: TreeState, route: RwSignal<Route>) -> A
             state.current_section.get().slug()
         )),
     };
-    view! {
-        <Tree
-            nodes=nodes
-            state=explorer
-            selected=selected
-            empty="Nothing here yet."
-            class="adi-ui-type"
-        />
-    }
-    .into_any()
+    view! { <Tree nodes=nodes state=explorer selected=selected empty="Nothing here yet."/> }
+        .into_any()
 }

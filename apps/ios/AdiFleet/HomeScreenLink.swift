@@ -67,34 +67,54 @@ struct HomeScreenLinkSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                Section {
-                    Text(link?.absoluteString ?? "—")
-                        .font(.system(.footnote, design: .monospaced))
-                        .textSelection(.enabled)
-                    Button {
-                        UIPasteboard.general.string = link?.absoluteString
-                        copied = true
-                    } label: {
-                        Label(copied ? "Copied" : "Copy link", systemImage: copied ? "checkmark" : "doc.on.doc")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("The link")
+                            .font(ADI.TextStyle.label)
+                            .foregroundStyle(ADI.ink3)
+                        Text(link?.absoluteString ?? "—")
+                            .font(ADI.TextStyle.mono)
+                            .foregroundStyle(ADI.code)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .adiCodeBlock()
+                        Text("Opens “\(title)” on \(node) in this app, from anywhere on the phone.")
+                            .font(ADI.TextStyle.small)
+                            .foregroundStyle(ADI.ink3)
+                        Button {
+                            UIPasteboard.general.string = link?.absoluteString
+                            copied = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                LucideIcon(icon: copied ? .check : .copy)
+                                Text(copied ? "Copied" : "Copy link")
+                            }
+                        }
+                        .buttonStyle(.adi())
+                        .disabled(link == nil)
+                        .padding(.top, 4)
                     }
-                    .disabled(link == nil)
-                } header: {
-                    Text("The link")
-                } footer: {
-                    Text("Opens “\(title)” on \(node) in this app, from anywhere on the phone.")
-                }
 
-                Section {
-                    step(1, "Open Shortcuts and add a shortcut.")
-                    step(2, "Add the action **Open URL** and paste the link.")
-                    step(3, "Share the shortcut → **Add to Home Screen**, then name it and pick an icon.")
-                } header: {
-                    Text("Putting it on the Home Screen")
-                } footer: {
-                    Text("iOS lets only Safari and Shortcuts place an icon, so this app cannot do it for you — but a shortcut that opens this link is indistinguishable once it is there.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Putting it on the Home Screen")
+                            .font(ADI.TextStyle.label)
+                            .foregroundStyle(ADI.ink3)
+                        VStack(alignment: .leading, spacing: 0) {
+                            step(1, "Open Shortcuts and add a shortcut.")
+                            Hairline()
+                            step(2, "Add the action **Open URL** and paste the link.")
+                            Hairline()
+                            step(3, "Share the shortcut → **Add to Home Screen**, then name it and pick an icon.")
+                        }
+                        Text("iOS lets only Safari and Shortcuts place an icon, so this app cannot do it for you — but a shortcut that opens this link is indistinguishable once it is there.")
+                            .font(ADI.TextStyle.small)
+                            .foregroundStyle(ADI.ink3)
+                    }
                 }
+                .padding(20)
             }
+            .background(ADI.bg)
             .navigationTitle("Add to Home Screen")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -108,10 +128,14 @@ struct HomeScreenLinkSheet: View {
     private func step(_ n: Int, _ text: LocalizedStringKey) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text("\(n)")
-                .font(.caption.weight(.semibold).monospacedDigit())
-                .foregroundStyle(.secondary)
+                .font(ADI.TextStyle.label.monospacedDigit())
+                .foregroundStyle(ADI.ink3)
                 .frame(width: 16, alignment: .trailing)
             Text(text)
+                .font(ADI.sans(15))
+                .foregroundStyle(ADI.ink)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(.vertical, 10)
     }
 }

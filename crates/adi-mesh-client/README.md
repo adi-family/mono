@@ -28,11 +28,33 @@ harness/e2e.sh --scan                 # the same, with the invite arriving throu
 | `src/store.rs` | IndexedDB: the browser's secret key, and one record per node |
 | `src/dashboards.rs` | what a node runs, asked of the node's own panel — and asking for a grant |
 | `src/bridge.rs` | answering the service worker's `fetch` and a panel's `new WebSocket()` |
-| `src/ui.rs` | the shell: the machines, what each runs, and the button that adds one |
+| `src/ui.rs` | the shell: the machines, what each runs, and the button that adds one — with the Lucide icons it uses inlined from `adi-ui/icons` at compile time |
 | `src/mark.rs` | the adi mark, with the geometry pinned to the tree's three other copies |
 | `sw.js` | which node *and service* a request belongs to, and how a whole app is served from one |
 | `js/panel-shim.js` | injected into a panel's `<head>`: gives it back `/`, and re-points its sockets |
 | `src/probe.rs` | the measurement the design stands on, kept as a regression test |
+| `styles/app.css` | the shell's own shapes, every value a token from `design/tokens.css` |
+
+## The look
+
+The rules are [`design/DESIGN.md`](../../design/DESIGN.md) and this client follows them the way
+the control panel does, without sharing a line of its CSS: it has no Tailwind and no component
+library, on purpose — it is a list, one button and a viewfinder, and a phone on mobile data should
+not download a design system to draw them. What it shares instead is the three things that cannot
+be allowed to drift:
+
+- **The tokens.** `index.html` links `design/tokens.css` ahead of `styles/app.css`, so every colour,
+  face, radius and spacing here is `var(--…)` from the same file every other surface reads. There
+  is no palette in this crate. Change a token at the root and this page follows.
+- **The faces.** Geist and Geist Mono, self-hosted from `adi-ui/fonts` — the same `fonts.css` and
+  the same woff2 files, copied into `dist/fonts/` by Trunk. Mono is for the node key, the invite
+  token and nothing else.
+- **The icons.** Lucide, `include_str!`-ed from `adi-ui/icons` and drawn at stroke 1.5 by `icon()`
+  in `src/ui.rs`. Add a name with `scripts/lucide.sh add <name>` and it is one more `include_str!`.
+
+The screen is dark, flush and one orange: machines are rows under hairlines with what each runs
+indented beneath them, a 6px green dot says a dashboard is up and open to this browser, and the
+one filled orange is the Scan button — pairing is the action this page exists for.
 
 ## How a node's control panel becomes a page here
 

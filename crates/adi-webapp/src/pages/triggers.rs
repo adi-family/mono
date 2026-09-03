@@ -6,9 +6,9 @@
 //! from its code block, which a **preset** prefills: applying "Telegram bot" fills the kind,
 //! the runtime, a working script, and the settings that script reads.
 //!
-//! Background triggers show live status (up, its pid, how long, how many restarts) and a
-//! Restart action; webhook triggers show ▶ Fire. The Log view shows the most recent output for
-//! either, re-polled each second while open.
+//! Background triggers show live status (up, its pid, how long, how many restarts) and offer
+//! Restart in their row menu; webhook triggers offer Fire. The Log view shows the most recent
+//! output for either, re-polled each second while open.
 
 use std::collections::BTreeMap;
 
@@ -26,7 +26,7 @@ use crate::ui::{
     row_actions, rows_or_placeholder, sort_rows, updated_text,
 };
 
-/// The Triggers page's columns; the trailing blank one holds Fire / Log / Enable.
+/// The Triggers page's columns; the trailing blank one holds the row's ⋯ menu.
 pub(crate) const COLS: &[&str] = &["Name", "Launches", "Project", "Status", "Last run", ""];
 
 /// The same in a project's own Triggers panel, which drops the Project column — every row there
@@ -66,10 +66,11 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Triggers defined">
+                <span class="adi-updated" title="Triggers defined">
                     {move || triggers.get().map_or_else(|| "\u{2014}".to_string(),
-                        |t| t.triggers.len().to_string())}
+                        |t| format!("{} defined", t.triggers.len()))}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(triggers, secs_since)}</span>
             </div>
 
@@ -85,8 +86,10 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     }}
                 </h2>
                 <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--link" type="button"
-                    on:click=move |_| clear_trigger_form(form)>"New trigger"</button>
+                {move || editing.get().is_some().then(|| view! {
+                    <button class="adi-btn adi-btn--quiet" type="button"
+                        on:click=move |_| clear_trigger_form(form)>"New trigger"</button>
+                })}
             </div>
 
             {move || preset_picker(state, form)}
@@ -169,16 +172,16 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                 <TextField id="trigger-description" label="Description" placeholder="what this trigger does"
                     wide=true field_class="adi-field--grow" value=description />
                 <label class="adi-field adi-field--check">
-                    <input type="checkbox"
+                    <input type="checkbox" class="adi-check"
                         prop:checked=move || enabled.get()
                         on:change=move |ev| enabled.set(event_target_checked(&ev)) />
                     <span class="adi-field__label">"Enabled"</span>
                 </label>
                 {move || extra_fields(state, form)}
                 {move || (kind.get() == "event").then(|| view! {
-                    <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                    <div class="adi-field adi-field--full">
                         <label class="adi-field__label" for="trigger-events">"Events"</label>
-                        <textarea class="adi-input adi-mono" id="trigger-events" rows="3"
+                        <textarea class="adi-input adi-input--wide adi-mono" id="trigger-events" rows="3"
                             placeholder="adi.tasks.*"
                             prop:value=move || events.get()
                             on:input=move |ev| events.set(event_target_value(&ev))></textarea>
@@ -186,14 +189,14 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     </div>
                 })}
                 {move || (kind.get() == "event").then(|| event_catalog_view(state, form))}
-                <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                <div class="adi-field adi-field--full">
                     <label class="adi-field__label" for="trigger-code">"Code block"</label>
                     // The same editor the store file page uses, so a trigger's code gets the
                     // highlighting its language deserves — and follows the runtime picker above.
                     <adi_ui::CodeEditor value=code
                         lang=Signal::derive(move || code_lang(&runtime.get()))
                         height=adi_ui::CodeHeight::Form id="trigger-code"
-                        class="adi-ui-type island"/>
+                        class="island bg-raise"/>
                     {field_hint(move || code_hint(&kind.get(), &runtime.get()))}
                 </div>
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
@@ -233,16 +236,16 @@ fn preset_picker(state: State, form: TriggersForm) -> AnyView {
             let label = p.label.clone();
             let applied = p.clone();
             view! {
-                <button class="adi-btn" type="button" title=title
-                    data-status=selected.then_some("ready")
+                <button class="adi-preset" type="button" title=title
+                    aria-pressed=selected.to_string()
                     on:click=move |_| apply_preset(form, &applied)>{label}</button>
             }
         })
         .collect::<Vec<_>>();
     view! {
-        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+        <div class="adi-field adi-field--full">
             <span class="adi-field__label">"Start from a preset"</span>
-            <div class="adi-table__actions" style="display:flex; flex-wrap:wrap; gap:var(--space-2)">
+            <div class="adi-field__choices">
                 {buttons}
             </div>
             {field_hint("fills the form with a working code block — edit it however you like")}
@@ -307,16 +310,17 @@ fn event_catalog_view(state: State, form: TriggersForm) -> AnyView {
             } else {
                 format!("{}\nexample: {}", e.summary, example)
             };
+            // An event name is a machine string, so the chip is the mono one.
             view! {
-                <button class="adi-btn" type="button" title=title
+                <button class="adi-toolpick__chip" type="button" title=title
                     on:click=move |_| add_event_pattern(form.events, &insert)>{label}</button>
             }
         })
         .collect::<Vec<_>>();
     view! {
-        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+        <div class="adi-field adi-field--full">
             <span class="adi-field__label">"Available events"</span>
-            <div class="adi-table__actions" style="display:flex; flex-wrap:wrap; gap:var(--space-2)">
+            <div class="adi-toolpick">
                 {chips}
             </div>
             {field_hint("click to add a pattern · each event arrives in $ADI_PAYLOAD, its name in $ADI_EVENT")}
@@ -349,9 +353,9 @@ fn trigger_on_field(state: State, form: TriggersForm) -> AnyView {
     let projects = state.projects;
     let trigger_on = form.trigger_on;
     view! {
-        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+        <div class="adi-field adi-field--full">
             <span class="adi-field__label">"Run only for projects"</span>
-            <div class="adi-table__actions" style="display:flex; flex-wrap:wrap; gap:var(--space-3)">
+            <div class="adi-field__choices">
                 {move || projects.get().map(|p| p.projects.into_iter()
                     .filter(|proj| !proj.is_archived())
                     .map(|proj| {
@@ -359,8 +363,8 @@ fn trigger_on_field(state: State, form: TriggersForm) -> AnyView {
                         let toggle_id = proj.id.clone();
                         let label = proj.name.clone();
                         view! {
-                            <label class="adi-field adi-field--check" style="margin:0">
-                                <input type="checkbox"
+                            <label class="adi-field adi-field--check">
+                                <input type="checkbox" class="adi-check"
                                     prop:checked=move || trigger_on.get().iter().any(|x| *x == checked_id)
                                     on:change=move |ev| toggle_trigger_on(trigger_on, &toggle_id, event_target_checked(&ev)) />
                                 <span class="adi-field__label">{label}</span>
@@ -540,12 +544,9 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
                     fetch::delete_trigger(del_name.clone()),
                 );
             });
-            let actions = row_actions(
-                state,
-                format!("trigger:{}", t.name),
-                trigger_actions(state, log, &t),
-                vec![trigger_toggle_item(state, &t), edit, delete],
-            );
+            let mut items = trigger_menu_items(state, log, &t);
+            items.extend([trigger_toggle_item(state, &t), edit, delete]);
+            let actions = row_actions(state, format!("trigger:{}", t.name), (), items);
             view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }
                 .into_any()
         })
@@ -573,17 +574,25 @@ pub(crate) fn trigger_key(t: &TriggerDto, col: &str) -> Key {
 /// also how a project's narrower panel works from the same code. Shared with that panel.
 pub(crate) fn trigger_cell(col: &str, t: &TriggerDto) -> AnyView {
     match col {
-        "Launches" => view! { <span class="font-mono">{launch_label(t)}</span> }.into_any(),
+        // The kind is a word; the runtime is the interpreter's name, so it is the mono half.
+        "Launches" => view! {
+            <span>
+                {t.kind.clone()}
+                <span class="adi-muted">" · "</span>
+                <span class="adi-mono adi-muted">{runtime_or_default(&t.runtime)}</span>
+            </span>
+        }
+        .into_any(),
         "Project" => match &t.project {
             Some(p) if !p.trim().is_empty() => {
-                view! { <span><span class="adi-chip adi-mono">{p.clone()}</span></span> }.into_any()
+                view! { <span><span class="adi-chip">{p.clone()}</span></span> }.into_any()
             }
             _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         },
         "Status" => view! { <span>{status_cell(t)}</span> }.into_any(),
         "Last run" => {
             let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <span class="font-mono text-meta">{fired}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{fired}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
@@ -592,7 +601,7 @@ pub(crate) fn trigger_cell(col: &str, t: &TriggerDto) -> AnyView {
                 <span title=t.description.clone()>
                     <span>{t.name.clone()}</span>
                     {hook_hint.map(|h| view! {
-                        <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
+                        <span class="adi-cell__sub adi-mono adi-muted">{h}</span>
                     })}
                 </span>
             }
@@ -619,7 +628,7 @@ pub(crate) fn status_cell(t: &TriggerDto) -> AnyView {
         };
         return view! {
             <span class="adi-tstatus" data-status="ready">"Running"</span>
-            <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{detail}</span>
+            <span class="adi-cell__sub adi-tabnums">{detail}</span>
         }
         .into_any();
     }
@@ -631,40 +640,38 @@ pub(crate) fn status_cell(t: &TriggerDto) -> AnyView {
         // Enabled but not up: either it is coming up, or its code block can't start at all.
         return view! {
             <span class="adi-tstatus" data-status="archived">"Stopped"</span>
-            <span class="adi-muted" style="font-size:var(--text-sm); display:block">"check the log"</span>
+            <span class="adi-cell__sub">"check the log"</span>
         }
         .into_any();
     }
     view! { <span class="adi-tstatus" data-status="ready">"Listening"</span> }.into_any()
 }
 
-/// The per-row run actions, shared between the global Triggers table and a project's panel.
-/// A background trigger offers Restart (its process is supervised); a webhook offers ▶ Fire
-/// (nothing else would ever run it by hand). A background trigger that *isn't* running can
-/// still be fired once, which is how you test one without enabling it.
-pub(crate) fn trigger_actions(state: State, log: TriggersLogView, t: &TriggerDto) -> AnyView {
+/// The run items of a trigger's ⋯ menu, shared between the global Triggers table and a project's
+/// panel. A background trigger offers Restart (its process is supervised); a webhook offers Fire
+/// (nothing else would ever run it by hand). A background trigger that *isn't* running can still
+/// be fired once, which is how you test one without enabling it. Log follows either.
+pub(crate) fn trigger_menu_items(
+    state: State,
+    log: TriggersLogView,
+    t: &TriggerDto,
+) -> Vec<AnyView> {
     let log_name = t.name.clone();
     let run_action = if t.running {
         let name = t.name.clone();
-        view! {
-            <button class="adi-btn adi-btn--link" title="replace the running process"
-                on:click=move |_| restart_trigger(state, name.clone())>"↻ Restart"</button>
-        }
-        .into_any()
+        menu_item(state, "Restart", false, move || {
+            restart_trigger(state, name.clone());
+        })
     } else {
         let name = t.name.clone();
-        view! {
-            <button class="adi-btn adi-btn--link" title="run the code block once, now"
-                on:click=move |_| fire_trigger(state, name.clone())>"▶ Fire"</button>
-        }
-        .into_any()
+        menu_item(state, "Fire", false, move || {
+            fire_trigger(state, name.clone())
+        })
     };
-    view! {
-        {run_action}
-        <button class="adi-btn adi-btn--link" title="show the most recent output"
-            on:click=move |_| open_log(log, log_name.clone())>"Log"</button>
-    }
-    .into_any()
+    vec![
+        run_action,
+        menu_item(state, "Log", false, move || open_log(log, log_name.clone())),
+    ]
 }
 
 /// The Enable/Disable toggle as a kebab menu item — shared by the global table and a project's
@@ -684,7 +691,7 @@ where
     apply_mutation(state, busy, ok_msg, |s, t| s.triggers.set(Some(t)), fut);
 }
 
-/// Run a trigger's code block once, by hand (the ▶ Fire action). The success flash comes from
+/// Run a trigger's code block once, by hand (the Fire action). The success flash comes from
 /// the server — its message carries the spawned pid.
 fn fire_trigger(state: State, name: String) {
     spawn_local(async move {
@@ -698,7 +705,7 @@ fn fire_trigger(state: State, name: String) {
     });
 }
 
-/// Replace a supervised background trigger's process (the ↻ Restart action). The new pid shows
+/// Replace a supervised background trigger's process (the Restart action). The new pid shows
 /// up on the next refresh, once the supervisor has actually cycled it.
 fn restart_trigger(state: State, name: String) {
     spawn_local(async move {
@@ -789,9 +796,9 @@ pub(crate) fn log_view(log: TriggersLogView) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Log — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!fired_at.is_empty()).then(|| view! {
-                        <span class="adi-muted" style="font-size:var(--text-sm)">{format!("last wrote {fired_at}")}</span>
+                        <span class="adi-updated">{format!("last wrote {fired_at}")}</span>
                     })}
-                    <button class="adi-btn adi-btn--link" on:click=move |_| log.close()>"Close"</button>
+                    <button class="adi-btn adi-btn--quiet" on:click=move |_| log.close()>"Close"</button>
                 </div>
                 {body}
             </section>

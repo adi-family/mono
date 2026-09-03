@@ -14,7 +14,7 @@ use crate::ui::{
 /// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
 /// does not sort. As on the Hive page, the sort keys match on header text, not index.
 pub(crate) const SERVICE_COLS: &[&str] = &[
-    "Service", "Host", "Ports", "Command", "Restart", "CPU", "Memory", "",
+    "Service", "Host", "Ports", "Command", "Restart", "Status", "CPU", "Memory", "",
 ];
 
 use super::reload_project;
@@ -48,8 +48,8 @@ pub(crate) struct QuickServiceForm {
 }
 
 /// Rows for the services table: a message when there's no hive / no services, else one row per
-/// service (host, ports as `key:port`, run command, restart policy, and a Start action for
-/// services that declare a runner).
+/// service (host, ports as `key:port`, run command, restart policy, its status, and the one
+/// control a service has — Start or Stop — for services that declare a runner).
 pub(crate) fn service_rows(
     state: State,
     project: String,
@@ -77,13 +77,13 @@ pub(crate) fn service_rows(
             let name = s.name.clone();
             let has_runner = s.run.is_some();
             let running = s.running;
+            // The row's single control, so it stays a button rather than going into a menu.
             let action = if !has_runner {
-                view! { <span class="adi-muted">"—"</span> }.into_any()
+                ().into_any()
             } else if running {
                 let (p, n) = (project.clone(), name.clone());
                 view! {
-                    <span style="color:var(--online); margin-right:var(--space-2)" title="Primary port is listening">"● Running"</span>
-                    <button class="adi-btn adi-btn--ghost" type="button" title="Stop this service"
+                    <button class="adi-btn adi-btn--sm" type="button" title="Stop this service"
                         on:click=move |_| stop_service(state, Some(p.clone()), n.clone())>
                         "Stop"
                     </button>
@@ -92,7 +92,7 @@ pub(crate) fn service_rows(
             } else {
                 let (p, n) = (project.clone(), name.clone());
                 view! {
-                    <button class="adi-btn adi-btn--ghost" type="button"
+                    <button class="adi-btn adi-btn--sm" type="button"
                         title="Run this service's command with its ports-manager port"
                         on:click=move |_| start_service(state, Some(p.clone()), n.clone())>
                         "Start"
@@ -100,7 +100,8 @@ pub(crate) fn service_rows(
                 }
                 .into_any()
             };
-            view! { <TableRow state=table cell=move |col| cell(col, &s) actions=action/> }.into_any()
+            view! { <TableRow state=table cell=move |col| cell(col, &s) actions=action/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -110,19 +111,41 @@ pub(crate) fn service_rows(
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, s: &ProjectService) -> AnyView {
     match col {
-        "Host" => view! { <span class="font-mono">{dash(s.host.clone())}</span> }.into_any(),
-        "Ports" => {
-            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }
-                .into_any()
+        "Host" => {
+            view! { <span class="adi-mono adi-muted">{dash(s.host.clone())}</span> }.into_any()
         }
+        "Ports" => view! { <span class="adi-tabnums">{fmt_ports(&s.ports)}</span> }.into_any(),
         "Command" => {
-            view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any()
+            view! { <span class="adi-mono adi-muted">{dash(s.run.clone())}</span> }.into_any()
         }
-        "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
+        "Restart" => {
+            view! { <span class="adi-mono adi-muted">{dash(s.restart.clone())}</span> }.into_any()
+        }
+        // A 6px dot and a word (DESIGN.md §6): green while the primary port answers, grey for a
+        // runner that is down, nothing for a service with no runner to be up or down.
+        "Status" => {
+            if s.run.is_none() {
+                view! { <span class="adi-muted">"—"</span> }.into_any()
+            } else if s.running {
+                view! {
+                    <span class="adi-status" data-state="online" title="the primary port is listening">
+                        <span class="adi-status__led"></span>"running"
+                    </span>
+                }
+                .into_any()
+            } else {
+                view! {
+                    <span class="adi-status">
+                        <span class="adi-status__led"></span>"stopped"
+                    </span>
+                }
+                .into_any()
+            }
+        }
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
         // "Service", and anything the layout offers that this match doesn't name.
-        _ => view! { <span class="font-mono">{s.name.clone()}</span> }.into_any(),
+        _ => view! { <span>{s.name.clone()}</span> }.into_any(),
     }
 }
 
@@ -144,6 +167,7 @@ fn service_key(s: &ProjectService, col: &str) -> Key {
         }
         "Command" => Key::maybe(s.run.as_deref()),
         "Restart" => Key::maybe(s.restart.as_deref()),
+        "Status" => Key::Bool(s.running),
         "CPU" => Key::Float(f64::from(cpu(s))),
         "Memory" => Key::num(mem(s)),
         // "Service", and the blank action column, which the header never lets you click.
@@ -255,13 +279,15 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
             <TextField id="pservice-name" label="Name" placeholder="api" mono=true
                 hint="the key under services:" value=name />
             <div class="adi-field">
-                <label class="adi-field__label" for="pservice-kind">"Kind"</label>
-                <select class="adi-input" id="pservice-kind"
-                    prop:value=move || kind.get()
-                    on:change=move |ev| kind.set(event_target_value(&ev))>
-                    <option value="script">"Script"</option>
-                    <option value="docker">"Docker"</option>
-                </select>
+                <span class="adi-field__label">"Kind"</span>
+                <div class="adi-segmented" role="group" aria-label="Runner kind">
+                    <button class="adi-segmented__option" type="button"
+                        aria-pressed=move || (kind.get() != "docker").to_string()
+                        on:click=move |_| kind.set("script".to_string())>"Script"</button>
+                    <button class="adi-segmented__option" type="button"
+                        aria-pressed=move || (kind.get() == "docker").to_string()
+                        on:click=move |_| kind.set("docker".to_string())>"Docker"</button>
+                </div>
             </div>
             {move || if kind.get() == "docker" {
                 docker_fields(image, container_port, pull, volumes, env)

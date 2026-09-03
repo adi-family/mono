@@ -31,30 +31,36 @@ struct ServiceView: View {
                     challenge: challenge
                 )
             } else if let failure {
-                ContentUnavailableView {
-                    Label("Cannot open \(service)", systemImage: "exclamationmark.triangle")
-                } description: {
+                VStack(spacing: 12) {
+                    LucideIcon(icon: .triangleAlert, size: .xl)
+                        .foregroundStyle(ADI.ink3)
+                    Text("Cannot open \(service)")
+                        .font(ADI.TextStyle.section)
+                        .foregroundStyle(ADI.ink)
                     Text(failure)
+                        .font(ADI.TextStyle.small)
+                        .foregroundStyle(ADI.ink2)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
                 }
+                .padding(32)
             } else {
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large)
                     if asking {
                         Text("Asking \(node.petname) to share \(service)…")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                            .font(ADI.TextStyle.small)
+                            .foregroundStyle(ADI.ink3)
                     }
                 }
             }
         }
-        // The same black behind every state, and behind the safe areas the page is allowed to run
-        // under. Without it the screen is black only where the page has painted, and the strip
+        // The page surface behind every state, and behind the safe areas the page is allowed to
+        // run under. Without it the screen is dark only where the page has painted, and the strip
         // under the home indicator stays the system background — which reads as a rendering bug.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black)
+        .background(ADI.bg)
         .ignoresSafeArea(edges: .bottom)
-        // A dark page under a light status bar is unreadable, and the page is what fills the
-        // screen now — so the bar is told which it is sitting on.
         .colorScheme(.dark)
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
@@ -172,14 +178,14 @@ private struct WebView: UIViewRepresentable {
         // non-persistent store would throw that away on every launch.
         let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         view.navigationDelegate = context.coordinator
-        // Black under the page, in three places because a white flash can come from any of them:
-        // the view itself before the first paint, the scroll view when a page is rubber-banded past
-        // its own end, and the default opaque white a WKWebView starts with. A dashboard's own CSS
-        // declares `color-scheme: light dark`, so on a dark phone it paints near-black — and the
-        // one frame of white before it does is exactly what is being removed here.
+        // The page surface under the page, in three places because a white flash can come from any
+        // of them: the view itself before the first paint, the scroll view when a page is
+        // rubber-banded past its own end, and the default opaque white a WKWebView starts with. A
+        // dashboard paints `--bg` itself; the one frame before it does is what is being removed.
+        let ground = UIColor(ADI.bg)
         view.isOpaque = false
-        view.backgroundColor = .black
-        view.scrollView.backgroundColor = .black
+        view.backgroundColor = ground
+        view.scrollView.backgroundColor = ground
         // Off, and that is what makes hiding the navigation bar safe. Both this and the stack's
         // interactive pop want the same left-edge swipe, and with no bar on screen the pop is the
         // only way out — so the two cannot both have it. In-page history is the smaller loss: a

@@ -151,7 +151,7 @@ impl Route {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Route::Meta => "Meta",
-            Route::Analytics => "Global Analytics",
+            Route::Analytics => "Global analytics",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",
@@ -166,7 +166,7 @@ impl Route {
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
             Route::Hive => "Hive",
-            Route::PortsManager => "Ports Manager",
+            Route::PortsManager => "Ports manager",
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
             Route::StoreFile => "File",

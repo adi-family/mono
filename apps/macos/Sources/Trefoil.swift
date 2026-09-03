@@ -1,18 +1,22 @@
 import Foundation
 
-/// The ADI mark: three hexagons at 120°, drawn back to front, weak to strong.
+/// The ADI mark: three hexagons at 120°, one in front (`design/DESIGN.md` §10), drawn back to
+/// front, weak to strong.
 ///
 /// This is the only definition of the geometry on the Swift side. `ADILogo` draws it in the
-/// window and `icon-gen.swift` draws it for the `.icns`; before this file existed each had its
-/// own copy of the coordinates and a comment asking whoever came next to keep them in step.
+/// window and `icon-gen.swift` draws it for the `.icns` and the iOS icon; before this file existed
+/// each had its own copy of the coordinates and a comment asking whoever came next to keep them
+/// in step. `crates/adi-ui/src/mark.rs` derives the same paths for the web and tests that they
+/// agree with the literals in `crates/adi-hive/src/notfound.rs`.
 ///
 /// **The draw order is the design.** An earlier version painted the lobes in the order they are
 /// listed but ran the tones the other way, so the lobe visually in front was the faintest — on a
 /// white ground that laid a wash of pale grey over the whole mark and the top lobe read grey
 /// rather than solid. Back to front is weak to strong, and nothing may reorder it.
 ///
-/// The mark never names its own colour: every lobe is the caller's ink at one of `tones`, so the
-/// same geometry works on any ground. See the `Build` cases for the two axes that vary.
+/// Flat. The mark takes the caller's ink at one of `tones`, or the three flat fills of the
+/// coloured build. No gloss, no gradient, no shadow — those were the mark's "lighting" until
+/// September 2026, and §10 says it is not a mascot.
 enum Trefoil {
     /// The design box every coordinate below is expressed in.
     static let box: Double = 200
@@ -24,13 +28,22 @@ enum Trefoil {
     /// Back, middle, front — in paint order. Front is the top lobe.
     static let angles: [Double] = [150, 30, -90]
 
-    /// Opacity of the caller's ink, per lobe, in the same order.
+    /// Opacity of the caller's ink, per lobe, in the same order (§10: 52%, 74%, 100%).
     ///
     /// The range is deliberately shallow at the bottom: the front lobe carries the form at full
     /// strength, so the two behind only have to be *told apart* from each other and from the
     /// ground. 52% is far enough from white to stay visible and far enough from 74% to read as a
     /// separate plane.
     static let tones: [Double] = [0.52, 0.74, 1.0]
+
+    /// The coloured build's fills, back to front: grey, orange, and the ink of wherever it sits
+    /// (`nil` here — the caller's ink). Literal on purpose: this is the app icon, and an icon
+    /// that changed with the page would be a different icon.
+    static let coloredFills: [(r: Double, g: Double, b: Double)?] = [
+        (0.549, 0.529, 0.502),   // #8C8780
+        (0.910, 0.325, 0.165),   // #E8532A
+        nil,
+    ]
 
     /// A lobe in front knocks a slightly larger hexagon out of whatever is behind it, leaving a
     /// hairline of ground between them. Below about 24pt the tones converge and this gap is the
@@ -39,22 +52,17 @@ enum Trefoil {
 
     /// Which of the two independent choices a drawing makes.
     ///
-    /// They are orthogonal: `cut` is about the gaps between lobes, `accented` is about what the
-    /// middle lobe is filled with. Small sizes want the gaps; a surface whose ground we control
-    /// can afford the accent; the marketing lockup wants neither and lets the lobes mix.
+    /// They are orthogonal: `cut` is about the gaps between lobes, `colored` is about what the
+    /// lobes are filled with. Small sizes want the gaps; the app icon and the landing take the
+    /// colour; the app itself is monochrome (§10).
     struct Build {
         /// Hairline gaps between the lobes. On below ~24pt, off above ~64pt.
         var cut: Bool = true
-        /// The middle lobe becomes the accent instead of ink.
-        ///
-        /// Never enable this on an accent-coloured ground — the lobe disappears into it.
-        var accented: Bool = false
-        /// Lobes mix rather than stack: richer above ~96pt, muddy below it.
-        var translucent: Bool = false
+        /// Grey, orange, ink instead of one ink at three tones. Never in the app.
+        var colored: Bool = false
 
-        static let icon = Build(cut: true, accented: true)
-        static let window = Build(cut: false, accented: true)
-        static let large = Build(cut: false, accented: false, translucent: true)
+        static let icon = Build(cut: true, colored: true)
+        static let window = Build(cut: true, colored: false)
     }
 
     /// Two lobes sit low and one sits high, so the three lobe centres average to the middle of
@@ -75,46 +83,6 @@ enum Trefoil {
             let radians = (Double(corner) * 60 - 90) * .pi / 180
             return (centre.x + radius * cos(radians), centre.y + radius * sin(radians))
         }
-    }
-
-    /// The opacity lobe `index` is painted at under `build`.
-    static func tone(_ index: Int, _ build: Build) -> Double {
-        build.translucent ? [0.42, 0.60, 0.88][index] : tones[index]
-    }
-
-    // MARK: gloss
-    //
-    // The lobes are lit, not filled flat: a specular wash over the upper part of each and a
-    // shade under the lower, clipped to the lobe so the gloss never leaks into the hairline gaps.
-    //
-    // The lighting is white and black laid *over* the lobe, never a ramp in the lobe's own
-    // alpha. Grading the alpha is the obvious way to do it and it is wrong — the front lobe
-    // turns translucent at its foot and whatever is behind it shows through.
-    //
-    // Kept as numbers here rather than as three hand-tuned gradients, because the SVG on the
-    // `.adi` pages has to arrive at the same surface as the Swift renderers do.
-
-    /// White over the top of the lobe: the specular.
-    static let sheenAlpha: Double = 0.38
-    /// Where the specular has faded to nothing, as a fraction of the lobe's height.
-    static let sheenEnd: Double = 0.55
-    /// Black under the bottom of the lobe, so the gloss reads as a curved surface rather than a
-    /// light leak.
-    static let shadeAlpha: Double = 0.28 
-
-    /// The accent, lit. Three stops rather than two: the middle one keeps `#FA5019` itself
-    /// present in the surface instead of leaving only the two ends of a ramp.
-    static let accentStops: [(location: Double, rgb: (Double, Double, Double))] = [
-        (0.00, (1.000, 0.541, 0.290)),   // #FF8A4A
-        (0.55, (0.980, 0.314, 0.098)),   // #FA5019
-        (1.00, (0.847, 0.220, 0.039)),   // #D8380A
-    ]
-
-    /// The vertical extent of lobe `index`, in box coordinates — where its gradients start and
-    /// stop.
-    static func span(_ index: Int) -> (top: Double, bottom: Double) {
-        let c = centre(index)
-        return (c.y - lobeRadius, c.y + lobeRadius)
     }
 
     /// The lobes that sit in front of `index` and therefore cut into it — empty when the build

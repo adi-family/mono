@@ -60,15 +60,15 @@ pub(crate) fn subprojects_panel(
                 apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {display}."),
                     fetch::create_project(body));
             }>
-                <TextField id="psub-name" label="Name" placeholder="My Sub-project" wide=true
+                <TextField id="psub-name" label="Name" placeholder="My sub-project" wide=true
                     field_class="adi-field--grow" value=name />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add sub-project"
                 </button>
             </form>
             <div class="adi-hint">
-                "These are full projects (each with its own directory, tasks, agents, and triggers),
-                 nested here. They appear in the global " <code>"Projects"</code> " list too."
+                "These are full projects (each with its own directory, tasks, agents, and triggers), "
+                "nested here. They appear in the global projects list too."
             </div>
         </section>
     }
@@ -112,15 +112,15 @@ fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// is what lets the user hide and reorder columns without the row builder knowing about it.
 fn subproject_cell(col: &str, p: &Project, state: State, route: RwSignal<Route>) -> AnyView {
     match col {
-        "ID" => view! { <span class="font-mono">{p.id.clone()}</span> }.into_any(),
+        "ID" => view! { <span class="adi-mono adi-muted">{p.id.clone()}</span> }.into_any(),
         "Created" => {
-            view! { <span class="font-mono text-meta">{fmt_date(p.created_at)}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{fmt_date(p.created_at)}</span> }.into_any()
         }
         "Status" => {
             if p.is_archived() {
-                view! { <span><span class="adi-chip">"Archived"</span></span> }.into_any()
+                view! { <span><span class="adi-tstatus" data-status="archived">"Archived"</span></span> }.into_any()
             } else {
-                view! { <span><span class="adi-muted">"Active"</span></span> }.into_any()
+                view! { <span><span class="adi-muted">"active"</span></span> }.into_any()
             }
         }
         // "Name", and anything the layout offers that this match doesn't name.
@@ -130,7 +130,7 @@ fn subproject_cell(col: &str, p: &Project, state: State, route: RwSignal<Route>)
             let title = p.description.clone().unwrap_or_default();
             view! {
                 <span title=title>
-                    <a class="adi-btn adi-btn--link" href=href
+                    <a href=href
                         on:click=move |ev: web_sys::MouseEvent| {
                             if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                             ev.prevent_default();

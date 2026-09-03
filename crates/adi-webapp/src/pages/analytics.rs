@@ -83,7 +83,7 @@ struct Busy {
 /// Everything in flight, most recently active first.
 ///
 /// This is exactly what the Overview's "working right now" counts — [`AgentStats::busy`] — which is
-/// why it sits above it: the tile says how many, and this says which. The two read the same two
+/// why it sits above it: the number says how many, and this says which. The two read the same two
 /// listings for the same reason, so a machine cannot be told it has three agents working and then
 /// shown two.
 fn busy_now(state: State) -> Vec<Busy> {
@@ -165,7 +165,7 @@ fn running_view(state: State) -> AnyView {
             view! { <div class="adi-empty">"Nothing is running right now."</div> }.into_any()
         }
         _ => view! {
-            <div class="adi-panel__body">
+            <div class="adi-an-nows">
                 {rows.into_iter().map(|b| busy_row(state, b)).collect::<Vec<_>>()}
             </div>
         }
@@ -175,8 +175,8 @@ fn running_view(state: State) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Running now"</h2>
-                <span class="adi-chip adi-mono" title="runs in flight, plus live interactive sessions">
-                    {if loading { "\u{2014}".to_string() } else { count.to_string() }}
+                <span class="adi-updated" title="runs in flight, plus live interactive sessions">
+                    {if loading { "\u{2014}".to_string() } else { format!("{count} in flight") }}
                 </span>
                 <span class="adi-spacer"></span>
                 // Its own island, like the Overview's: `updated_text` reads the seconds ticker, and
@@ -207,11 +207,7 @@ fn busy_row(state: State, b: Busy) -> AnyView {
         last_activity,
         session,
     } = b;
-    let state_word = if session {
-        "\u{25CF} live session"
-    } else {
-        "\u{25CF} running"
-    };
+    let state_word = if session { "live session" } else { "running" };
     // A pty session was never given a task, and a headless run whose message the server couldn't
     // carry is the same shape of nothing. Neither is an empty cell, which would read as an agent
     // sitting there doing nothing.
@@ -228,15 +224,12 @@ fn busy_row(state: State, b: Busy) -> AnyView {
         ms => format!("started {}", fmt_date(ms / 1000)),
     };
     view! {
-        <div class="adi-nowrow">
-            <span class="adi-nowrow__state">{state_word}</span>
-            <span class="adi-nowrow__name font-mono" title=backend>{agent}</span>
-            {(!project.is_empty())
-                .then(|| view! { <span class="adi-chip adi-mono">{project}</span> })}
-            <span class="adi-nowrow__task font-mono" class:adi-muted=untasked title=hover>
-                {shown}
-            </span>
-            <span class="adi-nowrow__meta text-meta" title=started_title>
+        <div class="adi-an-now">
+            <span class="adi-an-now__state">{dot("running")}{state_word}</span>
+            <span class="adi-an-now__name" title=backend>{agent}</span>
+            {(!project.is_empty()).then(|| view! { <span class="adi-chip">{project}</span> })}
+            <span class="adi-an-now__task" class:adi-muted=untasked title=hover>{shown}</span>
+            <span class="adi-an-now__meta" title=started_title>
                 {move || {
                     state.secs_since.track();
                     busy_meta(started_at, last_activity, session)
@@ -299,6 +292,18 @@ impl AgentStats {
         self.running > 0 || self.live_session
     }
 
+    /// The 6px dot before the state word: the accent for anything live, amber for a question
+    /// nobody has answered, nothing for the quiet states.
+    fn dot(&self) -> Option<&'static str> {
+        if self.running > 0 || (self.waiting == 0 && self.live_session) {
+            Some("running")
+        } else if self.waiting > 0 {
+            Some("warn")
+        } else {
+            None
+        }
+    }
+
     /// Whether this agent has never been used, as far as anything on this machine can tell. An
     /// interactive agent is excluded whatever its run count: it keeps no history to be empty.
     fn never_ran(&self) -> bool {
@@ -309,11 +314,11 @@ impl AgentStats {
     /// blocked on a person, alive, never used, otherwise quiet.
     fn state(&self) -> &'static str {
         if self.running > 0 {
-            "\u{25CF} running"
+            "running"
         } else if self.waiting > 0 {
             "waiting on you"
         } else if self.live_session {
-            "\u{25CF} live session"
+            "live session"
         } else if !self.defined {
             "removed"
         } else if self.never_ran() {
@@ -442,10 +447,11 @@ fn all_runs(state: State) -> Vec<AgentRunInfo> {
         .unwrap_or_default()
 }
 
-// ---- the overview tiles ------------------------------------------------------------------------
+// ---- the overview -----------------------------------------------------------------------------
 
-/// The totals, as a row of tiles: how many agents there are, how many of them are working, how
-/// many have never been used, and what the runs behind those numbers came to.
+/// The totals. A row of three numbers, a line of detail under them, then the four counts that are
+/// worth reading only when they are not zero, as a key-value list (DESIGN.md §6: stats are a row
+/// of numbers, never boxes).
 fn overview_view(state: State) -> AnyView {
     let rows = agent_stats(state);
     let runs = all_runs(state);
@@ -493,6 +499,11 @@ fn overview_view(state: State) -> AnyView {
             .sum()
     };
     let (today_cost, week_cost) = (day_cost(1), day_cost(7));
+    let detail = format!(
+        "{busy} working right now · {today_runs} today, {week_runs} this week · {} today, {} this week",
+        fmt_money(today_cost),
+        fmt_money(week_cost),
+    );
 
     view! {
         <section class="adi-panel">
@@ -505,43 +516,52 @@ fn overview_view(state: State) -> AnyView {
                     {move || updated_text(state.all_chats, state.secs_since)}
                 </span>
             </div>
-            <div class="adi-stats">
-                {stat(agents.to_string(), "Agents", format!("{busy} working right now"), "")}
-                {stat(runs.len().to_string(), "Runs on record",
-                    format!("{today_runs} today · {week_runs} this week"), "")}
-                {stat(running.to_string(), "Running now",
-                    "across every agent".to_string(),
-                    if running > 0 { "adi-stat--live" } else { "" })}
-                {stat(waiting.to_string(), "Waiting on you",
-                    "conversations stopped on a question".to_string(),
-                    if waiting > 0 { "adi-stat--warn" } else { "" })}
-                {stat(never.to_string(), "Never run",
-                    "defined, never launched".to_string(),
-                    if never > 0 { "adi-stat--warn" } else { "" })}
-                {stat(failed.to_string(), "Ended in error",
-                    "the engine's own verdict".to_string(),
-                    if failed > 0 { "adi-stat--down" } else { "" })}
-                {stat(fmt_cost(cost), "Spend",
-                    format!("{} today · {} this week", fmt_money(today_cost), fmt_money(week_cost)),
-                    "")}
+            <div class="adi-an-stats">
+                {stat(agents.to_string(), "agents")}
+                {stat(runs.len().to_string(), "runs on record")}
+                {stat(fmt_money(cost), "spent")}
             </div>
+            <div class="adi-an-fine">{detail}</div>
+            <dl class="adi-an-kv">
+                <dt>"Running now"</dt>
+                <dd>{count(running, "running", "across every agent")}</dd>
+                <dt>"Waiting on you"</dt>
+                <dd>{count(waiting, "warn", "conversations stopped on a question")}</dd>
+                <dt>"Never run"</dt>
+                <dd>{count(never, "warn", "defined, never launched")}</dd>
+                <dt>"Ended in error"</dt>
+                <dd>{count(failed, "err", "the engine's own verdict")}</dd>
+            </dl>
         </section>
     }
     .into_any()
 }
 
-/// One tile: the number, what it counts, and a line of context under it. `tone` is a modifier
-/// class — empty for the ordinary case, so a screen where nothing is wrong has no colour on it at
-/// all and the one tile that lights up is the one worth reading.
-fn stat(value: String, label: &'static str, note: String, tone: &'static str) -> AnyView {
+/// One number in the stats row: 20px, with its label under it.
+fn stat(value: String, label: &'static str) -> AnyView {
     view! {
-        <div class=format!("adi-stat {tone}")>
-            <span class="adi-stat__value">{value}</span>
-            <span class="adi-stat__label">{label}</span>
-            <span class="adi-stat__note">{note}</span>
+        <div class="adi-an-stat">
+            <b>{value}</b>
+            <span>{label}</span>
         </div>
     }
     .into_any()
+}
+
+/// A count worth reading only when it is not zero: a dot in the state's colour before the number,
+/// and a dimmed `0` otherwise, so a screen where nothing is wrong has no colour on it at all.
+fn count(n: usize, tone: &'static str, title: &'static str) -> AnyView {
+    if n == 0 {
+        return view! { <span class="adi-muted" title=title>"0"</span> }.into_any();
+    }
+    view! { <span title=title>{dot(tone)}{n.to_string()}</span> }.into_any()
+}
+
+/// A 6px dot in a state's colour — `running`, `ok`, `warn` or `err` — before the word or number
+/// it qualifies. The one form a semantic colour takes on this page.
+fn dot(tone: &'static str) -> AnyView {
+    view! { <span class=format!("adi-an-dot adi-an-dot--{tone}") aria-hidden="true"></span> }
+        .into_any()
 }
 
 // ---- the activity chart ------------------------------------------------------------------------
@@ -609,10 +629,10 @@ fn activity_view(state: State, spend: RwSignal<bool>) -> AnyView {
             let is_today = day == today;
             let hover = format!("{date} — {} run(s) · {}", d.runs, fmt_money(d.cost_micro));
             view! {
-                <div class="adi-spark__col" title=hover>
-                    <span class="adi-spark__bar" class:adi-spark__bar--today=is_today
+                <div class="adi-an-spark__col" title=hover>
+                    <span class="adi-an-spark__bar" class:adi-an-spark__bar--today=is_today
                         style=format!("height:{height}")></span>
-                    <span class="adi-spark__day">{if is_today {
+                    <span class="adi-an-spark__day">{if is_today {
                         "today".to_string()
                     } else {
                         date.chars().skip(5).collect::<String>()
@@ -626,16 +646,17 @@ fn activity_view(state: State, spend: RwSignal<bool>) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Activity"</h2>
-                <span class="adi-chip adi-mono" title="the last 14 days, added up">
-                    {if showing_spend { fmt_money(total) } else { total.to_string() }}
+                <span class="adi-updated" title="the last 14 days, added up">
+                    {if showing_spend {
+                        format!("{} spent, per day", fmt_money(total))
+                    } else {
+                        format!("{total} runs started, per day")
+                    }}
                 </span>
                 <span class="adi-spacer"></span>
-                <span class="adi-updated">
-                    {if showing_spend { "spend, per day" } else { "runs started, per day" }}
-                </span>
                 {segmented("What the bars measure", spend, "Runs", "Spend")}
             </div>
-            <div class="adi-spark">{bars}</div>
+            <div class="adi-an-spark">{bars}</div>
         </section>
     }
     .into_any()
@@ -657,12 +678,10 @@ fn agents_panel(state: State) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"By agent"</h2>
-                <span class="adi-chip adi-mono" title="agents defined on this machine">
+                <span class="adi-updated" title="agents defined on this machine">
                     {move || state.agents.get().map_or_else(|| "\u{2014}".to_string(),
-                        |a| a.agents.len().to_string())}
+                        |a| format!("{} agents, and what each has run", a.agents.len()))}
                 </span>
-                <span class="adi-spacer"></span>
-                <span class="adi-updated">"every agent, and what it has run"</span>
             </div>
             <Table state=state.tables.analytics_agents>{move || agent_rows(state)}</Table>
         </section>
@@ -712,25 +731,21 @@ fn agent_key(s: &AgentStats, col: &str) -> Key {
 
 /// One agent row's cell under `col`. Matching the header text — the same key the sort uses — is
 /// what lets the user hide and reorder columns without the row builder knowing about it.
+///
+/// Every number is sans and tabular; a count that is only worth reading when it isn't zero is a
+/// dash otherwise, so the eye finds the three rows that failed in a table of forty that didn't.
 fn agent_cell(col: &str, s: &AgentStats) -> AnyView {
-    /// A count that is only worth reading when it isn't zero: a dash otherwise, so the eye finds
-    /// the three rows that failed in a table of forty that didn't. `tone` is a design token, so
-    /// the colour follows the theme rather than being spelled twice.
-    fn count(n: usize, tone: &'static str) -> AnyView {
+    fn tally(n: usize, tone: &'static str) -> AnyView {
         if n == 0 {
             return view! { <span class="adi-muted">"—"</span> }.into_any();
         }
-        view! {
-            <span class="font-mono" style=format!("color:var(--{tone})")>{n.to_string()}</span>
-        }
-        .into_any()
+        view! { <span class="adi-tabnums">{dot(tone)}{n.to_string()}</span> }.into_any()
     }
     match col {
         "Project" => match s.project.is_empty() {
             true => view! { <span class="adi-muted">"—"</span> }.into_any(),
             false => {
-                view! { <span><span class="adi-chip adi-mono">{s.project.clone()}</span></span> }
-                    .into_any()
+                view! { <span><span class="adi-chip">{s.project.clone()}</span></span> }.into_any()
             }
         },
         "State" => {
@@ -743,28 +758,28 @@ fn agent_cell(col: &str, s: &AgentStats) -> AnyView {
                 ""
             };
             view! {
-                <span title=title class:adi-muted=quiet>{s.state()}</span>
+                <span title=title class:adi-muted=quiet>{s.dot().map(dot)}{s.state()}</span>
             }
             .into_any()
         }
         "Runs" => match (s.interactive, s.runs) {
             (true, 0) => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            (_, n) => view! { <span class="font-mono">{n.to_string()}</span> }.into_any(),
+            (_, n) => view! { <span class="adi-tabnums">{n.to_string()}</span> }.into_any(),
         },
-        "Running" => count(s.running, "online"),
-        "Failed" => count(s.failed, "down"),
-        "Waiting" => count(s.waiting, "warn"),
+        "Running" => tally(s.running, "running"),
+        "Failed" => tally(s.failed, "err"),
+        "Waiting" => tally(s.waiting, "warn"),
         // The turn count has no column of its own — ten of those already run past the edge of a
         // narrow main column — so it rides here, where a reader who wants to know what the money
         // bought is already looking.
         "Cost" => view! {
-            <span class="font-mono text-meta" title=format!("{} turns", s.turns)>
+            <span class="adi-tabnums text-ink-2" title=format!("{} turns", s.turns)>
                 {fmt_cost(s.cost_micro)}
             </span>
         }
         .into_any(),
         "Last run" => view! {
-            <span class="text-meta" style="white-space:nowrap">{ago(s.last)}</span>
+            <span class="adi-muted whitespace-nowrap">{ago(s.last)}</span>
         }
         .into_any(),
         // "Agent", and anything the layout offers that this match doesn't name. The backend has
@@ -794,19 +809,17 @@ fn idle_view(state: State) -> AnyView {
         .iter()
         .map(|s| {
             let title = format!("{} · never launched", s.backend);
-            view! { <span class="adi-chip adi-mono" title=title>{s.name.clone()}</span> }
+            view! { <span class="adi-chip" title=title>{s.name.clone()}</span> }
         })
         .collect::<Vec<_>>();
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Never run"</h2>
-                <span class="adi-chip adi-mono">{idle.len().to_string()}</span>
-                <span class="adi-spacer"></span>
-                <span class="adi-updated">"defined here, never launched"</span>
+                <span class="adi-updated">{format!("{} defined here, never launched", idle.len())}</span>
             </div>
             <div class="adi-panel__body">
-                <div class="adi-chiprow">{chips}</div>
+                <div class="adi-an-chips">{chips}</div>
                 <div class="adi-hint">
                     "Interactive (pty) agents are left out: their live session " <em>"is"</em>
                     " the run, so they keep no history for this to count."
@@ -850,15 +863,18 @@ fn outcomes_view(state: State) -> AnyView {
         .into_iter()
         .map(|((is_error, reason), n)| {
             let width = format!("width:{}%", (n * 100 / total).max(1));
+            // The reason is the engine's own enum value (`end_turn`, `max_turns`), so it is a
+            // machine string and stays mono; the count beside it is a number and is not.
             view! {
-                <div class="adi-endrow">
-                    <span class="adi-endrow__name font-mono"
-                        style=if is_error { "color:var(--down)" } else { "" }>{reason}</span>
-                    <span class="adi-endrow__track">
-                        <span class="adi-endrow__fill" class:adi-endrow__fill--err=is_error
+                <div class="adi-an-end">
+                    <span class="adi-an-end__name adi-mono" class:adi-an-end__name--err=is_error>
+                        {reason}
+                    </span>
+                    <span class="adi-an-end__track">
+                        <span class="adi-an-end__fill" class:adi-an-end__fill--err=is_error
                             style=width></span>
                     </span>
-                    <span class="adi-endrow__n font-mono">{n.to_string()}</span>
+                    <span class="adi-an-end__n">{n.to_string()}</span>
                 </div>
             }
         })
@@ -867,13 +883,11 @@ fn outcomes_view(state: State) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"How runs ended"</h2>
-                <span class="adi-chip adi-mono" title="runs that reported an ending">
-                    {total.to_string()}
+                <span class="adi-updated" title="runs that reported an ending">
+                    {format!("{total} runs, by the engine's own verdict")}
                 </span>
-                <span class="adi-spacer"></span>
-                <span class="adi-updated">"the engine's own verdict"</span>
             </div>
-            <div class="adi-panel__body">{bars}</div>
+            <div class="adi-an-ends">{bars}</div>
         </section>
     }
     .into_any()
@@ -922,12 +936,13 @@ fn ago(ms: u64) -> String {
     }
 }
 
-/// A coarse elapsed time for something still going: seconds up to a minute, then minutes, then
-/// hours and days. Deliberately not [`ago`]'s wording — "12m ago" names a moment in the past, and a
-/// run that has been working for twelve minutes is not one.
+/// A coarse elapsed time for something still going: minutes, then hours and days — never raw
+/// seconds, which read as a stopwatch on a panel that is glanced at (DESIGN.md §8). Deliberately
+/// not [`ago`]'s wording — "12m ago" names a moment in the past, and a run that has been working
+/// for twelve minutes is not one.
 fn dur(secs: u64) -> String {
     match secs {
-        s if s < 60 => format!("{s}s"),
+        s if s < 60 => "<1m".to_string(),
         s if s < 3_600 => format!("{}m", s / 60),
         s if s < 86_400 => format!("{}h {:02}m", s / 3_600, (s % 3_600) / 60),
         s => format!("{}d {}h", s / 86_400, (s % 86_400) / 3_600),
@@ -970,8 +985,8 @@ mod tests {
     /// been going "11m", which is not the same sentence as "11m ago".
     #[test]
     fn an_elapsed_time_reads_as_a_duration() {
-        assert_eq!(dur(0), "0s");
-        assert_eq!(dur(59), "59s");
+        assert_eq!(dur(0), "<1m");
+        assert_eq!(dur(59), "<1m");
         assert_eq!(dur(60), "1m");
         assert_eq!(dur(3_599), "59m");
         assert_eq!(dur(3_600), "1h 00m");

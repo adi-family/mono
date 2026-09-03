@@ -1,17 +1,48 @@
-// Utility layer: a few single-purpose helpers. Kept deliberately small — reach for a
-// component before adding utilities.
+// Utility layer: a few single-purpose helpers. Reach for a component before adding one.
 
+@use "mixins" as *;
+
+// A machine string. The only way text becomes monospace in the app.
 .adi-mono {
-  font-family: var(--font-mono), monospace;
-  font-variant-numeric: tabular-nums;
+  @include mono;
 }
 
 .adi-muted {
-  color: var(--muted);
+  color: var(--ink-3);
 }
 
 .adi-tabnums {
   font-variant-numeric: tabular-nums;
+}
+
+// A label, wherever one is written outside a field or a table.
+.adi-label {
+  @include label;
+}
+
+// A link inside prose: says it is one without borrowing the accent.
+.adi-link {
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--ink-3);
+  cursor: pointer;
+
+  &:hover { color: var(--ink); }
+}
+
+// A native checkbox, in the ink rather than the platform's blue and never the accent.
+.adi-check {
+  accent-color: var(--ink);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+// An error sentence under a control.
+.adi-error {
+  color: var(--err);
+  font-size: var(--fs-small);
 }
 
 // Visually hidden but available to assistive tech.

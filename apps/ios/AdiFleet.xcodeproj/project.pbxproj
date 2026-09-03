@@ -8,17 +8,24 @@
 
 /* Begin PBXBuildFile section */
 		060FC297C72073A05484A82A /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */; };
+		0976FE606622E4266C65EACF /* Geist[wght].ttf in Resources */ = {isa = PBXBuildFile; fileRef = B08E124653CDC54E36FC7FEB /* Geist[wght].ttf */; };
 		258DE79A1FE477BEF77454AE /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C479E979A7B9FBAE75B67D4E /* PairView.swift */; };
 		29957511B7645E68FFC80926 /* Mesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9022E6221D9CC1870992A9F6 /* Mesh.swift */; };
 		2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F738BDAB8A92EFA4D13E943E /* Assets.xcassets */; };
+		3923397D0A9DB2204EFCAC38 /* GeistMono-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = 726E0441DA08761438379449 /* GeistMono-OFL.txt */; };
 		4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */; };
 		4FF44BF699BB2558112D36D2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 135E1D5460ED7431969EB180 /* Security.framework */; };
 		5B48B38EA6EBF7E748F3DFA2 /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B79D8C3479F11081A748B93 /* ScanView.swift */; };
 		74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */; };
 		75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */; };
+		850DA264F8D1E30CDAABAE25 /* Tokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEC99AB0DF2D1A56322D0C95 /* Tokens.swift */; };
+		945D16C8E59A6C5BD5A44EBB /* Geist-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = C2FD3298A806EB2FEE54441C /* Geist-OFL.txt */; };
 		A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93220237C7671FE362AFB6 /* Keychain.swift */; };
+		AD8E142750B4B71A986D65D5 /* Controls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606E0EFFFB2F33BB622FE479 /* Controls.swift */; };
 		C811A4995BB1ABDCE2AA4A82 /* FleetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B455AF868E08BF351E128AE /* FleetModel.swift */; };
+		CAB46B81E5BE16748FF0DE50 /* Lucide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21D4962C7FB4022F26C9480F /* Lucide.swift */; };
 		D26FFD637E3AD03F4911273C /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F3427042990FA8C265C9C8 /* ScreenshotTests.swift */; };
+		DA6F97E6A3917BCA367F63A6 /* GeistMono[wght].ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0DEA0B4D7062D5708F038D4 /* GeistMono[wght].ttf */; };
 		F6A40E278675D3FC64C67299 /* ServiceWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */; };
 		FB7AB119801270FDC547ED7E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D074423A31FA51BC8156B3CF /* ContentView.swift */; };
 /* End PBXBuildFile section */
@@ -40,15 +47,22 @@
 		135E1D5460ED7431969EB180 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		1749117E8649A1A160365B69 /* AdiFleet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AdiFleet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreenLink.swift; sourceTree = "<group>"; };
+		21D4962C7FB4022F26C9480F /* Lucide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Lucide.swift; sourceTree = "<group>"; };
 		44262FFE6FE69FE791F924BD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		606E0EFFFB2F33BB622FE479 /* Controls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Controls.swift; sourceTree = "<group>"; };
 		61F3427042990FA8C265C9C8 /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
 		6B79D8C3479F11081A748B93 /* ScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanView.swift; sourceTree = "<group>"; };
+		726E0441DA08761438379449 /* GeistMono-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GeistMono-OFL.txt"; sourceTree = "<group>"; };
 		74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceWebView.swift; sourceTree = "<group>"; };
 		9022E6221D9CC1870992A9F6 /* Mesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mesh.swift; sourceTree = "<group>"; };
 		9B455AF868E08BF351E128AE /* FleetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetModel.swift; sourceTree = "<group>"; };
 		AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkChange.swift; sourceTree = "<group>"; };
 		AC93220237C7671FE362AFB6 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
+		AEC99AB0DF2D1A56322D0C95 /* Tokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tokens.swift; sourceTree = "<group>"; };
+		B08E124653CDC54E36FC7FEB /* Geist[wght].ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "Geist[wght].ttf"; sourceTree = "<group>"; };
+		B0DEA0B4D7062D5708F038D4 /* GeistMono[wght].ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "GeistMono[wght].ttf"; sourceTree = "<group>"; };
+		C2FD3298A806EB2FEE54441C /* Geist-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Geist-OFL.txt"; sourceTree = "<group>"; };
 		C479E979A7B9FBAE75B67D4E /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		D074423A31FA51BC8156B3CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		F738BDAB8A92EFA4D13E943E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -67,6 +81,17 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		3925E4B8E8361E4AF8228D38 /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				C2FD3298A806EB2FEE54441C /* Geist-OFL.txt */,
+				B08E124653CDC54E36FC7FEB /* Geist[wght].ttf */,
+				726E0441DA08761438379449 /* GeistMono-OFL.txt */,
+				B0DEA0B4D7062D5708F038D4 /* GeistMono[wght].ttf */,
+			);
+			path = Fonts;
+			sourceTree = "<group>";
+		};
 		4AF0E43F657C769849323974 /* AdiFleetUITests */ = {
 			isa = PBXGroup;
 			children = (
@@ -101,15 +126,19 @@
 				F738BDAB8A92EFA4D13E943E /* Assets.xcassets */,
 				11F0C3FB658F3828AAC70CA1 /* Bridging-Header.h */,
 				D074423A31FA51BC8156B3CF /* ContentView.swift */,
+				606E0EFFFB2F33BB622FE479 /* Controls.swift */,
 				9B455AF868E08BF351E128AE /* FleetModel.swift */,
 				1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */,
 				44262FFE6FE69FE791F924BD /* Info.plist */,
 				AC93220237C7671FE362AFB6 /* Keychain.swift */,
+				21D4962C7FB4022F26C9480F /* Lucide.swift */,
 				9022E6221D9CC1870992A9F6 /* Mesh.swift */,
 				AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */,
 				C479E979A7B9FBAE75B67D4E /* PairView.swift */,
 				6B79D8C3479F11081A748B93 /* ScanView.swift */,
 				77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */,
+				AEC99AB0DF2D1A56322D0C95 /* Tokens.swift */,
+				3925E4B8E8361E4AF8228D38 /* Fonts */,
 			);
 			path = AdiFleet;
 			sourceTree = "<group>";
@@ -209,6 +238,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */,
+				945D16C8E59A6C5BD5A44EBB /* Geist-OFL.txt in Resources */,
+				3923397D0A9DB2204EFCAC38 /* GeistMono-OFL.txt in Resources */,
+				DA6F97E6A3917BCA367F63A6 /* GeistMono[wght].ttf in Resources */,
+				0976FE606622E4266C65EACF /* Geist[wght].ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -221,14 +254,17 @@
 			files = (
 				75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */,
 				FB7AB119801270FDC547ED7E /* ContentView.swift in Sources */,
+				AD8E142750B4B71A986D65D5 /* Controls.swift in Sources */,
 				C811A4995BB1ABDCE2AA4A82 /* FleetModel.swift in Sources */,
 				4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */,
 				A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */,
+				CAB46B81E5BE16748FF0DE50 /* Lucide.swift in Sources */,
 				29957511B7645E68FFC80926 /* Mesh.swift in Sources */,
 				74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */,
 				258DE79A1FE477BEF77454AE /* PairView.swift in Sources */,
 				5B48B38EA6EBF7E748F3DFA2 /* ScanView.swift in Sources */,
 				F6A40E278675D3FC64C67299 /* ServiceWebView.swift in Sources */,
+				850DA264F8D1E30CDAABAE25 /* Tokens.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

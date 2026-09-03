@@ -23,7 +23,7 @@ export default async function status(ctx: Ctx) {
       for (const [key, value] of Object.entries(data)) {
         const dt = document.createElement("dt");
         dt.textContent = key;
-        dt.style.cssText = "color:var(--muted)";
+        dt.style.cssText = "color:var(--ink-3)";
         const dd = document.createElement("dd");
         dd.textContent = String(value);
         dd.style.cssText = "margin:0;font-family:ui-monospace,SFMono-Regular,monospace";

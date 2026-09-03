@@ -69,14 +69,11 @@ impl Token {
 /// it is invisible in plain text. Two rather than a longer cycle: with two, *every* neighbouring
 /// pair differs by the full step, which is the one thing a reader is looking for.
 ///
-/// The ink token at two low alphas, rather than named surfaces, because the named surfaces cannot
-/// do this job. `--panel-alt`, `--bubble`, `--selected` and `--card` exist to separate *large
-/// areas* — a panel beside a card — and sit within **1.012:1** of one another (measured, not
-/// guessed). As adjacent chips they were invisible, and since [`Panel`](crate::Panel) is itself
-/// `bg-card`, every fourth token was painted in exactly its own background and got no chip at all.
-/// Ink over the card gives a real step (boundary 1.33:1 light, 1.49:1 dark) and, being one token at
-/// two alphas, stays right in both themes without implying this chip *means* something its
-/// neighbour does not. Spelled as whole literals so Tailwind finds them.
+/// The ink token at two low alphas, rather than named surfaces, because the surface ladder
+/// cannot do this job: its steps separate *large areas* and sit a few points apart, which as
+/// adjacent chips is invisible. Ink over the raised surface gives a real step and, being one
+/// token at two alphas, never implies this chip *means* something its neighbour does not.
+/// Spelled as whole literals so Tailwind finds them.
 const TINTS: [&str; 2] = ["bg-ink/10", "bg-ink/22"];
 
 /// What a chip made of nothing but a break still needs: something to hold the colour open.
@@ -88,7 +85,7 @@ fn body(text: &str) -> Vec<AnyView> {
     for (i, piece) in text.split('\n').enumerate() {
         if i > 0 {
             // The arrow, then the real break. Both, in that order, is the whole trick.
-            out.push(view! { <span class="text-fainter select-none">"⏎"</span>"\n" }.into_any());
+            out.push(view! { <span class="text-ink-3 select-none">"⏎"</span>"\n" }.into_any());
         }
         if !piece.is_empty() {
             out.push(piece.to_string().into_any());
@@ -126,8 +123,11 @@ pub fn TokenStream(
             .into_iter()
             .enumerate()
             .map(|(i, t)| {
+                // The template's own seams are the one kind of token that means something:
+                // marked by weight and an underline, not by a colour the system reserves for
+                // states.
                 let tint = if t.special {
-                    "bg-accent-soft text-accent"
+                    "bg-chip font-medium text-ink underline decoration-ink-3 underline-offset-2"
                 } else {
                     TINTS[i % TINTS.len()]
                 };
@@ -147,7 +147,7 @@ pub fn TokenStream(
         // `pre-wrap` is what makes the break in `body` land, and what keeps the leading space
         // a token carries from being folded away by the browser.
         <div class=merge(
-            "font-mono text-mini leading-[2.1] whitespace-pre-wrap break-words text-body",
+            "font-mono text-mono leading-[2.1] whitespace-pre-wrap break-words text-code",
             class,
         )>
             {chips}
@@ -182,7 +182,7 @@ pub fn PromptText(
                 }
                 out.push(
                     view! {
-                        <span class="rounded-sm bg-accent-soft px-0.5 text-accent">
+                        <span class="rounded-sm bg-chip px-0.5 font-medium text-ink underline decoration-ink-3 underline-offset-2">
                             {t.text}
                         </span>
                     }
@@ -200,7 +200,7 @@ pub fn PromptText(
 
     view! {
         <div class=merge(
-            "font-mono text-mini leading-relaxed whitespace-pre-wrap break-words text-body",
+            "font-mono text-mono leading-[1.6] whitespace-pre-wrap break-words text-code",
             class,
         )>
             {runs}

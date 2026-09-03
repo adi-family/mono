@@ -5,11 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>adi · control panel</title>
 
-<!-- Installable-app metadata. The theme colour follows the active theme, matching the
-     `bg` token from adi-css so the window chrome is continuous with the page. -->
+<!-- Installable-app metadata. The app is dark (design/DESIGN.md §3); the theme colour is the
+     `--bg-side` token, so the window chrome is continuous with the bars. -->
 <link rel="manifest" href="/manifest.webmanifest">
-<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0a0b0d" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#101010">
+<meta name="color-scheme" content="dark">
 <meta name="application-name" content="adi">
 <meta name="mobile-web-app-capable" content="yes">
 <!-- iOS installs from Share → "Add to Home Screen"; these are the knobs it reads. The
@@ -17,7 +17,7 @@
      still only understands this spelling. -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="adi">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <link rel="icon" href="/assets/favicon.png" sizes="32x32" type="image/png">
 <link rel="icon" href="/assets/icon-192.png" sizes="192x192" type="image/png">
 <!-- Last, so it wins wherever it is understood: a browser takes the final `rel="icon"` it
@@ -25,21 +25,10 @@
 <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 
-<!-- Theme before first paint. `apply_saved_theme()` does the same thing from wasm, but that runs
-     a bundle-download later — long enough for the boot splash below to paint in the OS theme and
-     then snap to a saved override that disagrees with it. -->
-<script>
-(function () {
-  try {
-    var t = localStorage.getItem("adi-theme");
-    if (t) document.documentElement.setAttribute("data-theme", t);
-  } catch (e) { /* private mode: fall through to the OS preference */ }
-})();
-</script>
 
 <link data-trunk rel="rust" />
-<!-- adi-ui first, adi-css second: where the two name the same token, the second wins, and
-     nothing already on this page should change colour. See styles/tailwind.css. -->
+<!-- adi-ui first, adi-css second. Both resolve to design/tokens.css, so the order only decides
+     which reset wins where they overlap; see styles/tailwind.css. -->
 <link data-trunk rel="tailwind-css" href="styles/tailwind.css" />
 <link data-trunk rel="scss" href="styles/main.scss" />
 <!-- adi-ui's @font-face rules resolve against the dist root, so the files have to land there. -->
@@ -133,42 +122,20 @@
      page's own theme. `drop_boot_splash()` removes this node once the app mounts, and the app
      keeps showing the same splash (`.adi-boot`) until /api/meta says whether to onboard or chat.
 
-     The Trefoil is written out here because there is no wasm yet to draw it, and drawn by
+     The mark is written out here because there is no wasm yet to draw it, and drawn by
      `Mark` in adi-ui on the other side of the handover. `every_copy_of_the_mark_agrees` in
      src/pwa.rs fails if the two ever stop being the same mark. This is the solid build: above
      ~64px the lobes no longer need hairline gaps to stay apart, and the splash is never
-     smaller than 72. -->
+     smaller than 72. Monochrome and flat, as design/DESIGN.md §10 says every copy is. -->
 <div id="adi-boot" class="adi-boot">
   <svg class="adi-boot__mark" viewBox="0 0 200 200" fill="none" aria-hidden="true">
-    <defs>
-      <linearGradient id="adi-mark-gloss" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>
-        <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
-        <stop offset=".55" stop-color="#000000" stop-opacity="0"/>
-        <stop offset="1" stop-color="#000000" stop-opacity=".28"/>
-      </linearGradient>
-      <linearGradient id="adi-mark-accent" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0" stop-color="#FF8A4A"/>
-        <stop offset=".55" stop-color="#FA5019"/>
-        <stop offset="1" stop-color="#D8380A"/>
-      </linearGradient>
-    </defs>
     <g class="adi-mark__lobes">
-      <g class="adi-mark__lobe adi-mark__lobe--back">
-        <path fill="currentColor" fill-opacity="0.52" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
-      </g>
-      <g class="adi-mark__lobe adi-mark__lobe--mid">
-        <path fill="url(#adi-mark-accent)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
-      </g>
-      <g class="adi-mark__lobe adi-mark__lobe--front">
-        <path fill="currentColor" fill-opacity="1" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
-      </g>
+      <path fill="currentColor" fill-opacity="0.52" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
+      <path fill="currentColor" fill-opacity="0.74" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
+      <path fill="currentColor" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
     </g>
   </svg>
-  <span class="adi-boot__logo">adi<span class="adi-boot__dot">.</span></span>
+  <span class="adi-boot__logo">adi</span>
 </div>
 </body>
 </html>

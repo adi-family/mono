@@ -168,11 +168,9 @@ fn picker(
 ) -> impl IntoView {
     view! {
         <button
-            class="absolute -bottom-0.5 -right-0.5 grid size-3 place-items-center rounded-full \
-                   border border-dim bg-card text-meta hover:text-accent \
-                   focus-visible:outline-1 focus-visible:outline-accent"
+            class="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full \
+                   border border-line-strong bg-raise text-ink-3 hover:text-ink"
             type="button"
-            aria-label="Choose the speech engine"
             title="Choose the speech engine"
             on:click=move |_| {
                 picking.update(|open| *open = !*open);
@@ -181,10 +179,11 @@ fn picker(
                 }
             }
         >
-            <svg class="size-2" viewBox="0 0 8 8" fill="none" stroke="currentColor"
-                 stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
-                <path d="M1.5 3 4 5.5 6.5 3"></path>
-            </svg>
+            <adi_ui::Icon
+                icon=adi_ui::Lucide::ChevronDown
+                size=adi_ui::IconSize::Sm
+                label="Choose the speech engine"
+            />
         </button>
         {move || picking.get().then(|| view! {
             // An invisible sheet over the whole window, under the menu and above everything else.
@@ -193,7 +192,8 @@ fn picker(
             // opened it. It also swallows the wheel, which keeps a viewport-pinned menu from
             // drifting away from the button it was measured against.
             <div class="fixed inset-0 z-40" on:click=move |_| picking.set(false)></div>
-            <div class="island fixed z-50 w-60 bg-card p-1 shadow-lg" style=move || menu_style.get()>
+            <div class="fixed z-50 w-60 rounded-lg border border-line-strong bg-raise p-1"
+                 style=move || menu_style.get()>
                 <For
                     each=move || engines.get()
                     key=|e| e.id.clone()
@@ -207,7 +207,7 @@ fn picker(
                         });
                         view! {
                             <button
-                                class="flex w-full flex-col items-start gap-0.5 rounded-sm px-2 \
+                                class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 \
                                        py-1.5 text-left hover:bg-hover disabled:opacity-40 \
                                        disabled:hover:bg-transparent"
                                 type="button"
@@ -230,15 +230,21 @@ fn picker(
                                     }
                                 }
                             >
-                                <span class="flex items-center gap-1.5 text-body text-msg">
-                                    <span class=move || if chosen.get() { "text-accent" } else { "" }>
+                                // The chosen engine is said with a tick and a weight, never a
+                                // colour — the composer's one orange is its send button.
+                                <span class="flex items-center gap-1.5 text-row text-ink">
+                                    <span class=move || if chosen.get() { "font-medium" } else { "" }>
                                         {option.label.clone()}
                                     </span>
                                     {chosen.get().then(|| view! {
-                                        <span class="text-mini text-accent">"·"</span>
+                                        <adi_ui::Icon
+                                            icon=adi_ui::Lucide::Check
+                                            size=adi_ui::IconSize::Sm
+                                            class="text-ink-2"
+                                        />
                                     })}
                                 </span>
-                                <span class="text-mini text-meta">{option.detail.clone()}</span>
+                                <span class="text-mini text-ink-3">{option.detail.clone()}</span>
                             </button>
                         }
                     }

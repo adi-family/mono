@@ -4,14 +4,14 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-32 structs · 28 enums across 26 files.
+32 structs · 30 enums across 27 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `AppState`
 - [`src/ask.rs`](#srcaskrs) — `AskQuestion`, `AskOption`, `Picked`
 - [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `Attaching`
-- [`src/badge.rs`](#srcbadgers) — `BadgeTone`
+- [`src/badge.rs`](#srcbadgers) — `BadgeTone`, `DotTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
 - [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
@@ -20,6 +20,7 @@
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
 - [`src/flag.rs`](#srcflagrs) — `Flag`, `Offer`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
+- [`src/icon.rs`](#srciconrs) — `IconSize`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/mark.rs`](#srcmarkrs) — `MarkVariant`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
@@ -146,7 +147,7 @@ pub struct Attaching {
 
 ### enum `BadgeTone`
 
-What the badge is saying. The tones map to the design system's status tokens, so "running" here is the same green as "running" everywhere else in adi.
+What the badge is saying. The tones are the design system's semantic colours, drawn the one way §3 allows them: as text on a 12% tint, never as a fill.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -160,13 +161,29 @@ pub enum BadgeTone {
 }
 ```
 
+### enum `DotTone`
+
+What a `Dot` reports.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DotTone {
+    #[default]
+    Ok,
+    Live,
+    Warn,
+    Err,
+    Idle,
+}
+```
+
 ---
 
 ## `src/button.rs`
 
 ### enum `ButtonVariant`
 
-What the button is *for*, which is the only thing that decides how it looks. Weight is spent on the one action a screen wants; everything else recedes.
+What the button is *for*, which is the only thing that decides how it looks.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -174,6 +191,7 @@ pub enum ButtonVariant {
     #[default]
     Default,
     Primary,
+    Strong,
     Ghost,
     Danger,
     Link,
@@ -182,7 +200,7 @@ pub enum ButtonVariant {
 
 ### enum `ButtonSize`
 
-Button height. The dense default matches the rest of the panel furniture; `Small` is for controls that sit inside a table row.
+Button height. The default is the spec's `7px 14px`; `Small` is for a control that sits inside a table row or a 48px bar.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -480,6 +498,25 @@ pub enum Lang {
 
 ---
 
+## `src/icon.rs`
+
+### enum `IconSize`
+
+The four sizes an icon may be (§9). Nothing else.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconSize {
+    Sm,
+    #[default]
+    Md,
+    Lg,
+    Xl,
+}
+```
+
+---
+
 ## `src/input.rs`
 
 ### enum `InputWidth`
@@ -502,7 +539,7 @@ pub enum InputWidth {
 
 ### enum `MarkVariant`
 
-Which drawing of the mark this is. One drawing cannot serve a 16px favicon and a 168px error page, so there are three, and the size decides.
+Which drawing of the mark this is. One drawing cannot serve a 16px favicon and a 104px splash, so there are two, and the size decides.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -510,7 +547,6 @@ pub enum MarkVariant {
     #[default]
     Cut,
     Solid,
-    Glass,
 }
 ```
 
@@ -949,7 +985,7 @@ pub struct TreeNode {
     pub badge: Option<String>,
     pub title: Option<String>,
     pub container: bool,
-    pub icon: Option<&'static str>,
+    pub icon: Option<Lucide>,
     pub separated: bool,
     pub emphasis: bool,
 }

@@ -38,7 +38,17 @@ use super::services::is_listening;
 /// The scaffold a new dashboard starts from — the two fixed entry points plus one worked
 /// example of each extension point, embedded so the binary can create a dashboard anywhere.
 const FRONTEND_INDEX_TS: &str = include_str!("../../templates/dashboard/frontend/index.ts");
-const FRONTEND_INDEX_HTML: &str = include_str!("../../templates/dashboard/frontend/index.html");
+/// The dashboard shell, with `design/tokens.css` spliced in at its `/* @adi-tokens */` marker
+/// at build time. The shell has to stay self-contained — it is served under a name of its own,
+/// with no adi stylesheet to link — but a copy of the palette here would drift from the one
+/// everything else draws from, so it is the file itself, inlined.
+static FRONTEND_INDEX_HTML: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    include_str!("../../templates/dashboard/frontend/index.html").replacen(
+        "/* @adi-tokens */",
+        include_str!("../../../../design/tokens.css").trim_end(),
+        1,
+    )
+});
 const FRONTEND_MODULE_STATUS: &str =
     include_str!("../../templates/dashboard/frontend/modules/status.ts");
 const BACKEND_INDEX_TS: &str = include_str!("../../templates/dashboard/backend/index.ts");
@@ -263,7 +273,10 @@ fn scaffold(
     std::fs::create_dir_all(dir.join(".adi"))?;
 
     std::fs::write(dir.join("frontend").join("index.ts"), FRONTEND_INDEX_TS)?;
-    std::fs::write(dir.join("frontend").join("index.html"), FRONTEND_INDEX_HTML)?;
+    std::fs::write(
+        dir.join("frontend").join("index.html"),
+        FRONTEND_INDEX_HTML.as_str(),
+    )?;
     std::fs::write(
         dir.join("frontend").join("modules").join("status.ts"),
         FRONTEND_MODULE_STATUS,
@@ -312,7 +325,7 @@ const ID_FALLBACK: &str = "dashboard";
 /// catch a file that a *previous* migration wrote, so the second change in a row never lands
 /// anywhere. One stamp covers every generation there has ever been, including the ones migration
 /// itself produced, and including files written before stamps existed at all.
-const SHELL_STAMP: &str = "<!-- adi-shell: 2";
+const SHELL_STAMP: &str = "<!-- adi-shell: 3";
 const FRONTEND_ENTRY_STAMP: &str = "// adi-frontend-entry: 1";
 const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
 
@@ -338,7 +351,7 @@ fn migrate(dir: &Path, name: &str) {
     restamp_entry_point(
         &frontend.join("index.html"),
         SHELL_STAMP,
-        FRONTEND_INDEX_HTML,
+        &FRONTEND_INDEX_HTML,
     );
     restamp_entry_point(
         &dir.join("backend").join("index.ts"),
@@ -875,7 +888,7 @@ mod tests {
         );
         assert_eq!(
             read(dir.join("frontend").join("index.html")),
-            FRONTEND_INDEX_HTML
+            *FRONTEND_INDEX_HTML
         );
         assert_eq!(read(dir.join("backend").join("index.ts")), BACKEND_INDEX_TS);
     }
@@ -927,7 +940,10 @@ mod tests {
         // left behind rather than as a passing test.
         for (path, template) in [
             (dir.join("frontend").join("index.ts"), FRONTEND_INDEX_TS),
-            (dir.join("frontend").join("index.html"), FRONTEND_INDEX_HTML),
+            (
+                dir.join("frontend").join("index.html"),
+                FRONTEND_INDEX_HTML.as_str(),
+            ),
             (dir.join("backend").join("index.ts"), BACKEND_INDEX_TS),
         ] {
             std::fs::write(&path, "// some earlier generation\n").expect("stale entry point");
@@ -954,13 +970,13 @@ mod tests {
         migrate(&dir, "Nosh");
 
         let read = || std::fs::read_to_string(&shell).expect("shell");
-        assert_eq!(read(), FRONTEND_INDEX_HTML);
+        assert_eq!(read(), *FRONTEND_INDEX_HTML);
         assert!(read().contains("adi-editor__frame"), "no iframe drawer");
         assert!(read().contains("adi-pick"), "no element picker");
 
         // And the poll behind this must not rewrite it a second time.
         migrate(&dir, "Nosh");
-        assert_eq!(read(), FRONTEND_INDEX_HTML);
+        assert_eq!(read(), *FRONTEND_INDEX_HTML);
     }
 
     #[test]

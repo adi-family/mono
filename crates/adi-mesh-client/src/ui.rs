@@ -119,7 +119,8 @@ fn App() -> impl IntoView {
         }
     });
 
-    move || match screen.get() {
+    move || {
+        match screen.get() {
         // The page is mounted and unmounted rather than hidden: an iframe left in the tree keeps
         // its websocket and its polling alive, and a reader who went back to the list has said
         // they are done with it.
@@ -128,7 +129,7 @@ fn App() -> impl IntoView {
             <main class="shell">
                 <header>
                     <Mark />
-                    <div class="brand">
+                    <div>
                         <h1>"adi"</h1>
                         <p class="sub">"Your machines, over the mesh."</p>
                     </div>
@@ -145,8 +146,8 @@ fn App() -> impl IntoView {
                     // Closed by default. What is in here is what a reader needs when a node
                     // refuses them, and nothing at all on the days it does not.
                     <details>
-                        <summary>"This browser"</summary>
-                        <p class="label">"this browser's key"</p>
+                        <summary><span inner_html=icon(CHEVRON_RIGHT, 14)></span>"This browser"</summary>
+                        <p class="label">"This browser's key"</p>
                         <code class="key">{move || key.get()}</code>
                         <p class="note">
                             "Your key and every node password live in this browser and nowhere \
@@ -158,6 +159,7 @@ fn App() -> impl IntoView {
             </main>
         }
         .into_any(),
+    }
     }
 }
 
@@ -315,7 +317,7 @@ fn NodeList(
                                                 class="more"
                                                 aria-label="Rename or forget this machine"
                                                 on:click=move |_| renaming.set(edit.clone())
-                                                inner_html=MORE
+                                                inner_html=icon(ELLIPSIS, 16)
                                             ></button>
                                         </div>
                                         <Boards record screen boards />
@@ -420,8 +422,9 @@ fn Boards(record: NodeRecord, screen: RwSignal<Screen>, boards: RwSignal<Boards>
                                         }
                                         on:click=move |_| open(row.clone(), me.clone())
                                     >
+                                        {dot(board.clone(), asking)}
                                         <span class="name">{board.name.clone()}</span>
-                                        {tag(board.clone(), asking)}
+                                        {word(board.clone(), asking)}
                                     </button>
                                 </li>
                             }
@@ -434,23 +437,31 @@ fn Boards(record: NodeRecord, screen: RwSignal<Screen>, boards: RwSignal<Boards>
     }
 }
 
+/// The 6px dot before a dashboard that is up and open to this browser — the state that says
+/// nothing else (`design/DESIGN.md` §6: a dot, never a badge).
+fn dot(board: Board, asking: RwSignal<String>) -> impl IntoView {
+    let service = board.service;
+    let live = board.granted && board.running;
+    move || (live && asking.get() != service).then(|| view! { <span class="dot"></span> })
+}
+
 /// The one word beside a dashboard's name, or nothing.
 ///
 /// Nothing is the common case and the point: a dashboard that is running and granted is a row with
-/// a name on it. The two words that do appear are the two things a reader would otherwise learn by
-/// tapping and waiting — that the node will have to be asked first, and that the dashboard is not
-/// up over there.
-fn tag(board: Board, asking: RwSignal<String>) -> impl IntoView {
+/// a dot and a name on it. The words that do appear are the two things a reader would otherwise
+/// learn by tapping and waiting — that the node will have to be asked first, and that the dashboard
+/// is not up over there.
+fn word(board: Board, asking: RwSignal<String>) -> impl IntoView {
     let service = board.service;
     let (granted, running) = (board.granted, board.running);
     move || {
         if asking.get() == service {
-            return Some(view! { <span class="tag">"Asking…"</span> });
+            return Some(view! { <span class="word">"Asking…"</span> });
         }
         if !granted {
-            return Some(view! { <span class="tag">"Allow"</span> });
+            return Some(view! { <span class="word">"Tap to allow"</span> });
         }
-        (!running).then(|| view! { <span class="tag off">"Off"</span> })
+        (!running).then(|| view! { <span class="word">"Not running"</span> })
     }
 }
 
@@ -522,7 +533,7 @@ fn AddNode(
                         scanning.set(true);
                     }
                 >
-                    <span class="glyph" inner_html=VIEWFINDER></span>
+                    <span class="glyph" inner_html=icon(SCAN_LINE, 20)></span>
                     "Scan a pairing code"
                 </button>
             </Show>
@@ -539,7 +550,7 @@ fn AddNode(
                     on:input=move |ev| token.set(event_value(&ev))
                 ></textarea>
                 <button
-                    class="primary"
+                    class="strong"
                     disabled=move || {
                         busy.get() || !ready.get() || token.get().trim().is_empty()
                     }
@@ -580,28 +591,32 @@ fn AddNode(
     }
 }
 
-/// The Scan button's glyph: a viewfinder with a scan line across it.
-///
-/// Inner markup rather than an asset, for the reason [`crate::mark`] is: this client fetches
-/// nothing from anywhere, and an icon file would be a second request on a cold phone.
-const VIEWFINDER: &str = concat!(
-    r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" "##,
-    r##"stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">"##,
-    r##"<path d="M4 9V6.5A2.5 2.5 0 0 1 6.5 4H9"/>"##,
-    r##"<path d="M15 4h2.5A2.5 2.5 0 0 1 20 6.5V9"/>"##,
-    r##"<path d="M20 15v2.5a2.5 2.5 0 0 1-2.5 2.5H15"/>"##,
-    r##"<path d="M9 20H6.5A2.5 2.5 0 0 1 4 17.5V15"/>"##,
-    r##"<path d="M4 12h16"/>"##,
-    r##"</svg>"##,
-);
+// The icons are Lucide, the one set the product uses (`design/DESIGN.md` §9), read out of the
+// shared directory at compile time. Inlined rather than fetched, for the reason [`crate::mark`]
+// is: this client fetches nothing from anywhere, and an icon file would be a second request on a
+// cold phone.
+const ELLIPSIS: &str = include_str!("../../adi-ui/icons/ellipsis.svg");
+const SCAN_LINE: &str = include_str!("../../adi-ui/icons/scan-line.svg");
+const CHEVRON_LEFT: &str = include_str!("../../adi-ui/icons/chevron-left.svg");
+const CHEVRON_RIGHT: &str = include_str!("../../adi-ui/icons/chevron-right.svg");
 
-/// The glyph on a machine's second button — rename, or forget.
-const MORE: &str = concat!(
-    r##"<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">"##,
-    r##"<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/>"##,
-    r##"<circle cx="19" cy="12" r="1.6"/>"##,
-    r##"</svg>"##,
-);
+/// One icon as markup: the paths from a Lucide file, in the frame §9 fixes — stroke 1.5, one of
+/// the four sizes, `currentColor` so it takes the ink of the text beside it.
+///
+/// The file is kept verbatim on disk (its licence header travels with the paths); only what sits
+/// between `<svg …>` and `</svg>` is drawn, because the wrapper is where the weight and the size
+/// are decided, and Lucide's own is stroke 2 and 24px.
+fn icon(svg: &'static str, size: u32) -> String {
+    let start = svg
+        .find("<svg")
+        .and_then(|at| svg[at..].find('>').map(|end| at + end + 1))
+        .unwrap_or(0);
+    let end = svg.rfind("</svg>").unwrap_or(svg.len());
+    format!(
+        r#"<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{}</svg>"#,
+        &svg[start..end]
+    )
+}
 
 /// Hold the camera open until it reads an invite, or until the reader gives up.
 ///
@@ -762,7 +777,8 @@ fn Page(open: Open, screen: RwSignal<Screen>) -> impl IntoView {
         <div class="panel">
             <div class="bar">
                 <button class="back" on:click=move |_| screen.set(Screen::Nodes)>
-                    "‹ Machines"
+                    <span inner_html=icon(CHEVRON_LEFT, 16)></span>
+                    "Back"
                 </button>
                 <span class="title">
                     {title}

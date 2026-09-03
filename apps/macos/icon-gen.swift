@@ -1,4 +1,5 @@
-// Generates the ADI app-icon master PNG (1024×1024): the Trefoil mark on a light tile.
+// Generates the ADI app-icon master PNG (1024×1024): the mark, in its coloured build, on a flat
+// paper tile (design/DESIGN.md §10 — the coloured version is for the app icon and the landing).
 // Not part of the app; regenerate with `build.sh --regen-icon`, which then runs it through
 // sips + iconutil to produce apps/macos/ADI.icns. `--ios` emits the iOS master instead, which
 // `apps/ios/build.sh --regen-icon` writes into the app's asset catalogue.
@@ -53,8 +54,10 @@ struct IconGen {
         static let iOS = Canvas(inset: 0, cornerRatio: 0, markRatio: 0.55, hasAlpha: false)
     }
 
-    static let ink = NSColor(srgbRed: 0.078, green: 0.094, blue: 0.114, alpha: 1)   // #14181d
-    static let accent = NSColor(srgbRed: 0.980, green: 0.314, blue: 0.098, alpha: 1) // #FA5019
+    /// The tile's ink — `--ink` on paper, from design/tokens.css's light set.
+    static let ink = NSColor(srgbRed: 0.090, green: 0.082, blue: 0.059, alpha: 1)   // #17150F
+    /// The tile itself: paper, flat. A gradient here would be the one thing §10 forbids.
+    static let paper = NSColor(srgbRed: 0.984, green: 0.980, blue: 0.973, alpha: 1)  // #FBFAF8
 
     static func main() {
         var args = Array(CommandLine.arguments.dropFirst())
@@ -104,25 +107,6 @@ struct IconGen {
         print("wrote \(outPath)")
     }
 
-    /// The accent, lit — three stops so `#FA5019` itself stays present in the surface.
-    private static let accentGradient: NSGradient = {
-        let colors = Trefoil.accentStops.map {
-            NSColor(srgbRed: CGFloat($0.rgb.0), green: CGFloat($0.rgb.1),
-                    blue: CGFloat($0.rgb.2), alpha: 1)
-        }
-        let locations = Trefoil.accentStops.map { CGFloat($0.location) }
-        return NSGradient(colors: colors, atLocations: locations, colorSpace: .sRGB)!
-    }()
-
-    /// The specular over the top and the shade under the bottom, laid on whatever the lobe is.
-    private static let gloss = NSGradient(
-        colors: [NSColor(white: 1, alpha: CGFloat(Trefoil.sheenAlpha)),
-                 NSColor(white: 1, alpha: 0),
-                 NSColor(white: 0, alpha: 0),
-                 NSColor(white: 0, alpha: CGFloat(Trefoil.shadeAlpha))],
-        atLocations: [0, CGFloat(Trefoil.sheenEnd), CGFloat(Trefoil.sheenEnd), 1],
-        colorSpace: .sRGB)!
-
     private static func drawTile(in content: CGRect, _ canvas: Canvas) {
         NSGraphicsContext.saveGraphicsState()
         // A zero corner ratio means the tile *is* the canvas (iOS), where clipping to a rounded
@@ -131,15 +115,14 @@ struct IconGen {
             let radius = content.width * canvas.cornerRatio
             NSBezierPath(roundedRect: content, xRadius: radius, yRadius: radius).addClip()
         }
-        NSGradient(starting: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-                   ending: NSColor(srgbRed: 0.93, green: 0.94, blue: 0.95, alpha: 1))?
-            .draw(in: content, angle: -90)
+        paper.setFill()
+        content.fill()
         NSGraphicsContext.restoreGraphicsState()
     }
 
-    /// The icon build: cut *and* accented. The two are independent choices — `cut` is the
+    /// The icon build: cut *and* coloured. The two are independent choices — `cut` is the
     /// hairline gaps that keep the lobes apart once this is scaled to a 16pt Dock icon, and
-    /// `accented` is what the middle lobe is filled with. An icon needs both.
+    /// `colored` is the grey / orange / ink fills. An icon needs both.
     private static func drawMark(in content: CGRect, _ canvas: Canvas) {
         let build = Trefoil.Build.icon
         let extent = content.width * canvas.markRatio
@@ -171,18 +154,15 @@ struct IconGen {
             // gradient rather than a flat colour seamed over it.
             cg.beginTransparencyLayer(auxiliaryInfo: nil)
 
-            NSGraphicsContext.saveGraphicsState()
-            lobe.addClip()
-            if build.accented && index == 1 {
-                accentGradient.draw(in: lobe.bounds, angle: -90)
+            // Flat fills, back to front: grey, the accent, ink (Trefoil.coloredFills).
+            let fill: NSColor
+            if build.colored, let rgb = Trefoil.coloredFills[index] {
+                fill = NSColor(srgbRed: rgb.r, green: rgb.g, blue: rgb.b, alpha: 1)
             } else {
-                // Flat, then lit by the gloss pass. Grading an ink lobe by opacity would make
-                // the front one translucent at its foot and let the accent behind show through.
-                ink.withAlphaComponent(CGFloat(Trefoil.tone(index, build))).setFill()
-                lobe.bounds.fill()
+                fill = ink.withAlphaComponent(CGFloat(Trefoil.tones[index]))
             }
-            gloss.draw(in: lobe.bounds, angle: -90)
-            NSGraphicsContext.restoreGraphicsState()
+            fill.setFill()
+            lobe.fill()
 
             cg.setBlendMode(.destinationOut)
             for cutter in cutters {

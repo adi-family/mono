@@ -624,7 +624,8 @@ async fn respond_mesh_unavailable<S: ClientStream>(
     Ok(())
 }
 
-/// Write a small self-contained HTML error page and close (used for `502` upstream-down or `400` malformed).
+/// Write a self-contained HTML error page — the shared front-door shell — and close (used for
+/// `502` upstream-down or `400` malformed).
 async fn respond_error<S: ClientStream>(
     stream: &mut S,
     code: u16,
@@ -649,43 +650,16 @@ async fn respond_error<S: ClientStream>(
 }
 
 fn error_page(code: u16, reason: &str, message: &str) -> String {
-    format!(
-        "<!doctype html>\n\
-         <html lang=\"en\">\n\
-         <head>\n\
-         <meta charset=\"utf-8\">\n\
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{code} {reason}</title>\n\
-         <style>\n\
-           :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; }}\n\
-           @media (prefers-color-scheme: dark) {{\n\
-             :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; }}\n\
-           }}\n\
-           html,body {{ height:100%; }}\n\
-           body {{ margin:0; min-height:100vh; display:flex; align-items:center;\n\
-             justify-content:center; padding:40px 24px;\n\
-             background:var(--bg); color:var(--fg); letter-spacing:-.006em;\n\
-             -webkit-font-smoothing:antialiased;\n\
-             font:13.5px/1.45 ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; }}\n\
-           .wrap {{ display:flex; flex-direction:column; align-items:center; gap:12px; text-align:center; }}\n\
-           .line {{ display:flex; align-items:center; }}\n\
-           .code {{ font-size:20px; font-weight:600; letter-spacing:-.02em;\n\
-             font-variant-numeric:tabular-nums; }}\n\
-           .reason {{ margin-left:14px; padding-left:14px; border-left:1px solid var(--line);\n\
-             color:var(--muted); }}\n\
-           .msg {{ margin:0; color:var(--muted); max-width:34rem; }}\n\
-         </style>\n\
-         </head>\n\
-         <body>\n\
-           <div class=\"wrap\">\n\
-             <div class=\"line\">\n\
-               <span class=\"code\">{code}</span>\n\
-               <span class=\"reason\">{reason}</span>\n\
-             </div>\n\
-             <p class=\"msg\">{message}</p>\n\
-           </div>\n\
-         </body>\n\
-         </html>\n"
+    let body = format!("<p>{}</p>", crate::notfound::escape(message));
+    crate::notfound::shell(
+        &format!("{code} {reason}"),
+        &format!("{code} \u{b7} {}", reason.to_ascii_lowercase()),
+        match code {
+            502 => "The service is not answering",
+            400 => "That request could not be read",
+            _ => "The front door could not serve this",
+        },
+        &body,
     )
 }
 

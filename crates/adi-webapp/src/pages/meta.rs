@@ -29,7 +29,7 @@ pub(crate) fn meta_view(
     watch: AgentsWatch,
 ) -> AnyView {
     view! {
-        {intro_panel()}
+        {intro()}
         {move || match state.meta.get() {
             None => loading_panel(),
             // The setup form doubles as create (no agent yet) and reconfigure (editing an existing
@@ -45,34 +45,29 @@ pub(crate) fn meta_view(
     .into_any()
 }
 
-/// The header blurb: what the meta-agent is and what it's for.
-fn intro_panel() -> AnyView {
+/// The lead under the page title: what the meta-agent is and what it's for.
+fn intro() -> AnyView {
     view! {
-        <section class="adi-panel">
-            <p class="adi-hint">
-                <strong>"adi-agent"</strong>
-                " is your environment's default agent — a meta-agent that helps you set up and run
-                 this ADI stack. Pick a backend (Claude, Codex, the ADI loop, …); it comes preloaded
-                 with a system prompt that teaches it how ADI works — projects, hive services,
-                 dashboards, ports, and DNS — and with every tool in your store enabled on it.
-                 Edit the prompt to taste, then run it right here."
-            </p>
-        </section>
+        <p class="adi-meta__lead">
+            <b>"adi-agent"</b>
+            " is your environment's default agent — a meta-agent that helps you set up and run
+             this ADI stack. Pick a backend (Claude, Codex, the ADI loop, …); it comes preloaded
+             with a system prompt that teaches it how ADI works — projects, hive services,
+             dashboards, ports, and DNS — and with every tool in your store enabled on it.
+             Edit the prompt to taste, then run it right here."
+        </p>
     }
     .into_any()
 }
 
 /// Shown until the first `/api/meta` response lands.
 fn loading_panel() -> AnyView {
-    view! {
-        <section class="adi-panel"><div class="adi-empty">"Loading…"</div></section>
-    }
-    .into_any()
+    view! { <div class="adi-empty">"Loading…"</div> }.into_any()
 }
 
 /// The setup form — backend picker + the (prefilled, editable) system prompt. Used both to create
 /// the agent for the first time and to reconfigure an existing one (with a Cancel back to the
-/// summary).
+/// summary). Save is the screen's one orange: the form is what the page is for until it is done.
 fn setup_panel(state: State, form: MetaForm, m: MetaState) -> AnyView {
     let creating = m.agent.is_none();
     let backends = m.form.backends.clone();
@@ -90,13 +85,8 @@ fn setup_panel(state: State, form: MetaForm, m: MetaState) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">{title}</h2>
-                <span class="adi-spacer"></span>
-                {(!creating).then(|| view! {
-                    <button class="adi-btn adi-btn--link" type="button"
-                        on:click=move |_| form.editing.set(false)>"Cancel"</button>
-                })}
             </div>
-            <form class="adi-form" on:submit=move |ev| {
+            <form class="adi-meta__form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_setup(state, form);
             }>
@@ -105,7 +95,7 @@ fn setup_panel(state: State, form: MetaForm, m: MetaState) -> AnyView {
                     <select class="adi-input" id="meta-backend"
                         prop:value=move || form.backend.get()
                         on:change=move |ev| form.backend.set(event_target_value(&ev))>
-                        <option value="">"— pick a backend —"</option>
+                        <option value="">"Pick a backend"</option>
                         {backends.into_iter().map(|b| {
                             let id = b.id;
                             let label = b.label;
@@ -113,23 +103,31 @@ fn setup_panel(state: State, form: MetaForm, m: MetaState) -> AnyView {
                         }).collect::<Vec<_>>()}
                     </select>
                 </div>
-                <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                <div class="adi-field">
                     <label class="adi-field__label" for="meta-prompt">"System prompt"</label>
-                    <textarea class="adi-textarea adi-mono" id="meta-prompt" rows="16"
+                    <textarea class="adi-textarea" id="meta-prompt" rows="16"
                         placeholder="How this agent should operate your ADI environment…"
                         prop:value=move || form.prompt.get()
                         on:input=move |ev| form.prompt.set(event_target_value(&ev))></textarea>
                 </div>
-                <button class="adi-btn adi-btn--primary" type="submit"
-                    prop:disabled=move || form.busy.get()>{action}</button>
+                <div class="adi-meta__actions">
+                    {(!creating).then(|| view! {
+                        <button class="adi-btn adi-btn--ghost" type="button"
+                            on:click=move |_| form.editing.set(false)>"Cancel"</button>
+                    })}
+                    <span class="adi-spacer"></span>
+                    <button class="adi-btn adi-btn--accent" type="submit"
+                        prop:disabled=move || form.busy.get()>{action}</button>
+                </div>
             </form>
         </section>
     }
     .into_any()
 }
 
-/// The summary shown once `adi-agent` exists: its backend/model/run state, the run controls (shared
-/// with the Agents page), a Reconfigure button, and its system prompt behind a disclosure.
+/// The summary shown once `adi-agent` exists: its name with its state beside it, a key-value
+/// list of what it runs on, the run controls (shared with the Agents page), a Reconfigure link,
+/// and its system prompt behind a disclosure.
 fn ready_panel(
     state: State,
     route: RwSignal<Route>,
@@ -145,39 +143,48 @@ fn ready_panel(
     let has_prompt = !prompt.trim().is_empty();
     let a_for_actions = a.clone();
     let a_for_edit = a.clone();
+    let tools = match tool_count {
+        0 => "none".to_string(),
+        1 => "1 tool".to_string(),
+        n => format!("{n} tools"),
+    };
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">{a.name.clone()}</h2>
-                <span class="adi-chip adi-mono" title="backend">{backend}</span>
-                {(!model.is_empty()).then(|| view! {
-                    <span class="adi-chip adi-mono" title="model">{model}</span>
-                })}
-                <span class="adi-chip">{if running { "● running" } else { "idle" }}</span>
-                {(tool_count > 0).then(|| view! {
-                    <span class="adi-chip" title="adi tools enabled on this agent">
-                        {format!("{tool_count} tools")}
-                    </span>
-                })}
+                <span class="adi-status" data-state={if running { "running" } else { "idle" }}>
+                    <span class="adi-status__led"></span>
+                    <span>{if running { "running" } else { "idle" }}</span>
+                </span>
                 <span class="adi-spacer"></span>
                 {agent_actions(state, watch, &a_for_actions)}
                 <button class="adi-btn adi-btn--link" type="button"
                     on:click=move |_| start_reconfigure(form, &a_for_edit)>"Reconfigure"</button>
             </div>
+            <dl class="adi-meta__kv">
+                <dt>"Backend"</dt><dd class="adi-mono">{backend}</dd>
+                <dt>"Model"</dt>
+                {if model.is_empty() {
+                    view! { <dd class="adi-muted">"\u{2014}"</dd> }.into_any()
+                } else {
+                    view! { <dd class="adi-mono">{model}</dd> }.into_any()
+                }}
+                <dt>"Tools"</dt><dd>{tools}</dd>
+            </dl>
             {has_prompt.then(|| view! {
-                <details>
-                    <summary class="adi-muted">"System prompt"</summary>
+                <details class="adi-meta__prompt">
+                    <summary>"System prompt"</summary>
                     <pre class="adi-term">{prompt}</pre>
                 </details>
             })}
-            <div class="adi-hint">
+            <p class="adi-hint">
                 "Run the agent to start a session (interactive backends) or a headless run you give a
                  task to — the live view opens below. For fine-grained settings (model, tools,
                  permissions) edit it on the "
-                <a class="adi-btn adi-btn--link" href=Route::Agents.path()
+                <a class="adi-link" href=Route::Agents.path()
                     on:click=move |ev| spa_click(&ev, route, Route::Agents)>"Agents"</a>
                 " page."
-            </div>
+            </p>
         </section>
     }
     .into_any()

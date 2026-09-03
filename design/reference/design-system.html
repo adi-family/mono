@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADI — design system</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&family=Bricolage+Grotesque:opsz,wght@12..96,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #161616; --bg-side: #101010; --bg-raise: #1E1E1E; --bg-hover: #1B1B1B; --bg-active: #232323;
+    --line: rgba(255,255,255,.07); --line-strong: rgba(255,255,255,.13);
+    --ink: #ECEAE6; --ink-2: #A9A6A0; --ink-3: #6F6C67;
+    --accent: #E8532A; --accent-hover: #F05F35; --ok: #4CB77A; --warn: #E0A84B; --err: #E25C5C;
+    --sans: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace; --display: "Bricolage Grotesque", var(--sans);
+    --r: 6px; --r-lg: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--bg); color: var(--ink); scroll-behavior: smooth; }
+  body { font-family: var(--sans); font-size: 15px; line-height: 1.55; -webkit-font-smoothing: antialiased; font-feature-settings: "tnum"; }
+  a { color: inherit; text-decoration: none; }
+  code { font-family: var(--mono); font-size: 13px; background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 4px; color: #D6D3CD; }
+  .mono { font-family: var(--mono); font-size: 13px; }
+
+  .wrap { display: grid; grid-template-columns: 220px 1fr; min-height: 100vh; }
+  nav { position: sticky; top: 0; height: 100vh; background: var(--bg-side); border-right: 1px solid var(--line); padding: 28px 16px; font-size: 13.5px; }
+  nav .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; margin-bottom: 28px; padding: 0 8px; }
+  nav .brand svg { width: 20px; height: 20px; }
+  nav a { display: block; padding: 6px 8px; border-radius: var(--r); color: var(--ink-2); }
+  nav a:hover { background: var(--bg-hover); color: var(--ink); }
+  nav .v { margin-top: 28px; padding: 0 8px; font-size: 12px; color: var(--ink-3); }
+
+  main { padding: 64px 72px 160px; max-width: 1080px; }
+  .hero { padding-bottom: 56px; border-bottom: 1px solid var(--line); margin-bottom: 72px; }
+  .hero svg { width: 56px; height: 56px; margin-bottom: 28px; }
+  .hero h1 { font-size: 34px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 12px; }
+  .hero p { color: var(--ink-2); max-width: 60ch; font-size: 16px; }
+
+  section { margin-bottom: 96px; }
+  h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.015em; margin-bottom: 8px; }
+  .sub { color: var(--ink-2); max-width: 64ch; margin-bottom: 32px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 36px 0 12px; }
+  p { max-width: 64ch; }
+
+  .grid { display: grid; gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .grid > div { background: var(--bg); padding: 22px 24px; }
+  .g2 { grid-template-columns: 1fr 1fr; } .g3 { grid-template-columns: repeat(3, 1fr); } .g4 { grid-template-columns: repeat(4, 1fr); }
+  .prin b { display: block; font-weight: 600; margin-bottom: 6px; }
+  .prin p { color: var(--ink-2); font-size: 14px; }
+
+  /* mark */
+  .marks { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .marks > div { aspect-ratio: 1; border-radius: var(--r-lg); display: grid; place-items: center; position: relative; border: 1px solid var(--line); }
+  .marks svg { width: 40%; height: 40%; }
+  .marks span { position: absolute; left: 14px; bottom: 12px; font-size: 12px; color: var(--ink-3); }
+  .marks .on-dark { background: var(--bg-side); color: var(--ink); }
+  .marks .on-light { background: #F6F4F0; color: #17150F; }
+  .marks .on-light span { color: #8C8780; }
+  .marks .on-accent { background: var(--accent); color: #fff; }
+  .marks .on-accent span { color: rgba(255,255,255,.7); }
+
+  /* color */
+  .sw { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .sw > div { border-radius: var(--r-lg); border: 1px solid var(--line); overflow: hidden; }
+  .sw i { display: block; height: 72px; }
+  .sw b { display: block; padding: 10px 12px 2px; font-size: 13px; font-weight: 500; }
+  .sw span { display: block; padding: 0 12px 10px; font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+  .sw em { display: block; padding: 0 12px 12px; font-size: 12px; color: var(--ink-3); font-style: normal; }
+
+  /* type */
+  .type { border-top: 1px solid var(--line); }
+  .type > div { display: grid; grid-template-columns: 200px 1fr 200px; gap: 24px; align-items: baseline; padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .type .lab { font-size: 13px; color: var(--ink-2); } .type .lab small { display: block; color: var(--ink-3); font-family: var(--mono); font-size: 12px; margin-top: 2px; }
+  .type .use { font-size: 12.5px; color: var(--ink-3); }
+  .t-display { font-family: var(--display); font-size: 56px; font-weight: 500; letter-spacing: -0.035em; line-height: .98; font-variation-settings: "opsz" 96; }
+  .t-h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  .t-h2 { font-size: 17px; font-weight: 600; }
+  .t-body { font-size: 15.5px; line-height: 1.6; }
+  .t-ui { font-size: 14px; }
+  .t-small { font-size: 13px; color: var(--ink-2); }
+  .t-label { font-size: 12px; color: var(--ink-3); }
+  .t-mono { font-family: var(--mono); font-size: 12.5px; color: #D6D3CD; }
+
+  /* spacing */
+  .space { display: flex; gap: 12px; align-items: flex-end; }
+  .space div { background: var(--bg-active); border-radius: 3px; position: relative; }
+  .space div::after { content: attr(data-v); position: absolute; top: 100%; left: 0; margin-top: 6px; font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+  .radii { display: flex; gap: 20px; margin-top: 48px; }
+  .radii div { width: 72px; height: 72px; background: var(--bg-raise); border: 1px solid var(--line-strong); display: grid; place-items: center; font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+
+  /* components */
+  .comp { display: grid; grid-template-columns: 200px 1fr; gap: 24px; padding: 22px 0; border-bottom: 1px solid var(--line); align-items: start; }
+  .comp:first-of-type { border-top: 1px solid var(--line); }
+  .comp .lab { font-size: 13px; color: var(--ink-2); } .comp .lab small { display: block; color: var(--ink-3); font-size: 12.5px; margin-top: 4px; line-height: 1.45; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 500; padding: 7px 14px; border-radius: var(--r); background: rgba(255,255,255,.08); border: 0; color: var(--ink); font-family: inherit; cursor: pointer; }
+  .btn.primary { background: var(--accent); color: #fff; } .btn.strong { background: var(--ink); color: var(--bg); } .btn.quiet { background: none; color: var(--ink-2); }
+  .input { width: 280px; background: var(--bg-raise); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 8px 12px; font: inherit; font-size: 14px; color: var(--ink); }
+  .input.mono { font-family: var(--mono); font-size: 13px; }
+  .seg { display: inline-grid; grid-auto-flow: column; background: var(--bg-raise); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 3px; }
+  .seg span { padding: 6px 14px; border-radius: 4px; font-size: 13.5px; color: var(--ink-2); }
+  .seg span.on { background: var(--bg-active); color: var(--ink); font-weight: 500; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--ink-2); }
+  .chip { font-family: var(--mono); font-size: 12px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--ink-2); }
+  .grant { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--ink-2); }
+  .grant b { width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-3); font-weight: 400; }
+  .pill { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--ink-2); }
+  .pill.ok { color: var(--ok); background: rgba(76,183,122,.12); }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 7px; vertical-align: 1px; }
+  .item { width: 260px; padding: 7px 8px; border-radius: var(--r); }
+  .item.active { background: var(--bg-active); }
+  .item .t { font-size: 13.5px; } .item .m { font-size: 12px; color: var(--ink-3); } .item .m b { color: var(--ink-2); font-weight: 500; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; max-width: 640px; }
+  th { text-align: left; font-weight: 500; font-size: 12px; color: var(--ink-3); padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line-strong); }
+  td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--line); }
+  td .mono { color: var(--ink-2); font-size: 12.5px; } td .dim { color: var(--ink-3); }
+  .tool { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-3); font-size: 13px; max-width: 560px; }
+  .tool .n { color: var(--ink-2); font-weight: 500; } .tool .c { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .notice { display: flex; gap: 14px; font-size: 13px; color: var(--ink-3); max-width: 640px; }
+  .notice b { color: var(--ink-2); font-weight: 500; } .notice a { color: var(--ink-2); margin-left: auto; white-space: nowrap; }
+
+  /* do / don't */
+  .dd { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .dd > div { border: 1px solid var(--line); border-radius: var(--r-lg); padding: 20px 22px; }
+  .dd h4 { font-size: 13px; font-weight: 500; margin-bottom: 12px; }
+  .dd .yes h4 { color: var(--ok); } .dd .no h4 { color: var(--err); }
+  .dd li { list-style: none; padding: 7px 0; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+  .dd li:first-child { border-top: 0; }
+
+  pre.prompt { background: var(--bg-side); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 20px 22px; font-family: var(--mono); font-size: 12.5px; line-height: 1.65; color: #D6D3CD; white-space: pre-wrap; max-width: 760px; }
+  .lic { width: 20px; height: 20px; stroke-width: 1.5; color: var(--ink-2); display: block; margin: 6px auto 12px; }
+  .grid .lab { font-size: 13px; color: var(--ink-2); display: block; } .grid .lab small { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<nav>
+  <div class="brand">
+    <svg viewBox="0 0 200 200" fill="none"><defs><mask id="m0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M127.71 65.00 L178.81 94.50 L178.81 153.50 L127.71 183.00 L76.62 153.50 L76.62 94.50 Z" fill="#000"/><path d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z" fill="#000"/></mask><mask id="m1" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z" fill="#000"/></mask></defs><path d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z" fill="currentColor" fill-opacity="0.52" mask="url(#m0)"/><path d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z" fill="currentColor" fill-opacity="0.74" mask="url(#m1)"/><path d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z" fill="currentColor"/></svg>
+    ADI
+  </div>
+  <a href="#principles">Principles</a>
+  <a href="#mark">Mark</a>
+  <a href="#color">Color</a>
+  <a href="#type">Type</a>
+  <a href="#space">Space &amp; radius</a>
+  <a href="#components">Components</a>
+  <a href="#icons">Icons</a>
+  <a href="#rules">Rules</a>
+  <a href="#prompt">Prompt block</a>
+  <div class="v">Design system 1.0<br>September 2026</div>
+</nav>
+
+<main>
+  <div class="hero">
+    <svg viewBox="0 0 200 200" fill="none" style="color:var(--ink)"><use href="#markdef"/></svg>
+    <h1>ADI design system</h1>
+    <p>How the product looks and why. The product is a dense tool for people who run agents on their own machines. The design's job is to keep that density readable — not to decorate it.</p>
+  </div>
+
+  <!-- ================= PRINCIPLES ================= -->
+  <section id="principles">
+    <h2>Principles</h2>
+    <p class="sub">Five decisions that every screen inherits. When a new screen looks wrong, one of these is usually being broken.</p>
+    <div class="grid g2 prin">
+      <div><b>The transcript is the product</b><p>Everything else — sessions, agent panel, explorer — is chrome. Chrome sits on darker surfaces, in smaller and dimmer type, so the eye lands on what the agent said.</p></div>
+      <div><b>Density is honest</b><p>ADI shows a lot because a lot is happening. We don't hide information behind whitespace. We make it scannable with hierarchy: weight, color, and hairlines — not with boxes.</p></div>
+      <div><b>Mono means machine</b><p>Monospace is reserved for things a machine produced or will consume: paths, hashes, commands, model ids, config values. Labels, names, counts and dates are sans. If mono is everywhere, it means nothing.</p></div>
+      <div><b>One orange per screen</b><p>Orange marks the single most important action or state on a screen: send, save, update, running. Two oranges compete; three is noise. Everything else is grey.</p></div>
+      <div><b>Surfaces, not boxes</b><p>Grouping is done with background tone and 1px hairlines. Panels are flush to the edges. Cards are for things that are genuinely detachable — a dialog, a QR pairing block — not for every section.</p></div>
+      <div><b>Sentence case, always</b><p>No uppercase tracked labels. Section headers are small, grey, sentence case. Uppercase was our loudest AI-tell, and it made body text unreadable.</p></div>
+    </div>
+  </section>
+
+  <!-- ================= MARK ================= -->
+  <section id="mark">
+    <h2>Mark</h2>
+    <p class="sub">Three hexagons, one in front. The mark is monochrome by default and takes the current text color, with the two back shapes at 52% and 74% opacity. The colored version exists for the app icon and the landing only.</p>
+    <svg width="0" height="0" style="position:absolute"><defs>
+      <mask id="mk0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M127.71 65.00 L178.81 94.50 L178.81 153.50 L127.71 183.00 L76.62 153.50 L76.62 94.50 Z" fill="#000"/><path d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z" fill="#000"/></mask>
+      <mask id="mk1" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z" fill="#000"/></mask>
+      <g id="markdef"><path d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z" fill="currentColor" fill-opacity="0.52" mask="url(#mk0)"/><path d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z" fill="currentColor" fill-opacity="0.74" mask="url(#mk1)"/><path d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z" fill="currentColor"/></g>
+      <g id="markcolor"><path d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z" fill="#8C8780" mask="url(#mk0)"/><path d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z" fill="#E8532A" mask="url(#mk1)"/><path d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z" fill="currentColor"/></g>
+    </defs></svg>
+    <div class="marks">
+      <div class="on-dark"><svg viewBox="0 0 200 200"><use href="#markdef"/></svg><span>on dark, mono</span></div>
+      <div class="on-light"><svg viewBox="0 0 200 200"><use href="#markdef"/></svg><span>on light, mono</span></div>
+      <div class="on-dark"><svg viewBox="0 0 200 200"><use href="#markcolor"/></svg><span>color, app icon &amp; landing</span></div>
+      <div class="on-accent"><svg viewBox="0 0 200 200"><use href="#markdef"/></svg><span>on orange, white</span></div>
+    </div>
+    <h3>Usage</h3>
+    <p style="color:var(--ink-2)">Minimum size 16px. Clear space around it equal to the height of the front hexagon. In the top bar it sits at 18px next to the wordmark <code>adi</code> in 15px semibold. It never gets a glow, a drop shadow, a gradient background, or an animation. It is not a mascot.</p>
+  </section>
+
+  <!-- ================= COLOR ================= -->
+  <section id="color">
+    <h2>Color</h2>
+    <p class="sub">A grey scale with one accent. Four surface levels do the structural work; three ink levels do the hierarchy. Semantic colors appear only as small dots and pills, never as fills.</p>
+    <h3>Surfaces</h3>
+    <div class="sw">
+      <div><i style="background:#101010"></i><b>bg-side</b><span>#101010</span><em>sidebars, bars, panels</em></div>
+      <div><i style="background:#161616"></i><b>bg</b><span>#161616</span><em>page, transcript</em></div>
+      <div><i style="background:#1B1B1B"></i><b>bg-hover</b><span>#1B1B1B</span><em>row and item hover</em></div>
+      <div><i style="background:#1E1E1E"></i><b>bg-raise</b><span>#1E1E1E</span><em>inputs, code blocks, composer</em></div>
+      <div><i style="background:#232323"></i><b>bg-active</b><span>#232323</span><em>selected item, seg-control on</em></div>
+      <div><i style="background:#161616;box-shadow:inset 0 0 0 1px rgba(255,255,255,.13)"></i><b>line / line-strong</b><span>white 7% / 13%</span><em>hairlines / input borders</em></div>
+    </div>
+    <h3>Ink</h3>
+    <div class="sw">
+      <div><i style="background:#ECEAE6"></i><b>ink</b><span>#ECEAE6</span><em>primary text, titles</em></div>
+      <div><i style="background:#A9A6A0"></i><b>ink-2</b><span>#A9A6A0</span><em>secondary text, values</em></div>
+      <div><i style="background:#6F6C67"></i><b>ink-3</b><span>#6F6C67</span><em>labels, meta, placeholders</em></div>
+      <div><i style="background:#D6D3CD"></i><b>code</b><span>#D6D3CD</span><em>mono text</em></div>
+    </div>
+    <h3>Accent &amp; semantic</h3>
+    <div class="sw">
+      <div><i style="background:#E8532A"></i><b>accent</b><span>#E8532A</span><em>one action or state per screen</em></div>
+      <div><i style="background:#F05F35"></i><b>accent-hover</b><span>#F05F35</span><em>hover only</em></div>
+      <div><i style="background:#4CB77A"></i><b>ok</b><span>#4CB77A</span><em>online, set, running — dots &amp; pills</em></div>
+      <div><i style="background:#E0A84B"></i><b>warn</b><span>#E0A84B</span><em>dots &amp; pills</em></div>
+      <div><i style="background:#E25C5C"></i><b>err</b><span>#E25C5C</span><em>dots, pills, destructive text</em></div>
+    </div>
+    <h3>Light mode (landing, docs)</h3>
+    <div class="sw">
+      <div><i style="background:#FBFAF8"></i><b>paper</b><span>#FBFAF8</span><em>page</em></div>
+      <div><i style="background:#F4F3F0"></i><b>paper-2</b><span>#F4F3F0</span><em>side surfaces, grouped rows</em></div>
+      <div><i style="background:#17150F"></i><b>ink</b><span>#17150F</span><em>text</em></div>
+      <div><i style="background:#55514A"></i><b>ink-2</b><span>#55514A</span><em>secondary</em></div>
+      <div><i style="background:#8C8780"></i><b>ink-3</b><span>#8C8780</span><em>meta</em></div>
+      <div><i style="background:#D6431C"></i><b>accent</b><span>#D6431C</span><em>darker orange for contrast on paper</em></div>
+    </div>
+  </section>
+
+  <!-- ================= TYPE ================= -->
+  <section id="type">
+    <h2>Type</h2>
+    <p class="sub">Two families in the product, one more for marketing. Geist for everything people read, Geist Mono for everything machines wrote. Bricolage Grotesque only on the landing and in docs headlines, where type carries the personality.</p>
+    <div class="type">
+      <div><div class="lab">Display<small>Bricolage 500 · 48–76px · −0.035em · lh 0.98</small></div><div class="t-display">Long enough.</div><div class="use">Landing headlines only. Never in the app.</div></div>
+      <div><div class="lab">Page title<small>Geist 600 · 20–22px · −0.01em</small></div><div class="t-h1">Reconfigure your agent</div><div class="use">One per page.</div></div>
+      <div><div class="lab">Section<small>Geist 600 · 15–17px</small></div><div class="t-h2">Set up your primary agent</div><div class="use">Form sections, panel headers, card titles.</div></div>
+      <div><div class="lab">Transcript<small>Geist 400 · 15.5px · lh 1.6 · max 80ch</small></div><div class="t-body">Короткий ответ: нет, пока не окей — на GitHub лежит ровно та же поломка.</div><div class="use">Agent and user messages.</div></div>
+      <div><div class="lab">UI<small>Geist 400 · 13.5–14px · lh 1.5</small></div><div class="t-ui">Set your context first — this is a bug bounty</div><div class="use">List items, table cells, buttons (500), inputs.</div></div>
+      <div><div class="lab">Small<small>Geist 400 · 13px · ink-2</small></div><div class="t-small">Runs Claude Code headless on the login you already have.</div><div class="use">Help text, notices, secondary lines.</div></div>
+      <div><div class="lab">Label<small>Geist 400/500 · 12px · ink-3 · sentence case</small></div><div class="t-label">Permission mode</div><div class="use">Field labels, table headers, section dividers. Never uppercase.</div></div>
+      <div><div class="lab">Mono<small>Geist Mono 400 · 12.5–13px</small></div><div class="t-mono">/Users/mgorunuch/adi-family/apps/windows/build.sh · 0ef801d · bypassPermissions</div><div class="use">Paths, hashes, commands, ids, config values, model names.</div></div>
+    </div>
+    <h3>Rules</h3>
+    <p style="color:var(--ink-2)">Tabular numbers everywhere (<code>font-feature-settings: "tnum"</code>). Line length capped at 80 characters in the transcript and 64 in forms. Bold is 600, and it's for one phrase per paragraph at most — a verdict, a name — never for whole sentences.</p>
+  </section>
+
+  <!-- ================= SPACE ================= -->
+  <section id="space">
+    <h2>Space &amp; radius</h2>
+    <p class="sub">A 4px scale. Inside components use 4–12; between elements 16–24; between sections 32–48. The app never uses more than 48 inside a panel; the landing never uses less than 64 between sections.</p>
+    <div class="space">
+      <div style="width:4px;height:4px" data-v="4"></div>
+      <div style="width:8px;height:8px" data-v="8"></div>
+      <div style="width:12px;height:12px" data-v="12"></div>
+      <div style="width:16px;height:16px" data-v="16"></div>
+      <div style="width:24px;height:24px" data-v="24"></div>
+      <div style="width:32px;height:32px" data-v="32"></div>
+      <div style="width:48px;height:48px" data-v="48"></div>
+      <div style="width:64px;height:64px" data-v="64"></div>
+      <div style="width:96px;height:96px" data-v="96"></div>
+    </div>
+    <div class="radii">
+      <div style="border-radius:4px">4</div>
+      <div style="border-radius:6px">6</div>
+      <div style="border-radius:10px">10</div>
+      <div style="border-radius:999px">pill</div>
+    </div>
+    <p style="color:var(--ink-2);margin-top:20px">4 for inline code and seg-control items. 6 for buttons, inputs, list items — the default. 10 for cards and code blocks. Pill for tags, chips, status. Panels have no radius: they're flush.</p>
+    <h3>Layout</h3>
+    <p style="color:var(--ink-2)">App shell: 48px top bar · 248–272px left panel · fluid center · 316px right panel · 28px status bar. Content padding 20–32px. Forms center at 640px. Landing container 1200px, one left edge for nav, hero and every section.</p>
+  </section>
+
+  <!-- ================= COMPONENTS ================= -->
+  <section id="components">
+    <h2>Components</h2>
+    <p class="sub">Built from the tokens above. Each has one job; if a new component is needed, it should be describable in one sentence first.</p>
+
+    <div class="comp"><div class="lab">Buttons<small>Primary is orange and there's one per screen. Strong is for the page's main action when orange is taken. Default for everything else. Quiet for cancel.</small></div>
+      <div class="row"><button class="btn primary">Save changes</button><button class="btn strong">New agent</button><button class="btn">Check for updates</button><button class="btn quiet">Cancel</button></div></div>
+
+    <div class="comp"><div class="lab">Inputs<small>Raised surface, strong hairline, 6px. Mono when the value is a machine value.</small></div>
+      <div class="row"><input class="input" value="Pick a node" readonly><input class="input mono" value="bypassPermissions" readonly><input class="input mono" placeholder="sk-ant-…"></div></div>
+
+    <div class="comp"><div class="lab">Segmented control<small>Selected item is filled, not outlined. No orange.</small></div>
+      <div class="seg"><span class="on">Claude Code SDK</span><span>Kimi API key</span><span>GLM API key</span><span>Manual</span></div></div>
+
+    <div class="comp"><div class="lab">Tags, chips, grants<small>Tag: sans, for categories. Chip: mono, for suggested values. Grant: mono with × inside — the action lives in the object, not next to it.</small></div>
+      <div class="row"><span class="tag">bugbounty</span><span class="tag">adi-design</span><span class="chip">claude-opus-4-8</span><span class="chip">claude-sonnet-5</span><span class="grant">http:app<b>×</b></span><span class="grant">http:bugbounty<b>×</b></span></div></div>
+
+    <div class="comp"><div class="lab">Status<small>A 6px dot before text, or a pill. Never a filled badge.</small></div>
+      <div class="row"><span><span class="dot" style="background:var(--ok)"></span>online</span><span><span class="dot" style="background:var(--accent)"></span>running</span><span class="pill">idle</span><span class="pill ok">set</span></div></div>
+
+    <div class="comp"><div class="lab">List item<small>Title in ink, meta in ink-3 with the agent name in ink-2. Active is a tone change. Shortcuts appear on hover.</small></div>
+      <div><div class="item"><div class="t">Set your context first — this is a bug bounty</div><div class="m"><b>bb-finding-writer</b> · 23m ago</div></div><div class="item active"><div class="t">Не удается продолжить установку</div><div class="m"><b>adi-agent</b> · just now</div></div></div></div>
+
+    <div class="comp"><div class="lab">Table<small>No card around it. Headers 12px grey sentence case. Repeated values are dimmed. Row actions in ⋯.</small></div>
+      <table><thead><tr><th>Name ↑</th><th>Backend</th><th>Model</th><th>Project</th></tr></thead><tbody>
+        <tr><td>adi-agent</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td class="dim">—</td></tr>
+        <tr><td>adi-design</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td><span class="tag">adi-design</span></td></tr>
+        <tr><td>bb-athn-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td></tr>
+      </tbody></table></div>
+
+    <div class="comp"><div class="lab">Tool call<small>Collapsed by default, grey, the command truncated. It's a receipt, not a message.</small></div>
+      <div class="tool">›<span class="n">6 calls · Bash</span><span class="c">cd /Users/mgorunuch/adi-family && git show …</span></div></div>
+
+    <div class="comp"><div class="lab">Notice<small>One line of small grey text with a link, dismissable. Not a banner, not a box.</small></div>
+      <div class="notice"><span><b>Recommended:</b> let adi-agent manage this — say what you want in chat.</span><a href="#">Open chat</a></div></div>
+  </section>
+
+  <!-- ================= ICONS ================= -->
+  <section id="icons">
+    <h2>Icons</h2>
+    <p class="sub">One library: Lucide. Stroke 1.5, never 2. Sizes 14, 16, 20. The icon takes the color of the text beside it and is always labeled in the app. No filled variants, no duotone, nothing behind the icon.</p>
+    <div class="grid g4" style="text-align:center">
+      <div><i data-lucide="message-square" class="lic"></i><span class="lab">Sessions<br><small>message-square</small></span></div>
+      <div><i data-lucide="bot" class="lic"></i><span class="lab">Agent<br><small>bot</small></span></div>
+      <div><i data-lucide="folder" class="lic"></i><span class="lab">Project<br><small>folder</small></span></div>
+      <div><i data-lucide="wrench" class="lic"></i><span class="lab">Tools<br><small>wrench</small></span></div>
+      <div><i data-lucide="book-open" class="lic"></i><span class="lab">Knowledge<br><small>book-open</small></span></div>
+      <div><i data-lucide="code" class="lic"></i><span class="lab">Code index<br><small>code</small></span></div>
+      <div><i data-lucide="list-tree" class="lic"></i><span class="lab">Tasks<br><small>list-tree</small></span></div>
+      <div><i data-lucide="zap" class="lic"></i><span class="lab">Triggers<br><small>zap</small></span></div>
+      <div><i data-lucide="server" class="lic"></i><span class="lab">Services<br><small>server</small></span></div>
+      <div><i data-lucide="layout-dashboard" class="lic"></i><span class="lab">Dashboards<br><small>layout-dashboard</small></span></div>
+      <div><i data-lucide="key-round" class="lic"></i><span class="lab">Secrets<br><small>key-round</small></span></div>
+      <div><i data-lucide="database" class="lic"></i><span class="lab">Database<br><small>database</small></span></div>
+      <div><i data-lucide="network" class="lic"></i><span class="lab">Mesh / fleet<br><small>network</small></span></div>
+      <div><i data-lucide="brain" class="lic"></i><span class="lab">Memory<br><small>brain</small></span></div>
+      <div><i data-lucide="settings-2" class="lic"></i><span class="lab">Settings<br><small>settings-2</small></span></div>
+      <div><i data-lucide="ellipsis" class="lic"></i><span class="lab">Row actions<br><small>ellipsis</small></span></div>
+    </div>
+    <h3>Sizes and stroke</h3>
+    <div class="row" style="align-items:center;gap:28px">
+      <span><i data-lucide="folder" style="width:14px;height:14px;stroke-width:1.5;color:var(--ink-3);vertical-align:-2px"></i> <span class="t-label">14 · meta, tags</span></span>
+      <span><i data-lucide="folder" style="width:16px;height:16px;stroke-width:1.5;color:var(--ink-2);vertical-align:-3px"></i> <span class="t-label">16 · explorer, tables, buttons</span></span>
+      <span><i data-lucide="folder" style="width:20px;height:20px;stroke-width:1.5;color:var(--ink-2);vertical-align:-5px"></i> <span class="t-label">20 · landing features</span></span>
+      <span><i data-lucide="folder" style="width:20px;height:20px;stroke-width:2;color:var(--err);vertical-align:-5px"></i> <span class="t-label" style="color:var(--err)">stroke 2 — too heavy, don't</span></span>
+    </div>
+    <p style="color:var(--ink-2);margin-top:20px">Status is never an icon: running is a 6px orange dot, online and set are 6px green dots. Send is <code>arrow-up</code> in the orange square; update is <code>arrow-up</code> in the orange button. External links get <code>arrow-up-right</code> at 14px after the label. Full noun→icon table in <code>DESIGN.md</code> §9.</p>
+  </section>
+
+  <!-- ================= RULES ================= -->
+  <section id="rules">
+    <h2>Rules</h2>
+    <p class="sub">The short list. Most of what made earlier screens look generated is on the right.</p>
+    <div class="dd">
+      <div class="yes"><h4>Do</h4><ul>
+        <li>Group with surface tone and hairlines</li>
+        <li>Put the transcript on the lightest surface</li>
+        <li>Use mono for paths, ids, commands, config values</li>
+        <li>Dim values that repeat in every row</li>
+        <li>Collapse tool calls; show the count and the tool</li>
+        <li>Round money to cents, tokens to one decimal</li>
+        <li>Show shortcuts and secondary actions on hover</li>
+        <li>Put row actions in a ⋯ menu</li>
+      </ul></div>
+      <div class="no"><h4>Don't</h4><ul>
+        <li>Uppercase tracked labels, anywhere</li>
+        <li>Cards inside cards, or a card around a table</li>
+        <li>Mono for names, counts, dates, labels</li>
+        <li>More than one orange fill per screen</li>
+        <li>Stat cards with big numbers in boxes</li>
+        <li>Orange outlines as a selected state</li>
+        <li>Gradients, glows, blurred blobs, drop shadows on flat UI</li>
+        <li>Repeat an action word per row ("Revoke", "Rename")</li>
+        <li>Animate the mark, or anything the user didn't trigger</li>
+        <li>Mix icon libraries, draw custom icons, or use filled/duotone variants</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <!-- ================= PROMPT ================= -->
+  <section id="prompt">
+    <h2>Prompt block</h2>
+    <p class="sub">Paste this at the top of any prompt that asks Claude to build or change ADI UI. It's the same rules in the form the model follows best: constraints first, forbidden list explicit.</p>
+<pre class="prompt">DESIGN CONSTRAINTS — ADI (follow exactly, do not "improve")
+
+Fonts: Geist (UI), Geist Mono (paths, hashes, commands, ids, config values, model names — nothing else). Landing only: Bricolage Grotesque 500 for headlines.
+Surfaces (dark): side #101010, page #161616, hover #1B1B1B, raise #1E1E1E, active #232323. Hairline white 7%, input border white 13%.
+Ink: #ECEAE6 primary, #A9A6A0 secondary, #6F6C67 labels/meta, #D6D3CD mono.
+Accent #E8532A — exactly one filled orange element per screen (the main action or the live state). Semantic ok #4CB77A / warn #E0A84B / err #E25C5C as 6px dots or pills only.
+Spacing scale 4/8/12/16/24/32/48. Radius: 6 default, 4 inline, 10 cards & code, pill for tags. Panels flush, no radius, no border — separated by hairlines.
+Type: page title 20–22px/600, section 15–17px/600, transcript 15.5px/1.6 max 80ch, UI 13.5–14px, labels 12px grey sentence case, tabular numbers.
+
+Never: uppercase labels; nested cards; a card around a table; stat cards; orange outlines for selection; gradients, glows, blobs, shadows on flat UI; mono for names/counts/dates; repeated per-row action words; unprompted animation.
+Always: transcript on the lightest surface; sidebars dimmer and smaller; repeated column values dimmed; tool calls collapsed to "N calls · Tool · command…"; row actions in a ⋯ menu; shortcuts on hover.</pre>
+  </section>
+</main>
+</div>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>lucide.createIcons();</script>
+</body>
+</html>

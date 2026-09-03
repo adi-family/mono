@@ -1,14 +1,16 @@
 /* adi-ui — the crate's stylesheet, and the only one a consumer imports.
  *
- * Tailwind v4, with the design tokens in ./tokens.css mapped onto its theme. Two
- * deliberate departures from a stock setup:
+ * Tailwind v4 with `design/tokens.css` mapped onto its theme, so every utility resolves to a
+ * token and nothing else is reachable: Tailwind's own palette, type scale, radii and shadows
+ * are wiped. The rules are `design/DESIGN.md`; this file only names them for Tailwind.
  *
- *   1. **Preflight is replaced, not kept.** The `base` layer at the bottom of this file is
- *      the reset — small, and written against these tokens.
- *   2. **Utilities are unlayered.** Unlayered CSS beats layered CSS whatever the
- *      specificity, so `@layer utilities` would lose every argument with a stray
- *      unlayered rule from a host page. Unlayered, the two compete on source order, and
- *      this stylesheet is linked last.
+ * Two deliberate departures from a stock setup:
+ *
+ *   1. **Preflight is replaced, not kept.** The `base` layer at the bottom is the reset,
+ *      written against the tokens.
+ *   2. **Utilities are unlayered.** Unlayered CSS beats layered CSS whatever the specificity,
+ *      so `@layer utilities` would lose every argument with a stray unlayered rule from a host
+ *      page. Unlayered, the two compete on source order, and this sheet is linked last.
  */
 
 @import "tailwindcss/theme.css" layer(theme);
@@ -16,234 +18,140 @@
 
 @import "./tokens.css";
 
-/* ---- fonts, self-hosted --------------------------------------------------------------
- * Served from this crate's own `fonts/` (see its README for how they were built), so the
- * page makes no third-party request and the PWA keeps its typography offline.
- *
- * Both are **variable** fonts: one file per family covers every weight, which is why each
- * declares a `font-weight` *range* rather than a single value. Give a browser a range and
- * it interpolates 500 out of the same file it used for 400 — no second request, and no
- * synthetic bolding.
- *
- * The URLs are absolute because this stylesheet is imported from other crates, where a
- * relative path would resolve against *their* directory. Consumers copy this `fonts/` dir
- * to their dist root; see the crate README.
- */
-@font-face {
-  font-family: "IBM Plex Sans";
-  src: url("/fonts/ibm-plex-sans-var.woff2") format("woff2");
-  font-weight: 400 600;
-  font-style: normal;
-  /* Show the fallback immediately and swap when the file lands: a control panel that
-     renders nothing for 200ms is worse than one that reflows once. */
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "JetBrains Mono";
-  src: url("/fonts/jetbrains-mono-var.woff2") format("woff2");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
-}
-
-/* Scan this crate's components. Resolved relative to *this file*, so it keeps working when
- * a consumer imports this stylesheet from elsewhere in the tree — that is what makes
- * adi-ui usable as a library rather than as a copy-paste. */
+/* Scan this crate's components. Resolved relative to *this file*, so it keeps working when a
+ * consumer imports the sheet from elsewhere in the tree. */
 @source "../src";
 
 @theme {
   /* ---- colour -------------------------------------------------------------------------
-   * Tailwind's 22-family default palette is wiped and the tokens take its place, so the
-   * design system cannot be worked around by accident. Each is a `var()` onto a
-   * `light-dark()` token, which is why no component in this crate contains a `dark:`
-   * variant: `bg-card` is already both themes. */
+   * The surface ladder, the three inks, one accent, three semantic colours (§3). */
   --color-*: initial;
 
-  --color-canvas: var(--canvas);
-  --color-stage: var(--stage);
-  --color-panel: var(--panel);
-  --color-panel-alt: var(--panel-alt);
-  --color-bar: var(--bar);
-  --color-card: var(--card);
-  --color-bubble: var(--bubble);
-  --color-selected: var(--selected);
+  --color-bg: var(--bg);            /* page, transcript — the lightest large surface */
+  --color-side: var(--bg-side);     /* sidebars, bars, right panel */
+  --color-hover: var(--bg-hover);   /* row and item hover */
+  --color-raise: var(--bg-raise);   /* inputs, code blocks, composer */
+  --color-active: var(--bg-active); /* selected item, seg-control on, answer chip */
 
-  --color-divider: var(--divider);
-  --color-frame: var(--frame);
-  --color-edge: var(--edge);
-  --color-edge-2: var(--edge-2);
-  --color-dim: var(--dim);
+  --color-line: var(--line);               /* hairlines */
+  --color-line-strong: var(--line-strong); /* input borders, table header rule */
 
   --color-ink: var(--ink);
-  --color-body: var(--body);
-  --color-secondary: var(--secondary);
-  --color-meta: var(--meta);
-  --color-placeholder: var(--placeholder);
-  --color-faint: var(--faint);
-  --color-fainter: var(--fainter);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-code: var(--code);
 
   --color-accent: var(--accent);
-  --color-accent-fill: var(--accent-fill);
+  --color-accent-hover: var(--accent-hover);
   --color-on-accent: var(--on-accent);
-  --color-accent-soft: var(--accent-soft);
-  --color-accent-soft-edge: var(--accent-soft-edge);
-  --color-tip: var(--tip);
-  --color-tip-edge: var(--tip-edge);
 
-  --color-live: var(--live);
-  --color-live-bg: var(--live-bg);
-  --color-live-edge: var(--live-edge);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
   --color-err: var(--err);
-  --color-err-btn: var(--err-btn);
-  --color-err-bg: var(--err-bg);
-  --color-err-bg-2: var(--err-bg-2);
-  --color-err-edge: var(--err-edge);
-  --color-err-edge-2: var(--err-edge-2);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn-soft: var(--warn-soft);
+  --color-err-soft: var(--err-soft);
 
-  --color-queue: var(--queue);
-  --color-queue-ink: var(--queue-ink);
-  --color-queue-bg: var(--queue-bg);
-  --color-queue-edge: var(--queue-edge);
+  --color-chip: var(--chip);
+  --color-chip-hover: var(--chip-hover);
+  --color-btn: var(--btn);
+  --color-btn-hover: var(--btn-hover);
+  --color-scrim: var(--scrim);
+  --color-focus: var(--focus);
 
-  --color-attention: var(--attention);
-
-  --color-await: var(--await);
-  --color-await-bg: var(--await-bg);
-  --color-await-edge: var(--await-edge);
-
-  /* The code view's palette. Only `text-syn-*` is ever wanted, but Tailwind generates the
-   * whole family from one entry and the unused ones cost nothing. */
-  --color-syn-plain: var(--syn-plain);
-  --color-syn-comment: var(--syn-comment);
-  --color-syn-str: var(--syn-str);
-  --color-syn-num: var(--syn-num);
-  --color-syn-key: var(--syn-key);
-  --color-syn-kw: var(--syn-kw);
-  --color-syn-func: var(--syn-func);
-  --color-syn-punct: var(--syn-punct);
-
-  /* Not palette entries, and `--color-*: initial` takes them with it —
-   * `border-transparent` and `text-current` have to keep working. */
+  /* Not palette entries, and `--color-*: initial` takes them with it. */
   --color-transparent: transparent;
   --color-current: currentColor;
   --color-inherit: inherit;
+  --color-white: #ffffff;
+
+  /* The code view's own palette (`src/highlight.rs`): eight roles that have to stay apart at a
+   * glance inside a file. The one place a hue steps outside the greys. */
+  --color-syn-plain: var(--code);
+  --color-syn-comment: var(--ink-3);
+  --color-syn-str: #9ccc8a;
+  --color-syn-num: #d9b06a;
+  --color-syn-key: var(--ink);
+  --color-syn-kw: #7fbfcf;
+  --color-syn-func: #9db8e8;
+  --color-syn-punct: var(--ink-3);
 
   /* ---- type ---------------------------------------------------------------------------
-   * Named by role rather than by size, because the roles are the spec: there is no
-   * "text-lg" here to reach for when what you meant was a metric. */
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    "Liberation Mono", monospace;
+   * The scale in §4, named by role. There is no `text-lg` to reach for. */
+  --font-sans: var(--sans);
+  --font-mono: var(--mono);
+  --font-display: var(--display);
 
   --text-*: initial;
-  --text-caps: 10.5px;                 /* small caps labels */
-  --text-caps--line-height: 1;
-  --text-mini: 12px;                   /* meta and secondary */
+  --text-label: 12px;                  /* field labels, table headers, section dividers — ink-3 */
+  --text-label--line-height: 1.4;
+  --text-mini: 12px;                   /* meta lines, timestamps, second lines */
   --text-mini--line-height: 1.4;
-  --text-row: 13.5px;                  /* list rows and buttons */
+  --text-mono: 12.5px;                 /* paths, hashes, commands, ids */
+  --text-mono--line-height: 1.6;
+  --text-small: 13px;                  /* help text, notices — ink-2 */
+  --text-small--line-height: 1.5;
+  --text-row: 13.5px;                  /* list items, buttons (500) */
   --text-row--line-height: 1.45;
-  --text-msg: 14.5px;                  /* chat body */
-  --text-msg--line-height: 1.55;
-  --text-sub: 17px;                    /* an answer's subheading */
-  --text-sub--line-height: 1.35;
-  --text-title: 20px;                  /* screen titles */
+  --text-ui: 14px;                     /* inputs, table cells */
+  --text-ui--line-height: 1.5;
+  --text-body: 15.5px;                 /* the transcript, max 80ch */
+  --text-body--line-height: 1.6;
+  --text-section: 16px;                /* panel headers, form sections, card titles (600) */
+  --text-section--line-height: 1.35;
+  --text-title: 22px;                  /* one per page (600) */
   --text-title--line-height: 1.25;
-  --text-metric: 23px;                 /* metric numbers */
+  --text-metric: 20px;                 /* the number in a stats row (500) */
   --text-metric--line-height: 1.1;
 
   /* ---- spacing and radii ---------------------------------------------------------------
-   * Tailwind derives its whole spacing scale by multiplying one number; at 4px, `p-1/2/3/4`
-   * are the 4/8/12/16 rhythm and everything between stays available. */
+   * At 4px, `p-1/2/3/4/6/8/12` is the 4/8/12/16/24/32/48 scale (§5). */
   --spacing: 4px;
 
   --radius-*: initial;
-  --radius-sm: 5px;
-  --radius-md: 8px;
+  --radius-sm: 4px;     /* inline code, seg-control items */
+  --radius-md: 6px;     /* buttons, inputs, list items — the default */
+  --radius-lg: 10px;    /* cards, code blocks */
+  --radius-full: 999px; /* tags, chips, status */
+
+  /* No shadows on flat UI (§8). */
+  --shadow-*: initial;
+  --shadow-none: 0 0 #0000;
 }
 
-/* A small caps label: mono, tracked out, uppercase. It sets no colour, so it composes with
- * whichever of `text-faint` / `text-meta` the context calls for. */
-@utility caps {
-  font-family: var(--font-mono), monospace;
-  font-size: var(--text-caps);
-  font-weight: 500;
-  letter-spacing: 0.12em;
-  line-height: 1;
-  text-transform: uppercase;
+/* A label: 12px, sentence case, `--ink-3` set by the caller (§2.6). There is no uppercase
+ * utility, on purpose. */
+@utility label {
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.4;
+  text-transform: none;
 }
 
-/* An island — the shape every surface in this system takes.
- *
- * A screen here is a few distinct objects floating on the canvas with gaps between them,
- * not one edge-to-edge plane cut into regions by hairlines. That is the whole style rule:
- * if something is a *thing* — a rail, a panel, an editor, a tree — it gets a radius and an
- * edge and sits apart. If it is part of one, it does not.
- *
- * It sets **no fill**, so the surface is still the caller's choice: `island bg-panel` for a
- * rail, `island bg-card` for a panel. And it sets **no overflow** — a hint bubble has to be
- * able to leave the panel it is anchored in. An island whose children have to be clipped to
- * its corners (a header strip, a scrolling body) adds `overflow-hidden` itself.
- *
- * It is raised: `--shadow` is a real two-layer elevation, not a hairline. The border stays
- * anyway — a card has to hold its edge against a surface the same colour as itself, and on a
- * light theme the shadow alone will not do that. */
+/* A card (§5): a hairline and the large radius, for a genuinely detachable thing — a pairing
+ * block, a dialog, a code block. Never a panel, never a table, never a card in a card.
+ * Panels are flush: no radius, no border, a hairline where they meet. */
 @utility island {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--edge);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
-/* A surface that wants noticing: an amber wash laid over whatever it already is, breathing
- * on a slow cycle.
- *
- * Shallow and slow on purpose. A session waiting on you should catch the eye that passes
- * over it, not pull that eye back every second — so the wash is 12% at its brightest and
- * takes five seconds to get there and back. The tint is drawn on a `::before` rather than
- * as the element's own background, which leaves the element free to carry a fill of its
- * own (the open row does) and leaves `hover:` free to change it.
- *
- * Reduced motion holds the wash still instead of dropping it: the colour is the state, and
- * only the movement is decoration. */
-@utility attention-pulse {
-  position: relative;
-
-  &::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    /* Follows whatever radius the element was given, so this composes with any card. */
-    border-radius: inherit;
-    background-color: color-mix(in srgb, var(--attention) 12%, transparent);
-    animation: attention-breathe 5s ease-in-out infinite;
-    pointer-events: none;
-  }
+/* Machine strings (§2.3): paths, hashes, commands, ids, config values, model ids. */
+@utility mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--code);
 }
 
-@keyframes attention-breathe {
-  0%,
-  100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .attention-pulse::before {
-    animation: none;
-  }
-}
-
-/* A metric's number. Tabular figures so a counter ticking upward never shifts the layout
- * under it. */
+/* The number in a stats row: sans, 20px/500, tabular — not a box, not mono (§6). */
 @utility metric {
-  font-family: var(--font-mono), monospace;
-  font-size: var(--text-metric);
+  font-family: var(--sans);
+  font-size: 20px;
   font-weight: 500;
   line-height: 1.1;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
 
@@ -261,49 +169,52 @@
   }
 
   body {
-    background: var(--canvas);
-    color: var(--body);
-    font-family: var(--font-sans), sans-serif;
-    font-size: var(--text-row);
-    line-height: 1.45;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "tnum";
   }
 
-  /* Links carry their meaning through colour; a dense UI full of underlined text reads as
-   * unstyled. The underline returns on hover, where it confirms the target. */
+  /* Links inside the app are never orange (§3): they take the ink around them and say they
+   * are links on hover. The landing sets its own. */
   a {
-    color: var(--accent);
+    color: inherit;
     text-decoration: none;
   }
 
-  a:hover {
-    text-decoration: underline;
-  }
-
-  /* Controls do not inherit type by default, and every one of ours should.
-   *
-   * They also arrive wearing the platform's own border and fill, which no utility can
-   * fully undo: `border-l-2` sets one width and leaves the other three sides drawn by the
-   * UA in `outset`, and a button with no `bg-*` keeps ButtonFace. Every surface and every
-   * line in this system is drawn by a utility, so both are zeroed here — the same thing
-   * Tailwind's preflight does, and the reason a component may set a *partial* border. */
+  /* Controls do not inherit type by default, and every one of ours should. They also arrive
+   * wearing the platform's own border and fill, which no utility can fully undo, so both are
+   * zeroed here — the same thing Tailwind's preflight does. */
   button,
   input,
   select,
   textarea {
     font: inherit;
     color: inherit;
-    /* `transparent`, not Tailwind's `currentColor`: a control that sets a border *width*
-     * without a colour — a card reserving the pixel it will need when it is selected —
-     * would otherwise draw that border in its own text colour. Base-layer, so any
-     * `border-*` utility still wins. */
     border: 0 solid transparent;
     background-color: transparent;
   }
 
+  button {
+    cursor: pointer;
+  }
+
+  ::placeholder {
+    color: var(--ink-3);
+    opacity: 1;
+  }
+
   :focus-visible {
-    outline: 2px solid var(--accent);
+    outline: 1.5px solid var(--focus);
     outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
   }
 }

@@ -1,0 +1,143 @@
+// Page-local styles for `src/pages/knowledge.rs`: the search row, the result rows and the open
+// note. Shared components live in adi-css. Tokens from design/tokens.css only.
+
+@use "../../../adi-css/scss/mixins" as *;
+
+// The search row: the question takes the room, the scope and the button hang off its end.
+.adi-kb-search {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+
+  &__q {
+    flex: 1 1 26rem;
+    min-width: 16rem;
+  }
+}
+
+.adi-kb-rank {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+
+  .adi-hint { padding: 0; }
+}
+
+// A form that opens a section rather than closing one: no rule above it.
+.adi-form--first {
+  padding-top: 0;
+  border-top: 0;
+}
+
+// A field that takes the whole form row.
+.adi-kb-wide {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
+// One hit per row: the score, the title, where it lives, and its opening words.
+.adi-kb-hits {
+  display: flex;
+  flex-direction: column;
+}
+
+.adi-kb-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  font-size: var(--fs-ui-sm);
+  text-align: left;
+  cursor: pointer;
+
+  &:last-child { border-bottom: 0; }
+  &:hover { background: var(--bg-hover); }
+
+  &__score {
+    flex: none;
+    min-width: 4ch;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__title {
+    flex: none;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  &__base {
+    @include mono;
+    flex: none;
+    color: var(--ink-3);
+  }
+
+  &__preview {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+// A note whose vectors are out of date: findable by word and not by meaning, said as a pill.
+.adi-kb-stale {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+// A base or a note in its table: the name, and one dim line under it.
+.adi-kb-base {
+  display: block;
+  min-width: 0;
+
+  &__desc {
+    display: block;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+.adi-kb-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+// The open note: its tags and source on one line, the body at reading width, the one
+// destructive action at the foot.
+.adi-kb-note {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 80ch;
+
+  &__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+  }
+
+  &__foot {
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+}

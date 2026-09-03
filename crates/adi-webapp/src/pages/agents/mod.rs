@@ -1,6 +1,6 @@
-//! The Agents page: the list of agent definitions (docs/adi-agents.md §5), with delete and the
-//! launch actions on each row. ▶ Run starts either an interactive pty session or a headless
-//! background process; deeper orchestration is future work.
+//! The Agents page: the list of agent definitions (docs/adi-agents.md §5), each row carrying
+//! its launch and edit actions in its ⋯ menu. Run starts either an interactive pty session or a
+//! headless background process; deeper orchestration is future work.
 //!
 //! Writing a definition — a backend (`executor:what`), a system prompt, a CLI command scope, and
 //! the backend-specific params — happens in [`agent_detail_view`], on the agent's own page: New
@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use adi_ui::{Row as TableRow, Table};
+use adi_ui::{Icon, IconSize, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -23,7 +23,7 @@ use crate::ui::{
     Key, flash_view, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
 };
 
-/// The Agents page's columns; the trailing blank one holds Run / View / Stop and the kebab.
+/// The Agents page's columns; the trailing blank one holds the running dot and the ⋯ menu.
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
 
 mod actions;
@@ -42,11 +42,11 @@ pub(crate) use form::{
     agent_argument_values, agent_environment_fields, agent_param_applies, agent_schema_fields,
     load_agent_into_form, parsed_env_vars, parsed_path_dirs, parsed_prelude, set_agent_field_value,
 };
-use form::{agent_form_fields, clear_agent_form};
+use form::{agent_form_sections, clear_agent_form};
 
 /// The Agents page: every agent defined on this machine, with the live view above it and the
-/// per-row launch/delete actions. Editing one, or writing a new one, opens [`agent_detail_view`]
-/// on that agent's own URL — the definition form is not part of this page.
+/// per-row actions in each row's menu. Editing one, or writing a new one, opens
+/// [`agent_detail_view`] on that agent's own URL — the definition form is not part of this page.
 pub(crate) fn agents_view(
     state: State,
     form: AgentsForm,
@@ -56,6 +56,9 @@ pub(crate) fn agents_view(
 ) -> AnyView {
     let agents = state.agents;
     let secs_since = state.secs_since;
+    // The run cap's editor is a row that only appears when asked for: the head says the numbers,
+    // and "change limit" is the one control that opens the box that sets them.
+    let limit_open = RwSignal::new(false);
     view! {
         // Above everything, when it is open: taking the model's seat is the whole screen, not a
         // panel beside the list of agents you could take it in.
@@ -63,39 +66,55 @@ pub(crate) fn agents_view(
 
         {move || live_view(state, watch)}
 
-        <section class="adi-panel">
-            <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Agents defined">
-                    {move || agents.get().map_or_else(|| "\u{2014}".to_string(),
-                        |a| a.agents.len().to_string())}
-                </span>
-                {run_limit_view(state)}
-                <span class="adi-spacer"></span>
-                <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
-                <a class="adi-btn adi-btn--primary" href=agent_form_path("")
-                    on:click=move |ev| if spa_nav(&ev) {
-                        open_agent_editor(state, route, form, None);
-                    }>
-                    "New agent"
-                </a>
-            </div>
+        <header class="adi-bar">
+            <h1 class="adi-bar__title">"Agents"</h1>
+            <span class="adi-agents__meta">
+                {move || agents.get().map(|a| {
+                    let n = a.agents.len();
+                    let count = if n == 1 { "1 agent".to_string() } else { format!("{n} agents") };
+                    let running = if a.max_concurrent_runs == 0 {
+                        format!("{} running", a.running_runs)
+                    } else {
+                        format!("{} of {} running", a.running_runs, a.max_concurrent_runs)
+                    };
+                    view! {
+                        <b>{count}</b>" · "<b>{running}</b>" · "
+                        <button class="adi-agents__limit" type="button"
+                            aria-expanded=move || limit_open.get().to_string()
+                            on:click=move |_| limit_open.update(|o| *o = !*o)>
+                            "change limit"
+                        </button>
+                    }
+                })}
+            </span>
+            <span class="adi-spacer"></span>
+            <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
+            <a class="adi-btn adi-btn--primary" href=agent_form_path("")
+                on:click=move |ev| if spa_nav(&ev) {
+                    open_agent_editor(state, route, form, None);
+                }>
+                "New agent"
+            </a>
+        </header>
 
-            <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim, route)}</Table>
-            {flash_view(state.flash)}
-            // What the row actions do. It sat under the create form before that moved to a page
-            // of its own; it belongs with the buttons it explains, which are in the table above.
-            <div class="adi-hint">
-                "▶ Run launches pty backends in an interactive " <code>"adi-agent-<name>"</code>
-                " session you type into. A "<code>"process"</code>" backend is a template: ▶ Run…
-                 starts an independent one-shot run from a task you give it — one "<code>"--print"</code>
-                " turn, never continued — and several can run at once. A "<code>"harness"</code>"
-                 backend instead starts an answerable "<strong>"conversation"</strong>": ▶ Chat…
-                 sends a first message, the agent answers, and you reply to continue the same thread.
-                 Each run/conversation keeps its own log + transcript under "
-                <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
-                ", browsable as history in ● View."
-            </div>
-        </section>
+        {move || limit_open.get().then(|| view! {
+            <div class="adi-agents__limit-row">{run_limit_view(state)}</div>
+        })}
+
+        <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim, route)}</Table>
+        {flash_view(state.flash)}
+        // What the row menu's launch actions do. It belongs with the rows it explains.
+        <p class="adi-hint">
+            "Run starts a pty backend in an interactive " <code>"adi-agent-<name>"</code>
+            " session you type into. A "<code>"process"</code>" backend is a template: Run… starts \
+             an independent one-shot run from a task you give it — one "<code>"--print"</code>
+            " turn, never continued — and several can run at once. A "<code>"harness"</code>"
+             backend starts an answerable "<strong>"conversation"</strong>": Chat… sends a first \
+             message, the agent answers, and you reply to continue the same thread. Each run keeps \
+             its own log and transcript under "
+            <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
+            ", browsable as history in View."
+        </p>
     }
     .into_any()
 }
@@ -131,34 +150,48 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 .get()
                 .is_some_and(|s| !s.agents.iter().any(|a| a.name == open))
     };
+    // Whether the system prompt's editor is unfolded. Held here, above the fields, so a refresh
+    // of the agents list — which re-renders the fields — does not fold a prompt somebody is in
+    // the middle of writing.
+    let prompt_open = RwSignal::new(false);
+    Effect::new(move |_| {
+        if !form.system_prompt.get().is_empty() {
+            prompt_open.set(true);
+        }
+    });
     view! {
-        // Its own head, the way a project's detail page has one: what is being edited, and the
-        // way back up to the list — laid out as `parent_link` lays out a sub-project's.
-        <div class="adi-bar">
-            <h1 class="adi-bar__title">
+        <div class="adi-agents__form">
+            <a class="adi-agents__back" href=Route::Agents.path() title="Back to every agent"
+                on:click=move |ev| spa_click(&ev, route, Route::Agents)>
+                <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
+                "Agents"
+            </a>
+            <h1 class="adi-agents__title">
                 {move || match editing.get() {
-                    Some(n) => n,
+                    Some(n) => format!("Reconfigure {n}"),
                     None => "New agent".to_string(),
                 }}
             </h1>
-            <a class="adi-btn adi-btn--link" href=Route::Agents.path() title="back to every agent"
-                on:click=move |ev| spa_click(&ev, route, Route::Agents)>"\u{2191} Agents"</a>
-        </div>
+            <p class="adi-agents__lead">
+                {move || if editing.get().is_some() {
+                    "Change the runtime it runs on, what it may reach, or its system prompt."
+                } else {
+                    "Pick how it should run and give it what that needs. Everything here can \
+                     change later."
+                }}
+            </p>
 
-        {move || missing().then(|| view! {
-            <section class="adi-panel">
-                <div class="adi-empty">
+            {move || missing().then(|| view! {
+                <p class="adi-agents__missing">
                     {format!("No agent named “{}” — it may have been deleted or renamed.",
                         state.current_agent.get())}
-                </div>
-            </section>
-        })}
+                </p>
+            })}
 
-        // The form stays mounted either way: rebuilding it whenever the polled agents list lands
-        // would drop focus mid-edit, and a form still holding a deleted agent is how you put it
-        // back.
-        <section class="adi-panel">
-            <form class="adi-form" on:submit=move |ev| {
+            // The form stays mounted either way: rebuilding it whenever the polled agents list
+            // lands would drop focus mid-edit, and a form still holding a deleted agent is how
+            // you put it back.
+            <form class="adi-agents__body" on:submit=move |ev| {
                 ev.prevent_default();
                 let nm = name.get().trim().to_string();
                 if nm.is_empty() {
@@ -225,17 +258,103 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 replace_state(&agent_form_path(&nm));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
             }>
-                {move || agent_form_fields(state, form)}
-                {move || agent_tool_checkboxes(state, form)}
-                {move || agent_knowledge_checkboxes(form)}
-                {move || agent_secret_checkboxes(state, form)}
-                {move || agent_environment_fields(form)}
-                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
-                    {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
-                </button>
+                {move || agent_form_sections(state, form)}
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Tools"</h2>
+                    {move || agent_tool_checkboxes(state, form)}
+                    {move || agent_cli_field(state, form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Knowledge"</h2>
+                    {move || agent_knowledge_checkboxes(form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Secrets"</h2>
+                    {move || agent_secret_checkboxes(state, form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Run environment"</h2>
+                    <div class="adi-agents__grid">{agent_environment_fields(form)}</div>
+                </section>
+
+                {move || agent_prompt_disclosure(state, form, prompt_open)}
+
+                <footer class="adi-agents__actions">
+                    <a class="adi-btn adi-btn--ghost" href=Route::Agents.path()
+                        on:click=move |ev| spa_click(&ev, route, Route::Agents)>"Cancel"</a>
+                    // The form page's one orange: saving is what the page is for.
+                    <button class="adi-btn adi-btn--accent" type="submit" prop:disabled=move || busy.get()>
+                        {move || if editing.get().is_some() { "Save changes" } else { "Create agent" }}
+                    </button>
+                </footer>
             </form>
             {flash_view(flash)}
-        </section>
+        </div>
+    }
+    .into_any()
+}
+
+/// The `tools` schema field — which `adi-mono` command groups the agent may use — rendered under
+/// the tool checkboxes it belongs with rather than among the backend params.
+fn agent_cli_field(state: State, form: AgentsForm) -> AnyView {
+    let Some(st) = state.agents.get() else {
+        return ().into_any();
+    };
+    let only = ["tools".to_string()];
+    view! {
+        <div class="adi-agents__grid">
+            {agent_schema_fields(&st.form, Some(only.as_slice()), &[], state, form)}
+        </div>
+    }
+    .into_any()
+}
+
+/// The system prompt, folded under a disclosure row at the foot of the form: optional, advanced,
+/// and long — open, it is the one field that takes the page.
+fn agent_prompt_disclosure(state: State, form: AgentsForm, open: RwSignal<bool>) -> AnyView {
+    let Some(st) = state.agents.get() else {
+        return ().into_any();
+    };
+    let Some(field) = st
+        .form
+        .fields
+        .iter()
+        .find(|f| f.name == "system_prompt")
+        .cloned()
+    else {
+        return ().into_any();
+    };
+    let placeholder = field.placeholder;
+    view! {
+        <div class="adi-agents__disclosure">
+            <button class="adi-agents__disclosure-btn" type="button"
+                aria-expanded=move || open.get().to_string()
+                on:click=move |_| open.update(|o| *o = !*o)>
+                <span class=move || if open.get() {
+                    "adi-agents__caret adi-agents__caret--open"
+                } else {
+                    "adi-agents__caret"
+                }>
+                    <Icon icon=Lucide::ChevronRight size=IconSize::Sm/>
+                </span>
+                <span>{field.label}</span>
+                <span class="adi-agents__disclosure-hint">"optional, advanced"</span>
+            </button>
+            {move || open.get().then(|| {
+                let placeholder = placeholder.clone();
+                view! {
+                    <div class="adi-agents__prompt">
+                        <textarea class="adi-textarea" id="agent-system-prompt" placeholder=placeholder
+                            prop:value=move || form.system_prompt.get()
+                            on:input=move |ev| form.system_prompt.set(event_target_value(&ev))></textarea>
+                    </div>
+                }
+            })}
+        </div>
     }
     .into_any()
 }
@@ -262,6 +381,32 @@ pub(crate) fn open_agent_editor(
     scroll_top();
 }
 
+/// One checkbox in a wrapping list of them. `muted` dims a choice that is listed but cannot be
+/// taken; the reason travels in `title`.
+fn check_box(
+    label: impl IntoView + 'static,
+    title: String,
+    checked: impl Fn() -> bool + Send + Sync + 'static,
+    disabled: bool,
+    on_change: impl Fn(bool) + 'static,
+    trailing: Option<AnyView>,
+) -> AnyView {
+    let class = if disabled {
+        "adi-agents__check adi-agents__check--off"
+    } else {
+        "adi-agents__check"
+    };
+    view! {
+        <label class=class title=title>
+            <input type="checkbox" prop:checked=checked prop:disabled=disabled
+                on:change=move |ev| on_change(event_target_checked(&ev)) />
+            <span>{label}</span>
+            {trailing}
+        </label>
+    }
+    .into_any()
+}
+
 /// The per-agent tool checkboxes: one toggle per registered (active) tool — system or user — that
 /// adds/removes its id from the agent's enabled set (`bin_tools`). The ticked tools become shims in
 /// the agent's own `.bin`, on its PATH at launch. This is the "functionality enabled for this agent"
@@ -269,26 +414,17 @@ pub(crate) fn open_agent_editor(
 /// ticked on here.
 fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.tools.get() else {
-        return view! {
-            <div class="adi-field adi-field--grow">
-                <label class="adi-field__label">"Tools"</label>
-                <div class="adi-muted">"Loading tools…"</div>
-            </div>
-        }
-        .into_any();
+        return view! { <p class="adi-agents__loading">"Loading tools…"</p> }.into_any();
     };
     let mut tools: Vec<ToolDto> = st.tools.into_iter().filter(|t| !t.is_archived()).collect();
     // System tools first, then by name — the platform CLIs group together.
     tools.sort_by(|a, b| b.system.cmp(&a.system).then_with(|| a.name.cmp(&b.name)));
     if tools.is_empty() {
         return view! {
-            <div class="adi-field adi-field--grow">
-                <label class="adi-field__label">"Tools"</label>
-                <div class="adi-hint">
-                    "No tools yet — create one on the Tools page. Whatever you enable here lands "
-                    "in this agent's " <code>".bin"</code> "."
-                </div>
-            </div>
+            <p class="adi-hint">
+                "No tools yet — create one on the Tools page. Whatever you enable here lands "
+                "in this agent's " <code>".bin"</code> "."
+            </p>
         }
         .into_any();
     }
@@ -307,42 +443,38 @@ fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
                 t.name.clone()
             };
             let title = t.description.clone().unwrap_or_default();
-            view! {
-                <label class="adi-check" title=title
-                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0">
-                    <input type="checkbox" prop:checked=checked
-                        on:change=move |ev| {
-                            let on = event_target_checked(&ev);
-                            form.bin_tools.update(|set| {
-                                if on { set.insert(id_toggle.clone()); } else { set.remove(&id_toggle); }
-                            });
-                        } />
-                    <span class="adi-mono">{label}</span>
-                </label>
-            }
+            check_box(
+                label,
+                title,
+                checked,
+                false,
+                move |on| {
+                    form.bin_tools.update(|set| {
+                        if on {
+                            set.insert(id_toggle.clone());
+                        } else {
+                            set.remove(&id_toggle);
+                        }
+                    });
+                },
+                None,
+            )
         })
         .collect::<Vec<_>>();
     view! {
-        <div class="adi-field adi-field--grow">
-            <label class="adi-field__label">"Tools (this agent's .bin)"</label>
-            <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
-                {boxes}
-            </div>
-            <div class="adi-hint">
+        <div class="adi-field">
+            <span class="adi-field__label">"This agent's .bin"</span>
+            <div class="adi-agents__checks">{boxes}</div>
+            <p class="adi-field__note">
                 "Each one is asked " <code>"llm help"</code> " (then " <code>"help"</code> ", then "
                 <code>"--help"</code> ") at launch, and what it answers is appended to this agent's "
                 "system prompt — so it knows what the commands are without being told twice."
-            </div>
+            </p>
         </div>
     }
     .into_any()
 }
 
-/// The per-agent secret checkboxes: one toggle per registered secret (across every scope) that
-/// adds/removes its `(scope, name)` reference from the agent's attachment set. Only the ticked
-/// secrets are decrypted and injected into the agent's runs as environment variables — an explicit
-/// allowlist, so nothing is inherited from a scope for merely existing. Populated from the shared
-/// secrets list (`state.secrets`), which carries metadata only (never a value).
 /// The agent's knowledge: whether it keeps a memory of its own, and which existing bases it
 /// works with.
 ///
@@ -368,31 +500,41 @@ fn agent_knowledge_checkboxes(form: AgentsForm) -> AnyView {
     });
 
     let memory_toggle = view! {
-        <label class="adi-check" style="display:inline-flex; align-items:center; gap:var(--space-1)">
-            <input type="checkbox" prop:checked=move || form.memory.get()
-                on:change=move |ev| form.memory.set(event_target_checked(&ev)) />
-            <span>"Give this agent a memory of its own"</span>
-        </label>
-        <div class="adi-hint">
-            {move || {
-                let name = form.name.get();
-                let base = if name.trim().is_empty() {
-                    "agent:<name>/memory".to_string()
-                } else {
-                    format!("agent:{}/memory", name.trim())
-                };
-                format!("{base} — it alone writes there, and every other agent may read it. \
-                         Off by default: an agent that records what it learns is a different \
-                         thing from one that does not.")
-            }}
+        <div class="adi-field">
+            <div class="adi-agents__checks">
+                {check_box(
+                    "Give this agent a memory of its own",
+                    String::new(),
+                    move || form.memory.get(),
+                    false,
+                    move |on| form.memory.set(on),
+                    None,
+                )}
+            </div>
+            <p class="adi-field__note">
+                {move || {
+                    let name = form.name.get();
+                    let base = if name.trim().is_empty() {
+                        "agent:<name>/memory".to_string()
+                    } else {
+                        format!("agent:{}/memory", name.trim())
+                    };
+                    view! {
+                        <code>{base}</code>
+                        " — it alone writes there, and every other agent may read it. Off by \
+                         default: an agent that records what it learns is a different thing \
+                         from one that does not."
+                    }
+                }}
+            </p>
         </div>
     };
 
     view! {
-        <div class="adi-field adi-field--grow">
-            <label class="adi-field__label">"Knowledge"</label>
-            {memory_toggle}
-            <div style="padding-top:var(--space-2)">{move || base_checkboxes(form)}</div>
+        {memory_toggle}
+        <div class="adi-field">
+            <span class="adi-field__label">"Bases it searches"</span>
+            {move || base_checkboxes(form)}
         </div>
     }
     .into_any()
@@ -401,7 +543,7 @@ fn agent_knowledge_checkboxes(form: AgentsForm) -> AnyView {
 /// One checkbox per existing base, minus this agent's own memory (which is the toggle above).
 fn base_checkboxes(form: AgentsForm) -> AnyView {
     let Some(bases) = form.knowledge_bases.get() else {
-        return view! { <div class="adi-muted">"Loading knowledge bases…"</div> }.into_any();
+        return view! { <p class="adi-agents__loading">"Loading knowledge bases…"</p> }.into_any();
     };
     let agent = form.name.get().trim().to_string();
     let project = form.project.get().trim().to_string();
@@ -413,10 +555,10 @@ fn base_checkboxes(form: AgentsForm) -> AnyView {
         .collect();
     if offered.is_empty() {
         return view! {
-            <div class="adi-hint">
+            <p class="adi-hint">
                 "No knowledge bases yet — make one on the Knowledge page. Whatever you tick here "
                 "is what this agent searches."
-            </div>
+            </p>
         }
         .into_any();
     }
@@ -437,44 +579,46 @@ fn base_checkboxes(form: AgentsForm) -> AnyView {
                 _ => None,
             };
             let disabled = out_of_reach.is_some();
-            let title = out_of_reach.clone().unwrap_or_else(|| match b.level.as_str() {
-                "agent" => "another agent's memory — readable, never writable".to_string(),
-                "project" => "this project's knowledge".to_string(),
-                _ => "shared by everything on this machine".to_string(),
-            });
-            let label = b.id.clone();
-            view! {
-                <label class="adi-check" title=title
-                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0"
-                    class:adi-muted=disabled>
-                    <input type="checkbox" prop:checked=checked prop:disabled=disabled
-                        on:change=move |ev| {
-                            let on = event_target_checked(&ev);
-                            form.knowledge.update(|set| {
-                                if on { set.insert(id_toggle.clone()); } else { set.remove(&id_toggle); }
-                            });
-                        } />
-                    <span class="adi-mono">{label}</span>
-                    {out_of_reach.map(|_| view! { <span class="adi-chip">"out of scope"</span> })}
-                </label>
-            }
+            let title = out_of_reach
+                .clone()
+                .unwrap_or_else(|| match b.level.as_str() {
+                    "agent" => "another agent's memory — readable, never writable".to_string(),
+                    "project" => "this project's knowledge".to_string(),
+                    _ => "shared by everything on this machine".to_string(),
+                });
+            // A base id is a machine string; the reason it is out of reach is a tag on the row.
+            let label = view! { <span class="adi-mono">{b.id.clone()}</span> };
+            let trailing = out_of_reach
+                .map(|_| view! { <span class="adi-chip">"out of scope"</span> }.into_any());
+            check_box(
+                label,
+                title,
+                checked,
+                disabled,
+                move |on| {
+                    form.knowledge.update(|set| {
+                        if on {
+                            set.insert(id_toggle.clone());
+                        } else {
+                            set.remove(&id_toggle);
+                        }
+                    });
+                },
+                trailing,
+            )
         })
         .collect::<Vec<_>>();
-    view! {
-        <div style="display:flex; flex-wrap:wrap; align-items:center">{boxes}</div>
-    }
-    .into_any()
+    view! { <div class="adi-agents__checks">{boxes}</div> }.into_any()
 }
 
+/// The per-agent secret checkboxes: one toggle per registered secret (across every scope) that
+/// adds/removes its `(scope, name)` reference from the agent's attachment set. Only the ticked
+/// secrets are decrypted and injected into the agent's runs as environment variables — an explicit
+/// allowlist, so nothing is inherited from a scope for merely existing. Populated from the shared
+/// secrets list (`state.secrets`), which carries metadata only (never a value).
 fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.secrets.get() else {
-        return view! {
-            <div class="adi-field adi-field--grow">
-                <label class="adi-field__label">"Secrets"</label>
-                <div class="adi-muted">"Loading secrets…"</div>
-            </div>
-        }
-        .into_any();
+        return view! { <p class="adi-agents__loading">"Loading secrets…"</p> }.into_any();
     };
     let mut secrets: Vec<SecretDto> = st.secrets;
     // Global secrets first, then by project, then by name — the shared baseline groups together.
@@ -487,13 +631,10 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
     });
     if secrets.is_empty() {
         return view! {
-            <div class="adi-field adi-field--grow">
-                <label class="adi-field__label">"Secrets"</label>
-                <div class="adi-hint">
-                    "No secrets yet — add one on the Secrets page. Whatever you tick here is "
-                    "injected into this agent's runs as an environment variable."
-                </div>
-            </div>
+            <p class="adi-hint">
+                "No secrets yet — add one on the Secrets page. Whatever you tick here is "
+                "injected into this agent's runs as an environment variable."
+            </p>
         }
         .into_any();
     }
@@ -504,44 +645,50 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
             let key_checked = key.clone();
             let key_toggle = key.clone();
             let checked = move || form.secrets.get().contains(&key_checked);
-            let label = match s.project.as_deref().filter(|p| !p.trim().is_empty()) {
-                Some(p) => format!("{} · {p}", s.name),
-                None => s.name.clone(),
-            };
+            // The name is the env var the run sees, so it is mono; the project it is filed under
+            // is a name and is not.
+            let scope = s
+                .project
+                .as_deref()
+                .filter(|p| !p.trim().is_empty())
+                .map(|p| format!(" · {p}"));
+            let label = view! { <span class="adi-mono">{s.name.clone()}</span>{scope} };
             // The value is never sent here; the tooltip carries the description / OAuth provider.
             let title = match (&s.description, &s.oauth) {
                 (Some(d), _) if !d.trim().is_empty() => d.clone(),
                 (_, Some(o)) => format!("OAuth · {}", o.provider),
                 _ => String::new(),
             };
-            view! {
-                <label class="adi-check" title=title
-                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0">
-                    <input type="checkbox" prop:checked=checked
-                        on:change=move |ev| {
-                            let on = event_target_checked(&ev);
-                            form.secrets.update(|set| {
-                                if on { set.insert(key_toggle.clone()); } else { set.remove(&key_toggle); }
-                            });
-                        } />
-                    <span class="adi-mono">{label}</span>
-                </label>
-            }
+            check_box(
+                label,
+                title,
+                checked,
+                false,
+                move |on| {
+                    form.secrets.update(|set| {
+                        if on {
+                            set.insert(key_toggle.clone());
+                        } else {
+                            set.remove(&key_toggle);
+                        }
+                    });
+                },
+                None,
+            )
         })
         .collect::<Vec<_>>();
     view! {
-        <div class="adi-field adi-field--grow">
-            <label class="adi-field__label">"Secrets (injected as env vars)"</label>
-            <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
-                {boxes}
-            </div>
+        <div class="adi-field">
+            <span class="adi-field__label">"Injected as environment variables"</span>
+            <div class="adi-agents__checks">{boxes}</div>
         </div>
     }
     .into_any()
 }
 
-/// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
-/// View (live session), Edit (opens the agent's own editor page), and Delete actions.
+/// Render the agents table body: a loading/empty placeholder, or one row per agent. Every action —
+/// the launch controls, Edit, Simulate, Delete — sits in the row's ⋯ menu; the only thing drawn
+/// beside it is a dot on the rows that are running.
 fn agent_rows(
     state: State,
     form: AgentsForm,
@@ -567,38 +714,39 @@ fn agent_rows(
             let del_name = a.name.clone();
             let a_edit = a.clone();
             let sim_name = a.name.clone();
-            // Run/View/Stop stay inline (the live controls); Edit and the destructive Delete
-            // move into the kebab.
-            let items = vec![
-                menu_item(state, "Edit", false, move || {
-                    open_agent_editor(state, route, form, Some(&a_edit));
-                }),
-                // Take the model's seat in a run of this agent. In the kebab rather than inline
-                // because it is not a way of *running* the agent — it is a way of reading what the
-                // agent is told, and it opens a screen rather than starting work.
-                menu_item(state, "Simulate", false, move || {
-                    simulate::start_simulation(
-                        state,
-                        sim,
-                        sim_name.clone(),
-                        "Simulated run — read the prompt and take the model's seat.".to_string(),
-                    );
-                }),
-                menu_item(state, "Delete", true, move || {
-                    apply_agents(
-                        state,
-                        None,
-                        format!("Deleted {del_name}."),
-                        fetch::delete_agent(del_name.clone()),
-                    );
-                }),
-            ];
-            let actions = row_actions(
-                state,
-                format!("agent:{}", a.name),
-                agent_actions(state, watch, &a),
-                items,
-            );
+            let mut items = Vec::new();
+            // The launch controls lead the menu, on the rows that have any.
+            if a.runnable || a.running {
+                items.push(
+                    view! { <div class="adi-agents__live">{agent_actions(state, watch, &a)}</div> }
+                        .into_any(),
+                );
+            }
+            items.push(menu_item(state, "Edit", false, move || {
+                open_agent_editor(state, route, form, Some(&a_edit));
+            }));
+            // Take the model's seat in a run of this agent: a way of reading what the agent is
+            // told, not of running it — it opens a screen rather than starting work.
+            items.push(menu_item(state, "Simulate", false, move || {
+                simulate::start_simulation(
+                    state,
+                    sim,
+                    sim_name.clone(),
+                    "Simulated run — read the prompt and take the model's seat.".to_string(),
+                );
+            }));
+            items.push(menu_item(state, "Delete", true, move || {
+                apply_agents(
+                    state,
+                    None,
+                    format!("Deleted {del_name}."),
+                    fetch::delete_agent(del_name.clone()),
+                );
+            }));
+            let live = a
+                .running
+                .then(|| view! { <span class="adi-agents__live-dot" title="running"></span> });
+            let actions = row_actions(state, format!("agent:{}", a.name), live, items);
             view! {
                 <TableRow state=table cell=move |col| agent_cell(col, &a) actions=actions/>
             }
@@ -627,28 +775,43 @@ pub(crate) fn agent_key(a: &AgentDto, col: &str) -> Key {
 /// column belongs to a project's panel, which builds it there from the live watch.
 pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
     match col {
-        "Backend" => view! { <span class="font-mono">{a.backend.clone()}</span> }.into_any(),
-        "Model" => view! {
-            <span class="font-mono text-meta">{argument_text(&a.arguments, "model")}</span>
-        }
-        .into_any(),
+        // Backend and model are machine ids, and the backend repeats down the column.
+        "Backend" => view! { <span class="adi-mono">{a.backend.clone()}</span> }.into_any(),
+        "Model" => match argument_text(&a.arguments, "model") {
+            m if m.is_empty() => view! { <span class="adi-muted">"—"</span> }.into_any(),
+            m => view! { <span class="adi-mono">{m}</span> }.into_any(),
+        },
         "Project" => match &a.project {
             Some(p) if !p.trim().is_empty() => {
-                view! { <span><span class="adi-chip adi-mono">{p.clone()}</span></span> }.into_any()
+                view! { <span><span class="adi-chip">{p.clone()}</span></span> }.into_any()
             }
             _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         },
-        "Tags" => view! { <span class="text-meta">{a.tags.join(", ")}</span> }.into_any(),
+        "Tags" => match a.tags.join(", ") {
+            t if t.is_empty() => view! { <span class="adi-muted">"—"</span> }.into_any(),
+            t => view! { <span class="adi-muted">{t}</span> }.into_any(),
+        },
         // "Name", and anything the layout offers that this match doesn't name.
-        _ => {
-            let name = if a.starred {
-                format!("★ {}", a.name)
-            } else {
-                a.name.clone()
-            };
-            view! { <span>{name}</span> }.into_any()
-        }
+        _ => agent_name_cell(a),
     }
+}
+
+/// The name, led by its star: lit on a starred agent, faint on the rest so every name starts on
+/// the same edge.
+pub(crate) fn agent_name_cell(a: &AgentDto) -> AnyView {
+    let star = if a.starred {
+        "adi-agents__star adi-agents__star--on"
+    } else {
+        "adi-agents__star"
+    };
+    let title = if a.starred { "starred" } else { "not starred" };
+    view! {
+        <span class="adi-agents__name">
+            <span class=star title=title><Icon icon=Lucide::Star size=IconSize::Sm/></span>
+            {a.name.clone()}
+        </span>
+    }
+    .into_any()
 }
 
 /// The live view's input row, wired to the watched agent's pty session.

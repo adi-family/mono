@@ -17,6 +17,7 @@
 use leptos::{ev, html, prelude::*};
 use web_sys::wasm_bindgen::JsCast;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
 /// Where one attachment has got to.
@@ -158,14 +159,14 @@ fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
         None => item.name.clone(),
     };
     let frame = if failed.is_some() {
-        "border-err-edge-2"
+        "border-err"
     } else {
-        "border-dim"
+        "border-line"
     };
     view! {
         <div
             class=format!(
-                "group relative size-16 shrink-0 overflow-hidden rounded-sm border {frame} bg-card",
+                "group relative size-16 shrink-0 overflow-hidden rounded-md border {frame} bg-raise",
             )
             role="listitem"
             title=title
@@ -187,31 +188,28 @@ fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
                 })}
             {uploading
                 .then(|| view! {
-                    <div class="absolute inset-0 grid place-items-center text-mini text-meta">
+                    <div class="absolute inset-0 grid place-items-center text-mini text-ink-3">
                         "…"
                     </div>
                 })}
             {failed
                 .map(|_| view! {
-                    <div class="absolute inset-0 grid place-items-center bg-card/80 text-mini \
+                    <div class="absolute inset-0 grid place-items-center bg-raise/80 text-mini \
                                 text-err">
                         "failed"
                     </div>
                 })}
             <button
                 class="absolute right-0.5 top-0.5 grid size-5 cursor-pointer place-items-center \
-                       rounded-sm bg-card/90 text-mini leading-none text-meta hover:text-err \
-                       focus-visible:outline-2 focus-visible:outline-offset-1 \
-                       focus-visible:outline-accent"
+                       rounded-md bg-raise/90 text-ink-2 hover:text-ink"
                 type="button"
                 title="Remove this image"
-                aria-label=format!("Remove {}", item.name)
                 on:click=move |_| {
                     let key = key.clone();
                     files.update(|list| list.retain(|a| a.key != key));
                 }
             >
-                "\u{2715}"
+                <Icon icon=Lucide::X size=IconSize::Sm label=format!("Remove {}", item.name)/>
             </button>
         </div>
     }
@@ -251,12 +249,9 @@ pub fn AttachButton(attach: Attaching) -> impl IntoView {
             }
         />
         <button
-            class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm border \
-                   border-dim bg-card text-meta transition-colors duration-100 \
-                   hover:border-accent hover:text-body focus-visible:outline-2 \
-                   focus-visible:outline-offset-2 focus-visible:outline-accent"
+            class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-ink-2 \
+                   transition-colors duration-100 hover:bg-hover hover:text-ink"
             type="button"
-            aria-label="Attach an image"
             title="Attach an image — or paste one, or drop it here"
             on:click=move |_| {
                 if let Some(el) = input.get_untracked() {
@@ -264,18 +259,7 @@ pub fn AttachButton(attach: Attaching) -> impl IntoView {
                 }
             }
         >
-            <svg
-                class="size-4"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <path d="M10.5 5.5 6 10a1.8 1.8 0 0 0 2.5 2.5l4.5-4.5a3.4 3.4 0 0 0-4.8-4.8L3.7 8.2a5 5 0 0 0 7 7l3.8-3.8"></path>
-            </svg>
+            <Icon icon=Lucide::Paperclip size=IconSize::Md label="Attach an image"/>
         </button>
     }
 }
@@ -287,7 +271,7 @@ pub fn AttachRefusal(
     #[prop(optional)] class: String,
 ) -> impl IntoView {
     view! {
-        <div class=merge("px-1 text-mini text-meta", class)>{move || reason.get()}</div>
+        <div class=merge("text-mini text-ink-3", class)>{move || reason.get()}</div>
     }
 }
 

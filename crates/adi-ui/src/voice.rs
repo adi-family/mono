@@ -7,6 +7,7 @@
 
 use leptos::{ev, prelude::*};
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
 /// Where dictation has got to.
@@ -33,7 +34,7 @@ impl MicState {
     }
 }
 
-/// The microphone button.
+/// The microphone button: one of the composer's 32px quiet icon buttons.
 ///
 /// **A press toggles; it is not held down.** Push-to-talk by holding is the obvious reading of
 /// "push to talk", and it is the wrong one for a control that dictates a *message*: a held button
@@ -76,28 +77,24 @@ pub fn MicButton(
 
     let tone = move || match state.get() {
         // Listening is the one state that must be unmistakable from across the room: the
-        // microphone is open, and nothing about a message half-dictated says so otherwise.
-        MicState::Listening => "border-err-edge-2 text-err bg-err-bg animate-pulse",
-        MicState::Working => "border-dim text-meta",
-        _ => "border-dim bg-card text-meta hover:border-accent hover:text-accent",
+        // microphone is open, and nothing about a message half-dictated says so otherwise. Red
+        // ink on the red tint — a pill's treatment (§3), on the one button that is a live state.
+        MicState::Listening => "bg-err-soft text-err",
+        MicState::Working => "text-ink-3",
+        _ => "text-ink-2 hover:bg-hover hover:text-ink",
     };
 
     view! {
         <button
             class=move || merge(
                 &format!(
-                    "grid size-8 shrink-0 place-items-center rounded-sm border \
-                     transition-colors duration-100 focus-visible:outline-2 \
-                     focus-visible:outline-offset-2 focus-visible:outline-accent \
-                     disabled:cursor-not-allowed disabled:opacity-40 {}",
+                    "grid size-8 shrink-0 place-items-center rounded-md transition-colors \
+                     duration-100 disabled:cursor-not-allowed disabled:opacity-40 {}",
                     tone(),
                 ),
                 class.clone(),
             )
             type="button"
-            // The label says the state, not the glyph: to a screen reader "Dictate a message" and
-            // "Stop dictating" are different controls, which is the truth of it.
-            aria-label=title
             title=title
             // Reported so assistive tech hears the microphone open without the label being read
             // out again from scratch.
@@ -110,22 +107,21 @@ pub fn MicButton(
             }
         >
             {move || match state.get() {
-                // A spinner, so that a slow provider looks like waiting rather than like nothing
-                // having happened.
+                // Turning because the person pressed it and is waiting on the answer — the one
+                // motion here, and it was asked for.
                 MicState::Working => view! {
-                    <svg class="size-4 animate-spin" viewBox="0 0 16 16" fill="none"
-                         stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-                        <path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5" stroke-linecap="round"></path>
-                    </svg>
+                    <Icon
+                        icon=Lucide::LoaderCircle
+                        size=IconSize::Md
+                        class="animate-spin"
+                        label="Working out what you said"
+                    />
+                }.into_any(),
+                MicState::Listening => view! {
+                    <Icon icon=Lucide::Mic size=IconSize::Md label="Stop dictating"/>
                 }.into_any(),
                 _ => view! {
-                    <svg class="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor"
-                         stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
-                         aria-hidden="true">
-                        <rect x="6" y="1.75" width="4" height="8" rx="2"></rect>
-                        <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0"></path>
-                        <path d="M8 12v2.25"></path>
-                    </svg>
+                    <Icon icon=Lucide::Mic size=IconSize::Md label="Dictate a message"/>
                 }.into_any(),
             }}
         </button>

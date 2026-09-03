@@ -49,15 +49,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use leptos::{ev, html, prelude::*, wasm_bindgen::JsCast, web_sys};
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::{Button, ButtonSize, ButtonVariant, Empty, Flash, FlashKind, input::FRAME, merge};
-
-/// The inner markup of a 16×16 `<svg>`, drawn in `currentColor` at whatever size the row
-/// picks. Local to the picker: a component that needs an icon to be itself owns it, rather
-/// than making every call site pass one.
-const FOLDER: &str = "<path d='M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.2 1.6h5A1.5 1.5 0 0 1 14 \
-                      6.1v5.4A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5z'/>";
-const FILE: &str = "<path d='M4 2h4.5L12 5.5V14H4z'/><path d='M8.5 2v3.5H12'/>";
-const UP: &str = "<path d='M8 13V4'/><path d='M4.5 7.5 8 4l3.5 3.5'/>";
 
 /// One thing inside the directory being listed.
 ///
@@ -427,17 +420,20 @@ pub fn PathPicker(
     let step = move |delta: isize| step_highlight(delta, shown, active, list);
     let complete = move || complete_leaf(value, entries);
 
+    // Hanging under the field it is a menu: raised, a strong hairline, the large radius, no
+    // shadow. Inline it is the same block, in the flow.
     let sheet = if inline {
-        "island mt-1.5 overflow-hidden bg-bar"
+        "mt-1.5 overflow-hidden rounded-lg border border-line bg-raise"
     } else {
-        "island absolute top-[calc(100%+4px)] right-0 left-0 z-30 overflow-hidden bg-bar"
+        "absolute top-[calc(100%+4px)] right-0 left-0 z-30 overflow-hidden rounded-lg border \
+         border-line-strong bg-raise"
     };
     let footer = on_pick.is_some() || !inline;
-    // No chevron to leave room for when the sheet cannot be closed.
+    // No chevron to leave room for when the sheet cannot be closed. Mono: a path is a path.
     let box_class = if inline {
-        format!("{FRAME} w-full pl-7 font-mono text-mini")
+        format!("{FRAME} w-full pl-8 font-mono text-[13px]")
     } else {
-        format!("{FRAME} w-full pr-7 pl-7 font-mono text-mini")
+        format!("{FRAME} w-full pr-8 pl-8 font-mono text-[13px]")
     };
 
     view! {
@@ -447,22 +443,12 @@ pub fn PathPicker(
         // them floating halfway down it.
         <div class=merge("relative min-w-0", class)>
             <div class="relative">
-                <span
-                    class="pointer-events-none absolute top-1/2 left-2 z-10 -translate-y-1/2 \
-                           text-faint"
-                    aria-hidden="true"
-                >
-                    <svg
-                        class="block size-3.5"
-                        viewBox="0 0 16 16"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        inner_html=FOLDER
-                    ></svg>
-                </span>
+                <Icon
+                    icon=Lucide::Folder
+                    size=IconSize::Sm
+                    class="pointer-events-none absolute top-1/2 left-2.5 z-10 -translate-y-1/2 \
+                           text-ink-3"
+                />
 
                 <input
                     class=box_class
@@ -591,7 +577,7 @@ fn browse_toggle(
     view! {
         <button
             class="absolute top-1/2 right-1 grid size-6 -translate-y-1/2 cursor-pointer \
-                   place-items-center rounded-sm text-meta hover:text-ink \
+                   place-items-center rounded-md text-ink-3 hover:text-ink \
                    disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
             aria-label="Browse"
@@ -605,24 +591,11 @@ fn browse_toggle(
                 open.update(|o| *o = !*o);
             }
         >
-            <svg
-                class=move || {
-                    if open.get() {
-                        "size-3.5 rotate-180 transition-transform duration-100"
-                    } else {
-                        "size-3.5 transition-transform duration-100"
-                    }
-                }
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <path d="M4 6.5 8 10.5l4-4"></path>
-            </svg>
+            {move || if open.get() {
+                view! { <Icon icon=Lucide::ChevronDown size=IconSize::Sm class="rotate-180 transition-transform duration-100"/> }
+            } else {
+                view! { <Icon icon=Lucide::ChevronDown size=IconSize::Sm class="transition-transform duration-100"/> }
+            }}
         </button>
     }
 }
@@ -648,8 +621,7 @@ fn Rows(
             return view! { <Empty>"Reading\u{2026}"</Empty> }.into_any();
         }
         if let Some(why) = error.get() {
-            return view! { <Flash kind=FlashKind::Err card=true class="m-1">{why}</Flash> }
-                .into_any();
+            return view! { <Flash kind=FlashKind::Err class="px-2 pb-2">{why}</Flash> }.into_any();
         }
         let rows = shown.get();
         if rows.is_empty() {
@@ -747,16 +719,16 @@ fn roots_strip(
         let places = roots.get();
         (!places.is_empty()).then(|| {
             view! {
-                <div class="flex flex-wrap gap-1 border-b border-divider bg-panel px-2 py-1.5">
+                <div class="flex flex-wrap gap-1 border-b border-line px-2 py-1.5">
                     {places
                         .into_iter()
                         .map(|root| {
                             let path = root.path.clone();
                             view! {
                                 <button
-                                    class="cursor-pointer rounded-sm border border-edge \
-                                           bg-card px-1.5 py-0.5 text-mini text-secondary \
-                                           hover:border-accent-soft-edge hover:text-accent"
+                                    class="cursor-pointer rounded-full bg-chip px-2 py-0.5 \
+                                           text-mini text-ink-2 hover:bg-chip-hover \
+                                           hover:text-ink"
                                     type="button"
                                     title=root.path.clone()
                                     on:click=move |_| go(&path)
@@ -788,11 +760,11 @@ fn crumbs_strip(
             let deepest = crumbs.len() - 1;
             let parent = dir_of(trim_dir(&path)).to_string();
             view! {
-                <div class="flex items-center gap-0.5 overflow-x-auto border-b border-divider \
-                            bg-panel px-1.5 py-1 whitespace-nowrap">
+                <div class="flex items-center gap-0.5 overflow-x-auto border-b border-line \
+                            px-1.5 py-1 whitespace-nowrap">
                     <button
                         class="mr-0.5 grid size-5 shrink-0 cursor-pointer place-items-center \
-                               rounded-sm text-meta hover:bg-card hover:text-ink \
+                               rounded-md text-ink-3 hover:bg-hover hover:text-ink \
                                disabled:cursor-not-allowed disabled:opacity-40 \
                                disabled:hover:bg-transparent"
                         type="button"
@@ -800,17 +772,7 @@ fn crumbs_strip(
                         disabled=deepest == 0
                         on:click=move |_| go(&parent)
                     >
-                        <svg
-                            class="size-3.5"
-                            viewBox="0 0 16 16"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="1.5"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            aria-hidden="true"
-                            inner_html=UP
-                        ></svg>
+                        <Icon icon=Lucide::ArrowUp size=IconSize::Sm/>
                     </button>
                     {crumbs
                         .into_iter()
@@ -818,18 +780,20 @@ fn crumbs_strip(
                         .map(|(i, (label, target))| {
                             // The one you are in is not a place to go, so it does not offer.
                             let tone = if i == deepest {
-                                "shrink-0 cursor-pointer rounded-sm px-1 py-0.5 font-mono \
-                                 text-mini font-medium text-ink"
+                                "shrink-0 cursor-pointer rounded-md px-1 py-0.5 font-mono \
+                                 text-mono font-medium text-ink"
                             } else {
-                                "shrink-0 cursor-pointer rounded-sm px-1 py-0.5 font-mono \
-                                 text-mini text-meta hover:bg-card hover:text-ink"
+                                "shrink-0 cursor-pointer rounded-md px-1 py-0.5 font-mono \
+                                 text-mono text-ink-3 hover:bg-hover hover:text-ink"
                             };
                             view! {
                                 {(i > 0)
                                     .then(|| view! {
-                                        <span class="shrink-0 text-fainter" aria-hidden="true">
-                                            "\u{203a}"
-                                        </span>
+                                        <Icon
+                                            icon=Lucide::ChevronRight
+                                            size=IconSize::Sm
+                                            class="text-ink-3"
+                                        />
                                     })}
                                 <button class=tone type="button" on:click=move |_| go(&target)>
                                     {label}
@@ -851,8 +815,8 @@ fn choose_strip(
     confirm: impl Fn() + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
     view! {
-        <div class="flex items-center gap-2 border-t border-divider bg-panel px-2 py-1.5">
-            <span class="min-w-0 flex-1 truncate font-mono text-mini text-meta">
+        <div class="flex items-center gap-2 border-t border-line px-2 py-1.5">
+            <span class="mono min-w-0 flex-1 truncate text-ink-3">
                 {move || {
                     let path = value.get();
                     let chosen = trim_dir(&path);
@@ -861,7 +825,7 @@ fn choose_strip(
             </span>
             <Button
                 size=ButtonSize::Small
-                variant=ButtonVariant::Primary
+                variant=ButtonVariant::Strong
                 on:click=move |_| confirm()
             >
                 "Use this folder"
@@ -870,7 +834,8 @@ fn choose_strip(
     }
 }
 
-/// One row of the list. A directory is an option you can land on; a file is furniture.
+/// One row of the list. A directory is an option you can land on; a file is furniture. Names
+/// are mono: they are what the disk calls them.
 fn entry_row(
     uid: usize,
     index: usize,
@@ -878,22 +843,6 @@ fn entry_row(
     active: RwSignal<Option<usize>>,
     enter: Callback<String>,
 ) -> AnyView {
-    let icon = |markup: &'static str| {
-        view! {
-            <svg
-                class="block size-3.5 shrink-0"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                inner_html=markup
-            ></svg>
-        }
-    };
-
     let name = entry.name;
     if !entry.dir {
         let label = name.clone();
@@ -901,12 +850,12 @@ fn entry_row(
             // Still carries `data-row`, so the indices the keyboard skips over and the
             // indices in the DOM stay the same numbers.
             <div
-                class="flex cursor-default items-center gap-2 rounded-sm px-2 py-1 text-row \
-                       text-faint"
+                class="flex cursor-default items-center gap-2 rounded-md px-2 py-1 font-mono \
+                       text-[13px] text-ink-3"
                 data-row=index.to_string()
                 title=name
             >
-                {icon(FILE)}
+                <Icon icon=Lucide::File size=IconSize::Sm/>
                 <span class="truncate">{label}</span>
             </div>
         }
@@ -920,11 +869,11 @@ fn entry_row(
         <div
             class=move || {
                 if is_active() {
-                    "flex cursor-pointer items-center gap-2 rounded-sm bg-accent-soft px-2 \
-                     py-1 text-row text-accent"
+                    "flex cursor-pointer items-center gap-2 rounded-md bg-active px-2 py-1 \
+                     font-mono text-[13px] text-ink"
                 } else {
-                    "flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 text-row \
-                     text-body hover:bg-card"
+                    "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 font-mono \
+                     text-[13px] text-ink-2 hover:bg-hover hover:text-ink"
                 }
             }
             id=option_id(uid, index)
@@ -934,7 +883,7 @@ fn entry_row(
             title=name
             on:click=move |_| enter.run(target.clone())
         >
-            {icon(FOLDER)}
+            <Icon icon=Lucide::Folder size=IconSize::Sm class="text-ink-3"/>
             <span class="truncate">{label}</span>
         </div>
     }

@@ -1,0 +1,22 @@
+// Page-local styles for `src/pages/projects.rs`. Shared components live in adi-css; a shape that
+// exists on one page lives here. Tokens from design/tokens.css only.
+
+// A project's name is the way into it: ink, sans, and a link only on hover.
+.adi-projects__name {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+// The archive's heading is the control that opens it: the section title with a chevron before it
+// and the count after, and nothing that looks like a button until it is pointed at.
+.adi-projects__fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: -6px;
+  padding: 2px 6px;
+  border-radius: var(--r);
+  color: var(--ink-3);
+
+  &:hover { background: var(--bg-hover); }
+}

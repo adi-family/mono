@@ -50,7 +50,7 @@ struct PairView: View {
                     ForEach(Direction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .padding(.horizontal)
+                .padding(.horizontal, 20)
                 .padding(.bottom, 8)
 
                 switch direction {
@@ -58,8 +58,13 @@ struct PairView: View {
                     if let token {
                         invite(token)
                     } else if model.ready {
-                        ProgressView("Minting an invite…")
-                            .frame(maxHeight: .infinity)
+                        VStack(spacing: 12) {
+                            ProgressView().controlSize(.large)
+                            Text("Minting an invite…")
+                                .font(ADI.TextStyle.small)
+                                .foregroundStyle(ADI.ink3)
+                        }
+                        .frame(maxHeight: .infinity)
                     } else {
                         waiting
                     }
@@ -67,6 +72,7 @@ struct PairView: View {
                     spend
                 }
             }
+            .background(ADI.bg)
             .navigationTitle("Pair a node")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -113,18 +119,21 @@ struct PairView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Run `adi-mono mesh invite` on the machine — or open its Fleet page — then point this phone at the code it draws.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(ADI.TextStyle.small)
+                    .foregroundStyle(ADI.ink2)
 
                 scanner
 
-                DisclosureGroup("Paste the token instead", isExpanded: $pasteOpen) {
+                DisclosureGroup(isExpanded: $pasteOpen) {
                     pasteField
+                } label: {
+                    Text("Paste the token instead")
+                        .font(ADI.TextStyle.row)
+                        .foregroundStyle(ADI.ink2)
                 }
-                .font(.subheadline)
-                .tint(.secondary)
+                .tint(ADI.ink3)
             }
-            .padding()
+            .padding(20)
         }
         .task {
             camera = await CameraAccess.request()
@@ -147,10 +156,11 @@ struct PairView: View {
                     }
                 }
                 .frame(height: 300)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                // A reticle, so it is obvious what to point at what.
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(.white.opacity(0.9), lineWidth: 3)
+                .clipShape(RoundedRectangle(cornerRadius: ADI.Radius.lg))
+                // A reticle, so it is obvious what to point at what. White on the picture: the
+                // viewfinder is the one surface here that is not the app's own.
+                RoundedRectangle(cornerRadius: ADI.Radius.lg)
+                    .stroke(.white.opacity(0.9), lineWidth: 2)
                     .frame(width: 200, height: 200)
                 if joining {
                     ProgressView().controlSize(.large).tint(.white)
@@ -164,32 +174,27 @@ struct PairView: View {
     }
 
     private func fallbackNote(_ text: String) -> some View {
-        Text(text)
-            .font(.footnote)
-            .foregroundStyle(.secondary)
+        Note(icon: .camera, text: text)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(Color(.secondarySystemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var pasteField: some View {
         VStack(alignment: .leading, spacing: 16) {
                 TextEditor(text: $typed)
-                    .font(.system(.caption2, design: .monospaced))
+                    .font(ADI.TextStyle.mono)
+                    .foregroundStyle(ADI.code)
+                    .scrollContentBackground(.hidden)
                     .frame(height: 140)
-                    .padding(6)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .adiField()
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .overlay(alignment: .topLeading) {
                         if typed.isEmpty {
                             Text("adi-invite:…")
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 11)
-                                .padding(.vertical, 14)
+                                .font(ADI.TextStyle.mono)
+                                .foregroundStyle(ADI.ink3)
+                                .padding(.horizontal, 17)
+                                .padding(.vertical, 17)
                                 .allowsHitTesting(false)
                         }
                     }
@@ -210,7 +215,10 @@ struct PairView: View {
                         typed = pasted
                     }
                     .labelStyle(.titleAndIcon)
-                    .buttonBorderShape(.capsule)
+                    // System-drawn (that is its whole point — the tap is the consent), so it keeps
+                    // the platform's glyph; the shape and the ink are the design's.
+                    .buttonBorderShape(.roundedRectangle(radius: ADI.Radius.md))
+                    .tint(ADI.ink)
 
                     Button {
                         Task {
@@ -223,12 +231,15 @@ struct PairView: View {
                             if joining {
                                 ProgressView()
                             } else {
-                                Label("Pair", systemImage: "link")
+                                HStack(spacing: 6) {
+                                    LucideIcon(icon: .link)
+                                    Text("Pair")
+                                }
                             }
                         }
-                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    // The one orange on the pasting path: pairing is what the screen is for.
+                    .buttonStyle(.adi(.accent, wide: true))
                     .disabled(joining || Self.tokenIn(typed).isEmpty)
                 }
         }
@@ -251,16 +262,27 @@ struct PairView: View {
     /// Shown until the relay session is up. Minting before then would produce a token that only
     /// works on the local network, which is a worse answer than waiting a moment.
     private var waiting: some View {
-        ContentUnavailableView {
-            Label("Connecting to the mesh", systemImage: "antenna.radiowaves.left.and.right")
-        } description: {
+        VStack(spacing: 12) {
+            LucideIcon(icon: .radio, size: .xl)
+                .foregroundStyle(ADI.ink3)
+            Text("Connecting to the mesh")
+                .font(ADI.TextStyle.section)
+                .foregroundStyle(ADI.ink)
             Text("An invite needs a relay session, so a node has something to dial. This usually takes a few seconds.")
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
         }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func invite(_ token: String) -> some View {
         ScrollView {
             VStack(spacing: 24) {
+                // The code on a white plate: a QR drawn on the dark page is an inverted one that
+                // many cameras refuse, and the white is also its quiet zone.
                 if let image = qr(token) {
                     Image(uiImage: image)
                         .interpolation(.none)
@@ -269,52 +291,58 @@ struct PairView: View {
                         .frame(maxWidth: 260)
                         .padding(12)
                         .background(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .clipShape(RoundedRectangle(cornerRadius: ADI.Radius.lg))
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Run this on the node")
-                        .font(.headline)
+                        .font(ADI.TextStyle.section)
+                        .foregroundStyle(ADI.ink)
                     Text("adi-mono mesh join …")
-                        .font(.system(.footnote, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                        .font(ADI.TextStyle.mono)
+                        .foregroundStyle(ADI.code)
                     Text("The node dials back over the mesh. It needs no open port, and it will print nothing you have to type here — this device already holds the password.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(ADI.TextStyle.small)
+                        .foregroundStyle(ADI.ink2)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Text(token)
-                    .font(.system(.caption2, design: .monospaced))
+                    .font(ADI.TextStyle.mono)
+                    .foregroundStyle(ADI.ink3)
                     .lineLimit(4)
                     .truncationMode(.middle)
-                    .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .adiCodeBlock()
 
                 HStack(spacing: 12) {
+                    // The one orange on the minting path: getting the command onto the machine is
+                    // the whole job.
                     Button {
                         UIPasteboard.general.string = "adi-mono mesh join \(token)"
                         copied = true
                     } label: {
-                        Label(copied ? "Copied" : "Copy command", systemImage: copied ? "checkmark" : "doc.on.doc")
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 6) {
+                            LucideIcon(icon: copied ? .check : .copy)
+                            Text(copied ? "Copied" : "Copy command")
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.adi(.accent, wide: true))
 
                     ShareLink(item: "adi-mono mesh join \(token)") {
-                        Label("Share", systemImage: "square.and.arrow.up")
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 6) {
+                            LucideIcon(icon: .share)
+                            Text("Share")
+                        }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.adi(wide: true))
                 }
 
                 Text("This invite can be spent once, and expires in ten minutes.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ADI.TextStyle.label)
+                    .foregroundStyle(ADI.ink3)
             }
-            .padding()
+            .padding(20)
         }
     }
 

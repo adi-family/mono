@@ -1,6 +1,9 @@
 //! The Files panel of the project detail page.
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{
+    CodeEditor, CodeFrame, CodeHeight, EmptyRow, Icon, IconSize, Lang, Lucide, Row as TableRow,
+    Table,
+};
 use adi_webapp_api::types::FileEntry;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -95,18 +98,16 @@ pub(crate) fn files_view(state: State) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Files"</h2>
-                <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--ghost" type="button" prop:disabled=move || files.busy.get()
-                    on:click=move |_| open_dir(state, files.dir.get_untracked())>"Reload"</button>
-            </div>
-            <div class="adi-panel__body">
                 {move || crumbs_view(state)}
+                <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--quiet" type="button" prop:disabled=move || files.busy.get()
+                    on:click=move |_| open_dir(state, files.dir.get_untracked())>"Reload"</button>
             </div>
             <Table state=state.tables.files>{move || file_rows(state)}</Table>
             {move || match files.open.get() {
                 None => view! {
-                    <div class="adi-panel__body">
-                        <span class="adi-muted">"Select a file above to view or edit it. Directories open in place; there's no going outside this project."</span>
+                    <div class="adi-hint">
+                        "Select a file above to view or edit it. Directories open in place; there's no going outside this project."
                     </div>
                 }.into_any(),
                 Some(path) => editor_view(state, path),
@@ -138,7 +139,7 @@ fn crumbs_view(state: State) -> AnyView {
                     view! { <span class="adi-crumbs__here">{label}</span> }.into_any()
                 } else {
                     view! {
-                        <a class="adi-btn adi-btn--link" href="#"
+                        <a href="#"
                             on:click=move |ev: web_sys::MouseEvent| {
                                 ev.prevent_default();
                                 open_dir(state, target.clone());
@@ -171,18 +172,19 @@ fn file_rows(state: State) -> AnyView {
                     let parent = parent.clone();
                     view! {
                         <span>
-                            <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                            <a class="adi-filerow adi-filerow--dir" href="#"
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.prevent_default();
                                     open_dir(state, parent.clone());
                                 }>
-                                <span class="adi-filerow__icon">"↑"</span><span>".."</span>
+                                <Icon icon=Lucide::ArrowUp size=IconSize::Md class="adi-filerow__icon"/>
+                                <span>".."</span>
                             </a>
                         </span>
                     }
                     .into_any()
                 }
-                _ => view! { <span class="text-meta">"—"</span> }.into_any(),
+                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
             }/> }
             .into_any(),
         );
@@ -221,25 +223,25 @@ fn file_rows(state: State) -> AnyView {
 fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: State) -> AnyView {
     match col {
         // A directory has no meaningful size, so it shows a dash rather than a misleading zero.
-        "Size" if entry.is_dir => view! { <span class="text-meta">"—"</span> }.into_any(),
+        "Size" if entry.is_dir => view! { <span class="adi-muted">"—"</span> }.into_any(),
         "Size" => {
-            view! { <span class="font-mono text-meta">{fmt_size(entry.size)}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{fmt_size(entry.size)}</span> }.into_any()
         }
         "Modified" => {
             let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <span class="font-mono text-meta">{modified}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{modified}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ if entry.is_dir => {
             let path = path.to_string();
             view! {
                 <span>
-                    <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                    <a class="adi-filerow adi-filerow--dir" href="#"
                         on:click=move |ev: web_sys::MouseEvent| {
                             ev.prevent_default();
                             open_dir(state, path.clone());
                         }>
-                        <span class="adi-filerow__icon">"▸"</span>
+                        <Icon icon=Lucide::Folder size=IconSize::Md class="adi-filerow__icon"/>
                         <span>{entry.name.clone()}"/"</span>
                     </a>
                 </span>
@@ -250,13 +252,14 @@ fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: Sta
             let path = path.to_string();
             view! {
                 <span>
-                    <a class="adi-btn adi-btn--link adi-filerow" href="#"
+                    <a class="adi-filerow" href="#"
                         aria-current=move || if is_open { "true" } else { "false" }
                         on:click=move |ev: web_sys::MouseEvent| {
                             ev.prevent_default();
                             open_file(state, path.clone());
                         }>
-                        <span class="adi-filerow__icon">"·"</span><span>{entry.name.clone()}</span>
+                        <Icon icon=Lucide::File size=IconSize::Md class="adi-filerow__icon"/>
+                        <span>{entry.name.clone()}</span>
                     </a>
                 </span>
             }
@@ -265,32 +268,37 @@ fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: Sta
     }
 }
 
-/// The in-place editor for the open file: a toolbar (path, dirty state, Save/Reload/Close) and a
-/// monospace textarea bound to the buffer.
+/// The in-place editor for the open file: the file's frame — its path, whether it is saved, and
+/// Save / Reload / Close — with the highlighted buffer under it.
 fn editor_view(state: State, path: String) -> AnyView {
     let files = state.files;
     let dirty = move || files.buffer.get() != files.original.get();
+    let lang = Lang::from_path(&path);
     let reload_path = path.clone();
-    view! {
-        <div class="adi-form adi-form--toolbar">
-            <span class="adi-chip adi-mono">{path}</span>
-            <span class="adi-muted" style="font-size:var(--text-md)">
-                {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
+    // The frame asks for its controls on every render, so the path is cloned into each click
+    // handler rather than moved into the first one.
+    let actions = move || {
+        let reload_path = reload_path.clone();
+        view! {
+            <span class="adi-updated">
+                {move || if dirty() { "unsaved changes" } else { "saved" }}
             </span>
-            <span class="adi-spacer"></span>
-            <button class="adi-btn adi-btn--primary" type="button"
-                prop:disabled=move || files.busy.get() || !dirty()
-                on:click=move |_| save_file(state)>"Save"</button>
-            <button class="adi-btn adi-btn--ghost" type="button"
+            <button class="adi-btn adi-btn--sm" type="button"
                 prop:disabled=move || files.busy.get()
                 on:click=move |_| open_file(state, reload_path.clone())>"Reload"</button>
-            <button class="adi-btn adi-btn--link" type="button"
+            <button class="adi-btn adi-btn--sm adi-btn--primary" type="button"
+                prop:disabled=move || files.busy.get() || !dirty()
+                on:click=move |_| save_file(state)>"Save"</button>
+            <button class="adi-btn adi-btn--sm adi-btn--quiet" type="button"
                 on:click=move |_| close_file(state)>"Close"</button>
-        </div>
+        }
+        .into_any()
+    };
+    view! {
         <div class="adi-panel__body">
-            <textarea class="adi-textarea" spellcheck="false" autocomplete="off"
-                prop:value=move || files.buffer.get()
-                on:input=move |ev| files.buffer.set(event_target_value(&ev))></textarea>
+            <CodeFrame title=path actions=actions height=CodeHeight::Form>
+                <CodeEditor value=files.buffer lang=lang height=CodeHeight::Form id="project-file-editor"/>
+            </CodeFrame>
         </div>
     }
     .into_any()

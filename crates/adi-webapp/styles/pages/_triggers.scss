@@ -1,0 +1,22 @@
+// Page-local styles for `src/pages/triggers` and a project's Triggers panel. Shared components
+// live in adi-css; a shape that exists on one page lives here. Tokens from design/tokens.css only.
+
+// A preset to start from: a sans tag, since "Telegram bot" is a name and not a value. The applied
+// one is a tone change, never an outline (DESIGN.md §6).
+.adi-preset {
+  background: var(--chip);
+  color: var(--ink-2);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  font-size: var(--fs-small);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+
+  &:hover { background: var(--chip-hover); color: var(--ink); }
+
+  &[aria-pressed="true"] {
+    background: var(--bg-active);
+    color: var(--ink);
+    font-weight: 500;
+  }
+}

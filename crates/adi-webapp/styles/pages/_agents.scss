@@ -1,0 +1,256 @@
+// Page-local styles for `src/pages/agents`: the Agents table's head and rows, and the agent
+// editor — the form page of design/DESIGN.md §6. Shared components live in adi-css; tokens from
+// design/tokens.css only.
+
+.adi-agents {
+  // ---- the table page ----------------------------------------------------------------------
+  // The head's meta line: counts in `--ink-2` 500, the rest `--ink-3`, and "change limit" as a
+  // word that is also the one control for the run cap.
+  &__meta {
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+    white-space: nowrap;
+
+    b { color: var(--ink-2); font-weight: 500; }
+  }
+
+  &__limit {
+    padding: 0;
+    color: var(--ink-2);
+    font-size: inherit;
+    cursor: pointer;
+
+    &:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  }
+
+  // The row "change limit" opens: the number box and its Set. The chip the shared control also
+  // draws repeats what the head already says, so it is not drawn here.
+  &__limit-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -4px 0 14px;
+
+    > .adi-chip { display: none; }
+  }
+
+  // The name cell: a star every row has, lit only where it is set, so every name starts on the
+  // same edge.
+  &__name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__star {
+    display: inline-flex;
+    color: var(--ink-3);
+    opacity: .55;
+
+    &--on { color: var(--ink-2); opacity: 1; fill: currentColor; }
+  }
+
+  // The running mark beside a row's ⋯: the 6px dot, never a word (§6).
+  &__live-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 6px;
+    border-radius: 50%;
+    background: var(--ok);
+    vertical-align: middle;
+  }
+
+  // The launch controls, at the head of the row's menu: each takes a menu item's row.
+  &__live {
+    padding-bottom: 4px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+
+    &:empty { display: none; }
+
+    .adi-btn--link {
+      display: block;
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: var(--r);
+      color: var(--ink);
+      font-size: var(--fs-ui-sm);
+      font-weight: 400;
+      text-align: left;
+
+      &:hover { background: var(--bg-hover); color: var(--ink); }
+    }
+  }
+
+  // ---- the editor (a form page, §6) ---------------------------------------------------------
+  &__form {
+    width: min(var(--form-w), 100%);
+    margin: 0 auto;
+    padding: 12px 0 96px;
+  }
+
+  &__back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+
+    &:hover { color: var(--ink-2); text-decoration: none; }
+  }
+
+  &__title {
+    margin: 16px 0 6px;
+    font-size: var(--fs-title);
+    font-weight: 600;
+    letter-spacing: -.01em;
+    color: var(--ink);
+  }
+
+  &__lead {
+    color: var(--ink-2);
+    max-width: 64ch;
+    margin-bottom: 36px;
+  }
+
+  &__missing {
+    padding: 0 0 14px;
+    margin-bottom: 20px;
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-small);
+    color: var(--err);
+  }
+
+  &__section {
+    margin-bottom: 32px;
+  }
+
+  &__h2 {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 14px;
+  }
+
+  &__intro {
+    color: var(--ink-2);
+    max-width: 64ch;
+    margin: -6px 0 20px;
+    line-height: 1.55;
+
+    b { color: var(--ink); font-weight: 500; }
+  }
+
+  &__loading {
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+  }
+
+  // Two columns of fields; a wide field, a picker or a textarea takes the row. Every control
+  // fills its cell — the page is 640 wide, and a 200px input in a 300px cell is a ragged edge.
+  &__grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px 16px;
+    align-items: start;
+
+    .adi-input,
+    select.adi-input,
+    .adi-textarea { width: 100%; }
+
+    > .adi-field--check { align-self: end; padding-bottom: 9px; }
+  }
+
+  // A textarea that is a few lines, not the prompt editor.
+  &__short { min-height: 0; }
+
+  // A wrapping list of checkboxes: tools, bases, secrets.
+  &__checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    padding: 2px 0;
+  }
+
+  &__check {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-ui-sm);
+    color: var(--ink);
+    cursor: pointer;
+
+    input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--ink);
+    }
+
+    .adi-mono { color: var(--ink); }
+
+    // Offered but out of reach; the reason is in the title and the tag beside it.
+    &--off {
+      color: var(--ink-3);
+      cursor: default;
+
+      .adi-mono { color: var(--ink-3); }
+    }
+  }
+
+  // The system prompt's row: a disclosure between two hairlines, the editor under it when open.
+  &__disclosure {
+    margin: 8px 0 32px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+
+  &__disclosure-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 14px 0;
+    color: var(--ink);
+    font-size: var(--fs-ui);
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+
+    &:hover &__disclosure-hint { color: var(--ink-2); }
+  }
+
+  &__caret {
+    display: inline-flex;
+    color: var(--ink-3);
+    transition: transform var(--transition);
+
+    &--open { transform: rotate(90deg); }
+  }
+
+  &__disclosure-hint {
+    margin-left: auto;
+    font-size: var(--fs-small);
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+
+  &__prompt {
+    padding: 0 0 16px;
+
+    .adi-textarea { width: 100%; }
+  }
+
+  &__actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  @media (max-width: 720px) {
+    &__grid { grid-template-columns: 1fr; }
+    &__meta { white-space: normal; }
+  }
+}

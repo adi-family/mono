@@ -1,0 +1,9 @@
+// Page-local styles for `src/pages/workspaces` (a project's Workspaces panel). Shared components
+// live in adi-css; a shape that exists on one page lives here. Tokens from design/tokens.css only.
+
+// A path in a table cell may be long; it wraps at any character rather than widening the table.
+.adi-cell__path {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}

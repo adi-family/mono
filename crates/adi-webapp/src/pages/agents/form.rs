@@ -18,16 +18,49 @@ use super::{argument_text, scalar_argument_text};
 /// `provider` argument. Must match the id served by the API's form spec.
 const ADI_HARNESS: &str = "harness:adi";
 
-/// Render the agent form from the server-provided schema — every field that applies to the chosen
-/// backend, which is what the full Agents page wants.
-pub(crate) fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
+/// The fields that say what the agent *is* rather than how it runs, in the order the editor asks
+/// them. None of them is scoped to a backend, so they are always shown.
+const IDENTITY: [&str; 5] = ["name", "project", "tags", "starred", "unattended"];
+
+/// The fields the editor renders somewhere other than the runtime section: the identity above,
+/// the CLI command scope (under Tools), and the system prompt (its own disclosure at the foot).
+const NOT_RUNTIME: [&str; 7] = [
+    "name",
+    "project",
+    "tags",
+    "starred",
+    "unattended",
+    "tools",
+    "system_prompt",
+];
+
+/// The schema-driven half of the editor, as its two sections: the agent, then the runtime it
+/// runs on — the backend and every param that backend takes. The Agents page's own form; the
+/// onboarding wizard asks the same schema in its own order through [`agent_schema_fields`].
+pub(crate) fn agent_form_sections(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.agents.get() else {
-        return view! {
-            <div class="adi-muted" style="padding:0 0 var(--space-2)">"Loading agent form..."</div>
-        }
-        .into_any();
+        return view! { <p class="adi-agents__loading">"Loading agent form…"</p> }.into_any();
     };
-    agent_schema_fields(&st.form, None, &[], state, form)
+    let identity: Vec<String> = IDENTITY.iter().map(|n| (*n).to_string()).collect();
+    view! {
+        <section class="adi-agents__section">
+            <h2 class="adi-agents__h2">"Agent"</h2>
+            <div class="adi-agents__grid">
+                {agent_schema_fields(&st.form, Some(identity.as_slice()), &[], state, form)}
+            </div>
+        </section>
+        <section class="adi-agents__section">
+            <h2 class="adi-agents__h2">"Runtime"</h2>
+            <p class="adi-agents__intro">
+                "The backend it runs on, and what that backend takes. Pick one and the fields \
+                 it understands appear."
+            </p>
+            <div class="adi-agents__grid">
+                {agent_schema_fields(&st.form, None, &NOT_RUNTIME, state, form)}
+            </div>
+        </section>
+    }
+    .into_any()
 }
 
 /// Render fields from a schema, for callers that hold one directly (the onboarding wizard reads
@@ -219,6 +252,8 @@ fn render_agent_input(
 /// backend argument.
 fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
     let label = field.label.clone();
+    let hint = field.hint.clone();
+    let show_hint = !hint.is_empty();
     let name_for_value = field.name.clone();
     let name_for_change = field.name.clone();
     view! {
@@ -227,6 +262,7 @@ fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
                 prop:checked=move || agent_field_bool(form, &name_for_value)
                 on:change=move |ev| set_agent_field_bool(form, &name_for_change, event_target_checked(&ev)) />
             <span class="adi-field__label">{label}</span>
+            {show_hint.then(|| field_hint(hint))}
         </label>
     }
     .into_any()
@@ -244,7 +280,7 @@ fn render_agent_textarea(field: AgentFormField, form: AgentsForm) -> AnyView {
     view! {
         <div class="adi-field" style=style>
             <label class="adi-field__label" for=label_for>{label}</label>
-            <textarea class="adi-textarea" id=id placeholder=placeholder
+            <textarea class="adi-textarea adi-agents__short" id=id rows="3" placeholder=placeholder
                 prop:value=move || agent_field_value(form, &name_for_value)
                 on:input=move |ev| set_agent_field_value(form, &name_for_input, event_target_value(&ev))></textarea>
         </div>
@@ -268,7 +304,7 @@ fn render_agent_tools(field: AgentFormField, form: AgentsForm) -> AnyView {
     let name_value = name.clone();
     let name_input = name.clone();
     view! {
-        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+        <div class="adi-field" style=WIDE>
             <label class="adi-field__label" for=label_for>{label}</label>
             <div class="adi-toolpick">
                 {options.into_iter().map(|opt| {
@@ -429,9 +465,20 @@ fn field_id(name: &str) -> String {
     format!("agent-{}", name.replace('_', "-"))
 }
 
+/// A field that takes the whole row: in the editor's two-column grid and in the wizard's wrapping
+/// row alike, which is why it says both.
+const WIDE: &str = "flex:1 1 100%; min-width:0; grid-column:1 / -1";
+
 fn field_style(field: &AgentFormField) -> String {
-    if field.wide || matches!(field.kind, AgentFormFieldKind::Textarea) {
-        "flex:1 1 100%; min-width:0".into()
+    if field.wide
+        || matches!(
+            field.kind,
+            AgentFormFieldKind::Textarea
+                | AgentFormFieldKind::ToolPicker
+                | AgentFormFieldKind::ModelPicker
+        )
+    {
+        WIDE.into()
     } else {
         String::new()
     }
@@ -695,9 +742,9 @@ fn is_scalar_argument_field(name: &str) -> bool {
 /// left alone.
 pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
     view! {
-        <div class="adi-field">
+        <div class="adi-field" style=WIDE>
             <label class="adi-field__label" for="agent-prelude">"Run before the first message"</label>
-            <textarea class="adi-textarea" id="agent-prelude" rows="2"
+            <textarea class="adi-textarea adi-agents__short" id="agent-prelude" rows="2"
                 placeholder="bb-brief"
                 prop:value=move || form.prelude.get()
                 on:input=move |ev| form.prelude.set(event_target_value(&ev))></textarea>
@@ -708,9 +755,9 @@ pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
                  always starts by reading something need not spend a turn asking for it.",
             )}
         </div>
-        <div class="adi-field">
+        <div class="adi-field" style=WIDE>
             <label class="adi-field__label" for="agent-path">"Extra PATH dirs"</label>
-            <textarea class="adi-textarea" id="agent-path" rows="2"
+            <textarea class="adi-textarea adi-agents__short" id="agent-path" rows="2"
                 placeholder="$HOME/.nvm/versions/node/v22.14.0/bin"
                 prop:value=move || form.path.get()
                 on:input=move |ev| form.path.set(event_target_value(&ev))></textarea>
@@ -720,9 +767,9 @@ pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
                  ~ and $HOME are expanded at launch; the agent's own tools still come first.",
             )}
         </div>
-        <div class="adi-field">
+        <div class="adi-field" style=WIDE>
             <label class="adi-field__label" for="agent-env">"Extra environment"</label>
-            <textarea class="adi-textarea" id="agent-env" rows="2" placeholder="NODE_ENV=development"
+            <textarea class="adi-textarea adi-agents__short" id="agent-env" rows="2" placeholder="NODE_ENV=development"
                 prop:value=move || form.env.get()
                 on:input=move |ev| form.env.set(event_target_value(&ev))></textarea>
             {field_hint(

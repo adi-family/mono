@@ -1,10 +1,10 @@
-//! [`Form`] — the strip of controls along the bottom of a panel.
+//! [`Form`] — the strip of controls under a section's content.
 
 use leptos::prelude::*;
 
 use crate::merge;
 
-/// A horizontal strip of controls, tinted a shade off the panel it closes.
+/// A horizontal strip of controls, ruled off from what is above it by a hairline.
 ///
 /// Fields align on their **inputs**, not their labels, so a row mixing labelled and bare
 /// controls still lines up along the one edge the eye follows.
@@ -32,25 +32,20 @@ pub fn Form(
     children: Children,
 ) -> impl IntoView {
     let own = if toolbar {
-        "flex flex-wrap items-center justify-start gap-2 border-t border-divider \
-         bg-bar px-3.5 py-2.5"
+        "flex flex-wrap items-center justify-start gap-2 border-t border-line pt-3"
     } else {
-        "flex flex-wrap items-end gap-2 border-t border-divider bg-bar px-3.5 py-2.5 \
-         max-[620px]:p-2.5 max-[620px]:*:w-full max-[620px]:*:min-w-0 max-[620px]:*:flex-[1_1_100%]"
+        "flex flex-wrap items-end gap-2 border-t border-line pt-3 \
+         max-[620px]:*:w-full max-[620px]:*:min-w-0 max-[620px]:*:flex-[1_1_100%]"
     };
     view! { <div class=merge(own, class)>{children()}</div> }
 }
 
-/// Explanatory copy hanging below a form or a panel body — the written-out version of what
-/// a [`crate::Field`]'s hint says in one line. Carries the form's own tint and gutter so
-/// the two read as one block rather than as a paragraph that fell off the bottom.
+/// Help text under a form or a section — the written-out version of what a
+/// [`crate::Field`]'s hint says in one line. 13px `--ink-3`, 64ch (§4).
 #[component]
 pub fn Hint(#[prop(optional, into)] class: String, children: Children) -> impl IntoView {
     view! {
-        <p class=merge(
-            "m-0 bg-bar px-3.5 pb-2.5 text-mini text-meta [&_code]:font-mono",
-            class,
-        )>
+        <p class=merge("m-0 max-w-[64ch] pt-2 text-small leading-normal text-ink-3 [&_code]:font-mono", class)>
             {children()}
         </p>
     }

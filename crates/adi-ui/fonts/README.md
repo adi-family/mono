@@ -1,35 +1,26 @@
 # Fonts
 
-Self-hosted, so the app renders its own typography with no network request and no
-third-party origin in the page — which is what makes the PWA look right offline.
+The three faces `design/DESIGN.md` §4 names — **Geist** for everything people read, **Geist
+Mono** for everything machines wrote, **Bricolage Grotesque** for landing headlines — self-hosted
+so the control panel makes no third-party request and the installed app keeps its type offline.
 
-| File | Family | Weights | Size |
+`scripts/fonts.sh` fetches them from Google Fonts as per-script variable woff2 subsets and
+writes [`fonts.css`](./fonts.css), the `@font-face` rules with the matching `unicode-range`s. A
+browser downloads only the scripts a page actually uses.
+
+| Family | Files | Weights | Scripts |
 | --- | --- | --- | --- |
-| `ibm-plex-sans-var.woff2` | IBM Plex Sans | 400–600 (variable) | 119 KB |
-| `jetbrains-mono-var.woff2` | JetBrains Mono | 400–700 (variable) | 53 KB |
+| Geist | `geist-*.woff2` | 100–900 (variable) | latin, latin-ext, cyrillic, cyrillic-ext |
+| Geist Mono | `geist-mono-*.woff2` | 100–900 (variable) | latin, latin-ext, cyrillic, cyrillic-ext, symbols2 (box drawing) |
+| Bricolage Grotesque | `bricolage-*.woff2` | 200–800 (variable), `opsz` 12–96 | latin, latin-ext |
 
-Both are **variable** fonts, so one file per family covers every weight the design uses —
-and any value between them, which is why `@font-face` declares a `font-weight` *range*
-rather than one number per file.
+Cyrillic is not optional: transcripts are read in Russian as often as in English. No italics —
+the design specifies none, and a browser synthesises an oblique where Markdown asks for one.
 
-Both keep full **Latin, Cyrillic and Greek** coverage; nothing was subsetted away.
-
-## How they were made
-
-From the Google Fonts distribution, with `fonttools`:
-
-- **Pinned `wdth: 100` on IBM Plex Sans.** Its variable font ships a width axis (75–100)
-  for the Condensed and SemiCondensed cuts, which the design never uses; pinning it drops
-  that half of the design space.
-- **Clamped the weight axes** to the range each family actually needs (400–600 sans,
-  400–700 mono) instead of the full 100–700/100–800.
-- **Compressed to woff2.** Together: 704 KB of TTF → 172 KB.
-
-No italics. The design specifies none, and shipping them would roughly double the payload;
-a browser synthesises an oblique where markdown asks for emphasis. Add the
-`*-Italic-VariableFont` cuts the same way if that becomes visible enough to matter.
+The URLs in `fonts.css` are absolute (`/fonts/…`) because the sheet is imported from other
+crates; every consumer copies this directory to its dist root (`rel="copy-dir"` in Trunk).
 
 ## Licence
 
-Both are SIL Open Font License 1.1 — see `IBM_Plex_Sans-OFL.txt` and
-`JetBrains_Mono-OFL.txt`, which the licence requires to travel with the files.
+All three are SIL Open Font License 1.1 — `Geist-OFL.txt` and `BricolageGrotesque-OFL.txt`
+travel with the files, as the licence requires.

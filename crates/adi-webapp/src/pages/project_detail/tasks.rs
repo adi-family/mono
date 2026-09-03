@@ -5,10 +5,12 @@ use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::tasks::{is_finished, task_cell, task_key};
+use crate::pages::tasks::{is_finished, task_cell, task_key, task_title};
 use crate::routing::{ProjectSection, Route};
 use crate::state::{Flash, State};
-use crate::ui::{Key, Sort, TextField, apply_mutation, sort_rows, task_tree_rows};
+use crate::ui::{
+    Key, Sort, TextField, apply_mutation, menu_item, row_actions, sort_rows, task_tree_rows,
+};
 
 /// The panel's columns. No Project column — every row is this project's (or a sub-project's,
 /// which the Task cell marks inline), so it would say the same thing all the way down.
@@ -104,8 +106,8 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 </button>
             </form>
             <div class="adi-hint">
-                "These appear in the global " <code>"Tasks"</code> " list too. Completing, editing, "
-                "and subtasks stay in the " <code>"adi-mono tasks"</code> " CLI."
+                "These appear in the global tasks list too. Completing, editing, and subtasks "
+                "stay in the " <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
     }
@@ -156,26 +158,33 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
             // Tasks section. Kept as its ids, not a built view: the cell builder is called per
             // column, so it has to be able to render the marker rather than consume one.
             let owner = scope.owner(t.project.as_deref());
+            // The row's one action lives in its ⋯ menu: Reopen on a finished task, Archive on
+            // a live one.
             let action = {
                 let id = t.id.clone();
                 let store = |s: State, ts: TasksState| s.tasks.set(Some(ts));
-                if is_finished(&t.effective) {
-                    view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_mutation(state, None, format!("Reopened {id}."), store,
-                                fetch::reopen_task(id.clone()));
-                        }>"Reopen"</button>
-                    }
-                    .into_any()
+                let item = if is_finished(&t.effective) {
+                    menu_item(state, "Reopen", false, move || {
+                        apply_mutation(
+                            state,
+                            None,
+                            format!("Reopened {id}."),
+                            store,
+                            fetch::reopen_task(id.clone()),
+                        );
+                    })
                 } else {
-                    view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_mutation(state, None, format!("Archived {id}."), store,
-                                fetch::archive_task(id.clone()));
-                        }>"Archive"</button>
-                    }
-                    .into_any()
-                }
+                    menu_item(state, "Archive", false, move || {
+                        apply_mutation(
+                            state,
+                            None,
+                            format!("Archived {id}."),
+                            store,
+                            fetch::archive_task(id.clone()),
+                        );
+                    })
+                };
+                row_actions(state, format!("ptask:{}", t.id), (), vec![item])
             };
             view! { <TableRow state=table cell=move |col| {
                 // Every column but Task renders exactly as it does on the global page; only
@@ -183,17 +192,10 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                 if col != "Task" {
                     return task_cell(col, &t, depth);
                 }
-                let indent = format!("padding-left:{}px", depth * 20);
-                let details = t.details.clone().unwrap_or_default();
                 let marker = owner.clone().map(|(oid, oname)| {
                     super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
                 });
-                view! {
-                    <span title=details>
-                        <span style=indent>{t.title.clone()}</span>{marker}
-                    </span>
-                }
-                .into_any()
+                task_title(&t, depth, marker)
             } actions=action/> }
             .into_any()
         })

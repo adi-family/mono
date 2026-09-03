@@ -61,8 +61,8 @@ impl NodeKind {
         matches!(self, Self::Composed | Self::Artifact)
     }
 
-    /// The badge tone. Derived nodes take the accent; a stated fact takes none, because it is
-    /// the ordinary case and a base is mostly this.
+    /// The badge tone. Derived nodes take the louder chip; a stated fact takes the plain one,
+    /// because it is the ordinary case and a base is mostly this.
     #[must_use]
     pub fn tone(self) -> BadgeTone {
         match self {
@@ -141,32 +141,32 @@ pub(crate) fn Sentence(
     size: &'static str,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let own = format!("m-0 leading-relaxed text-ink [overflow-wrap:anywhere] {size}");
+    let own = format!("m-0 leading-[1.6] text-ink [overflow-wrap:anywhere] {size}");
     view! { <p class=merge(&own, class)>{text}</p> }
 }
 
 /// "said by igor, written by `agent:chat@1`" — the two identities, spelled out.
 ///
-/// Both names are mono: they are actor ids the store interned, not prose, and one of them is
-/// nearly always an agent with a version stuck to it.
+/// Both names are mono: they are actor ids the store interned — machine strings (§2.3) — and
+/// one of them is nearly always an agent with a version stuck to it.
 #[component]
 pub(crate) fn Provenance(
     #[prop(into)] author: String,
     #[prop(into)] creator: String,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let own = "flex flex-wrap items-baseline gap-x-1 text-mini text-meta";
+    let own = "flex flex-wrap items-baseline gap-x-1 text-mini text-ink-3";
     view! {
         <div class=merge(own, class)>
             {(!author.is_empty())
                 .then(|| view! {
                     <span>"said by"</span>
-                    <span class="font-mono text-secondary">{author}</span>
+                    <span class="font-mono text-ink-2">{author}</span>
                 })}
             {(!creator.is_empty())
                 .then(|| view! {
                     <span>"written by"</span>
-                    <span class="font-mono text-secondary">{creator}</span>
+                    <span class="font-mono text-ink-2">{creator}</span>
                 })}
         </div>
     }
@@ -183,11 +183,11 @@ pub(crate) fn Stamp(
     version: u32,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let own = "font-mono text-caps whitespace-nowrap tabular-nums text-fainter";
+    let own = "font-mono text-mini whitespace-nowrap tabular-nums text-ink-3";
     view! {
         <span class=merge(own, class)>
             {id}
-            <span class="text-faint">{format!(" v{version}")}</span>
+            <span>{format!(" v{version}")}</span>
         </span>
     }
 }
@@ -199,8 +199,7 @@ pub(crate) fn Stamp(
 /// `<FactRow on:click=open/>` lands on the underlying `<button>` — so, as with
 /// [`crate::Button`], there is no callback prop.
 ///
-/// It draws no border of its own: a row is part of a list, and the panel around it is the
-/// island.
+/// It draws no border of its own: a row is part of a list, and the open one is a tone change.
 #[component]
 pub fn FactRow(
     fact: Fact,
@@ -224,10 +223,9 @@ pub fn FactRow(
     // selected/idle fill and the call site's own utilities are merged in the same closure.
     let fill = move || {
         let own = if selected.get() {
-            "w-full cursor-pointer rounded-sm border border-edge bg-selected px-2.5 py-2 text-left"
+            "w-full cursor-pointer rounded-md bg-active px-2.5 py-2 text-left"
         } else {
-            "w-full cursor-pointer rounded-sm border border-transparent px-2.5 py-2 text-left \
-             hover:bg-card"
+            "w-full cursor-pointer rounded-md px-2.5 py-2 text-left hover:bg-hover"
         };
         merge(own, class.clone())
     };
@@ -245,9 +243,10 @@ pub fn FactRow(
     }
 }
 
-/// A fact as a **card**, for when it is the thing on screen rather than one of a list.
+/// A fact as a **card**, for when it is the thing on screen rather than one of a list — the
+/// one genuinely detachable thing here, so it gets the hairline and the large radius (§5).
 ///
-/// Same three parts in the same order, one step louder, on its own island.
+/// Same three parts in the same order, one step louder.
 #[component]
 pub fn FactCard(
     fact: Fact,
@@ -268,15 +267,15 @@ pub fn FactCard(
         kind,
     } = fact;
     view! {
-        <div class=merge("island bg-card", class)>
-            <div class="flex items-center gap-2 border-b border-divider px-3 py-1.5">
+        <div class=merge("rounded-lg border border-line", class)>
+            <div class="flex items-center gap-2 border-b border-line px-3 py-2">
                 <Stamp id=id version=version/>
                 <Badge tone=kind.tone() mono=true>{kind.label()}</Badge>
                 <span class="flex-1"></span>
                 {actions.map(|a| a.run())}
             </div>
             <div class="flex flex-col gap-2 p-3">
-                <Sentence text=text size="text-msg"/>
+                <Sentence text=text size="text-body"/>
                 <Provenance author=author creator=creator/>
                 {children.map(|c| c())}
             </div>
@@ -298,10 +297,10 @@ pub(crate) fn WasNow(
     let own = "grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-2 gap-y-1";
     view! {
         <div class=merge(own, class)>
-            <span class="caps text-fainter">"was"</span>
-            <span class="text-mini leading-relaxed text-meta [overflow-wrap:anywhere]">{was}</span>
-            <span class="caps text-fainter">"now"</span>
-            <span class="text-mini leading-relaxed text-ink [overflow-wrap:anywhere]">{now}</span>
+            <span class="text-label text-ink-3">"was"</span>
+            <span class="text-small leading-normal text-ink-3 [overflow-wrap:anywhere]">{was}</span>
+            <span class="text-label text-ink-3">"now"</span>
+            <span class="text-small leading-normal text-ink [overflow-wrap:anywhere]">{now}</span>
         </div>
     }
 }
@@ -398,11 +397,11 @@ fn StaleCard(item: Stale, on_refresh: Option<Callback<String>>) -> impl IntoView
     let Stale { node, causes } = item;
     let id = node.id.clone();
     view! {
-        <div class="island bg-card">
-            <div class="flex items-center gap-2 border-b border-divider px-3 py-1.5">
+        <div class="rounded-lg border border-line">
+            <div class="flex items-center gap-2 border-b border-line px-3 py-2">
                 <Stamp id=node.id.clone() version=node.version/>
                 <Badge tone=node.kind.tone() mono=true>{node.kind.label()}</Badge>
-                <Badge tone=BadgeTone::Warn mono=true>"stale"</Badge>
+                <Badge tone=BadgeTone::Warn>"stale"</Badge>
                 <span class="flex-1"></span>
                 {on_refresh.map(|cb| view! {
                     <Button
@@ -410,21 +409,23 @@ fn StaleCard(item: Stale, on_refresh: Option<Callback<String>>) -> impl IntoView
                         variant=ButtonVariant::Default
                         on:click=move |_| cb.run(id.clone())
                     >
-                        "mark refreshed"
+                        "Mark refreshed"
                     </Button>
                 })}
             </div>
             <div class="flex flex-col gap-3 p-3">
-                <Sentence text=node.text size="text-msg"/>
-                <div class="flex flex-col gap-2">
+                <Sentence text=node.text size="text-body"/>
+                // One source per band, ruled off by hairlines: a box in a card is a card in a
+                // card (§8).
+                <div class="flex flex-col">
                     {causes
                         .into_iter()
                         .map(|c| view! {
-                            <div class="rounded-sm border border-edge bg-panel-alt p-2.5">
+                            <div class="border-t border-line pt-2.5 pb-1">
                                 <div class="mb-1.5 flex flex-wrap items-center gap-2">
-                                    <span class="caps text-fainter">"built on"</span>
+                                    <span class="text-label text-ink-3">"built on"</span>
                                     <Stamp id=c.source version=c.version/>
-                                    <span class="font-mono text-caps text-fainter">
+                                    <span class="text-mini text-ink-3">
                                         {format!("stamped at v{}", c.built_at)}
                                     </span>
                                 </div>
@@ -514,47 +515,43 @@ pub fn FactHistory(
     let rewritten = now > 1;
 
     view! {
-        <div class=merge("island bg-card", class)>
-            <div class="flex items-center gap-2 border-b border-divider px-3 py-1.5">
+        <div class=merge("rounded-lg border border-line", class)>
+            <div class="flex items-center gap-2 border-b border-line px-3 py-2">
                 <Stamp id=head.id.clone() version=now/>
                 <Badge tone=head.kind.tone() mono=true>{head.kind.label()}</Badge>
             </div>
 
             <div class="flex flex-col gap-2 p-3">
-                <Sentence text=head.text.clone() size="text-msg"/>
+                <Sentence text=head.text.clone() size="text-body"/>
                 <Provenance author=head.author.clone() creator=head.creator.clone()/>
             </div>
 
-            // The reference check. Drawn in the queue tones rather than the error ones: a
-            // drifted reference is not a failure of anything, it is news, and it is news
-            // whether the reader likes it or not.
+            // The reference check. Amber rather than red: a drifted reference is not a
+            // failure of anything, it is news, and it is news whether the reader likes it or
+            // not. A line, not a box.
             {move || against.get().map(|at| if at < now {
                 view! {
-                    <div class="mx-3 mb-3 rounded-sm border border-queue-edge bg-queue-bg \
-                                px-2.5 py-2 text-mini text-queue">
-                        <span class="caps">"stale reference"</span>
-                        <span>
-                            {format!(
-                                " \u{2014} written against v{at}, the fact is now v{now}.",
-                            )}
-                        </span>
-                    </div>
+                    <p class="m-0 px-3 pb-3 text-small text-warn">
+                        {format!(
+                            "Stale reference \u{2014} written against v{at}, the fact is now v{now}.",
+                        )}
+                    </p>
                 }
                 .into_any()
             } else {
                 view! {
-                    <div class="mx-3 mb-3 text-mini text-meta">
+                    <p class="m-0 px-3 pb-3 text-small text-ink-3">
                         {format!("Reference written against v{at} \u{2014} still current.")}
-                    </div>
+                    </p>
                 }
                 .into_any()
             })}
 
-            <div class="border-t border-divider">
-                <div class="px-3 pt-2 pb-1">
-                    <span class="caps text-faint">"what changed"</span>
+            <div class="border-t border-line">
+                <div class="px-3 pt-2.5 pb-1">
+                    <span class="text-label text-ink-3">"What changed"</span>
                 </div>
-                <div class="flex flex-col gap-2 px-3 pb-3">
+                <div class="flex flex-col px-3 pb-3">
                     {move || changes
                         .get()
                         .into_iter()
@@ -567,7 +564,7 @@ pub fn FactHistory(
             // true of an id that still works, which is exactly why nothing above makes the
             // point on its own.
             {rewritten.then(|| view! {
-                <p class="m-0 border-t border-divider bg-bar px-3.5 py-2.5 text-mini text-meta">
+                <p class="m-0 border-t border-line px-3 py-2.5 text-small text-ink-3">
                     "The id still resolves. It no longer means what it did."
                 </p>
             })}
@@ -586,22 +583,22 @@ fn Step(change: Change) -> impl IntoView {
         now,
     } = change;
     view! {
-        <div class="rounded-sm border border-edge bg-panel-alt p-2.5">
+        <div class="border-t border-line pt-2.5 pb-1.5 first:border-t-0 first:pt-0">
             <div class="mb-1.5 flex flex-wrap items-center gap-2">
-                <span class="font-mono text-caps tabular-nums text-faint">
+                <span class="font-mono text-mini tabular-nums text-ink-3">
                     {format!("v{version}")}
                 </span>
                 {match verdict {
-                    Some(v) => view! { <Badge tone=v.tone() mono=true>{v.label()}</Badge> }
+                    Some(v) => view! { <Badge tone=v.tone()>{v.label()}</Badge> }
                         .into_any(),
-                    None => view! { <Badge mono=true>"created"</Badge> }.into_any(),
+                    None => view! { <Badge>"created"</Badge> }.into_any(),
                 }}
-                <span class="text-mini text-meta">"by"</span>
-                <span class="font-mono text-mini text-secondary">{by}</span>
+                <span class="text-mini text-ink-3">"by"</span>
+                <span class="font-mono text-mini text-ink-2">{by}</span>
             </div>
             {if was.is_empty() {
                 view! {
-                    <div class="text-mini leading-relaxed text-ink [overflow-wrap:anywhere]">
+                    <div class="text-small leading-normal text-ink [overflow-wrap:anywhere]">
                         {now}
                     </div>
                 }

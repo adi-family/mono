@@ -161,3 +161,20 @@ cargo doc -p <crate> --no-deps      # unresolved intra-doc links = dead referenc
 ```
 
 and a grep for backticked identifiers in comments that match no definition in the tree.
+
+## The design system: `design/DESIGN.md`
+
+Every UI surface — the control panel, the mesh client, the landing, the native apps, the pages
+the front door renders — follows `design/DESIGN.md`, drawn from one token file,
+`design/tokens.css`. Read the rulebook fully before touching a screen; its §7 checklist is what
+"done" means and its §8 Never/Always list is law (one orange per screen, sentence case, mono
+only for machine strings, no cards around tables, no shadows, Lucide only).
+
+- **Tokens** live once, in `design/tokens.css`; adi-css `@use`s it, adi-ui inlines it through
+  Tailwind, the mesh client links it, the landing keeps a copy. Never restate a hex.
+- **Icons**: `scripts/lucide.sh add <name>` fetches a Lucide SVG into `crates/adi-ui/icons/`;
+  `adi-ui`'s build script turns the directory into `adi_ui::Lucide`; draw it with
+  `adi_ui::Icon` (stroke 1.5, sizes 14/16/20/24). No inline SVG paths, no Unicode glyph icons.
+- **Fonts**: `scripts/fonts.sh` refreshes the self-hosted Geist / Geist Mono / Bricolage subsets
+  in `crates/adi-ui/fonts/`.
+- `docs/design.md` maps where each surface implements the system.

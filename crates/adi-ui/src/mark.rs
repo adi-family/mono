@@ -1,22 +1,20 @@
-//! The mark — **Trefoil**: three hexagons at 120°, painted back to front, weak to strong.
+//! The mark — three hexagons, one in front (`design/DESIGN.md` §10).
 //!
 //! This is the web's copy of the geometry that `apps/macos/Sources/Trefoil.swift` holds for the
-//! Swift renderers and `crates/adi-hive/src/notfound.rs` holds as SVG literals for the pages the
-//! front door serves. It is generated from the numbers rather than written out, and
-//! `the_lobes_match_the_spec` re-derives the literals the other two agree on and fails if this
-//! one drifts from them.
+//! Swift renderers, `crates/adi-mesh-client/src/mark.rs` holds for the mesh client and
+//! `crates/adi-hive/src/notfound.rs` holds as SVG literals for the pages the front door serves.
+//! It is generated from the numbers rather than written out, and `the_lobes_match_the_spec`
+//! re-derives the literals the other copies agree on and fails if this one drifts.
 //!
-//! Three things about the drawing are load-bearing, and every one of them is a mistake somebody
-//! already made:
+//! Monochrome by default: `currentColor`, with the two back shapes at 52% and 74%. The coloured
+//! build — grey, orange, ink — exists for the app icon and the landing, and nowhere in the app.
+//! No gloss, no gradient, no shadow, no animation: it is not a mascot.
 //!
-//! **Paint order is the design.** Back to front runs weak to strong (52% / 74% / 100%). Run the
-//! tones the other way and the lobe visually in front is the faintest, which on white lays a
-//! wash of pale grey over the whole mark.
+//! Two things about the drawing are load-bearing, and both are mistakes somebody already made:
 //!
-//! **The tone is on the lobe's fill, never on the group.** Fading the group fades the gloss with
-//! it, and — worse, on the front lobe — turns the shape itself translucent so whatever is behind
-//! shows through its foot. The one build that *does* set group opacity is [`MarkVariant::Glass`],
-//! where lobes mixing is the point.
+//! **Paint order is the design.** Back to front runs weak to strong. Run the tones the other way
+//! and the lobe visually in front is the faintest, which on white lays a wash of pale grey over
+//! the whole mark.
 //!
 //! **A gap between lobes is a real subtraction.** [`MarkVariant::Cut`] masks each lobe with the
 //! ones in front of it, so the hairline shows the ground. Even-odd on a combined path is the
@@ -43,24 +41,21 @@ const VERTICAL_NUDGE: f64 = 8.0;
 /// leaves a hairline of ground between them. Below about 24px the tones converge and this gap is
 /// the only thing keeping three shapes from reading as one.
 const CUT_BLEED: f64 = 3.0;
-/// The ink each lobe is filled at, in paint order.
-///
-/// Shallow at the bottom on purpose: the front lobe carries the form at full strength, so the two
-/// behind only have to be told apart from each other and from the ground.
-const TONES: [f64; 3] = [0.52, 0.74, 1.0];
-/// The same, for [`MarkVariant::Glass`], where the numbers are group opacities and the lobes mix.
-const GLASS_TONES: [f64; 3] = [0.42, 0.60, 0.88];
+/// The ink each lobe is filled at, in paint order (§10: 52%, 74%, 100%).
+const TONES: [&str; 3] = ["0.52", "0.74", "1"];
+/// The coloured build's fills, in paint order: grey, orange, and the ink of wherever it sits.
+/// Literal on purpose — this is an icon, and an icon that changed with the page would be a
+/// different icon. The landing's light orange is the one exception, and the landing draws its
+/// own copy.
+const COLORED: [&str; 3] = ["#8C8780", "#E8532A", "currentColor"];
 
 /// The centre of the drawn shape, as a percentage of the box — **not** the middle of the
-/// viewBox, which sits the vertical nudge above it.
-///
-/// Only rotation cares, and it cares completely: turned about this point the three lobes map onto
-/// each other exactly, so a third of a turn lands the mark back on itself. Turned about the
-/// middle of the viewBox the nudge orbits and it does not.
+/// viewBox, which sits the vertical nudge above it. What a `transform-origin` for the whole mark
+/// has to be, on the one surface (the app icon in motion) that is allowed to turn it.
 pub const SPIN_ORIGIN: &str = "50% 54%";
 
-/// Which drawing of the mark this is. One drawing cannot serve a 16px favicon and a 168px error
-/// page, so there are three, and the size decides.
+/// Which drawing of the mark this is. One drawing cannot serve a 16px favicon and a 104px
+/// splash, so there are two, and the size decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MarkVariant {
     /// Hairline gaps between the lobes. The default, and what anything icon-sized wants.
@@ -68,8 +63,6 @@ pub enum MarkVariant {
     Cut,
     /// No gaps — the lobes are told apart by their tones alone, which is enough above ~64px.
     Solid,
-    /// The lobes mix rather than stack: richer above ~96px, muddy below it.
-    Glass,
 }
 
 /// The centre of lobe `index`, in box coordinates, with y running downward.
@@ -106,35 +99,6 @@ pub fn lobe_path(index: usize) -> String {
     hexagon(centre(index), LOBE_RADIUS)
 }
 
-/// The specular over the top of a lobe and the shade under its bottom, handing over at the same
-/// stop so there is no band between them.
-///
-/// Laid *over* the lobe, never as a ramp in the lobe's own alpha. Left in `objectBoundingBox`
-/// units, which is what lets one gradient serve all three lobes: each `<path>` maps it to its own
-/// box.
-const GLOSS: &str = concat!(
-    r##"<linearGradient id="adi-mark-gloss" x1="0" y1="0" x2="0" y2="1">"##,
-    r##"<stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>"##,
-    r##"<stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>"##,
-    r##"<stop offset=".55" stop-color="#000000" stop-opacity="0"/>"##,
-    r##"<stop offset="1" stop-color="#000000" stop-opacity=".28"/>"##,
-    r##"</linearGradient>"##,
-);
-
-/// The accent, lit. Three stops rather than two, so `#FA5019` itself stays present in the surface
-/// instead of only the two ends of a ramp.
-///
-/// Written out rather than mixed from `--accent`: this is the one place the mark names a colour,
-/// and it names the same one on every ground and in both themes. An app icon that changed with
-/// the page theme would be a different app icon.
-const ACCENT: &str = concat!(
-    r##"<linearGradient id="adi-mark-accent" x1="0" y1="0" x2="0" y2="1">"##,
-    r##"<stop offset="0" stop-color="#FF8A4A"/>"##,
-    r##"<stop offset=".55" stop-color="#FA5019"/>"##,
-    r##"<stop offset="1" stop-color="#D8380A"/>"##,
-    r##"</linearGradient>"##,
-);
-
 /// The mask that cuts the lobes in front of `index` out of it. White keeps, black erases.
 fn cut_mask(index: usize) -> String {
     let mut mask = format!(
@@ -149,8 +113,8 @@ fn cut_mask(index: usize) -> String {
     mask
 }
 
-/// One lobe: its fill, then the gloss over it, both inside whatever mask cuts it.
-fn lobe(index: usize, variant: MarkVariant, accent: bool) -> String {
+/// One lobe: its fill, inside whatever mask cuts it.
+fn lobe(index: usize, variant: MarkVariant, colored: bool) -> String {
     let path = lobe_path(index);
     let name = ["back", "mid", "front"][index];
     // Only the lobes with something in front of them are cut; the front lobe never is.
@@ -159,73 +123,55 @@ fn lobe(index: usize, variant: MarkVariant, accent: bool) -> String {
     } else {
         String::new()
     };
-    let (group_opacity, fill) = match (variant, accent && index == 1) {
-        // The accent lobe is the gradient at full strength: a tone under it would wash out the
-        // one colour in the mark.
-        (_, true) => (String::new(), r#"fill="url(#adi-mark-accent)""#.to_string()),
-        (MarkVariant::Glass, false) => (
-            format!(r#" opacity="{}""#, GLASS_TONES[index]),
-            r#"fill="currentColor""#.to_string(),
-        ),
-        (_, false) => (
-            String::new(),
-            format!(r#"fill="currentColor" fill-opacity="{}""#, TONES[index]),
-        ),
+    let fill = if colored {
+        format!(r#"fill="{}""#, COLORED[index])
+    } else {
+        format!(r#"fill="currentColor" fill-opacity="{}""#, TONES[index])
     };
-
-    let mut group =
-        format!(r#"<g class="adi-mark__lobe adi-mark__lobe--{name}"{group_opacity}{mask}>"#);
-    let _ = write!(group, r#"<path {fill} d="{path}"/>"#);
-    let _ = write!(group, r#"<path fill="url(#adi-mark-gloss)" d="{path}"/>"#);
-    group.push_str("</g>");
-    group
+    format!(
+        r#"<g class="adi-mark__lobe adi-mark__lobe--{name}"{mask}><path {fill} d="{path}"/></g>"#
+    )
 }
 
 /// Everything inside the `<svg>`, as markup.
-fn markup(variant: MarkVariant, accent: bool) -> String {
-    let mut defs = String::from(GLOSS);
-    if accent {
-        defs.push_str(ACCENT);
-    }
+fn markup(variant: MarkVariant, colored: bool) -> String {
+    let mut defs = String::new();
     if variant == MarkVariant::Cut {
         for index in 0..ANGLES.len() - 1 {
             defs.push_str(&cut_mask(index));
         }
     }
     let lobes: String = (0..ANGLES.len())
-        .map(|index| lobe(index, variant, accent))
+        .map(|index| lobe(index, variant, colored))
         .collect();
-    // The lobes are wrapped rather than dropped straight in, so CSS animating the mark has one
-    // element to turn: turning each lobe on its own turns it about its own centre.
     format!(r#"<defs>{defs}</defs><g class="adi-mark__lobes">{lobes}</g>"#)
 }
 
-/// The mark, at whatever size `class` gives it.
+/// The mark, at whatever size `class` gives it. 18px beside the wordmark in a bar; never under
+/// 16.
 ///
 /// It never names its own ink — every lobe is `currentColor` at one of the tones, which is what
-/// lets the same drawing sit on white, on black, on an image, or inside a control and pick up
-/// that control's state.
+/// lets the same drawing sit on the page, in a bar, or inside a control and pick up that
+/// control's colour.
 ///
 /// Hidden from assistive technology, because every place it is used pairs it with the wordmark,
 /// and a screen reader announcing "adi" twice is worse than not drawing it at all.
 ///
 /// ```ignore
-/// <Mark accent=true class="size-4.5"/>
+/// <Mark class="size-4.5"/>
 /// ```
 #[component]
 pub fn Mark(
     #[prop(optional)] variant: MarkVariant,
-    /// The middle lobe takes the accent instead of ink. Never on an accent-coloured ground —
-    /// the lobe disappears into it.
+    /// The coloured build — grey, orange, ink. For the app icon and the landing only; in the
+    /// app the mark is monochrome (§10), and an orange lobe on every screen is a second orange.
     #[prop(optional)]
     accent: bool,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
         <svg
-            // `overflow-visible` because a caller that animates the lobes moves them past the
-            // viewBox, and an svg viewport clips by default.
-            class=merge("adi-mark shrink-0 overflow-visible", class)
+            class=merge("adi-mark shrink-0", class)
             viewBox="0 0 200 200"
             fill="none"
             aria-hidden="true"
@@ -239,8 +185,8 @@ mod tests {
     use super::{MarkVariant, lobe_path, markup};
 
     /// The three lobes, exactly as `crates/adi-hive/src/notfound.rs` writes them and as
-    /// `apps/macos/Sources/Trefoil.swift` computes them. This is the whole point of generating
-    /// the module: three languages draw this mark and none of them may drift.
+    /// `apps/macos/Sources/Trefoil.swift` computes them. Three languages draw this mark and none
+    /// of them may drift.
     const SPEC: [&str; 3] = [
         "M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z",
         "M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z",
@@ -254,8 +200,7 @@ mod tests {
         }
     }
 
-    /// Back to front is weak to strong, and nothing may reorder it — an earlier mark ran the
-    /// tones the other way and laid a wash of the palest shape over everything.
+    /// Back to front is weak to strong, and nothing may reorder it.
     #[test]
     fn the_front_lobe_is_the_strongest() {
         let drawn = markup(MarkVariant::Solid, false);
@@ -264,13 +209,26 @@ mod tests {
         assert!(at("0.74") < at(r#"fill-opacity="1""#));
     }
 
-    /// The front lobe has nothing in front of it, so nothing cuts it — and the builds without
-    /// gaps keep every lobe and lose only the hairlines.
+    /// The front lobe has nothing in front of it, so nothing cuts it — and the solid build keeps
+    /// every lobe and loses only the hairlines.
     #[test]
     fn only_the_covered_lobes_are_cut() {
         let cut = markup(MarkVariant::Cut, true);
         assert!(cut.contains("adi-mark-cut-0") && cut.contains("adi-mark-cut-1"));
         assert!(!cut.contains("adi-mark-cut-2"));
         assert!(!markup(MarkVariant::Solid, true).contains("mask"));
+    }
+
+    /// §10: no gradient, no gloss, and the app's build names no colour of its own.
+    #[test]
+    fn the_mark_is_flat() {
+        let mono = markup(MarkVariant::Cut, false);
+        assert!(!mono.contains("Gradient"), "{mono}");
+        // The masks are black and white; nothing else in the app's build may name a colour.
+        for named in ["#E8532A", "#FA5019", "#8C8780"] {
+            assert!(!mono.contains(named), "{named} in the monochrome mark");
+        }
+        let colored = markup(MarkVariant::Cut, true);
+        assert!(colored.contains("#E8532A") && !colored.contains("Gradient"));
     }
 }

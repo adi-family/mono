@@ -10,12 +10,10 @@
 #
 # ## Why Chrome and not Pillow
 #
-# The composition is `frames/panel.html` + `frames/_frame.css`, and those implement
-# `projects/adi-design/decisions/2026-08-27-dimensional-not-generated.md` — which states its
-# permitted values as CSS: five blurred sources at named alphas, a radial vignette, an
-# feTurbulence grain at .062 under the readable layers. A browser is the thing that evaluates
-# those the same way the reference render did. The first version of these panels was composited
-# in Pillow from two hex codes and a guess, and it looked like it.
+# The composition is `frames/panel.html` + `frames/_frame.css`, drawn to design/DESIGN.md against
+# the design tokens and set in Geist from crates/adi-ui/fonts. A browser lays that out the way
+# every other surface is laid out; the first version of these panels was composited in Pillow
+# from two hex codes and a guess, and it looked like it.
 #
 # ## The Chrome gotcha, which costs an hour to rediscover
 #
@@ -23,7 +21,7 @@
 # exit — with or without --virtual-time-budget. A plain invocation in a loop never reaches the
 # second render. So: launch it, wait for the file to appear and stop growing, kill it, and kill
 # the helpers by their unique profile path. Lifted from
-# `projects/adi-design/explorations/04-dimensional/render.sh`, which learned it first.
+# the design project's own render script, which learned it first.
 #
 # Rendered at 2x and downscaled with LANCZOS, so the delivered pixels are averages of rendered
 # ones — the same reason the reference does it.
@@ -123,8 +121,8 @@ im = Image.open(p); print(im.size[0], im.size[1])")
   # The phone is narrower on the iPad panel: a 13\" panel is nearly square, so a device at the
   # iPhone panel's fraction would be enormous and the copy would have nowhere to sit.
   case "$dev" in
-    iphone) W=1284; H=2778; DW=0.94; KIND=phone;  TB=$W;                  ST=0.205; BL=.092; VG=.38 ;;
-    ipad)   W=$CW;  H=$CH;  DW=0.76; KIND=tablet; TB=$(( W * 68 / 100 )); ST=0.265; BL=.092; VG=.38 ;;
+    iphone) W=1284; H=2778; DW=0.94; KIND=phone;  TB=$W;                  ST=0.205 ;;
+    ipad)   W=$CW;  H=$CH;  DW=0.76; KIND=tablet; TB=$(( W * 68 / 100 )); ST=0.265 ;;
   esac
 
   log "$dev — panel ${W}x${H} from ${CW}x${CH} captures, device at ${DW} of the frame"
@@ -140,7 +138,7 @@ im = Image.open(p); print(im.size[0], im.size[1])")
 from PIL import Image
 im = Image.open('$shot'); print(im.size[0], im.size[1])")
 
-    url="file://$here/frames/panel.html?w=$W&h=$H&sw=$SW&sh=$SH&dw=$DW&kind=$KIND&tb=$TB&st=$ST&bl=$BL&vg=$VG"
+    url="file://$here/frames/panel.html?w=$W&h=$H&sw=$SW&sh=$SH&dw=$DW&kind=$KIND&tb=$TB&st=$ST"
     url+="&shot=$(urlencode "$shot")"
     url+="&head=$(urlencode "$head")&sub=$(urlencode "$sub")"
 

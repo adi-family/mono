@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
 /// One row of a tree.
@@ -40,9 +41,9 @@ pub struct TreeNode {
     /// A grouping row that is not itself a destination. Clicking it opens or closes it, the
     /// way clicking a folder name does, rather than selecting something unopenable.
     pub container: bool,
-    /// The row's glyph, as the inner markup of a 16×16 `<svg>`. Rows without one get a dot,
-    /// so the icon column keeps its width either way and every label starts on one edge.
-    pub icon: Option<&'static str>,
+    /// The row's glyph. Rows without one get a dot, so the icon column keeps its width either
+    /// way and every label starts on one edge.
+    pub icon: Option<Lucide>,
     /// Draw a rule above this row, marking the boundary between two kinds of children.
     pub separated: bool,
     /// Give the row more presence than its siblings — the project among its own pages.
@@ -118,7 +119,7 @@ impl TreeNode {
 
     /// The row's glyph (see [`TreeNode::icon`]).
     #[must_use]
-    pub fn icon(mut self, icon: &'static str) -> Self {
+    pub fn icon(mut self, icon: Lucide) -> Self {
         self.icon = Some(icon);
         self
     }
@@ -248,7 +249,7 @@ pub fn Tree(
                 let rows = rows();
                 if rows.is_empty() {
                     view! {
-                        <div class="px-3.5 py-6 text-center text-mini text-meta">
+                        <div class="px-3 py-6 text-small text-ink-3">
                             {empty.clone()}
                         </div>
                     }
@@ -280,19 +281,22 @@ fn ancestors_of(nodes: &[TreeNode], selected: Option<&str>) -> HashSet<String> {
 
 /// The open/close control, and on a leaf the empty slot that keeps the column aligned.
 ///
-/// The chevron is **drawn, not typed**. `▸`/`▾` are 10px specks in a UI font — and whether
-/// they are there at all depends on that font having them, which a self-hosted pair need
-/// not. A chevron that turns is also the one tree control everybody already reads.
+/// A chevron that turns is the one tree control everybody already reads; the turn is the
+/// reader's own click, so it may take the 100ms.
 fn twisty(id: &str, has_children: bool, expanded: bool, state: TreeState) -> AnyView {
     if !has_children {
         return view! { <span class="ml-1 size-4 shrink-0"></span> }.into_any();
     }
     let id = id.to_string();
-    let turn = if expanded { "rotate-90" } else { "" };
+    let turn = if expanded {
+        "rotate-90 transition-transform duration-100"
+    } else {
+        "transition-transform duration-100"
+    };
     view! {
         <button
             class="ml-1 grid size-4 shrink-0 cursor-pointer place-items-center p-0 \
-                   text-meta hover:text-ink"
+                   text-ink-3 hover:text-ink"
             type="button"
             tabindex="-1"
             aria-label=if expanded { "Collapse" } else { "Expand" }
@@ -302,18 +306,7 @@ fn twisty(id: &str, has_children: bool, expanded: bool, state: TreeState) -> Any
                 state.toggle(&id);
             }
         >
-            <svg
-                class=format!("size-3 transition-transform duration-100 {turn}")
-                viewBox="0 0 12 12"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <path d="M4.5 2.5 8 6l-3.5 3.5"></path>
-            </svg>
+            <Icon icon=Lucide::ChevronRight size=IconSize::Sm class=turn/>
         </button>
     }
     .into_any()
@@ -321,47 +314,39 @@ fn twisty(id: &str, has_children: bool, expanded: bool, state: TreeState) -> Any
 
 /// One row: `depth` indent rails, a twisty on branches, the glyph, the label, and whatever
 /// the badge says.
+///
+/// The open row is a tone change plus a 3px accent marker down its left edge — the one place
+/// navigation may carry the accent (§3), and a marker rather than a fill of it.
 fn row(node: TreeNode, expanded: bool, selected: Option<&str>, state: TreeState) -> AnyView {
     let is_selected = selected == Some(node.id.as_str());
 
     // Written out per case, because Tailwind only finds a class it can read as a literal.
     let tone = if is_selected {
-        "bg-accent-soft text-accent"
+        "bg-active text-ink"
     } else if node.emphasis {
-        "font-medium text-ink hover:bg-card"
+        "font-medium text-ink hover:bg-hover"
     } else {
-        "text-body hover:bg-card"
+        "text-ink-2 hover:bg-hover hover:text-ink"
     };
     let rule = if node.separated {
-        "mt-1 border-t border-divider pt-1"
+        "mt-1 border-t border-line pt-1"
     } else {
         ""
     };
-    // Selection and emphasis both reach into the glyph — it is the one part of a row that
-    // can take colour without the label shifting weight.
+    // The glyph takes the ink one step below the label, and steps up with it when the row is
+    // open — never a colour of its own.
     let glyph = if is_selected || node.emphasis {
-        "text-accent"
+        "text-ink-2"
     } else {
-        "text-faint"
+        "text-ink-3"
     };
 
     let rails = (0..node.depth)
-        .map(|_| view! { <span class="ml-2 w-3.5 shrink-0 self-stretch border-l border-divider"></span> })
+        .map(|_| view! { <span class="ml-2 w-3.5 shrink-0 self-stretch border-l border-line"></span> })
         .collect::<Vec<_>>();
 
     let icon = match node.icon {
-        Some(markup) => view! {
-            <svg
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                inner_html=markup
-            ></svg>
-        }
-        .into_any(),
+        Some(icon) => view! { <Icon icon=icon size=IconSize::Sm/> }.into_any(),
         None => view! { <span class="text-[11px] leading-none">"·"</span> }.into_any(),
     };
 
@@ -378,8 +363,8 @@ fn row(node: TreeNode, expanded: bool, selected: Option<&str>, state: TreeState)
 
     view! {
         <div
-            class=format!("flex cursor-default items-center rounded-sm py-0.5 pr-2.5 \
-                           whitespace-nowrap {tone} {rule}")
+            class=format!("relative flex cursor-default items-center rounded-md py-[5px] \
+                           pr-2.5 whitespace-nowrap {tone} {rule}")
             role="treeitem"
             tabindex="0"
             title=node.title
@@ -393,18 +378,23 @@ fn row(node: TreeNode, expanded: bool, selected: Option<&str>, state: TreeState)
                 }
             }
         >
+            {is_selected.then(|| view! {
+                <span
+                    class="absolute top-1.5 bottom-1.5 left-0 w-[3px] rounded-sm bg-accent"
+                    aria-hidden="true"
+                ></span>
+            })}
             {rails}
             {twisty(&node.id, node.has_children, expanded, state)}
             <span
-                class=format!("grid h-4 w-4.5 shrink-0 place-items-center \
-                               [&_svg]:block [&_svg]:size-3.5 {glyph}")
+                class=format!("grid h-4 w-4.5 shrink-0 place-items-center {glyph}")
                 aria-hidden="true"
             >
                 {icon}
             </span>
             <span class="truncate pl-1.5">{node.label}</span>
             {node.badge.map(|b| view! {
-                <span class="ml-auto pl-2 font-mono text-mini text-meta">{b}</span>
+                <span class="ml-auto pl-2 text-mini text-ink-3">{b}</span>
             })}
         </div>
     }

@@ -291,6 +291,11 @@ fn join_fleet(token: &str, json: bool) -> Result<(), String> {
 
 /// The one place the plaintext password is ever shown. It is not stored on either machine — both
 /// keep only a salted verifier — so the line saying so is part of the output, not a nicety.
+///
+/// The host at the end is `viewer`, never `petname` (§2: three names, never conflated). `petname`
+/// is what the *far* side calls this machine and resolves only in that machine's registry; the one
+/// this machine can open is the name it filed the far side under. Printing the other one sent the
+/// operator to a host their own gateway has never heard of.
 fn print_joined(joined: &Joined) {
     println!("Joined the fleet as `{}`.", joined.petname);
     println!("  the viewer is filed here as: {}", joined.viewer);
@@ -304,7 +309,7 @@ fn print_joined(joined: &Joined) {
         "Copy the password now: it is not stored anywhere, on either machine — only a salted \
          verifier is. The browser will ask for it the first time you open"
     );
-    println!("  http://app.{}.n.adi/", joined.petname);
+    println!("  http://app.{}.n.adi/", joined.viewer);
 }
 
 // -- the registry ----------------------------------------------------------------------------

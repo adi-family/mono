@@ -4,12 +4,12 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-62 structs · 9 enums · 1 type alias across 23 files.
+61 structs · 9 enums · 1 type alias across 23 files.
 
 ## Index
 
 - [`src/icons.rs`](#srciconsrs) — `Icon`
-- [`src/launcher.rs`](#srclauncherrs) — `Launcher`, `Drag`, `Action`
+- [`src/launcher.rs`](#srclauncherrs) — `Launcher`, `Action`
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
@@ -37,6 +37,8 @@
 ## `src/icons.rs`
 
 ### enum `Icon`
+
+A noun in the app. `lucide()` is the glyph for it.
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,7 +68,6 @@ pub(crate) enum Icon {
     Download,
     Upgrade,
     Chart,
-    Contrast,
     Filter,
     Sliders,
 }
@@ -78,31 +79,15 @@ pub(crate) enum Icon {
 
 ### struct `Launcher`
 
-The floating mark and everything the menu behind it needs to remember.
+The menu, and everything it needs to remember.
 
 ```rust
 #[derive(Clone, Copy)]
 pub(crate) struct Launcher {
     open: RwSignal<bool>,
-    pos: RwSignal<Option<(f64, f64)>>,
     query: RwSignal<String>,
     cursor: RwSignal<usize>,
-    drag: RwSignal<Option<Drag>>,
     floor: f64,
-    swallow: RwSignal<bool>,
-}
-```
-
-### struct `Drag`
-
-A press on the mark, from `pointerdown` until it is released.
-
-```rust
-#[derive(Clone, Copy)]
-struct Drag {
-    start: (f64, f64),
-    from: (f64, f64),
-    moved: bool,
 }
 ```
 
@@ -1273,6 +1258,9 @@ pub(crate) struct FleetForm {
     pub(crate) invite: RwSignal<Option<adi_webapp_api::types::FleetInvite>>,
     pub(crate) invite_until: RwSignal<f64>,
     pub(crate) minting: RwSignal<bool>,
+    pub(crate) join_token: RwSignal<String>,
+    pub(crate) joining: RwSignal<bool>,
+    pub(crate) joined: RwSignal<Option<adi_webapp_api::types::FleetJoined>>,
 }
 ```
 

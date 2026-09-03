@@ -1,16 +1,18 @@
-//! The panel — the surface almost everything else sits on.
+//! The panel — a section of a page.
 
 use leptos::prelude::*;
 
 use crate::merge;
 
-/// A titled surface: a hairline-bordered card with a header strip and a body.
+/// A titled section: the section title (16px/600), its actions on the right, a hairline
+/// under them, and the content.
 ///
-/// Depth is a border, not a shadow — the design system separates surfaces by line, so a
-/// page of panels reads as one plane rather than a pile of cards.
+/// Not a card. Grouping is done with tone and hairlines, never boxes (`design/DESIGN.md`
+/// §2.5): the section has no border, no fill and no radius, and its content sits flush with
+/// its title — a table inside it draws its own rules against the same left edge.
 ///
 /// The header is dropped entirely when there is no `title` and no `actions`, which makes
-/// `<Panel>` on its own a plain surface to put anything on.
+/// `<Panel>` on its own a plain block to put anything in.
 ///
 /// ```ignore
 /// <Panel title="Ports" actions=|| view! { <Button>"Refresh"</Button> }.into_any()>
@@ -23,30 +25,23 @@ pub fn Panel(
     /// Controls pinned to the right of the header — usually a [`crate::Button`] or two.
     #[prop(optional, into)]
     actions: Option<ViewFn>,
-    /// Drop the body padding, for a panel whose child manages its own edges (a table, a
-    /// terminal, a code view).
-    #[prop(optional)]
-    flush: bool,
     #[prop(optional, into)] class: String,
     children: Children,
 ) -> impl IntoView {
     let has_head = !title.is_empty() || actions.is_some();
-    let body = if flush { "" } else { "p-4" };
 
     view! {
-        <section class=merge("island bg-card text-body", class)>
+        <section class=merge("flex flex-col text-ink", class)>
             {has_head.then(|| view! {
-                <header class="flex min-h-9 items-center justify-between gap-2 \
-                               border-b border-divider px-4 py-2">
-                    <h2 class="caps m-0 text-faint">
-                        {title}
-                    </h2>
+                <header class="mb-3 flex min-h-8 items-center justify-between gap-3 border-b \
+                               border-line pb-2.5">
+                    <h2 class="m-0 text-section font-semibold text-ink">{title}</h2>
                     <div class="flex items-center gap-2">
                         {actions.map(|a| a.run())}
                     </div>
                 </header>
             })}
-            <div class=body>{children()}</div>
+            <div class="min-w-0">{children()}</div>
         </section>
     }
 }

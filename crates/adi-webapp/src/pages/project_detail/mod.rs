@@ -2,7 +2,7 @@
 //! the project's `.adi/hive.yaml`, and an in-place file browser/editor scoped to the project's own
 //! directory (via the isolated `adi-fs` jail).
 
-use adi_ui::Table;
+use adi_ui::{Icon, IconSize, Lucide, Table};
 use adi_webapp_api::types::{ProjectDetail, ProjectRenamed, ProjectsState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -196,7 +196,7 @@ pub(crate) fn project_detail_view(
     .into_any()
 }
 
-/// Render one loaded [`ProjectDetail`]. The header — name, status, archive/delete — is the
+/// Render one loaded [`ProjectDetail`]. The header — name, slug, archive/delete — is the
 /// project's identity and shows on every section; `services` picks which body follows it,
 /// since Overview and Services are the two sections drawn from this payload.
 fn detail_body(
@@ -211,20 +211,12 @@ fn detail_body(
     let id = d.id.clone();
     let name = d.name.clone();
     let created = fmt_date(d.created_at);
-    let archived_note = d
-        .archived_at
-        .map_or_else(String::new, |ts| format!("archived {}", fmt_date(ts)));
-    let status_label = if archived { "Archived" } else { "Active" };
-    // The identity line that used to be a stat-tile strip: dates belong next to the name, not in
-    // cards of their own.
-    let meta = if archived_note.is_empty() {
-        format!("created {created}")
-    } else {
-        format!("created {created} \u{b7} {archived_note}")
-    };
+    let archived_on = d.archived_at.map(fmt_date);
+    let parent = d.parent.clone();
     let description = d.description.clone();
     let has_hive = d.has_hive;
     let services = d.services.clone();
+    let service_count = services.len();
     let reload_id = id.clone();
     let rows_id = id.clone();
 
@@ -233,14 +225,15 @@ fn detail_body(
         view! {
             <button class="adi-btn" on:click=move |_| {
                 apply_detail_mutation(state, toggle_id.clone(), None,
-                    format!("Restored {}.", toggle_id), fetch::unarchive_project(toggle_id.clone()));
+                    format!("Restored {toggle_id}."), fetch::unarchive_project(toggle_id.clone()));
             }>"Restore"</button>
-        }.into_any()
+        }
+        .into_any()
     } else {
         view! {
             <button class="adi-btn" on:click=move |_| {
                 apply_detail_mutation(state, toggle_id.clone(), None,
-                    format!("Archived {}.", toggle_id), fetch::archive_project(toggle_id.clone()));
+                    format!("Archived {toggle_id}."), fetch::archive_project(toggle_id.clone()));
             }>"Archive"</button>
         }
         .into_any()
@@ -252,13 +245,13 @@ fn detail_body(
             let yes_id = del_id.clone();
             view! {
                 <span class="adi-muted">"Delete permanently?"</span>
-                <button class="adi-btn adi-btn--link" style="color:var(--down)" on:click=move |_| {
+                <button class="adi-btn adi-btn--link adi-btn--danger" on:click=move |_| {
                     let yes_id = yes_id.clone();
                     spawn_local(async move {
                         match fetch::remove_project(yes_id.clone()).await {
                             Ok(list) => {
                                 state.projects.set(Some(list));
-                                state.flash.set(Some(Flash::ok(format!("Deleted {}.", yes_id))));
+                                state.flash.set(Some(Flash::ok(format!("Deleted {yes_id}."))));
                                 go_projects(state, route);
                             }
                             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -271,7 +264,7 @@ fn detail_body(
             .into_any()
         } else {
             view! {
-                <button class="adi-btn adi-btn--link"
+                <button class="adi-btn adi-btn--link adi-btn--danger"
                     on:click=move |_| confirm_delete.set(true)>"Delete…"</button>
             }
             .into_any()
@@ -280,38 +273,52 @@ fn detail_body(
 
     let slug_id = id.clone();
     let slug_name = name.clone();
+    let slug = id.clone();
+    let directory = format!("~/.adi/mono/projects/{id}");
+    let services_line = if has_hive {
+        format!("{service_count} in .adi/hive.yaml")
+    } else {
+        "no .adi/hive.yaml yet".to_string()
+    };
     view! {
         <div class="adi-bar">
             <h1 class="adi-bar__title">{name}</h1>
-            <span class="adi-chip">{status_label}</span>
             <button class="adi-chip adi-chip--action adi-mono" type="button"
                 title="the project's slug: its directory under ~/.adi/mono/projects and the word in its URL — click to rename"
-                on:click=move |_| rename_slug(state, route, &slug_id, &slug_name)>{id}</button>
-            {parent_link(state, route, d.parent.clone())}
+                on:click=move |_| rename_slug(state, route, &slug_id, &slug_name)>{slug}</button>
+            {archived.then(|| view! {
+                <span class="adi-tstatus" data-status="archived">"Archived"</span>
+            })}
+            {parent_link(state, route, parent.clone())}
             <span class="adi-spacer"></span>
-            <span class="adi-updated">{meta}</span>
             {archive_btn}
             {delete_ctrl}
         </div>
 
         {(!services_section).then(|| view! {
-            {description.map(|text| view! {
-                <section class="adi-panel">
-                    <div class="adi-panel__head"><h2 class="adi-panel__title">"Description"</h2></div>
-                    <p class="adi-muted">{text}</p>
-                </section>
-            })}
+            <section class="adi-panel">
+                <div class="adi-panel__head"><h2 class="adi-panel__title">"Overview"</h2></div>
+                {description.map(|text| view! { <p class="adi-project__desc">{text}</p> })}
+                <dl class="adi-kv">
+                    <dt>"Slug"</dt><dd class="adi-mono">{id.clone()}</dd>
+                    <dt>"Directory"</dt><dd class="adi-mono">{directory}</dd>
+                    {parent.clone().map(|pid| view! { <dt>"Parent"</dt><dd class="adi-mono">{pid}</dd> })}
+                    <dt>"Created"</dt><dd>{created}</dd>
+                    {archived_on.map(|on| view! { <dt>"Archived"</dt><dd>{on}</dd> })}
+                    <dt>"Services"</dt><dd>{services_line}</dd>
+                </dl>
+            </section>
         })}
 
         {services_section.then(|| view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Services"</h2>
+                <span class="adi-updated">"from " <code>".adi/hive.yaml"</code></span>
                 <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--ghost" type="button"
+                <button class="adi-btn adi-btn--quiet" type="button"
                     title="Re-read this project's .adi/hive.yaml from disk"
                     on:click=move |_| reload_project(state, reload_id.clone())>"Reload config"</button>
-                <span class="adi-updated">"the project's .adi/hive.yaml"</span>
             </div>
             // A closure, not a rendered value: re-sorting or rearranging then redraws just this
             // tbody instead of the whole panel around it.
@@ -319,7 +326,7 @@ fn detail_body(
             {service_create_form(state, service_form)}
             <div class="adi-hint">
                 "Written to the project's " <code>".adi/hive.yaml"</code> " — the front door picks the "
-                "service up from there. Edit or remove services by editing that file in the Files panel."
+                "service up from there. Edit or remove services by editing that file in the Files section."
             </div>
         </section>
         })}
@@ -480,7 +487,9 @@ pub(super) fn sub_marker(
                 if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                 ev.prevent_default();
                 open_project_section(state, route, open_id.clone(), section);
-            }>{format!("↳ {owner_name}")}</a>
+            }>
+            <Icon icon=Lucide::Folder size=IconSize::Sm class="mr-1 align-[-2px]"/>{owner_name}
+        </a>
     }
     .into_any()
 }
@@ -497,7 +506,9 @@ fn parent_link(state: State, route: RwSignal<Route>, parent: Option<String>) -> 
                     if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                     ev.prevent_default();
                     open_project(state, route, open_pid.clone());
-                }>{format!("↑ {pid}")}</a>
+                }>
+                <Icon icon=Lucide::ArrowUp size=IconSize::Sm/>{pid}
+            </a>
         }
         .into_any(),
     )

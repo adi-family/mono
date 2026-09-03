@@ -1,0 +1,9 @@
+// Page-local styles for `src/pages/ports.rs`. Shared components live in adi-css; a shape that
+// exists on one page lives here. Tokens from design/tokens.css only.
+
+// The count beside the page title: the page header's meta line (§6), in the label ink.
+.adi-ports__meta {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}

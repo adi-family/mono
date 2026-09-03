@@ -14,3 +14,9 @@
 # argument: it is injected by the worker, so the two have to move together or not at all.
 /__adi/*
   Cache-Control: no-cache
+
+# The faces are unhashed (`/fonts/geist-latin.woff2` keeps its name across builds, because the
+# stylesheet that names them is shared with other crates). A week is long enough to spare a phone
+# the download on every visit and short enough that a re-cut face reaches it.
+/fonts/*
+  Cache-Control: public, max-age=604800

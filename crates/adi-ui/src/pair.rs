@@ -22,7 +22,8 @@
 //! a calibration the number does not have: `independent` pairs run 0.245–0.898 and `duplicate`
 //! pairs 0.617–0.898 — the ceilings are identical, and the second-ranked pair in the base came
 //! back `independent`. A [`Badge`] in mono says "this is a measurement" without claiming it
-//! sorts anything.
+//! sorts anything (§8: tokens to one decimal is for money and counts; a cosine keeps its
+//! three).
 //!
 //! **Rank is not priority.** By median similarity duplicates sit at 0.821, qualifications at
 //! 0.721 and contradictions at 0.672 — so a strictly top-down queue makes a person grind
@@ -141,6 +142,18 @@ impl Verdict {
             Self::Merge => "merge",
             Self::Supersede => "supersede",
             Self::Drop => "drop",
+        }
+    }
+
+    /// The same word on a button — sentence case (§2.6); the lowercase [`label`](Self::label)
+    /// is a state word on a pill.
+    #[must_use]
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Coexist => "Coexist",
+            Self::Merge => "Merge",
+            Self::Supersede => "Supersede",
+            Self::Drop => "Drop",
         }
     }
 
@@ -349,10 +362,11 @@ enum Mode {
 
 /// One pair, and the four ways to rule on it. **The decision atom of the whole subsystem.**
 ///
-/// The two facts are the subject of the card: equal weight, equal size, side by side, each
-/// with its own provenance, because deciding between them means reading both. Everything else
-/// — the strength, the classifier's guess at the relation, its stated reason — is furniture
-/// around them.
+/// A card — the one genuinely detachable thing on the facts screen (§5): a hairline and the
+/// large radius, no fill, no shadow. The two facts are the subject of it: equal weight, equal
+/// size, side by side, each with its own provenance, because deciding between them means
+/// reading both. Everything else — the strength, the classifier's guess at the relation, its
+/// stated reason — is furniture around them.
 ///
 /// Two of the verdicts need something more than a click, and the card asks for it in place
 /// rather than in a dialog:
@@ -482,24 +496,24 @@ pub fn PairCard(
             data-pair=id.clone()
             tabindex="0"
             class=merge(
-                "group island bg-card focus-visible:outline-2 focus-visible:outline-offset-2 \
-                 focus-visible:outline-accent",
+                "group rounded-lg border border-line focus-visible:outline-[1.5px] \
+                 focus-visible:outline-offset-2 focus-visible:outline-focus",
                 class,
             )
             on:keydown=on_key
         >
-            <div class="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5">
+            <div class="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
                 {rank.map(|n| view! {
-                    <span class="caps text-fainter">{format!("rank {n}")}</span>
+                    <span class="text-label text-ink-3">{format!("rank {n}")}</span>
                 })}
                 // The number, plain. Three places because that is the resolution the pairs are
                 // actually ordered at; a bar or a tinted meter would claim a calibration the
                 // cosine does not have.
                 <Badge mono=true>{format!("{strength:.3}")}</Badge>
-                <Badge tone=relation.tone() mono=true>{relation.label()}</Badge>
+                <Badge tone=relation.tone()>{relation.label()}</Badge>
                 <span class="flex-1"></span>
                 {decided.clone().map(|d| view! {
-                    <Badge tone=d.verdict.tone() mono=true>{d.verdict.label()}</Badge>
+                    <Badge tone=d.verdict.tone()>{d.verdict.label()}</Badge>
                 })}
             </div>
 
@@ -511,7 +525,7 @@ pub fn PairCard(
                     .map(|(i, side)| {
                         // Both literals spelled out: Tailwind reads this file as text.
                         let edge = if i == 0 {
-                            "flex flex-col gap-2 border-b border-divider p-3 sm:border-r \
+                            "flex flex-col gap-2 border-b border-line p-3 sm:border-r \
                              sm:border-b-0"
                         } else {
                             "flex flex-col gap-2 p-3"
@@ -523,10 +537,10 @@ pub fn PairCard(
                         view! {
                             <div class=edge>
                                 <div class="flex flex-wrap items-center gap-2">
-                                    <Badge mono=true>{label}</Badge>
+                                    <Badge>{label}</Badge>
                                     <Stamp id=fact.id.clone() version=fact.version/>
                                 </div>
-                                <Sentence text=fact.text.clone() size="text-msg"/>
+                                <Sentence text=fact.text.clone() size="text-body"/>
                                 <Provenance author=fact.author.clone() creator=fact.creator.clone()/>
                                 {move || match mode.get() {
                                     Mode::Picking(v) => {
@@ -543,9 +557,9 @@ pub fn PairCard(
                                                 )
                                             >
                                                 {if v == Verdict::Supersede {
-                                                    "this one stands"
+                                                    "This one stands"
                                                 } else {
-                                                    "this one lands"
+                                                    "This one lands"
                                                 }}
                                             </Button>
                                         })
@@ -562,11 +576,11 @@ pub fn PairCard(
             // rather than merely styled down, because a sentence in an interface reads as a
             // finding unless something says whose sentence it is.
             {(!reason.is_empty()).then(|| view! {
-                <div class="flex flex-col gap-1 border-t border-divider bg-panel-alt px-3 py-2">
-                    <span class="caps text-fainter">"the classifier says"</span>
-                    <p class="m-0 text-mini leading-relaxed text-meta">{reason.clone()}</p>
+                <div class="flex flex-col gap-1 border-t border-line px-3 py-2">
+                    <span class="text-label text-ink-3">"The classifier says"</span>
+                    <p class="m-0 text-small leading-normal text-ink-2">{reason.clone()}</p>
                     <Show when=move || reason_suspect.get()>
-                        <p class="m-0 text-mini leading-relaxed text-queue">
+                        <p class="m-0 text-small leading-normal text-warn">
                             "This reason names facts that are not in this pair. Read the two \
                              sentences; the explanation is about something else."
                         </p>
@@ -580,12 +594,12 @@ pub fn PairCard(
                 // second answer to a settled question.
                 (Some(d), _) => view! {
                     <div class="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t \
-                                border-divider bg-bar px-3 py-2.5 text-mini text-meta">
-                        <span>"recorded"</span>
-                        <span class="font-mono text-secondary">{d.verdict.label()}</span>
+                                border-line px-3 py-2.5 text-small text-ink-3">
+                        <span>"Recorded"</span>
+                        <span class="text-ink-2">{d.verdict.label()}</span>
                         <span>"by"</span>
-                        <span class="font-mono text-secondary">{d.by.clone()}</span>
-                        <span class="w-full text-fainter">
+                        <span class="font-mono text-ink-2">{d.by.clone()}</span>
+                        <span class="w-full">
                             "A recorded verdict is permanent. This pair is never asked again."
                         </span>
                     </div>
@@ -604,9 +618,9 @@ pub fn PairCard(
                 }
                 .into_any(),
                 (None, Mode::Picking(v)) => view! {
-                    <div class="flex flex-wrap items-center gap-2 border-t border-divider \
-                                bg-bar px-3 py-2.5">
-                        <span class="min-w-0 flex-1 text-mini text-meta">
+                    <div class="flex flex-wrap items-center gap-2 border-t border-line \
+                                px-3 py-2.5">
+                        <span class="min-w-0 flex-1 text-small text-ink-3">
                             {if v == Verdict::Supersede {
                                 "Pick the sentence that stands. It is written into the other \
                                  node in place, so everything derived from that node goes stale."
@@ -620,14 +634,14 @@ pub fn PairCard(
                             variant=ButtonVariant::Ghost
                             on:click=move |_| mode.set(Mode::Idle)
                         >
-                            "cancel"
+                            "Cancel"
                         </Button>
                     </div>
                 }
                 .into_any(),
                 (None, Mode::Idle) => view! {
-                    <div class="flex flex-wrap items-center gap-2 border-t border-divider \
-                                bg-bar px-3 py-2.5">
+                    <div class="flex flex-wrap items-center gap-2 border-t border-line \
+                                px-3 py-2.5">
                         {Verdict::ALL
                             .into_iter()
                             .map(|v| {
@@ -643,7 +657,7 @@ pub fn PairCard(
                                         attr:title=v.says()
                                         on:click=move |_| start(v)
                                     >
-                                        {v.label()}
+                                        {v.title()}
                                         // Hidden until the card has the keyboard, in CSS
                                         // rather than in a signal: the queue re-creates every
                                         // card component when one of them is ruled, so a
@@ -673,8 +687,8 @@ fn MergeBox(
     on_merge: Callback<String>,
 ) -> impl IntoView {
     view! {
-        <div class="flex flex-col gap-2 border-t border-divider bg-bar px-3 py-2.5">
-            <span class="text-mini text-meta">
+        <div class="flex flex-col gap-2 border-t border-line px-3 py-2.5">
+            <span class="text-small text-ink-3">
                 "One sentence in place of both \u{2014} the one that says what each of them said."
             </span>
             <Textarea
@@ -697,7 +711,7 @@ fn MergeBox(
                                 variant=ButtonVariant::Ghost
                                 on:click=move |_| draft.set(text.clone())
                             >
-                                {format!("start from {label}")}
+                                {format!("Start from {label}")}
                             </Button>
                         }
                     })
@@ -708,14 +722,14 @@ fn MergeBox(
                     variant=ButtonVariant::Ghost
                     on:click=move |_| on_cancel.run(())
                 >
-                    "cancel"
+                    "Cancel"
                 </Button>
                 <Button
                     size=ButtonSize::Small
                     disabled=Signal::derive(move || draft.get().trim().is_empty())
                     on:click=move |_| on_merge.run(draft.get_untracked())
                 >
-                    "record merge"
+                    "Record merge"
                 </Button>
             </div>
         </div>
@@ -764,8 +778,8 @@ enum Order {
 
 /// The queue: every pair waiting on a decision, and the two ways to come at it.
 ///
-/// It draws **no island of its own** — it is a list, and the panel it sits in is the object on
-/// the screen. See [`crate::TxPanel`], which is usually that panel.
+/// It draws **no frame of its own** — it is a list inside the section that owns it. See
+/// [`crate::TxPanel`], which is usually that section.
 ///
 /// The controls at the top exist because rank is not priority. Sorting strictly by strength
 /// makes a person work through duplicates — median 0.821 — before ever reaching the
@@ -817,14 +831,13 @@ pub fn PairQueue(
 
     view! {
         <div class=merge("flex flex-col", class)>
-            <div class="flex flex-wrap items-center gap-2 border-b border-divider bg-panel-alt \
-                        px-3 py-2">
+            <div class="flex flex-wrap items-center gap-2 border-b border-line py-2.5">
                 <span class="text-row font-medium text-ink">
                     {move || format!("{} to decide", open.get())}
                 </span>
                 <span class="flex-1"></span>
-                <span class="caps text-fainter">"deciding as"</span>
-                <span class="font-mono text-mini text-secondary">
+                <span class="text-label text-ink-3">"Deciding as"</span>
+                <span class="font-mono text-mini text-ink-2">
                     {move || {
                         let who = acting_as.get();
                         if who.is_empty() { "\u{2014} nobody set".to_string() } else { who }
@@ -832,7 +845,7 @@ pub fn PairQueue(
                 </span>
             </div>
 
-            <div class="flex flex-wrap items-center gap-1.5 border-b border-divider px-3 py-2">
+            <div class="flex flex-wrap items-center gap-1.5 border-b border-line py-2">
                 <Chip on:click=move |_| kind.set(None) active=Signal::derive(move || kind.get().is_none())>
                     {move || format!("all {}", pairs.get().len())}
                 </Chip>
@@ -864,19 +877,19 @@ pub fn PairQueue(
                     })
                 >
                     {move || match order.get() {
-                        Order::Ranked => "as ranked",
-                        Order::ConflictsFirst => "conflicts first",
+                        Order::Ranked => "As ranked",
+                        Order::ConflictsFirst => "Conflicts first",
                     }}
                 </Button>
             </div>
 
-            <p class="m-0 px-3 py-1.5 text-mini text-meta">
+            <p class="m-0 max-w-[64ch] py-2 text-small text-ink-3">
                 "Rank is similarity, not importance \u{2014} above 0.80 this base holds more \
                  contradictions than duplicates. Nothing here resolves in bulk; every pair is \
                  read."
             </p>
 
-            <div class="flex flex-col gap-3 p-3">
+            <div class="flex flex-col gap-3 py-3">
                 {move || {
                     let rows = shown.get();
                     if rows.is_empty() {
@@ -894,10 +907,10 @@ pub fn PairQueue(
 
             // Said either way. "Nothing more" and "we stopped looking" are different facts and
             // an interface that only ever prints one of them has picked which one you assume.
-            <div class="border-t border-divider bg-bar px-3.5 py-2.5 text-mini text-meta">
+            <div class="border-t border-line py-2.5 text-small text-ink-3">
                 {move || match truncated.get() {
                     Some(t) => view! {
-                        <span class="text-queue">
+                        <span class="text-warn">
                             {format!(
                                 "{} more pairs were not examined \u{2014} everything below \
                                  {:.3}.",
@@ -916,7 +929,7 @@ pub fn PairQueue(
     }
 }
 
-/// A filter chip. Same shape as the simulator's tabs, in the queue's own row.
+/// A filter chip: a tag (§6), and the chosen one a tone change.
 #[component]
 fn Chip(
     #[prop(into)] active: Signal<bool>,
@@ -925,11 +938,10 @@ fn Chip(
 ) -> impl IntoView {
     let look = move || {
         if active.get() {
-            "caps cursor-pointer rounded-sm border border-accent-soft-edge bg-accent-soft \
-             px-2 py-1 text-accent"
+            "cursor-pointer rounded-full bg-active px-2 py-0.5 text-mini text-ink"
         } else {
-            "caps cursor-pointer rounded-sm border border-transparent px-2 py-1 text-faint \
-             hover:text-secondary"
+            "cursor-pointer rounded-full bg-chip px-2 py-0.5 text-mini text-ink-2 \
+             hover:bg-chip-hover hover:text-ink"
         }
     };
     view! {

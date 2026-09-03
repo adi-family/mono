@@ -8,7 +8,9 @@ target = "index.html"
 dist = "dist"
 
 [watch]
-watch = ["src", "js", "styles", "index.html", "sw.js", "manifest.webmanifest"]
+# The token file and the font sheet live outside the crate and are linked from index.html, so
+# they are watched too — a palette change must reload this page like any other.
+watch = ["src", "js", "styles", "index.html", "sw.js", "manifest.webmanifest", "../../design", "../adi-ui/fonts", "../adi-ui/icons"]
 ignore = ["dist", "harness"]
 
 [serve]

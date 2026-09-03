@@ -4,7 +4,7 @@
 //! rail gives it the whole content pane — these are configs and JSON, and a 300px column is not
 //! where you read them.
 
-use adi_ui::Lang;
+use adi_ui::{CodeEditor, CodeFrame, CodeHeight, Lang};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -12,8 +12,9 @@ use crate::fetch;
 use crate::state::{Flash, State};
 use crate::ui::flash_view;
 
-/// The editor page: a header with the path and Save, then the buffer. Shows a placeholder when
-/// no file is selected, and the failure in place when one couldn't be read.
+/// The editor page: the file's frame — its path, whether it is saved, Reload and Save — with the
+/// buffer filling the pane under it. Shows a placeholder when no file is selected, and the failure
+/// in place when one couldn't be read.
 pub(crate) fn store_file_view(state: State) -> AnyView {
     let store = state.store;
     view! {
@@ -21,35 +22,35 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
             None => view! {
                 <section class="adi-panel">
                     <div class="adi-empty">
-                        "No file open \u{2014} pick one from the Store rail on the right."
+                        "No file open \u{2014} pick one from the store rail on the right."
                     </div>
                 </section>
             }
             .into_any(),
             Some(path) => {
                 let lang = Lang::from_path(&path);
+                let actions = move || view! {
+                    <span class="adi-updated">
+                        {move || if store.dirty() { "unsaved changes" } else { "saved" }}
+                    </span>
+                    <button class="adi-btn adi-btn--sm" type="button" title="Re-read from disk"
+                        prop:disabled=move || store.busy.get()
+                        on:click=move |_| reload(state)>"Reload"</button>
+                    <button class="adi-btn adi-btn--sm adi-btn--primary" type="button"
+                        prop:disabled=move || store.busy.get() || !store.dirty()
+                        on:click=move |_| save(state)>"Save"</button>
+                }
+                .into_any();
                 view! {
                 <section class="adi-panel adi-panel--fill">
-                    <div class="adi-panel__head">
-                        <h2 class="adi-panel__title adi-mono">{path.clone()}</h2>
-                        <span class="adi-updated">
-                            {move || if store.dirty() { "unsaved changes" } else { "saved" }}
-                        </span>
-                        <span class="adi-spacer"></span>
-                        <button class="adi-btn adi-btn--ghost" type="button" title="Re-read from disk"
-                            prop:disabled=move || store.busy.get()
-                            on:click=move |_| reload(state)>"Reload"</button>
-                        <button class="adi-btn adi-btn--primary" type="button"
-                            prop:disabled=move || store.busy.get() || !store.dirty()
-                            on:click=move |_| save(state)>"Save"</button>
-                    </div>
-
                     {move || store.error.get().map(|e| view! {
-                        <div class="adi-flash" data-kind="err">{e}</div>
+                        <div class="adi-flash adi-flash--card" data-kind="err">{e}</div>
                     })}
-
-                    <adi_ui::CodeEditor value=store.buffer lang=lang id="store-file-editor"
-                        class="adi-ui-type min-h-0 flex-1"/>
+                    <CodeFrame title=path.clone() actions=actions height=CodeHeight::Fill
+                        class="min-h-0 flex-1">
+                        <CodeEditor value=store.buffer lang=lang id="store-file-editor"
+                            height=CodeHeight::Fill/>
+                    </CodeFrame>
                 </section>
                 }
                 .into_any()

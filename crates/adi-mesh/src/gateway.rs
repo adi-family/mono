@@ -1337,17 +1337,14 @@ fn bad_request_page(host: &str) -> String {
     )
 }
 
-/// The shared page shell. Styled after [`adi_hive::notfound::mesh_unavailable`] so the front
-/// door's "no gateway here" page and the gateway's own pages read as one family; self-contained,
-/// because a page explaining that nothing is reachable cannot fetch an asset to say it.
+/// The gateway's pages, drawn into the front door's [`adi_hive::notfound::shell`] so "no gateway
+/// here" and the gateway's own answers read as one family. Self-contained, because a page
+/// explaining that nothing is reachable cannot fetch an asset to say it.
 ///
 /// Everything interpolated came off the wire (a `Host` header is whatever the client wrote), so
 /// every piece is HTML-escaped.
 fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> String {
-    let host = escape(host);
-    let reason = escape(reason);
-    let message = escape(message);
-    let rows = rows.iter().filter(|(_, value)| !value.is_empty()).fold(
+    let facts = rows.iter().filter(|(_, value)| !value.is_empty()).fold(
         String::new(),
         |mut html, (label, value)| {
             use std::fmt::Write as _;
@@ -1360,83 +1357,40 @@ fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> Strin
             html
         },
     );
-    format!(
-        r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{host} — {reason}</title>
-<style>
-  /* Mirrors the adi design-system tokens; inlined because this page makes no external
-     requests. Keep in sync with crates/adi-css/scss/_tokens.scss. */
-  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#FA5019; }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#FF7A4D; }}
-  }}
-  * {{ box-sizing: border-box; }}
-  html, body {{ height: 100%; }}
-  body {{
-    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
-    padding:40px 24px; background:var(--bg); color:var(--fg);
-    letter-spacing:-.006em; -webkit-font-smoothing:antialiased;
-    font:13.5px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  }}
-  .wrap {{ display:flex; flex-direction:column; align-items:center; gap:14px;
-    text-align:center; max-width:36rem; }}
-  .link {{ width:min(196px, 46vw); height:auto; color:var(--fg); overflow:visible; }}
-  .link .far {{ opacity:.32; }}
-  .link .span {{ stroke-dasharray:6 7; animation:meshDrift 2.6s linear infinite; }}
-  @keyframes meshDrift {{ to {{ stroke-dashoffset:-26; }} }}
-  @media (prefers-reduced-motion: reduce) {{ .link .span {{ animation:none; }} }}
-  .line {{ display:flex; align-items:center; margin-top:6px; }}
-  .code {{ font-size:20px; font-weight:600; letter-spacing:-.02em;
-    font-variant-numeric:tabular-nums; }}
-  .reason {{ margin-left:14px; padding-left:14px; border-left:1px solid var(--line);
-    color:var(--muted); }}
-  .host {{ margin:0; font:600 15px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    color:var(--accent); word-break:break-all; }}
-  .msg {{ margin:0; color:var(--muted); }}
-  .facts {{ width:100%; border-top:1px solid var(--line); padding-top:14px; margin-top:4px;
-    display:flex; flex-direction:column; gap:8px; }}
-  .row {{ display:flex; gap:12px; align-items:baseline; text-align:left; }}
-  .k {{ flex:0 0 10.5rem; color:var(--muted); }}
-  code {{ font:12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    color:var(--fg); word-break:break-all; }}
-</style>
-</head>
-<body>
-  <div class="wrap">
-    <svg class="link" viewBox="0 0 240 90" fill="none" role="img"
-         aria-label="two machines, not connected">
-      <g class="near">
-        <path d="M24 45 L44 33 L64 45 L44 57 Z" stroke="currentColor" stroke-width="2"
-              stroke-linejoin="round"/>
-        <circle cx="44" cy="45" r="5" fill="var(--accent)"/>
-      </g>
-      <line class="span" x1="74" y1="45" x2="166" y2="45" stroke="currentColor" stroke-width="2"
-            stroke-linecap="round" opacity=".45"/>
-      <g class="far">
-        <path d="M176 45 L196 33 L216 45 L196 57 Z" stroke="currentColor" stroke-width="2"
-              stroke-linejoin="round"/>
-        <circle cx="196" cy="45" r="5" fill="currentColor"/>
-      </g>
-    </svg>
-
-    <div class="line">
-      <span class="code">502</span>
-      <span class="reason">{reason}</span>
-    </div>
-
-    <p class="host">{host}</p>
-    <p class="msg">{message}</p>
-
-    <div class="facts">{rows}</div>
-  </div>
-</body>
-</html>
-"#
+    let facts = if facts.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"facts\">{facts}</div>")
+    };
+    // Lucide `unplug` (crates/adi-ui/icons/unplug.svg), at the 24px an empty state gets.
+    let body = format!(
+        "<svg class=\"glyph\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" \
+         stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\">\
+         <path d=\"m19 5 3-3\"/><path d=\"m2 22 3-3\"/>\
+         <path d=\"M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z\"/>\
+         <path d=\"M7.5 13.5 10 11\"/><path d=\"M10.5 16.5 13 14\"/>\
+         <path d=\"m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z\"/></svg>\
+         <p class=\"host\">{host}</p><p>{message}</p>{facts}",
+        host = escape(host),
+        message = escape(message),
+    );
+    adi_hive::notfound::shell(
+        &format!("{host} — {reason}"),
+        &format!("502 \u{b7} {reason}"),
+        reason_heading(reason),
+        &body,
     )
+}
+
+/// The one-line title over a gateway page, from the reason the page is served for.
+fn reason_heading(reason: &str) -> &'static str {
+    match reason {
+        r if r.contains("not paired") => "That machine has not paired with this one",
+        r if r.contains("unreachable") => "That machine is not reachable from here",
+        r if r.contains("fleet hostname") => "That is not a fleet hostname",
+        r if r.contains("refused") => "That machine refused the request",
+        _ => "That machine did not answer",
+    }
 }
 
 #[cfg(test)]

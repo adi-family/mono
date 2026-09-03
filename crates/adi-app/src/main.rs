@@ -30,7 +30,7 @@ use adi_agents::Agents;
 use adi_db::Db;
 use adi_events::Events;
 use adi_knowledge::KnowledgeStore;
-use adi_mesh::Daemon;
+use adi_mesh::{Daemon, join};
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 use adi_secrets::Secrets;
@@ -103,6 +103,24 @@ impl MeshCtl {
     async fn stop(&self) {
         if let Some(daemon) = self.daemon.lock().await.take() {
             daemon.stop().await;
+        }
+    }
+
+    /// Spend an invite: over the running daemon's endpoint when the mesh is up here, and over a
+    /// short-lived one of its own when it is not.
+    ///
+    /// The distinction is the whole reason this is a method and not a call to [`join::join`]. A
+    /// second endpoint bound on this machine's identity while the daemon holds one would race it
+    /// for the same relay session, and the loser's peers quietly stop reaching it — see
+    /// [`Daemon::join`]. With the mesh stopped there is no such endpoint, so binding one for the
+    /// length of the handshake is exactly what `adi-mono mesh join` does.
+    ///
+    /// The lock is held across the handshake on purpose: a `start` arriving mid-dial would bind
+    /// that second endpoint behind this call's back.
+    async fn join(&self, token: &str) -> anyhow::Result<join::Joined> {
+        match self.daemon.lock().await.as_ref() {
+            Some(daemon) => daemon.join(token).await,
+            None => join::join(token).await,
         }
     }
 }
@@ -452,6 +470,9 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         ("POST", "/api/fleet/dashboards/unlock") => viewer::unlock(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/forget") => viewer::forget(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/allow") => viewer::allow(&app.secrets, &req.body).await,
+        // Spend an invite minted somewhere else. Async because it *dials* — the one fleet route
+        // that leaves the machine, and the half of `docs/fleet.md` §8 the panel could not do.
+        ("POST", "/api/fleet/join") => fleet_join(app, &req.body).await,
         ("GET", "/api/mesh") => handlers::mesh(app.mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(&app.mesh).await,
         ("POST", "/api/mesh/stop") => mesh_stop(&app.mesh).await,
@@ -890,6 +911,55 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
     handlers::mesh(false)
 }
 
+/// `POST /api/fleet/join` — spend an invite minted on another machine, enrolling this one in its
+/// fleet (`docs/fleet.md` §8).
+///
+/// The mirror of `POST /api/fleet/invite`, and the reason both directions of pairing are now
+/// reachable without a terminal: minting only ever helps the side that can be *dialled*, so a
+/// machine whose operator has no shell could be paired only by somebody who did have one. The
+/// token is checked before anything leaves the machine ([`handlers::fleet_join_token`]), dialled
+/// over the endpoint the mesh already holds ([`MeshCtl::join`]), and answered with the credential
+/// the handshake minted — once, because neither machine keeps it.
+///
+/// **This grants nothing that could not be granted from here already.** The pairing files the far
+/// side with `http:app`, which is what the panel's own Grant form hands out, and §5's argument
+/// covers the rest: whatever can reach this panel can already create a dashboard here and run a
+/// task on this machine.
+async fn fleet_join(app: &App, body: &[u8]) -> Response {
+    let token = match handlers::fleet_join_token(body, now_secs()) {
+        Ok(token) => token,
+        Err(response) => return response,
+    };
+    match app.mesh.join(&token).await {
+        Ok(joined) => {
+            record_front_door(&joined.viewer);
+            handlers::fleet_joined(app.projects.config(), &joined)
+        }
+        // 502 and not 500: what failed is the far side of a handshake — an unreachable viewer, a
+        // nonce already spent, a refusal — and the message is the one thing that tells them apart.
+        Err(e) => handlers::error(502, &format!("{e:#}")),
+    }
+}
+
+/// Record a freshly paired peer in the front door's certificate list, so this machine's next leaf
+/// covers `*.<petname>.n.adi`.
+///
+/// Deliberately **advisory**, exactly as the CLI's copy is (`adi-cli`'s `record_front_door`): the
+/// list feeds only the SAN set, while routing `*.n.adi` is one gateway rule that never consults
+/// it. A peer that could not be recorded is reachable over `http://` immediately and only warns on
+/// `https://` until the next front-door start — turning that into a failed pairing would be far
+/// worse than a browser warning. It must never run ahead of the registry save; by here, the
+/// handshake has already written it.
+fn record_front_door(petname: &str) {
+    if adi_core::dns::Dns.add_mesh_node(petname) == adi_core::dns::MeshNodeChange::Failed {
+        warn!(
+            petname,
+            "could not record the new peer in the front door's certificate list; \
+             http://<service>.<peer>.n.adi works now, https:// will warn until it is refreshed"
+        );
+    }
+}
+
 /// The OAuth router base URL used for server-side secret refresh (override with
 /// `ADI_OAUTH_ROUTER_URL`, e.g. for a self-hosted or local router).
 fn oauth_router_url() -> String {
@@ -1084,20 +1154,24 @@ fn webapp_dist_override() -> Option<PathBuf> {
     }
 }
 
-/// The page shown when the webapp isn't built into `dist/` yet, styled with the shared
-/// [`adi_css`] design system.
+/// The page shown when the webapp isn't built into `dist/` yet, drawn with the shared
+/// [`adi_css`] system — the tokens travel inside its stylesheet. No mark: the geometry lives in
+/// crates that pin it with a test, and a dev-only page is not worth a fourth untested copy.
 fn placeholder_html() -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <title>adi-app</title>{style}</head>\
-         <body><div class=\"adi-container\">\
-         <h1>adi-app is running</h1>\
-         <p class=\"adi-muted\">The web UI hasn't been built yet. Build it with:</p>\
-         <pre class=\"adi-mono\">scripts/build-app.sh</pre>\
-         <p class=\"adi-muted\">or run <code>trunk build</code> in <code>crates/adi-webapp</code>, \
-         then <code>cargo build -p adi-app</code>.</p>\
-         </div></body></html>",
+         <meta name=\"color-scheme\" content=\"dark\">\
+         <title>adi</title>{style}</head>\
+         <body><main class=\"adi-container\">\
+         <p class=\"adi-logo\">adi</p>\
+         <h1 class=\"adi-bar__title\" style=\"margin-top:48px\">The control panel is not built yet</h1>\
+         <p class=\"adi-hint\">adi-app is running and serving the API, but there is no web UI in \
+         <code>dist/</code> to hand you. Build it once:</p>\
+         <pre class=\"adi-term\">scripts/build-app.sh</pre>\
+         <p class=\"adi-hint\">or run <code>trunk build</code> in <code>crates/adi-webapp</code>, \
+         then <code>cargo build -p adi-app</code>, and reload.</p>\
+         </main></body></html>",
         style = adi_css::style_tag(),
     )
 }

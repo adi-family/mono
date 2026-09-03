@@ -2,13 +2,14 @@
 
 use leptos::{ev, prelude::*};
 
+use crate::icon::{Icon, Lucide};
 use crate::merge;
 
 /// A dialog over the page.
 ///
-/// It is an island like everything else, laid over a scrim that dims what it interrupts —
-/// which is the point of a modal and also its cost, so it is worth reserving for the times
-/// the reader has to finish something before going on.
+/// A genuinely detachable thing, so it is a card (§5): the large radius and a hairline, on
+/// the page surface, over a scrim that dims what it interrupts. No blur, no shadow, no fade —
+/// it is there or it is not.
 ///
 /// Three ways out, because a reader who cannot find the way out of a dialog is stuck in
 /// your app: the close button, the scrim, and `Escape`. The listener lives only while the
@@ -16,7 +17,7 @@ use crate::merge;
 ///
 /// ```ignore
 /// let open = RwSignal::new(false);
-/// view! { <Modal open=open title="FAQ"><Faq items=QNA/></Modal> }
+/// view! { <Modal open=open title="Questions"><Faq items=QNA/></Modal> }
 /// ```
 #[component]
 pub fn Modal(
@@ -47,40 +48,30 @@ pub fn Modal(
             >
                 // The scrim: a click anywhere off the card is a way out, so it has to be
                 // its own element under the card rather than a background on the wrapper.
-                <div
-                    class="fixed inset-0 bg-canvas/70 backdrop-blur-[2px]"
-                    on:click=move |_| open.set(false)
-                ></div>
+                <div class="fixed inset-0 bg-scrim" on:click=move |_| open.set(false)></div>
                 <div class=merge(
                     &format!(
-                        "island relative flex max-h-[80vh] w-full flex-col overflow-hidden \
-                         bg-card {width}"
+                        "relative flex max-h-[80vh] w-full flex-col overflow-hidden rounded-lg \
+                         border border-line bg-bg text-ink {width}"
                     ),
                     class.clone(),
                 )>
-                    <header class="flex min-h-9 shrink-0 items-center justify-between gap-2 \
-                                   border-b border-divider bg-bar px-3 py-1.5">
-                        <span class="truncate text-row font-medium text-ink">{title.clone()}</span>
+                    <header class="flex min-h-10 shrink-0 items-center justify-between gap-2 \
+                                   border-b border-line px-4 py-2">
+                        <span class="truncate text-section font-semibold text-ink">
+                            {title.clone()}
+                        </span>
                         <button
-                            class="grid size-6 shrink-0 cursor-pointer place-items-center \
-                                   rounded-sm text-meta hover:bg-card hover:text-ink \
-                                   focus-visible:outline-2 focus-visible:outline-offset-[-2px] \
-                                   focus-visible:outline-accent"
+                            class="grid size-7 shrink-0 cursor-pointer place-items-center \
+                                   rounded-md text-ink-3 hover:bg-hover hover:text-ink \
+                                   focus-visible:outline-[1.5px] \
+                                   focus-visible:outline-offset-[-2px] \
+                                   focus-visible:outline-focus"
                             type="button"
                             aria-label="Close"
                             on:click=move |_| open.set(false)
                         >
-                            <svg
-                                class="size-3.5"
-                                viewBox="0 0 16 16"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="1.5"
-                                stroke-linecap="round"
-                                aria-hidden="true"
-                            >
-                                <path d="M4 4l8 8M12 4l-8 8"></path>
-                            </svg>
+                            <Icon icon=Lucide::X/>
                         </button>
                     </header>
                     <div class="min-h-0 flex-1 overflow-y-auto p-4">{children()}</div>

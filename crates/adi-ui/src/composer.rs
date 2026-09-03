@@ -1,8 +1,9 @@
-//! [`Composer`] — the box you type into, at the bottom of a chat.
+//! [`Composer`] — the box you type into, at the top of a chat.
 
 use leptos::{ev, html, prelude::*};
 
 use crate::attach::{AttachButton, AttachRefusal, AttachTray, Attaching};
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
 /// The composer.
@@ -23,6 +24,10 @@ use crate::merge;
 /// paperclip — and shows what is attached above what you are typing. A message that is only a
 /// picture sends; a message whose picture is still uploading does not, because that send would
 /// arrive without it.
+///
+/// The send button is the chat screen's one filled orange (`design/DESIGN.md` §6). Nothing else
+/// in the box takes a colour: attach, dictate and settings are quiet icon buttons, and Stop is
+/// the same shape in red only under the cursor.
 ///
 /// Sending is the caller's: `on_send` gets the text, and clearing the box is the caller's
 /// call too — a send that fails should not have thrown the message away.
@@ -58,7 +63,7 @@ pub fn Composer(
     /// Reactive, because what a composer asks for can change under it: the same box starts a
     /// conversation or takes a one-shot task depending on what the backend turns out to be,
     /// and that answer arrives after the box is already on screen.
-    #[prop(default = "Message the agent…".into(), into)]
+    #[prop(default = "Write to the agent…".into(), into)]
     placeholder: Signal<String>,
     /// The tallest it grows before it starts scrolling, in `rem`-free pixels — a number
     /// because the ceiling is about the screen, not about the type.
@@ -160,9 +165,9 @@ pub fn Composer(
     view! {
         <div
             class=merge(
-                "island flex flex-col gap-1 bg-card p-2 focus-within:border-accent \
-                 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)] \
-                 transition-[border-color,box-shadow] duration-100",
+                "flex flex-col gap-1 rounded-lg border border-line-strong bg-raise \
+                 pt-2.5 pr-2.5 pb-2.5 pl-4 transition-[border-color] duration-100 \
+                 focus-within:border-ink-3",
                 class,
             )
             on:dragover=move |ev: ev::DragEvent| {
@@ -183,11 +188,11 @@ pub fn Composer(
             }
         >
             {attach.map(|attach| view! { <AttachTray attach=attach/> })}
-        <div class="flex items-end gap-2">
+        <div class="flex items-end gap-1.5">
             <textarea
-                class="min-h-8 w-full flex-1 resize-none self-center border-0 bg-transparent \
-                       px-1 py-1 text-msg text-body outline-none \
-                       placeholder:text-placeholder max-[620px]:text-[16px]"
+                class="min-h-10 w-full flex-1 resize-none self-center border-0 bg-transparent \
+                       py-2 pr-1 text-body text-ink outline-none placeholder:text-ink-3 \
+                       max-[620px]:text-[16px]"
                 rows="1"
                 placeholder=move || placeholder.get()
                 node_ref=area
@@ -245,45 +250,26 @@ pub fn Composer(
             // and the row does not shuffle under it when a turn starts.
             {move || on_stop.filter(|_| stoppable.get()).map(|on_stop| view! {
                 <button
-                    class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm \
-                           border border-dim bg-card text-meta transition-colors duration-100 \
-                           hover:border-err-edge-2 hover:text-err \
-                           focus-visible:outline-2 focus-visible:outline-offset-2 \
-                           focus-visible:outline-accent"
+                    class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md \
+                           text-ink-2 transition-colors duration-100 hover:bg-hover \
+                           hover:text-err"
                     type="button"
-                    aria-label="Stop"
                     title="Stop"
                     on:click=move |_| on_stop.run(())
                 >
-                    <svg class="size-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                        <rect x="3" y="3" width="10" height="10" rx="1.5"></rect>
-                    </svg>
+                    <Icon icon=Lucide::Square size=IconSize::Md label="Stop"/>
                 </button>
             })}
             <button
-                class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm \
-                       bg-accent-fill text-on-accent transition-opacity duration-100 \
-                       hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 \
-                       focus-visible:outline-2 focus-visible:outline-offset-2 \
-                       focus-visible:outline-accent"
+                class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md \
+                       bg-accent text-on-accent transition-colors duration-100 \
+                       hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40"
                 type="button"
-                aria-label="Send"
+                title="Send"
                 disabled=move || !ready.get()
                 on:click=move |_| send()
             >
-                <svg
-                    class="size-4"
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.6"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M8 13V3"></path>
-                    <path d="M3.5 7.5 8 3l4.5 4.5"></path>
-                </svg>
+                <Icon icon=Lucide::ArrowUp size=IconSize::Md label="Send"/>
             </button>
         </div>
             // Said before anything is pasted, not after: a picture the send would have dropped is
@@ -294,7 +280,7 @@ pub fn Composer(
                     .map(|a| view! { <AttachRefusal reason=a.refusal/> })
             }}
             {move || waiting().then(|| view! {
-                <div class="px-1 text-mini text-meta">"attaching…"</div>
+                <div class="text-mini text-ink-3">"attaching…"</div>
             })}
         </div>
     }

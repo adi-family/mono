@@ -6,9 +6,12 @@ form over the `/api/*` backend.
 
 - Types come from [`adi-webapp-api`](../adi-webapp-api), so the client deserializes exactly
   the structs the server serializes.
-- Styling comes from [`adi-css`](../adi-css) — the shared design system. The markup uses
-  its `adi-*` classes; `styles/main.scss` just `@use`s the library, and Trunk compiles it
-  into `<head>`.
+- Styling is [`design/DESIGN.md`](../../design/DESIGN.md), drawn from one token file:
+  [`design/tokens.css`](../../design/tokens.css). Two stylesheets both resolve to it —
+  [`adi-css`](../adi-css)'s `adi-*` classes (`styles/main.scss` `@use`s the library and adds
+  the shell's own shapes; one partial per page under `styles/pages/`) and
+  [`adi-ui`](../adi-ui)'s Tailwind utilities (`styles/tailwind.css`). Trunk compiles both into
+  `<head>`. The app is dark; there is no theme toggle.
 
 ## Hot-reload dev loop (recommended)
 

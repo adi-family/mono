@@ -2,35 +2,30 @@
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
-/// The shared frame for anything you type into — the box and its states, but not the type
-/// it sets, so a control that wants different words in it (the sessions filter, which takes
-/// prose rather than a value) can wear the same frame without fighting a `font-mono` it
-/// cannot outrank.
+/// The shared frame for anything you type into (§6): the raised surface, a strong hairline,
+/// radius 6, `9px 12px`, 14px sans, the placeholder in `--ink-3`.
 ///
 /// Two details here are load-bearing rather than taste:
 ///
-/// - **Focus is a border plus a soft ring, not an outline.** An outline is drawn outside the
-///   box and shifts nothing, but at these sizes it reads as a second border; the accent
-///   border with a 3px tinted halo says "here" without the visual jump. Buttons keep the
-///   plain outline ring — they are not text entry and never sit shoulder to shoulder.
+/// - **Focus is the border stepping up one tone, not a ring.** A ring at these sizes reads as
+///   a second border, and an orange one is a selected state nobody asked for (§3).
 /// - **16px below 620px.** iOS zooms the page in when it focuses a field with text under
 ///   16px, and it does not zoom back out: one tap and the layout is wider than the screen
-///   with no obvious gesture to undo it. adi's type scale tops out at 13.5px, so every
-///   field in the system needs this, not just the big ones.
-pub(crate) const FRAME: &str = "min-w-0 rounded-sm border border-edge bg-card px-2 py-[5px] \
-                     text-body placeholder:text-placeholder \
-                     transition-[border-color,box-shadow] duration-100 \
-                     focus-visible:border-accent focus-visible:outline-none \
-                     focus-visible:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)] \
+///   with no obvious gesture to undo it.
+pub(crate) const FRAME: &str = "min-w-0 rounded-md border border-line-strong bg-raise px-3 \
+                     py-2 text-ui text-ink placeholder:text-ink-3 \
+                     transition-colors duration-100 \
+                     focus-visible:border-ink-3 focus-visible:outline-none \
                      disabled:cursor-not-allowed disabled:opacity-50 \
                      max-[620px]:text-[16px]";
 
-/// [`FRAME`] plus the type the three controls in this file share: mono, because what goes
-/// in them is a value — a port, a path, a flag — and mono is what the design system sets
-/// those in.
-const FIELD: &str = "font-mono text-mini";
+/// The type a control switches to when its value is a machine value — a path, a port, a
+/// flag, a model id. 13px mono in the same ink (the reference's `.input.mono`); the default
+/// is sans, because most of what is typed is words (§2.3).
+const MONO: &str = "font-mono text-[13px]";
 
 /// How much horizontal room a control asks for.
 ///
@@ -54,9 +49,9 @@ impl InputWidth {
     #[must_use]
     pub fn classes(self) -> &'static str {
         match self {
-            Self::Default => "w-35 max-w-full",
+            Self::Default => "w-50 max-w-full",
             Self::Wide => "w-full",
-            Self::Num => "w-18",
+            Self::Num => "w-20",
         }
     }
 }
@@ -81,9 +76,16 @@ pub fn Input(
     #[prop(optional, into)] placeholder: String,
     #[prop(optional, into)] disabled: Signal<bool>,
     #[prop(optional)] width: InputWidth,
+    /// The value is a machine value — a path, an id, a config value. Sets it in mono.
+    #[prop(optional)]
+    mono: bool,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let own = format!("{FRAME} {FIELD} {}", width.classes());
+    let own = format!(
+        "{FRAME} {} {}",
+        if mono { MONO } else { "" },
+        width.classes()
+    );
     view! {
         <input
             class=merge(&own, class)
@@ -113,6 +115,9 @@ pub fn Textarea(
     /// it is the shape a message composer wants.
     #[prop(optional)]
     prose: bool,
+    /// The content is machine text — a config, a command per line. Sets it in mono.
+    #[prop(optional)]
+    mono: bool,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let wrap = if prose {
@@ -121,7 +126,8 @@ pub fn Textarea(
         "whitespace-pre overflow-auto"
     };
     let own = format!(
-        "{FRAME} {FIELD} block w-full resize-y align-top leading-relaxed [tab-size:2] {wrap}"
+        "{FRAME} {} block w-full resize-y align-top leading-normal [tab-size:2] {wrap}",
+        if mono { MONO } else { "" }
     );
     view! {
         <textarea
@@ -142,9 +148,8 @@ pub fn Textarea(
 /// A dropdown. Children are its `<option>`s.
 ///
 /// It sizes to its content rather than to [`InputWidth::Default`], because a fixed width
-/// clips the longest option behind the platform's own arrow. The arrow stays native — the
-/// `color-scheme` the design tokens set is what keeps it on-theme, so there is nothing to
-/// draw and nothing to keep in sync.
+/// clips the longest option behind the arrow. The arrow is drawn — a small chevron at the
+/// right (§6) — so it is the same glyph on every platform.
 ///
 /// ```ignore
 /// view! {
@@ -158,22 +163,35 @@ pub fn Textarea(
 pub fn Select(
     #[prop(optional)] value: Option<RwSignal<String>>,
     #[prop(optional, into)] disabled: Signal<bool>,
+    /// The options are machine values — model ids, backends. Sets them in mono.
+    #[prop(optional)]
+    mono: bool,
     #[prop(optional, into)] class: String,
     children: Children,
 ) -> impl IntoView {
-    let own = format!("{FRAME} {FIELD} w-auto min-w-[150px] max-w-full cursor-pointer");
+    let own = format!(
+        "{FRAME} {} w-auto min-w-40 max-w-full cursor-pointer appearance-none pr-8",
+        if mono { MONO } else { "" }
+    );
     view! {
-        <select
-            class=merge(&own, class)
-            disabled=move || disabled.get()
-            prop:value=move || value.map(|v| v.get()).unwrap_or_default()
-            on:change=move |ev| {
-                if let Some(v) = value {
-                    v.set(event_target_value(&ev));
+        <span class="relative block max-w-full">
+            <select
+                class=merge(&own, class)
+                disabled=move || disabled.get()
+                prop:value=move || value.map(|v| v.get()).unwrap_or_default()
+                on:change=move |ev| {
+                    if let Some(v) = value {
+                        v.set(event_target_value(&ev));
+                    }
                 }
-            }
-        >
-            {children()}
-        </select>
+            >
+                {children()}
+            </select>
+            <Icon
+                icon=Lucide::ChevronDown
+                size=IconSize::Sm
+                class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-ink-3"
+            />
+        </span>
     }
 }

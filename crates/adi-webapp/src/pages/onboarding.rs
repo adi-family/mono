@@ -9,10 +9,13 @@
 //!
 //! Every field here is rendered by the Agents page's own renderers from the same server schema, so
 //! a knob added to a backend shows up in both places or neither.
+//!
+//! This is the form page of `design/DESIGN.md` §6: a centred 640px column, no card around it,
+//! and the Save at its foot is the screen's one orange.
 
 use std::collections::BTreeSet;
 
-use adi_ui::Lang;
+use adi_ui::{Icon, IconSize, Lang, Lucide};
 use adi_webapp_api::types::{
     AgentBackendOption, AgentDto, AgentFormSpec, AgentSetupPreset, AgentSetupSecret, MetaState,
     SaveAgent, SecretRef, SetSecret,
@@ -35,7 +38,7 @@ const ONBOARDING_STEPS: [&str; 2] = ["Set up your primary agent", "You're ready"
 
 /// The schema fields the manual form never renders from the schema: the root agent's name is
 /// well-known and it is global by definition; its runtime is the wizard's own select (the one
-/// carrying "help me to choose?"), and its system prompt its own editor further down the card.
+/// carrying "help me to choose?"), and its system prompt its own editor further down the page.
 const MANUAL_SKIP: [&str; 4] = ["name", "backend", "project", "system_prompt"];
 
 /// One "do you have…?" branch in the runtime picker: the situation, a note on the shared
@@ -99,7 +102,7 @@ pub(crate) struct OnboardingForm {
     error: RwSignal<Option<String>>,
     /// True while editing an agent that already exists, so the wizard shows in place of the chat.
     pub(crate) reconfiguring: RwSignal<bool>,
-    /// Whether the manual preset's "help me to choose?" runtime modal is open.
+    /// Whether the manual preset's "help me to choose?" runtime dialog is open.
     show_help: RwSignal<bool>,
     /// The system prompt is advanced and seeded from a sensible default, so it starts collapsed.
     show_prompt: RwSignal<bool>,
@@ -198,48 +201,46 @@ fn apply_preset(form: OnboardingForm, presets: &[AgentSetupPreset], id: &str) {
     }
 }
 
-/// The wizard: the greeting, the stepper, and step 1's setup card.
+/// The wizard: the title and its lead, the stepper, and step 1's form — one element, so the
+/// shell's column spaces nothing inside it and the page keeps its own rhythm.
 pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
     let first_run = m.agent.is_none();
     view! {
-        {onb_intro(first_run)}
-        <ol class="adi-onb__steps">{onb_steps(first_run)}</ol>
-        {onb_setup_card(state, form, m)}
+        <div class="adi-onb__wizard">
+            {onb_intro(first_run)}
+            <ol class="adi-onb__steps">{onb_steps(first_run)}</ol>
+            {onb_setup(state, form, m)}
+        </div>
     }
     .into_any()
 }
 
-/// The wizard's heading. "Welcome to adi." is the greeting for an actual first run — no agent
-/// exists yet — so a reconfigure (same form, reached from the chat's bar) gets a heading that
+/// The wizard's title. "Welcome to adi" is the greeting for an actual first run — no agent
+/// exists yet — so a reconfigure (same form, reached from the chat's bar) gets a title that
 /// says where you are instead of greeting someone who has been here all along.
 fn onb_intro(first_run: bool) -> AnyView {
     if first_run {
         view! {
-            <div class="adi-onb__intro">
-                <h1 class="adi-onb__welcome">
-                    "Welcome to adi"<span class="adi-onb__dot">"."</span>
-                </h1>
-                <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
-            </div>
+            <h1 class="adi-onb__title">"Welcome to adi"</h1>
+            <p class="adi-onb__lead">"Let\u{2019}s set up your primary agent."</p>
         }
         .into_any()
     } else {
         view! {
-            <div class="adi-onb__intro">
-                <h1 class="adi-onb__welcome">"Reconfigure your agent"</h1>
-                <p class="adi-onb__sub">
-                    "Change the runtime it runs on, its credentials, or its system prompt."
-                </p>
-            </div>
+            <h1 class="adi-onb__title">"Reconfigure your agent"</h1>
+            <p class="adi-onb__lead">
+                "Change the runtime it runs on, its credentials, or its system prompt."
+            </p>
         }
         .into_any()
     }
 }
 
-/// The stepper row: one node per onboarding step. Step 1 is `active` on a first run and `done`
-/// once the agent exists (a reconfigure is step 1 again, from the other side); later steps are
-/// `upcoming`.
+/// The stepper row: one node per onboarding step, a hairline between. Step 1 is `active` on a
+/// first run and `done` once the agent exists (a reconfigure is step 1 again, from the other
+/// side); later steps are `upcoming`.
 fn onb_steps(first_run: bool) -> Vec<AnyView> {
+    let last = ONBOARDING_STEPS.len() - 1;
     ONBOARDING_STEPS
         .iter()
         .enumerate()
@@ -251,15 +252,16 @@ fn onb_steps(first_run: bool) -> Vec<AnyView> {
             } else {
                 "done"
             };
-            let num = if i == 0 && !first_run {
-                "\u{2713}".to_string()
+            let num = if state == "done" {
+                view! { <Icon icon=Lucide::Check size=IconSize::Sm/> }.into_any()
             } else {
-                (i + 1).to_string()
+                (i + 1).to_string().into_any()
             };
             view! {
                 <li class="adi-onb__step" data-state=state>
                     <span class="adi-onb__step-num">{num}</span>
                     <span class="adi-onb__step-label">{(*label).to_string()}</span>
+                    {(i < last).then(|| view! { <hr class="adi-onb__step-rule"/> })}
                 </li>
             }
             .into_any()
@@ -267,54 +269,51 @@ fn onb_steps(first_run: bool) -> Vec<AnyView> {
         .collect()
 }
 
-/// Step 1's setup card: the preset picker, the fields that preset asks for, the (collapsed)
-/// system prompt, and the save. Doubles as create (no agent yet) and reconfigure (an agent exists
-/// and Cancel returns to the chat).
-fn onb_setup_card(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
+/// Step 1: the section title and intro, the preset picker, the fields that preset asks for, the
+/// (collapsed) system prompt, and the save. Doubles as create (no agent yet) and reconfigure (an
+/// agent exists and Cancel returns to the chat).
+fn onb_setup(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
     let creating = m.agent.is_none();
     let presets = m.form.presets.clone();
     let for_submit = m.clone();
     let for_body = m.clone();
     view! {
-        <div class="adi-onb__card">
-            <span class="adi-onb__eyebrow">"Step 1"</span>
-            <h2 class="adi-onb__title">"Set up your primary agent"</h2>
-            <p class="adi-onb__desc">
-                <strong>"adi-agent"</strong>
-                " is your environment's root agent — a meta-agent that helps you set up and
-                 operate this ADI stack. Pick how it should run and give it what that needs;
-                 every tool in your store is enabled on it. You can change all of it later."
-            </p>
-            <form class="adi-onb__form" on:submit=move |ev| {
-                ev.prevent_default();
-                submit_onb_agent(state, form, &for_submit);
-            }>
-                {preset_picker(form, presets)}
-                {move || preset_body(state, form, &for_body)}
-                {prompt_disclosure(form)}
+        <h2 class="adi-onb__section">"Set up your primary agent"</h2>
+        <p class="adi-onb__intro">
+            <b>"adi-agent"</b>
+            " is your environment's root agent — a meta-agent that helps you set up and
+             operate this ADI stack. Pick how it should run and give it what that needs;
+             every tool in your store is enabled on it. You can change all of it later."
+        </p>
+        <form class="adi-onb__form" on:submit=move |ev| {
+            ev.prevent_default();
+            submit_onb_agent(state, form, &for_submit);
+        }>
+            {preset_picker(form, presets)}
+            {move || preset_body(state, form, &for_body)}
+            {prompt_disclosure(form)}
 
-                {move || form.error.get().map(|e| view! { <p class="adi-onb__error">{e}</p> })}
+            {move || form.error.get().map(|e| view! { <p class="adi-error">{e}</p> })}
 
-                <div class="adi-onb__actions">
-                    {(!creating).then(|| view! {
-                        <button class="adi-btn adi-btn--link" type="button"
-                            on:click=move |_| form.reconfiguring.set(false)>"Cancel"</button>
-                    })}
-                    <span class="adi-spacer"></span>
-                    <button class="adi-btn adi-btn--primary adi-onb__submit" type="submit"
-                        prop:disabled=move || form.agent.busy.get()>
-                        {move || match (form.agent.busy.get(), creating) {
-                            (true, _) => "Saving…",
-                            (false, true) => "Create adi-agent",
-                            (false, false) => "Save changes",
-                        }}
-                    </button>
-                </div>
-            </form>
-        </div>
+            <div class="adi-onb__actions">
+                {(!creating).then(|| view! {
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        on:click=move |_| form.reconfiguring.set(false)>"Cancel"</button>
+                })}
+                <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--accent" type="submit"
+                    prop:disabled=move || form.agent.busy.get()>
+                    {move || match (form.agent.busy.get(), creating) {
+                        (true, _) => "Saving…",
+                        (false, true) => "Create adi-agent",
+                        (false, false) => "Save changes",
+                    }}
+                </button>
+            </div>
+        </form>
 
         {move || form.show_help.get()
-            .then(|| onb_help_modal(form, m.form.backends.clone()))}
+            .then(|| onb_help_dialog(form, m.form.backends.clone()))}
     }
     .into_any()
 }
@@ -328,12 +327,10 @@ fn preset_picker(form: OnboardingForm, presets: Vec<AgentSetupPreset>) -> AnyVie
         .into_iter()
         .map(|preset| {
             let id = preset.id.clone();
-            let for_flag = id.clone();
             let for_aria = id.clone();
             let all = blurbs.clone();
             view! {
                 <button class="adi-onb__preset" type="button" role="radio"
-                    data-on=move || (form.preset.get() == for_flag).to_string()
                     aria-checked=move || (form.preset.get() == for_aria).to_string()
                     on:click=move |_| apply_preset(form, &all, &id)>
                     {preset.label}
@@ -344,14 +341,14 @@ fn preset_picker(form: OnboardingForm, presets: Vec<AgentSetupPreset>) -> AnyVie
     let blurb_of = blurbs.clone();
     view! {
         <div class="adi-field">
-            <label class="adi-field__label">"How should it run?"</label>
+            <span class="adi-field__label">"How should it run?"</span>
             <div class="adi-onb__presets" role="radiogroup" aria-label="How should it run?">
                 {segments}
             </div>
             {move || {
                 let on = form.preset.get();
                 blurb_of.iter().find(|p| p.id == on).map(|p| view! {
-                    <p class="adi-onb__hint">{p.blurb.clone()}</p>
+                    <p class="adi-field__note">{p.blurb.clone()}</p>
                 })
             }}
         </div>
@@ -375,21 +372,21 @@ fn preset_body(state: State, form: OnboardingForm, m: &MetaState) -> AnyView {
         let id = format!("onb-key-{}", secret.env.to_lowercase().replace('_', "-"));
         let label_for = id.clone();
         let placeholder = if stored {
-            "stored — leave blank to keep it".to_string()
+            "Stored — leave blank to keep it".to_string()
         } else {
             secret.placeholder.clone()
         };
         view! {
-            <div class="adi-field" style="flex:1 1 100%; min-width:0">
+            <div class="adi-field">
                 <label class="adi-field__label" for=label_for>{secret.label.clone()}</label>
-                <input class="adi-input adi-mono" id=id type="password" autocomplete="off"
+                <input class="adi-input adi-input--wide adi-mono" id=id type="password" autocomplete="off"
                     spellcheck="false" placeholder=placeholder
                     prop:value=move || form.key.get()
                     on:input=move |ev| form.key.set(event_target_value(&ev)) />
-                <p class="adi-onb__hint">
+                <p class="adi-field__note">
                     {secret.hint.clone()}
                     " Kept as a secret named "
-                    <code class="adi-onb__code">{secret.env.clone()}</code>
+                    <code>{secret.env.clone()}</code>
                     ", attached to this agent alone."
                 </p>
             </div>
@@ -406,16 +403,16 @@ fn manual_body(state: State, form: OnboardingForm, spec: &AgentFormSpec) -> AnyV
     let fields = agent_schema_fields(spec, None, &MANUAL_SKIP, state, form.agent);
     view! {
         <div class="adi-onb__fields">
-            <div class="adi-field" style="flex:1 1 100%; min-width:0">
+            <div class="adi-field">
                 <div class="adi-onb__field-head">
                     <label class="adi-field__label" for="onb-backend">"Runtime"</label>
-                    <button class="adi-onb__help-link" type="button"
-                        on:click=move |_| form.show_help.set(true)>"help me to choose?"</button>
+                    <button class="adi-link adi-onb__help-link" type="button"
+                        on:click=move |_| form.show_help.set(true)>"Help me choose"</button>
                 </div>
-                <select class="adi-input" id="onb-backend"
+                <select class="adi-input adi-input--wide" id="onb-backend"
                     prop:value=move || form.agent.backend.get()
                     on:change=move |ev| form.agent.backend.set(event_target_value(&ev))>
-                    <option value="">"— pick a runtime —"</option>
+                    <option value="">"Pick a runtime"</option>
                     {backends.into_iter().map(|b| view! {
                         <option value=b.id>{b.label}</option>
                     }).collect::<Vec<_>>()}
@@ -433,27 +430,25 @@ fn manual_body(state: State, form: OnboardingForm, spec: &AgentFormSpec) -> AnyV
 fn prompt_disclosure(form: OnboardingForm) -> AnyView {
     let show = form.show_prompt;
     view! {
-        <div class="adi-field">
+        <div class="adi-onb__disclosure-block">
             <button class="adi-onb__disclosure" type="button"
                 aria-expanded=move || show.get().to_string()
                 on:click=move |_| show.update(|v| *v = !*v)>
-                <span class="adi-onb__disclosure-caret"
-                    class:is-open=move || show.get()>"\u{25b8}"</span>
+                <Icon icon=Lucide::ChevronRight size=IconSize::Sm class="adi-onb__disclosure-caret"/>
                 <span class="adi-onb__disclosure-label">"System prompt"</span>
-                <span class="adi-onb__disclosure-hint">"optional \u{00b7} advanced"</span>
+                <span class="adi-onb__disclosure-hint">"optional, advanced"</span>
             </button>
             {move || show.get().then(|| view! {
                 <div class="adi-onb__prompt">
-                    <p class="adi-onb__hint">
+                    <p class="adi-field__note">
                         "Seeded with a default that orients the agent in your ADI stack and
                          points it at the guides in "
-                        <code class="adi-onb__code">"~/.adi/mono/guides"</code>
+                        <code>"~/.adi/mono/guides"</code>
                         " (dashboards, tasks, tools, …). Edit freely — you can change it
                          later."
                     </p>
                     <adi_ui::CodeEditor value=form.agent.system_prompt lang=Lang::Md
-                        height=adi_ui::CodeHeight::Form id="onb-prompt"
-                        class="adi-ui-type island"/>
+                        height=adi_ui::CodeHeight::Form id="onb-prompt" class="island"/>
                 </div>
             })}
         </div>
@@ -471,10 +466,10 @@ fn secret_is_stored(state: State, env: &str) -> bool {
     })
 }
 
-/// The "help me to choose?" modal: a "do you have…?" checklist (from [`RUNTIME_GUIDE`]) that
+/// The "help me choose" dialog: a "do you have…?" checklist (from [`RUNTIME_GUIDE`]) that
 /// recommends a runtime for what the user already has and, on "Use this", writes it into the
-/// manual preset's select and closes. Clicking the scrim or the ✕ dismisses it.
-fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> AnyView {
+/// manual preset's select and closes. Clicking the scrim or the close button dismisses it.
+fn onb_help_dialog(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> AnyView {
     let rows = RUNTIME_GUIDE
         .iter()
         .map(|guide| {
@@ -483,7 +478,7 @@ fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> An
                 .iter()
                 .map(|(id, how)| {
                     let id = (*id).to_string();
-                    // Show the server's own label for the runtime when it offers one, so the modal
+                    // Show the server's own label for the runtime when it offers one, so the dialog
                     // never drifts from the select; fall back to the raw id if the list lacks it.
                     let label = backends
                         .iter()
@@ -492,12 +487,10 @@ fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> An
                     let pick = id.clone();
                     view! {
                         <div class="adi-help__opt">
-                            <div class="adi-help__opt-main">
-                                <code class="adi-onb__code">{label}</code>
-                                <span class="adi-help__how">{(*how).to_string()}</span>
-                            </div>
+                            <span class="adi-help__runtime">{label}</span>
+                            <span class="adi-help__how">{(*how).to_string()}</span>
                             <span class="adi-spacer"></span>
-                            <button class="adi-btn adi-btn--ghost adi-help__use" type="button"
+                            <button class="adi-btn adi-btn--sm" type="button"
                                 on:click=move |_| {
                                     form.agent.backend.set(pick.clone());
                                     form.show_help.set(false);
@@ -522,8 +515,10 @@ fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> An
             <div class="adi-help__panel" on:click=|ev| ev.stop_propagation()>
                 <header class="adi-help__head">
                     <h3 class="adi-help__title">"Which runtime should I pick?"</h3>
-                    <button class="adi-btn adi-btn--icon-sm" type="button" aria-label="Close"
-                        on:click=move |_| form.show_help.set(false)>"\u{00d7}"</button>
+                    <button class="adi-btn adi-btn--icon-sm" type="button"
+                        on:click=move |_| form.show_help.set(false)>
+                        <Icon icon=Lucide::X label="Close"/>
+                    </button>
                 </header>
                 <p class="adi-help__intro">
                     "Tell us what you already have — we\u{2019}ll point you at a matching runtime.
@@ -531,7 +526,7 @@ fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> An
                 </p>
                 <ul class="adi-help__list">{rows}</ul>
                 <p class="adi-help__foot">
-                    "Still unsure? Go back to " <strong>"Claude Code SDK"</strong>
+                    "Still unsure? Go back to " <b>"Claude Code SDK"</b>
                     " — every runtime is swappable from Extended \u{2192} Meta later."
                 </p>
             </div>

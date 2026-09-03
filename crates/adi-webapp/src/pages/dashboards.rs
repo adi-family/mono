@@ -14,7 +14,7 @@
 //! fleet rather than anything typed is the point — "run this in the cloud" should be picking a
 //! name off a list, not learning a deployment.
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{EmptyRow, Icon, IconSize, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{
     Dashboard, DashboardsState, NewDashboard, TransferDashboard, TransferMode,
 };
@@ -40,8 +40,8 @@ pub(crate) const COLS: &[&str] = &[
     "",
 ];
 
-/// The Dashboards page: summary tiles, one row per dashboard, the create form, and a collapsed
-/// archive of removed dashboards at the foot.
+/// The Dashboards page: one row per dashboard, the create form, and a collapsed archive of removed
+/// dashboards at the foot.
 pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
     let State {
         dashboards,
@@ -52,10 +52,12 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Live dashboards">
+                <h2 class="adi-panel__title">"Dashboards"</h2>
+                <span class="adi-updated" title="Live dashboards">
                     {move || dashboards.get().map_or_else(|| "\u{2014}".to_string(),
-                        |d| d.dashboards.iter().filter(|x| !x.is_archived()).count().to_string())}
+                        |d| format!("{} live", d.dashboards.iter().filter(|x| !x.is_archived()).count()))}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(dashboards, secs_since)}</span>
             </div>
 
@@ -145,7 +147,8 @@ fn transfer_panel(state: State, form: DashboardsForm) -> AnyView {
                 <section class="adi-panel">
                     <div class="adi-panel__head">
                         <h2 class="adi-panel__title">{move || transfer_title(state, form)}</h2>
-                        <button class="adi-btn adi-btn--link" type="button"
+                        <span class="adi-spacer"></span>
+                        <button class="adi-btn adi-btn--ghost" type="button"
                             on:click=move |_| close_transfer(form)>"Cancel"</button>
                     </div>
                     <form class="adi-form" on:submit=move |ev| {
@@ -262,7 +265,7 @@ fn transfer_password_field(form: DashboardsForm) -> AnyView {
 fn transfer_warning(form: DashboardsForm) -> AnyView {
     view! {
         {move || (form.transfer_move.get() && form.transfer_delete.get()).then(|| view! {
-            <p class="adi-muted">
+            <p class="adi-hint">
                 "The local directory is removed once the node confirms it has the files. \
                  The node's copy is then the only one."
             </p>
@@ -400,9 +403,10 @@ fn archived_section(state: State, form: DashboardsForm) -> AnyView {
                             <button class="adi-btn adi-btn--link" type="button"
                                 aria-expanded=open.to_string()
                                 on:click=move |_| show.update(|v| *v = !*v)>
-                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Archived"
+                                <Icon icon=if open { Lucide::ChevronDown } else { Lucide::ChevronRight }
+                                    size=IconSize::Sm/>
+                                {format!("Archived · {n}")}
                             </button>
-                            <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
                         {open.then(|| view! { <Table state=state.tables.dashboards_archived>{move || rows_view(state, form, true)}</Table> }.into_any())}
                     </section>
@@ -499,8 +503,12 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
         }
         "Backend" => view! { <span>{service_cell(d.backend_port, d.backend_running, None)}</span> }
             .into_any(),
-        "Modules" => view! { <span class="font-mono">{summarize(&d.modules)}</span> }.into_any(),
-        "Routes" => view! { <span class="font-mono">{summarize(&d.routes)}</span> }.into_any(),
+        "Modules" => {
+            view! { <span class="adi-mono adi-muted">{summarize(&d.modules)}</span> }.into_any()
+        }
+        "Routes" => {
+            view! { <span class="adi-mono adi-muted">{summarize(&d.routes)}</span> }.into_any()
+        }
         // "Dashboard", and anything the layout offers that this match doesn't name.
         _ => {
             let name = match open_url(d) {
@@ -514,7 +522,7 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
                 None => view! { <span>{d.name.clone()}</span> }.into_any(),
             };
             view! {
-                <span>
+                <span class="adi-dash__name">
                     <div>{name}</div>
                     <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
                     {moved_marker(d)}
@@ -578,7 +586,7 @@ fn moved_marker(d: &Dashboard) -> AnyView {
         .filter(|service| !service.is_empty())
         .and_then(|service| crate::origin::service_url(&format!("{service}.{node}.n.adi")));
     view! {
-        <div class="adi-muted">
+        <div class="adi-dash__note">
             "moved to "
             {match there {
                 Some(href) => view! {
@@ -602,7 +610,7 @@ fn no_host_hint(d: &Dashboard) -> AnyView {
         return ().into_any();
     }
     view! {
-        <div class="adi-muted"
+        <div class="adi-dash__note"
             title="Give both of its services the same proxy.host in .adi/hive.yaml, and its \
                    /api calls route through the front door.">
             "no host yet — /api will not route"
@@ -643,58 +651,54 @@ fn project_cell(state: State, d: &Dashboard) -> AnyView {
     .into_any()
 }
 
-/// The trailing actions for a dashboard row.
+/// The trailing actions for a dashboard row, all in its ⋯ menu.
 ///
-/// While live: **Transfer** and **Archive**, both inline. Transfer is one click from the row it
-/// acts on — the whole point of the feature is that running a dashboard somewhere else is a
-/// choice you make in passing, not a procedure — and it only opens the panel below, so nothing
+/// While live: **Transfer** and **Archive**. Transfer only opens the panel below, so nothing
 /// leaves this machine until a node and a password have been given.
 ///
-/// While archived: **Restore** inline, with Transfer and Delete in the kebab. An archived
-/// dashboard still has all its files, so sending it to a node is a real thing to want — it is how
-/// one that was moved away comes back up on a *different* node.
+/// While archived: **Restore**, **Transfer** and **Delete**. An archived dashboard still has all
+/// its files, so sending it to a node is a real thing to want — it is how one that was moved away
+/// comes back up on a *different* node.
 fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> AnyView {
     let id = id.to_string();
     let short = short_id(&id);
     let key = format!("dashboard:{id}");
     let transfer_id = id.clone();
+    let transfer = menu_item(state, "Transfer to a node\u{2026}", false, move || {
+        start_transfer(form, &transfer_id);
+    });
     if archived {
-        let del_id = id.clone();
-        let del_short = short.clone();
-        let restore = view! {
-            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                apply_dashboards(state, format!("Restored {short}."),
-                    fetch::unarchive_dashboard(id.clone()));
-            }>"Restore"</button>
-        };
-        let transfer = menu_item(state, "Transfer to a node\u{2026}", false, move || {
-            start_transfer(form, &transfer_id);
+        let (restore_id, restore_short) = (id.clone(), short.clone());
+        let restore = menu_item(state, "Restore", false, move || {
+            apply_dashboards(
+                state,
+                format!("Restored {restore_short}."),
+                fetch::unarchive_dashboard(restore_id.clone()),
+            );
         });
         let delete = menu_item(state, "Delete", true, move || {
             if !confirm(&format!(
-                "Permanently delete dashboard {del_short}? This removes all of its files \
+                "Permanently delete dashboard {short}? This removes all of its files \
                  and cannot be undone."
             )) {
                 return;
             }
             apply_dashboards(
                 state,
-                format!("Deleted {del_short}."),
-                fetch::delete_dashboard(del_id.clone()),
+                format!("Deleted {short}."),
+                fetch::delete_dashboard(id.clone()),
             );
         });
-        row_actions(state, key, restore, vec![transfer, delete])
+        row_actions(state, key, (), vec![restore, transfer, delete])
     } else {
-        let inline = view! {
-            <button class="adi-btn adi-btn--link" type="button"
-                title="Run this dashboard on a paired node \u{2014} a copy, or a move"
-                on:click=move |_| start_transfer(form, &transfer_id)>"Transfer"</button>
-            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                apply_dashboards(state, format!("Archived {short}."),
-                    fetch::archive_dashboard(id.clone()));
-            }>"Archive"</button>
-        };
-        row_actions(state, key, inline, Vec::new())
+        let archive = menu_item(state, "Archive", false, move || {
+            apply_dashboards(
+                state,
+                format!("Archived {short}."),
+                fetch::archive_dashboard(id.clone()),
+            );
+        });
+        row_actions(state, key, (), vec![transfer, archive])
     }
 }
 
@@ -727,7 +731,7 @@ fn service_cell(port: Option<u16>, running: bool, href: Option<String>) -> AnyVi
         }
         .into_any()
     } else {
-        view! { <span class="adi-mono">{label}</span> }.into_any()
+        view! { <span class="adi-mono adi-muted">{label}</span> }.into_any()
     };
     view! {
         <span class="adi-status" data-state=state_attr>

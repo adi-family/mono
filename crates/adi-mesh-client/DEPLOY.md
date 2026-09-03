@@ -20,7 +20,7 @@ scripts/build-mesh-client.sh          # → crates/adi-mesh-client/dist/
 | Build command | `scripts/build-mesh-client.sh` (or `cd crates/adi-mesh-client && trunk build --release`) |
 | Output directory | `crates/adi-mesh-client/dist` |
 | Environment variables | none |
-| Size, as of 2026-08-27 | **3.64 MB raw / 1.09 MB brotli** wasm, plus 64 KB JS, 6 KB CSS and the icons — 3.7 MB on disk |
+| Size, as of 2026-09-02 | **3.66 MB raw / 1.09 MB brotli** wasm, plus 64 KB JS, 20 KB CSS (the shell, the shared tokens, the font rules), the icons and 280 KB of fonts — 4.0 MB on disk. A phone fetches only the Geist subsets its text uses, ~50 KB for Latin; Bricolage is in the directory because `adi-ui/fonts` is copied whole, and no rule here ever asks for it |
 
 ## Three requirements the host has to meet
 

@@ -4,9 +4,10 @@
 target = "index.html"
 dist = "dist"
 
-# Watch the webapp AND the shared design system, so editing adi-css SCSS hot-reloads too.
+# Watch the webapp, the shared design system AND the token file, so editing any of them
+# hot-reloads too.
 [watch]
-watch = [".", "../adi-css/scss"]
+watch = [".", "../adi-css/scss", "../adi-ui/styles", "../../design"]
 ignore = ["dist"]
 
 # `trunk serve` is only for standalone UI iteration. It proxies /api to the adi-app that

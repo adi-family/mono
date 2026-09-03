@@ -1,0 +1,551 @@
+// The chat screen's own shapes: the composer's surround, the run settings that hang off it, and
+// the right panel that says what a conversation is and what it has added up to. Shared
+// components live in adi-css; the transcript itself is `adi_ui::Chat`. Tokens from
+// design/tokens.css only; the geometry is design/examples/chat.html.
+
+// ---- above the transcript --------------------------------------------------------------------
+// The composer and what sits with it. Padded like the transcript under it, so the box and the
+// words share a left edge.
+.adi-chat__top {
+  padding: 14px 32px 0;
+}
+
+// The one 13px `--ink-3` line above the composer: "+ Set a goal", or the goal that is set.
+.adi-chat__goal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin-bottom: 6px;
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+
+  // A goal is a sentence somebody wrote, and clicking it rewords it.
+  &-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    color: var(--ink-2);
+    cursor: pointer;
+
+    &:hover { color: var(--ink); }
+  }
+}
+
+.adi-chat__link {
+  color: var(--ink-3);
+  cursor: pointer;
+  text-decoration: none;
+
+  &:hover { color: var(--ink-2); text-decoration: none; }
+}
+
+// What the composer says under itself: queued, at the run cap, attaching.
+.adi-chat__note {
+  min-height: 18px;
+  margin-top: 6px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+}
+
+// The home screen's composer, centred at the form width (§5).
+.adi-chat__runbar {
+  width: min(100%, var(--form-w));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+// A 32px icon button in the composer's row — attach, dictate, settings all share it.
+.adi-chat__settings {
+  position: relative;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--r);
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+
+  &:hover { background: var(--bg-hover); color: var(--ink); }
+
+  // Something is overridden for runs started here. Said in ink and by the count, never in
+  // orange — the send button beside it is the screen's one.
+  &.is-set { color: var(--ink); }
+}
+
+// How many settings differ, in the button's corner: a chip, so the square footprint stays.
+.adi-chat__settings-count {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  min-width: 14px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-active);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  text-align: center;
+}
+
+// The run-settings panel: above the composer, between two hairlines. As tall as the fields the
+// backend takes, never a layer over the message being typed.
+.adi-chat__runset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0 16px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+
+  &-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+
+  &-title {
+    margin: 0;
+    font-size: var(--fs-small);
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  // Which agent these belong to: settings are per agent and the panel outlives the picker.
+  &-for {
+    @extend .adi-mono;
+    color: var(--ink-3);
+  }
+
+  &-body {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+  }
+
+  &-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 220px;
+    min-width: 0;
+
+    .adi-input, select.adi-input, .adi-textarea { width: 100%; }
+    .adi-textarea { min-height: 0; }
+
+    &--wide { flex: 1 1 100%; }
+  }
+
+  &-label {
+    font-size: var(--fs-small);
+    color: var(--ink-2);
+  }
+
+  &-hint {
+    margin: 0;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    line-height: 1.5;
+  }
+
+  &-foot {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+
+    span { flex: 1 1 auto; }
+  }
+}
+
+// ---- the transcript ---------------------------------------------------------------------------
+.adi-chat__transcript {
+  padding: 28px 32px 80px;
+}
+
+// ---- the right panel: what this conversation is, and what it has come to --------------------
+// Sections separated by hairlines, each 16px 18px; a 12px grey sentence-case header where a
+// section has one. Nothing is a box.
+.adi-chat__panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.adi-chat__sec {
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+
+  &-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 10px;
+    font-size: var(--fs-label);
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+}
+
+// The agent: its name at section size, the state beside it as a pill or a dot.
+.adi-chat__agent {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+
+  &-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-section);
+    font-weight: 600;
+    color: var(--ink);
+  }
+}
+
+// `idle` as a pill; a live state as a 6px dot before its word (§6). Waiting is the one that asks
+// for something, so it takes the warning colour; running takes the accent dot.
+.adi-chat__state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--chip);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+
+  &::before {
+    content: "";
+    display: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  &[data-state="working"],
+  &[data-state="waiting"],
+  &[data-state="awaiting"] {
+    padding-left: 0;
+    background: none;
+
+    &::before { display: inline-block; }
+  }
+
+  &[data-state="working"]::before { background: var(--accent); }
+  &[data-state="waiting"] { color: var(--warn); &::before { background: var(--warn); } }
+  &[data-state="awaiting"]::before { background: var(--ink-3); }
+}
+
+// The line under the name: backend · model · Settings.
+.adi-chat__sub {
+  margin-bottom: 14px;
+  font-size: var(--fs-mono);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+
+  code, .adi-mono { color: var(--ink-3); }
+}
+
+// `key   value`, 74px to the key (§6). Keys `--ink-3`, values `--ink-2`, machine values mono.
+.adi-chat__kv {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 6px 10px;
+  margin: 0;
+  font-size: var(--fs-small);
+
+  dt { color: var(--ink-3); }
+
+  dd {
+    min-width: 0;
+    margin: 0;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  dd.adi-mono { font-size: 12px; }
+  dd.adi-chat__kv-wrap { white-space: normal; overflow-wrap: anywhere; }
+}
+
+// The three numbers, in one row: 20px/500, tabular, a 12px label under each. Not boxes.
+.adi-chat__stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.adi-chat__stat {
+  min-width: 0;
+
+  b {
+    display: block;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+// One 12px line of detail under the numbers.
+.adi-chat__fine {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+// The tools list: name left, count right, 13px. A failed count takes the error colour.
+.adi-chat__tools {
+  margin-top: 12px;
+  font-size: var(--fs-small);
+}
+
+.adi-chat__tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--ink-2);
+
+  &-name {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-bad { color: var(--err); font-size: var(--fs-label); }
+
+  &-n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+}
+
+// A band inside a section, for the exceptions: a 12px header, then rows.
+.adi-chat__band {
+  margin-top: 14px;
+
+  &-head {
+    margin-bottom: 4px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+// A row that goes somewhere in the transcript: a dot in the state's colour, the tool, the
+// argument. Reads as a line until hovered.
+.adi-chat__jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 -6px;
+  padding: 3px 6px;
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+  text-align: left;
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); color: var(--ink); }
+
+  // The same row with nowhere to go — a failure the transcript drew nothing for.
+  &--flat {
+    color: var(--ink-3);
+    cursor: default;
+
+    &:hover { background: none; color: var(--ink-3); }
+  }
+
+  &-dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+  &[data-status="error"] &-dot { background: var(--err); }
+  &[data-status="running"] &-dot { background: var(--accent); }
+  &[data-status="blocked"] &-dot { background: var(--warn); }
+
+  &-name { flex: none; }
+
+  &-arg {
+    @extend .adi-mono;
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+// A full-width default button in the panel, and the hint under it.
+.adi-chat__btn-w {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--r);
+  background: var(--btn);
+  color: var(--ink);
+  font-size: var(--fs-small);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover { background: var(--btn-hover); }
+  &:disabled { opacity: .5; cursor: default; }
+
+  & + & { margin-top: 10px; }
+}
+
+.adi-chat__hint {
+  margin: 8px 0 10px;
+  font-size: var(--fs-mono);
+  color: var(--ink-3);
+  line-height: 1.5;
+}
+
+// The context itemization, once it has landed: the total in the stats' size, then the bands.
+.adi-chat__ctx {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+
+  b {
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  code { color: var(--ink-3); background: none; padding: 0; }
+}
+
+// One repeated run of text: its cost leads, then how often, then what it was.
+.adi-chat__rep {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+
+  &-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+
+    b { font-weight: 500; color: var(--ink-2); }
+  }
+
+  &-text {
+    @extend .adi-mono;
+    margin-top: 2px;
+    font-size: 12px;
+    color: var(--ink-3);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-all;
+  }
+
+  &-hint {
+    margin-top: 2px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+// The foot of the column: Donate · Docs, 12px, at the bottom whatever is above it.
+.adi-chat__foot {
+  margin-top: auto;
+  display: flex;
+  gap: 14px;
+  padding: 12px 18px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+
+  a:hover { color: var(--ink-2); text-decoration: none; }
+}
+
+.adi-chat__empty {
+  padding: 16px 18px;
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+
+// ---- the sessions head ------------------------------------------------------------------------
+// The head's icon buttons: node, filter. Quiet; ink rather than orange when one is narrowing the
+// list, with the petname beside the node button saying which machine.
+.adi-chat__head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 28px;
+  max-width: 132px;
+  padding: 0 6px;
+  border-radius: var(--r);
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); color: var(--ink-2); }
+  &.is-on { color: var(--ink); }
+
+  // A petname is a DNS label and can be 63 characters: clipped, never wrapped.
+  &-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+// The star and the delete on a session row's right edge: 22px, on hover.
+.adi-chat__row-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); color: var(--ink); }
+  &.is-on { color: var(--ink-2); }
+}

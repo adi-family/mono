@@ -1,5 +1,6 @@
-// Base layer: a minimal reset and document defaults. Scoped to the essentials so the
-// library composes with a host page rather than fighting it.
+// Base layer: a minimal reset and document defaults. `design/tokens.css` already sets the
+// document's background, ink, face and size; this only takes the platform's own styling off
+// the elements a component then draws itself.
 
 @use "mixins" as *;
 
@@ -15,27 +16,47 @@ body {
 }
 
 body {
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--font-sans), sans-serif;
-  font-size: var(--text-base);
-  line-height: 1.45;
-  letter-spacing: -.006em; // takes the slack out of system sans at small sizes
-  -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-// Links carry their meaning through colour, not a permanent underline — a dense UI full of
-// underlined text reads as unstyled. The underline comes back on hover, where it confirms
-// the target rather than decorating the page.
-a {
-  color: var(--accent-ink);
-  text-decoration: none;
-
-  &:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6, p, ul, ol, dl, dd, figure, pre {
+  margin: 0;
 }
 
-// One consistent focus ring across every focusable element.
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+// A link inside the app is never orange (DESIGN.md §3). It takes the ink around it and says it
+// is a link on hover. The landing sets its own.
+a {
+  color: inherit;
+  text-decoration: none;
+
+  &:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-3); }
+}
+
+// Controls inherit type; the platform's border and fill come off so a component draws its own.
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+  border: 0 solid transparent;
+  background-color: transparent;
+}
+
+button { cursor: pointer; }
+
+::placeholder {
+  color: var(--ink-3);
+  opacity: 1;
+}
+
 :focus-visible {
   @include focus-ring;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, .1) transparent;
 }

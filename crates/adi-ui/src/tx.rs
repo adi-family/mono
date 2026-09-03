@@ -19,9 +19,11 @@ use crate::{Badge, BadgeTone, Button, ButtonSize, ButtonVariant, merge};
 
 /// The open transaction.
 ///
-/// It is the island; the pending list is its `children`, so this component knows nothing about
-/// pairs and the queue knows nothing about committing. Usually the child is a
-/// [`crate::PairQueue`].
+/// A section, ruled top and bottom: the pending list is its `children`, so this component
+/// knows nothing about pairs and the queue knows nothing about committing. Usually the child
+/// is a [`crate::PairQueue`].
+///
+/// Commit is the one action the screen exists for, so it is the screen's orange.
 ///
 /// ```ignore
 /// <TxPanel
@@ -59,11 +61,10 @@ pub fn TxPanel(
     let blocked = Signal::derive(move || pending.get() > 0);
 
     view! {
-        <section class=merge("island overflow-hidden bg-card", class)>
-            <header class="flex flex-wrap items-center gap-2 border-b border-divider bg-bar \
-                           px-3 py-2">
+        <section class=merge("flex flex-col text-ink", class)>
+            <header class="flex flex-wrap items-center gap-2 border-b border-line pb-2.5">
                 {(!id.is_empty()).then(|| view! { <Badge mono=true>{id.clone()}</Badge> })}
-                <span class="text-row text-body">
+                <span class="text-row text-ink">
                     {move || {
                         let (s, p) = (staged.get(), pending.get());
                         format!("{s} staged, {p} to decide")
@@ -71,15 +72,14 @@ pub fn TxPanel(
                 </span>
                 <span class="flex-1"></span>
                 {move || blocked.get().then(|| view! {
-                    <Badge tone=BadgeTone::Warn mono=true>"open"</Badge>
+                    <Badge tone=BadgeTone::Warn>"open"</Badge>
                 })}
             </header>
 
             {children()}
 
-            <footer class="flex flex-wrap items-center gap-2 border-t border-divider bg-bar \
-                           px-3 py-2.5">
-                <span class="min-w-0 flex-1 text-mini text-meta">
+            <footer class="flex flex-wrap items-center gap-2 border-t border-line pt-3">
+                <span class="min-w-0 flex-1 text-small text-ink-3">
                     {move || {
                         let p = pending.get();
                         if p == 0 {
@@ -102,7 +102,7 @@ pub fn TxPanel(
                         disabled=busy
                         on:click=move |_| cb.run(())
                     >
-                        "abort"
+                        "Abort"
                     </Button>
                 })}
                 <Button
@@ -111,7 +111,7 @@ pub fn TxPanel(
                     disabled=Signal::derive(move || blocked.get() || busy.get())
                     on:click=move |_| on_commit.run(())
                 >
-                    "commit"
+                    "Commit"
                 </Button>
             </footer>
         </section>

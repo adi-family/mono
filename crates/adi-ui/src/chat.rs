@@ -37,9 +37,17 @@
 //!
 //! Find-in-page, `Ctrl+F`, anchors and screen readers all still see everything, which is
 //! what a JS virtual list takes away.
+//!
+//! # What it looks like
+//!
+//! The transcript is the product (`design/DESIGN.md` §2.1): it sits on the lightest surface,
+//! in the largest body type, at the widest measure. The agent's words are plain paragraphs —
+//! no bubble. A run of tool calls is a receipt, not a message: one collapsed line with a
+//! hairline round it, opened on demand.
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::{Markdown, merge};
 
 /// Who said it.
@@ -57,7 +65,7 @@ pub enum Role {
 pub enum ToolState {
     /// Still going. At most one call in a transcript is, and it is the one worth showing
     /// without being asked. **Only while something is alive to finish it** — a call left
-    /// green in a run that ended weeks ago is the transcript lying about the present.
+    /// live in a run that ended weeks ago is the transcript lying about the present.
     Running,
     /// It returned.
     #[default]
@@ -70,14 +78,14 @@ pub enum ToolState {
 }
 
 impl ToolState {
-    /// The dot beside the call's name.
+    /// The 6px dot beside the call's name (§3: a state is a dot, never a fill).
     #[must_use]
     pub fn dot_classes(self) -> &'static str {
         match self {
             Self::Running => "bg-accent",
-            Self::Ok => "bg-faint",
+            Self::Ok => "bg-ink-3",
             Self::Failed => "bg-err",
-            Self::Unanswered => "bg-attention",
+            Self::Unanswered => "bg-warn",
         }
     }
 }
@@ -138,9 +146,6 @@ impl ToolCall {
     }
 
     /// A one-line preview: the call, flattened, with values cut short.
-    ///
-    /// This is what a folded run shows for the call that is still running — enough to know
-    /// *what* is happening without opening anything.
     #[must_use]
     pub fn summary(&self) -> String {
         let args = self
@@ -158,6 +163,17 @@ impl ToolCall {
             .collect::<Vec<_>>()
             .join(", ");
         format!("{}({args})", self.name)
+    }
+
+    /// What the receipt line shows of this call: its first argument, flattened — the command
+    /// of a `Bash`, the path of a `Read`. The line is cut by the box it sits in, so nothing is
+    /// truncated here; a call with no arguments shows nothing.
+    #[must_use]
+    pub fn preview(&self) -> String {
+        self.params
+            .first()
+            .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default()
     }
 }
 
@@ -259,14 +275,14 @@ pub fn Chat(
     /// content changes between polls.
     ///
     /// It is drawn outside the keyed list, in a reactive closure of its own, so a streaming
-    /// answer costs one card's worth of work per poll instead of the whole transcript's. Its
+    /// answer costs one turn's worth of work per poll instead of the whole transcript's. Its
     /// entries are keyed too, so the moment it settles and moves into `turns` the list
     /// recognises it rather than treating it as new.
     #[prop(optional, into)]
     live: Signal<Vec<Entry>>,
     /// What sits at the head of the transcript — **inside** its scroll, above the newest turn.
     ///
-    /// This exists because the alternative does not work. A card pinned *outside* the scroll (a
+    /// This exists because the alternative does not work. A block pinned *outside* the scroll (a
     /// pending question, say) is a flex item in a column with a height: the moment it is taller
     /// than the pane its bottom is simply cut off, and there is no scrollbar anywhere that
     /// reaches it. Put it in here and it is one more thing in the feed — it scrolls like a
@@ -276,13 +292,12 @@ pub fn Chat(
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
-        <div class=merge("flex flex-col gap-3 overflow-y-auto", class)>
+        <div class=merge("flex flex-col gap-4 overflow-y-auto bg-bg", class)>
             // `shrink-0` for exactly the reason every turn carries it (see [`LAZY`]): this is a
             // flex item in a column with a height, and a lead that can be squeezed is a lead with
-            // its second half missing. `gap-3` inside, so several lead items sit apart the way the
-            // turns below them do.
+            // its second half missing.
             {lead.map(|lead| view! {
-                <div class="flex shrink-0 flex-col gap-3">{lead.run()}</div>
+                <div class="flex max-w-[80ch] shrink-0 flex-col gap-4">{lead.run()}</div>
             })}
             // Above the settled list, because it is the newest thing there is. Rebuilt in
             // place on every poll — which is affordable precisely because it is one turn.
@@ -296,7 +311,7 @@ pub fn Chat(
             {move || {
                 let parts = live.get();
                 (!parts.is_empty()).then(|| view! {
-                    <div class="flex shrink-0 flex-col-reverse gap-3">
+                    <div class="flex shrink-0 flex-col-reverse gap-4">
                         {parts.into_iter().map(entry).collect::<Vec<_>>()}
                     </div>
                 })
@@ -327,18 +342,22 @@ fn entry(entry: Entry) -> AnyView {
     }
 }
 
-/// What every top-level entry wears, and both halves of it are load-bearing.
+/// What every top-level entry wears, and every half of it is load-bearing.
 ///
 /// **`shrink-0`** first, because this is a flex column with a height: without it a turn is a
 /// flex item that can be squeezed, and one that opens — a tool run — gets squeezed. Measured
 /// in the browser: an opened run came out 343px tall around 607px of content, with the
-/// second half of it simply gone. `overflow-hidden` on the run then hid the evidence.
+/// second half of it simply gone.
 ///
 /// **`content-visibility: auto`** second, with an intrinsic height beside it so a skipped
 /// turn still reserves room and the scrollbar does not lie. That pair is the whole
 /// virtualisation story: the engine skips what is off screen, and find-in-page, anchors and
 /// screen readers keep seeing everything — which is what a JS virtual list takes away.
-const LAZY: &str = "shrink-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px]";
+///
+/// **`max-w-[80ch]`** last: the transcript's measure (§4). Wider than that and a line of
+/// prose is a line nobody finishes.
+const LAZY: &str =
+    "max-w-[80ch] shrink-0 [content-visibility:auto] [contain-intrinsic-size:auto_120px]";
 
 /// One thing said.
 #[component]
@@ -349,10 +368,10 @@ fn Said(
     #[prop(optional)] images: Vec<Image>,
 ) -> impl IntoView {
     let own = match role {
-        // The user's own words are a bubble, because they are the short thing you scan for
-        // to find where a stretch of work began.
-        Role::User => "island ml-8 bg-bubble px-3 py-2",
-        Role::Agent => "px-1",
+        // Your own words are on the raised surface so a stretch of work can be scanned for
+        // where it began; a tone, not a bubble — no border, and never a card in a card.
+        Role::User => "rounded-lg bg-raise px-4 py-3",
+        Role::Agent => "",
     };
     let said = !body.trim().is_empty();
     view! {
@@ -372,7 +391,7 @@ fn Said(
 /// three.
 #[component]
 fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
-    let gap = if said { "mb-2" } else { "" };
+    let gap = if said { "mb-3" } else { "" };
     view! {
         <div class=format!("flex flex-wrap gap-2 {gap}")>
             {images
@@ -383,9 +402,7 @@ fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
                     let href = url.clone();
                     view! {
                         <a
-                            class="block max-w-full overflow-hidden rounded-sm border border-dim \
-                                   focus-visible:outline-2 focus-visible:outline-offset-2 \
-                                   focus-visible:outline-accent"
+                            class="block max-w-full overflow-hidden rounded-md border border-line"
                             href=href
                             target="_blank"
                             rel="noreferrer"
@@ -405,7 +422,7 @@ fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
     }
 }
 
-/// A message said but not yet asked: your own bubble, hollowed out.
+/// A message said but not yet asked: your own block, hollowed out.
 ///
 /// It is not a [`Turn`], and deliberately so — a queue is not transcript. The turns a [`Chat`]
 /// holds are things that happened; this is a thing that has not, and it sits *outside* the
@@ -413,7 +430,7 @@ fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
 /// it out of `Vec<Turn>` is what stops a queued message from being indistinguishable from a
 /// sent one the moment anything reads the list.
 ///
-/// Same geometry as the user bubble in [`Said`], then emptied: dashed edge, no fill, dimmed
+/// Same geometry as the user's block in [`Said`], then emptied: dashed hairline, no fill, dimmed
 /// text — intent rather than history.
 ///
 /// ```ignore
@@ -437,43 +454,63 @@ pub fn Queued(
 ) -> impl IntoView {
     view! {
         <div class=merge(
-            &format!("{LAZY} island ml-8 border-dashed bg-transparent px-3 py-2 text-meta"),
+            &format!("{LAZY} rounded-lg border border-dashed border-line-strong px-4 py-3 text-ink-3"),
             class,
         )>
-            <div class="caps mb-1 flex items-center gap-1 text-faint">
-                "you · queued"
+            <div class="label mb-1 flex items-center gap-1 text-ink-3">
+                "You · queued"
                 {on_unqueue.map(|cb| view! {
                     <button
-                        class="-my-0.5 ml-auto cursor-pointer rounded-sm px-1 py-0.5 leading-none \
-                               text-faint hover:text-err focus-visible:outline-2 \
-                               focus-visible:outline-offset-1 focus-visible:outline-accent"
+                        class="-my-0.5 ml-auto grid size-6 place-items-center rounded-md \
+                               text-ink-3 hover:bg-hover hover:text-ink"
                         type="button"
                         title="don't send this after all"
-                        aria-label="Remove from queue"
                         on:click=move |_| cb.run(())
                     >
-                        "\u{2715}"
+                        <Icon icon=Lucide::X size=IconSize::Sm label="Remove from queue"/>
                     </button>
                 })}
             </div>
             {(!images.is_empty())
                 .then(|| view! { <Pictures images=images said=!body.trim().is_empty()/> })}
-            <Markdown source=body class="text-meta"/>
+            <Markdown source=body class="text-ink-3"/>
         </div>
     }
 }
 
-/// A folded run of tool calls.
+/// The tools a run used, for its receipt line: one name when they are all the same, the first
+/// three otherwise. A run that read, grepped and edited is "Read, Grep, Edit"; one that only ran
+/// shell is "Bash".
+fn tools_of(calls: &[ToolCall]) -> String {
+    let mut names: Vec<&str> = Vec::new();
+    for call in calls {
+        if !names.contains(&call.name.as_str()) {
+            names.push(&call.name);
+        }
+    }
+    match names.len() {
+        0..=3 => names.join(", "),
+        _ => format!("{}, …", names[..3].join(", ")),
+    }
+}
+
+/// A folded run of tool calls: a receipt, not a message (§6).
 ///
 /// Closed by default, always: a run is what you skip. It is one `<details>` for the whole
 /// run rather than one per call, so opening it shows the *sequence*, which is the thing
 /// worth reading — a single call out of context rarely explains anything.
 ///
-/// The summary line carries the one call worth seeing without opening: whatever is running
-/// now, or the last one that ran.
+/// The line carries the count and the tool, and the one call worth seeing without opening:
+/// whatever is running now, or the last one that ran.
 #[component]
 fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
     let n = calls.len();
+    let count = if n == 1 {
+        "1 call".to_string()
+    } else {
+        format!("{n} calls")
+    };
+    let tools = tools_of(&calls);
     // What the closed run shows: the live call if there is one, else the last to have run.
     let head = calls
         .iter()
@@ -483,49 +520,35 @@ fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
     // The one word the closed run says about its head call, when there is one worth saying.
     // "running" is a claim about right now and must be true; a run that ended on a call says
     // so instead, which is the honest version of the flag it used to leave behind.
-    let chip = match head.as_ref().map(|c| c.state) {
-        Some(ToolState::Running) => Some(("running", "text-accent")),
-        Some(ToolState::Unanswered) => Some(("no result", "text-attention")),
+    let note = match head.as_ref().map(|c| c.state) {
+        Some(ToolState::Running) => Some(("running", "bg-accent")),
+        Some(ToolState::Unanswered) => Some(("no result", "bg-warn")),
+        Some(ToolState::Failed) => Some(("failed", "bg-err")),
         _ => None,
     };
 
     view! {
-        <details id=id class=format!("{LAZY} group island overflow-hidden bg-card")>
-            <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 \
-                            select-none hover:bg-bubble focus-visible:outline-2 \
-                            focus-visible:outline-offset-[-2px] focus-visible:outline-accent \
+        <details id=id class=format!("{LAZY} group rounded-lg border border-line text-ink-3")>
+            <summary class="flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-3 \
+                            py-2 text-small select-none hover:bg-hover hover:text-ink-2 \
                             [&::-webkit-details-marker]:hidden">
-                <svg
-                    class="size-3 shrink-0 text-meta transition-transform duration-100 \
-                           group-open:rotate-90"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.6"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                >
-                    <path d="M4.5 2.5 8 6l-3.5 3.5"></path>
-                </svg>
-                <span class="caps shrink-0 text-faint">
-                    {if n == 1 { "1 call".to_string() } else { format!("{n} calls") }}
-                </span>
-                {head.map(|c| {
-                    let dot = c.state.dot_classes();
-                    view! {
-                        <span
-                            class=format!("size-1.5 shrink-0 rounded-full {dot}")
-                            aria-hidden="true"
-                        ></span>
-                        <span class="truncate font-mono text-mini text-meta">{c.summary()}</span>
-                    }
+                <Icon
+                    icon=Lucide::ChevronRight
+                    size=IconSize::Sm
+                    class="transition-transform duration-100 group-open:rotate-90"
+                />
+                <span class="shrink-0 font-medium text-ink-2">{format!("{count} · {tools}")}</span>
+                {head.map(|c| view! {
+                    <span class="min-w-0 truncate font-mono text-mini">{c.preview()}</span>
                 })}
-                {chip.map(|(word, ink)| view! {
-                    <span class=format!("caps ml-auto shrink-0 {ink}")>{word}</span>
+                {note.map(|(word, dot)| view! {
+                    <span class="ml-auto flex shrink-0 items-center gap-1.5 text-label">
+                        <span class=format!("size-1.5 rounded-full {dot}") aria-hidden="true"></span>
+                        {word}
+                    </span>
                 })}
             </summary>
-            <div class="flex flex-col gap-2 border-t border-divider p-3">
+            <div class="flex flex-col gap-3 border-t border-line px-3 py-3">
                 {calls.into_iter().map(|c| view! { <Call call=c/> }).collect::<Vec<_>>()}
             </div>
         </details>
@@ -537,20 +560,20 @@ fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
 fn Call(call: ToolCall) -> impl IntoView {
     let dot = call.state.dot_classes();
     view! {
-        <div id=call.anchor.clone() class="flex flex-col gap-1">
+        <div id=call.anchor.clone() class="flex flex-col gap-1.5">
             <div class="flex items-center gap-2">
                 <span class=format!("size-1.5 shrink-0 rounded-full {dot}") aria-hidden="true">
                 </span>
-                <span class="font-mono text-mini text-syn-func">{call.name.clone()}</span>
+                <span class="text-small font-medium text-ink-2">{call.name.clone()}</span>
             </div>
             <Invoke name=call.name params=call.params/>
             {call.result.map(|r| view! {
-                <pre class="m-0 shrink-0 overflow-x-auto rounded-sm border border-edge \
-                            bg-stage p-2.5 font-mono text-mini leading-[1.55] \
-                            whitespace-pre-wrap [word-break:break-word] text-syn-comment">
-                    <span class="text-syn-punct">"<result>\n"</span>
+                <pre class="m-0 shrink-0 overflow-x-auto rounded-lg border border-line \
+                            bg-raise px-3.5 py-3 font-mono text-mono leading-[1.6] \
+                            whitespace-pre-wrap [word-break:break-word] text-ink-2">
+                    <span class="text-ink-3">"<result>\n"</span>
                     {r}
-                    <span class="text-syn-punct">"\n</result>"</span>
+                    <span class="text-ink-3">"\n</result>"</span>
                 </pre>
             })}
         </div>
@@ -581,22 +604,50 @@ pub(crate) fn Invoke(
 ) -> impl IntoView {
     view! {
         <pre class=merge(
-            "m-0 shrink-0 overflow-x-auto rounded-sm border border-edge bg-bubble p-2.5 \
-             font-mono text-mini leading-[1.55] whitespace-pre-wrap [word-break:break-word] \
-             text-syn-plain",
+            "m-0 shrink-0 overflow-x-auto rounded-lg border border-line bg-raise px-3.5 py-3 \
+             font-mono text-mono leading-[1.6] whitespace-pre-wrap [word-break:break-word] \
+             text-code",
             class,
         )>
-            <span class="text-syn-punct">"<invoke name="</span>
+            <span class="text-ink-3">"<invoke name="</span>
             <span class="text-syn-str">{format!("\"{name}\"")}</span>
-            <span class="text-syn-punct">">\n"</span>
+            <span class="text-ink-3">">\n"</span>
             {params.into_iter().map(|(k, v)| view! {
-                <span class="text-syn-punct">"  <parameter name="</span>
+                <span class="text-ink-3">"  <parameter name="</span>
                 <span class="text-syn-str">{format!("\"{k}\"")}</span>
-                <span class="text-syn-punct">">"</span>
+                <span class="text-ink-3">">"</span>
                 {v}
-                <span class="text-syn-punct">"</parameter>\n"</span>
+                <span class="text-ink-3">"</parameter>\n"</span>
             }).collect::<Vec<_>>()}
-            <span class="text-syn-punct">"</invoke>"</span>
+            <span class="text-ink-3">"</invoke>"</span>
         </pre>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ToolCall, tools_of};
+
+    #[test]
+    fn a_receipt_names_its_tools() {
+        let one = vec![ToolCall::new("Bash"), ToolCall::new("Bash")];
+        assert_eq!(tools_of(&one), "Bash");
+        let mixed = vec![
+            ToolCall::new("Read"),
+            ToolCall::new("Grep"),
+            ToolCall::new("Read"),
+            ToolCall::new("Edit"),
+            ToolCall::new("Bash"),
+        ];
+        assert_eq!(tools_of(&mixed), "Read, Grep, Edit, …");
+    }
+
+    #[test]
+    fn the_preview_is_the_first_argument_flattened() {
+        let call = ToolCall::new("Bash")
+            .param("command", "cd /tmp &&\n  ls")
+            .param("description", "list");
+        assert_eq!(call.preview(), "cd /tmp && ls");
+        assert_eq!(ToolCall::new("thinking").preview(), "");
     }
 }

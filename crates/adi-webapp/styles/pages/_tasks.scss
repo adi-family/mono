@@ -1,0 +1,37 @@
+// Page-local styles for `src/pages/tasks` and a project's Tasks panel. Shared components live in
+// adi-css; a shape that exists on one page lives here. Tokens from design/tokens.css only.
+
+// A subtask's depth, drawn as hairline rails rather than blank indent, so a row four levels down
+// still reads as belonging to something.
+.adi-taskrow {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.adi-taskrow__rail {
+  flex: none;
+  width: 18px;
+  height: 20px;
+  margin-right: 2px;
+  border-left: 1px solid var(--line);
+}
+
+.adi-taskrow__title {
+  min-width: 0;
+  color: var(--ink);
+}
+
+// A section that folds — Done, Archived: a chevron, the word, the count in meta type.
+.adi-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  color: var(--ink);
+  font-size: var(--fs-section);
+  font-weight: 600;
+
+  svg { width: 16px; height: 16px; color: var(--ink-3); }
+  &:hover svg { color: var(--ink-2); }
+}

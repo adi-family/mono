@@ -1,7 +1,7 @@
 //! The Workspaces panel on a project's detail page: the project's working copies (created
 //! by its hook scripts — the first by `init`, later ones by `workspace`) plus the hook files
-//! themselves with Run/Log/Edit actions. Hooks are plain files at `.adi/hooks/<name>`; the
-//! Edit action opens them in a dedicated hook editor panel rendered right above this one.
+//! themselves, each row's actions in its ⋯ menu. Hooks are plain files at `.adi/hooks/<name>`;
+//! the Edit action opens them in a dedicated hook editor panel rendered right above this one.
 
 use adi_ui::Lang;
 use adi_ui::{EmptyRow, Row as TableRow, Table};
@@ -18,10 +18,10 @@ use crate::ui::{
     Key, TextField, confirm, fmt_date, menu_item, row_actions, rows_or_placeholder, sort_rows,
 };
 
-/// The workspaces table's columns; the trailing blank one holds ⌨ Terminal and Unregister.
+/// The workspaces table's columns; the trailing blank one holds the row's ⋯ menu.
 pub(crate) const WORKSPACE_COLS: &[&str] = &["Name", "Path", "Kind", "Status", "Created", ""];
 
-/// The hooks table's columns; the trailing blank one holds ▶ Run, Log, and Edit.
+/// The hooks table's columns; the trailing blank one holds the row's ⋯ menu.
 pub(crate) const HOOK_COLS: &[&str] = &["Hook", "Status", "Last run", ""];
 
 /// A hook's path inside the project, as the file API sees it.
@@ -89,7 +89,7 @@ pub(crate) fn workspaces_panel(
                     wide=true field_class="adi-field--grow"
                     hint="absolute; empty = inside the project" value=path />
                 <label class="adi-field adi-field--check">
-                    <input type="checkbox"
+                    <input type="checkbox" class="adi-check"
                         prop:checked=move || local.get()
                         on:change=move |ev| local.set(event_target_checked(&ev)) />
                     <span class="adi-field__label">"Link existing dir (no hook)"</span>
@@ -102,7 +102,7 @@ pub(crate) fn workspaces_panel(
                 {move || next_hook_hint(state)}
             </div>
 
-            <div class="adi-panel__head">
+            <div class="adi-panel__head adi-panel__head--divided">
                 <h2 class="adi-panel__title">"Hooks"</h2>
                 <span class="adi-updated">"plain files under " <code>".adi/hooks"</code></span>
             </div>
@@ -137,8 +137,8 @@ pub(crate) fn workspaces_panel(
     .into_any()
 }
 
-/// Rows for the workspaces table: **⌨ Terminal** inline (when the directory exists), with the
-/// Unregister action in the kebab (behind a confirm; files stay on disk).
+/// Rows for the workspaces table. The ⋯ menu opens a terminal (when the directory exists) and
+/// unregisters the workspace (behind a confirm; files stay on disk).
 fn workspace_rows(state: State, term: TermWatch) -> AnyView {
     let table = state.tables.workspaces;
     let Some(snapshot) = current_snapshot(state) else {
@@ -146,9 +146,9 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
     };
     if snapshot.workspaces.is_empty() {
         let hint = if snapshot.has_init_hook {
-            "Not initialized yet — press ⚡ Initialize to run the init hook (or add a workspace with a custom name below)."
+            "Not initialized yet — press Initialize to run the init hook (or add a workspace with a custom name below)."
         } else {
-            "No workspaces yet — create an init hook below first, then press ⚡ Initialize."
+            "No workspaces yet — create an init hook below first, then press Initialize."
         };
         return view! { <EmptyRow state=table>{hint}</EmptyRow> }.into_any();
     }
@@ -174,22 +174,21 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
             // A terminal needs the directory on disk: ready always has it, local links do
             // by definition; a creating/failed workspace has nothing to open a shell in.
             let can_term = matches!(w.status.as_str(), "ready" | "local");
-            let terminal = can_term.then(|| view! {
-                <button class="adi-btn adi-btn--link" title="open a terminal in this directory"
-                    on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
-            });
-            let unregister = menu_item(state, "Unregister", true, move || {
-                if !confirm(&format!("Unregister workspace {del_display}? Files stay on disk.")) {
+            let mut items = Vec::new();
+            if can_term {
+                items.push(menu_item(state, "Open terminal", false, move || {
+                    open_terminal(state, term, term_name.clone());
+                }));
+            }
+            items.push(menu_item(state, "Unregister", true, move || {
+                if !confirm(&format!(
+                    "Unregister workspace {del_display}? Files stay on disk."
+                )) {
                     return;
                 }
                 remove_workspace(state, del_name.clone());
-            });
-            let actions = row_actions(
-                state,
-                format!("workspace:{}", w.name),
-                terminal,
-                vec![unregister],
-            );
+            }));
+            let actions = row_actions(state, format!("workspace:{}", w.name), (), items);
             view! {
                 <TableRow
                     state=table
@@ -208,12 +207,10 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
 fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
     match col {
         "Path" => view! {
-            <span class="font-mono text-meta" style="font-size:var(--text-sm); word-break:break-all">
-                {w.path.clone()}
-            </span>
+            <span class="adi-mono adi-muted adi-cell__path">{w.path.clone()}</span>
         }
         .into_any(),
-        "Kind" => view! { <span class="font-mono">{w.kind.clone()}</span> }.into_any(),
+        "Kind" => view! { <span class="adi-muted">{w.kind.clone()}</span> }.into_any(),
         "Status" => {
             let status_data = match w.status.as_str() {
                 "ready" => "ready",
@@ -248,14 +245,14 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
             } else {
                 "—".to_string()
             };
-            view! { <span class="font-mono text-meta">{created}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{created}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => view! {
             <span>
-                <span class="adi-mono">{w.name.clone()}</span>
+                <span>{w.name.clone()}</span>
                 {w.primary.then(|| view! {
-                    <span class="adi-muted" style="font-size:var(--text-sm); display:block">"★ primary"</span>
+                    <span class="adi-cell__sub">"primary"</span>
                 })}
             </span>
         }
@@ -263,7 +260,7 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
     }
 }
 
-/// Rows for the hooks table: each hook file with Run / Log / Edit actions.
+/// Rows for the hooks table: each hook file, with Run / Log / Edit in its ⋯ menu.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let table = state.tables.hooks;
     let mut hooks = match rows_or_placeholder(
@@ -291,33 +288,32 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
             let log_name = h.name.clone();
             let edit_name = h.name.clone();
             // init/workspace only make sense with the ADI_WORKSPACE_* env a workspace
-            // create provides — no manual Run for them (the API refuses it anyway).
+            // create provides — no manual Run for them (the API refuses it anyway), and the
+            // row says so where the menu would otherwise offer it.
             let lifecycle = h.name == "init" || h.name == "workspace";
-            // ▶ Run inline for a runnable hook (a lifecycle hook shows why it can't be run by
-            // hand instead); Log + Edit live in the kebab.
-            let inline =
-                if lifecycle {
-                    view! {
-                    <span class="adi-muted" style="font-size:var(--text-sm)"
+            let note = lifecycle.then(|| {
+                view! {
+                    <span class="adi-updated"
                         title="lifecycle hooks run when a workspace is created — use Add workspace">
-                        "via Add workspace"
+                        "runs on workspace create"
                     </span>
-                }.into_any()
-                } else {
-                    view! {
-                    <button class="adi-btn adi-btn--link" title="run the hook now, detached"
-                        on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
-                }.into_any()
-                };
-            let items = vec![
+                }
+            });
+            let mut items = Vec::new();
+            if !lifecycle {
+                items.push(menu_item(state, "Run", false, move || {
+                    run_hook(state, log, run_name.clone());
+                }));
+            }
+            items.extend([
                 menu_item(state, "Log", false, move || {
                     open_hook_log(state, log, log_name.clone())
                 }),
                 menu_item(state, "Edit", false, move || {
                     open_hook_editor(state, editor, edit_name.clone())
                 }),
-            ];
-            let actions = row_actions(state, format!("hook:{}", h.name), inline, items);
+            ]);
+            let actions = row_actions(state, format!("hook:{}", h.name), note, items);
             view! { <TableRow state=table cell=move |col| hook_cell(col, &h) actions=actions/> }
                 .into_any()
         })
@@ -348,15 +344,13 @@ fn hook_cell(col: &str, h: &ProjectHookDto) -> AnyView {
         }
         "Last run" => {
             let ran = h.last_run_at.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <span class="font-mono text-meta">{ran}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{ran}</span> }.into_any()
         }
         // "Hook", and anything the layout offers that this match doesn't name.
         _ => view! {
             <span>
-                <span class="adi-mono">{h.name.clone()}</span>
-                <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">
-                    {hook_rel_path(&h.name)}
-                </span>
+                <span>{h.name.clone()}</span>
+                <span class="adi-cell__sub adi-mono adi-muted">{hook_rel_path(&h.name)}</span>
             </span>
         }
         .into_any(),
@@ -387,9 +381,9 @@ fn next_hook_hint(state: State) -> AnyView {
     }
 }
 
-/// The one-click ⚡ Initialize button: creates the first workspace (named `main`) with the
-/// init hook. Rendered only while the project is uninitialized (no hook-created workspace
-/// yet) and an init hook file exists.
+/// The one-click Initialize button: creates the first workspace (named `main`) with the init
+/// hook. Rendered only while the project is uninitialized (no hook-created workspace yet) and
+/// an init hook file exists — and then it is the panel's main action.
 fn initialize_button(state: State, form: WorkspaceForm) -> Option<AnyView> {
     let snapshot = current_snapshot(state)?;
     (snapshot.next_hook == "init" && snapshot.has_init_hook).then(|| {
@@ -397,7 +391,7 @@ fn initialize_button(state: State, form: WorkspaceForm) -> Option<AnyView> {
             <button class="adi-btn adi-btn--primary" type="button"
                 title="run the init hook — creates the first workspace, “main”"
                 prop:disabled=move || form.busy.get()
-                on:click=move |_| initialize_project(state, form)>"⚡ Initialize"</button>
+                on:click=move |_| initialize_project(state, form)>"Initialize"</button>
         }
         .into_any()
     })
@@ -449,7 +443,7 @@ fn submit_workspace(state: State, form: WorkspaceForm) {
 }
 
 /// Fire a workspace-create request and fan the result into the signals (shared by the
-/// ⚡ Initialize button and the create form).
+/// Initialize button and the create form).
 fn send_create_workspace(state: State, form: WorkspaceForm, body: NewWorkspace) {
     form.busy.set(true);
     spawn_local(async move {
@@ -521,7 +515,7 @@ fn remove_workspace(state: State, name: String) {
     });
 }
 
-/// Run a hook by hand (the ▶ Run action), then open its log so the output is visible live.
+/// Run a hook by hand (the Run action), then open its log so the output is visible live.
 fn run_hook(state: State, log: HookLogView, name: String) {
     let id = state.current_project.get_untracked();
     if id.is_empty() {
@@ -629,30 +623,31 @@ pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyVi
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title adi-mono">{hook_rel_path(&name)}</h2>
+                <h2 class="adi-panel__title">"Hook"</h2>
+                <span class="adi-mono adi-muted">{hook_rel_path(&name)}</span>
                 <span class="adi-updated">
                     {move || if dirty() { "unsaved changes" } else { "saved" }}
+                    " · runs as " <code>"sh -c"</code> ", detached"
                 </span>
-                <span class="adi-chip">"sh -c, detached"</span>
                 <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--ghost" type="button" title="Re-read from disk"
+                <button class="adi-btn" type="button" title="Re-read from disk"
                     prop:disabled=move || editor.busy.get()
                     on:click=move |_| reload_hook(state, editor)>"Reload"</button>
                 <button class="adi-btn adi-btn--primary" type="button"
                     prop:disabled=move || editor.busy.get() || !dirty()
                     on:click=move |_| save_hook(state, editor)>"Save"</button>
-                <button class="adi-btn adi-btn--link" type="button"
+                <button class="adi-btn adi-btn--quiet" type="button"
                     on:click=move |_| editor.close()>"Close"</button>
             </div>
             <adi_ui::CodeEditor value=editor.buffer lang=Lang::Sh id="hook-editor"
-                class="adi-ui-type island h-[60vh]"/>
+                height=adi_ui::CodeHeight::Form class="island bg-raise"/>
         </section>
     }
     .into_any()
     .into()
 }
 
-/// Open the terminal view on a workspace (the ⌨ Terminal action): ensure the pty session
+/// Open the terminal view on a workspace (the Open terminal action): ensure the pty session
 /// exists (started in the workspace directory), show the panel with the first snapshot, and
 /// scroll up to where it renders. Reopening an open terminal just reattaches the view.
 fn open_terminal(state: State, term: TermWatch, name: String) {
@@ -724,13 +719,13 @@ pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Terminal — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!attach.is_empty()).then(|| view! {
-                        <code class="adi-mono adi-muted" style="font-size:var(--text-sm)">{attach}</code>
+                        <span class="adi-mono adi-muted">{attach}</span>
                     })}
                     {running.then(|| view! {
-                        <button class="adi-btn adi-btn--link" title="kill the session"
+                        <button class="adi-btn adi-btn--link adi-btn--danger" title="kill the session"
                             on:click=move |_| kill_terminal(state, term)>"Kill"</button>
                     })}
-                    <button class="adi-btn adi-btn--link" title="hide the view — the session keeps running"
+                    <button class="adi-btn adi-btn--quiet" title="hide the view — the session keeps running"
                         on:click=move |_| term.close()>"Close"</button>
                 </div>
                 {body}
@@ -845,9 +840,9 @@ pub(crate) fn hook_log_view(log: HookLogView) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Hook log — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!status_line.is_empty()).then(|| view! {
-                        <span class="adi-muted" style="font-size:var(--text-sm)">{status_line}</span>
+                        <span class="adi-updated">{status_line}</span>
                     })}
-                    <button class="adi-btn adi-btn--link" on:click=move |_| log.close()>"Close"</button>
+                    <button class="adi-btn adi-btn--quiet" on:click=move |_| log.close()>"Close"</button>
                 </div>
                 {body}
             </section>

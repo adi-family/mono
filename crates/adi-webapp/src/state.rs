@@ -1438,6 +1438,19 @@ pub(crate) struct FleetForm {
     /// Whether an invite is being minted, kept apart from [`busy`](Self::busy) so the grant form
     /// is not disabled by a click on the pairing button.
     pub(crate) minting: RwSignal<bool>,
+    /// An invite minted *elsewhere*, pasted here to be spent — the other direction of `docs/fleet.md`
+    /// §8. Cleared the moment it is accepted: a token that has been spent is a token no screen
+    /// should still be holding.
+    pub(crate) join_token: RwSignal<String>,
+    /// Whether that invite is being spent. Its own flag, like [`minting`](Self::minting), because
+    /// the handshake dials another machine — seconds, not a local round-trip — and nothing else on
+    /// the page should be disabled for the length of it.
+    pub(crate) joining: RwSignal<bool>,
+    /// What the last spent invite bought, and the **only copy of that password there will ever
+    /// be** — both machines keep a salted verifier and neither keeps the plaintext. So it is held
+    /// exactly as long as the screen showing it: [`clear_pairing`](Self::clear_pairing) takes it
+    /// away with the invite when the page is left.
+    pub(crate) joined: RwSignal<Option<adi_webapp_api::types::FleetJoined>>,
 }
 
 impl FleetForm {
@@ -1449,6 +1462,9 @@ impl FleetForm {
             invite: RwSignal::new(None),
             invite_until: RwSignal::new(0.0),
             minting: RwSignal::new(false),
+            join_token: RwSignal::new(String::new()),
+            joining: RwSignal::new(false),
+            joined: RwSignal::new(None),
         }
     }
 
@@ -1459,6 +1475,16 @@ impl FleetForm {
     pub(crate) fn clear_invite(self) {
         self.invite.set(None);
         self.invite_until.set(0.0);
+    }
+
+    /// Forget every credential this page has held: the invite it minted, the one it was given to
+    /// spend, and the password the spending bought. Called when leaving the page, because all
+    /// three are bearer secrets and none of them has a reason to outlive the screen — the same
+    /// rule [`clear_invite`](Self::clear_invite) keeps, applied to the direction that dials.
+    pub(crate) fn clear_pairing(self) {
+        self.clear_invite();
+        self.join_token.set(String::new());
+        self.joined.set(None);
     }
 }
 

@@ -1,0 +1,305 @@
+// Page-local styles for `src/pages/onboarding.rs` — the form page of design/DESIGN.md §6 and
+// design/examples/setup-agents-fleet.html page 1. A centred 640px column on the page surface, no
+// card around it, the Save at the foot its one orange. The shell (`src/main.rs`, main.scss) puts
+// the column on the page; everything inside it, the "help me choose" dialog included, is here.
+
+// ---- the wizard --------------------------------------------------------------------------
+// The frame around it (`.adi-onb`, `__body`, `__panel`) is the shell's, in main.scss. This is
+// everything inside it.
+.adi-onb__wizard {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+// ---- title, lead, stepper --------------------------------------------------------------
+.adi-onb__title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin-bottom: 6px;
+}
+
+.adi-onb__lead {
+  color: var(--ink-2);
+  margin-bottom: 36px;
+}
+
+.adi-onb__steps {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 40px;
+  padding: 0 0 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+.adi-onb__step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  &[data-state="active"] { color: var(--ink); }
+  &[data-state="done"] { color: var(--ink-2); }
+}
+
+// The step's number: a 20px ring, filled with ink on the current step.
+.adi-onb__step-num {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+
+  .adi-onb__step[data-state="active"] & {
+    background: var(--ink);
+    border-color: var(--ink);
+    color: var(--bg);
+  }
+}
+
+.adi-onb__step-label { white-space: nowrap; }
+
+// The hairline between two steps.
+.adi-onb__step-rule {
+  width: 48px;
+  margin: 0 0 0 4px;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+// ---- the section -------------------------------------------------------------------------
+.adi-onb__section {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.adi-onb__intro {
+  color: var(--ink-2);
+  line-height: 1.55;
+  margin-bottom: 32px;
+
+  b { color: var(--ink); font-weight: 500; }
+}
+
+// Fields stacked at the form's own rhythm (§6: label above, help below), controls full width.
+.adi-onb__form,
+.adi-onb__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+
+  .adi-input, .adi-textarea, select.adi-input { width: 100%; }
+}
+
+.adi-onb__fields { margin-bottom: 0; }
+
+// The preset picker: a segmented control stretched to the column (§6), one segment per way in.
+.adi-onb__presets {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+}
+
+.adi-onb__preset {
+  padding: 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  font-size: var(--fs-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+
+  &:hover { color: var(--ink); }
+
+  &[aria-checked="true"] {
+    background: var(--bg-active);
+    color: var(--ink);
+    font-weight: 500;
+  }
+}
+
+// A label with a way out beside it: "Runtime" on the left, "Help me choose" at the right.
+.adi-onb__field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.adi-onb__help-link {
+  font-size: var(--fs-small);
+}
+
+// The collapsed "System prompt" row: a hairline above and below, the chevron turning when open.
+.adi-onb__disclosure-block {
+  margin: 8px 0 10px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.adi-onb__disclosure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+
+  &[aria-expanded="true"] .adi-onb__disclosure-caret { transform: rotate(90deg); }
+}
+
+.adi-onb__disclosure-caret {
+  color: var(--ink-3);
+  transition: transform var(--transition);
+}
+
+.adi-onb__disclosure-label { font-weight: 500; }
+
+.adi-onb__disclosure-hint {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+}
+
+.adi-onb__prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 16px;
+}
+
+.adi-onb__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+// ---- the "help me choose" dialog -------------------------------------------------------
+// A card over a scrim (§5): the one detachable thing on this page. No blur, no shadow, and it
+// arrives rather than fading in.
+.adi-help {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: var(--scrim);
+}
+
+.adi-help__panel {
+  width: min(100%, 560px);
+  max-height: min(86dvh, 720px);
+  overflow-y: auto;
+  padding: 20px 22px;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+}
+
+.adi-help__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.adi-help__title {
+  flex: 1;
+  font-size: var(--fs-section);
+  font-weight: 600;
+}
+
+.adi-help__intro {
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.adi-help__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+// One "do you have…?" branch: a hairline above, the question in ink, the note under it.
+.adi-help__row {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.adi-help__q {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.adi-help__note {
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  margin-bottom: 8px;
+}
+
+.adi-help__opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.adi-help__opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+// The runtime's name is a config value: a mono chip.
+.adi-help__runtime {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--chip);
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.adi-help__how {
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+}
+
+.adi-help__foot {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+
+  b { color: var(--ink-2); font-weight: 500; }
+}
+
+@media (max-width: 620px) {
+  .adi-onb__body { padding-top: 40px; }
+  .adi-onb__step-label { display: none; }
+  .adi-onb__presets { grid-auto-flow: row; }
+}

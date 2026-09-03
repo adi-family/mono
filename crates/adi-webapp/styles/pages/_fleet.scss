@@ -1,0 +1,230 @@
+// Page-local styles for `src/pages/fleet.rs`: the node cell, the grant pills, the grant row, and
+// the pairing card — design/examples/setup-agents-fleet.html, page 3. Shared components live in
+// adi-css. Tokens from design/tokens.css only.
+
+@use "../../../adi-css/scss/mixins" as *;
+
+// The Node cell: what this machine calls it, over what it calls itself.
+.adi-fleet-node {
+  display: block;
+  min-width: 0;
+
+  > b {
+    display: block;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  > span {
+    display: block;
+    font-size: 12.5px;
+    color: var(--ink-3);
+  }
+
+  &__pending {
+    display: block;
+    font-size: 12.5px;
+    color: var(--warn);
+  }
+}
+
+// A grant: a mono pill with its × inside. The remove action lives in the object (§6).
+.adi-fleet-grants {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.adi-fleet-grant {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 3px 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--chip);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--fs-label);
+  white-space: nowrap;
+
+  > button {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-radius: 50%;
+    color: var(--ink-3);
+    cursor: pointer;
+
+    &:hover {
+      color: var(--ink);
+      background: var(--chip-hover);
+    }
+  }
+}
+
+// The grant row under the table: node, grant, one plain button, aligned on their inputs.
+.adi-fleet-grantrow {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin: 20px 0 10px;
+
+  @include narrow {
+    grid-template-columns: 1fr;
+  }
+}
+
+// The join row: the token and the one button that spends it.
+.adi-fleet-joinrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 10px;
+
+  @include narrow {
+    grid-template-columns: 1fr;
+  }
+}
+
+// One pending rename: the sentence, then its two answers on the right.
+.adi-fleet-change {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-ui);
+  color: var(--ink-2);
+
+  &:last-of-type { border-bottom: 0; }
+
+  b {
+    font-weight: 500;
+    color: var(--ink);
+  }
+}
+
+// What a join bought: the sentence, the credential, the link.
+.adi-fleet-joined {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+  max-width: 64ch;
+
+  p { color: var(--ink-2); }
+
+  b {
+    font-weight: 500;
+    color: var(--ink);
+  }
+}
+
+// The pairing card — the one card on the page (§5): a hairline, the large radius, no fill.
+.adi-fleet-card {
+  @include card;
+  margin-top: 32px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  &__meta {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--fs-small);
+    font-weight: 400;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+
+  // The code beside what to do with it, while there is room; stacked when there is not.
+  &__body {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 28px;
+    padding: 20px 18px;
+    border-bottom: 1px solid var(--line);
+
+    @include narrow {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  &__foot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 18px 18px;
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+    line-height: 1.5;
+
+    p { max-width: 64ch; }
+  }
+}
+
+// The code itself, on a white plate. Its light modules are painted into the SVG rather than
+// inherited, because this panel is dark and a QR drawn on a dark ground is an inverted one that
+// many cameras refuse; the white here is the quiet zone's frame around that, for the same reason
+// — the one place on the page that names a colour.
+.adi-fleet-qr {
+  // Measured, not chosen by eye: a v15 code (77 modules) rendered at 220 CSS px is about 5 device
+  // pixels a module on a Retina panel, and Apple Vision would not find it at that size — at 260 it
+  // does. So the floor has real headroom above what decoded.
+  width: clamp(260px, 38vw, 320px);
+  padding: 12px;
+  background: #fff;
+  border-radius: var(--r);
+
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+}
+
+// What to do with the code.
+.adi-fleet-say {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+
+  p {
+    color: var(--ink-2);
+    max-width: 60ch;
+  }
+
+  a {
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--ink-3);
+  }
+
+  b {
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  &__sm {
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+  }
+
+  &__label { margin-top: 14px; }
+}

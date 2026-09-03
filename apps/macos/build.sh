@@ -120,6 +120,10 @@ plutil -replace ADIDomain -string "$ADI_DOMAIN" "$APP/Contents/Info.plist"
 # App icon (Info.plist references it via CFBundleIconFile = ADI). Regenerate with
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"
+# The faces the window is set in (design/DESIGN.md §4): Geist and Geist Mono, variable TTFs,
+# with their OFL beside them. Info.plist's ATSApplicationFontsPath points at this directory, so
+# the app registers them at launch; missing, the views fall back to the system face.
+cp -R "$SCRIPT_DIR/Resources/Fonts" "$APP/Contents/Resources/Fonts"
 plutil -replace CFBundleIconFile -string "$APP_NAME" "$APP/Contents/Info.plist"
 # adi-mono resolves adi-dns/adi-hive/adi-app as siblings, so they all live side by side
 # in Resources (adi-hive runs adi-app as the app.adi front-door service). Fuse the

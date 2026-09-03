@@ -1,0 +1,54 @@
+// Page-local styles for `src/pages/project_detail`. Shared components live in adi-css; a shape
+// that exists on one page lives here. Tokens from design/tokens.css only.
+
+// The overview's key-value list (DESIGN.md §6): keys `--ink-3`, values `--ink-2`, machine values
+// mono. One column of facts, not a row of tiles.
+.adi-kv {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 6px 10px;
+  max-width: 64ch;
+  font-size: var(--fs-small);
+
+  dt { color: var(--ink-3); }
+  dd {
+    margin: 0;
+    color: var(--ink-2);
+    overflow-wrap: anywhere;
+  }
+}
+
+// A project's description: body copy, not a note.
+.adi-project__desc {
+  max-width: 64ch;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+// The file browser's rows: the open file is the one drawn in full ink.
+.adi-filerow[aria-current="true"] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+// A field that takes the whole row of a wrapping form — a textarea, a code editor, a chip row.
+.adi-field--full {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+// A wrapping row of choices inside a field: presets, events, project checkboxes.
+.adi-field__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+// The second line of a cell — a path, a pid, a hook's file — in meta type under the name.
+.adi-cell__sub {
+  display: block;
+  margin-top: 1px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+}

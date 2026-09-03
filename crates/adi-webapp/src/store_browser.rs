@@ -8,6 +8,7 @@
 //! Directories load lazily, one listing per expanded folder, so opening a deep path never
 //! re-fetches or collapses what is already open above it.
 
+use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::FileEntry;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -28,14 +29,21 @@ pub(crate) fn store_rail(state: State, route: RwSignal<Route>) -> AnyView {
                     title=move || if store.open.get() { "Hide the store browser" } else { "Show the store browser" }
                     aria-expanded=move || store.open.get().to_string()
                     on:click=move |_| toggle_rail(state)>
-                    {move || if store.open.get() { "\u{25b8}" } else { "\u{25c2}" }}
+                    {move || if store.open.get() {
+                        view! { <Icon icon=Lucide::PanelRight/> }
+                    } else {
+                        view! { <Icon icon=Lucide::PanelLeft/> }
+                    }}
                 </button>
                 {move || store.open.get().then(|| view! {
                     <span class="adi-store__title">"Store"</span>
                     <span class="adi-spacer"></span>
                     <button class="adi-btn adi-btn--icon-sm" type="button" title="Reload the tree"
+                        aria-label="Reload the tree"
                         prop:disabled=move || store.busy.get()
-                        on:click=move |_| reload_root(state)>"\u{21bb}"</button>
+                        on:click=move |_| reload_root(state)>
+                        <Icon icon=Lucide::RefreshCw/>
+                    </button>
                 })}
             </div>
 
@@ -255,7 +263,7 @@ fn draft_row(state: State, dir: &str, depth: usize) -> Option<AnyView> {
         view! {
             <div class="adi-store__row adi-store__row--new" style=indent(depth)>
                 <span class="adi-store__caret">
-                    {if draft.is_dir { "\u{25b8}" } else { "" }}
+                    {draft.is_dir.then(|| view! { <Icon icon=Lucide::ChevronRight size=IconSize::Sm/> })}
                 </span>
                 <input class="adi-store__input" type="text" node_ref=input
                     spellcheck="false" autocomplete="off"
@@ -365,7 +373,11 @@ fn entry_row(
                 }
                 on:click=move |_| toggle_dir(state, click_path.clone())>
                 <span class="adi-store__caret">
-                    {move || if expanded(&caret_path) { "\u{25be}" } else { "\u{25b8}" }}
+                    {move || if expanded(&caret_path) {
+                        view! { <Icon icon=Lucide::ChevronDown size=IconSize::Sm/> }
+                    } else {
+                        view! { <Icon icon=Lucide::ChevronRight size=IconSize::Sm/> }
+                    }}
                 </span>
                 <span class="adi-store__name">{name}</span>
             </button>

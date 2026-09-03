@@ -1,9 +1,8 @@
 //! `adi-ui` — the adi component library.
 //!
-//! Leptos components, styled with Tailwind utilities that resolve to the
-//! [`adi-css`](../adi-css) design tokens. A host page supplies the tokens (any page that
-//! loads the adi design system already does) and imports
-//! [`styles/ui.css`](./styles/ui.css); the components bring their own look from there.
+//! Leptos components, styled with Tailwind utilities that resolve to the one token file,
+//! `design/tokens.css`, and drawn to `design/DESIGN.md`. A host page imports
+//! [`styles/ui.css`](./styles/ui.css) and the components bring their own look from there.
 //!
 //! ```ignore
 //! use adi_ui::{Button, ButtonVariant, Panel};
@@ -27,8 +26,8 @@
 //!
 //! # Developing
 //!
-//! `trunk serve` in this directory opens the playground — every component on one page, in
-//! both themes, with hot reload. See the [README](./README.md).
+//! `trunk serve` in this directory opens the playground — every component on one page, with
+//! hot reload. See the [README](./README.md).
 
 // Leptos components are PascalCase functions by convention, which is not a Rust function name.
 #![allow(non_snake_case)]
@@ -48,6 +47,7 @@ mod field;
 mod flag;
 mod form;
 pub mod highlight;
+mod icon;
 mod input;
 mod kbd;
 mod mark;
@@ -71,7 +71,7 @@ mod voice;
 pub use app::{AppItem, AppState};
 pub use ask::{Ask, AskOption, AskQuestion};
 pub use attach::{AttachState, Attached, Attaching, files_of};
-pub use badge::{Badge, BadgeTone};
+pub use badge::{Badge, BadgeTone, Dot, DotTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use chat::{Chat, Entry, Image, Queued, Role, ToolCall, ToolState, Turn, by_position};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
@@ -83,6 +83,7 @@ pub use field::Field;
 pub use flag::{Flag, FlagList, FlagMark};
 pub use form::{Form, Hint};
 pub use highlight::{Lang, Tok, highlight};
+pub use icon::{Icon, IconSize, Lucide, STROKE, svg as icon_svg};
 pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};

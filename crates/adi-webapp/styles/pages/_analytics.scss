@@ -1,0 +1,223 @@
+// Page-local styles for `src/pages/analytics.rs`. Shared components live in adi-css; the four
+// shapes that exist only on this page live here. Tokens from design/tokens.css only.
+//
+// Colour on this page is spent one way: a 6px dot before a word or a number, in the state's
+// colour, and only when the state is asking for something (DESIGN.md §3). Every number is sans
+// and tabular; nothing is a box.
+
+@use "../../../adi-css/scss/mixins" as *;
+
+// One line per run in flight: state, agent, project, the task, and how long it has been going.
+.adi-an-nows {
+  display: flex;
+  flex-direction: column;
+}
+
+.adi-an-now {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-ui-sm);
+
+  &:last-child { border-bottom: 0; }
+
+  &__state {
+    flex: none;
+    color: var(--ink-2);
+    font-size: var(--fs-small);
+    white-space: nowrap;
+  }
+
+  &__name {
+    flex: none;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  // Only the task flexes, and it is the only thing here allowed to be long — a run launched
+  // with three paragraphs truncates in place rather than pushing the elapsed time off the end
+  // of the row, which is the number the row is read for.
+  &__task {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__meta {
+    flex: none;
+    color: var(--ink-3);
+    font-size: var(--fs-small);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// The dot. `running` is the accent: it is the page's live state, and at 6px it is not the
+// screen's one orange (§3).
+.adi-an-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  vertical-align: 1px;
+
+  &--running { background: var(--accent); }
+  &--ok { background: var(--ok); }
+  &--warn { background: var(--warn); }
+  &--err { background: var(--err); }
+}
+
+// The stats row (§6): three numbers, 20px/500, a 12px label under each.
+.adi-an-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 480px;
+}
+
+.adi-an-stat {
+  b {
+    display: block;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  span {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+// The one line of detail under the numbers.
+.adi-an-fine {
+  margin-top: 10px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+// The counts that only matter when they are not zero, as a key-value list (§6).
+.adi-an-kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px 10px;
+  margin-top: 16px;
+  max-width: 480px;
+  font-size: var(--fs-small);
+
+  dt { color: var(--ink-3); }
+
+  dd {
+    margin: 0;
+    color: var(--ink-2);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// A fortnight of bars, seated on one baseline so the heights are read against each other. Ink,
+// not the accent: today is the darkest bar, and that is all the emphasis a chart of one series
+// needs.
+.adi-an-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding-top: 8px;
+  max-width: 640px;
+
+  &__col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    height: 104px;
+    min-width: 0;
+  }
+
+  &__bar {
+    display: block;
+    border-radius: 2px 2px 0 0;
+    background: var(--ink-3);
+  }
+
+  &__col:hover &__bar { background: var(--ink-2); }
+
+  &__bar--today { background: var(--ink); }
+
+  &__day {
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// How runs ended: a name, a proportional bar, a count.
+.adi-an-ends {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 640px;
+}
+
+.adi-an-end {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--fs-ui-sm);
+
+  &__name {
+    flex: 0 0 auto;
+    min-width: 140px;
+    color: var(--ink-2);
+
+    &--err { color: var(--err); }
+  }
+
+  &__track {
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--bg-active);
+    overflow: hidden;
+  }
+
+  &__fill {
+    display: block;
+    height: 100%;
+    background: var(--ink-2);
+
+    &--err { background: var(--err); }
+  }
+
+  &__n {
+    flex: 0 0 auto;
+    min-width: 3ch;
+    text-align: right;
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// The agents nothing has run, as tags.
+.adi-an-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

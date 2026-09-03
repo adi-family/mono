@@ -1,0 +1,104 @@
+/* ADI design tokens — the single source of truth. Import this; never hardcode a hex in a component. */
+:root {
+  /* Surfaces, dark (the app). Higher = closer to the user. */
+  --bg-side:   #101010;  /* sidebars, top bar, status bar, right panel */
+  --bg:        #161616;  /* page, transcript — the lightest large surface */
+  --bg-hover:  #1B1B1B;  /* row / item hover */
+  --bg-raise:  #1E1E1E;  /* inputs, code blocks, composer */
+  --bg-active: #232323;  /* selected list item, seg-control selected, answer chip */
+
+  /* Lines */
+  --line:        rgba(255,255,255,.07);  /* hairlines between rows, panels, sections */
+  --line-strong: rgba(255,255,255,.13);  /* input borders, table header rule */
+
+  /* Ink */
+  --ink:   #ECEAE6;  /* primary text, titles, list item titles */
+  --ink-2: #A9A6A0;  /* secondary text, values, agent names in meta */
+  --ink-3: #6F6C67;  /* labels, meta, placeholders, table headers */
+  --code:  #D6D3CD;  /* monospace text */
+
+  /* Accent — exactly one filled orange element per screen */
+  --accent:       #E8532A;
+  --accent-hover: #F05F35;
+
+  /* Semantic — 6px dots and pills only, never fills */
+  --ok:   #4CB77A;
+  --warn: #E0A84B;
+  --err:  #E25C5C;
+
+  /* Type */
+  --sans:    "Geist", system-ui, sans-serif;
+  --mono:    "Geist Mono", ui-monospace, monospace;
+  --display: "Bricolage Grotesque", var(--sans);  /* landing headlines only */
+
+  /* Icons (Lucide) */
+  --icon-stroke: 1.5; --icon-sm: 14px; --icon: 16px; --icon-lg: 20px;
+
+  /* Radius */
+  --r-sm: 4px;    /* inline code, seg-control items */
+  --r:    6px;    /* buttons, inputs, list items — default */
+  --r-lg: 10px;   /* cards, code blocks */
+  --r-pill: 999px;
+
+  /* Spacing scale — use these, nothing in between */
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s6: 24px; --s8: 32px; --s12: 48px; --s16: 64px; --s24: 96px;
+
+  /* Shell */
+  --bar-h: 48px; --status-h: 28px; --side-w: 264px; --panel-w: 316px; --form-w: 640px; --container: 1200px;
+}
+
+/* Light mode — landing and docs only. The app is dark. */
+.light, [data-theme="light"] {
+  --bg-side: #F4F3F0; --bg: #FBFAF8; --bg-hover: #F1EFEB; --bg-raise: #FFFFFF; --bg-active: #EBE8E2;
+  --line: rgba(0,0,0,.07); --line-strong: rgba(0,0,0,.13);
+  --ink: #17150F; --ink-2: #55514A; --ink-3: #8C8780; --code: #3D3A34;
+  --accent: #D6431C; --accent-hover: #C23A15;
+}
+
+/* Base */
+html { background: var(--bg); color: var(--ink); }
+body { font-family: var(--sans); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; font-feature-settings: "tnum"; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; color: var(--code); }
+code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: var(--r-sm); }
+.light code { background: rgba(0,0,0,.06); }
+
+/* ---- Derived tokens ------------------------------------------------------------------
+   Values DESIGN.md spells out as rules rather than as named colours, given names here so no
+   component has to restate them. Everything below is derived from the palette above; change
+   the palette, not these. */
+:root {
+  --on-accent: #FFFFFF;                 /* text on an --accent fill (§6 button) */
+  --chip:       rgba(255,255,255,.07);  /* tags, chips, pills, inline code (§3) */
+  --chip-hover: rgba(255,255,255,.11);
+  --btn:        rgba(255,255,255,.08);  /* the default button fill (§6) */
+  --btn-hover:  rgba(255,255,255,.12);
+  --ok-soft:   rgba(76,183,122,.12);    /* the 12% tint behind a status pill (§3) */
+  --warn-soft: rgba(224,168,75,.12);
+  --err-soft:  rgba(226,92,92,.12);
+  --scrim: rgba(0,0,0,.55);             /* behind a dialog or a drawer */
+  --focus: var(--ink-2);                /* keyboard focus ring; never orange in the app (§3) */
+  --transition: 120ms ease;             /* the one duration for a user-triggered state change (§8) */
+
+  /* Type scale (§4). Sizes only — weight and colour are the component's call. */
+  --fs-display: clamp(44px, 5.6vw, 76px);  /* landing hero only */
+  --fs-title:   22px;    /* page title, 600 */
+  --fs-section: 16px;    /* panel headers, form sections, 600 */
+  --fs-body:    15.5px;  /* transcript, line-height 1.6, max 80ch */
+  --fs-ui:      14px;    /* inputs, table cells */
+  --fs-ui-sm:   13.5px;  /* list items, buttons (500) */
+  --fs-small:   13px;    /* help text, notices, second lines — --ink-2 */
+  --fs-label:   12px;    /* field labels, table headers, panel section dividers — --ink-3 */
+  --fs-mono:    12.5px;  /* paths, hashes, commands, ids — --code */
+}
+.light, [data-theme="light"] {
+  --on-accent: #FFFFFF;
+  --chip:       rgba(0,0,0,.06);
+  --chip-hover: rgba(0,0,0,.10);
+  --btn:        rgba(0,0,0,.06);
+  --btn-hover:  rgba(0,0,0,.10);
+  --ok-soft:   rgba(76,183,122,.14);
+  --warn-soft: rgba(224,168,75,.16);
+  --err-soft:  rgba(226,92,92,.12);
+  --scrim: rgba(23,21,15,.45);
+  --focus: var(--accent);               /* on paper the ring may be the accent (landing) */
+}

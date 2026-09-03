@@ -6,7 +6,8 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::pages::agents::{
-    agent_actions, agent_cell, agent_key, open_agent_editor, project_run_limit_view,
+    agent_actions, agent_cell, agent_key, agent_name_cell, open_agent_editor,
+    project_run_limit_view,
 };
 use crate::routing::{ProjectSection, Route};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
@@ -127,8 +128,8 @@ pub(crate) fn agents_panel(
                 </button>
             </form>
             <div class="adi-hint">
-                "These appear in the global " <code>"Agents"</code> " list too. Models, permission
-                 modes, and other backend params live on the Agents page."
+                "These appear in the global agents list too. Models, permission modes, and other "
+                "backend params live on the Agents page."
             </div>
         </section>
     }
@@ -183,34 +184,37 @@ fn project_agent_rows(
             let edit = menu_item(state, "Edit", false, move || {
                 open_agent_editor(state, route, edit_form, Some(&a_edit));
             });
-            let actions = row_actions(state, format!("agent:{}", a.name),
-                agent_actions(state, watch, &a), vec![edit]);
+            let actions = row_actions(
+                state,
+                format!("agent:{}", a.name),
+                agent_actions(state, watch, &a),
+                vec![edit],
+            );
             view! { <TableRow state=table cell=move |col| match col {
-                    "Status" => {
-                        if a.running {
-                            view! {
-                                <span><span class="adi-tstatus" data-status="ready">"Running"</span></span>
-                            }
-                            .into_any()
-                        } else {
-                            view! { <span><span class="adi-muted">"—"</span></span> }.into_any()
+                // Running is a live state: the accent dot (DESIGN.md §3), not a badge.
+                "Status" => {
+                    if a.running {
+                        view! {
+                            <span class="adi-status" data-state="running">
+                                <span class="adi-status__led"></span>"running"
+                            </span>
                         }
+                        .into_any()
+                    } else {
+                        view! { <span><span class="adi-muted">"—"</span></span> }.into_any()
                     }
-                    // Only the Name cell differs from the global page's, by carrying the owning
-                    // sub-project's marker.
-                    "Name" => {
-                        let name = if a.starred {
-                            format!("★ {}", a.name)
-                        } else {
-                            a.name.clone()
-                        };
-                        let marker = owner.clone().map(|(oid, oname)| {
-                            super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
-                        });
-                        view! { <span>{name}{marker}</span> }.into_any()
-                    }
-                    other => agent_cell(other, &a),
-                } actions=actions/> }.into_any()
+                }
+                // Only the Name cell differs from the global page's, by carrying the owning
+                // sub-project's marker after the name.
+                "Name" => {
+                    let marker = owner.clone().map(|(oid, oname)| {
+                        super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
+                    });
+                    view! { <span>{agent_name_cell(&a)}{marker}</span> }.into_any()
+                }
+                other => agent_cell(other, &a),
+            } actions=actions/> }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

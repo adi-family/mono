@@ -4,22 +4,30 @@
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
-/// What the button is *for*, which is the only thing that decides how it looks. Weight is
-/// spent on the one action a screen wants; everything else recedes.
+/// What the button is *for*, which is the only thing that decides how it looks.
+///
+/// `design/DESIGN.md` §2.4: one filled orange per screen. [`Primary`](Self::Primary) is that
+/// orange and a screen gets one; when the orange is already spent — an update button in the
+/// bar, a running dot the page is about — the page's main action is [`Strong`](Self::Strong),
+/// an ink fill. Everything else recedes into the translucent default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonVariant {
-    /// The default action on a surface: bordered, on the surface colour.
+    /// Most buttons: a translucent fill on whatever surface it sits on.
     #[default]
     Default,
-    /// The one action a view exists for. At most one per screen.
+    /// The one action a screen exists for — Send, Save, Update. Orange, and one per screen.
     Primary,
-    /// Present but quiet — no border until you point at it.
+    /// The page's main action when orange is taken: ink on the page.
+    Strong,
+    /// Present but quiet — no fill until you point at it. Cancel, tertiary controls.
     Ghost,
-    /// Destructive. Reads as text until hover, so it never competes for the eye.
+    /// Destructive. Red text on the default fill; the word says the rest.
     Danger,
-    /// Reads as a link, behaves as a button. For inline actions inside prose or a table cell.
+    /// Reads as a link, behaves as a button. For an action inside prose or a meta line. Never
+    /// orange: links inside the app take the ink around them (§3).
     Link,
 }
 
@@ -29,36 +37,26 @@ impl ButtonVariant {
     #[must_use]
     pub fn classes(self) -> &'static str {
         match self {
-            Self::Default => {
-                "border border-edge bg-card text-body hover:bg-bubble hover:text-ink \
-                 active:bg-selected"
-            }
-            Self::Primary => {
-                "border border-transparent bg-accent-fill text-on-accent hover:opacity-90 \
-                 active:opacity-80"
-            }
-            Self::Ghost => {
-                "border border-transparent bg-transparent text-meta hover:bg-card \
-                 hover:text-ink"
-            }
-            Self::Danger => {
-                "border border-transparent bg-transparent text-err hover:bg-err-bg-2 \
-                 active:bg-err-bg-2"
-            }
+            Self::Default => "bg-btn text-ink hover:bg-btn-hover",
+            Self::Primary => "bg-accent text-on-accent hover:bg-accent-hover",
+            Self::Strong => "bg-ink text-bg hover:bg-white",
+            Self::Ghost => "bg-transparent text-ink-2 hover:bg-hover hover:text-ink",
+            Self::Danger => "bg-btn text-err hover:bg-btn-hover",
             Self::Link => {
-                "border border-transparent bg-transparent px-0 text-accent hover:underline"
+                "bg-transparent px-0 text-ink-2 underline decoration-ink-3 \
+                 underline-offset-[3px] hover:text-ink"
             }
         }
     }
 }
 
-/// Button height. The dense default matches the rest of the panel furniture; `Small` is for
-/// controls that sit inside a table row.
+/// Button height. The default is the spec's `7px 14px`; `Small` is for a control that sits
+/// inside a table row or a 48px bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ButtonSize {
-    /// Table-row scale.
+    /// Row scale: `5px 10px`, 13px.
     Small,
-    /// The default.
+    /// The default: `7px 14px`, 13.5px.
     #[default]
     Medium,
 }
@@ -68,30 +66,28 @@ impl ButtonSize {
     #[must_use]
     pub fn classes(self) -> &'static str {
         match self {
-            Self::Small => "h-6 gap-1 px-2 text-mini",
-            Self::Medium => "h-7 gap-2 px-3 text-row",
+            Self::Small => "gap-1 px-2.5 py-[5px] text-small",
+            Self::Medium => "gap-1.5 px-3.5 py-[7px] text-row",
         }
     }
 
-    /// The glyph's box at this step — a shade under the type size, so an icon reads as part
-    /// of the label rather than as a second thing next to it.
+    /// The glyph at this step: 14 in a row-scale button, 16 otherwise (DESIGN.md §9).
     #[must_use]
-    pub fn icon_classes(self) -> &'static str {
+    pub fn icon_size(self) -> IconSize {
         match self {
-            Self::Small => "size-3 shrink-0",
-            Self::Medium => "size-3.5 shrink-0",
+            Self::Small => IconSize::Sm,
+            Self::Medium => IconSize::Md,
         }
     }
 }
 
-/// Shared by every variant: the box, the type, and the states. Focus uses the same ring the
-/// design system puts on `:focus-visible`, so a button focused by keyboard looks like every
-/// other focused control on the page.
-const BASE: &str = "inline-flex items-center justify-center whitespace-nowrap rounded-sm \
-                    font-medium transition-[background-color,opacity,color] duration-100 \
+/// Shared by every variant: the box, the type, and the states. Focus is the same quiet ring
+/// the design system puts on every `:focus-visible` — never orange (§3).
+const BASE: &str = "inline-flex items-center justify-center whitespace-nowrap rounded-md \
+                    font-medium leading-[1.2] transition-[background-color,color] duration-100 \
                     cursor-pointer select-none \
-                    focus-visible:outline-2 focus-visible:outline-offset-2 \
-                    focus-visible:outline-accent \
+                    focus-visible:outline-[1.5px] focus-visible:outline-offset-2 \
+                    focus-visible:outline-focus \
                     disabled:cursor-not-allowed disabled:opacity-50";
 
 /// A button.
@@ -113,15 +109,12 @@ pub fn Button(
     #[prop(optional)]
     submit: bool,
     #[prop(optional, into)] disabled: Signal<bool>,
-    /// A glyph before the label, as the inner markup of a 16×16 `<svg>` — the same shape
-    /// [`crate::TreeNode::icon`] takes, so one set of paths serves both.
-    ///
-    /// It is drawn in `currentColor` at a size the button picks, which is what keeps an
-    /// icon button on-theme through every variant and both themes without the call site
-    /// knowing anything. A button with an icon and no children is a square icon button;
-    /// give it an `aria-label` when it has no words.
+    /// A glyph before the label. Drawn in `currentColor` at the size the button picks, which
+    /// is what keeps an icon button on-theme through every variant without the call site
+    /// knowing anything. A button with an icon and no children is a square icon button; give
+    /// it an `aria-label` when it has no words.
     #[prop(optional)]
-    icon: Option<&'static str>,
+    icon: Option<Lucide>,
     /// Extra utilities from the call site: layout, width, margin.
     #[prop(optional, into)]
     class: String,
@@ -134,19 +127,7 @@ pub fn Button(
             type=if submit { "submit" } else { "button" }
             disabled=move || disabled.get()
         >
-            {icon.map(|markup| view! {
-                <svg
-                    class=size.icon_classes()
-                    viewBox="0 0 16 16"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="1.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
-                    inner_html=markup
-                ></svg>
-            })}
+            {icon.map(|icon| view! { <Icon icon=icon size=size.icon_size()/> })}
             {children.map(|c| c())}
         </button>
     }

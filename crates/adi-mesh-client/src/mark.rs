@@ -1,16 +1,21 @@
-//! The adi mark — **Trefoil**: three hexagons at 120°, painted back to front, weak to strong.
+//! The adi mark — three hexagons, one in front (`design/DESIGN.md` §10), painted back to front,
+//! weak to strong.
 //!
 //! This is a fourth renderer of one drawing, and it is a fourth because nothing this client can
 //! depend on already draws it. `adi-ui`'s `Mark` is the obvious reuse, except that the whole
-//! component library is styled with Tailwind utilities resolved against the `adi-css` design
-//! tokens — a stylesheet this page does not have and would have to ship a copy of, to draw one
-//! logo. `adi-webapp/assets/mark.svg` is a file rather than markup, so it lands as a second
-//! network request in a client whose premise is that it fetches nothing from anywhere.
+//! component library is styled with Tailwind utilities — a stylesheet this page does not have
+//! and would have to ship a copy of, to draw one logo. `adi-webapp/assets/mark.svg` is a file
+//! rather than markup, so it lands as a second network request in a client whose premise is
+//! that it fetches nothing from anywhere.
 //!
 //! So the geometry is restated, and [`the_lobes_match_the_spec`](tests::the_lobes_match_the_spec)
 //! re-derives every path below from the five numbers all four copies are built from — the same
 //! guard `adi-hive/src/notfound.rs` puts on its copy, and the reason a drift here is a failing
 //! test rather than two logos that quietly stop matching.
+//!
+//! Monochrome: `currentColor` at 52%, 74% and 100%, so the mark takes the ink of whatever it sits
+//! in. No gloss, no gradient, no named colour — the coloured build is for the app icon and the
+//! landing, and this is the app.
 //!
 //! Two things about the drawing are load-bearing, and both are mistakes somebody already made
 //! (`adi-ui/src/mark.rs` has the long form):
@@ -26,29 +31,10 @@ use leptos::prelude::*;
 /// Everything inside the `<svg>`, as markup.
 ///
 /// Set with `inner_html` rather than written as elements in the `view!`, which is what `adi-ui`
-/// does with its copy and for the same reason: `linearGradient` and `maskUnits` are camelCase in
-/// SVG, and markup is the one form in which they cannot be normalised into something a browser
-/// ignores.
-///
-/// The ink is `currentColor` at 52% and 100%, so the mark takes the colour of whatever it sits in
-/// and follows both themes without a second drawing. The middle lobe is the one named colour —
-/// `#FA5019`, the same accent the Dock icon, the disk image and the front door's error pages use.
+/// does with its copy and for the same reason: `maskUnits` is camelCase in SVG, and markup is
+/// the one form in which it cannot be normalised into something a browser ignores.
 const MARKUP: &str = concat!(
     r##"<defs>"##,
-    // Specular then shade, handing over at the same offset so there is no band between them. Laid
-    // *over* the lobe and never graded into its own alpha: grading the alpha turns the front lobe
-    // translucent at its foot and lets whatever is behind show through.
-    r##"<linearGradient id="adi-mark-gloss" x1="0" y1="0" x2="0" y2="1">"##,
-    r##"<stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>"##,
-    r##"<stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>"##,
-    r##"<stop offset=".55" stop-color="#000000" stop-opacity="0"/>"##,
-    r##"<stop offset="1" stop-color="#000000" stop-opacity=".28"/>"##,
-    r##"</linearGradient>"##,
-    r##"<linearGradient id="adi-mark-accent" x1="0" y1="0" x2="0" y2="1">"##,
-    r##"<stop offset="0" stop-color="#FF8A4A"/>"##,
-    r##"<stop offset=".55" stop-color="#FA5019"/>"##,
-    r##"<stop offset="1" stop-color="#D8380A"/>"##,
-    r##"</linearGradient>"##,
     // White keeps, black erases: each mask holds the lobes that sit in front of the one it cuts,
     // grown by the bleed that leaves the hairline.
     r##"<mask id="adi-mark-cut-0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">"##,
@@ -63,15 +49,12 @@ const MARKUP: &str = concat!(
     r##"</defs>"##,
     r##"<g mask="url(#adi-mark-cut-0)">"##,
     r##"<path fill="currentColor" fill-opacity="0.52" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>"##,
-    r##"<path fill="url(#adi-mark-gloss)" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>"##,
     r##"</g>"##,
     r##"<g mask="url(#adi-mark-cut-1)">"##,
-    r##"<path fill="url(#adi-mark-accent)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>"##,
-    r##"<path fill="url(#adi-mark-gloss)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>"##,
+    r##"<path fill="currentColor" fill-opacity="0.74" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>"##,
     r##"</g>"##,
     r##"<g>"##,
     r##"<path fill="currentColor" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>"##,
-    r##"<path fill="url(#adi-mark-gloss)" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>"##,
     r##"</g>"##,
 );
 
@@ -136,9 +119,22 @@ mod tests {
     #[test]
     fn the_front_lobe_is_the_strongest() {
         let faded = MARKUP.find("fill-opacity=\"0.52\"").expect("the back lobe");
+        let mid = MARKUP
+            .find("fill-opacity=\"0.74\"")
+            .expect("the middle lobe");
         let full = MARKUP
             .rfind("<path fill=\"currentColor\" d=")
             .expect("the front lobe");
-        assert!(faded < full, "the lobes must be declared back to front");
+        assert!(
+            faded < mid && mid < full,
+            "the lobes must be declared back to front"
+        );
+    }
+
+    /// §10: no gradient, no gloss, no named colour of its own.
+    #[test]
+    fn the_mark_is_flat() {
+        assert!(!MARKUP.contains("Gradient"));
+        assert!(!MARKUP.contains("#FA5019") && !MARKUP.contains("#E8532A"));
     }
 }

@@ -22,7 +22,7 @@
 // a cached port table would be worse than an error. And a node's response cached on this origin
 // would be one node's data readable by the next node opened here.
 
-const CACHE = "adi-mesh-client-v1";
+const CACHE = "adi-mesh-client-v2";
 
 // The shell's own files, fetched on install so a cold offline launch still draws a frame. The
 // hashed wasm/js names are not known here — they land in the cache on first load instead.

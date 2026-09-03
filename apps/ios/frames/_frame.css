@@ -1,39 +1,39 @@
-/* The App Store panel — the "dimensional, not generated" field, in portrait, around a phone.
+/* The App Store panel, in portrait, around a phone — drawn to design/DESIGN.md.
  *
- * EVERY VALUE IN THE FIELD IS LIFTED, NOT INVENTED. The source is
- * `projects/adi-design/explorations/04-dimensional/d-recommended.html` and the decision it
- * produced (`decisions/2026-08-27-dimensional-not-generated.md`), which states the permitted
- * ranges as numbers so that a later run cannot argue taste. The only adaptation is geometry: that
- * composition is 1270x760 landscape with the copy left and the artefact right, and a store panel
- * is portrait with the copy above. The sources are re-placed to keep the same light *direction*,
- * not re-tuned to look nice.
+ * A dark page (`--bg`), the copy in Geist at the top, the device below it on a flat rail. Nothing
+ * else: no light field, no vignette, no grain, no shadow under the phone. §8 forbids every one of
+ * those, and the panel is the product's own surface, not a photograph of it — the ink, the paper
+ * and the one orange are the same ones the app draws with, which is what makes a listing read as
+ * the app rather than as a poster about it.
  *
- * Two things the decision explicitly threw away are absent here on purpose, because the first
- * version of these panels had reinvented both:
- *
- *   - the accent on a rule under the subhead. "A second accent spend on a 44px line that carries
- *     no information." The rule stays, at white .16, because the *rule* was never the problem.
- *   - any gradient whose light has no source in the frame. The lip highlight below runs 160deg,
- *     which is the direction b1 and b4 actually come from.
+ * The values here are `design/tokens.css`'s dark set, restated because this file is rendered from
+ * a `file://` URL by a headless browser and cannot import across the tree; refresh them from the
+ * token file, never by eye.
  *
  * Sizes are in px against a frame whose width is set per device by the renderer, so the same
  * sheet serves the 1320-wide iPhone panel and the 2064-wide iPad one.
  */
 
 :root {
-  /* The two permitted grounds. #0A0B0D is the darker; the field needs it to reach the measured
-     swing, because swing is relative to the ground and a lighter ground eats it. */
-  --ground: #0A0B0D;
-  --ink: #F1F2F4;
-  /* The reference composition sets its subhead at .64, and that is right THERE: its copy sits
-     left of centre in a landscape frame, over field that has already fallen off. Here the copy is
-     at the top of a portrait panel, which is exactly where the warm sources peak — at .64 the
-     subhead measured 3.41 : 1 against the brightest ground it sits on, under the 4.5 the design
-     project's own checker holds body text to. The ratio is the rule; the alpha is not. */
-  --muted: rgba(255, 255, 255, .82);
+  --bg: #161616;
+  --bg-side: #101010;
+  --bg-raise: #1E1E1E;
+  --line: rgba(255, 255, 255, .07);
+  --line-strong: rgba(255, 255, 255, .13);
+  --ink: #ECEAE6;
+  --ink-2: #A9A6A0;
+  --ink-3: #6F6C67;
+  --sans: "Geist", system-ui, -apple-system, sans-serif;
   --stage-top: .205;
-  --blur: .092;
-  --vig: .38;
+}
+
+/* Geist, from the crate that ships it for every other surface (crates/adi-ui/fonts). A relative
+   path, because this sheet is opened from disk. */
+@font-face {
+  font-family: "Geist";
+  src: url("../../../crates/adi-ui/fonts/geist-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box }
@@ -42,85 +42,31 @@ html, body {
   width: var(--w);
   height: var(--h);
   overflow: hidden;
-  background: var(--ground);
+  background: var(--bg);
 }
 
 body {
   position: relative;
-  /* System stack, one family. The landing brief names Inter / Geist / Space Grotesk /
-     Instrument Serif as the converged AI wave; the system face is the one this audience reads
-     all day and does not notice. */
-  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: var(--sans);
   -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum";
   color: var(--ink);
 }
 
-/* ── the field ─────────────────────────────────────────────────────────────────────────────
- * Five circular sources, blurred past recognition, additive over a near-black ground. Two warm
- * (hue 15 and 21), two cool (hue 223), one white lift. They add toward the ground rather than
- * interpolating, which is why there is no purple crossover band — the thing the eye has actually
- * been trained to spot.
- *
- * Placement follows one rule: THE LIGHT COMES FROM UP AND TO THE LEFT, and everything in the
- * frame agrees. b1 and b4 are the warm sources up-left; b3 is the white lift just right of them;
- * the cool sources sit low and to the right, where the warm ones have fallen off. The lip
- * highlight on the phone runs 160deg for the same reason.
- */
-/* Blur is a variable because the two panels are different shapes: the same fraction of width is
-   a much larger fraction of a 2064x2752 tablet panel's *height* than of a 1320x2868 phone's, and
-   the tablet's field measured flat at .092. The floor the decision sets is 8.5% of frame width
-   and neither value goes under it. */
-.field { position: absolute; inset: 0; z-index: 0; filter: blur(calc(var(--w) * var(--blur))) }
-.field b { position: absolute; display: block; border-radius: 50% }
-
-.b1 { left: calc(var(--w) * -.10); top: calc(var(--h) * -.06);
-      width: calc(var(--w) * .82); height: calc(var(--w) * .82);
-      background: rgba(250, 80, 25, .30) }
-.b2 { right: calc(var(--w) * -.22); bottom: calc(var(--h) * -.04);
-      width: calc(var(--w) * .90); height: calc(var(--w) * .90);
-      background: rgba(86, 116, 190, .34) }
-.b3 { left: calc(var(--w) * .30); top: calc(var(--h) * -.10);
-      width: calc(var(--w) * .66); height: calc(var(--w) * .66);
-      background: rgba(255, 255, 255, .10) }
-.b4 { left: calc(var(--w) * .22); top: calc(var(--h) * .05);
-      width: calc(var(--w) * .46); height: calc(var(--w) * .46);
-      background: rgba(255, 138, 74, .22) }
-.b5 { left: calc(var(--w) * -.14); bottom: calc(var(--h) * -.02);
-      width: calc(var(--w) * .42); height: calc(var(--w) * .42);
-      background: rgba(86, 116, 190, .20) }
-
-.vig  { position: absolute; inset: 0; z-index: 1;
-        background: radial-gradient(130% 105% at 50% 34%, transparent 34%, rgba(0,0,0,var(--vig))) }
-.foot { position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
-        height: calc(var(--h) * .16);
-        background: linear-gradient(180deg, transparent, rgba(0,0,0,.28)) }
-
-/* Grain, because a wide blurred field bands on an 8-bit display and banding reads as "cheap".
-   z-index 1 puts it under every readable layer — laid over the copy it spreads the luminance
-   and costs contrast, which is the measured mistake this rule exists to prevent. */
-.noise { position: absolute; inset: 0; z-index: 1; opacity: .062;
-         mix-blend-mode: overlay; pointer-events: none }
-
 /* ── the copy ──────────────────────────────────────────────────────────────────────────────
- * Hierarchy is bought with size and weight in one family. The step from headline to subhead is
- * ~2.6x, well past the 1.25 minimum the landing brief sets.
- *
- * No tracked uppercase eyebrow: it is on the forbidden list as a named tell.
+ * Hierarchy is size and weight in one family (§4): the headline in 600, the subhead in `--ink-2`.
+ * Headings are never tracked out and there is no eyebrow.
  */
 .copy { position: absolute; z-index: 3;
         left: calc(var(--w) * .076); right: calc(var(--w) * .076);
-        top: calc(var(--h) * .052) }
+        top: calc(var(--h) * .062) }
 
 .copy h1 { font-size: calc(var(--tb) * .0665); font-weight: 600;
-           line-height: 1.11; letter-spacing: -.022em; color: var(--ink) }
+           line-height: 1.08; letter-spacing: -.02em; color: var(--ink);
+           text-wrap: balance }
 
-.copy p  { margin-top: calc(var(--tb) * .026); font-size: calc(var(--tb) * .0255);
-           line-height: 1.58; letter-spacing: .002em; color: var(--muted) }
-
-/* White, not accent. See the header — this is the deletion the reference argued for. */
-.copy .rule { margin-top: calc(var(--tb) * .030);
-              width: calc(var(--tb) * .058); height: 2px; border-radius: 2px;
-              background: rgba(255, 255, 255, .16) }
+.copy p  { margin-top: calc(var(--tb) * .024); font-size: calc(var(--tb) * .0255);
+           line-height: 1.5; color: var(--ink-2); max-width: 30ch }
 
 /* ── the phone ─────────────────────────────────────────────────────────────────────────────
  * A real device, not a rounded crop of a screenshot. The proportions are the 6.9" iPhone's:
@@ -128,8 +74,10 @@ body {
  * the rail around it is ~4pt (0.9%). The Dynamic Island is 125x36pt at 11pt from the top.
  *
  * It bleeds off the bottom of the panel. Every screen in this app is a list that lives in its
- * top third, so a whole phone floating in the frame is mostly empty white — and a phone cut by
- * the frame edge reads as a photograph of an object rather than as an asset that ran out.
+ * top third, so a whole phone floating in the frame is mostly empty — and a phone cut by the
+ * frame edge reads as an object rather than as an asset that ran out.
+ *
+ * The rail is one flat tone one step off the page, edged by a hairline. Nothing casts a shadow.
  */
 .stage { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0;
          top: calc(var(--h) * var(--stage-top)); display: flex; justify-content: center }
@@ -144,22 +92,8 @@ body {
   --rail: calc(var(--w) * var(--device-w) * .0195);
   padding: var(--rail);
   border-radius: calc(var(--w) * var(--device-w) * .148);
-  /* The rail. A single flat black would read as a sticker; this is the light source again —
-     brighter on the top-left edge where b1 and b4 are, falling to near-black bottom-right. */
-  background:
-    linear-gradient(150deg,
-      #6f7378 0%, #3b3e43 12%, #17191c 34%, #101215 62%, #2c2f34 88%, #55585d 100%);
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, .10),
-    0 calc(var(--w) * .012) calc(var(--w) * .05) rgba(0, 0, 0, .55),
-    0 calc(var(--w) * .055) calc(var(--w) * .13) rgba(0, 0, 0, .62);
-}
-
-/* The rail's own lit edge. 160deg — the same direction b1 and b4 come from. This is the
-   difference between a highlight and a sweep with nothing casting it. */
-.device::before {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: linear-gradient(160deg, rgba(255,255,255,.20), transparent 34%);
+  background: var(--bg-side);
+  box-shadow: 0 0 0 1px var(--line-strong);
 }
 
 .screen {
@@ -170,16 +104,10 @@ body {
 .screen img { display: block; width: 100%; height: auto }
 
 /* ── the tablet ────────────────────────────────────────────────────────────────────────────
- * The iPad panel gets an iPad, and this is not a detail. The first render put the 2064x2752
- * tablet capture inside the phone's rail, complete with a Dynamic Island across the top of a
- * 4:3 screen — an object that does not exist, on a store listing, as the proof that we build
- * carefully. A frame has to be the device the screenshot came out of.
- *
- * The 13" iPad Pro's screen is 1032x1376pt with a ~30pt corner radius (2.9% of its width) and a
- * bezel of ~7pt (0.68%). Both are far tighter than the phone's, which is most of why one frame
- * cannot serve both.
+ * The iPad panel gets an iPad. The 13" iPad Pro's screen is 1032x1376pt with a ~30pt corner
+ * radius (2.9% of its width) and a bezel of ~7pt (0.68%). Both are far tighter than the phone's,
+ * which is most of why one frame cannot serve both.
  */
-/* The tablet's copy needs more room above the device, and its own type base. */
 .device.tablet {
   --rail: calc(var(--w) * var(--device-w) * .0068);
   border-radius: calc(var(--w) * var(--device-w) * .035);
@@ -199,16 +127,15 @@ body {
 }
 
 /* ── the mark ──────────────────────────────────────────────────────────────────────────────
- * The one accent spend in our own chrome. It carries information — whose app this is — which is
- * the test the deleted rule failed. The panel's own orange inside the screenshot is the second,
- * and it is inside the artefact where it belongs.
+ * The coloured build beside the wordmark (§10): whose app this is. The panel's only orange
+ * outside the screenshot.
  */
 .mark { position: absolute; z-index: 3;
         left: calc(var(--w) * .076); top: calc(var(--h) * .026);
-        display: flex; align-items: center; gap: calc(var(--tb) * .014) }
-.mark img { display: block; width: calc(var(--tb) * .038); height: calc(var(--tb) * .038) }
-.mark span { font-size: calc(var(--tb) * .0205); font-weight: 600; letter-spacing: .045em;
-             color: rgba(255, 255, 255, .60) }
+        display: flex; align-items: center; gap: calc(var(--tb) * .012) }
+.mark img { display: block; width: calc(var(--tb) * .034); height: calc(var(--tb) * .034) }
+.mark span { font-size: calc(var(--tb) * .0215); font-weight: 600; letter-spacing: 0;
+             color: var(--ink) }
 
 /* The plate render: everything except what is read. `frames/measure.py` takes the background
    luminance from this, because on the full render the brightest thing near a glyph is another

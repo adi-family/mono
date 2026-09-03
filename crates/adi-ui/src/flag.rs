@@ -5,7 +5,7 @@
 //! caused it: not "the tool section is confusing" filed a day later, but this sentence, this
 //! run, this note.
 //!
-//! So the affordance is the one every reader already has. Select a passage and a **flag this**
+//! So the affordance is the one every reader already has. Select a passage and a **Flag this**
 //! button appears at the selection; press it and the passage is quoted into a list with an
 //! empty note under it. Nothing else is asked for — a form standing between noticing something
 //! and recording it is a form that loses most of what gets noticed.
@@ -16,6 +16,7 @@
 
 use leptos::{html, prelude::*, wasm_bindgen::JsCast, web_sys};
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::{Empty, Textarea, merge};
 
 /// A passage somebody marked, and what they had to say about it.
@@ -93,8 +94,8 @@ pub fn FlagMark(
     /// Called with the selected passage, verbatim.
     #[prop(into)]
     on_flag: Callback<String>,
-    /// The button's words. "flag this" by default, which is what it does.
-    #[prop(default = "flag this".into(), into)]
+    /// The button's words. "Flag this" by default, which is what it does.
+    #[prop(default = "Flag this".into(), into)]
     label: String,
     #[prop(optional, into)] class: String,
     children: Children,
@@ -126,11 +127,12 @@ pub fn FlagMark(
                 <button
                     // Above everything in the prompt, and out of the way of the words it is
                     // pointing at: the selection's *bottom* edge, so it never covers what you
-                    // just read to decide to flag it.
-                    class="island absolute z-20 cursor-pointer bg-card px-2 py-1 text-caps \
-                           text-accent shadow-[0_2px_8px_var(--shadow)] hover:bg-bubble \
-                           focus-visible:outline-2 focus-visible:outline-offset-1 \
-                           focus-visible:outline-accent"
+                    // just read to decide to flag it. An ink fill — the strong button — so it
+                    // stands off the raised surface without a shadow.
+                    class="absolute z-20 cursor-pointer rounded-md bg-ink px-2.5 py-1 \
+                           text-small font-medium text-bg hover:bg-white \
+                           focus-visible:outline-[1.5px] focus-visible:outline-offset-1 \
+                           focus-visible:outline-focus"
                     style=format!("left:{}px;top:{}px", x.max(0.0), y + 6.0)
                     type="button"
                     // The selection is gone by the time `click` runs — the browser drops it on
@@ -184,25 +186,24 @@ pub fn FlagList(
                 view! {
                     <div class="flex flex-col gap-1.5">
                         <div class="flex items-start gap-2">
-                            <blockquote class="m-0 min-w-0 flex-1 border-l-2 border-attention \
-                                               pl-2 font-mono text-mini leading-[1.55] \
-                                               whitespace-pre-wrap [word-break:break-word] \
-                                               text-secondary">
+                            <blockquote class="mono m-0 min-w-0 flex-1 border-l-2 \
+                                               border-line-strong pl-3 leading-[1.6] \
+                                               whitespace-pre-wrap [word-break:break-word]">
                                 {flag.quote}
                             </blockquote>
                             {on_drop.map(|cb| view! {
                                 <button
-                                    class="shrink-0 cursor-pointer rounded-sm px-1 py-0.5 \
-                                           leading-none text-faint hover:text-err \
-                                           focus-visible:outline-2 \
+                                    class="grid size-6 shrink-0 cursor-pointer place-items-center \
+                                           rounded-md text-ink-3 hover:bg-hover hover:text-ink \
+                                           focus-visible:outline-[1.5px] \
                                            focus-visible:outline-offset-1 \
-                                           focus-visible:outline-accent"
+                                           focus-visible:outline-focus"
                                     type="button"
-                                    title="unflag this"
+                                    title="Unflag this"
                                     aria-label="Unflag this passage"
                                     on:click=move |_| cb.run(i)
                                 >
-                                    "\u{2715}"
+                                    <Icon icon=Lucide::X size=IconSize::Sm/>
                                 </button>
                             })}
                         </div>

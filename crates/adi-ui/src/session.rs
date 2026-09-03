@@ -1,18 +1,19 @@
 //! The session — one conversation, as a row in the left rail.
 //!
 //! Everything the row *sits in* — the rail, the bands, the card, the quiet second line —
-//! lives in [`crate::rail`] and is shared with the dashboards on the other side. What is
-//! here is only what a session is: five states, and what each of them does to a row.
+//! lives in [`crate::rail`] and is shared with the apps on the other side. What is here is
+//! only what a session is: five states, and what each of them does to a row.
 
 use leptos::prelude::*;
 
+use crate::badge::{Dot, DotTone};
+use crate::kbd::Kbd;
 use crate::rail::{RailCard, meta_line};
 
 /// Where a session stands, which is the only thing that decides how its row looks.
 ///
-/// Only one of the five asks for anything: `Waiting` is *your turn*, and it is the only one
-/// that moves. The other four report — finished, broken, busy, coming back — and a row that
-/// reports should be readable at a glance and quiet the rest of the time.
+/// A state is said with a 6px dot before the title and a word in the meta line — never a
+/// fill, never motion (§8). Only `Waiting` asks for anything; the rest report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionState {
     /// Nothing is pending. The default, because a row you forgot to mark should sit quiet
@@ -21,10 +22,9 @@ pub enum SessionState {
     Done,
     /// It stopped and cannot go on without you: a question, an approval, a choice.
     Waiting,
-    /// It failed. Loud in the dot and in the words, but still — it wants reading, not
-    /// answering, so it does not move.
+    /// It failed. Said in the dot and in the word; it wants reading, not answering.
     Error,
-    /// An agent is working in it right now.
+    /// An agent is working in it right now. The one orange dot a row may carry.
     Working,
     /// It stopped, but it is coming back on its own: it left a wake registered — an event
     /// to watch for, a deadline, a command that decides — and will pick the conversation up
@@ -37,77 +37,50 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    /// The fill and border for a row in this state, open or not.
-    ///
-    /// The open row is a card: a fill and a hairline **all the way round**, rather than a
-    /// marker down one edge. A rail in the gutter costs every row in the list the same 2px
-    /// whether it is using them or not, and it said a second time what the tint, the dot
-    /// and the ink already say.
-    ///
-    /// The border is on the card in every state and only ever changes colour — see
-    /// [`crate::rail::RailCard`] — so the open row does not grow a pixel taller than the ones around it.
-    ///
-    /// `Waiting` breathes whether it is open or not. A session blocked on you has not
-    /// stopped being blocked because you are looking at it, and its wash sits *over* the
-    /// open row's fill rather than instead of it — see the `attention-pulse` utility.
-    ///
-    /// `Awaiting` does not breathe, and that is the difference between the two of them said
-    /// in motion: movement is how a row asks, and this one is not asking. It takes the blue
-    /// only under the cursor, where hovering the row is already a question about it.
+    /// The fill for a row in this state, open or not: `--bg-active` when open, a hover tone
+    /// otherwise. The state itself is not in the fill — it is the dot.
     #[must_use]
     pub fn row_classes(self, selected: bool) -> &'static str {
-        match (self, selected) {
-            (Self::Done | Self::Error | Self::Working, false) => "border-transparent hover:bg-card",
-            (Self::Done | Self::Error | Self::Working, true) => "border-edge bg-selected",
-            (Self::Awaiting, false) => "border-transparent hover:bg-await-bg",
-            (Self::Awaiting, true) => "border-await-edge bg-selected",
-            (Self::Waiting, false) => "attention-pulse border-transparent hover:bg-queue-bg",
-            (Self::Waiting, true) => "attention-pulse border-edge bg-selected",
+        if selected {
+            "bg-active"
+        } else {
+            "hover:bg-hover"
         }
     }
 
-    /// Ink for the title. Anything still standing open is ink; what is finished recedes to
-    /// secondary, which is most of a long list and should read as background until it is
-    /// searched.
+    /// Ink for the title. Every row's title is `--ink` (§6); the state is said beside it.
     #[must_use]
     pub fn title_classes(self) -> &'static str {
-        match self {
-            Self::Waiting | Self::Error | Self::Working | Self::Awaiting => "font-medium text-ink",
-            Self::Done => "text-secondary",
-        }
+        "text-ink"
     }
 
     /// Ink for the row's one loud word.
     ///
-    /// A question is amber, a registered wake is blue, and everything else that is worth
-    /// saying twice is red: amber is the colour of *your turn*, blue is the colour of
-    /// nobody's, and spending red on either would put a run that merely wants an answer in
-    /// the same voice as one that broke.
+    /// A question is amber, a registered wake is plain, and everything else worth saying
+    /// twice is red: amber is the colour of *your turn*, and spending red on a run that merely
+    /// wants an answer would put it in the same voice as one that broke.
     #[must_use]
     pub fn alert_classes(self) -> &'static str {
         match self {
-            Self::Waiting => "font-medium text-attention",
-            Self::Awaiting => "font-medium text-await",
+            Self::Waiting => "font-medium text-warn",
+            Self::Awaiting => "text-ink-2",
             Self::Done | Self::Error | Self::Working => "font-medium text-err",
         }
     }
 
     /// The dot before the title, when this state gets one.
     ///
-    /// Green for busy, blue for coming back, red for broken, and nothing for the two that
-    /// already say it elsewhere: `Waiting` has the wash under it and `Done` has nothing to
-    /// report. A dot per state would be five marks where three carry the news.
-    ///
-    /// `Working` and `Awaiting` get the same mark in two colours on purpose — they are the
-    /// two rows a conversation is still alive in, and a rail is scanned for exactly that.
-    /// What separates them is only whether anything is happening in it this second.
+    /// Orange for busy, amber for waiting on you, red for broken, grey for coming back — and
+    /// nothing for `Done`, which has nothing to report. The orange is the only accent a rail
+    /// carries, and it is 6px (§3).
     #[must_use]
-    pub fn dot_classes(self) -> Option<&'static str> {
+    pub fn dot(self) -> Option<DotTone> {
         match self {
-            Self::Working => Some("bg-accent"),
-            Self::Awaiting => Some("bg-await"),
-            Self::Error => Some("bg-err"),
-            Self::Waiting | Self::Done => None,
+            Self::Working => Some(DotTone::Live),
+            Self::Waiting => Some(DotTone::Warn),
+            Self::Error => Some(DotTone::Err),
+            Self::Awaiting => Some(DotTone::Idle),
+            Self::Done => None,
         }
     }
 }
@@ -124,6 +97,7 @@ impl SessionState {
 ///     selected=Signal::derive(move || open.get() == id)
 ///     alert="agent question"
 ///     age="14m"
+///     shortcut="\u{2303}1"
 ///     on:click=move |_| open.set(id)
 /// />
 /// ```
@@ -134,11 +108,11 @@ pub fn SessionItem(
     /// The one the screen is currently showing.
     #[prop(optional, into)]
     selected: Signal<bool>,
-    /// Who ran it. Monospace, because it is a name the machine chose.
+    /// Who ran it. Sans, `--ink-2` 500 — a name, not a machine string.
     #[prop(optional, into)]
     agent: String,
     /// What the row is waiting on, in the state's own colour: "agent question", "needs
-    /// approval". It is the only coloured thing in the row, so spending it on anything else
+    /// approval". It is the only coloured word in the row, so spending it on anything else
     /// costs the list the signal.
     ///
     /// Say what it wants, not how much of it there is. A count — "3 errors" — reads as
@@ -149,6 +123,10 @@ pub fn SessionItem(
     /// How long ago, already written the way you want it read: "14m", "2h", "4d".
     #[prop(optional, into)]
     age: String,
+    /// The key that opens this row — `⌃1`. Shown at the right on hover and on the open row,
+    /// hidden the rest of the time (§6).
+    #[prop(optional, into)]
+    shortcut: String,
     #[prop(optional, into)] class: String,
     /// A `<span>` after the title — an unread count, a badge.
     #[prop(optional)]
@@ -157,26 +135,35 @@ pub fn SessionItem(
     let (open, shut) = (state.row_classes(true), state.row_classes(false));
     let fill = Signal::derive(move || if selected.get() { open } else { shut });
     let meta = meta_line(vec![
-        ("text-meta", agent),
+        ("font-medium text-ink-2", agent),
         (state.alert_classes(), alert),
-        ("text-meta", age),
+        ("", age),
     ]);
+    let has_key = !shortcut.is_empty();
 
     view! {
         <RailCard fill=fill current=selected class=class>
-            <div class="flex items-center gap-1.5">
-                {state.dot_classes().map(|dot| view! {
-                    <span
-                        class=format!("size-1.5 shrink-0 rounded-full {dot}")
-                        aria-hidden="true"
-                    ></span>
-                })}
+            <div class=if has_key { "flex items-center gap-2 pr-7" } else { "flex items-center gap-2" }>
+                {state.dot().map(|tone| view! { <Dot tone=tone/> })}
                 <span class=format!("truncate text-row {}", state.title_classes())>
                     {title}
                 </span>
                 {children.map(|c| c())}
             </div>
             {meta}
+            {has_key.then(|| view! {
+                // Hidden until the row is hovered or open; the class is reactive on the row's
+                // own `selected`, so it lands on a wrapper rather than on the key itself.
+                <span class=move || {
+                    if selected.get() {
+                        "absolute top-0.5 right-0 opacity-100"
+                    } else {
+                        "absolute top-0.5 right-0 opacity-0 group-hover:opacity-100"
+                    }
+                }>
+                    <Kbd>{shortcut.clone()}</Kbd>
+                </span>
+            })}
         </RailCard>
     }
 }

@@ -14,6 +14,7 @@
 //! running are different states, and the page keeps them different on purpose: the artifact is
 //! somebody else's TypeScript, and running it is a choice somebody makes.
 
+use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::{MarketplaceApp, MarketplaceSource};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -22,19 +23,17 @@ use crate::fetch;
 use crate::state::{Flash, MarketplaceForm, State};
 use crate::ui::flash_view;
 
-/// The Marketplace page: one panel per source, one row per app, a Sync button up top.
+/// The Marketplace page: a line on what the page does with Sync beside it, then one section per
+/// source with one row per app. Nothing here is orange: installing and starting are choices, not
+/// the live state of anything.
 pub(crate) fn marketplace_view(state: State, form: MarketplaceForm) -> AnyView {
     view! {
-        <section class="adi-panel">
-            <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Marketplace"</h2>
-                {sync_button(state, form)}
-            </div>
-            <p class="adi-muted">
-                "Apps land installed, not running — Start is the act that runs one."
-            </p>
-            {flash_view(state.flash)}
-        </section>
+        <div class="adi-market__lead">
+            <span>"Apps land installed, not running. Start is the act that runs one."</span>
+            <span class="adi-spacer"></span>
+            {sync_button(state, form)}
+        </div>
+        {flash_view(state.flash)}
 
         {source_panels(state, form)}
     }
@@ -46,7 +45,7 @@ pub(crate) fn marketplace_view(state: State, form: MarketplaceForm) -> AnyView {
 fn sync_button(state: State, form: MarketplaceForm) -> AnyView {
     let busy = form.busy;
     view! {
-        <button class="adi-btn adi-btn--primary" type="button"
+        <button class="adi-btn" type="button"
             prop:disabled=move || busy.get().as_deref() == Some(SYNC_KEY)
             on:click=move |_| {
                 busy.set(Some(SYNC_KEY.to_string()));
@@ -61,6 +60,7 @@ fn sync_button(state: State, form: MarketplaceForm) -> AnyView {
                     busy.set(None);
                 });
             }>
+            <Icon icon=Lucide::RefreshCw/>
             {move || if busy.get().as_deref() == Some(SYNC_KEY) { "Syncing\u{2026}" } else { "Sync" }}
         </button>
     }
@@ -70,24 +70,22 @@ fn sync_button(state: State, form: MarketplaceForm) -> AnyView {
 /// The busy key of the page's one shared action.
 const SYNC_KEY: &str = "sync";
 
-/// One panel per marketplace, in the order the sources were added. A store with no sources says
+/// One section per marketplace, in the order the sources were added. A store with no sources says
 /// how to add one rather than rendering nothing — the CLI is the door for that act, and the page
 /// names it.
 fn source_panels(state: State, form: MarketplaceForm) -> AnyView {
     view! {
         {move || {
             let Some(loaded) = state.marketplace.get() else {
-                return view! { <section class="adi-panel"><p class="adi-muted">"Loading\u{2026}"</p></section> }.into_any();
+                return view! { <div class="adi-empty">"Loading\u{2026}"</div> }.into_any();
             };
             if loaded.sources.is_empty() {
                 return view! {
-                    <section class="adi-panel">
-                        <p class="adi-muted">
-                            "No marketplaces configured. Add one from a shell:"<br />
-                            <span class="adi-mono">"adi-mono marketplace add <name> <https://manifest-url>"</span><br />
-                            "then Sync here."
-                        </p>
-                    </section>
+                    <p class="adi-hint">
+                        "No marketplaces configured. Add one from a shell with "
+                        <code>"adi-mono marketplace add <name> <https://manifest-url>"</code>
+                        ", then Sync here."
+                    </p>
                 }.into_any();
             }
             loaded.sources.iter().map(|source| {
@@ -95,20 +93,20 @@ fn source_panels(state: State, form: MarketplaceForm) -> AnyView {
                     .filter(|app| app.marketplace == source.name)
                     .cloned()
                     .collect();
-                source_panel(state, form, source, apps)
+                source_panel(state, form, source, &apps)
             }).collect::<Vec<_>>().into_any()
         }}
     }
     .into_any()
 }
 
-/// One marketplace's panel: its name, where it points, whether what it shows is fresh — then one
-/// row per app it lists.
+/// One marketplace's section: its name, where it points, whether what it shows is fresh — then
+/// one row per app it lists.
 fn source_panel(
     state: State,
     form: MarketplaceForm,
     source: &MarketplaceSource,
-    apps: Vec<MarketplaceApp>,
+    apps: &[MarketplaceApp],
 ) -> AnyView {
     let (name, url, freshness) = (
         source.name.clone(),
@@ -119,11 +117,12 @@ fn source_panel(
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">{name.clone()}</h2>
-                <span class="adi-updated" title=url.clone()>{url.clone()}</span>
+                <span class="adi-mono adi-muted adi-market__url" title=url.clone()>{url.clone()}</span>
+                <span class="adi-spacer"></span>
+                <span class="adi-updated">{freshness}</span>
             </div>
-            {freshness}
             {if apps.is_empty() {
-                view! { <p class="adi-muted">"Nothing in this manifest yet."</p> }.into_any()
+                view! { <div class="adi-empty">"Nothing in this manifest yet."</div> }.into_any()
             } else {
                 apps.iter()
                     .map(|app| app_row(state, form, name.clone(), app))
@@ -135,7 +134,7 @@ fn source_panel(
     .into_any()
 }
 
-/// The sentence under a source's URL: when it last synced, and — when the fetch since has
+/// The sentence beside a source's name: when it last synced, and — when the fetch since has
 /// failed — that what is shown is the stale copy, and why. The same facts the CLI's `list`
 /// prints, so the two doors never disagree.
 fn freshness_note(source: &MarketplaceSource) -> String {
@@ -170,24 +169,24 @@ fn app_row(
     );
 
     let action = if app.started {
-        open_link(&app)
+        open_link(app)
     } else if app.installed {
         let action_key = key.clone();
         view! {
-            <button class="adi-btn adi-btn--primary" type="button"
+            <span class="adi-market__state">"installed, not running"</span>
+            <button class="adi-btn" type="button"
                 prop:disabled=move || busy.get().is_some()
                 on:click=move |_| {
                     run(state, form, action_key.clone(), fetch::start_marketplace_app(slug.clone()));
                 }>
                 "Start"
             </button>
-            <span class="adi-muted">"installed — not running"</span>
         }
         .into_any()
     } else {
         let action_key = key.clone();
         view! {
-            <button class="adi-btn adi-btn--primary" type="button"
+            <button class="adi-btn" type="button"
                 prop:disabled=move || busy.get().is_some()
                 on:click=move |_| {
                     run(
@@ -206,11 +205,11 @@ fn app_row(
     view! {
         <div class="adi-market__row">
             <div class="adi-market__about">
-                <div>
-                    <strong>{name}</strong>
-                    {version.map(|v| view! { <span class="adi-mono adi-muted">{format!("  {v}")}</span> })}
+                <div class="adi-market__title">
+                    <span class="adi-market__name">{name}</span>
+                    {version.map(|v| view! { <span class="adi-mono adi-muted">{v}</span> })}
                 </div>
-                {description.map(|d| view! { <div class="adi-muted">{d}</div> })}
+                {description.map(|d| view! { <div class="adi-market__desc">{d}</div> })}
                 <div class="adi-mono adi-muted" title=key.clone()>{key.clone()}</div>
             </div>
             <div class="adi-market__actions">{action}</div>
@@ -224,16 +223,20 @@ fn app_row(
 /// being built here.
 fn open_link(app: &MarketplaceApp) -> AnyView {
     let Some(host) = app.host.as_deref().map(str::trim).filter(|h| !h.is_empty()) else {
-        return view! { <span class="adi-muted">"running — no routable name"</span> }.into_any();
+        return view! { <span class="adi-market__state">"running, no routable name"</span> }
+            .into_any();
     };
     match crate::origin::service_url(host) {
         Some(href) => view! {
-            <a class="adi-btn adi-btn--link" href=href.clone() target="_blank" rel="noreferrer"
-                title=href>"Open"</a>
-            <span class="adi-muted">{format!("running at {host}")}</span>
+            <span class="adi-market__state">{format!("running at {host}")}</span>
+            <a class="adi-btn" href=href.clone() target="_blank" rel="noreferrer" title=href>
+                "Open"
+                <Icon icon=Lucide::ArrowUpRight size=IconSize::Sm/>
+            </a>
         }
         .into_any(),
-        None => view! { <span class="adi-muted">{format!("running at {host}")}</span> }.into_any(),
+        None => view! { <span class="adi-market__state">{format!("running at {host}")}</span> }
+            .into_any(),
     }
 }
 
@@ -267,6 +270,7 @@ fn ago(at: u64) -> String {
 /// Now, in Unix seconds — the browser's clock on wasm, the system clock anywhere else (which is
 /// to say: in this crate's native unit tests, where a wasm import would panic).
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn now_unix() -> u64 {
     (js_sys::Date::now() / 1000.0) as u64
 }

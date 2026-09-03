@@ -1,2 +1,5 @@
 # Trunk build output — embedded into adi-app at build time, never committed.
 /dist
+# The same output under the dev loop's own directory, so a `trunk build -d dist-dev` beside a
+# release `dist` does not stage 43 MB of wasm.
+/dist-dev

@@ -368,6 +368,63 @@ pub struct FleetInvite {
     pub svg: String,
 }
 
+/// Request body for `POST /api/fleet/join` — the invite this machine is about to spend.
+///
+/// The other direction of §8's handshake, and the only fleet endpoint that enrols *this* machine
+/// somewhere rather than filing somebody here: minting is for the side that can be dialled, and
+/// this is for the side that dials. A machine whose operator has no terminal — the case the panel
+/// exists for — could otherwise only ever be the minter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetJoinRef {
+    /// The `adi-invite:` token, exactly as the far side minted it.
+    pub token: String,
+}
+
+/// What a spent invite bought — the answer to `POST /api/fleet/join`.
+///
+/// Pairing is symmetric (`docs/fleet.md` §8), so this describes a relationship both machines now
+/// hold: the far side filed this one under [`petname`](Self::petname) with `http:app`, and this
+/// one filed the far side under [`viewer`](Self::viewer) with the same. Two names for two
+/// registries, never conflated — §2's rule, at the one moment both are minted.
+///
+/// **[`password`](Self::password) is the only copy that will ever exist.** Both machines keep a
+/// salted verifier and neither keeps the plaintext, so a page that answers with this has to show
+/// it and then let it go, the way the CLI prints it once to a terminal. It is answered over the
+/// same channel the panel is read on: loopback locally, and over the mesh behind the node's own
+/// password plus an `http:app` grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetJoined {
+    /// What the fleet that accepted this machine now calls it — the label *its* registry pinned,
+    /// derived from the nickname this machine offered, or a suggestion when that name was taken.
+    pub petname: String,
+    /// What this machine now calls the far side, and therefore the label in
+    /// `<service>.<viewer>.n.adi` here. This is the name to open, never
+    /// [`petname`](Self::petname), which resolves only in the other machine's registry.
+    pub viewer: String,
+    /// The far side's `EndpointId` — the identity of record for the relationship (§2), and what an
+    /// operator confirms out of band.
+    pub viewer_key: String,
+    /// The username the browser prompt wants.
+    pub username: String,
+    /// The password it wants, in plaintext, once. Stored nowhere on either machine.
+    pub password: String,
+    /// What the far side may reach here, in the string form an operator reads: a fresh pairing
+    /// carries `http:app` and nothing else.
+    pub grants: Vec<String>,
+    /// The registry as it stands now, so the page updates from this one round-trip — the contract
+    /// every other fleet mutation keeps.
+    pub fleet: FleetState,
+}
+
+impl FleetJoined {
+    /// The far side's control panel: `app.<viewer>.n.adi` (§1) — the one link this credential was
+    /// minted to open.
+    #[must_use]
+    pub fn app_host(&self) -> String {
+        node_app_host(&self.viewer)
+    }
+}
+
 // ---- projects (metadata manifests under ~/.adi/mono/projects) -----------------------
 
 /// One registered project, flattened for the wire: the id (its directory name) plus the

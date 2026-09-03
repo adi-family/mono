@@ -27,7 +27,7 @@ pub fn Markdown(
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
-        <div class=merge("flex flex-col gap-3 text-msg text-body", class)>
+        <div class=merge("flex flex-col gap-4 text-body text-ink [&_strong]:font-semibold", class)>
             {move || blocks(&source.get()).into_iter().map(block).collect::<Vec<_>>()}
         </div>
     }
@@ -301,11 +301,11 @@ fn block(b: Block) -> AnyView {
                 .into_any()
         }
         Block::Heading(2, text) => {
-            view! { <h2 class="m-0 text-sub font-semibold text-ink">{inline(&text)}</h2> }
+            view! { <h2 class="m-0 text-section font-semibold text-ink">{inline(&text)}</h2> }
                 .into_any()
         }
         Block::Heading(_, text) => {
-            view! { <h3 class="m-0 text-msg font-semibold text-ink">{inline(&text)}</h3> }
+            view! { <h3 class="m-0 text-body font-semibold text-ink">{inline(&text)}</h3> }
                 .into_any()
         }
         // `shrink-0` is load-bearing, not decoration. `overflow-x-auto` makes this a scroll
@@ -313,12 +313,10 @@ fn block(b: Block) -> AnyView {
         // content — so inside the flex column above, a code block was the one block that
         // could be squeezed, and it was: the last line came out sliced in half.
         //
-        // The fill is `bubble`, the surface that sits *above* a card in both themes. `stage`
-        // is below it, and a block of code that reads as a hole in the page is a block
-        // nobody's eye stops on.
+        // A code block (§6): the raised surface, a hairline, the large radius, mono at 12.5.
         Block::Code(lang, text) => view! {
-            <pre class="m-0 shrink-0 overflow-x-auto rounded-sm border border-edge bg-bubble \
-                        p-3 font-mono text-mini leading-[1.55] [tab-size:2] text-syn-plain">
+            <pre class="m-0 shrink-0 overflow-x-auto rounded-lg border border-line bg-raise \
+                        px-4 py-3.5 font-mono text-mono leading-[1.6] [tab-size:2] text-code">
                 {highlight(lang, &text)
                     .into_iter()
                     .map(|(tok, run)| view! { <span class=tok.classes()>{run}</span> })
@@ -338,16 +336,16 @@ fn block(b: Block) -> AnyView {
             }
         }
         Block::Quote(text) => view! {
-            <blockquote class="m-0 border-l-2 border-dim pl-3 text-secondary">
+            <blockquote class="m-0 border-l-2 border-line-strong pl-4 text-ink-2">
                 {inline(&text)}
             </blockquote>
         }
         .into_any(),
-        // A table is a *thing*, so it takes the island shape the rest of the system does —
-        // and `shrink-0` beside `overflow-x-auto` for exactly the reason the code block
-        // above spells out: a scroll container is the one child a flex column can squeeze
-        // to nothing. `w-full` lets a narrow table fill the message; a wide one outgrows it
-        // and scrolls inside its own edges rather than stretching the bubble.
+        // A table takes hairlines, never a box (§6): a strong rule under the header, a
+        // hairline between rows. `shrink-0` beside `overflow-x-auto` for exactly the reason
+        // the code block above spells out: a scroll container is the one child a flex column
+        // can squeeze to nothing. `w-full` lets a narrow table fill the message; a wide one
+        // outgrows it and scrolls inside its own edges.
         Block::Table { head, rows, aligns } => {
             let align = |col: usize| aligns.get(col).copied().unwrap_or(Align::Default).class();
             let head = head
@@ -355,7 +353,8 @@ fn block(b: Block) -> AnyView {
                 .enumerate()
                 .map(|(col, cell)| {
                     let class = format!(
-                        "border-b border-edge px-3 py-1.5 font-semibold text-ink {}",
+                        "border-b border-line-strong px-3 py-2 text-label font-medium \
+                         text-ink-3 {}",
                         align(col),
                     );
                     view! { <th class=class>{inline(cell.trim())}</th> }
@@ -369,7 +368,7 @@ fn block(b: Block) -> AnyView {
                         .enumerate()
                         .map(|(col, cell)| {
                             let class = format!(
-                                "border-t border-divider px-3 py-1.5 align-top {}",
+                                "border-b border-line px-3 py-2 align-top text-ui {}",
                                 align(col),
                             );
                             view! { <td class=class>{inline(cell.trim())}</td> }
@@ -379,9 +378,10 @@ fn block(b: Block) -> AnyView {
                 })
                 .collect::<Vec<_>>();
             view! {
-                <div class="island shrink-0 overflow-x-auto">
-                    <table class="w-full border-collapse">
-                        <thead class="bg-card">
+                <div class="shrink-0 overflow-x-auto">
+                    <table class="w-full border-collapse [&_td:first-child]:pl-0 \
+                                  [&_th:first-child]:pl-0">
+                        <thead>
                             <tr>{head}</tr>
                         </thead>
                         <tbody>{body}</tbody>
@@ -390,7 +390,7 @@ fn block(b: Block) -> AnyView {
             }
             .into_any()
         }
-        Block::Rule => view! { <hr class="m-0 h-px border-0 bg-divider"/> }.into_any(),
+        Block::Rule => view! { <hr class="m-0 h-px border-0 bg-line"/> }.into_any(),
         Block::Para(text) => view! { <p class="m-0">{inline(&text)}</p> }.into_any(),
     }
 }
@@ -407,7 +407,7 @@ fn inline(src: &str) -> Vec<AnyView> {
         let matched = match chars[i] {
             '`' => delimited(&chars, i, "`").map(|(text, next)| {
                 let v = view! {
-                    <code class="rounded-sm bg-bubble px-1 py-0.5 font-mono text-mini text-ink">
+                    <code class="rounded-sm bg-chip px-1.5 py-0.5 font-mono text-[0.85em] text-code">
                         {text}
                     </code>
                 }
@@ -470,7 +470,17 @@ fn link(chars: &[char], i: usize) -> Option<(AnyView, usize)> {
     let url: String = chars[close + 2..end].iter().collect();
     let href = safe_href(&url)?;
     Some((
-        view! { <a href=href rel="noreferrer noopener">{text}</a> }.into_any(),
+        view! {
+            <a
+                class="underline decoration-ink-3 underline-offset-[3px] hover:text-ink \
+                       hover:decoration-ink-2"
+                href=href
+                rel="noreferrer noopener"
+            >
+                {text}
+            </a>
+        }
+        .into_any(),
         end + 1,
     ))
 }

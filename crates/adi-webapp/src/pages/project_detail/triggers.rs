@@ -5,7 +5,7 @@ use adi_webapp_api::types::{SaveTrigger, TriggersState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::triggers::{trigger_actions, trigger_cell, trigger_key, trigger_toggle_item};
+use crate::pages::triggers::{trigger_cell, trigger_key, trigger_menu_items, trigger_toggle_item};
 use crate::state::{Flash, State, TriggersLogView};
 use crate::ui::{Key, TextField, apply_mutation, row_actions, sort_rows};
 
@@ -103,9 +103,9 @@ pub(crate) fn triggers_panel(
                 </button>
             </form>
             <div class="adi-hint">
-                "These appear in the global " <code>"Triggers"</code> " list too. Webhook triggers are "
-                "live at " <code>"/api/hooks/<name>"</code> "; presets, TypeScript, settings, and "
-                "editing live on the Triggers page."
+                "These appear in the global triggers list too. Webhook triggers are live at "
+                <code>"/api/hooks/<name>"</code> "; presets, TypeScript, settings, and editing "
+                "live on the Triggers page."
             </div>
         </section>
     }
@@ -133,12 +133,9 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
     });
     mine.into_iter()
         .map(|t| {
-            let actions = row_actions(
-                state,
-                format!("trigger:{}", t.name),
-                trigger_actions(state, log, &t),
-                vec![trigger_toggle_item(state, &t)],
-            );
+            let mut items = trigger_menu_items(state, log, &t);
+            items.push(trigger_toggle_item(state, &t));
+            let actions = row_actions(state, format!("trigger:{}", t.name), (), items);
             view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }
                 .into_any()
         })

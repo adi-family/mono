@@ -1,0 +1,8 @@
+// Page-local styles for `src/pages/hive.rs`. Shared components live in adi-css; a shape that
+// exists on one page lives here. Tokens from design/tokens.css only.
+
+// A service's name: the row's title, so it carries the weight the rest of the row does not.
+.adi-hive-name {
+  font-weight: 500;
+  color: var(--ink);
+}

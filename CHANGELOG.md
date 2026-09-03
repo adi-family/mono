@@ -20,6 +20,36 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **The whole product is drawn to one design system now**, written down in `design/DESIGN.md`
+  and valued in one file, `design/tokens.css`. The control panel is dark — there is no theme
+  toggle any more — and quieter: sidebars and bars recede, the transcript sits on the lightest
+  surface at 15.5px, tables lost the cards around them, labels lost their capitals, and one
+  orange per screen marks the one action or live state that matters. Type is Geist, with Geist
+  Mono only for what a machine wrote or will read — paths, ids, commands, model names. Every
+  icon is Lucide, at one stroke. The mark is flat: three hexagons in the ink around them, no
+  gloss, no motion. The same rules reach the front door's error pages, the pages the mesh
+  gateway serves, the shell every dashboard is generated into, the mesh client, the disk image
+  and the landing at withadi.dev. Nothing about what the app does changed; a dashboard you
+  already have picks up the new shell the next time it is listed.
+
+### Added
+
+- **You can now join another machine's fleet from the control panel.** Settings → Fleet has a
+  *Join a fleet* panel: paste the invite the other machine minted, press Join, and this machine
+  dials out and pairs. It then shows the password that pairing minted — once, because neither
+  machine stores it — and the link to the other machine's panel at `app.<name>.n.adi`. Before this
+  the page could only mint invites, so the machine doing the *dialling* needed somebody at a
+  terminal to run `adi-mono mesh join`; that is precisely the machine most likely to have nobody
+  who wants one.
+
+### Fixed
+
+- `adi-mono mesh join` printed the wrong address to open after pairing — the name the *other*
+  machine files you under, which resolves nowhere on yours. It now prints the name you file it
+  under, which is the one that works.
+
 ## 1.2.1 — 2026-09-02
 
 ### Fixed

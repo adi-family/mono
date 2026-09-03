@@ -11,9 +11,20 @@ struct AdiFleetApp: App {
     /// Watches for the phone changing network while the app is open — see [`NetworkChangeWatcher`].
     @State private var network = NetworkChangeWatcher()
 
+    init() {
+        // The navigation bar and the segmented control are UIKit's; they take the tokens here,
+        // once, rather than per screen.
+        ADI.applyAppearance()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                // The app is dark (design/DESIGN.md §3), and every tinted control — the back
+                // chevron, a link's disclosure, a toggle — takes ink rather than the accent (§3:
+                // orange is never a selected state or a link).
+                .preferredColorScheme(.dark)
+                .tint(ADI.ink)
                 .onChange(of: scenePhase) { _, phase in
                     // iOS freezes the process in the background, and a QUIC connection that was
                     // alive when it went away is usually dead when it comes back — while still

@@ -32,7 +32,7 @@ pub(crate) fn tools_panel(
                 (!project.is_empty()).then(|| tool_create_form(state, form, Some(project)))
             }}
             <div class="adi-hint">
-                "These appear in the global " <code>"Tools"</code> " list too, and each gets a "
+                "These appear in the global tools list too, and each gets a "
                 <code>".bin/<name>"</code> " shim agents run. A project-scoped tool runs in the "
                 "project's directory."
             </div>

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{EmptyRow, Icon, IconSize, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
 
@@ -15,11 +15,11 @@ use crate::ui::{
     sort_rows, updated_text,
 };
 
-/// The live projects table's columns; the trailing blank one holds the row's Archive control.
-pub(crate) const COLS: &[&str] = &["Name", "ID", "Tasks", "Created", "Status", ""];
+/// The live projects table's columns; the trailing blank one holds the row's ⋯ menu. No Status
+/// column — every row here is live, so it would say the same thing all the way down.
+pub(crate) const COLS: &[&str] = &["Name", "ID", "Tasks", "Created", ""];
 
-/// The archive's columns. No Status — every row there is archived, so it would say the same thing
-/// all the way down — and the date column is when it *was* archived, which is what you sort by
+/// The archive's columns. The date column is when it *was* archived, which is what you sort by
 /// when hunting for something to restore.
 pub(crate) const ARCHIVED_COLS: &[&str] = &["Name", "ID", "Tasks", "Archived", ""];
 
@@ -43,10 +43,13 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Active projects, at every depth">
-                    {move || projects.get().map_or_else(|| "\u{2014}".to_string(),
-                        |p| p.projects.iter().filter(|x| !x.is_archived()).count().to_string())}
+                <span class="adi-muted">
+                    {move || projects.get().map_or_else(|| "\u{2014}".to_string(), |p| {
+                        let n = p.projects.iter().filter(|x| !x.is_archived()).count();
+                        if n == 1 { "1 project".to_string() } else { format!("{n} projects") }
+                    })}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(projects, secs_since)}</span>
             </div>
 
@@ -78,13 +81,13 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 apply_projects(state, Some(busy), format!("Registered project {display}."),
                     fetch::create_project(body));
             }>
-                <TextField id="proj-name" label="Name" placeholder="My App" value=name />
+                <TextField id="proj-name" label="Name" placeholder="My app" value=name />
                 <div class="adi-field">
-                    <label class="adi-field__label" for="proj-parent">"Parent (sub-project of)"</label>
+                    <label class="adi-field__label" for="proj-parent">"Parent"</label>
                     <select class="adi-input" id="proj-parent"
                         prop:value=move || parent.get()
                         on:change=move |ev| parent.set(event_target_value(&ev))>
-                        <option value="">"— none (top-level) —"</option>
+                        <option value="">"None (top level)"</option>
                         {move || projects.get().map(|p| project_tree_rows(p.projects.into_iter()
                             .filter(|proj| !proj.is_archived()).collect()).into_iter()
                             .map(|(depth, proj)| {
@@ -96,7 +99,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                             }).collect::<Vec<_>>()).unwrap_or_default()}
                     </select>
                 </div>
-                <TextField id="proj-desc" label="Description" placeholder="optional one-liner" wide=true
+                <TextField id="proj-desc" label="Description" placeholder="Optional one-liner" wide=true
                     field_class="adi-field--grow" value=description />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add project"
@@ -119,10 +122,9 @@ fn archived_count(state: State) -> usize {
         .map_or(0, |p| p.projects.iter().filter(|x| x.is_archived()).count())
 }
 
-/// The archive: its own collapsed panel at the foot of the page, with a caret header and a count.
-/// Expanding reveals archived projects so they can be restored. A separate panel rather than a
-/// section inside the main one — inline, the split between live and archived rows reads as one
-/// continuous table. Renders nothing at all when nothing is archived.
+/// The archive: its own collapsed section at the foot of the page, opened by its heading.
+/// A separate section rather than rows inside the main table — inline, the split between live
+/// and archived rows reads as one continuous table. Renders nothing at all when nothing is archived.
 fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) -> AnyView {
     view! {
         {move || {
@@ -132,12 +134,13 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
                 view! {
                     <section class="adi-panel">
                         <div class="adi-panel__head">
-                            <button class="adi-btn adi-btn--link" type="button"
+                            <button class="adi-projects__fold" type="button"
                                 aria-expanded=open.to_string()
                                 on:click=move |_| show.update(|v| *v = !*v)>
-                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Archived"
+                                <Icon icon={if open { Lucide::ChevronDown } else { Lucide::ChevronRight }} size=IconSize::Sm/>
+                                <span class="adi-panel__title">"Archived"</span>
+                                <span class="adi-muted">{n.to_string()}</span>
                             </button>
-                            <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
                         {open.then(|| view! { <Table state=state.tables.projects_archived>{move || project_rows(state, route, true)}</Table> }.into_any())}
                     </section>
@@ -150,8 +153,8 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
 }
 
 /// Render a projects table body: a loading/empty placeholder, or one row per project matching
-/// `archived`, indented by its depth in the tree. The name opens the project's page; the trailing
-/// action archives or restores it. Archived rows are split into their own collapsed table, so the
+/// `archived`, indented by its depth in the tree. The name opens the project's page; the row's
+/// menu archives or restores it. Archived rows are split into their own collapsed table, so the
 /// main one shows only live projects — but both are built from this one function.
 ///
 /// Each side is tree-flattened over its own subset, so a project whose parent fell on the other
@@ -185,7 +188,6 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
             // Both date columns read the same field the cell renders.
             "Created" => Key::num(p.created_at),
             "Archived" => Key::num(p.archived_at.unwrap_or(p.created_at)),
-            "Status" => Key::Bool(p.is_archived()),
             _ => Key::text(&p.name),
         },
         |p| Key::text(&p.name),
@@ -203,19 +205,16 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
     rows.into_iter()
         .map(|(depth, p)| {
             let archived = p.is_archived();
-            // Archived rows keep Restore inline with Delete in the kebab; a live row's lone Archive
-            // stays inline (no overflow ⇒ `row_actions` drops the kebab).
+            // Every action lives in the row's menu: one word per row, whichever way it goes.
             let action = {
                 let id = p.id.clone();
                 let key = format!("project:{id}");
-                if archived {
+                let items = if archived {
                     let del_id = id.clone();
-                    let restore = view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_projects(state, None, format!("Restored {id}."),
-                                fetch::unarchive_project(id.clone()));
-                        }>"Restore"</button>
-                    };
+                    let restore = menu_item(state, "Restore", false, move || {
+                        apply_projects(state, None, format!("Restored {id}."),
+                            fetch::unarchive_project(id.clone()));
+                    });
                     let delete = menu_item(state, "Delete", true, move || {
                         if !confirm(&format!(
                             "Permanently delete project {del_id}? This cannot be undone.")) {
@@ -224,16 +223,14 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
                         apply_projects(state, None, format!("Deleted {del_id}."),
                             fetch::remove_project(del_id.clone()));
                     });
-                    row_actions(state, key, restore, vec![delete])
+                    vec![restore, delete]
                 } else {
-                    let archive = view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_projects(state, None, format!("Archived {id}."),
-                                fetch::archive_project(id.clone()));
-                        }>"Archive"</button>
-                    };
-                    row_actions(state, key, archive, Vec::new())
-                }
+                    vec![menu_item(state, "Archive", false, move || {
+                        apply_projects(state, None, format!("Archived {id}."),
+                            fetch::archive_project(id.clone()));
+                    })]
+                };
+                row_actions(state, key, (), items)
             };
             let tasks = counts.get(&p.id).copied();
             view! { <TableRow state=table cell=move |col| project_cell(col, &p, depth, tasks, state, route) actions=action/> }.into_any()
@@ -253,34 +250,22 @@ fn project_cell(
     route: RwSignal<Route>,
 ) -> AnyView {
     match col {
-        "ID" => view! { <span class="font-mono">{p.id.clone()}</span> }.into_any(),
+        "ID" => view! { <span class="adi-mono adi-muted">{p.id.clone()}</span> }.into_any(),
         "Tasks" => match counts {
             Some((open, total)) => {
                 let tip = format!("{open} open \u{b7} {total} total");
-                view! {
-                    <span>
-                        <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span>
-                    </span>
-                }
-                .into_any()
+                view! { <span class="adi-tabnums" title=tip>{format!("{open} open")}</span> }
+                    .into_any()
             }
-            None => view! { <span><span class="adi-muted">"\u{2014}"</span></span> }.into_any(),
+            None => view! { <span class="adi-muted">"\u{2014}"</span> }.into_any(),
         },
         // The archive dates rows by when they were archived; the live table by creation.
         "Created" => {
-            view! { <span class="font-mono text-meta">{fmt_date(p.created_at)}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{fmt_date(p.created_at)}</span> }.into_any()
         }
         "Archived" => {
             let at = fmt_date(p.archived_at.unwrap_or(p.created_at));
-            view! { <span class="font-mono text-meta">{at}</span> }.into_any()
-        }
-        "Status" => {
-            let label = if p.is_archived() {
-                "Archived"
-            } else {
-                "Active"
-            };
-            view! { <span><span class="adi-muted">{label}</span></span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{at}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
@@ -290,15 +275,13 @@ fn project_cell(
             // A computed per-row indent — the one thing here that genuinely varies per row.
             let indent = format!("padding-left:{}px", depth * 16);
             view! {
-                <span title=title>
-                    <span style=indent>
-                        <a class="adi-btn adi-btn--link" href=href
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                ev.prevent_default();
-                                open_project(state, route, open_id.clone());
-                            }>{p.name.clone()}</a>
-                    </span>
+                <span title=title style=indent>
+                    <a class="adi-projects__name" href=href
+                        on:click=move |ev: web_sys::MouseEvent| {
+                            if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                            ev.prevent_default();
+                            open_project(state, route, open_id.clone());
+                        }>{p.name.clone()}</a>
                 </span>
             }
             .into_any()

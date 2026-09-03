@@ -36,13 +36,10 @@ impl AppState {
     #[must_use]
     pub fn dot_classes(self) -> &'static str {
         match self {
-            // `live`, not `accent`. These three are a semantic triple — good, bad, inert —
-            // and the accent is for what is interactive or selected. It was `bg-accent`
-            // while the accent was mint, which happened to read as "running"; against an
-            // orange accent the same rule painted every healthy app the colour of a warning.
-            Self::Live => "bg-live",
+            // Online is `--ok`, never the accent: the semantic colours are their own axis (§3).
+            Self::Live => "bg-ok",
             Self::Offline => "bg-err",
-            Self::ViewOnly => "bg-faint",
+            Self::ViewOnly => "bg-ink-3",
         }
     }
 
@@ -63,7 +60,7 @@ impl AppState {
     pub fn title_classes(self) -> &'static str {
         match self {
             Self::Live => "text-ink",
-            Self::Offline | Self::ViewOnly => "text-secondary",
+            Self::Offline | Self::ViewOnly => "text-ink-2",
         }
     }
 }
@@ -109,9 +106,9 @@ pub fn AppItem(
 ) -> impl IntoView {
     let fill = Signal::derive(move || {
         if selected.get() {
-            "border-edge bg-selected"
+            "bg-active"
         } else {
-            "border-transparent hover:bg-card"
+            "hover:bg-hover"
         }
     });
     // Whether the dot has been asked what it means. Local: nothing outside this row cares,
@@ -138,8 +135,8 @@ pub fn AppItem(
                     // Two lines tall, and the row is built around it.
                     {if favicon.is_empty() {
                         view! {
-                            <span class="grid size-8 shrink-0 place-items-center rounded-sm \
-                                         bg-bubble font-mono text-row font-medium text-meta">
+                            <span class="grid size-8 shrink-0 place-items-center rounded-md \
+                                         bg-chip text-row font-medium text-ink-2">
                                 {mark}
                             </span>
                         }
@@ -147,7 +144,7 @@ pub fn AppItem(
                     } else {
                         view! {
                             <img
-                                class="size-8 shrink-0 rounded-sm bg-bubble object-cover"
+                                class="size-8 shrink-0 rounded-md bg-chip object-cover"
                                 src=favicon
                                 alt=""
                                 loading="lazy"
@@ -159,20 +156,20 @@ pub fn AppItem(
                         <span class=format!("truncate text-row {}", state.title_classes())>
                             {title}
                         </span>
-                        <span class="truncate font-mono text-mini text-meta">{machine}</span>
+                        <span class="truncate text-mini text-ink-3">{machine}</span>
                     </span>
                 </div>
             </RailCard>
             // The dot rides the icon's corner, and it is laid *over* the card rather than
             // inside it: when it is a control, a button inside a button is not a thing a
-            // browser will do. Its box is the icon's box — the card's own `px-2 py-1.5`
+            // browser will do. Its box is the icon's box — the card's own `px-2 py-[7px]`
             // plus `size-8` — so the two cannot drift apart.
             {if interactive {
                 view! {
                     <button
-                        class="absolute top-1.5 left-2 size-8 cursor-pointer rounded-sm \
-                               focus-visible:outline-2 focus-visible:outline-offset-2 \
-                               focus-visible:outline-accent"
+                        class="absolute top-[7px] left-2 size-8 cursor-pointer rounded-md \
+                               focus-visible:outline-[1.5px] focus-visible:outline-offset-2 \
+                               focus-visible:outline-focus"
                         type="button"
                         title=state.label()
                         aria-label=state.label()
@@ -181,7 +178,7 @@ pub fn AppItem(
                         <span
                             class=format!(
                                 "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 \
-                                 ring-panel {dot}",
+                                 ring-side {dot}",
                             )
                             aria-hidden="true"
                         ></span>
@@ -191,13 +188,13 @@ pub fn AppItem(
             } else {
                 view! {
                     <span
-                        class="pointer-events-none absolute top-1.5 left-2 size-8"
+                        class="pointer-events-none absolute top-[7px] left-2 size-8"
                         title=state.label()
                     >
                         <span
                             class=format!(
                                 "absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 \
-                                 ring-panel {dot}",
+                                 ring-side {dot}",
                             )
                             aria-hidden="true"
                         ></span>

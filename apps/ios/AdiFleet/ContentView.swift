@@ -1,6 +1,10 @@
 import SwiftUI
 
 /// The fleet: every node this phone has paired with, and a way to add one.
+///
+/// One list on the page surface, grouped by node with tone and hairlines rather than boxes
+/// (`design/DESIGN.md` §2.5): a node is a header row — its name, and its key in mono — and the
+/// rows under it are what it runs. The one filled orange on the screen is the pairing action.
 struct ContentView: View {
     @State private var model = FleetModel()
     @State private var pairing = false
@@ -21,13 +25,18 @@ struct ContentView: View {
                     list
                 }
             }
+            .background(ADI.bg)
             .navigationTitle("Fleet")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         pairing = true
                     } label: {
-                        Label("Pair a node", systemImage: "plus")
+                        Label {
+                            Text("Pair a node")
+                        } icon: {
+                            LucideIcon(icon: .plus)
+                        }
                     }
                     .disabled(!model.ready)
                 }
@@ -80,66 +89,85 @@ struct ContentView: View {
             .contains { $0.service == service && $0.allowed }
     }
 
+    /// Nothing paired yet: the one icon size reserved for an empty state (§9), a section title,
+    /// one sentence, and the one orange.
     private var empty: some View {
-        ContentUnavailableView {
-            Label("No nodes yet", systemImage: "point.3.connected.trianglepath.dotted")
-        } description: {
+        VStack(spacing: 12) {
+            LucideIcon(icon: .network, size: .xl)
+                .foregroundStyle(ADI.ink3)
+            Text("No nodes yet")
+                .font(ADI.TextStyle.section)
+                .foregroundStyle(ADI.ink)
             Text("Pair a machine and its services show up here — reached by key over the mesh, with no port open on either side.")
-        } actions: {
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
             Button("Pair a node") { pairing = true }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.adi(.accent))
                 .disabled(!model.ready)
+                .padding(.top, 8)
         }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var list: some View {
         List {
             ForEach(model.nodes) { node in
-                Section {
-                    ForEach(model.dashboards[node.petname] ?? []) { dashboard in
-                        DashboardRow(node: node, dashboard: dashboard) { sharing = $0 }
-                    }
-                    if model.listing.contains(node.petname) && model.dashboards[node.petname] == nil {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Asking \(node.petname) what it has…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
+                // The node's own row, then its dashboards, its plain services, and what it has
+                // to say for itself — a band of rows under one hairline-separated header rather
+                // than a section in a box.
+                NodeHeader(node: node, isNew: node.petname == model.justPaired)
+                    .adiRow()
+                    .padding(.top, 16)
+                    .listRowSeparator(.hidden, edges: .top)
+                    .swipeActions {
+                        Button("Unpair", role: .destructive) {
+                            Task { await model.forget(node) }
                         }
                     }
-                    // A dashboard is a service, so anything already listed above would otherwise
-                    // appear twice — once by name and once by label.
-                    ForEach(services(of: node), id: \.self) { service in
-                        NavigationLink(value: Route(node: node, service: service)) {
-                            Label(service, systemImage: icon(for: service))
-                        }
-                        .contextMenu {
-                            Button {
-                                sharing = ShareTarget(
-                                    node: node.petname, service: service, title: service)
-                            } label: {
-                                Label("Add to Home Screen…", systemImage: "square.and.arrow.up")
-                            }
-                        }
-                    }
-                    if node.any_service {
-                        NavigationLink(value: Route(node: node, service: nil)) {
-                            Label("Open another service…", systemImage: "ellipsis.curlybraces")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } header: {
-                    header(for: node)
-                } footer: {
-                    footer(for: node)
+
+                ForEach(model.dashboards[node.petname] ?? []) { dashboard in
+                    DashboardRow(node: node, dashboard: dashboard) { sharing = $0 }
+                        .adiRow()
                 }
-                .swipeActions {
-                    Button("Unpair", role: .destructive) {
-                        Task { await model.forget(node) }
+                if model.listing.contains(node.petname) && model.dashboards[node.petname] == nil {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Asking \(node.petname) what it has…")
+                            .font(ADI.TextStyle.small)
+                            .foregroundStyle(ADI.ink3)
+                    }
+                    .adiRow()
+                }
+                // A dashboard is a service, so anything already listed above would otherwise
+                // appear twice — once by name and once by label.
+                ForEach(services(of: node), id: \.self) { service in
+                    NavigationLink(value: Route(node: node, service: service)) {
+                        ServiceLabel(icon: icon(for: service), title: service, mono: true)
+                    }
+                    .adiRow()
+                    .contextMenu {
+                        Button {
+                            sharing = ShareTarget(
+                                node: node.petname, service: service, title: service)
+                        } label: {
+                            Text("Add to Home Screen…")
+                        }
                     }
                 }
+                if node.any_service {
+                    NavigationLink(value: Route(node: node, service: nil)) {
+                        ServiceLabel(icon: .ellipsis, title: "Open another service…", ink: ADI.ink2)
+                    }
+                    .adiRow()
+                }
+                footer(for: node)
             }
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
         .navigationDestination(for: Route.self) { route in
             if let service = route.service {
                 ServiceView(node: route.node, service: service, share: route.share, model: model)
@@ -155,63 +183,102 @@ struct ContentView: View {
         return node.services.filter { !named.contains($0) }
     }
 
-    private func header(for node: Node) -> some View {
-        HStack {
-            Text(node.petname)
-            if node.petname == model.justPaired {
-                Text("new")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.15))
-                    .clipShape(Capsule())
-            }
-            Spacer()
-            Text(node.shortKey)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    /// What a node has to say for itself under its section: a nickname it has declared, and why
+    /// What a node has to say for itself under its rows: a nickname it has declared, and why
     /// its dashboards could not be listed.
     @ViewBuilder
     private func footer(for node: Node) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if node.renamedItself, let pending = node.pending_nickname {
-                // §2 rule 4: a node that renames itself files a notice; it never takes over the
-                // links this device already has.
-                Label("This node now calls itself “\(pending)”. Your name for it is unchanged.",
-                      systemImage: "info.circle")
-            }
-            if let problem = model.listingFailure[node.petname] {
-                Label(problem, systemImage: "exclamationmark.triangle")
-            }
+        if node.renamedItself, let pending = node.pending_nickname {
+            // §2 rule 4 of docs/fleet.md: a node that renames itself files a notice; it never
+            // takes over the links this device already has.
+            Note(icon: .info, text: "This node now calls itself “\(pending)”. Your name for it is unchanged.")
+                .adiRow()
+                .listRowSeparator(.hidden)
+        }
+        if let problem = model.listingFailure[node.petname] {
+            Note(icon: .triangleAlert, text: problem)
+                .adiRow()
+                .listRowSeparator(.hidden)
         }
     }
 
     /// This device's own key, which is what a node's operator authorizes.
     private var identity: some View {
         VStack(spacing: 2) {
-            Text(model.ready ? "on the mesh" : "connecting…")
-                .font(.caption2)
-                .foregroundStyle(model.ready ? .secondary : .tertiary)
+            HStack(spacing: 7) {
+                StatusDot(color: model.ready ? ADI.ok : ADI.ink3)
+                Text(model.ready ? "On the mesh" : "Connecting…")
+                    .font(ADI.TextStyle.label)
+                    .foregroundStyle(ADI.ink3)
+            }
             if !model.key.isEmpty {
                 Text(model.key.prefix(12) + "…")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+                    .font(ADI.mono(12))
+                    .foregroundStyle(ADI.ink3)
             }
         }
     }
 
-    /// A guess at the right symbol. Cosmetic only — a service the app has never heard of gets the
+    /// A guess at the right glyph. Cosmetic only — a service the app has never heard of gets the
     /// generic one and works exactly the same.
-    private func icon(for service: String) -> String {
+    private func icon(for service: String) -> Lucide {
         switch service {
-        case "app": "square.grid.2x2"
-        case "api": "chevron.left.forwardslash.chevron.right"
-        default: "globe"
+        case "app": .layoutGrid
+        case "api": .code
+        default: .globe
         }
+    }
+}
+
+/// The row a node's band opens with: its name, `new` while it is, and its key in mono.
+private struct NodeHeader: View {
+    let node: Node
+    let isNew: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            LucideIcon(icon: .monitor)
+                .foregroundStyle(ADI.ink2)
+            Text(node.petname)
+                .font(ADI.sans(15, .medium))
+                .foregroundStyle(ADI.ink)
+            if isNew {
+                Chip(text: "new")
+            }
+            Spacer(minLength: 8)
+            Text(node.shortKey)
+                .font(ADI.TextStyle.mono)
+                .foregroundStyle(ADI.ink3)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// A service or dashboard as a row: the glyph in the row's ink, the name, an optional second line.
+private struct ServiceLabel: View {
+    let icon: Lucide
+    let title: String
+    var subtitle: String? = nil
+    /// Whether the title is a service *label* — a machine string — rather than a name.
+    var mono = false
+    var ink: Color = ADI.ink
+
+    var body: some View {
+        HStack(spacing: 10) {
+            LucideIcon(icon: icon)
+                .foregroundStyle(ink == ADI.ink ? ADI.ink2 : ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(mono ? ADI.mono(14) : ADI.sans(15))
+                    .foregroundStyle(ink)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(ADI.TextStyle.small)
+                        .foregroundStyle(ADI.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -229,35 +296,20 @@ private struct DashboardRow: View {
     var body: some View {
         if let service = dashboard.service {
             NavigationLink(value: Route(node: node, service: service, share: !dashboard.allowed)) {
-                label
+                ServiceLabel(icon: .layoutDashboard, title: dashboard.name, subtitle: subtitle)
             }
             .contextMenu {
                 Button {
                     onShare(ShareTarget(
                         node: node.petname, service: service, title: dashboard.name))
                 } label: {
-                    Label("Add to Home Screen…", systemImage: "square.and.arrow.up")
+                    Text("Add to Home Screen…")
                 }
             }
         } else {
             // Nothing to route to: a dashboard with no `<label>.adi` host of its own is reachable
             // on the node and nowhere else (`docs/fleet.md` §4).
-            label.foregroundStyle(.secondary)
-        }
-    }
-
-    private var label: some View {
-        Label {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dashboard.name)
-                if let note = subtitle {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        } icon: {
-            Image(systemName: "rectangle.3.group")
+            ServiceLabel(icon: .layoutDashboard, title: dashboard.name, subtitle: subtitle, ink: ADI.ink3)
         }
     }
 
@@ -306,22 +358,33 @@ private struct AnyServiceView: View {
     @State private var service = ""
 
     var body: some View {
-        Form {
-            Section {
-                TextField("service label", text: $service)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .font(.system(.body, design: .monospaced))
-                NavigationLink("Open") {
-                    ServiceView(node: node, service: service, model: model)
-                }
-                .disabled(service.isEmpty)
-            } header: {
-                Text("Service on \(node.petname)")
-            } footer: {
-                Text("The label a service has on the node — what it answers to as `<label>.adi` there. This node granted every one of them, and the mesh has no way to list them, so it has to be named.")
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Service on \(node.petname)")
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink2)
+            TextField("service label", text: $service)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .font(ADI.mono(16))
+                .foregroundStyle(ADI.ink)
+                .adiField()
+            Text("The label a service has on the node — what it answers to as <label>.adi there. This node granted every one of them, and the mesh has no way to list them, so it has to be named.")
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+            NavigationLink {
+                ServiceView(node: node, service: service, model: model)
+            } label: {
+                Text("Open")
             }
+            .buttonStyle(.adi(.accent, wide: true))
+            .disabled(service.isEmpty)
+            .padding(.top, 8)
+            Spacer()
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(ADI.bg)
         .navigationTitle(node.petname)
         .navigationBarTitleDisplayMode(.inline)
     }

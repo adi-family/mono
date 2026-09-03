@@ -6,23 +6,23 @@ use adi_webapp_api::types::{
     AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
     DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
-    FleetGrantRef, FleetNodes, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
-    FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, InstallMarketplaceApp,
-    KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
-    KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef,
-    LinkTool, MarketplaceDone, MarketplaceState, MeshForwardRef, MeshListenRef, MeshPeerRef,
-    MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase, NewKnowledgeNote,
-    NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace, NodeServiceRef,
-    PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
-    ProjectRenamed, ProjectsState, ReleaseResponse, RenameProject, ReplyToRun, ReserveResponse,
-    RevealedSecret, ReviewRun, RunAgent, RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef,
-    SecretsState, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
-    SimulateAgent, SimulateTurn, StarRun, StartMarketplaceApp, StartResult, StartService,
-    StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
-    TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode,
-    UnqueueFromRun, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
-    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
-    WriteToolScript,
+    FleetGrantRef, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState, FsContent,
+    FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait,
+    InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes,
+    KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState,
+    LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MarketplaceDone, MarketplaceState, MeshForwardRef,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
+    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
+    RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
+    RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
+    SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun,
+    StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
+    ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
+    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateState, UsedPorts,
+    VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys,
+    WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile, WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -125,6 +125,14 @@ pub async fn fleet() -> Result<FleetState, String> {
 /// somebody spends this.
 pub async fn fleet_invite() -> Result<adi_webapp_api::types::FleetInvite, String> {
     post("/api/fleet/invite", &()).await
+}
+
+/// Spend an invite minted on another machine. The slowest call on this page by far — it dials that
+/// machine and waits for the handshake — and the only one that answers with a credential: the
+/// password inside is the single copy either side will ever hold, so what shows it is what has to
+/// let it go.
+pub async fn fleet_join(token: String) -> Result<adi_webapp_api::types::FleetJoined, String> {
+    post("/api/fleet/join", &FleetJoinRef { token }).await
 }
 
 pub async fn fleet_rename(petname: String, to: String) -> Result<FleetState, String> {

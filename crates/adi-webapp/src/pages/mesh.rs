@@ -7,20 +7,26 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::state::{MeshForm, State};
-use crate::ui::{Key, TextField, apply_mutation, copy_row, rows_or_placeholder, sort_rows};
+use crate::ui::{
+    Key, TextField, apply_mutation, copy_row, menu_item, row_actions, rows_or_placeholder,
+    sort_rows,
+};
 
-/// The exposed-ports table: one port per row, with a Remove control. A single named column, so
-/// it sorts but has no settings gear — there is nothing to hide or reorder.
+/// The exposed-ports table: one port per row, with its ⋯ menu. A single named column, so it
+/// sorts but has no settings gear — there is nothing to hide or reorder.
 pub(crate) const ALLOW_COLS: &[&str] = &["Port", ""];
 
-/// The authorized-peers table. As with [`ALLOW_COLS`], one column and a Revoke control.
-pub(crate) const PEER_COLS: &[&str] = &["Endpoint ID", ""];
+/// The authorized-peers table. As with [`ALLOW_COLS`], one column and a menu.
+pub(crate) const PEER_COLS: &[&str] = &["Endpoint id", ""];
 
 /// The forwards table: a local listener, the peer it dials, and the port it reaches there.
 pub(crate) const FORWARD_COLS: &[&str] = &["Name", "Local", "Peer", "Remote", ""];
 
 /// The Mesh page: this machine's id/ticket to share, the ports it exposes to peers, the
 /// peers authorized to reach them, and the local→peer forwards.
+///
+/// Starting the daemon is the screen's one orange: it is the action everything else on the page
+/// waits on. While the daemon is up, nothing here is orange — its state is the green dot.
 pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
     let mesh = state.mesh;
     view! {
@@ -31,12 +37,12 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"This machine"</h2>
-                <span class="adi-spacer"></span>
                 <span class="adi-status" data-state=move || mesh_state_data(mesh)>
                     <span class="adi-status__led"></span>
-                    <span>{move || mesh.get().map_or_else(|| "…".to_string(),
+                    <span>{move || mesh.get().map_or_else(|| "\u{2026}".to_string(),
                         |m| if m.running { "daemon up".to_string() } else { "daemon down".to_string() })}</span>
                 </span>
+                <span class="adi-spacer"></span>
                 {move || {
                     let running = mesh.get().is_some_and(|m| m.running);
                     let busy = form.busy.get();
@@ -50,7 +56,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         }.into_any()
                     } else {
                         view! {
-                            <button class="adi-btn adi-btn--primary" type="button" prop:disabled=busy
+                            <button class="adi-btn adi-btn--accent" type="button" prop:disabled=busy
                                 on:click=move |_| apply_mesh(state, Some(form.busy),
                                     "Started the mesh daemon.".to_string(), fetch::mesh_start())>
                                 "Start mesh"
@@ -61,21 +67,21 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
             </div>
             <div class="adi-panel__body">
                 <div class="adi-field">
-                    <label class="adi-field__label">"Endpoint ID"</label>
+                    <label class="adi-field__label">"Endpoint id"</label>
                     {copy_row(form.id_ref, move || mesh.get().map(|m| m.id).unwrap_or_default())}
-                    <div class="adi-field__note">"The minimal token a peer can dial (resolved via discovery)."</div>
+                    <div class="adi-field__note">"The minimal token a peer can dial; it is resolved through discovery."</div>
                 </div>
                 <div class="adi-field">
                     <label class="adi-field__label">"Ticket"</label>
                     {move || match mesh.get().and_then(|m| m.ticket) {
                         Some(ticket) => copy_row(form.ticket_ref, move || ticket.clone()).into_any(),
                         None => view! {
-                            <div class="adi-field__note adi-muted">
-                                "Start the mesh daemon (the "<strong>"Start mesh"</strong>" button above) to publish a ticket a peer can dial without discovery."
+                            <div class="adi-field__note">
+                                "Start the mesh daemon to publish a ticket a peer can dial without discovery."
                             </div>
                         }.into_any(),
                     }}
-                    <div class="adi-field__note">"id + relay + direct addresses — the reliable token to hand a peer."</div>
+                    <div class="adi-field__note">"The id, the relay and the direct addresses: the reliable token to hand a peer."</div>
                 </div>
             </div>
         </section>
@@ -106,8 +112,11 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <h2 class="adi-panel__title">"Authorized peers"</h2>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || mesh.get().map_or_else(String::new,
-                    |m| if m.authorized_peers.is_empty() { "none allowed".to_string() }
-                        else { format!("{} allowed", m.authorized_peers.len()) })}</span>
+                    |m| match m.authorized_peers.len() {
+                        0 => "none allowed".to_string(),
+                        1 => "1 allowed".to_string(),
+                        n => format!("{n} allowed"),
+                    })}</span>
             </div>
             <Table state=state.tables.mesh_peers>{move || mesh_peer_rows(state)}</Table>
             <form class="adi-form" on:submit=move |ev| {
@@ -119,7 +128,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         fetch::mesh_allow_peer(peer));
                 }
             }>
-                <TextField id="mesh-peer" label="Peer id or ticket" placeholder="an EndpointId or adimesh: ticket"
+                <TextField id="mesh-peer" label="Peer id or ticket" placeholder="An endpoint id or an adimesh: ticket"
                     wide=true mono=true field_class="adi-field--grow" value=form.peer />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Authorize peer"
@@ -131,7 +140,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Forwards"</h2>
                 <span class="adi-spacer"></span>
-                <span class="adi-updated">"local 127.0.0.1:port → a peer's port"</span>
+                <span class="adi-updated">"A local port, reaching a port on a peer"</span>
             </div>
             <Table state=state.tables.mesh_forwards>{move || mesh_forward_rows(state)}</Table>
             <form class="adi-form" on:submit=move |ev| {
@@ -150,7 +159,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 }
             }>
                 <TextField id="fwd-listen" label="Local port" placeholder="5000" numeric=true value=form.fwd_listen />
-                <TextField id="fwd-peer" label="Peer id or ticket" placeholder="peer to reach" wide=true mono=true
+                <TextField id="fwd-peer" label="Peer id or ticket" placeholder="The peer to reach" wide=true mono=true
                     field_class="adi-field--grow" value=form.fwd_peer />
                 <TextField id="fwd-port" label="Remote port" placeholder="3000" numeric=true value=form.fwd_port />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
@@ -162,7 +171,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
     .into_any()
 }
 
-/// The `data-state` value for the "This machine" status pill.
+/// The `data-state` value for the "This machine" status dot.
 fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
     match mesh.get() {
         Some(m) if m.running => "online",
@@ -171,8 +180,8 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
     }
 }
 
-/// Rows for the exposed-ports table: a placeholder, or one row per allowed port with a
-/// button to stop exposing it.
+/// Rows for the exposed-ports table: a placeholder, or one row per allowed port with a menu
+/// that stops exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
     let table = state.tables.mesh_allow;
     let mut ports = match rows_or_placeholder(
@@ -192,21 +201,15 @@ fn mesh_allow_rows(state: State) -> AnyView {
     ports
         .into_iter()
         .map(|port| {
-            let remove = view! {
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_mesh(state, None, format!("Stopped exposing port {port}."),
-                        fetch::mesh_deny(port));
-                }>"Remove"</button>
-            }
-            .into_any();
+            let remove = menu_item(state, "Stop exposing", true, move || {
+                apply_mesh(state, None, format!("Stopped exposing port {port}."),
+                    fetch::mesh_deny(port));
+            });
             view! {
                 <TableRow
                     state=table
-                    cell=move |_| view! {
-                        <span class="font-mono font-medium text-accent">{port.to_string()}</span>
-                    }
-                    .into_any()
-                    actions=remove
+                    cell=move |_| view! { <span class="adi-tabnums">{port.to_string()}</span> }.into_any()
+                    actions=row_actions(state, format!("mesh-allow:{port}"), (), vec![remove])
                 />
             }
             .into_any()
@@ -237,23 +240,25 @@ fn mesh_peer_rows(state: State) -> AnyView {
         .into_iter()
         .map(|peer| {
             let full = peer.clone();
-            let revoke = view! {
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_mesh(state, None, "Revoked the peer.".to_string(),
-                        fetch::mesh_deny_peer(full.clone()));
-                }>"Revoke"</button>
-            }
-            .into_any();
+            let menu_key = format!("mesh-peer:{peer}");
+            let revoke = menu_item(state, "Revoke", true, move || {
+                apply_mesh(
+                    state,
+                    None,
+                    "Revoked the peer.".to_string(),
+                    fetch::mesh_deny_peer(full.clone()),
+                );
+            });
             view! {
                 <TableRow
                     state=table
                     cell=move |_| {
                         view! {
-                            <span class="font-mono" title=peer.clone()>{short_id(&peer)}</span>
+                            <span class="adi-mono" title=peer.clone()>{short_id(&peer)}</span>
                         }
                         .into_any()
                     }
-                    actions=revoke
+                    actions=row_actions(state, menu_key, (), vec![revoke])
                 />
             }
             .into_any()
@@ -262,7 +267,7 @@ fn mesh_peer_rows(state: State) -> AnyView {
         .into_any()
 }
 
-/// Rows for the forwards table: a placeholder, or one row per forward with a remove button.
+/// Rows for the forwards table: a placeholder, or one row per forward with a menu to remove it.
 fn mesh_forward_rows(state: State) -> AnyView {
     let table = state.tables.mesh_forwards;
     let mut forwards = match rows_or_placeholder(
@@ -288,15 +293,17 @@ fn mesh_forward_rows(state: State) -> AnyView {
         .into_iter()
         .map(|f| {
             let listen = f.listen;
-            let remove = view! {
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_mesh(state, None, format!("Removed the forward on 127.0.0.1:{listen}."),
-                        fetch::mesh_remove_forward(listen));
-                }>"Remove"</button>
-            }
-            .into_any();
+            let remove = menu_item(state, "Remove", true, move || {
+                apply_mesh(
+                    state,
+                    None,
+                    format!("Removed the forward on 127.0.0.1:{listen}."),
+                    fetch::mesh_remove_forward(listen),
+                );
+            });
             view! {
-                <TableRow state=table cell=move |col| forward_cell(col, &f) actions=remove/>
+                <TableRow state=table cell=move |col| forward_cell(col, &f)
+                    actions=row_actions(state, format!("mesh-fwd:{listen}"), (), vec![remove])/>
             }
             .into_any()
         })
@@ -308,16 +315,20 @@ fn mesh_forward_rows(state: State) -> AnyView {
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn forward_cell(col: &str, f: &MeshForward) -> AnyView {
     match col {
-        "Local" => view! {
-            <span class="font-mono font-medium text-accent">{format!("127.0.0.1:{}", f.listen)}</span>
+        "Local" => {
+            view! { <span class="adi-mono">{format!("127.0.0.1:{}", f.listen)}</span> }.into_any()
         }
-        .into_any(),
-        "Peer" => {
-            view! { <span class="font-mono" title=f.peer.clone()>{short_id(&f.peer)}</span> }.into_any()
-        }
-        "Remote" => view! { <span class="font-mono">{format!(":{}", f.port)}</span> }.into_any(),
+        "Peer" => view! { <span class="adi-mono" title=f.peer.clone()>{short_id(&f.peer)}</span> }
+            .into_any(),
+        "Remote" => view! { <span class="adi-mono">{format!(":{}", f.port)}</span> }.into_any(),
         // "Name", and anything the layout offers that this match doesn't name.
-        _ => view! { <span>{f.name.clone()}</span> }.into_any(),
+        _ => {
+            if f.name.is_empty() {
+                view! { <span class="adi-muted">"\u{2014}"</span> }.into_any()
+            } else {
+                view! { <span>{f.name.clone()}</span> }.into_any()
+            }
+        }
     }
 }
 

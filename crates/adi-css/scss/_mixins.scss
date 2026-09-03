@@ -1,30 +1,45 @@
-// Reusable Sass helpers. Kept tiny on purpose — tokens do most of the work.
+// Reusable Sass helpers. Kept tiny on purpose — the tokens do most of the work.
 
-// Standard focus ring, applied to `:focus-visible`.
+// The keyboard focus ring. Ink, not orange: orange outlines are a selected state nobody asked
+// for (DESIGN.md §8), and this ring only appears under a keyboard.
 @mixin focus-ring {
-  outline: 2px solid var(--accent);
+  outline: 1.5px solid var(--focus);
   outline-offset: 2px;
 }
 
-// An uppercase, letter-spaced label (tile/field/table headings). Restrained on purpose:
-// heavy tracking at small sizes reads as shouting, so weight does the work instead.
-@mixin eyebrow($size: var(--text-xs)) {
-  text-transform: uppercase;
-  letter-spacing: .06em;
-  font-size: $size;
-  font-weight: 600;
-  color: var(--muted);
+// A label: 12px, `--ink-3`, sentence case (DESIGN.md §2.6). Field labels, table headers, panel
+// section dividers. Never uppercase, never tracked.
+@mixin label {
+  font-size: var(--fs-label);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink-3);
 }
 
-// The shared surface treatment behind tiles and panels.
+// A machine string (DESIGN.md §2.3): a path, a hash, a command, an id, a config value.
+@mixin mono {
+  font-family: var(--mono);
+  font-size: var(--fs-mono);
+  color: var(--code);
+  font-variant-numeric: tabular-nums;
+}
+
+// A card (DESIGN.md §5): a hairline and the large radius, for a genuinely detachable thing.
+// No fill, no shadow. Never around a table, never inside another card.
 @mixin card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
 }
 
-// Below this width the panel/tiles collapse to a single column.
+// A tag, chip or pill's fill.
+@mixin chip {
+  background: var(--chip);
+  color: var(--ink-2);
+  border-radius: var(--r-pill);
+}
+
+// Below this width the workbench stacks and forms take a row per control.
 $breakpoint-narrow: 620px;
 
 @mixin narrow {

@@ -229,15 +229,14 @@ pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
             let tone = if u.outcome.as_deref() == Some("rolled-back") {
                 "text-err hover:text-err"
             } else {
-                "text-fainter hover:text-meta"
+                "text-ink-3 hover:text-ink-2"
             };
             view! {
                 <button
                     type="button"
                     class=format!(
-                        "inline-flex h-6 shrink-0 cursor-pointer items-center rounded-sm \
-                         border border-transparent bg-transparent px-2 font-mono text-mini \
-                         hover:bg-card disabled:cursor-default {tone}"
+                        "inline-flex h-7 shrink-0 cursor-pointer items-center rounded-md \
+                         px-2 text-small hover:bg-hover disabled:cursor-default {tone}"
                     )
                     title=tooltip(&u)
                     disabled=move || watch.busy.get()
@@ -251,7 +250,7 @@ pub(crate) fn version_pill(watch: UpdateWatch) -> impl IntoView {
                             <Button
                                 size=ButtonSize::Small
                                 variant=ButtonVariant::Primary
-                                icon=icons::Icon::Upgrade.path()
+                                icon=icons::Icon::Upgrade.lucide()
                                 disabled=watch.busy
                                 attr:title=format!("See what is in {latest}, then install it")
                                 on:click=move |_| watch.offer.set(true)
@@ -287,15 +286,15 @@ fn whats_new(watch: UpdateWatch, latest: String, notes: Option<String>) -> impl 
                     {match notes.clone() {
                         Some(md) => view! { <Markdown source=md/> }.into_any(),
                         None => {
-                            view! { <p class="text-msg text-meta">{unnoted.clone()}</p> }
+                            view! { <p class="text-ui text-ink-2">{unnoted.clone()}</p> }
                                 .into_any()
                         }
                     }}
                 </div>
                 <div class="flex flex-wrap items-center justify-between gap-3 border-t \
-                            border-divider pt-3">
+                            border-line pt-3">
                     // The consequence, beside the button rather than discovered after it.
-                    <p class="min-w-0 flex-1 text-mini text-fainter">
+                    <p class="min-w-0 flex-1 text-small text-ink-3">
                         "Installing restarts the stack onto the new version. This page "
                         "reconnects on its own, and the update rolls itself back if the "
                         "services do not come up."
@@ -309,7 +308,7 @@ fn whats_new(watch: UpdateWatch, latest: String, notes: Option<String>) -> impl 
                         </Button>
                         <Button
                             variant=ButtonVariant::Primary
-                            icon=icons::Icon::Upgrade.path()
+                            icon=icons::Icon::Upgrade.lucide()
                             disabled=watch.busy
                             on:click=move |_| watch.install()
                         >

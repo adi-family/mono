@@ -150,6 +150,22 @@ impl Daemon {
         self.id
     }
 
+    /// Spend an invite over **this** daemon's endpoint: the dialling half of the pairing in
+    /// `docs/fleet.md` §8, run by a machine whose mesh is already up.
+    ///
+    /// It exists so that machine never reaches for [`join::join`], which binds an endpoint of its
+    /// own. Two endpoints on one secret key race for the same relay session — the loser's peers
+    /// quietly stop being able to reach it — and a long-lived process would lose that race every
+    /// time it paired. `adi-mono mesh join` may call [`join::join`] because it is a short-lived
+    /// process beside a daemon that is usually not up yet; the control panel is neither.
+    ///
+    /// # Errors
+    /// As [`join::join_on`]: a malformed or expired token, an unreadable identity or registry, a
+    /// viewer that does not answer in time, or a refusal.
+    pub async fn join(&self, token: &str) -> anyhow::Result<join::Joined> {
+        join::join_on(&self.endpoint, token).await
+    }
+
     /// Signal every task to stop, wait for them, clear the published ticket, and close the
     /// endpoint. After this, nothing from this daemon is left running.
     pub async fn stop(self) {

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADI — five hero concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --ink: #17150F; --ink-2: #55514A; --ink-3: #8C8780;
+    --line: #E4E0D9; --accent: #D6431C;
+    --font: "Bricolage Grotesque", system-ui, sans-serif;
+  }
+  html { background: #FBFAF8; color: var(--ink); scroll-snap-type: y proximity; }
+  body { font-family: var(--font); font-size: 17px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+
+  .c { width: min(1200px, 100% - 64px); margin-inline: auto; }
+  section { min-height: 100vh; position: relative; scroll-snap-align: start; }
+  .tag { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 12px; color: var(--ink-3); letter-spacing: .02em; }
+
+  .nav { display: flex; align-items: center; justify-content: space-between; height: 88px; font-size: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: 18px; }
+  .brand i { display: inline-block; width: 10px; height: 10px; background: var(--accent); }
+  .nav a.dl { color: var(--ink-2); }
+
+  h1 { font-weight: 500; letter-spacing: -0.035em; line-height: 0.96; font-variation-settings: "opsz" 96; text-wrap: balance; }
+  .btn { display: inline-flex; background: var(--ink); color: #fff; font-weight: 500; padding: 16px 28px; border-radius: 8px; font-size: 17px; }
+  .btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .src { color: var(--accent); }
+  .slot { border: 1px dashed var(--line); border-radius: 12px; display: grid; place-items: center; color: var(--ink-3); font-size: 13px; }
+
+  /* 1 — centered, one line, screenshot below */
+  .s1 .hero { text-align: center; padding-top: 128px; }
+  .s1 h1 { font-size: clamp(52px, 6.4vw, 88px); max-width: 16ch; margin-inline: auto; margin-bottom: 40px; }
+  .s1 .btn { margin-bottom: 96px; }
+  .s1 .slot { aspect-ratio: 16/9; }
+
+  /* 2 — type only, statement on the whole screen */
+  .s2 .hero { min-height: calc(100vh - 88px); display: flex; flex-direction: column; justify-content: space-between; padding-bottom: 64px; }
+  .s2 h1 { font-size: clamp(72px, 10.5vw, 148px); line-height: 0.9; letter-spacing: -0.045em; max-width: 12ch; padding-top: 64px; }
+  .s2 .foot { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: end; }
+  .s2 .foot p { max-width: 36ch; color: var(--ink-2); }
+  .s2 .foot .cta { display: flex; gap: 24px; align-items: center; justify-content: end; }
+
+  /* 3 — split, screenshot bleeds right, one sentence */
+  .s3 .hero { display: grid; grid-template-columns: 4fr 8fr; gap: 64px; align-items: center; min-height: calc(100vh - 88px); padding-bottom: 88px; }
+  .s3 h1 { font-size: clamp(44px, 4.8vw, 64px); margin-bottom: 32px; }
+  .s3 p { color: var(--ink-2); margin-bottom: 40px; max-width: 30ch; }
+  .s3 .slot { aspect-ratio: 4/3; width: calc(100% + 80px); }
+  .s3 .wrap { overflow: hidden; margin-right: calc((100vw - min(1200px, 100vw - 64px)) / -2); }
+
+  /* 4 — the number is the visual */
+  .s4 .hero { padding-top: 112px; display: grid; grid-template-columns: 1fr 1fr; gap: 96px; align-items: end; min-height: calc(100vh - 88px); padding-bottom: 96px; }
+  .s4 h1 { font-size: clamp(44px, 4.8vw, 64px); margin-bottom: 32px; }
+  .s4 p { color: var(--ink-2); max-width: 32ch; margin-bottom: 40px; }
+  .s4 .num { font-size: clamp(120px, 15vw, 220px); line-height: .85; letter-spacing: -0.06em; font-weight: 400; font-variation-settings: "opsz" 96; }
+  .s4 .num small { display: block; font-size: 17px; letter-spacing: 0; color: var(--ink-2); margin-top: 24px; max-width: 30ch; line-height: 1.5; }
+  .s4 .bar { height: 6px; background: var(--line); margin-top: 32px; position: relative; }
+  .s4 .bar b { position: absolute; left: 0; top: 0; bottom: 0; width: 86.7%; background: var(--ink); }
+  .s4 .bar i { position: absolute; left: 86.7%; top: 0; bottom: 0; right: 0; background: var(--accent); }
+
+  /* 5 — dark, window peeking from the bottom edge */
+  .s5 { background: #111; color: #F4F2EE; --ink-2: #A8A39B; --ink-3: #6E6A63; --line: #2E2C29; overflow: hidden; }
+  .s5 .brand i { background: var(--accent); }
+  .s5 .hero { text-align: center; padding-top: 112px; }
+  .s5 h1 { font-size: clamp(52px, 6.4vw, 88px); max-width: 14ch; margin-inline: auto; margin-bottom: 32px; }
+  .s5 p { color: var(--ink-2); margin-bottom: 40px; }
+  .s5 .btn { background: #F4F2EE; color: #111; margin-bottom: 80px; }
+  .s5 .slot { aspect-ratio: 16/9; border-color: #3A3733; border-bottom: 0; border-radius: 12px 12px 0 0; background: #1A1917; height: 38vh; }
+
+  @media (max-width: 900px) {
+    .s2 .foot, .s3 .hero, .s4 .hero { grid-template-columns: 1fr; }
+    .s3 .slot, .s3 .wrap { width: 100%; margin: 0; }
+    .s2 .foot .cta { justify-content: start; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 1 -->
+<section class="s1"><span class="tag">1 — centered, one line</span>
+  <div class="c">
+    <nav class="nav"><a class="brand" href="#"><i></i>ADI</a><a class="dl" href="#">Download</a></nav>
+    <div class="hero">
+      <h1>You've been the whole company long enough.</h1>
+      <a class="btn" href="#">Download ADI</a>
+      <div class="slot">screenshot, 1200 × 675</div>
+    </div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section class="s2"><span class="tag">2 — type only</span>
+  <div class="c">
+    <nav class="nav"><a class="brand" href="#"><i></i>ADI</a><a class="dl" href="#">Download</a></nav>
+    <div class="hero">
+      <h1>You've been the whole company long enough.</h1>
+      <div class="foot">
+        <p>ADI runs agents on your own machine. Close the tab and they still know what they knew.</p>
+        <div class="cta"><a class="src" href="#">Read the source</a><a class="btn" href="#">Download ADI</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section class="s3"><span class="tag">3 — split, screenshot bleeds right</span>
+  <div class="c">
+    <nav class="nav"><a class="brand" href="#"><i></i>ADI</a><a class="dl" href="#">Download</a></nav>
+    <div class="hero">
+      <div>
+        <h1>You've been the whole company long enough.</h1>
+        <p>Agents that run on your machine and remember the work between conversations.</p>
+        <a class="btn" href="#">Download ADI</a>
+      </div>
+      <div class="wrap"><div class="slot">screenshot, one region, bleeds off the right</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section class="s4"><span class="tag">4 — the number is the visual</span>
+  <div class="c">
+    <nav class="nav"><a class="brand" href="#"><i></i>ADI</a><a class="dl" href="#">Download</a></nav>
+    <div class="hero">
+      <div>
+        <h1>You've been the whole company long enough.</h1>
+        <p>ADI runs agents on your own machine. Hand off the roles you can't afford to hire for.</p>
+        <a class="btn" href="#">Download ADI</a>
+      </div>
+      <div>
+        <div class="num">843<small>hours the month asks for. It has 730.5.</small></div>
+        <div class="bar"><b></b><i></i></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section class="s5"><span class="tag">5 — dark, window from the bottom</span>
+  <div class="c">
+    <nav class="nav"><a class="brand" href="#"><i></i>ADI</a><a class="dl" href="#">Download</a></nav>
+    <div class="hero">
+      <h1>You've been the whole company long enough.</h1>
+      <p>Agents on your own machine, with memory between conversations.</p>
+      <a class="btn" href="#">Download ADI</a>
+      <div class="slot">screenshot, top edge only, dark theme</div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

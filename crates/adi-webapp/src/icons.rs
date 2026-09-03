@@ -1,200 +1,96 @@
-//! The icon set: small stroked glyphs drawn on a 16×16 grid.
+//! The control panel's icons: the nouns the app has, each mapped to the one Lucide glyph
+//! `design/DESIGN.md` §9 gives it.
 //!
-//! Each icon is the *inner* markup of an `<svg>`; the element around it supplies the
-//! viewBox, `currentColor` stroke, and joins, so an icon inherits the colour and weight of
-//! whatever row it sits in. Kept as hand-written paths rather than a font or sprite sheet so
-//! the UI stays a single self-contained wasm bundle with no external requests.
+//! The drawing is [`adi_ui::Icon`]'s — stroke 1.5, one of four sizes, `currentColor`. What is
+//! here is only the *choice*: which glyph a route, a project section or an action gets, made
+//! once so two screens never pick differently for the same noun.
+
+use adi_ui::Lucide;
 
 use crate::routing::{ProjectSection, Route};
 
+/// A noun in the app. `lucide()` is the glyph for it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Icon {
+    /// The global scope in the explorer.
     Globe,
+    /// Settings.
     Gear,
     Folder,
+    /// Projects, as a list.
     List,
     Tasks,
     Agent,
     Trigger,
     Dashboard,
+    /// Services.
     Server,
+    /// The ports manager.
     Plug,
+    /// The mesh.
     Mesh,
+    /// A fleet node — a machine, as against `Mesh`'s links between them.
     Node,
+    /// The marketplace.
     Box,
+    /// Workspaces.
     Layers,
     File,
+    /// A document — a project's overview, a store file.
     Doc,
+    /// The meta agent.
     Spark,
     Wrench,
+    /// Secrets.
     Key,
     Database,
-    /// An open book — a collection of written notes, which is what a knowledge base is.
+    /// Knowledge.
     Book,
-    /// Two nodes on a spine, each carrying a line — a pair of facts, linked. The facts base
-    /// is read as pairs before it is read as a list, so the glyph is a pair rather than a
-    /// stack.
+    /// The facts base, read as pairs.
     Pair,
-    /// An arrow into a tray — "install this as an app".
+    /// Install this as an app.
     Download,
-    /// [`Icon::Download`] mirrored: an arrow rising *out* of a bar — "move this machine up
-    /// to the published version". The two sit in the same bar, so they are each other's
-    /// reflection rather than two takes on an arrow.
+    /// Move this machine up to the published version.
     Upgrade,
-    /// Bars rising inside an axis — a reading of what has happened, which is what the
-    /// analytics page is. Deliberately unlike `Dashboard`'s four tiles: one is a chart, the
-    /// other a grid of panels, and at 13px only the bars tell them apart.
+    /// Analytics.
     Chart,
-    /// A disc filled on one side — the theme toggle. It says "two of these" without
-    /// naming either, which is what a toggle between light and dark is.
-    Contrast,
-    /// A funnel — a list narrowed to part of itself. The one glyph a person reads as
-    /// "filter" without a label beside it, which is what a 24px control in a rail head has
-    /// room for.
+    /// Narrow a list to part of itself.
     Filter,
-    /// Two rails with a knob each, at different positions — dials somebody has set.
-    ///
-    /// Deliberately *not* [`Icon::Gear`], which this app already spends on the Settings scope
-    /// in the rail: a gear says "how this program is configured", and the control this marks
-    /// changes how one run behaves and nothing else. The knobs sitting off-centre are the
-    /// glyph's whole argument — it reads as adjustment rather than administration.
+    /// Per-run settings — dials somebody has set, as against `Gear`'s administration.
     Sliders,
 }
 
 impl Icon {
-    /// The glyph's paths. Coordinates assume a 16×16 viewBox and a 1.5 stroke.
-    // One arm per icon and nothing else: the length is the size of the set, and splitting the
-    // table in two would only move the line where the set is looked up.
-    #[allow(clippy::too_many_lines)]
-    pub(crate) fn path(self) -> &'static str {
+    /// The Lucide glyph for this noun (DESIGN.md §9).
+    pub(crate) const fn lucide(self) -> Lucide {
         match self {
-            Icon::Globe => {
-                r#"<circle cx="8" cy="8" r="6.25"/><path d="M1.75 8h12.5"/>
-                   <path d="M8 1.75c1.6 1.7 2.5 3.9 2.5 6.25S9.6 12.55 8 14.25c-1.6-1.7-2.5-3.9-2.5-6.25S6.4 3.45 8 1.75z"/>"#
-            }
-            Icon::Gear => {
-                r#"<circle cx="8" cy="8" r="2.25"/>
-                   <path d="M8 1.5v1.75M8 12.75v1.75M1.5 8h1.75M12.75 8h1.75M3.4 3.4l1.25 1.25M11.35 11.35l1.25 1.25M12.6 3.4l-1.25 1.25M4.65 11.35L3.4 12.6"/>"#
-            }
-            Icon::Folder => {
-                r#"<path d="M1.75 4.5a1 1 0 0 1 1-1h3.1l1.5 1.5h6.9a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H2.75a1 1 0 0 1-1-1z"/>"#
-            }
-            Icon::List => {
-                r#"<path d="M5.75 4h8M5.75 8h8M5.75 12h8"/><path d="M2.75 4h.01M2.75 8h.01M2.75 12h.01"/>"#
-            }
-            // A ticked box rather than a two-row checklist: at 13px the extra strokes of a
-            // checklist collapse into noise.
-            Icon::Tasks => {
-                r#"<rect x="2.5" y="2.5" width="11" height="11" rx="2"/>
-                   <path d="M5.5 8.25l1.75 1.75 3.25-3.5"/>"#
-            }
-            // A chip, not a robot head — a small rounded box with an antenna reads as a
-            // padlock at this size.
-            Icon::Agent => {
-                r#"<rect x="4.5" y="4.5" width="7" height="7" rx="1.5"/>
-                   <path d="M6.5 1.75v2.75M9.5 1.75v2.75M6.5 11.5v2.75M9.5 11.5v2.75"/>
-                   <path d="M1.75 6.5h2.75M1.75 9.5h2.75M11.5 6.5h2.75M11.5 9.5h2.75"/>"#
-            }
-            Icon::Trigger => r#"<path d="M8.75 1.75L3.75 9h3.5l-.5 5.25L12.25 7h-3.5z"/>"#,
-            Icon::Dashboard => {
-                r#"<rect x="2.25" y="2.25" width="5" height="5" rx="1"/>
-                   <rect x="8.75" y="2.25" width="5" height="5" rx="1"/>
-                   <rect x="2.25" y="8.75" width="5" height="5" rx="1"/>
-                   <rect x="8.75" y="8.75" width="5" height="5" rx="1"/>"#
-            }
-            Icon::Server => {
-                r#"<rect x="2.25" y="2.75" width="11.5" height="4.5" rx="1"/>
-                   <rect x="2.25" y="8.75" width="11.5" height="4.5" rx="1"/>
-                   <path d="M4.75 5h.01M4.75 11h.01"/>"#
-            }
-            Icon::Plug => {
-                r#"<path d="M6 1.75v3.5M10 1.75v3.5"/>
-                   <path d="M3.75 5.25h8.5V8a4.25 4.25 0 0 1-8.5 0z"/><path d="M8 12.25v2"/>"#
-            }
-            Icon::Mesh => {
-                r#"<circle cx="8" cy="3.25" r="1.75"/><circle cx="3.25" cy="12.25" r="1.75"/>
-                   <circle cx="12.75" cy="12.25" r="1.75"/>
-                   <path d="M6.9 4.8L4.35 10.7M9.1 4.8l2.55 5.9M5 12.25h6"/>"#
-            }
-            // A screen on a stand — a remote *machine*, as against `Mesh`'s links between them.
-            // The fleet page is about the nodes themselves, so the two must not read alike.
-            Icon::Node => {
-                r#"<rect x="1.75" y="2.25" width="12.5" height="8.5" rx="1"/>
-                   <path d="M8 10.75v2.25M5.25 13.75h5.5"/>"#
-            }
-            Icon::Box => {
-                r#"<path d="M8 1.75l5.75 3.1v6.3L8 14.25l-5.75-3.1v-6.3z"/>
-                   <path d="M2.25 4.85L8 7.95l5.75-3.1M8 7.95v6.3"/>"#
-            }
-            Icon::Layers => {
-                r#"<path d="M8 1.75l6.25 3.1L8 7.95 1.75 4.85z"/>
-                   <path d="M1.75 8.4L8 11.5l6.25-3.1M1.75 11.6L8 14.7l6.25-3.1"/>"#
-            }
-            Icon::File => {
-                r#"<path d="M9.25 1.75H4.5a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h7a1 1 0 0 0 1-1V5z"/>
-                   <path d="M9.25 1.75V5h3.25"/>"#
-            }
-            Icon::Doc => {
-                r#"<rect x="2.75" y="2.25" width="10.5" height="11.5" rx="1"/>
-                   <path d="M5.5 5.75h5M5.5 8.25h5M5.5 10.75h3"/>"#
-            }
-            // Two four-point sparkles — the "assistant / meta-agent" mark. Concave points keep it
-            // reading as a spark rather than a plus at 13px.
-            Icon::Spark => {
-                r#"<path d="M6.5 1.75c.35 2.55 1.2 3.4 3.75 3.75-2.55.35-3.4 1.2-3.75 3.75-.35-2.55-1.2-3.4-3.75-3.75 2.55-.35 3.4-1.2 3.75-3.75z"/>
-                   <path d="M11.75 9.25c.2 1.5.7 2 2.2 2.2-1.5.2-2 .7-2.2 2.2-.2-1.5-.7-2-2.2-2.2 1.5-.2 2-.7 2.2-2.2z"/>"#
-            }
-            // A wrench — the "tool" mark: an open-end head over a diagonal handle.
-            Icon::Wrench => {
-                r#"<path d="M11.4 2.4a3 3 0 0 0-3.85 3.75l-5 5a1.35 1.35 0 0 0 1.9 1.9l5-5A3 3 0 0 0 13.1 4.1l-1.85 1.85-1.5-.35-.35-1.5z"/>"#
-            }
-            // A key — the "secret" mark: a ringed bow with a notched bit on a diagonal shaft.
-            Icon::Key => {
-                r#"<circle cx="5.25" cy="10.75" r="3"/><path d="M7.4 8.6l5.35-5.35"/>
-                   <path d="M10.5 5.5l1.5 1.5M12.75 3.25l1.5 1.5"/>"#
-            }
-            Icon::Download => {
-                r#"<path d="M8 2.25v7"/><path d="M5 6.5l3 3 3-3"/>
-                   <path d="M2.75 11.25v2.5h10.5v-2.5"/>"#
-            }
-            Icon::Upgrade => {
-                r#"<path d="M8 13.75v-7"/><path d="M5 9.5l3-3 3 3"/>
-                   <path d="M2.75 4.75v-2.5h10.5v2.5"/>"#
-            }
-            Icon::Chart => {
-                r#"<path d="M2.25 2v11.75H14"/>
-                   <path d="M5 11.5V7.25M8 11.5V4.25M11 11.5V8.75"/>"#
-            }
-            Icon::Contrast => {
-                r#"<circle cx="8" cy="8" r="6.25"/>
-                   <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" stroke="none"/>"#
-            }
-            // Wide mouth, short stem, and the stem's foot cut on the slant a funnel's spout has —
-            // at 14px a symmetrical stem reads as an hourglass instead.
-            Icon::Filter => r#"<path d="M2.25 3.25h11.5l-4.4 5.15v4.1l-2.7 1.5V8.4z"/>"#,
-            // Each rail is drawn as two segments that stop at its knob rather than as one line
-            // behind it: at 16px a stroke crossing the circle fills it in, and two filled discs
-            // on a pair of lines read as a bolt or a hinge, not as a control you can move.
-            Icon::Sliders => {
-                r#"<path d="M2.25 4.75h6M11.75 4.75h2M2.25 11.25h2M7.75 11.25h6"/>
-                   <circle cx="10" cy="4.75" r="1.75"/><circle cx="6" cy="11.25" r="1.75"/>"#
-            }
-            Icon::Database => {
-                r#"<ellipse cx="8" cy="3.75" rx="5.25" ry="2"/>
-                   <path d="M2.75 3.75v8.5c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2v-8.5"/>
-                   <path d="M2.75 8c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2"/>"#
-            }
-            // An open book: two leaves meeting at a spine. Distinct from `Doc` (one page) and
-            // `Layers` (a stack) at 16px, which is the only size that matters here.
-            Icon::Book => {
-                r#"<path d="M8 4.25C6.9 3.2 5.4 2.75 3.5 2.75H1.75v9.5H3.5c1.9 0 3.4.45 4.5 1.5"/>
-                   <path d="M8 4.25c1.1-1.05 2.6-1.5 4.5-1.5h1.75v9.5H12.5c-1.9 0-3.4.45-4.5 1.5z"/>
-                   <path d="M8 4.25v9.5"/>"#
-            }
-            Icon::Pair => {
-                r#"<circle cx="3.5" cy="4.75" r="1.6"/><circle cx="3.5" cy="11.25" r="1.6"/>
-                   <path d="M3.5 6.35v3.3"/><path d="M7.25 4.75h6.5M7.25 11.25h6.5"/>"#
-            }
+            Icon::Globe => Lucide::Globe,
+            Icon::Gear => Lucide::Settings2,
+            Icon::Folder => Lucide::Folder,
+            Icon::List => Lucide::List,
+            Icon::Tasks => Lucide::ListTree,
+            Icon::Agent => Lucide::Bot,
+            Icon::Trigger => Lucide::Zap,
+            Icon::Dashboard => Lucide::LayoutDashboard,
+            Icon::Server => Lucide::Server,
+            Icon::Plug => Lucide::Plug,
+            Icon::Mesh => Lucide::Network,
+            Icon::Node => Lucide::Monitor,
+            Icon::Box => Lucide::Store,
+            Icon::Layers => Lucide::Layers,
+            Icon::File => Lucide::File,
+            Icon::Doc => Lucide::FileText,
+            Icon::Spark => Lucide::Sparkles,
+            Icon::Wrench => Lucide::Wrench,
+            Icon::Key => Lucide::KeyRound,
+            Icon::Database => Lucide::Database,
+            Icon::Book => Lucide::BookOpen,
+            Icon::Pair => Lucide::GitCompare,
+            Icon::Download => Lucide::Download,
+            Icon::Upgrade => Lucide::ArrowUp,
+            Icon::Chart => Lucide::ChartColumn,
+            Icon::Filter => Lucide::ListFilter,
+            Icon::Sliders => Lucide::SlidersHorizontal,
         }
     }
 }
@@ -234,7 +130,7 @@ pub(crate) fn section_icon(section: ProjectSection) -> Icon {
         ProjectSection::Tools => Icon::Wrench,
         ProjectSection::Secrets => Icon::Key,
         ProjectSection::Knowledge => Icon::Book,
-        ProjectSection::Services => Icon::Box,
+        ProjectSection::Services => Icon::Server,
         ProjectSection::Workspaces => Icon::Layers,
         ProjectSection::Files => Icon::File,
     }

@@ -1,160 +1,80 @@
-//! The floating mark, and the menu behind it.
+//! The menu `⌘K` opens, and the triggers that open it by pointer.
 //!
-//! The root screens used to wear a bar across the top whose whole job was to hold five
-//! controls and a wordmark. A bar is a poor container for that: it costs a strip of every
-//! viewport forever, it puts the mark where the sessions rail wants to start, and the
-//! controls in it are ones a reader touches a few times a day.
+//! The root screens wear no bar. A bar is a poor container for what one would hold here: it
+//! costs a strip of every viewport forever to carry controls a reader touches a few times a
+//! day. So everything it would have carried is a row in this menu instead — every dashboard
+//! this machine can open, here or on a paired node, every page of the control panel.
 //!
-//! So the bar is gone and the mark floats instead — one small island the reader can drag
-//! anywhere and that stays where it was put, on this browser, across visits. Clicking it
-//! opens the menu; so does `⌘K`. Everything the bar carried is a row in there, alongside
-//! whatever else is worth reaching from a keyboard: every dashboard this machine can open,
-//! here or on a paired node, every page of the control panel, the theme.
-//!
-//! The control panel carries the same mark, and both are given their rows by [`crate::menu`] —
-//! one list, so the two menus cannot come to disagree about what this app can do. A palette that
+//! The control panel carries the same menu, and both are given their rows by [`crate::menu`] —
+//! one list, so the two cannot come to disagree about what this app can do. A palette that
 //! stopped working on the page you had just used it to reach would be one nobody learned to
 //! trust; that is the whole reason it is on both.
 //!
-//! It is the Trefoil ([`adi_ui::Mark`]) and nothing else — a 44px square carrying the same mark
-//! as the Dock icon and the browser tab. Deliberately *without* the `adi.` wordmark beside it: a
-//! control that floats over somebody's chat forever should be as small as it can be and still be
-//! recognised, and a mark that needs the word spelled out next to it is not doing its job. The
-//! name it owes a reader is the accessible one, which the [`aria-label`] and the `title` (which
-//! also names `⌘K`) carry.
+//! **The trigger and the menu mount separately**, because the trigger differs by screen and the
+//! menu does not:
 //!
-//! Being the only always-present control on the screen, it is also the only one that gets a
-//! flourish: hovering lifts the chip and steps the mark's three lobes apart, pressing closes them
-//! again. That lives in `styles/main.scss` under `.adi-launcher`, not here — it is entirely CSS,
-//! and a hover that needed a signal would be a hover that stopped working the moment wasm was
-//! busy.
+//! * [`overlay`] — the `⌘K` listener and the dialog. Mounted once per screen and *outside*
+//!   whatever swaps underneath it, so the menu survives the screen behind it changing.
+//! * [`brand`] — the mark, the wordmark and the shortcut on one line. The chat docks it at the
+//!   head of the sessions rail; it is the one screen with a column to put it in.
+//! * [`floating`] — the bare mark in a corner, for the screens with nowhere to dock one: the
+//!   setup wizard and the control panel.
 //!
-//! [`aria-label`]: https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Attributes/aria-label
-//!
-//! **A drag is not a click.** The mark is both a handle and a button, which is only safe
-//! because the press has to travel [`DRAG_SLOP`] pixels before it stops being the second
-//! one — otherwise every reader who nudged the mark by two pixels while clicking it would
-//! find that nothing happened.
-//!
-//! The two are read from *different events*, though, and deliberately: dragging is pointer
-//! events, opening is `click`. A button that opened on `pointerup` would be one no keyboard
-//! could press, because `Enter` and `Space` fire `click` and nothing else. So a drag that
-//! actually moved marks the click it is about to produce to be thrown away, and every other
-//! click — pointer, `Enter`, `Space`, a screen reader's activation — opens the menu.
+//! The mark is [`adi_ui::Mark`] and nothing else. It does not move, glow or open up on hover:
+//! the mark is not a mascot (`design/DESIGN.md` §10), and its hover is the same tone change
+//! every other control gets.
 
-use leptos::html;
 use leptos::{ev, prelude::*};
 
-use adi_ui::{Mark, Modal};
+use adi_ui::{Kbd, Mark, Modal};
 
 use crate::icons;
-use crate::ui::storage;
 
-/// Where the mark's position is kept between visits: `"<left>,<top>"` in CSS pixels, in this
-/// browser's `localStorage`. Per browser rather than per machine on purpose — where a
-/// floating control should sit is a fact about the screen it is being read on.
-const POS_KEY: &str = "adi-launcher-pos";
-
-/// How far a press has to travel before it counts as a drag rather than a click.
-///
-/// Four pixels, because a mouse click is rarely perfectly still and a touch never is. Below
-/// this the pointer's movement is discarded entirely, so the mark does not creep.
-const DRAG_SLOP: f64 = 4.0;
-
-/// How close to the edge of the viewport the mark may be dropped. It is clamped to this on
-/// every drag *and* on every resize — a mark parked against the right edge of a wide window
-/// would otherwise be outside a narrow one, with no way to get it back.
+/// How far from the corner the floating mark sits.
 const EDGE: f64 = 8.0;
 
-/// The mark's own size, used only to keep it on screen.
-///
-/// Exact rather than measured, because the chip is a fixed square: it carries `size-11` and
-/// nothing inside it can stretch it. Reading the element would be the general answer, but
-/// [`clamp`] also runs at construction, before there is an element to read.
-const MARK_W: f64 = 44.0;
-const MARK_H: f64 = 44.0;
-
 /// The height of the workbench's status strip (`.adi-statusbar` in `adi-css`), which the control
-/// panel's mark has to start clear of. Stated rather than measured, like [`MARK_H`]: the bar is a
-/// fixed height, and the default corner is drawn before there is anything on screen to read.
+/// panel's mark has to start clear of. Stated rather than measured: the strip is a fixed height,
+/// and the corner is drawn before there is anything on screen to read.
 const STATUS_STRIP: f64 = 28.0;
 
-/// The floating mark and everything the menu behind it needs to remember.
+/// The menu, and everything it needs to remember.
 ///
-/// Built once per mounted screen and passed to [`launcher`]. It is `Copy`, so the branch that
-/// draws the chat and the branch that draws the wizard can hold the same one — which is the
-/// point: the menu does not close, move or forget its position when the screen under it
+/// Built once per mounted screen and passed to the pieces above. It is `Copy`, so the branch
+/// that draws the chat and the branch that draws the wizard can hold the same one — which is the
+/// point: the menu does not close or forget what was typed into it when the screen under it
 /// swaps.
 #[derive(Clone, Copy)]
 pub(crate) struct Launcher {
-    /// Whether the menu is open. Public because [`Modal`] closes itself through it, and
-    /// because a row that navigates within this document has to shut it on the way out.
+    /// Whether the menu is open. Also how [`Modal`] closes itself, and how a row that navigates
+    /// within this document shuts the menu on its way out.
     open: RwSignal<bool>,
-    /// The mark's top-left in CSS pixels. `None` means "still where it started" — the
-    /// bottom-left corner — which is drawn from the bottom rather than the top, so it needs
-    /// no measurement before the first paint.
-    pos: RwSignal<Option<(f64, f64)>>,
     /// What has been typed into the filter.
     query: RwSignal<String>,
     /// Which row `Enter` would run, as an index into the *filtered* list.
     cursor: RwSignal<usize>,
-    /// The press in progress, if any. See [`Drag`].
-    drag: RwSignal<Option<Drag>>,
-    /// How far above the foot of the viewport the mark sits *before anybody has moved it*. The
-    /// workbench wears a status strip along that edge and the root screens do not, so the two
-    /// start the mark in different corners. Only the default: a dragged mark is wherever its
-    /// reader dropped it, and that position is one both screens share.
+    /// How far above the foot of the viewport [`floating`] sits. The workbench wears a status
+    /// strip along that edge and the wizard does not, so the two start in different corners.
     floor: f64,
-    /// Whether the click that a finished drag is about to produce should be thrown away. See
-    /// [`launcher`] for why the two are separate events in the first place.
-    swallow: RwSignal<bool>,
-}
-
-/// A press on the mark, from `pointerdown` until it is released.
-#[derive(Clone, Copy)]
-struct Drag {
-    /// Where the pointer went down, in client coordinates.
-    start: (f64, f64),
-    /// Where the mark's top-left was at that moment — read from the element rather than from
-    /// [`Launcher::pos`], so a mark still sitting in its default corner drags from where it
-    /// visibly is instead of jumping to the origin.
-    from: (f64, f64),
-    /// Whether the pointer has travelled [`DRAG_SLOP`] yet. Until it has, the release is a
-    /// click.
-    moved: bool,
 }
 
 impl Launcher {
-    /// Start one, restoring the mark to wherever it was last dropped.
     pub(crate) fn new() -> Self {
         Self {
             open: RwSignal::new(false),
-            pos: RwSignal::new(load_pos()),
             query: RwSignal::new(String::new()),
             cursor: RwSignal::new(0),
-            drag: RwSignal::new(None),
-            swallow: RwSignal::new(false),
             floor: EDGE,
         }
     }
 
-    /// The same, for the control panel: its default corner clears the status strip along the
-    /// bottom of the workbench, which the mark would otherwise be dropped on top of.
+    /// The same, for the control panel: its corner clears the status strip along the bottom of
+    /// the workbench, which the mark would otherwise be drawn on top of.
     pub(crate) fn workbench() -> Self {
         Self {
             floor: STATUS_STRIP + EDGE,
             ..Self::new()
         }
-    }
-
-    /// End the press in progress, handing back what it was. `None` when there wasn't one,
-    /// which is what a stray release arriving here looks like from the inside.
-    fn end_drag(self) -> Option<Drag> {
-        let d = self.drag.get_untracked();
-        if d.is_some() {
-            self.drag.set(None);
-        }
-        d
     }
 
     /// Open the menu from a clean slate: no filter, first row selected.
@@ -230,17 +150,15 @@ impl Action {
     }
 }
 
-/// The mark and the menu, as one thing to drop into a screen.
+/// The `⌘K` listener and the dialog it opens — everything but the button.
 ///
 /// `actions` is called every time the list is drawn rather than taken once, so the rows track
-/// whatever signals they read — a dashboard that comes up mid-session appears in the menu
-/// without anything having to invalidate it.
-pub(crate) fn launcher(
+/// whatever signals they read: a dashboard that comes up mid-session appears in the menu without
+/// anything having to invalidate it.
+pub(crate) fn overlay(
     l: Launcher,
     actions: impl Fn() -> Vec<Action> + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let mark: NodeRef<html::Button> = NodeRef::new();
-
     // `⌘K` from anywhere on the page. `code`, not `key`: with a modifier held, a layout that
     // puts something else on that key reports *that*, and the menu must not depend on the
     // keyboard. Toggles rather than opens, so the same press that opened it closes it.
@@ -261,98 +179,48 @@ pub(crate) fn launcher(
     });
     on_cleanup(move || keys.remove());
 
-    // A window that got smaller must not take the mark with it. Clamping only what was
-    // actually placed leaves a mark still in its default corner alone, which is already
-    // anchored to that corner and follows the resize on its own.
-    let resize = window_event_listener(ev::resize, move |_| {
-        if let Some(p) = l.pos.get_untracked() {
-            l.pos.set(Some(clamp(p)));
-        }
-    });
-    on_cleanup(move || resize.remove());
+    menu(l, actions)
+}
 
+/// The docked trigger: the mark, the wordmark and the shortcut on one line.
+///
+/// `place` is the modifier the stylesheet keys off — the sessions rail's head or the
+/// narrow-viewport bar. Both are drawn, and CSS shows whichever belongs to the current width;
+/// they cannot be one element, because the two live in different parents.
+pub(crate) fn brand(l: Launcher, place: &'static str) -> impl IntoView {
     view! {
         <button
-            node_ref=mark
             type="button"
-            // `touch-none` so a drag on a touchscreen moves the mark instead of scrolling the
-            // chat underneath it. What `adi-launcher` adds is the hover — the lift and the
-            // lobes stepping apart, in `styles/main.scss`.
-            //
-            // `text-ink` survives the wordmark it was written for: the mark draws in
-            // `currentColor`, so this line is what colours two of its three lobes.
-            class="adi-launcher island fixed z-40 flex size-11 cursor-grab touch-none \
-                   select-none items-center justify-center bg-card text-ink \
-                   active:cursor-grabbing focus-visible:outline-2 \
-                   focus-visible:outline-offset-2 focus-visible:outline-accent"
-            style=move || match l.pos.get() {
-                Some((x, y)) => format!("left:{x}px;top:{y}px"),
-                // The corner it starts in, stated as a corner rather than as coordinates —
-                // no measurement, and it survives a resize by itself.
-                None => format!("left:{EDGE}px;bottom:{}px", l.floor),
-            }
-            title=move || format!("Menu — {}K, or drag to move", mod_glyph())
+            class=format!("adi-brand {place}")
+            title=format!("Menu — {}K", mod_glyph())
             aria-label="Open the menu"
             aria-haspopup="dialog"
             aria-keyshortcuts="Meta+K Control+K"
-            on:pointerdown=move |ev: web_sys::PointerEvent| {
-                let Some(el) = mark.get_untracked() else { return };
-                // Capture, so the rest of the drag arrives here even when the pointer
-                // outruns a 62px target — which, on a fast throw, it always does.
-                let _ = el.set_pointer_capture(ev.pointer_id());
-                let r = el.get_bounding_client_rect();
-                // A fresh press owns its own click. Clearing here is also what stops a drag
-                // that somehow ended without one from eating the *next* press.
-                l.swallow.set(false);
-                l.drag.set(Some(Drag {
-                    start: (f64::from(ev.client_x()), f64::from(ev.client_y())),
-                    from: (r.left(), r.top()),
-                    moved: false,
-                }));
-            }
-            on:pointermove=move |ev: web_sys::PointerEvent| {
-                let Some(d) = l.drag.get_untracked() else { return };
-                let dx = f64::from(ev.client_x()) - d.start.0;
-                let dy = f64::from(ev.client_y()) - d.start.1;
-                if !d.moved && dx.hypot(dy) < DRAG_SLOP {
-                    return;
-                }
-                l.drag.set(Some(Drag { moved: true, ..d }));
-                l.pos.set(Some(clamp((d.from.0 + dx, d.from.1 + dy))));
-            }
-            on:pointerup=move |ev: web_sys::PointerEvent| {
-                let Some(d) = l.end_drag() else { return };
-                if let Some(el) = mark.get_untracked() {
-                    let _ = el.release_pointer_capture(ev.pointer_id());
-                }
-                if d.moved {
-                    save_pos(l.pos.get_untracked());
-                    l.swallow.set(true);
-                }
-            }
-            // A press that ends by being cancelled (a system gesture, a lost pointer) still
-            // has to put back what it moved, or the mark keeps following the next one.
-            on:pointercancel=move |_| {
-                if l.end_drag().is_some_and(|d| d.moved) {
-                    save_pos(l.pos.get_untracked());
-                    l.swallow.set(true);
-                }
-            }
-            // Opening is on `click` and not on the release above, because `click` is also
-            // what `Enter` and `Space` fire on a focused button: hang the menu off the
-            // pointer and it becomes a control no keyboard can reach.
-            on:click=move |_| {
-                if l.swallow.get_untracked() {
-                    l.swallow.set(false);
-                } else {
-                    l.show();
-                }
-            }
+            on:click=move |_| l.show()
         >
-            <Mark accent=true class="size-7"/>
+            <Mark class="adi-brand__mark"/>
+            <span class="adi-brand__word">"adi"</span>
+            <Kbd class="adi-brand__kbd">{format!("{}K", mod_glyph())}</Kbd>
         </button>
+    }
+}
 
-        {menu(l, actions)}
+/// The trigger for a screen with no column to dock one in: the mark alone, in a corner.
+pub(crate) fn floating(l: Launcher) -> impl IntoView {
+    view! {
+        <button
+            type="button"
+            class="fixed z-40 flex size-11 cursor-pointer items-center justify-center \
+                   rounded-md border border-line-strong bg-side text-ink hover:bg-raise"
+            style=format!("left:{EDGE}px;bottom:{}px", l.floor)
+            title=format!("Menu — {}K", mod_glyph())
+            aria-label="Open the menu"
+            aria-haspopup="dialog"
+            aria-keyshortcuts="Meta+K Control+K"
+            on:click=move |_| l.show()
+        >
+            <Mark class="size-7"/>
+        </button>
     }
 }
 
@@ -361,7 +229,7 @@ fn menu(
     l: Launcher,
     actions: impl Fn() -> Vec<Action> + Copy + Send + Sync + 'static,
 ) -> impl IntoView {
-    let field: NodeRef<html::Input> = NodeRef::new();
+    let field: NodeRef<leptos::html::Input> = NodeRef::new();
     // Focus the filter as it opens, so `⌘K` and then typing is one movement. On the ref
     // landing rather than on `open`, because the node does not exist until the dialog is up.
     Effect::new(move |_| {
@@ -390,9 +258,8 @@ fn menu(
             <div class="flex flex-col gap-3">
                 <input
                     node_ref=field
-                    class="h-8 w-full rounded-sm border border-frame bg-canvas px-2.5 \
-                           text-row text-ink placeholder:text-placeholder \
-                           focus-visible:border-accent focus-visible:outline-none"
+                    class="h-9 w-full rounded-md border border-line-strong bg-raise px-3 \
+                           text-ui text-ink focus-visible:border-ink-3 focus-visible:outline-none"
                     type="text"
                     placeholder="Search actions…"
                     autocomplete="off"
@@ -434,7 +301,7 @@ fn menu(
                         let (rows, at) = shown();
                         if rows.is_empty() {
                             return view! {
-                                <p class="px-2 py-6 text-center text-mini text-fainter">
+                                <p class="px-2 py-6 text-center text-small text-ink-3">
                                     "Nothing matches."
                                 </p>
                             }
@@ -458,9 +325,9 @@ fn action_row(l: Launcher, i: usize, selected: bool, row: Action) -> AnyView {
     view! {
         <button
             type="button"
-            class="flex w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-sm px-2 \
-                   py-1.5 text-left text-row hover:bg-selected"
-            class:bg-selected=selected
+            class="flex w-full shrink-0 cursor-pointer items-center gap-2.5 rounded-md px-2 \
+                   py-1.5 text-left text-row hover:bg-hover"
+            class:bg-active=selected
             // The pointer moving over a row is the reader saying which one they mean, so it
             // takes the cursor with it — otherwise Enter and the pointer aim at two
             // different rows at once.
@@ -470,19 +337,9 @@ fn action_row(l: Launcher, i: usize, selected: bool, row: Action) -> AnyView {
                 run.run(());
             }
         >
-            <svg
-                class="size-3.5 shrink-0 text-meta"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                inner_html=row.icon.path()
-            ></svg>
+            <adi_ui::Icon icon=row.icon.lucide() class="text-ink-3"/>
             <span class="min-w-0 flex-1 truncate text-ink">{row.label}</span>
-            <span class="shrink-0 truncate text-mini text-fainter">{row.hint}</span>
+            <span class="shrink-0 truncate text-mini text-ink-3">{row.hint}</span>
         </button>
     }
     .into_any()
@@ -491,37 +348,12 @@ fn action_row(l: Launcher, i: usize, selected: bool, row: Action) -> AnyView {
 /// The modifier this platform writes its shortcuts with.
 ///
 /// A guess from the user agent, which is the only thing a browser still offers — and a wrong
-/// one costs a hint that names the wrong key, not a shortcut that fails: [`launcher`] answers
-/// to `⌘K` and `Ctrl+K` on every platform either way.
+/// one costs a hint that names the wrong key, not a shortcut that fails: [`overlay`] answers to
+/// `⌘K` and `Ctrl+K` on every platform either way.
 pub(crate) fn mod_glyph() -> &'static str {
     let mac = window()
         .navigator()
         .user_agent()
         .is_ok_and(|ua| ua.contains("Mac"));
     if mac { "\u{2318}" } else { "Ctrl+" }
-}
-
-/// Hold a point far enough inside the viewport that the mark stays reachable.
-fn clamp((x, y): (f64, f64)) -> (f64, f64) {
-    let w = window().inner_width().ok().and_then(|v| v.as_f64());
-    let h = window().inner_height().ok().and_then(|v| v.as_f64());
-    // `max(EDGE)` on the ceiling as well as the floor: on a viewport narrower than the mark
-    // the two bounds cross, and without it the clamp would pin the mark off the left edge.
-    let cx = w.map_or(x, |w| x.clamp(EDGE, (w - MARK_W - EDGE).max(EDGE)));
-    let cy = h.map_or(y, |h| y.clamp(EDGE, (h - MARK_H - EDGE).max(EDGE)));
-    (cx, cy)
-}
-
-/// Where the mark was left, if anywhere. A stored pair is clamped on the way in — the window
-/// it was saved from may have been a different size, or a different screen.
-fn load_pos() -> Option<(f64, f64)> {
-    let raw = storage()?.get_item(POS_KEY).ok().flatten()?;
-    let (x, y) = raw.split_once(',')?;
-    Some(clamp((x.trim().parse().ok()?, y.trim().parse().ok()?)))
-}
-
-fn save_pos(pos: Option<(f64, f64)>) {
-    if let (Some(s), Some((x, y))) = (storage(), pos) {
-        let _ = s.set_item(POS_KEY, &format!("{x},{y}"));
-    }
 }

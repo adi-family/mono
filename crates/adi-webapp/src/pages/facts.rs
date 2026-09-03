@@ -24,8 +24,8 @@
 
 use adi_ui::{
     Button, ButtonSize, ButtonVariant, Change, Decided, Empty, Fact, FactHistory, FactRow, Flash,
-    FlashKind, Input, InputWidth, Moved, NodeKind, Pair, PairQueue, PairSide, Relation, Ruling,
-    Stale, StaleList, Truncated, TxPanel, Verdict,
+    FlashKind, Input, InputWidth, Lucide, Moved, NodeKind, Pair, PairQueue, PairSide, Relation,
+    Ruling, Stale, StaleList, Truncated, TxPanel, Verdict,
 };
 use leptos::prelude::*;
 
@@ -193,8 +193,9 @@ fn decide_panel(facts: FactsConsole) -> AnyView {
                 <h2 class="adi-panel__title">"Decide"</h2>
                 <span class="adi-spacer"></span>
                 // The identity, editable and never hidden. Every verdict carries it.
-                <span class="adi-updated">"acting as"</span>
-                <Input value=facts.acting_as width=InputWidth::Default placeholder="igor"/>
+                <label class="adi-field__label" for="facts-acting-as">"Acting as"</label>
+                <Input value=facts.acting_as width=InputWidth::Default placeholder="igor"
+                    attr:id="facts-acting-as"/>
             </div>
 
             <div class="adi-panel__body">
@@ -245,8 +246,8 @@ fn stale_panel(facts: FactsConsole) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Out of date"</h2>
-                <span class="adi-chip adi-mono" title="Derived nodes with a source that moved">
-                    {move || items.get().len().to_string()}
+                <span class="adi-updated" title="Derived nodes with a source that moved">
+                    {move || format!("{} derived nodes", items.get().len())}
                 </span>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">
@@ -280,15 +281,17 @@ fn base_panel(facts: FactsConsole) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"The base"</h2>
-                <span class="adi-chip adi-mono" title="Facts in the base">
-                    {move || all.get().len().to_string()}
+                <span class="adi-updated" title="Facts in the base">
+                    {move || format!("{} facts", all.get().len())}
                 </span>
                 <span class="adi-spacer"></span>
+                // Words, not a value: the filter box takes prose.
                 <Input
                     value=facts.filter
                     input_type="search"
-                    placeholder="filter by words"
+                    placeholder="Filter by words"
                     width=InputWidth::Default
+                    class="font-sans"
                 />
             </div>
             <div class="adi-panel__body">
@@ -347,9 +350,10 @@ fn history_panel(facts: FactsConsole) -> AnyView {
                     <Button
                         size=ButtonSize::Small
                         variant=ButtonVariant::Ghost
+                        icon=Lucide::X
                         on:click=move |_| facts.open.set(String::new())
                     >
-                        "close"
+                        "Close"
                     </Button>
                 </div>
                 <div class="adi-panel__body">

@@ -1,5 +1,5 @@
-//! [`TopBar`] — the lid of the window: who this is on the left, where you are in the
-//! middle, what you can do on the right.
+//! [`TopBar`] — the bar across the top of a screen: who this is on the left, where you are
+//! in the middle, what you can do on the right.
 
 use leptos::prelude::*;
 
@@ -36,16 +36,16 @@ impl Crumb {
 
 /// The path to what is open, for [`TopBar`]'s middle slot.
 ///
-/// Written left to right from the mark — `adi. / projects / adi-ui` — so the bar reads as
-/// one sentence rather than as two clumps with a void between them. Monospace, because a
-/// path is a path.
+/// Written left to right from the mark — `adi / Settings / Fleet` — so the bar reads as one
+/// sentence rather than as two clumps with a void between them. Sans, 13px, `--ink-3`, with
+/// the segment you are on in `--ink` 500: a location is not a machine string (§2.3).
 ///
 /// The last segment is where you are and is never a link, however it was built: a link to
 /// the page you are on is a control that does nothing, and the reader has to click it to
 /// find that out.
 ///
 /// ```ignore
-/// <Crumbs items=vec![Crumb::new("projects").href("/projects"), Crumb::new("adi-ui")]/>
+/// <Crumbs items=vec![Crumb::new("Settings").href("/settings"), Crumb::new("Fleet")]/>
 /// ```
 #[component]
 pub fn Crumbs(
@@ -54,7 +54,7 @@ pub fn Crumbs(
 ) -> impl IntoView {
     view! {
         <nav
-            class=merge("flex min-w-0 items-center gap-1.5 font-mono text-mini", class)
+            class=merge("flex min-w-0 items-center gap-1 text-small text-ink-3", class)
             aria-label="Breadcrumb"
         >
             {move || {
@@ -66,10 +66,10 @@ pub fn Crumbs(
                     .map(|(i, crumb)| {
                         let here = i == last;
                         view! {
-                            <span class="shrink-0 text-fainter" aria-hidden="true">"/"</span>
+                            <span class="shrink-0" aria-hidden="true">"/"</span>
                             {match crumb.href {
                                 Some(href) if !here => view! {
-                                    <a class="truncate text-meta no-underline hover:text-accent \
+                                    <a class="truncate no-underline hover:text-ink-2 \
                                               hover:no-underline" href=href>
                                         {crumb.label}
                                     </a>
@@ -77,7 +77,7 @@ pub fn Crumbs(
                                 .into_any(),
                                 _ => view! {
                                     <span
-                                        class="truncate text-secondary"
+                                        class=if here { "truncate font-medium text-ink" } else { "truncate" }
                                         aria-current=here.then_some("page")
                                     >
                                         {crumb.label}
@@ -93,33 +93,27 @@ pub fn Crumbs(
     }
 }
 
-/// The bar across the very top of a screen.
-///
-/// **It is the one thing in this crate that is not an island.** Everything else floats on
-/// the canvas with a gap around it, because everything else is an object on the screen; the
-/// top bar is the screen's own edge, and an edge that floats reads as a card that got
-/// stuck to the ceiling. So it goes wall to wall, on the bar surface, closed by a hairline
-/// — the same shape the control panel's titlebar has always had.
+/// The bar across the very top of a screen: 48px, on `--bg-side`, a hairline under it (§5).
 ///
 /// It is `sticky`, so it stays while a document scrolls under it, and harmless in an app
 /// shell where it is a flex row that never scrolls in the first place.
 ///
-/// Three slots, left to right: the mark, whatever says where you are, and the controls.
-/// The middle one takes the free space, which is what puts the actions hard against the
-/// right edge whether it is filled or empty.
+/// Three slots, left to right: the mark and wordmark, whatever says where you are, and the
+/// controls. The middle one takes the free space, which is what puts the actions hard
+/// against the right edge whether it is filled or empty. The one filled orange a bar may hold
+/// is the update button, and only while an update exists.
 ///
 /// ```ignore
 /// <TopBar
 ///     logo="adi"
-///     actions=|| view! { <Button size=ButtonSize::Small icon=GEAR/> }.into_any()
+///     actions=|| view! { <Button size=ButtonSize::Small icon=Lucide::Settings2/> }.into_any()
 /// >
 ///     <Crumbs/>
 /// </TopBar>
 /// ```
 #[component]
 pub fn TopBar(
-    /// The word beside the mark, set in mono and closed with an accent dot — `logo="adi"`
-    /// reads `adi.` next to the Trefoil ([`crate::Mark`]). Left off, the bar starts with
+    /// The word beside the mark — `adi`, 15px/600 (§10). Left off, the bar starts with
     /// whatever the children are: the two travel together, so there is no mark without it.
     #[prop(optional, into)]
     logo: String,
@@ -140,21 +134,21 @@ pub fn TopBar(
     /// it may never start, send, or destroy anything.
     #[prop(optional, into)]
     on_home: Option<Callback<()>>,
-    /// Controls pinned to the right: a theme toggle, an install button, an account menu.
-    /// Small [`crate::Button`]s — the bar is 38px.
+    /// Controls pinned to the right: the version, an install button, the update button.
+    /// Small [`crate::Button`]s.
     #[prop(optional, into)]
     actions: Option<ViewFn>,
     #[prop(optional, into)] class: String,
-    /// Between the two: breadcrumbs, a document title, a status pill. Read left to right
-    /// from the mark, which is the natural reading order and keeps the bar from being two
-    /// clumps with a void between them.
+    /// Between the two: breadcrumbs, a document title, a status. Read left to right from the
+    /// mark, which is the natural reading order and keeps the bar from being two clumps with
+    /// a void between them.
     #[prop(optional)]
     children: Option<Children>,
 ) -> impl IntoView {
     view! {
         <header class=merge(
-            "sticky top-0 z-40 flex h-9.5 shrink-0 items-center gap-3 border-b \
-             border-divider bg-bar px-3",
+            "sticky top-0 z-40 flex h-12 shrink-0 items-center gap-3 border-b border-line \
+             bg-side px-4 text-small text-ink-3",
             class,
         )>
             {(!logo.is_empty()).then(|| {
@@ -162,12 +156,11 @@ pub fn TopBar(
                 // screen gains a way home. The link only adds what a link is: a target, a
                 // focus ring, and no underline — the mark is a mark, not a sentence.
                 let mark = view! {
-                    <Mark accent=true class="size-4.5"/>
-                    <span>{logo}<span class="text-accent">"."</span></span>
+                    <Mark class="size-[18px]"/>
+                    <span>{logo}</span>
                 };
-                let cls = "flex shrink-0 items-center gap-1.5 font-mono text-sub font-semibold \
-                           tracking-[-0.03em] text-ink no-underline hover:text-ink \
-                           hover:no-underline";
+                let cls = "flex shrink-0 items-center gap-2 text-[15px] font-semibold text-ink \
+                           no-underline hover:text-ink hover:no-underline";
                 match (on_home, home.is_empty()) {
                     // Home already: the mark reopens this screen rather than going to it. A
                     // button and not a link, because nothing is being navigated to.
@@ -176,8 +169,8 @@ pub fn TopBar(
                             type="button"
                             class=format!(
                                 "{cls} cursor-pointer bg-transparent p-0 \
-                                 focus-visible:outline-2 focus-visible:outline-offset-1 \
-                                 focus-visible:outline-accent"
+                                 focus-visible:outline-[1.5px] focus-visible:outline-offset-2 \
+                                 focus-visible:outline-focus"
                             )
                             title="Back to the start"
                             on:click=move |_| reset.run(())
@@ -192,7 +185,7 @@ pub fn TopBar(
                 }
             })}
             <div class="flex min-w-0 flex-1 items-center gap-2">{children.map(|c| c())}</div>
-            <div class="flex shrink-0 items-center gap-1">{actions.map(|a| a.run())}</div>
+            <div class="flex shrink-0 items-center gap-2">{actions.map(|a| a.run())}</div>
         </header>
     }
 }

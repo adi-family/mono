@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADI — setup, agents, fleet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #161616; --bg-side: #101010; --bg-raise: #1E1E1E; --bg-hover: #1B1B1B; --bg-active: #232323;
+    --line: rgba(255,255,255,.07); --line-strong: rgba(255,255,255,.13);
+    --ink: #ECEAE6; --ink-2: #A9A6A0; --ink-3: #6F6C67;
+    --accent: #E8532A; --ok: #4CB77A;
+    --sans: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace;
+    --r: 6px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; font-feature-settings: "tnum"; overflow: hidden; }
+  a { color: inherit; text-decoration: none; }
+  button, input, select { font: inherit; color: inherit; background: none; border: 0; }
+  button { cursor: pointer; }
+  code, .mono { font-family: var(--mono); font-size: 12.5px; }
+  code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: 4px; color: #D6D3CD; }
+  ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 4px; }
+
+  /* switcher (review only) */
+  .switch { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 9; display: flex; gap: 2px; background: #000; border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px; }
+  .switch button { font-size: 12px; padding: 4px 12px; border-radius: 999px; color: var(--ink-3); }
+  .switch button.on { background: var(--bg-active); color: var(--ink); }
+  .page { display: none; height: 100vh; } .page.on { display: grid; }
+
+  /* ---------- buttons, controls ---------- */
+  .btn { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 500; padding: 7px 14px; border-radius: var(--r); background: rgba(255,255,255,.08); white-space: nowrap; }
+  .btn:hover { background: rgba(255,255,255,.12); }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #F05F35; }
+  .btn.quiet { background: none; color: var(--ink-2); } .btn.quiet:hover { color: var(--ink); background: var(--bg-hover); }
+  .field { display: block; margin-bottom: 22px; }
+  .label { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 7px; }
+  .label .q { color: var(--ink-3); margin-left: 4px; }
+  .input { width: 100%; background: var(--bg-raise); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 9px 12px; font-size: 14px; color: var(--ink); }
+  .input.mono { font-family: var(--mono); font-size: 13px; }
+  .input::placeholder { color: var(--ink-3); }
+  .help { font-size: 13px; color: var(--ink-3); margin-top: 7px; line-height: 1.5; }
+  .chips { display: flex; gap: 6px; margin-bottom: 8px; }
+  .chip { font-family: var(--mono); font-size: 12px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--ink-2); }
+  .chip:hover { background: rgba(255,255,255,.1); color: var(--ink); }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; background: var(--bg-raise); border: 1px solid var(--line-strong); border-radius: var(--r); padding: 3px; }
+  .seg button { padding: 8px; border-radius: 4px; font-size: 14px; color: var(--ink-2); }
+  .seg button.on { background: var(--bg-active); color: var(--ink); font-weight: 500; box-shadow: 0 1px 0 rgba(0,0,0,.4); }
+  .select { position: relative; }
+  .select::after { content: ""; position: absolute; right: 12px; top: 50%; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3); transform: translateY(-70%) rotate(45deg); }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--ink-2); white-space: nowrap; }
+  .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); margin-right: 7px; vertical-align: 1px; }
+
+  /* ---------- 1 · setup form ---------- */
+  .setup { grid-template-rows: 1fr; overflow-y: auto; }
+  .setup-in { width: min(640px, 100% - 48px); margin: 0 auto; padding: 88px 0 120px; }
+  .setup h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+  .setup .lead { color: var(--ink-2); margin-bottom: 36px; }
+  .steps { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-3); margin-bottom: 40px; padding-bottom: 20px; border-bottom: 1px solid var(--line); }
+  .steps .s { display: flex; align-items: center; gap: 8px; }
+  .steps .s.cur { color: var(--ink); }
+  .steps .n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; border: 1px solid var(--line-strong); }
+  .steps .s.cur .n { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .steps hr { flex: 1; border: 0; border-top: 1px solid var(--line); max-width: 48px; }
+  .setup h2 { font-size: 17px; font-weight: 600; margin-bottom: 10px; }
+  .setup .intro { color: var(--ink-2); margin-bottom: 32px; line-height: 1.55; }
+  .setup .intro b { color: var(--ink); font-weight: 500; }
+  .disclosure { display: flex; justify-content: space-between; align-items: center; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 8px 0 32px; }
+  .disclosure .t { font-weight: 500; } .disclosure .t::before { content: "▸ "; color: var(--ink-3); }
+  .disclosure span:last-child { font-size: 13px; color: var(--ink-3); }
+  .actions { display: flex; justify-content: space-between; align-items: center; }
+
+  /* ---------- shell for 2 & 3 ---------- */
+  .shell { grid-template-rows: 48px 1fr 28px; grid-template-columns: 248px 1fr; }
+  .bar { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--bg-side); }
+  .bar .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+  .bar .brand svg { width: 18px; height: 18px; }
+  .bar .crumb { color: var(--ink-3); } .bar .crumb b { color: var(--ink); font-weight: 500; }
+  .bar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-3); }
+  .bar .upd { background: var(--accent); color: #fff; padding: 6px 12px; }
+  .bar .upd:hover { background: #F05F35; }
+  .btn.strong { background: var(--ink); color: var(--bg); }
+  .btn.strong:hover { background: #fff; }
+  .tree { background: var(--bg-side); border-right: 1px solid var(--line); padding: 12px 8px; overflow-y: auto; font-size: 13.5px; }
+  .tree .h { display: flex; justify-content: space-between; padding: 0 8px 8px; font-size: 12px; color: var(--ink-3); }
+  .tree a { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r); color: var(--ink-2); }
+  .tree a:hover { background: var(--bg-hover); color: var(--ink); }
+  .tree a.on { background: var(--bg-active); color: var(--ink); }
+  .tree a.on::before { content: ""; width: 3px; height: 14px; border-radius: 2px; background: var(--accent); margin-left: -8px; margin-right: 5px; }
+  .tree a.root { color: var(--ink); font-weight: 500; }
+  .tree a.sub { padding-left: 32px; }
+  .tree .tw { width: 10px; color: var(--ink-3); font-size: 10px; }
+  .tree svg { width: 14px; height: 14px; color: var(--ink-3); flex: none; }
+  .tree a.on svg { color: var(--ink-2); }
+  .content { overflow-y: auto; padding: 20px 32px 80px; min-width: 0; }
+  .notice { display: flex; gap: 14px; align-items: baseline; font-size: 13px; color: var(--ink-3); padding: 0 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+  .notice b { color: var(--ink-2); font-weight: 500; } .notice a { color: var(--ink-2); white-space: nowrap; margin-left: auto; }
+  .notice .x { color: var(--ink-3); }
+  .head { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .head h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  .head .meta { color: var(--ink-3); font-size: 13px; }
+  .head .meta b { color: var(--ink-2); font-weight: 500; }
+  .head .right { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-3); }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-weight: 500; font-size: 12px; color: var(--ink-3); padding: 8px 10px; border-bottom: 1px solid var(--line-strong); white-space: nowrap; }
+  th.sort { color: var(--ink-2); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr:hover td { background: var(--bg-hover); }
+  td:first-child, th:first-child { padding-left: 0; } td:last-child, th:last-child { padding-right: 0; }
+  td .mono { color: var(--ink-2); font-size: 12.5px; }
+  td .dim { color: var(--ink-3); }
+  .star { color: var(--ink-3); margin-right: 6px; font-size: 12px; } .star.on { color: var(--ink-2); }
+  .status { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 16px; font-size: 12px; color: var(--ink-3); border-top: 1px solid var(--line); background: var(--bg-side); }
+  .status .end { margin-left: auto; }
+
+  /* 3 · fleet specifics */
+  .grants { display: flex; flex-wrap: wrap; gap: 4px; }
+  .grant { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 12px; padding: 2px 4px 2px 8px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--ink-2); }
+  .grant button { color: var(--ink-3); width: 16px; height: 16px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; line-height: 1; }
+  .grant button:hover { color: var(--ink); background: rgba(255,255,255,.1); }
+  .node b { display: block; font-weight: 500; color: var(--ink); }
+  .node span { font-size: 12.5px; color: var(--ink-3); }
+  .more { color: var(--ink-3); padding: 0 6px; } .more:hover { color: var(--ink); }
+  .grantrow { display: grid; grid-template-columns: 220px 1fr auto; gap: 10px; align-items: end; margin: 20px 0 10px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; margin-top: 32px; }
+  .card .ch { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); font-weight: 500; }
+  .card .ch .r { margin-left: auto; display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--ink-3); }
+  .card .cb { display: grid; grid-template-columns: 220px 1fr; gap: 28px; padding: 20px 18px; }
+  .qr { width: 220px; height: 220px; background: #fff; border-radius: 6px; padding: 12px; }
+  .qr div { width: 100%; height: 100%; background:
+    repeating-linear-gradient(90deg, #000 0 6px, transparent 6px 12px),
+    repeating-linear-gradient(0deg, #000 0 6px, #fff 6px 12px); background-blend-mode: difference; opacity: .9; }
+  .cb p { color: var(--ink-2); margin-bottom: 8px; } .cb p a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-3); }
+  .cb .sm { font-size: 13px; color: var(--ink-3); }
+  .token { display: flex; gap: 8px; margin: 14px 0 8px; }
+</style>
+</head>
+<body>
+
+<div class="switch">
+  <button class="on" data-p="p1">Setup</button><button data-p="p2">Agents</button><button data-p="p3">Fleet</button>
+</div>
+
+<!-- ============ 1 · SETUP ============ -->
+<section class="page setup on" id="p1">
+  <div class="setup-in">
+    <h1>Reconfigure your agent</h1>
+    <p class="lead">Change the runtime it runs on, its credentials, or its system prompt.</p>
+
+    <div class="steps">
+      <div class="s cur"><span class="n">1</span>Set up your primary agent</div><hr>
+      <div class="s"><span class="n">2</span>You're ready</div>
+    </div>
+
+    <h2>Set up your primary agent</h2>
+    <p class="intro"><b>adi-agent</b> is your environment's root agent — a meta-agent that helps you set up and operate this ADI stack. Pick how it should run and give it what that needs; every tool in your store is enabled on it. You can change all of it later.</p>
+
+    <div class="field">
+      <span class="label">How should it run?</span>
+      <div class="seg"><button class="on">Claude Code SDK</button><button>Kimi API key</button><button>GLM API key</button><button>Manual</button></div>
+      <p class="help">Runs Claude Code headless on the login you already have (Pro / Max), or on an Anthropic API key.</p>
+    </div>
+
+    <label class="field">
+      <span class="label">Model <span class="q">?</span></span>
+      <div class="chips"><span class="chip">claude-opus-4-8</span><span class="chip">claude-sonnet-5</span><span class="chip">claude-haiku-4-5</span></div>
+      <input class="input mono" value="opus">
+    </label>
+
+    <label class="field">
+      <span class="label">Permission mode</span>
+      <div class="select"><input class="input mono" value="bypassPermissions" readonly></div>
+    </label>
+
+    <label class="field">
+      <span class="label">Anthropic API key</span>
+      <input class="input mono" placeholder="sk-ant-…">
+      <p class="help">Optional — leave blank to use the Claude login on this machine. Kept as a secret named <code>ANTHROPIC_API_KEY</code>, attached to this agent alone.</p>
+    </label>
+
+    <div class="disclosure"><span class="t">System prompt</span><span>optional, advanced</span></div>
+
+    <div class="actions">
+      <button class="btn quiet">Cancel</button>
+      <button class="btn primary">Save changes</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 · AGENTS ============ -->
+<section class="page shell" id="p2">
+  <div class="bar">
+    <a class="brand" href="#"><svg viewBox="-1 -1 2 2"><polygon points="0,-1 .866,-.5 0,0 -.866,-.5" fill="#3A3A3A"/><polygon points="-.866,-.5 0,0 0,1 -.866,.5" fill="#6F6C67"/><polygon points="0,0 .866,-.5 .866,.5 0,1" fill="#E8532A"/></svg>adi</a>
+    <span class="crumb">/ <b>Agents</b></span>
+    <div class="right"><a href="#">← simple</a><span>v1.1.0</span><button class="btn upd">↑ Update to 1.2.0</button></div>
+  </div>
+
+  <nav class="tree">
+    <div class="h"><span>Explorer</span><span>+</span></div>
+    <a class="root" href="#"><span class="tw">▾</span>Global</a>
+    <a class="sub" href="#">Meta</a><a class="sub" href="#">Global analytics</a><a class="sub" href="#">Projects</a><a class="sub" href="#">Tasks</a>
+    <a class="sub on" href="#">Agents</a>
+    <a class="sub" href="#">Tools</a><a class="sub" href="#">Secrets</a><a class="sub" href="#">Knowledge</a><a class="sub" href="#">Facts</a><a class="sub" href="#">Database</a><a class="sub" href="#">Triggers</a><a class="sub" href="#">Dashboards</a><a class="sub" href="#">Marketplace</a>
+    <a class="root" href="#"><span class="tw">▸</span>Settings</a>
+    <a class="root" href="#"><span class="tw">▸</span>ADI</a><a class="root" href="#"><span class="tw">▸</span>Bugbounty</a><a class="root" href="#"><span class="tw">▸</span>Homebridge</a><a class="root" href="#"><span class="tw">▸</span>LLM eval</a><a class="root" href="#"><span class="tw">▸</span>NakitYok</a><a class="root" href="#"><span class="tw">▸</span>Private Markets</a>
+  </nav>
+
+  <div class="content">
+    <div class="notice"><span><b>Recommended:</b> let adi-agent manage this — say what you want in chat and it sets up projects, services, tools and secrets the way this store expects. These panels are for the careful case: seeing exactly what is there, or changing one thing precisely.</span><a href="#">Open chat</a><span class="x">×</span></div>
+
+    <div class="head">
+      <h1>Agents</h1>
+      <span class="meta"><b>78</b> agents · <b>7</b> of 20 running · <a href="#" style="color:var(--ink-2)">change limit</a></span>
+      <div class="right"><span>updated 4s ago</span><button class="btn strong">New agent</button></div>
+    </div>
+
+    <table>
+      <thead><tr><th class="sort">Name ↑</th><th>Backend</th><th>Model</th><th>Project</th><th>Tags</th><th></th></tr></thead>
+      <tbody>
+        <tr><td><span class="star on">★</span>adi-agent</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td class="dim">—</td><td class="dim"></td><td></td></tr>
+        <tr><td><span class="star on">★</span>adi-agent-glm</td><td class="mono">adi</td><td class="mono">glm-5.3</td><td class="dim">—</td><td class="dim"></td><td></td></tr>
+        <tr><td><span class="star">☆</span>adi-agent-kimi</td><td class="mono">adi</td><td class="mono">kimi-k3</td><td class="dim">—</td><td class="dim"></td><td></td></tr>
+        <tr><td><span class="star on">★</span>adi-business</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td><span class="tag">adi</span></td><td class="dim">adi, business, strategy</td><td></td></tr>
+        <tr><td><span class="star on">★</span>adi-design</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td><span class="tag">adi-design</span></td><td class="dim">adi, design, ux, brand</td><td></td></tr>
+        <tr><td><span class="star">☆</span>adi-dev</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td><span class="tag">adi</span></td><td class="dim">adi, dev, rust</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-aave-move-review</td><td class="mono">claude-sdk</td><td class="mono">opus</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, onchain, review, move, aptos</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-apit-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, apit, solver</td><td><span class="dot"></span></td></tr>
+        <tr><td><span class="star">☆</span>bb-apit-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, apit, planner</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-athn-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, athn, solver</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-athn-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, athn, planner</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-athz-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, athz, solver</td><td><span class="dot"></span></td></tr>
+        <tr><td><span class="star">☆</span>bb-athz-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, athz, planner</td><td></td></tr>
+        <tr><td><span class="star on">★</span>bb-busl-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, busl, solver</td><td></td></tr>
+        <tr><td><span class="star on">★</span>bb-busl-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, busl, planner</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-clnt-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, clnt, solver</td><td><span class="dot"></span></td></tr>
+        <tr><td><span class="star">☆</span>bb-clnt-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, clnt, planner</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-conf-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, conf, solver</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-conf-task-creator</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, conf, planner</td><td></td></tr>
+        <tr><td><span class="star">☆</span>bb-cryp-solver</td><td class="mono">claude-sdk</td><td class="dim">—</td><td><span class="tag">bugbounty</span></td><td class="dim">bugbounty, wstg, cryp, solver</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="status"><span><span class="dot"></span>online</span><span>2h 18m</span><span class="end">Agents</span></div>
+</section>
+
+<!-- ============ 3 · FLEET ============ -->
+<section class="page shell" id="p3">
+  <div class="bar">
+    <a class="brand" href="#"><svg viewBox="-1 -1 2 2"><polygon points="0,-1 .866,-.5 0,0 -.866,-.5" fill="#3A3A3A"/><polygon points="-.866,-.5 0,0 0,1 -.866,.5" fill="#6F6C67"/><polygon points="0,0 .866,-.5 .866,.5 0,1" fill="#E8532A"/></svg>adi</a>
+    <span class="crumb">/ Settings / <b>Fleet</b></span>
+    <div class="right"><a href="#">← simple</a><span>v1.1.0</span><button class="btn upd">↑ Update to 1.2.0</button></div>
+  </div>
+
+  <nav class="tree">
+    <div class="h"><span>Explorer</span><span>+</span></div>
+    <a class="root" href="#"><span class="tw">▸</span>Global</a>
+    <a class="root" href="#"><span class="tw">▾</span>Settings</a>
+    <a class="sub" href="#">Hive</a><a class="sub" href="#">Ports manager</a><a class="sub" href="#">Mesh</a>
+    <a class="sub on" href="#">Fleet</a>
+    <a class="root" href="#"><span class="tw">▸</span>ADI</a><a class="root" href="#"><span class="tw">▸</span>Bugbounty</a><a class="root" href="#"><span class="tw">▸</span>Homebridge</a><a class="root" href="#"><span class="tw">▸</span>LLM eval</a><a class="root" href="#"><span class="tw">▸</span>NakitYok</a><a class="root" href="#"><span class="tw">▸</span>Private Markets</a>
+  </nav>
+
+  <div class="content">
+    <div class="notice"><span><b>Recommended:</b> let adi-agent manage this — say what you want in chat and it sets up projects, services, tools and secrets the way this store expects.</span><a href="#">Open chat</a><span class="x">×</span></div>
+
+    <div class="head">
+      <h1>Fleet</h1>
+      <span class="meta"><b>6</b> paired nodes</span>
+      <div class="right"><span>updated 2s ago</span></div>
+    </div>
+
+    <table>
+      <thead><tr><th class="sort">Node ↑</th><th>Key</th><th>Grants</th><th>Password</th><th>Paired</th><th></th></tr></thead>
+      <tbody>
+        <tr><td class="node"><b>8626e4721660</b><span>calls itself 8626e4721660</span></td><td class="mono">f1283f2f…77b7</td><td><div class="grants"><span class="grant">http:app<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-07-31</td><td><button class="more">⋯</button></td></tr>
+        <tr><td class="node"><b>adi-demo</b><span>calls itself adi-demo</span></td><td class="mono">25f6795f…ffcc</td><td><div class="grants"><span class="grant">http:app<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-08-31</td><td><button class="more">⋯</button></td></tr>
+        <tr><td class="node"><b>browser-f768e8749c</b><span>calls itself browser-f768e8749c</span></td><td class="mono">f768e874…b2bd</td><td><div class="grants"><span class="grant">http:app<button>×</button></span><span class="grant">http:bugbounty<button>×</button></span><span class="grant">http:audience<button>×</button></span><span class="grant">http:adi-gtm<button>×</button></span><span class="grant">http:adi-launch<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-08-27</td><td><button class="more">⋯</button></td></tr>
+        <tr><td class="node"><b>f714b5418e52</b><span>calls itself f714b5418e52</span></td><td class="mono">1dd33e48…6cff</td><td><div class="grants"><span class="grant">http:app<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-07-31</td><td><button class="more">⋯</button></td></tr>
+        <tr><td class="node"><b>viewer-e4b36fb717</b><span>calls itself viewer-e4b36fb717</span></td><td class="mono">e4b36fb7…b81c</td><td><div class="grants"><span class="grant">http:app<button>×</button></span><span class="grant">http:bugbounty<button>×</button></span><span class="grant">http:nosh<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-07-31</td><td><button class="more">⋯</button></td></tr>
+        <tr><td class="node"><b>zomro-de1</b><span>calls itself zomro-de1</span></td><td class="mono">4b5ed310…f6b5</td><td><div class="grants"><span class="grant">http:app<button>×</button></span></div></td><td><span class="dot"></span>set</td><td class="dim">2026-08-05</td><td><button class="more">⋯</button></td></tr>
+      </tbody>
+    </table>
+
+    <div class="grantrow">
+      <label><span class="label">Node</span><div class="select"><input class="input" value="Pick a node" readonly></div></label>
+      <label><span class="label">Grant</span><input class="input mono" placeholder="http:* — or http:nosh, http:app.nosh"></label>
+      <button class="btn">Grant</button>
+    </div>
+    <p class="help">A paired node reaches nothing here until a grant says otherwise. <code>http:&lt;service&gt;</code> opens one service (or <code>http:*</code> all of them), and that is the whole of it — <code>tcp:</code> and <code>ctl:</code> still parse for old files but nothing enforces them, so neither opens anything.</p>
+
+    <div class="card">
+      <div class="ch">Pair another node<div class="r"><span>expires in 9:56</span><button class="btn">New code</button></div></div>
+      <div class="cb">
+        <div class="qr"><div></div></div>
+        <div>
+          <p>On the phone, open <a href="#">mono-mesh-client.withadi.dev</a>, press <b>Scan</b>, and point it at this code.</p>
+          <p class="sm">A phone's own camera app will only offer to copy this — it has to be the client's own Scan button.</p>
+          <span class="label" style="margin-top:22px">Or hand over the token</span>
+          <div class="token"><input class="input mono" value="adi-invite:7b2276223a312c22656e64706f696e74223a226164696d6573683a3762323323636393634323232361" readonly><button class="btn">Copy</button></div>
+          <p class="sm">Single-use, and good for one machine only — hand it over the way you would a password.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status"><span><span class="dot"></span>online</span><span>2h 18m</span><span class="end">Fleet</span></div>
+</section>
+
+<script>
+  document.querySelectorAll('.switch button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.switch button').forEach(x => x.classList.toggle('on', x === b));
+    document.querySelectorAll('.page').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
+  });
+</script>
+</body>
+</html>

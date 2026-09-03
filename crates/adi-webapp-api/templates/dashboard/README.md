@@ -55,6 +55,34 @@ not a port from anywhere. The same page is served under this machine's `.adi` na
 real domain later — a hardcoded address pins it to one of those, and `127.0.0.1` in particular
 means *the viewer's* machine, which is the one place the backend certainly is not.
 
+### Style with the shell's tokens — never a hex, never a one-off size
+
+The shell carries ADI's design tokens (`design/tokens.css`, spliced in when the dashboard is
+generated), so a panel inherits the whole palette and type scale for free. **Use them. Never write
+a colour, a family, a radius or a font size of your own.**
+
+| want | use |
+| --- | --- |
+| page / panel / hover / input surface | `--bg` `--bg-side` `--bg-hover` `--bg-raise` `--bg-active` |
+| text, secondary, labels and meta | `--ink` `--ink-2` `--ink-3` |
+| hairline between rows, input border | `--line` `--line-strong` |
+| status — as a 6px dot or a pill, never a fill | `--ok` `--warn` `--err` |
+| the one accent, at most one filled element per screen | `--accent` |
+| type sizes | `--fs-label` 12 · `--fs-small` 13 · `--fs-ui-sm` 13.5 · `--fs-ui` 14 · `--fs-section` 16 · `--fs-title` 22 |
+| radius | `--r-sm` 4 · `--r` 6 · `--r-lg` 10 · `--r-pill` |
+| families | `--sans`, and `--mono` **only** for paths, hashes, commands, ids, config values, model names |
+
+A token that is not in that file does not exist, however plausible it reads. This is not
+hypothetical: panels on this machine went on naming `--muted`, `--online`, `--down` and `--panel`
+long after those were renamed, and because an undefined custom property simply inherits, every
+quiet line rendered at full brightness with nothing in the markup to explain why the screen looked
+loud. If you need a colour the token file does not name, say so rather than inventing one.
+
+The rules the tokens serve are `~/adi-family/design/DESIGN.md` — §7 is the checklist that defines
+"done", §8 is the Never/Always list. The short version for a panel: group with hairlines and
+surface tone rather than by putting a card inside a card, never a card around a table, no shadows
+and no gradients, sentence case everywhere, and mono only for strings a machine produced.
+
 ## Add an endpoint
 
 Create `backend/routes/<name>.ts`. Default-export a handler returning a `Response`. The file

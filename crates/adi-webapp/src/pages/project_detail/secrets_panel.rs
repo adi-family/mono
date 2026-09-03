@@ -27,9 +27,9 @@ pub(crate) fn secrets_panel(state: State, form: SecretsForm) -> AnyView {
                 (!project.is_empty()).then(|| secret_create_form(state, form, Some(project)))
             }}
             <div class="adi-hint">
-                "These appear in the global " <code>"Secrets"</code> " list too. A trigger or agent "
-                "filed under this project inherits them (overriding a global of the same name) as "
-                "environment variables."
+                "These appear in the global secrets list too. A trigger or agent filed under this "
+                "project inherits them (overriding a global of the same name) as environment "
+                "variables."
             </div>
         </section>
     }

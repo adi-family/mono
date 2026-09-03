@@ -1,6 +1,6 @@
 //! [`CodeEditor`] — a syntax-highlighted editor built out of two stacked layers —
 //! [`CodeLog`], the read-only half of it that follows a growing file, and [`CodeFrame`], the
-//! card either one sits in.
+//! code block either one sits in.
 
 use leptos::prelude::*;
 
@@ -45,8 +45,8 @@ impl CodeHeight {
     }
 }
 
-/// The card a file is read in: a name, room for controls beside it, and whatever is showing
-/// the file underneath.
+/// The code block a file is read in (§6): a name, room for controls beside it, and whatever
+/// is showing the file underneath — on the raised surface, a hairline, the large radius.
 ///
 /// It is deliberately *not* part of [`CodeEditor`]. The same chrome has to sit over the
 /// rendered half of a Markdown file, a diff, or a log — and a frame that belongs to the
@@ -70,7 +70,7 @@ pub fn CodeFrame(
     #[prop(optional, into)]
     title: Signal<String>,
     /// Controls pinned to the right of the name: a preview toggle, a save, a language
-    /// picker. Small [`crate::Button`]s — the strip is 36px and the name is 12px.
+    /// picker. Small [`crate::Button`]s — the strip is 36px and the name is 12.5px.
     #[prop(optional, into)]
     actions: Option<ViewFn>,
     #[prop(optional)] height: CodeHeight,
@@ -81,18 +81,18 @@ pub fn CodeFrame(
 
     view! {
         <div class=merge(
-            // `overflow-hidden` because this island clips two children to its corners: the
-            // header strip's fill, and whatever scrolls underneath it.
+            // `overflow-hidden` because the block clips two children to its corners: the
+            // header strip, and whatever scrolls underneath it.
             &format!(
-                "island flex flex-col overflow-hidden bg-card {}",
+                "flex flex-col overflow-hidden rounded-lg border border-line bg-raise {}",
                 height.classes(),
             ),
             class,
         )>
             {has_head.then(|| view! {
                 <header class="flex min-h-9 shrink-0 items-center justify-between gap-2 \
-                               border-b border-divider bg-bar px-3 py-1.5">
-                    <span class="truncate font-mono text-mini text-meta">{move || title.get()}</span>
+                               border-b border-line px-3 py-1.5">
+                    <span class="mono truncate text-ink-2">{move || title.get()}</span>
                     <div class="flex shrink-0 items-center gap-1">{actions.map(|a| a.run())}</div>
                 </header>
             })}
@@ -108,7 +108,7 @@ pub fn CodeFrame(
 /// breaking down to the pixel; any divergence shows up as the caret drifting away from the
 /// text it is supposed to be inside — a bug that looks like a rendering glitch and is
 /// actually a stylesheet.
-const LAYER: &str = "m-0 border-0 p-3 font-mono text-mini leading-[1.55] [tab-size:2] \
+const LAYER: &str = "m-0 border-0 p-3 font-mono text-mono leading-[1.6] [tab-size:2] \
                      whitespace-pre-wrap [word-break:break-word] \
                      [overflow-wrap:break-word]";
 
@@ -176,7 +176,7 @@ pub fn CodeEditor(
         // edge a pixel inside the first. A caller using the editor bare adds them through
         // `class`, where nothing of the component's own is there to fight.
         <div class=merge(
-            &format!("relative overflow-hidden bg-card {}", height.classes()),
+            &format!("relative overflow-hidden bg-raise {}", height.classes()),
             class,
         )>
             <pre class=format!("{LAYER} absolute inset-0 overflow-auto text-syn-plain \
@@ -192,7 +192,7 @@ pub fn CodeEditor(
             <textarea
                 class=format!("{LAYER} relative block size-full resize-none overflow-auto \
                                bg-transparent text-transparent caret-ink outline-none \
-                               [-webkit-text-fill-color:transparent] selection:bg-meta/35")
+                               [-webkit-text-fill-color:transparent] selection:bg-ink-3/35")
                 spellcheck="false"
                 autocomplete="off"
                 id=(!id.is_empty()).then_some(id)
@@ -262,7 +262,7 @@ pub fn CodeLog(
         <pre
             class=merge(
                 &format!(
-                    "{LAYER} overflow-auto bg-card text-syn-plain {}",
+                    "{LAYER} overflow-auto bg-raise text-syn-plain {}",
                     height.max_classes(),
                 ),
                 class,

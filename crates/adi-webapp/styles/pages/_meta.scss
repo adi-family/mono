@@ -1,0 +1,56 @@
+// Page-local styles for `src/pages/meta.rs`. Shared components live in adi-css; a shape that
+// exists on one page lives here. Tokens from design/tokens.css only.
+
+// The lead under the page title: secondary ink at reading width, the agent's name in ink.
+.adi-meta__lead {
+  max-width: 64ch;
+  margin-bottom: 24px;
+  color: var(--ink-2);
+  font-size: var(--fs-ui);
+  line-height: 1.55;
+
+  b { color: var(--ink); font-weight: 500; }
+}
+
+// The setup form: one column at the form width (§6), fields stacked, the footer with Cancel left
+// and Save right.
+.adi-meta__form {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: var(--form-w);
+
+  .adi-input, .adi-textarea { width: 100%; }
+}
+
+.adi-meta__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+// What the agent runs on: the key-value list (§6).
+.adi-meta__kv {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 6px 10px;
+  margin: 0 0 16px;
+  font-size: var(--fs-small);
+
+  dt { color: var(--ink-3); }
+  dd { margin: 0; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+// The prompt, folded: the summary is a label-weight line, the block under it a code block.
+.adi-meta__prompt {
+  margin-bottom: 16px;
+
+  summary {
+    cursor: pointer;
+    color: var(--ink-3);
+    font-size: var(--fs-small);
+    margin-bottom: 8px;
+
+    &:hover { color: var(--ink-2); }
+  }
+}

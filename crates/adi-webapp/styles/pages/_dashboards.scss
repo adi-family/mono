@@ -1,0 +1,23 @@
+// Page-local styles for `src/pages/dashboards.rs`. Shared components live in adi-css; a shape that
+// exists on one page lives here. Tokens from design/tokens.css only.
+
+// The Dashboard cell stacks the name over its id and the one-line notes under it.
+.adi-dash__name {
+  display: block;
+  min-width: 0;
+}
+
+// A note under a dashboard's name — where it was moved to, or why its link will not route.
+.adi-dash__note {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+// The inline project picker in a row: the ordinary select, sized to the cell.
+.adi-dash__proj {
+  max-width: 180px;
+  min-width: 0;
+  padding: 4px 26px 4px 8px;
+  font-size: var(--fs-small);
+}

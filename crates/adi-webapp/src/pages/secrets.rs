@@ -3,12 +3,12 @@
 //! A secret is one KEY→value, stored encrypted at rest, in one of two scopes: **global**
 //! (available everywhere) or filed under a **project** (overriding a global of the same name for
 //! that project's runs). The page lists names and descriptions only — a value is shown solely
-//! after an explicit Reveal, and never persists across a reload.
+//! after an explicit Reveal from the row's menu, and never persists across a reload.
 //!
 //! A value can be **typed** or **obtained through an OAuth flow**: choosing OAuth sends the user
 //! to the [`oauth-router`](https://oauth-router.withadi.dev) worker, which returns the token in
 //! the redirect fragment; the page captures it and stores it via `/api/secrets/set-oauth`. An
-//! OAuth secret shows a provider badge with its expiry, and can be **refreshed** (server-side,
+//! OAuth secret shows a provider tag with its expiry, and can be **refreshed** (server-side,
 //! using its stored refresh token) or **re-authorized**.
 //!
 //! The table and create form are shared with a project's Secrets panel, so their view helpers are
@@ -24,8 +24,8 @@ use crate::fetch;
 use crate::routing::Route;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, confirm, flash_view, menu_item, row_actions,
-    sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, flash_view, fmt_date, menu_item,
+    row_actions, sort_rows, updated_text,
 };
 
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
@@ -35,11 +35,11 @@ const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
 const PENDING_KEY: &str = "adi.oauth.pending";
 
 /// The columns of the global secrets table.
-pub(crate) const COLS: &[&str] = &["Name", "Value", "Description", "Project", ""];
+pub(crate) const COLS: &[&str] = &["Name", "Value", "Description", "Project", "Updated", ""];
 
 /// The same in a project's own Secrets panel, which drops the Project column — every row there is
 /// scoped to the open project, so it would say the same thing all the way down.
-pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Value", "Description", ""];
+pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Value", "Description", "Updated", ""];
 
 /// The Secrets page: the live secrets table (global scope), then the create form.
 pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
@@ -55,10 +55,13 @@ pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Global secrets">
-                    {move || secrets.get().map_or_else(|| "\u{2014}".to_string(),
-                        |s| s.secrets.iter().filter(|x| x.project.is_none()).count().to_string())}
+                <span class="adi-muted">
+                    {move || secrets.get().map_or_else(|| "\u{2014}".to_string(), |s| {
+                        let n = s.secrets.iter().filter(|x| x.project.is_none()).count();
+                        if n == 1 { "1 global secret".to_string() } else { format!("{n} global secrets") }
+                    })}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(secrets, secs_since)}</span>
             </div>
             <Table state=state.tables.secrets>{move || rows_view(state, state.tables.secrets, form, None)}</Table>
@@ -87,17 +90,21 @@ pub(crate) fn secret_create_form(
     let oauth_project = project.clone();
     view! {
         <div class="adi-form">
-            <div style="display:flex; gap:var(--space-2)">
-                {source_toggle_button(form, "text", "Text")}
-                {source_toggle_button(form, "oauth", "OAuth")}
+            <div class="adi-field">
+                <span class="adi-field__label">"Value from"</span>
+                <div class="adi-segmented" role="group" aria-label="Where the value comes from">
+                    {source_toggle_button(form, "text", "Typed")}
+                    {source_toggle_button(form, "oauth", "OAuth")}
+                </div>
             </div>
             <TextField id="secret-name" label="Name" mono=true placeholder="API_KEY"
-                hint="the env-var name it injects as (letters, digits, _)" value=form.name />
+                hint="The env var it is injected as: letters, digits, _." value=form.name />
             <TextField id="secret-desc" label="Description" wide=true field_class="adi-field--grow"
                 placeholder="What it's for" value=form.description />
             {(project.is_none()).then(move || view! {
                 <TextField id="secret-project" label="Project" mono=true
-                    placeholder="(global — a project id scopes it)" value=form.project />
+                    placeholder="global" hint="A project id scopes it to that project's runs."
+                    value=form.project />
             })}
             {move || if form.source.get() == "oauth" {
                 oauth_authorize_row(state, form, oauth_project.clone())
@@ -109,11 +116,11 @@ pub(crate) fn secret_create_form(
     .into_any()
 }
 
-/// One button of the Text | OAuth source toggle.
+/// One option of the Typed | OAuth source control.
 fn source_toggle_button(form: SecretsForm, value: &'static str, label: &'static str) -> AnyView {
     view! {
-        <button type="button"
-            class=move || if form.source.get() == value { "adi-btn adi-btn--primary" } else { "adi-btn" }
+        <button type="button" class="adi-segmented__option"
+            aria-pressed=move || (form.source.get() == value).to_string()
             on:click=move |_| form.source.set(value.to_string())>
             {label}
         </button>
@@ -121,11 +128,16 @@ fn source_toggle_button(form: SecretsForm, value: &'static str, label: &'static 
     .into_any()
 }
 
-/// The typed-value branch of the create form: a value field + Set button.
+/// The typed-value branch of the create form: a masked value field + the Set button.
 fn text_value_row(state: State, form: SecretsForm, project: Option<String>) -> AnyView {
     view! {
-        <TextField id="secret-value" label="Value" wide=true field_class="adi-field--grow"
-            placeholder="the secret value — stored encrypted" value=form.value />
+        <div class="adi-field adi-field--grow">
+            <label class="adi-field__label" for="secret-value">"Value"</label>
+            <input class="adi-input adi-input--wide adi-mono" id="secret-value" type="password"
+                autocomplete="off" spellcheck="false" placeholder="Stored encrypted"
+                prop:value=move || form.value.get()
+                on:input=move |ev| form.value.set(event_target_value(&ev)) />
+        </div>
         <button class="adi-btn adi-btn--primary" type="button" prop:disabled=move || form.busy.get()
             on:click=move |_| submit_text(state, form, project.clone())>
             "Set secret"
@@ -138,14 +150,14 @@ fn text_value_row(state: State, form: SecretsForm, project: Option<String>) -> A
 /// and the Authorize button.
 fn oauth_authorize_row(state: State, form: SecretsForm, project: Option<String>) -> AnyView {
     view! {
-        <label class="adi-field">
-            <span class="adi-field__label">"Provider"</span>
-            <select class="adi-input adi-mono"
+        <div class="adi-field">
+            <label class="adi-field__label" for="secret-provider">"Provider"</label>
+            <select class="adi-input" id="secret-provider"
                 on:change=move |ev| form.provider.set(event_target_value(&ev))>
                 <option value="google">"Google"</option>
                 <option value="github">"GitHub"</option>
             </select>
-        </label>
+        </div>
         {move || access_checkboxes(form)}
         <button class="adi-btn adi-btn--primary" type="button"
             on:click=move |_| start_oauth(state, form, project.clone())>
@@ -153,7 +165,7 @@ fn oauth_authorize_row(state: State, form: SecretsForm, project: Option<String>)
         </button>
         <p class="adi-hint">
             "You'll be sent to " <code>"oauth-router.withadi.dev"</code>
-            " to sign in, then returned here with the token stored automatically."
+            " to sign in, then returned here with the token stored."
         </p>
     }
     .into_any()
@@ -176,11 +188,11 @@ fn provider_accesses(provider: &str) -> &'static [(&'static str, &'static str)] 
             ),
             (
                 "https://www.googleapis.com/auth/gmail.modify",
-                "Gmail — read, send & manage (labels, drafts, archive; no permanent delete)",
+                "Gmail — read, send and manage (labels, drafts, archive; no permanent delete)",
             ),
             (
                 "https://mail.google.com/",
-                "Gmail — full access (incl. permanent delete)",
+                "Gmail — full access (including permanent delete)",
             ),
             ("email", "Account email address"),
         ],
@@ -200,7 +212,7 @@ fn access_checkboxes(form: SecretsForm) -> AnyView {
         .map(|(scope, label)| access_checkbox(form, scope, label))
         .collect::<Vec<_>>();
     view! {
-        <fieldset class="adi-field" style="border:1px solid var(--line); border-radius:var(--radius); padding:var(--space-2)">
+        <fieldset class="adi-field adi-secrets__access">
             <legend class="adi-field__label">"Access"</legend>
             {boxes}
         </fieldset>
@@ -212,8 +224,8 @@ fn access_checkboxes(form: SecretsForm) -> AnyView {
 fn access_checkbox(form: SecretsForm, scope: &'static str, label: &'static str) -> AnyView {
     let contains = move || form.scopes.get().iter().any(|s| s == scope);
     view! {
-        <label style="display:flex; gap:var(--space-2); align-items:flex-start; margin-top:var(--space-1)">
-            <input type="checkbox" prop:checked=contains
+        <label class="adi-field--check adi-secrets__scope">
+            <input type="checkbox" class="adi-check" prop:checked=contains
                 on:change=move |ev| {
                     let on = event_target_checked(&ev);
                     form.scopes.update(|list| {
@@ -323,6 +335,8 @@ fn current_provider(form: SecretsForm) -> String {
 /// Render a secrets table body: the loading/empty placeholder, or one row per matching secret, in
 /// the order and arrangement `table`'s header controls select. `project` (when `Some`) filters to
 /// that project, as a project's own panel does; `None` shows global secrets only.
+///
+/// Reads the reveal cache up front, so a Reveal rebuilds the rows and the row's menu says Hide.
 pub(crate) fn rows_view(
     state: State,
     table: TableState,
@@ -332,6 +346,7 @@ pub(crate) fn rows_view(
     let Some(loaded) = state.secrets.get() else {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
+    let revealed = form.revealed.get();
     let want = project;
     let mut rows: Vec<SecretDto> = loaded
         .secrets
@@ -351,58 +366,57 @@ pub(crate) fn rows_view(
             "Value" => Key::maybe(s.oauth.as_ref().map(|o| o.provider.as_str())),
             "Description" => Key::maybe(s.description.as_deref()),
             "Project" => Key::maybe(s.project.as_deref()),
+            "Updated" => Key::num(s.updated_at),
             _ => Key::text(&s.name),
         },
         |s| Key::text(&s.name),
     );
     rows.into_iter()
         .map(|s| {
-            let action = secret_actions(state, form, &s);
-            view! { <TableRow state=table cell=move |col| cell(col, &s, form) actions=action/> }
+            let shown = revealed
+                .get(&reveal_key(s.project.as_deref(), &s.name))
+                .cloned();
+            let action = secret_actions(state, form, &s, shown.is_some());
+            view! { <TableRow state=table cell=move |col| cell(col, &s, shown.clone()) actions=action/> }
                 .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
 }
 
-/// One secret's cell under `col`: the name (with an OAuth badge when applicable), a
-/// masked-or-revealed value, its description, and the project it is scoped to. Matching the
-/// header text — the same key the sort uses — is what lets the user hide and reorder columns
-/// without the row builder knowing about it, and is also how the project panel's narrower column
-/// set works from the same code.
-fn cell(col: &str, s: &SecretDto, form: SecretsForm) -> AnyView {
+/// One secret's cell under `col`: the name (with an OAuth tag when applicable), the value as a
+/// `● set` pill or — after a Reveal — the plaintext, its description, the project it is scoped
+/// to, and when it last changed. Matching the header text — the same key the sort uses — is what lets the user hide
+/// and reorder columns without the row builder knowing about it, and is also how the project
+/// panel's narrower column set works from the same code.
+fn cell(col: &str, s: &SecretDto, shown: Option<String>) -> AnyView {
     match col {
-        "Value" => {
-            let value_key = reveal_key(s.project.as_deref(), &s.name);
-            view! {
-                <span class="font-mono">
-                    {move || match form.revealed.get().get(&value_key) {
-                        Some(v) => view! { <span>{v.clone()}</span> }.into_any(),
-                        None => view! { <span class="adi-muted">"••••••••"</span> }.into_any(),
-                    }}
-                </span>
-            }
-            .into_any()
-        }
+        "Value" => match shown {
+            Some(v) => view! { <span class="adi-mono">{v}</span> }.into_any(),
+            None => view! { <span class="adi-tstatus" data-status="ready">"set"</span> }.into_any(),
+        },
         "Description" => {
             let desc = s.description.clone().unwrap_or_default();
-            let text = if desc.is_empty() {
-                "—".to_string()
+            if desc.is_empty() {
+                view! { <span class="adi-muted">"—"</span> }.into_any()
             } else {
-                desc
-            };
-            view! { <span class="text-meta">{text}</span> }.into_any()
+                view! { <span class="adi-secrets__desc">{desc}</span> }.into_any()
+            }
         }
-        "Project" => {
-            let project = s.project.clone().unwrap_or_else(|| "—".to_string());
-            view! { <span class="font-mono text-meta">{project}</span> }.into_any()
+        // The scope is a category, so it is a tag; a global secret has none.
+        "Project" => match s.project.clone() {
+            Some(project) => view! { <span class="adi-chip">{project}</span> }.into_any(),
+            None => view! { <span class="adi-muted">"—"</span> }.into_any(),
+        },
+        "Updated" => {
+            view! { <span class="adi-muted adi-tabnums">{fmt_date(s.updated_at)}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
             let badge = s.oauth.as_ref().map(oauth_badge);
             view! {
-                <span>
-                    <div class="adi-mono">{s.name.clone()}</div>
+                <span class="adi-secrets__name">
+                    <span class="adi-mono adi-secrets__env">{s.name.clone()}</span>
                     {badge}
                 </span>
             }
@@ -411,42 +425,45 @@ fn cell(col: &str, s: &SecretDto, form: SecretsForm) -> AnyView {
     }
 }
 
-/// The trailing actions for a secret row — shared by the global table and a project's panel. The
-/// row stays one compact line: **Reveal** (fetches + shows the value) toggling to Hide, then a
-/// `⋮` kebab holding the rest — OAuth Refresh/Re-auth when applicable, and the destructive Remove.
-pub(crate) fn secret_actions(state: State, form: SecretsForm, s: &SecretDto) -> AnyView {
+/// The trailing actions for a secret row — shared by the global table and a project's panel: one
+/// ⋯ menu holding Reveal (or Hide, while the value is showing), the OAuth Refresh and Re-authorize
+/// when applicable, and the destructive Remove.
+fn secret_actions(state: State, form: SecretsForm, s: &SecretDto, revealed: bool) -> AnyView {
     let key = reveal_key(s.project.as_deref(), &s.name);
     let toggle_key = key.clone();
-    let label_key = key.clone();
     let reveal_project = s.project.clone();
     let reveal_name = s.name.clone();
-    let reveal = view! {
-        <button class="adi-btn adi-btn--link" on:click=move |_| {
-            if form.revealed.get().contains_key(&toggle_key) {
-                form.revealed.update(|m| { m.remove(&toggle_key); });
+    let reveal = menu_item(
+        state,
+        if revealed {
+            "Hide value"
+        } else {
+            "Reveal value"
+        },
+        false,
+        move || {
+            if revealed {
+                form.revealed.update(|m| {
+                    m.remove(&toggle_key);
+                });
             } else {
                 reveal_now(state, form, reveal_project.clone(), reveal_name.clone());
             }
-        }>
-            {move || if form.revealed.get().contains_key(&label_key) { "Hide" } else { "Reveal" }}
-        </button>
-    };
-    row_actions(
-        state,
-        format!("secret:{key}"),
-        reveal,
-        secret_menu_items(state, s),
-    )
+        },
+    );
+    let mut items = vec![reveal];
+    items.extend(secret_menu_items(state, s));
+    row_actions(state, format!("secret:{key}"), (), items)
 }
 
-/// The kebab menu items for a secret row: the OAuth actions (Refresh when a refresh token is held,
-/// Re-auth) and the destructive Remove.
+/// The menu items after Reveal: the OAuth actions (Refresh when a refresh token is held,
+/// Re-authorize) and the destructive Remove.
 fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
     let mut items = Vec::new();
     if let Some(info) = s.oauth.as_ref() {
         if info.has_refresh {
             let (refresh_name, refresh_project) = (s.name.clone(), s.project.clone());
-            items.push(menu_item(state, "Refresh", false, move || {
+            items.push(menu_item(state, "Refresh token", false, move || {
                 apply_secrets(
                     state,
                     format!("Refreshed \u{201c}{refresh_name}\u{201d}."),
@@ -462,7 +479,7 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
             provider: info.provider.clone(),
         };
         let reauth_scope = info.scope.clone();
-        items.push(menu_item(state, "Re-auth", false, move || {
+        items.push(menu_item(state, "Re-authorize", false, move || {
             oauth_initiate(&reauth, reauth_scope.as_deref());
         }));
     }
@@ -482,13 +499,14 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
     items
 }
 
-/// The provenance badge on an OAuth secret's row: the provider and a coarse expiry.
+/// The provenance tag on an OAuth secret's row: the provider and a coarse expiry.
 fn oauth_badge(info: &OAuthInfoDto) -> AnyView {
     let label = match expiry_text(info.expires_at) {
         Some(exp) => format!("{} · {exp}", provider_label(&info.provider)),
         None => provider_label(&info.provider),
     };
-    view! { <span class="adi-chip adi-mono" title="OAuth-sourced token">{label}</span> }.into_any()
+    view! { <span class="adi-chip" title="Obtained through an OAuth sign-in">{label}</span> }
+        .into_any()
 }
 
 /// A coarse "expires in Nm/Nh" / "expired" label from an absolute expiry, or `None` when the

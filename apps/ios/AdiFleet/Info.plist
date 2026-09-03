@@ -24,6 +24,14 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- The faces the app is set in (design/DESIGN.md §4): Geist and Geist Mono, variable TTFs
+	     under Fonts/, with their OFL beside them. xcodegen adds the folder's files as resources at
+	     the bundle root, which is the path UIAppFonts expects. -->
+	<key>UIAppFonts</key>
+	<array>
+		<string>Geist[wght].ttf</string>
+		<string>GeistMono[wght].ttf</string>
+	</array>
 	<!-- How a Home Screen shortcut reaches one dashboard. iOS gives an app no way to place an icon
 	     itself — only Safari and Shortcuts may — so the supported route is a Shortcut that opens a
 	     URL, and this is the URL it opens: adifleet://open?node=<petname>&service=<label>.

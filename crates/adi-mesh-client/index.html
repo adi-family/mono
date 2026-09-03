@@ -5,13 +5,21 @@
 <!-- `viewport-fit=cover` plus the safe-area insets in the stylesheet: installed on an iPhone this
      runs full-bleed, and without both the list ends under the home indicator. -->
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light dark">
-<meta name="theme-color" content="#f6f6f7">
+<!-- The app is dark (design/DESIGN.md §3); the theme colour is `--bg-side`, so the status bar is
+     continuous with the page. -->
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#101010">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>adi · mesh client</title>
 
 <link data-trunk rel="rust" data-wasm-opt="z" />
+<!-- The palette and the faces are the product's, not this client's: the token file at the
+     repository root, and Geist / Geist Mono self-hosted from adi-ui's font directory. The font
+     rules resolve against the dist root, so the files have to land there. -->
+<link data-trunk rel="css" href="../../design/tokens.css" />
+<link data-trunk rel="css" href="../adi-ui/fonts/fonts.css" />
+<link data-trunk rel="copy-dir" href="../adi-ui/fonts" />
 <link data-trunk rel="css" href="styles/app.css" />
 <link data-trunk rel="copy-file" href="manifest.webmanifest" />
 <link data-trunk rel="copy-file" href="sw.js" />

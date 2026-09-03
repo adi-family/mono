@@ -1,8 +1,9 @@
 # ADI.app (macOS)
 
-A standard windowed app that controls **local ADI services**. The window is a
-translucent (vibrancy) control panel: the ADI logo and one big **On/Off** power button
-with a live status word under it. **DNS** is the first built-in service.
+A standard windowed app that controls **local ADI services**. The window is a small dark
+panel drawn to [`design/DESIGN.md`](../../design/DESIGN.md): the mark and wordmark, what ADI
+is doing as a dot and a word, the services switch, and one filled button into the control
+panel. **DNS** is the first built-in service.
 
 The app is a **thin trigger**: all control logic (config, launchd supervision, the
 `.adi` route + admin prompt, status) lives in `adi-core` and is exposed as the bundled
@@ -108,10 +109,13 @@ Three things about the design are load-bearing and easy to break:
 
 - **The cards exist for contrast, not decoration.** Finder writes each icon label onto the
   background — black under Light appearance, white under Dark — and a disk image cannot
-  override either. Only luminance 0.175–0.183 clears 4.5:1 against both; `#6E7684` is
-  0.178. `make-assets.sh` renders the exact glyphs Finder will draw and refuses to ship art
-  whose worst pixel under the text misses. It is not a formality: a draft that measured
-  4.60:1 as a flat colour really shipped 3.42:1 once a texture went over it.
+  override either. Only luminance 0.175–0.183 clears 4.5:1 against both; the cards are
+  `#79756F`, the one grey in the token family's range that does, pinned by that constraint
+  rather than picked. `make-assets.sh` renders the exact glyphs Finder will draw and refuses
+  to ship art whose worst pixel under the text misses. It is not a formality: a draft that
+  measured 4.60:1 as a flat colour really shipped 3.42:1 once a texture went over it. The
+  art itself is flat and on the design tokens — a monochrome mark, no masthead blur, no
+  gradient — and the guardrail stays green.
 - **Nothing load-bearing goes below y=340.** The Finder path bar follows a *global* user
   preference; when on it takes ~28pt off the icon view and clips the background with it.
   `layout.applescript` turns it off per-window, but a viewer can switch it back on.
@@ -160,14 +164,15 @@ spctl -a -t open --context context:primary-signature -v build/ADI.dmg  # -> acce
 
 ## Use
 
-Open the DMG, drag **ADI** to Applications, launch it. The translucent control window
-opens with the ADI logo and one big **power button** — click it to turn all services
-On/Off (`adi-mono enable` / `disable`). Quit from the app menu (⌘Q).
+Open the DMG, drag **ADI** to Applications, launch it. The window walks through moving the
+app and the two permissions, then shows the **ADI services** switch — flip it to turn all
+services On/Off (`adi-mono enable` / `disable`) — and **Open control panel**. Quit from the
+app menu (⌘Q).
 
 Turning **On** installs the `family.adi.app.dns` LaunchAgent (`launchctl bootstrap`,
 runs now + at login, auto-restart via `KeepAlive`) and, on first enable, the `.adi`
 route (`/etc/resolver/adi` + the landing daemon — one admin-password prompt). The status
-word reads `Running` / `Starting…` / `Off`.
+line reads `Running` / `Starting…` / `Off` beside a green, orange or grey dot.
 
 ### The two controls at the foot of the window
 
@@ -175,7 +180,8 @@ Below a rule, on **every** step including the two setup ones, sit the two things
 work when nothing else does (`Sources/Maintenance.swift`).
 
 **Update.** The installed version, what the release channel says about it, and one button —
-*Check for Updates*, becoming *Update to X* when there is one. It runs the bundled CLI
+*Check for updates*, becoming *Update to X* when there is one — the window's one orange
+button while it is, at which point *Open control panel* steps back to an ink fill. It runs the bundled CLI
 (`adi-mono update check` / `update run`) and reaches GitHub over the system's own DNS.
 
 > **It is in the app, and not only on the control panel, on purpose.** The panel is `app.adi`,
@@ -193,12 +199,12 @@ it would update a different bundle and leave this window untouched).
 
 **Something not working?** Marked with a ladybug, and carrying two buttons.
 
-*Create Report* runs `adi-mono diagnose`, writes an archive of everything that could explain a
+*Create report* runs `adi-mono diagnose`, writes an archive of everything that could explain a
 fault, and reveals it in Finder (it becomes *Show in Finder* afterwards). It also says what the
 collector already thinks is wrong, so a fixable problem need not be sent anywhere. See
 **Diagnostic reports** below.
 
-*Open an Issue ↗* opens a **pre-filled** GitHub issue at `ADIIssuesURL` (`Info.plist`, canonical
+*Open an issue ↗* opens a **pre-filled** GitHub issue at `ADIIssuesURL` (`Info.plist`, canonical
 value = the workspace `Cargo.toml`'s `repository`): a blank space to write in, then the ADI
 version and flavour, the macOS version and the architecture slice actually running, the three
 setup gates, every service's state, and the findings from the last report by name. Those are the
@@ -274,28 +280,51 @@ crates/
   adi-cli/             the `adi-mono` binary — a thin argv adapter over adi-core
 
 apps/macos/Sources/
-  ADIApp.swift         @main — a single translucent Window (content-sized)
-  ContentView.swift    the window: logo + big power button + status word
-  PowerButton.swift    the big circular On/Off toggle
+  ADIApp.swift         @main — a single dark Window (content-sized)
+  ContentView.swift    the window: header, the step the install is on, the footer
+  StatusLine.swift     the status dot + word, and the services switch
+  DashboardButton.swift  the one filled button: Open control panel
   Maintenance.swift    the footer: the update row and the report-a-problem row
-  VisualEffectView.swift  NSVisualEffectView vibrancy + non-opaque window
-  ADILogo.swift        the ADI mark (hexagon cage + orange core, from the .adi page)
+  Tokens.swift         design/tokens.css as Swift: colours, radii, spacing, type roles
+  Controls.swift       the button style, dot, hairline, chip, field and code block
+  Lucide.swift         GENERATED — the Lucide icons the app uses, drawn as SwiftUI paths
+  ADILogo.swift        the mark, monochrome, drawn from Trefoil
+  Trefoil.swift        the mark's geometry — the one Swift definition
   AppModel.swift       holds the last report + 2s refresh + isOn/busy + toggle
   Core.swift           the only bridge to core: runs `adi-mono`, decodes its JSON
   Models.swift         Codable mirror of `adi-mono status/update/diagnose --json`
 apps/macos/
-  icon-gen.swift       renders the app icon (same design as ADILogo); see below
+  Resources/Fonts/     Geist and Geist Mono (variable TTF, OFL) — bundled by build.sh
+  lucide-gen.py        writes Sources/Lucide.swift (and the iOS copy) from crates/adi-ui/icons
+  icon-gen.swift       renders the app icon (the coloured build of the mark); see below
   ADI.icns             the built app icon (Info.plist CFBundleIconFile = ADI)
 ```
 
-The logo is the **real ADI mark** — the hexagonal cage + orange core from the `.adi`
-4XX page (`crates/adi-hive/src/notfound.rs`). `ADILogo.swift` (in-window) and
-`icon-gen.swift` (app icon) both draw it from the page SVG's 200×200 coordinates, so
-they stay identical to the web logo; keep the coordinates in sync between the two.
+### The design system, natively
+
+The window is drawn to `design/DESIGN.md`, and the values come from `design/tokens.css` —
+restated in `Sources/Tokens.swift` because a native app cannot import a stylesheet. Change a
+value there first, then here. `Tokens.swift`, `Controls.swift` and `Lucide.swift` are the same
+files in `apps/ios/AdiFleet`, so a fix lands in both by copying.
+
+- **Type** is Geist, with Geist Mono for machine strings only. Both ship as variable TTFs in
+  `Resources/Fonts`; `build.sh` copies the directory into the bundle and `Info.plist`'s
+  `ATSApplicationFontsPath` registers it at launch. If registration fails the roles in
+  `Tokens.swift` fall back to the system face rather than to nothing.
+- **Icons** are Lucide and nothing else — no SF Symbols. `lucide-gen.py` writes the glyphs the
+  apps use into `Lucide.swift` as their SVG markup, and `LucideShape` turns that into a `Path`
+  at draw time (stroke 1.5 on the 24 grid, round caps). Add an icon by putting its name in the
+  script's list and running it; the script refuses a path its parser cannot draw.
+- **One orange per screen.** The panel button is the ready step's orange, unless an update is
+  waiting — then *Update to X* takes it and the panel button becomes an ink fill.
+- **The mark** in the window is monochrome — `Trefoil` at 52 / 74 / 100% of the ink. The
+  coloured build (grey, orange, ink) is the app icon's alone.
 
 **App icon** — `icon-gen.swift` draws the master PNG, and `build.sh --regen-icon` runs it
 through `sips` + `iconutil` to rebuild `ADI.icns`. `build.sh` copies `ADI.icns` into the
-bundle (Info.plist `CFBundleIconFile = ADI`).
+bundle (Info.plist `CFBundleIconFile = ADI`). The icon is the coloured, flat build of the mark
+on a paper tile; `ADI.icns` was last generated before that change and is redrawn by the next
+`--regen-icon`.
 
 The app polls `adi-mono status --json` (which reports each service's
 `enabled`/`running`/`detail`) to drive the power button's on/off state and the status

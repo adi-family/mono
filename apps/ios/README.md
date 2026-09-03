@@ -50,6 +50,24 @@ iphoneos` for a device. The products are identical, and `simctl` / `devicectl` i
 identifier without Xcode's device machinery. The alternative — a multi-gigabyte `xcodebuild
 -downloadPlatform iOS` — buys nothing here.
 
+## The design system, natively
+
+The screens are drawn to [`design/DESIGN.md`](../../design/DESIGN.md), from the values in
+`design/tokens.css` restated in `AdiFleet/Tokens.swift` (a native app cannot import a
+stylesheet; change a value there first). `Tokens.swift`, `Controls.swift` and `Lucide.swift` are
+the same files as `apps/macos/Sources`, so a fix lands in both by copying.
+
+- **Dark**, one surface (`--bg`) cut by hairlines; the navigation bar and the segmented control
+  take the tokens through the appearance proxies `ADI.applyAppearance()` sets at launch.
+- **Type** is Geist, Geist Mono for keys, hosts and commands only. The variable TTFs live in
+  `AdiFleet/Fonts` (OFL beside them); xcodegen adds them as resources and `Info.plist`'s
+  `UIAppFonts` registers them. Missing, the roles fall back to the system face.
+- **Icons** are Lucide, drawn as SwiftUI paths by the generated `Lucide.swift`
+  (`python3 apps/macos/lucide-gen.py`). The one system-drawn control is the `PasteButton`,
+  which keeps its own glyph because the tap on it *is* the pasteboard consent.
+- **One orange per screen**: *Pair a node* on the empty fleet, *Pair* / *Copy command* on the
+  two pairing paths, *Open* on the name-a-service form. Everything tinted takes ink.
+
 ## Pairing
 
 The handshake is symmetric and which side dials is a deployment choice (`docs/fleet.md` §8), so the

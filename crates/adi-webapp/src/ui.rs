@@ -1,5 +1,4 @@
-//! Shared view helpers, formatters, the generic mutation runner, and the theme toggle the pages
-//! compose from.
+//! Shared view helpers, formatters, and the generic mutation runner the pages compose from.
 
 use adi_webapp_api::types::{ProcessUsage, ServicePort, TaskRow};
 use leptos::prelude::*;
@@ -95,7 +94,7 @@ pub(crate) fn placeholder_row(colspan: usize, msg: &str) -> AnyView {
 }
 
 /// The trailing action controls for a table row: any always-visible `inline` buttons, then — when
-/// `items` is non-empty — a `⋮` kebab opening an overflow menu of them (each built with
+/// `items` is non-empty — a `⋯` opening an overflow menu of them (each built with
 /// [`menu_item`]). `key` identifies this row's menu and must be unique among the rows on screen
 /// (namespace it per table, e.g. `secret:…`/`tool:…`, so two panels on one page never collide).
 /// Backed by the single [`State::row_menu`] signal, so only one menu is ever open.
@@ -121,7 +120,7 @@ pub(crate) fn row_actions(
                 aria-label="More actions"
                 aria-expanded=move || rm.get().is_some_and(|m| m.key == aria_key).to_string()
                 on:click=move |ev: web_sys::MouseEvent| toggle_row_menu(rm, &toggle_key, &ev)>
-                "\u{22ee}"
+                <adi_ui::Icon icon=adi_ui::Lucide::Ellipsis/>
             </button>
         </div>
         <div class="adi-menu__scrim"
@@ -163,8 +162,8 @@ pub(crate) fn menu_item(
     .into_any()
 }
 
-/// Open (or close, if already this row's) the shared kebab menu for `key`, anchored to the click
-/// point. Anchored from the viewport's right edge so it opens leftward from the right-aligned kebab
+/// Open (or close, if already this row's) the shared row menu for `key`, anchored to the click
+/// point. Anchored from the viewport's right edge so it opens leftward from the right-aligned ⋯
 /// and never spills off-screen.
 fn toggle_row_menu(rm: RwSignal<Option<RowMenu>>, key: &str, ev: &web_sys::MouseEvent) {
     if rm.get_untracked().is_some_and(|m| m.key == key) {
@@ -455,7 +454,7 @@ pub(crate) fn memory_cell(usage: Option<&ProcessUsage>) -> AnyView {
 /// rolls up the listener's whole process tree.
 fn usage_cell(usage: Option<&ProcessUsage>, value: impl Fn(&ProcessUsage) -> String) -> AnyView {
     let Some(u) = usage else {
-        return view! { <td class="adi-mono adi-muted">"—"</td> }.into_any();
+        return view! { <td class="adi-muted">"—"</td> }.into_any();
     };
     let procs = if u.processes == 1 {
         format!("pid {}", u.pid)
@@ -463,7 +462,7 @@ fn usage_cell(usage: Option<&ProcessUsage>, value: impl Fn(&ProcessUsage) -> Str
         format!("pid {} + {} child processes", u.pid, u.processes - 1)
     };
     let title = format!("{procs}, up {}", fmt_uptime(u.uptime_secs));
-    view! { <td class="adi-mono" title=title>{value(u)}</td> }.into_any()
+    view! { <td class="adi-tabnums" title=title>{value(u)}</td> }.into_any()
 }
 
 /// The capitalized display label for a task's computed effective status, used with the
@@ -537,43 +536,11 @@ pub(crate) fn fmt_date(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-// ---- theme toggle (persisted; falls back to the OS preference) ----------------------
-
-/// Apply the theme saved in `localStorage`, if any, to `<html data-theme>`.
-pub(crate) fn apply_saved_theme() {
-    if let Some(theme) = storage().and_then(|s| s.get_item("adi-theme").ok().flatten())
-        && let Some(el) = document_element()
-    {
-        let _ = el.set_attribute("data-theme", &theme);
-    }
-}
-
-/// Flip the theme and persist the choice, seeding from the OS preference when unset.
-pub(crate) fn toggle_theme() {
-    let Some(el) = document_element() else {
-        return;
-    };
-    let current = match el.get_attribute("data-theme") {
-        Some(t) if !t.is_empty() => t,
-        _ if prefers_dark() => "dark".to_string(),
-        _ => "light".to_string(),
-    };
-    let next = if current == "dark" { "light" } else { "dark" };
-    let _ = el.set_attribute("data-theme", next);
-    if let Some(s) = storage() {
-        let _ = s.set_item("adi-theme", next);
-    }
-}
-
-fn document_element() -> Option<web_sys::Element> {
-    web_sys::window()?.document()?.document_element()
-}
-
 // ---- the workbench's standing advice (persisted dismissal) --------------------------
 
 /// Where the dismissal of the "ask adi-agent" line is remembered. Per browser rather than per
-/// machine, like the theme beside it: it is a preference about how this person reads the page,
-/// not a fact about the stack, and the store has no business holding it.
+/// machine: it is a preference about how this person reads the page, not a fact about the stack,
+/// and the store has no business holding it.
 const ADVICE_KEY: &str = "adi-advice-hidden";
 
 /// Whether the advice line above every workbench page has been hidden on this browser.
@@ -605,10 +572,4 @@ pub(crate) fn storage() -> Option<web_sys::Storage> {
     {
         None
     }
-}
-
-fn prefers_dark() -> bool {
-    web_sys::window()
-        .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
-        .is_some_and(|m| m.matches())
 }

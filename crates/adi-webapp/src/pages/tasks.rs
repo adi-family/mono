@@ -2,15 +2,15 @@
 //! a create form, and a collapsed block of finished tasks; deeper mutations stay in the
 //! `adi-mono tasks ...` CLI surface.
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{EmptyRow, Icon, IconSize, Lucide, Row as TableRow, Table};
 use adi_webapp_api::types::{NewTask, TaskRow, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, effective_label_title, flash_view, sort_rows,
-    task_tree_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, effective_label_title, flash_view, menu_item,
+    row_actions, sort_rows, task_tree_rows, updated_text,
 };
 
 /// The columns of both task tables — the open tree and the collapsed Done block, which are the
@@ -38,10 +38,11 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Open tasks, at every depth">
+                <span class="adi-updated" title="Open tasks, at every depth">
                     {move || tasks.get().map_or_else(|| "\u{2014}".to_string(),
-                        |t| t.tasks.iter().filter(|x| !is_finished(&x.effective)).count().to_string())}
+                        |t| format!("{} open", t.tasks.iter().filter(|x| !is_finished(&x.effective)).count()))}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(tasks, secs_since)}</span>
             </div>
 
@@ -125,8 +126,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
             </form>
             {flash_view(flash)}
             <div class="adi-hint">
-                "Archive takes a task and its subtasks off the plate; in the Done block, Reopen "
-                "brings one back and Delete removes it for good (its subtasks reparent). "
+                "A row's menu archives it, which takes the task and its subtasks off the plate; "
+                "under Done, the menu reopens one or deletes it for good (its subtasks reparent). "
                 "Completing and editing stay in the " <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
@@ -156,12 +157,7 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
                 view! {
                     <section class="adi-panel">
                         <div class="adi-panel__head">
-                            <button class="adi-btn adi-btn--link" type="button"
-                                aria-expanded=open.to_string()
-                                on:click=move |_| show.update(|v| *v = !*v)>
-                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Done"
-                            </button>
-                            <span class="adi-chip adi-mono">{n.to_string()}</span>
+                            {fold_button(open, "Done", n, move || show.update(|v| *v = !*v))}
                         </div>
                         {open.then(|| view! { <Table state=state.tables.tasks_done>{move || task_rows(state, true)}</Table> }.into_any())}
                     </section>
@@ -169,6 +165,30 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
                 .into_any()
             })
         }}
+    }
+    .into_any()
+}
+
+/// The heading of a section that folds — Done here, Archived on the Tools page: a chevron that
+/// turns, the word, and how many rows are under it in meta type.
+pub(crate) fn fold_button(
+    open: bool,
+    label: &'static str,
+    count: usize,
+    toggle: impl Fn() + 'static,
+) -> AnyView {
+    let chevron = if open {
+        Lucide::ChevronDown
+    } else {
+        Lucide::ChevronRight
+    };
+    view! {
+        <button class="adi-fold" type="button" aria-expanded=open.to_string()
+            on:click=move |_| toggle()>
+            <Icon icon=chevron size=IconSize::Md/>
+            {label}
+            <span class="adi-muted adi-tabnums">{count.to_string()}</span>
+        </button>
     }
     .into_any()
 }
@@ -184,8 +204,8 @@ where
 
 /// Render a task table body: a loading/empty placeholder, or the tree flattened into rows (a
 /// parent immediately followed by its subtree), each indented by its depth. `finished` picks the
-/// side of the split — the open tree, or the collapsed Done block — and with it the trailing
-/// action: Archive on a live row, Reopen on a finished one.
+/// side of the split — the open tree, or the collapsed Done block — and with it the row's menu:
+/// Archive on a live row, Reopen and Delete on a finished one.
 ///
 /// Each side is tree-flattened over its own subset, so an open subtask of a finished parent
 /// re-roots into the main tree rather than disappearing with its parent.
@@ -223,35 +243,29 @@ fn task_rows(state: State, finished: bool) -> AnyView {
         .map(|(depth, t)| {
             let action = {
                 let id = t.id.clone();
-                if finished {
+                let items = if finished {
                     let del_id = id.clone();
-                    view! {
-                        <span style="display:inline-flex; gap:var(--space-2)">
-                            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                                apply_tasks(state, None, format!("Reopened {id}."),
-                                    fetch::reopen_task(id.clone()));
-                            }>"Reopen"</button>
-                            <button class="adi-btn adi-btn--link" style="color:var(--down)"
-                                on:click=move |_| {
-                                    if !confirm(&format!(
-                                        "Permanently delete task {del_id}? This cannot be undone.")) {
-                                        return;
-                                    }
-                                    apply_tasks(state, None, format!("Deleted {del_id}."),
-                                        fetch::delete_task(del_id.clone()));
-                                }>"Delete"</button>
-                        </span>
-                    }
-                    .into_any()
+                    vec![
+                        menu_item(state, "Reopen", false, move || {
+                            apply_tasks(state, None, format!("Reopened {id}."),
+                                fetch::reopen_task(id.clone()));
+                        }),
+                        menu_item(state, "Delete", true, move || {
+                            if !confirm(&format!(
+                                "Permanently delete task {del_id}? This cannot be undone.")) {
+                                return;
+                            }
+                            apply_tasks(state, None, format!("Deleted {del_id}."),
+                                fetch::delete_task(del_id.clone()));
+                        }),
+                    ]
                 } else {
-                    view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_tasks(state, None, format!("Archived {id}."),
-                                fetch::archive_task(id.clone()));
-                        }>"Archive"</button>
-                    }
-                    .into_any()
-                }
+                    vec![menu_item(state, "Archive", false, move || {
+                        apply_tasks(state, None, format!("Archived {id}."),
+                            fetch::archive_task(id.clone()));
+                    })]
+                };
+                row_actions(state, format!("task:{}", t.id), (), items)
             };
             view! { <TableRow state=table cell=move |col| task_cell(col, &t, depth) actions=action/> }.into_any()
         })
@@ -277,17 +291,17 @@ pub(crate) fn task_key(t: &TaskRow, col: &str) -> Key {
 /// the same key the sort uses — is what lets the user hide and reorder columns without the row
 /// builder knowing about it. Shared with a project's Tasks panel.
 pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
-    /// An optional chip cell — the shape both Project and Tag render as.
+    /// An optional tag cell — the shape both Project and Tag render as.
     fn chip(value: Option<&String>) -> AnyView {
         match value {
             Some(v) if !v.trim().is_empty() => {
-                view! { <span><span class="adi-chip adi-mono">{v.clone()}</span></span> }.into_any()
+                view! { <span><span class="adi-chip">{v.clone()}</span></span> }.into_any()
             }
             _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         }
     }
     match col {
-        "ID" => view! { <span class="font-mono text-meta">{t.id.clone()}</span> }.into_any(),
+        "ID" => view! { <span class="adi-mono adi-muted">{t.id.clone()}</span> }.into_any(),
         "Project" => chip(t.project.as_ref()),
         "Tag" => chip(t.tag.as_ref()),
         "Status" => {
@@ -303,24 +317,35 @@ pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
             } else {
                 String::new()
             };
-            view! { <span class="font-mono text-meta">{subtasks}</span> }.into_any()
+            view! { <span class="adi-muted adi-tabnums">{subtasks}</span> }.into_any()
         }
         // "Task", and anything the layout offers that this match doesn't name.
-        _ => {
-            let indent = format!("padding-left:{}px", depth * 20);
-            // The hover text is what a row can say without a column of its own: the details, and
-            // the directory the work happens in when the task names one.
-            let mut hover = t.details.clone().unwrap_or_default();
-            if let Some(cwd) = t.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
-                if !hover.is_empty() {
-                    hover.push_str("\n\n");
-                }
-                hover.push_str(&format!("cwd: {cwd}"));
-            }
-            view! {
-                <span title=hover><span style=indent>{t.title.clone()}</span></span>
-            }
-            .into_any()
-        }
+        _ => task_title(t, depth, None),
     }
+}
+
+/// The Task cell: the title behind one hairline rail per level of depth, so a subtask reads as
+/// belonging to the row above it, with a sub-project's `marker` after it when the row is filed
+/// somewhere else. Shared with a project's Tasks panel.
+pub(crate) fn task_title(t: &TaskRow, depth: usize, marker: Option<AnyView>) -> AnyView {
+    // The hover text is what a row can say without a column of its own: the details, and the
+    // directory the work happens in when the task names one.
+    let mut hover = t.details.clone().unwrap_or_default();
+    if let Some(cwd) = t.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+        if !hover.is_empty() {
+            hover.push_str("\n\n");
+        }
+        hover.push_str(&format!("cwd: {cwd}"));
+    }
+    let rails = (0..depth)
+        .map(|_| view! { <span class="adi-taskrow__rail" aria-hidden="true"></span> })
+        .collect::<Vec<_>>();
+    view! {
+        <span class="adi-taskrow" title=hover>
+            {rails}
+            <span class="adi-taskrow__title">{t.title.clone()}</span>
+            {marker}
+        </span>
+    }
+    .into_any()
 }

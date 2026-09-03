@@ -1,9 +1,9 @@
 //! What the ⌘K menu offers, as one list.
 //!
 //! The app has two shells — the root document (`/`: the chat and the setup wizard) and the control
-//! panel (`/extended/…`) — and the floating mark ([`crate::launcher`]) is on both. Almost every row
+//! panel (`/extended/…`) — and the ⌘K menu ([`crate::launcher`]) is on both. Almost every row
 //! is worth the same on either: the panel's pages, the pairing QR, the dashboards this machine can
-//! open, the theme, the version. So they are written once, here, and each shell asks for them
+//! open, the version. So they are written once, here, and each shell asks for them
 //! rather than keeping a copy. Two hand-maintained lists is how a menu comes to disagree with
 //! itself about what the app can do — one shell grows a row and the other quietly doesn't.
 //!
@@ -23,7 +23,7 @@ use leptos::prelude::*;
 use crate::launcher::Action;
 use crate::routing::{self, Route};
 use crate::state::{FleetForm, State};
-use crate::{icons, origin, pages, pwa, ui, update};
+use crate::{icons, origin, pages, pwa, update};
 
 /// The marker the root screen leaves in the URL to say the panel was opened *in order to pair*.
 ///
@@ -86,7 +86,7 @@ impl Shell {
 
 /// Every row both shells offer, in the order the menu reads them.
 ///
-/// Rebuilt on every draw (see [`crate::launcher::launcher`]), which is what lets it be honest
+/// Rebuilt on every draw (see [`crate::launcher::overlay`]), which is what lets it be honest
 /// about the moment: the dashboards it lists are the ones that are up *now*, and the version row
 /// says what the last poll said. Reading signals here is therefore deliberate — it is what makes
 /// the menu track them.
@@ -165,12 +165,6 @@ pub(crate) fn rows(
         }
     }
 
-    rows.push(Action::new(
-        "Toggle theme",
-        "Light or dark",
-        icons::Icon::Contrast,
-        ui::toggle_theme,
-    ));
     if can_install.get() {
         rows.push(Action::new(
             "Install app",

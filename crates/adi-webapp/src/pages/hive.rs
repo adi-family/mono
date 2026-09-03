@@ -38,21 +38,22 @@ fn reload_hive(state: State) {
     });
 }
 
+/// The Hive page: one table of every declared service, with what it all adds up to in the head.
 pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
     let State { hive, .. } = state;
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Declared services">
-                    {move || hive.get().map_or_else(|| "\u{2014}".to_string(),
-                        |h| h.services.len().to_string())}
-                </span>
-                <span class="adi-updated">
-                    {move || hive.get().map_or(String::new(),
-                        |h| format!("{} running", h.services.iter().filter(|s| s.running).count()))}
+                <h2 class="adi-panel__title">"Services"</h2>
+                <span class="adi-updated" title="Declared services, and how many are running">
+                    {move || hive.get().map_or_else(|| "\u{2014}".to_string(), |h| format!(
+                        "{} declared · {} running",
+                        h.services.len(),
+                        h.services.iter().filter(|s| s.running).count(),
+                    ))}
                 </span>
                 <span class="adi-spacer"></span>
-                <span class="adi-chip adi-mono" title="Total CPU and memory of every running service">
+                <span class="adi-updated" title="Total CPU and memory of every running service">
                     {move || hive.get().map_or_else(|| "\u{2014}".to_string(), |h| {
                         let (cpu, mem) = h.services.iter().filter_map(|s| s.usage.as_ref())
                             .fold((0.0_f32, 0_u64), |(c, m), u|
@@ -233,23 +234,24 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<Route>) -> AnyView {
     match col {
-        "Service" => view! { <span class="font-mono">{s.name.clone()}</span> }.into_any(),
+        "Service" => view! { <span class="adi-hive-name">{s.name.clone()}</span> }.into_any(),
         "Host" => host_cell(s.host.as_deref()),
         "Ports" => {
-            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }
-                .into_any()
+            view! { <span class="adi-mono adi-muted">{fmt_ports(&s.ports)}</span> }.into_any()
         }
         "Command" => {
-            view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any()
+            view! { <span class="adi-mono adi-muted">{dash(s.run.clone())}</span> }.into_any()
         }
-        "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
+        "Restart" => {
+            view! { <span class="adi-mono adi-muted">{dash(s.restart.clone())}</span> }.into_any()
+        }
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
         "Status" => {
             let (attr, label) = if s.running {
-                ("online", "Running")
+                ("online", "running")
             } else {
-                ("down", "Stopped")
+                ("down", "stopped")
             };
             view! {
                 <span>
@@ -274,13 +276,13 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
 /// name stays, unlinked — the row is still telling the truth about the service.
 fn host_cell(host: Option<&str>) -> AnyView {
     let Some(host) = host else {
-        return view! { <span class="font-mono">{dash(None)}</span> }.into_any();
+        return view! { <span class="adi-muted">{dash(None)}</span> }.into_any();
     };
     let Some(href) = crate::origin::service_url(host) else {
-        return view! { <span class="font-mono">{host.to_string()}</span> }.into_any();
+        return view! { <span class="adi-mono">{host.to_string()}</span> }.into_any();
     };
     view! {
-        <span class="font-mono">
+        <span class="adi-mono">
             <a href=href.clone() target="_blank" rel="noreferrer" title=href>{host.to_string()}</a>
         </span>
     }
@@ -297,7 +299,7 @@ fn source_cell(s: &HiveService, src: &Source, state: State, route: RwSignal<Rout
         (_, Some(id)) => {
             let title = format!("dashboard {id}");
             view! {
-                <a class="adi-btn adi-btn--link" href=Route::Dashboards.path() title=title
+                <a href=Route::Dashboards.path() title=title
                     on:click=move |ev: web_sys::MouseEvent| {
                         if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                         ev.prevent_default();
@@ -313,7 +315,7 @@ fn source_cell(s: &HiveService, src: &Source, state: State, route: RwSignal<Rout
             let href = project_href(id);
             let title = format!("project {id}");
             view! {
-                <a class="adi-btn adi-btn--link" href=href title=title
+                <a href=href title=title
                     on:click=move |ev: web_sys::MouseEvent| {
                         if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                         ev.prevent_default();

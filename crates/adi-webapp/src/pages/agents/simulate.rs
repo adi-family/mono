@@ -221,7 +221,7 @@ pub(crate) fn simulate_view(state: State, sim: Simulate) -> AnyView {
         return view! {
             <section class="adi-panel">
                 <div class="adi-panel__head">
-                    <strong>{format!("Simulating “{name}”")}</strong>
+                    <h2 class="adi-panel__title">{format!("Simulating {name}")}</h2>
                 </div>
                 <div class="adi-empty">"Materializing the run and composing its prompt…"</div>
             </section>
@@ -327,7 +327,7 @@ pub(crate) fn simulate_view(state: State, sim: Simulate) -> AnyView {
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <strong>{format!("Simulating “{name}”")}</strong>
+                <h2 class="adi-panel__title">{format!("Simulating {name}")}</h2>
                 <span class="adi-chip adi-mono" title="Run id">{run_id.clone()}</span>
                 <span class="adi-spacer"></span>
                 <button
@@ -339,14 +339,14 @@ pub(crate) fn simulate_view(state: State, sim: Simulate) -> AnyView {
                     "Refresh"
                 </button>
                 <button
-                    class="adi-btn"
+                    class="adi-btn adi-btn--quiet"
                     type="button"
                     on:click=move |_| close_simulation(sim)
                 >
                     "Close"
                 </button>
             </div>
-            <div class="adi-panel__body adi-ui-type">
+            <div class="adi-panel__body">
                 <Simulator
                     prompt=tokens
                     blocks=Signal::derive(move || blocks.get())

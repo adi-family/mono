@@ -1,5 +1,6 @@
-<!-- The adi mark as the app tile: the Trefoil on a light squircle, cut so the lobes keep
-     hairline gaps down to a 16px favicon, with the middle lobe on the accent.
+<!-- The adi mark as the app tile: the three hexagons on a paper squircle, cut so the lobes
+     keep hairline gaps down to a 16px favicon, in the coloured build design/DESIGN.md §10 keeps
+     for the app icon — grey, orange, ink — and flat: no gloss, no gradient.
 
      Generated, not drawn. The lobes come from `Mark` in crates/adi-ui/src/mark.rs, and
      `every_copy_of_the_mark_agrees` in crates/adi-webapp/src/pwa.rs fails if this file and that
@@ -11,21 +12,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="adi">
   <title>adi</title>
   <defs>
-    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#EDF0F2"/>
-    </linearGradient>
-    <linearGradient id="adi-mark-gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>
-      <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset=".55" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="1" stop-color="#000000" stop-opacity=".28"/>
-    </linearGradient>
-    <linearGradient id="adi-mark-accent" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#FF8A4A"/>
-      <stop offset=".55" stop-color="#FA5019"/>
-      <stop offset="1" stop-color="#D8380A"/>
-    </linearGradient>
     <mask id="adi-mark-cut-0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
       <rect width="200" height="200" fill="#fff"/>
       <path fill="#000" d="M127.71 65.00 L178.81 94.50 L178.81 153.50 L127.71 183.00 L76.62 153.50 L76.62 94.50 Z"/>
@@ -36,21 +22,18 @@
       <path fill="#000" d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z"/>
     </mask>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="184.33" fill="url(#tile)"/>
+  <rect x="100" y="100" width="824" height="824" rx="184.33" fill="#FBFAF8"/>
   <!-- The mark fills 66% of the content square, centred in the full canvas. -->
   <g transform="translate(240.08 240.08) scale(2.7192)" style="color:#14181d">
     <g class="adi-mark__lobes">
       <g class="adi-mark__lobe adi-mark__lobe--back" mask="url(#adi-mark-cut-0)">
-        <path fill="currentColor" fill-opacity="0.52" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
+        <path fill="#8C8780" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
       </g>
       <g class="adi-mark__lobe adi-mark__lobe--mid" mask="url(#adi-mark-cut-1)">
-        <path fill="url(#adi-mark-accent)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
+        <path fill="#E8532A" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
       </g>
       <g class="adi-mark__lobe adi-mark__lobe--front">
-        <path fill="currentColor" fill-opacity="1" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
-        <path fill="url(#adi-mark-gloss)" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
+        <path fill="currentColor" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
       </g>
     </g>
   </g>

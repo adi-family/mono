@@ -7,7 +7,7 @@
 // the API calls inside it.
 //
 // Bump CACHE to retire every previously cached file in one step.
-const CACHE = "adi-shell-v1";
+const CACHE = "adi-shell-v2";
 
 // Fetched on install so a cold, offline launch still has a frame to draw. The hashed
 // wasm/js/css names aren't known here — they land in the cache on first load instead.

@@ -258,6 +258,26 @@ differences from the CLI, all deliberate:
   a panel reached over the mesh may mint, and the gate is the grant that let it in rather than a
   second one at this endpoint.
 
+**Spending is not a terminal-only act either.** The Fleet page has a paste field, and it posts to
+`POST /api/fleet/join` — the same `join::join_on` handshake `adi-mono mesh join <token>` runs. This
+half was missing for longer than the minting half, and the asymmetry cost something specific:
+minting only ever helps the side that *can be dialled*, so the machine that has to dial — a laptop
+handed to somebody who was sent an invite — could be paired only by an operator with a shell on it.
+Three things about the endpoint:
+
+- **It dials over the endpoint the mesh already has.** `adi-app`'s `MeshCtl::join` calls
+  `Daemon::join` when the in-process daemon is up and only falls back to `join::join` when it is
+  not. Binding a second endpoint on this machine's secret key while the first is live makes the two
+  race for the same relay session, and the loser's peers quietly stop reaching it. The CLI may bind
+  its own because it is a short-lived process beside a daemon that is usually not up yet; a control
+  panel is neither.
+- **The token is decoded before anything is dialled.** A typo, or an invite that expired while it
+  was being carried, is a 400 that says so — not a handshake timeout the operator waits out and
+  then has to interpret.
+- **The password is answered once and kept nowhere.** It is the same single copy the CLI prints:
+  both machines store a salted verifier, so the response is the only place it will ever exist, and
+  the page drops it when the operator navigates away. The same is true of the token on its way in.
+
 **A pairing is not usable the instant it is accepted.** The node's gateway serves from an in-memory
 snapshot of `fleet.toml` and re-reads it every `RELOAD_INTERVAL` — five seconds
 (`adi-mesh/src/gateway.rs`). The join handshake writes the file and answers immediately, so for up
@@ -670,6 +690,12 @@ Each item ships with unit tests in the same file.
       the Fleet page shows it as a QR with a countdown, the token under it, and where to point a
       phone. Until this, the only way to see the code was a terminal — which is exactly how the
       operator failed to find it.
+- [x] E6 *Spending* an invite from the panel (§8): `POST /api/fleet/join` runs the same
+      `join::join_on` handshake as `adi-mono mesh join`, over the endpoint the in-process daemon
+      already holds, and answers with the credential plus a fresh `FleetState`. The Fleet page's
+      **Join a fleet** panel is the paste field, and it shows the password once. Both directions of
+      the handshake are now reachable without a shell, which matters most on the machine that has
+      to be the dialler and is least likely to have one.
 
 ### G — moving a dashboard to a node (§10)
 

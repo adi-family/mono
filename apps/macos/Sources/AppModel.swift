@@ -2,8 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 
-/// What the power button shows: dim when off, blue while a command runs or the service
-/// is still coming up, orange once it's running.
+/// What the status line shows: off, a command running or a service still coming up, or running.
 enum PowerState: Equatable {
     case off
     case inProgress
@@ -196,8 +195,8 @@ final class AppModel: ObservableObject {
     var isOn: Bool { report.services.contains { $0.enabled } }
     var anyRunning: Bool { report.anyRunning }
 
-    /// Button color state: a command in flight or a service still starting is "in
-    /// progress" (blue); actually running is "done" (orange); otherwise off.
+    /// The status line's state: a command in flight or a service still starting is "in
+    /// progress"; actually running is "on"; otherwise off.
     var powerState: PowerState {
         if busy { return .inProgress }
         if anyRunning { return .on }
@@ -205,7 +204,7 @@ final class AppModel: ObservableObject {
         return .off
     }
 
-    /// Short word under the power button.
+    /// The word beside the status dot.
     var statusSummary: String {
         if report.services.isEmpty { return "No services" }
         if anyRunning { return "Running" }
@@ -255,6 +254,13 @@ final class AppModel: ObservableObject {
 
     /// Whether to offer the control at all — see `Core.isReleaseInstall`.
     let updatable = Core.isReleaseInstall
+
+    /// Whether the update row is holding the window's one orange (`design/DESIGN.md` §2.4), in
+    /// which case the panel button gives it up.
+    var updateAvailable: Bool {
+        if case .available = updateState { return true }
+        return false
+    }
 
     /// Seed the update row from what the background agent already wrote down.
     ///
@@ -476,7 +482,7 @@ final class AppModel: ObservableObject {
         } else {
             lines += [
                 "",
-                "Press **Create Report** in ADI and drag the archive it makes into this box — "
+                "Press **Create report** in ADI and drag the archive it makes into this box — "
                     + "it carries the logs, the routes and every service's state.",
             ]
         }

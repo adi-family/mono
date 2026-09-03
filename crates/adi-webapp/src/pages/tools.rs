@@ -6,7 +6,8 @@
 //! panel surfaces both the shim name and the directory to add.
 //!
 //! The run panel and the script editor are shared with a project's Tools panel (they render the
-//! same way there), so their view + action helpers are `pub(crate)`.
+//! same way there), so their view + action helpers are `pub(crate)`. A row's actions — Run, Edit,
+//! Archive; Restore, Delete once archived — live in its ⋯ menu.
 
 use adi_ui::Lang;
 use adi_ui::{EmptyRow, Row as TableRow, Table};
@@ -14,6 +15,7 @@ use adi_webapp_api::types::{LinkTool, NewTool, ToolDto, ToolsState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use super::tasks::fold_button;
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
@@ -47,10 +49,11 @@ pub(crate) fn tools_view(
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Active tools">
+                <span class="adi-updated" title="Active tools">
                     {move || tools.get().map_or_else(|| "\u{2014}".to_string(),
-                        |t| t.tools.iter().filter(|x| !x.is_archived()).count().to_string())}
+                        |t| format!("{} active", t.tools.iter().filter(|x| !x.is_archived()).count()))}
                 </span>
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(tools, secs_since)}</span>
             </div>
             <Table state=state.tables.tools>{move || rows_view(state, state.tables.tools, editor, run, false, None)}</Table>
@@ -179,12 +182,7 @@ fn archived_section(
                 view! {
                     <section class="adi-panel">
                         <div class="adi-panel__head">
-                            <button class="adi-btn adi-btn--link" type="button"
-                                aria-expanded=open.to_string()
-                                on:click=move |_| show.update(|v| *v = !*v)>
-                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Archived"
-                            </button>
-                            <span class="adi-chip adi-mono">{n.to_string()}</span>
+                            {fold_button(open, "Archived", n, move || show.update(|v| *v = !*v))}
                         </div>
                         {open.then(|| view! { <Table state=state.tables.tools_archived>{move || rows_view(state, state.tables.tools_archived, editor, run, true, None)}</Table> }.into_any())}
                     </section>
@@ -255,18 +253,23 @@ pub(crate) fn rows_view(
 /// about it, and is also how the project panel's narrower column set works from the same code.
 fn cell(col: &str, t: &ToolDto) -> AnyView {
     match col {
-        "Runtime" => view! { <span class="font-mono">{t.runtime.clone()}</span> }.into_any(),
+        "Runtime" => {
+            view! { <span class="adi-mono adi-muted">{t.runtime.clone()}</span> }.into_any()
+        }
         "Invoke" => view! {
-            <span class="font-mono" title=format!("adi-mono tools run {}", t.id)>
+            <span class="adi-mono adi-muted" title=format!("adi-mono tools run {}", t.id)>
                 {format!(".bin/{}", t.bin_name)}
             </span>
         }
         .into_any(),
-        "Project" => {
-            let project = t.project.clone().unwrap_or_else(|| "—".to_string());
-            view! { <span class="font-mono text-meta">{project}</span> }.into_any()
-        }
-        // "Tool", and anything the layout offers that this match doesn't name.
+        "Project" => match &t.project {
+            Some(p) if !p.trim().is_empty() => {
+                view! { <span><span class="adi-chip">{p.clone()}</span></span> }.into_any()
+            }
+            _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
+        },
+        // "Tool", and anything the layout offers that this match doesn't name: the name, and
+        // under it where the script lives.
         _ => {
             let source = if t.system {
                 "system"
@@ -281,8 +284,8 @@ fn cell(col: &str, t: &ToolDto) -> AnyView {
             };
             view! {
                 <span title=t.id.clone()>
-                    <div>{t.name.clone()}</div>
-                    <div class="adi-mono adi-muted" style="font-size:var(--text-sm)">{sub}</div>
+                    <span>{t.name.clone()}</span>
+                    <span class="adi-cell__sub adi-mono adi-muted">{sub}</span>
                 </span>
             }
             .into_any()
@@ -290,10 +293,10 @@ fn cell(col: &str, t: &ToolDto) -> AnyView {
     }
 }
 
-/// The trailing actions for a tool row — shared by the global table and a project's panel. Active:
-/// **▶ Run** inline (opens the panel and runs with no args), with Edit (opens the script editor) and
-/// Archive in the kebab. Archived: **Restore** inline, with Delete in the kebab (behind a confirm; a
-/// linked target file is never touched — a system tool has no Delete, so no kebab).
+/// The ⋯ menu of a tool row — shared by the global table and a project's panel. Active: Run
+/// (opens the panel and runs with no args), Edit (opens the script editor), Archive. Archived:
+/// Restore, and Delete behind a confirm — a linked target file is never touched, and a system
+/// tool has no Delete (archive is how you disable it).
 pub(crate) fn tool_actions(
     state: State,
     editor: ToolEditor,
@@ -306,15 +309,13 @@ pub(crate) fn tool_actions(
         let restore_id = id.clone();
         let del_id = id.clone();
         let del_short = short_id(&id);
-        let restore = view! {
-            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                apply_tools(state, "Restored tool.".to_string(),
-                    fetch::unarchive_tool(restore_id.clone()));
-            }>"Restore"</button>
-        };
-        // A system tool is protected from hard delete (archive is how you disable it), so its row
-        // has no overflow item — `row_actions` then drops the kebab entirely.
-        let mut items = Vec::new();
+        let mut items = vec![menu_item(state, "Restore", false, move || {
+            apply_tools(
+                state,
+                "Restored tool.".to_string(),
+                fetch::unarchive_tool(restore_id.clone()),
+            );
+        })];
         if !t.system {
             items.push(menu_item(state, "Delete", true, move || {
                 if !confirm(&format!(
@@ -330,7 +331,7 @@ pub(crate) fn tool_actions(
                 );
             }));
         }
-        row_actions(state, key, restore, items)
+        row_actions(state, key, (), items)
     } else {
         let run_id = id.clone();
         let run_name = t.name.clone();
@@ -338,12 +339,10 @@ pub(crate) fn tool_actions(
         let edit_name = t.name.clone();
         let edit_runtime = t.runtime.clone();
         let arch_id = id.clone();
-        let run_btn = view! {
-            <button class="adi-btn adi-btn--link" title="Run with no arguments" on:click=move |_| {
-                run_tool_now(state, run, run_id.clone(), run_name.clone(), Vec::new());
-            }>"▶ Run"</button>
-        };
         let items = vec![
+            menu_item(state, "Run", false, move || {
+                run_tool_now(state, run, run_id.clone(), run_name.clone(), Vec::new());
+            }),
             menu_item(state, "Edit", false, move || {
                 open_tool_editor(
                     state,
@@ -361,7 +360,7 @@ pub(crate) fn tool_actions(
                 );
             }),
         ];
-        row_actions(state, key, run_btn, items)
+        row_actions(state, key, (), items)
     }
 }
 
@@ -384,10 +383,10 @@ pub(crate) fn tool_run_view(state: State, run: ToolRunView) -> Option<AnyView> {
                 <h2 class="adi-panel__title">{format!("Run — {name}")}</h2>
                 <span class="adi-status" data-state=move || status().1>
                     <span class="adi-status__led"></span>
-                    <span class="adi-mono">{move || status().0}</span>
+                    {move || status().0}
                 </span>
                 <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--link" type="button" on:click=move |_| run.close()>"Close"</button>
+                <button class="adi-btn adi-btn--quiet" type="button" on:click=move |_| run.close()>"Close"</button>
             </div>
             <div class="adi-form adi-form--toolbar">
                 <TextField id="tool-run-args" label="Arguments" mono=true wide=true
@@ -398,12 +397,12 @@ pub(crate) fn tool_run_view(state: State, run: ToolRunView) -> Option<AnyView> {
                     on:click=move |_| {
                         let args = split_args(&run.args.get());
                         run_tool_now(state, run, rerun_id.clone(), rerun_name.clone(), args);
-                    }>"▶ Run again"</button>
+                    }>"Run again"</button>
             </div>
             <div class="adi-panel__body">
                 <adi_ui::CodeLog value=run.output lang=Lang::Sh
                     height=adi_ui::CodeHeight::Form id="tool-run-output"
-                    class="adi-ui-type island"/>
+                    class="island bg-raise"/>
             </div>
         </section>
     }
@@ -428,15 +427,15 @@ pub(crate) fn tool_editor_view(state: State, editor: ToolEditor) -> Option<AnyVi
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">{format!("Script — {name}")}</h2>
                     <span class="adi-spacer"></span>
-                    <button class="adi-btn adi-btn--ghost" type="button"
+                    <button class="adi-btn" type="button"
                         prop:disabled=move || editor.busy.get()
                         on:click=move |_| open_tool_editor(state, editor, retry_id.clone(), retry_name.clone(), retry_runtime.clone())>"Retry"</button>
-                    <button class="adi-btn adi-btn--link" type="button"
+                    <button class="adi-btn adi-btn--quiet" type="button"
                         on:click=move |_| editor.close()>"Close"</button>
                 </div>
                 <div class="adi-panel__body">
                     <div class="adi-flash" data-kind="err">{err}</div>
-                    <p class="adi-muted">
+                    <p class="adi-hint">
                         "The tool's script isn't readable. For a linked tool, the target file may have "
                         "moved; re-link it, or restore the file at that path."
                     </p>
@@ -454,21 +453,18 @@ pub(crate) fn tool_editor_view(state: State, editor: ToolEditor) -> Option<AnyVi
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">{format!("Script — {name}")}</h2>
-                <span class="adi-updated">{move || editor.runtime.get()}</span>
-            </div>
-            <div class="adi-form adi-form--toolbar">
-                <span class="adi-chip adi-mono">{move || editor.path.get()}</span>
-                <span class="adi-muted" style="font-size:var(--text-md)">
-                    {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
+                <span class="adi-mono adi-muted">{move || editor.path.get()}</span>
+                <span class="adi-updated">
+                    {move || if dirty() { "unsaved changes" } else { "saved" }}
                 </span>
                 <span class="adi-spacer"></span>
+                <button class="adi-btn" type="button"
+                    prop:disabled=move || editor.busy.get()
+                    on:click=move |_| open_tool_editor(state, editor, reload_id.clone(), reload_name.clone(), editor.runtime.get())>"Reload"</button>
                 <button class="adi-btn adi-btn--primary" type="button"
                     prop:disabled=move || editor.busy.get() || !dirty()
                     on:click=move |_| save_tool_script(state, editor, save_id.clone())>"Save"</button>
-                <button class="adi-btn adi-btn--ghost" type="button"
-                    prop:disabled=move || editor.busy.get()
-                    on:click=move |_| open_tool_editor(state, editor, reload_id.clone(), reload_name.clone(), editor.runtime.get())>"Reload"</button>
-                <button class="adi-btn adi-btn--link" type="button"
+                <button class="adi-btn adi-btn--quiet" type="button"
                     on:click=move |_| editor.close()>"Close"</button>
             </div>
             <div class="adi-panel__body">
@@ -477,7 +473,7 @@ pub(crate) fn tool_editor_view(state: State, editor: ToolEditor) -> Option<AnyVi
                     lang=Signal::derive(move || Lang::from_path(&format!("s.{}", editor.runtime.get())))
                     height=adi_ui::CodeHeight::Form
                     id="tool-script-edit"
-                    class="adi-ui-type island"
+                    class="island bg-raise"
                 />
             </div>
         </section>
@@ -540,7 +536,7 @@ fn save_tool_script(state: State, editor: ToolEditor, id: String) {
 }
 
 /// Run a tool now: open the run panel, spawn the run, and fold the captured output + fresh tools
-/// state back into the page. Shared by the row's ▶ Run and the panel's ▶ Run again.
+/// state back into the page. Shared by the row menu's Run and the panel's Run again.
 pub(crate) fn run_tool_now(
     state: State,
     run: ToolRunView,

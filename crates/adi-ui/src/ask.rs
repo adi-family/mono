@@ -1,12 +1,15 @@
-//! [`Ask`] — the card a run puts up when it needs a person to decide something.
+//! [`Ask`] — the block a run puts up when it needs a person to decide something.
 //!
-//! # Why it is a card and not a message
+//! # Why it is a block and not a message
 //!
 //! A run that stops to ask could simply say so in prose, and before this it did. The trouble is
 //! that prose is not a *state*: the transcript reads the same whether the question was answered
 //! an hour ago or is holding the work up right now, and there is nothing for a rail, an inbox or a
-//! notification to point at. The card is the visible half of a stored question — while it is on
+//! notification to point at. The block is the visible half of a stored question — while it is on
 //! screen the conversation is blocked, and when it goes the answer is a turn like any other.
+//!
+//! It is drawn the way `design/DESIGN.md` §6 draws an ask: a 2px rule down its left edge and
+//! nothing else around it. It is part of the transcript, not a card floating over it.
 //!
 //! # One tap where one tap will do
 //!
@@ -14,25 +17,25 @@
 //! the options are buttons, and the single commonest shape — one question, one choice — sends on
 //! the click rather than making somebody confirm what they just said. Every question still keeps a
 //! free-text box under its buttons, because the right answer is regularly "neither, do this
-//! instead", and a card that cannot say that is a card people route around.
+//! instead", and a block that cannot say that is a block people route around.
 //!
 //! # It never traps you
 //!
 //! Send lights up as soon as *any* question has an answer, not when all of them do. A person who
 //! knows two of three answers should be able to say so — the run hears "(no answer)" for the third
-//! and can ask again if it really cannot proceed. The alternative is a card that holds the whole
+//! and can ask again if it really cannot proceed. The alternative is a block that holds the whole
 //! conversation hostage to the one question nobody can settle.
 
 use std::collections::BTreeSet;
 
 use leptos::prelude::*;
 
-use crate::{Button, ButtonSize, ButtonVariant, Markdown, merge};
+use crate::{Button, ButtonSize, Markdown, merge};
 
 /// One thing the run wants decided.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AskQuestion {
-    /// Two or three words naming the decision, shown as a chip. Optional.
+    /// Two or three words naming the decision, shown as a tag. Optional.
     pub header: String,
     pub question: String,
     /// The answers offered as buttons. Empty means free text only.
@@ -93,7 +96,7 @@ impl Picked {
     }
 }
 
-/// The question card.
+/// The question block.
 ///
 /// ```ignore
 /// <Ask
@@ -115,14 +118,14 @@ pub fn Ask(
     deadline_note: Signal<String>,
     /// One reply per question, in the order they were asked.
     on_answer: Callback<Vec<String>>,
-    /// True while an answer is in flight, so the card cannot be sent twice.
+    /// True while an answer is in flight, so the block cannot be sent twice.
     #[prop(optional, into)]
     busy: Signal<bool>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let picks: Vec<Picked> = questions.iter().map(|_| Picked::new()).collect();
     // One question with a fixed set of answers is the shape a click can settle outright. Anything
-    // else needs the whole card read before it can be sent, so the button is the only way out.
+    // else needs the whole block read before it can be sent, so the button is the only way out.
     let one_tap =
         questions.len() == 1 && !questions[0].options.is_empty() && !questions[0].multi_select;
 
@@ -168,33 +171,27 @@ pub fn Ask(
 
     let send_click = send.clone();
     view! {
-        <div class=merge(
-            "island border-accent/60 bg-accent/5 px-3 py-2.5",
-            class,
-        )>
-            <div class="caps mb-1.5 flex items-center gap-2 text-accent">
-                "waiting on you"
-                <span class="ml-auto normal-case text-mini text-meta">
-                    {move || deadline_note.get()}
-                </span>
+        <div class=merge("border-l-2 border-line-strong py-1 pl-[18px]", class)>
+            <div class="mb-2 flex items-center gap-3 text-label text-ink-3">
+                "Waiting on you"
+                <span class="ml-auto">{move || deadline_note.get()}</span>
             </div>
             {(!note.trim().is_empty()).then(|| view! {
-                <Markdown source=note class="mb-2 text-meta"/>
+                <Markdown source=note class="mb-3 text-small text-ink-2"/>
             })}
-            <div class="flex flex-col gap-3">{rows}</div>
+            <div class="flex flex-col gap-4">{rows}</div>
             // One question answered by a click needs no button — it has already gone. Everything
-            // else gets one, and it stays dark until there is something to send.
+            // else gets one, and it stays out until there is something to send.
             {(!one_tap).then(|| view! {
-                <div class="mt-2.5 flex items-center gap-2">
+                <div class="mt-3 flex items-center gap-3">
                     <Button
-                        variant=ButtonVariant::Primary
-                        size=ButtonSize::Small
+                        size=ButtonSize::Medium
                         disabled=Signal::derive(move || busy.get() || !answered.get())
                         on:click=move |_| send_click()
                     >
                         "Answer"
                     </Button>
-                    <span class="text-mini text-faint">
+                    <span class="text-small text-ink-3">
                         {move || if answered.get() {
                             "a question left blank is answered “(no answer)”"
                         } else {
@@ -207,7 +204,7 @@ pub fn Ask(
     }
 }
 
-/// One question: its chip, its text, its buttons, and the box under them.
+/// One question: its tag, its text, its buttons, and the box under them.
 fn question_row(
     index: usize,
     total: usize,
@@ -228,16 +225,15 @@ fn question_row(
             let tap = one_tap;
             let chosen = Signal::derive(move || pick.chosen.get().contains(&option_index));
             view! {
+                // The chosen option is the answer chip (§6): the active surface, never orange.
                 <button
                     type="button"
                     class=move || if chosen.get() {
-                        "island cursor-pointer border-accent bg-accent/15 px-2.5 py-1.5 text-left \
-                         text-body text-fg focus-visible:outline-2 focus-visible:outline-offset-1 \
-                         focus-visible:outline-accent"
+                        "cursor-pointer rounded-md bg-active px-3 py-1.5 text-left text-ui \
+                         font-medium text-ink"
                     } else {
-                        "island cursor-pointer px-2.5 py-1.5 text-left text-body text-meta \
-                         hover:border-accent/60 hover:text-fg focus-visible:outline-2 \
-                         focus-visible:outline-offset-1 focus-visible:outline-accent"
+                        "cursor-pointer rounded-md bg-btn px-3 py-1.5 text-left text-ui \
+                         text-ink hover:bg-btn-hover"
                     }
                     prop:disabled=move || busy.get()
                     on:click=move |_| {
@@ -253,7 +249,7 @@ fn question_row(
                                 set.insert(option_index);
                             }
                         });
-                        // Only the one-question, one-choice card sends on the click. The update
+                        // Only the one-question, one-choice block sends on the click. The update
                         // above has already landed, so the reply it reads is this option.
                         if let Some(tap) = tap {
                             tap.run(());
@@ -262,7 +258,7 @@ fn question_row(
                 >
                     <span class="block">{option.label.clone()}</span>
                     {(!option.description.trim().is_empty()).then(|| view! {
-                        <span class="mt-0.5 block text-mini text-faint">
+                        <span class="mt-0.5 block text-mini font-normal text-ink-3">
                             {option.description.clone()}
                         </span>
                     })}
@@ -272,28 +268,30 @@ fn question_row(
         .collect();
 
     view! {
-        <div class="flex flex-col gap-1.5">
+        <div class="flex flex-col gap-2">
             <div class="flex flex-wrap items-baseline gap-2">
                 // Numbered only when there is more than one: a lone "1." in front of a single
                 // question is a list that isn't there.
                 {(total > 1).then(|| view! {
-                    <span class="caps text-faint">{format!("{}.", index + 1)}</span>
+                    <span class="text-label text-ink-3">{format!("{}.", index + 1)}</span>
                 })}
                 {(!header.trim().is_empty()).then(|| view! {
-                    <span class="caps text-accent">{header.clone()}</span>
+                    <span class="rounded-full bg-chip px-2 py-0.5 text-label text-ink-2">
+                        {header.clone()}
+                    </span>
                 })}
-                <span class="text-body text-fg">{text.clone()}</span>
+                <span class="text-[15px] text-ink">{text.clone()}</span>
                 {multi.then(|| view! {
-                    <span class="text-mini text-faint">"(choose any)"</span>
+                    <span class="text-mini text-ink-3">"(choose any)"</span>
                 })}
             </div>
             {(!buttons.is_empty()).then(|| view! {
-                <div class="flex flex-wrap gap-1.5">{buttons}</div>
+                <div class="flex flex-wrap gap-2">{buttons}</div>
             })}
             <input
                 type="text"
-                class="w-full rounded-md border border-edge bg-surface px-2 py-1.5 text-body \
-                       text-fg placeholder:text-faint focus-visible:border-accent \
+                class="w-full rounded-md border border-line-strong bg-raise px-3 py-2 text-ui \
+                       text-ink placeholder:text-ink-3 focus-visible:border-ink-3 \
                        focus-visible:outline-none"
                 placeholder=if question.options.is_empty() {
                     "your answer"

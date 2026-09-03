@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADI — agents on your own machine</title>
+<meta name="description" content="ADI runs AI agents on your own machine — you define each one, and it keeps your tools, your data and the memory of the work.">
+<meta name="theme-color" content="#FBFAF8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #FBFAF8; --bg-2: #F4F3F0; --bg-3: #EBE8E2;
+    --line: rgba(0,0,0,.08); --line-strong: rgba(0,0,0,.14);
+    --ink: #17150F; --ink-2: #55514A; --ink-3: #8C8780;
+    --accent: #D6431C;
+    --sans: "Geist", system-ui, sans-serif; --mono: "Geist Mono", ui-monospace, monospace; --display: "Bricolage Grotesque", var(--sans);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { background: var(--bg); color: var(--ink); scroll-behavior: smooth; }
+  body { font-family: var(--sans); font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; font-feature-settings: "tnum"; }
+  a { color: inherit; text-decoration: none; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+  code { font-family: var(--mono); font-size: .88em; background: rgba(0,0,0,.06); padding: 1px 6px; border-radius: 4px; }
+  img { display: block; max-width: 100%; }
+
+  .c { width: min(1200px, 100% - 48px); margin-inline: auto; }
+  h1, h2 { font-family: var(--display); font-weight: 500; letter-spacing: -0.03em; line-height: 1; font-variation-settings: "opsz" 96; text-wrap: balance; }
+  h1 { font-size: clamp(44px, 5.6vw, 76px); letter-spacing: -0.035em; line-height: .98; }
+  h2 { font-size: clamp(34px, 3.6vw, 48px); margin-bottom: 24px; max-width: 20ch; }
+  h3 { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+  p { max-width: 60ch; color: var(--ink-2); }
+  p + p { margin-top: 16px; }
+  p b { color: var(--ink); font-weight: 500; }
+  section { padding: 96px 0; }
+  section + section { border-top: 1px solid var(--line); }
+  .btn { display: inline-flex; align-items: center; background: var(--ink); color: var(--bg); font-weight: 500; font-size: 16px; padding: 14px 24px; border-radius: 8px; }
+  .btn:hover { background: #2C2823; }
+  .link { color: var(--accent); }
+  .link:hover { text-decoration: underline; text-underline-offset: 4px; }
+  .shot { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 20px 50px rgba(0,0,0,.08); background: #111; }
+
+  /* nav */
+  .nav { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 17px; }
+  .brand svg { width: 22px; height: 22px; }
+  .nav-links { display: flex; gap: 32px; font-size: 15px; color: var(--ink-2); }
+  .nav-links a:hover { color: var(--ink); }
+
+  /* hero */
+  .hero { padding: 88px 0 0; }
+  .hero-top { display: grid; grid-template-columns: 7fr 5fr; gap: 64px; align-items: end; margin-bottom: 56px; }
+  .hero .lede { font-size: 19px; max-width: 42ch; margin-bottom: 32px; }
+  .cta { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+  .cta .meta { font-size: 14px; color: var(--ink-3); }
+  .cta .src { display: block; width: 100%; margin-top: 4px; font-size: 15px; }
+  .hero .shot img { width: 100%; }
+  .hero .cap { font-size: 13px; color: var(--ink-3); margin-top: 14px; max-width: 80ch; }
+
+  /* hours */
+  .hours { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: start; }
+  .bars { margin-top: 8px; }
+  .bar { margin-bottom: 28px; }
+  .bar .lab { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 10px; }
+  .bar .lab b { font-family: var(--display); font-size: 40px; letter-spacing: -0.03em; line-height: 1; font-weight: 500; }
+  .bar .lab span { color: var(--ink-3); align-self: end; }
+  .bar .track { height: 12px; background: var(--bg-3); border-radius: 3px; overflow: hidden; display: flex; }
+  .bar .track i { display: block; height: 100%; background: var(--ink); }
+  .bar .track i.over { background: var(--accent); }
+  .legend { display: flex; gap: 20px; font-size: 13px; color: var(--ink-3); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .hours .note { font-size: 13px; color: var(--ink-3); margin-top: 20px; }
+
+  /* roles */
+  .three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 48px; margin-top: 56px; padding-top: 32px; border-top: 1px solid var(--line); }
+  .three p { font-size: 15px; }
+
+  /* split with image */
+  .split { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: start; }
+  .split.rev { grid-template-columns: 7fr 5fr; }
+  .split .shot img { width: 100%; }
+
+  /* store list */
+  .store { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px 48px; margin-top: 48px; padding-top: 32px; border-top: 1px solid var(--line); }
+  .store div { padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 15px; color: var(--ink-2); }
+  .store div b { display: block; color: var(--ink); font-weight: 500; }
+
+  /* network */
+  .net { margin-top: 32px; }
+  .net li { list-style: none; padding: 16px 0; border-top: 1px solid var(--line); font-size: 15px; color: var(--ink-2); max-width: 60ch; }
+  .net li b { color: var(--ink); font-weight: 500; }
+
+  /* small sections */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; }
+  .two h2 { font-size: clamp(28px, 2.8vw, 36px); }
+
+  /* download */
+  .dl { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: start; }
+  .dl-list a { display: flex; align-items: baseline; justify-content: space-between; padding: 20px 0; border-top: 1px solid var(--line); font-size: 18px; font-weight: 500; }
+  .dl-list a:last-child { border-bottom: 1px solid var(--line); }
+  .dl-list a:hover { color: var(--accent); }
+  .dl-list span { font-family: var(--mono); font-size: 13px; color: var(--ink-3); font-weight: 400; }
+  .dl .fine { font-size: 14px; color: var(--ink-3); margin-top: 20px; max-width: none; }
+
+  footer { padding: 40px 0 64px; border-top: 1px solid var(--line); display: flex; gap: 28px; font-size: 14px; color: var(--ink-3); flex-wrap: wrap; }
+  footer a:hover { color: var(--ink); }
+  footer .brand { margin-right: auto; font-size: 15px; }
+
+  @media (max-width: 900px) {
+    section { padding: 64px 0; }
+    .hero-top, .hours, .split, .split.rev, .two, .dl { grid-template-columns: 1fr; gap: 40px; }
+    .three, .store { grid-template-columns: 1fr; }
+  }
+
+  .ic { width: 20px; height: 20px; stroke-width: 1.5; color: var(--ink-2); }
+  .three h3 { display: flex; align-items: center; gap: 10px; }
+  .store div b { display: flex; align-items: center; gap: 8px; }
+  .store .ic { width: 16px; height: 16px; color: var(--ink-3); }
+
+  /* agent definition */
+  .roles { display: grid; grid-template-columns: 5fr 7fr; gap: 64px; align-items: start; }
+  .def { background: #161616; color: #D6D3CD; border-radius: 10px; padding: 24px 28px; font-family: var(--mono); font-size: 13px; line-height: 1.7; box-shadow: 0 20px 50px rgba(0,0,0,.10); overflow-x: auto; }
+  .def .k { color: #A9A6A0; } .def .c { color: #6F6C67; } .def .s { color: #ECEAE6; }
+  .def .a { color: #E8532A; }
+
+  /* mesh diagram */
+  .mesh { width: 100%; height: auto; }
+  .mesh text { font-family: var(--sans); font-size: 13px; fill: var(--ink-2); }
+  .mesh .m { font-family: var(--mono); font-size: 11px; fill: var(--ink-3); }
+  .mesh .box { fill: var(--bg-2); stroke: var(--line-strong); }
+  .mesh .l { stroke: var(--ink-3); stroke-width: 1.2; fill: none; }
+  .mesh .d { stroke: var(--ink-3); stroke-width: 1.2; fill: none; stroke-dasharray: 3 4; }
+  @media (max-width: 900px) { .roles { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <mask id="mk0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M127.71 65 L178.81 94.5 L178.81 153.5 L127.71 183 L76.62 153.5 L76.62 94.5 Z" fill="#000"/><path d="M100 17 L151.1 46.5 L151.1 105.5 L100 135 L48.9 105.5 L48.9 46.5 Z" fill="#000"/></mask>
+  <mask id="mk1" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200"><rect width="200" height="200" fill="#fff"/><path d="M100 17 L151.1 46.5 L151.1 105.5 L100 135 L48.9 105.5 L48.9 46.5 Z" fill="#000"/></mask>
+  <g id="mark"><path d="M72.29 68 L120.78 96 L120.78 152 L72.29 180 L23.79 152 L23.79 96 Z" fill="#8C8780" mask="url(#mk0)"/><path d="M127.71 68 L176.21 96 L176.21 152 L127.71 180 L79.22 152 L79.22 96 Z" fill="#D6431C" mask="url(#mk1)"/><path d="M100 20 L148.5 48 L148.5 104 L100 132 L51.5 104 L51.5 48 Z" fill="currentColor"/></g>
+</defs></svg>
+
+<header class="c">
+  <nav class="nav" aria-label="Main">
+    <a class="brand" href="/"><svg viewBox="0 0 200 200"><use href="#mark"/></svg>ADI</a>
+    <div class="nav-links"><a href="https://github.com/adi-family/mono">Source</a><a href="#download">Download</a></div>
+  </nav>
+</header>
+
+<main class="c">
+
+  <section class="hero">
+    <div class="hero-top">
+      <div>
+        <h1>Agents that run on your machine and remember the work.</h1>
+      </div>
+      <div>
+        <p class="lede">ADI runs AI agents on your own computer. You define each one — a model, a prompt, the tools it may use — and it keeps its memory between conversations. Close the tab and it still knows what it knew.</p>
+        <div class="cta">
+          <a class="btn" href="#download">Download ADI</a>
+          <span class="meta">Free. macOS, Linux and Windows. No account.</span>
+          <a class="src link" href="https://github.com/adi-family/mono">Read the source</a>
+        </div>
+      </div>
+    </div>
+    <div class="shot"><img src="https://withadi.dev/artefacts/panel-chat.webp" alt="The ADI control panel: a rail of twelve conversations across six agents, an open conversation in which one agent lists the seven open tasks and names which agent to hand each one to, and a panel beside it accounting for the run — model, tool calls, tokens and spend." width="2400" height="1400"></div>
+    <p class="cap">One agent reading the task tree across six projects and saying who should pick up what. Every run is accounted for on the right: model, tool calls, tokens, spend.</p>
+  </section>
+
+  <section>
+    <div class="hours">
+      <div>
+        <h2>You've been the whole company long enough.</h2>
+        <p>Sleep, the day job, the commute, the house, the people in it — plus the hours founders say they put into their own thing. The month asks for 843 hours. It has 730.5.</p>
+        <p>Sleep and the job don't move. Neither do the people at home. But one part of that column is work you'd have hired for: the support email, the outreach, the follow-ups nobody sent. You do it because hiring starts at a salary. The overdraft comes out of the right-hand column.</p>
+      </div>
+      <div class="bars">
+        <div class="bar">
+          <div class="lab"><b>730.5</b><span>hours in the month</span></div>
+          <div class="track"><i style="width:100%"></i></div>
+        </div>
+        <div class="bar">
+          <div class="lab"><b>843</b><span>hours asked of it</span></div>
+          <div class="track"><i style="width:86.7%"></i><i class="over" style="width:13.3%"></i></div>
+        </div>
+        <div class="legend"><span><i style="background:var(--ink)"></i>what you must</span><span><i style="background:var(--accent)"></i>what you want</span></div>
+        <p class="note">ATUS 2025 + self-reported founder hours · profile: employed, building at night</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="roles">
+      <div>
+        <h2>Hand off the roles, not the tasks.</h2>
+        <p>An agent in ADI isn't a chat window. It's a definition you keep: a model, a prompt, the exact tools it may run, the secrets it may use, and a memory of its own.</p>
+        <p>You don't build any of that by hand, and you don't learn the platform to get it. ADI comes with an agent whose job is ADI: you ask, and it writes the tool, files the project, puts the service up.</p>
+      </div>
+      <pre class="def"><span class="c"># agents/support-agent/agent.yaml — the whole of it</span>
+<span class="k">name:</span>     <span class="s">support-agent</span>
+<span class="k">backend:</span>  claude-sdk
+<span class="k">model:</span>    opus
+<span class="k">prompt:</span>   <span class="s">./prompt.md</span>
+<span class="k">tools:</span>
+  - inbox-read
+  - inbox-reply
+  - <span class="a">refund-lookup</span>   <span class="c"># it wrote this one itself, the second time it needed it</span>
+<span class="k">secrets:</span>  [HELP_SCOUT_TOKEN]
+<span class="k">memory:</span>   own
+<span class="k">triggers:</span>
+  - <span class="k">on:</span> webhook:helpscout.new-ticket</pre>
+    </div>
+    <div class="three">
+      <div><h3><i data-lucide="brain" class="ic"></i>It keeps its own memory</h3><p>What this run worked out, the next one starts from. Searched by meaning, not keywords.</p></div>
+      <div><h3><i data-lucide="wrench" class="ic"></i>It makes its own tools</h3><p>The second time an agent needs the same thing, it writes itself a CLI for it — or you ask for one. Each gets the tools you ticked, not the ones you didn't.</p></div>
+      <div><h3><i data-lucide="moon" class="ic"></i>It doesn't stop when you close the tab</h3><p>Triggers fire on events. Tasks outlive the run that made them.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="split">
+      <div>
+        <h2>Then close the laptop.</h2>
+        <p>The same store runs headless on a Linux box, and keeps running after you log out. No open port, no ssh — it dials out to pair.</p>
+        <p>Then it doesn't need you. A service stays up; a webhook or an event starts an agent with the prompt you wrote for exactly that alert. What it works out is in the task tree when you get back.</p>
+        <p>Every machine you pair reaches the others, authorised by key, exposing only the ports you named. Your iPhone too — any dashboard, on any of them. That app is in review and not downloadable yet.</p>
+      </div>
+      <svg class="mesh" viewBox="0 0 640 300" aria-label="A laptop, a Linux box and a phone paired over a relay; each reaches only the ports it was granted">
+        <rect class="box" x="24" y="110" width="150" height="80" rx="8"/>
+        <text x="99" y="146" text-anchor="middle">Your laptop</text>
+        <text class="m" x="99" y="166" text-anchor="middle">app.adi · closes at night</text>
+
+        <rect class="box" x="466" y="110" width="150" height="80" rx="8"/>
+        <text x="541" y="146" text-anchor="middle">Linux box</text>
+        <text class="m" x="541" y="166" text-anchor="middle">headless · same store · stays up</text>
+
+        <rect class="box" x="245" y="222" width="150" height="60" rx="8"/>
+        <text x="320" y="248" text-anchor="middle">Your phone</text>
+        <text class="m" x="320" y="268" text-anchor="middle">any dashboard, on any of them</text>
+
+        <circle cx="320" cy="60" r="22" class="box"/>
+        <text class="m" x="320" y="64" text-anchor="middle">relay</text>
+        <text class="m" x="320" y="20" text-anchor="middle">iroh · or name your own</text>
+
+        <path class="d" d="M174 140 C 230 140, 260 80, 298 66"/>
+        <path class="d" d="M466 140 C 410 140, 380 80, 342 66"/>
+        <path class="l" d="M174 160 L 466 160"/>
+        <text class="m" x="320" y="152" text-anchor="middle">direct, authorised by key</text>
+        <path class="l" d="M245 252 L 174 175"/>
+        <path class="l" d="M395 252 L 466 175"/>
+        <text class="m" x="200" y="222" text-anchor="end">http:app</text>
+        <text class="m" x="440" y="222">http:app, http:bugbounty</text>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>One store. One control panel.</h2>
+    <p>Everything ADI runs lives in one directory, browsable and editable at <code>app.adi</code> on your own machine — a name your own DNS answers, which installs as an app if you'd rather it were one.</p>
+    <div class="shot" style="margin-top:40px"><img src="https://withadi.dev/artefacts/panel-services.webp" alt="One project's Services panel: an api service running from a script, and a db service declared as a postgres container, stopped, with a Start button." width="1600" height="1000"></div>
+    <div class="store">
+      <div><b><i data-lucide="folder" class="ic"></i>Projects</b>with the services, secrets and database that belong to them.</div>
+      <div><b><i data-lucide="bot" class="ic"></i>Agents</b>a model, a prompt, scoped tools, a memory of their own.</div>
+      <div><b><i data-lucide="wrench" class="ic"></i>Tools</b>small CLIs an agent writes when it needs one, or when you ask.</div>
+      <div><b><i data-lucide="book-open" class="ic"></i>Knowledge</b>notes searched by meaning.</div>
+      <div><b><i data-lucide="code" class="ic"></i>Code index</b>your source, by meaning, name or path.</div>
+      <div><b><i data-lucide="list-tree" class="ic"></i>Tasks</b>one tree everything writes to.</div>
+      <div><b><i data-lucide="zap" class="ic"></i>Triggers</b>a webhook, an event, or a process, running your code.</div>
+      <div><b><i data-lucide="server" class="ic"></i>Services</b>script or container, supervised, on its own <code>name.adi</code>.</div>
+      <div><b><i data-lucide="layout-dashboard" class="ic"></i>Dashboards</b>loose <code>.ts</code> files that hot-reload as you edit.</div>
+      <div><b><i data-lucide="key-round" class="ic"></i>Secrets</b>encrypted at rest, injected into a run, never shown by a listing.</div>
+      <div><b><i data-lucide="database" class="ic"></i>Database</b>one SQLite store all of them share.</div>
+      <div><b><i data-lucide="network" class="ic"></i>Mesh</b>pair another machine and grant it exactly what it may reach.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="split rev">
+      <div class="shot"><img src="https://withadi.dev/artefacts/panel-hive-yaml.webp" alt="The panel's own file browser with projects/api/.adi/hive.yaml open and editable — the service, its host, its runner and the port it leases, in plain YAML." width="1600" height="1000"></div>
+      <div>
+        <h2>Part of your machine, not a tab in someone's cloud.</h2>
+        <p>There is no account to create. Your projects, your database, your secrets and your agents' memory sit in one directory on your own disk, under your own backups. Pull the network and the store is still yours.</p>
+        <p>You bring your own model account — that call goes to whichever provider you already pay for. A few other things reach the network, and they're named right here. None of them reports you: there is no telemetry or product-analytics SDK anywhere in the source.</p>
+        <ul class="net">
+          <li><b>Your model provider</b> — inference goes to the account you already pay for.</li>
+          <li><b>The update check</b> — one static file from GitHub Releases, at login and every six hours. <code>adi-mono update disable</code> stops it.</li>
+          <li><b>The mesh relay</b>, if you pair two machines over the internet — iroh's public relays by default; name your own in <code>mesh.toml</code>.</li>
+          <li><b>Signing in with Google or GitHub</b> — a router we run trades the sign-in for your token and hands it into your own secrets store. No database, no session, no ADI account.</li>
+          <li><b>The embedding model</b> — the weights download once, from Hugging Face, then run here.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="two">
+      <div>
+        <h2>What it isn't.</h2>
+        <p>ADI is early. It's built and used every day by one person, and that person wrote it. There are no logos on this page and no case studies, because there is nothing yet that would be true.</p>
+        <p>It doesn't ship your product while you sleep. There's no seat count, no licence key, and nothing that asks permission to run on hardware you own.</p>
+      </div>
+      <div>
+        <h2>Free for you. Licensed past $1M or ten people.</h2>
+        <p><b>ADI is free for you.</b> Using it for yourself — your own projects, learning, anything that isn't commercial — is free for anyone. Using it for a business is free too, as long as that business is under $1M a year and under ten people.</p>
+        <p>Past those numbers, a company needs a commercial licence from us. The source is public: read it, build it, change it for your own use. The licence is proprietary and source-available, and it is short. <a class="link" href="https://github.com/adi-family/mono/blob/main/LICENSE">Read the licence</a></p>
+      </div>
+    </div>
+  </section>
+
+  <section id="download">
+    <div class="dl">
+      <div>
+        <h2>Get the hours back.</h2>
+        <p>It runs on your own machine, so this is the whole of it: one file, and no account to create before or after.</p>
+      </div>
+      <div>
+        <div class="dl-list">
+          <a href="https://github.com/adi-family/mono/releases/latest/download/ADI.dmg">Download for macOS <span>.dmg</span></a>
+          <a href="https://github.com/adi-family/mono/releases/latest/download/adi-linux-x64.tar.gz">Download for Linux <span>x64 · .tar.gz</span></a>
+          <a href="https://github.com/adi-family/mono/releases/latest/download/ADI-Setup-x64.exe">Download for Windows <span>x64 · .exe</span></a>
+        </div>
+        <p class="fine">Every build, its checksums and its release notes are on <a class="link" href="https://github.com/adi-family/mono/releases">the releases page</a>. ADI checks for updates itself once it's installed — <code>adi-mono update disable</code> stops that.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <a class="brand" href="/"><svg viewBox="0 0 200 200" style="width:18px;height:18px"><use href="#mark"/></svg>ADI</a>
+    <a href="#download">Download</a>
+    <a href="https://github.com/adi-family/mono">Source</a>
+    <a href="https://github.com/adi-family/mono/blob/main/LICENSE">Licence</a>
+    <a href="https://github.com/adi-family/mono/blob/main/CHANGELOG.md">Changelog</a>
+    <a href="https://withadi.dev/security">Security</a>
+    <a href="https://the-ihor.com">Contact</a>
+  </footer>
+
+</main>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>lucide.createIcons();</script>
+</body>
+</html>

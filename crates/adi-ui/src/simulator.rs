@@ -196,11 +196,11 @@ pub fn Simulator(
         )>
             <div class="flex min-w-0 flex-col gap-4">
                 <Panel
-                    title="what the model sees"
-                    flush=true
+                    title="What the model sees"
                     actions=move || view! {
-                        <span class="font-mono text-caps text-fainter">
-                            {move || format!("{} tok · {}", prompt.get().len(), encoding.get())}
+                        <span class="text-mini text-ink-3">
+                            {move || format!("{} tok · ", prompt.get().len())}
+                            <span class="font-mono">{move || encoding.get()}</span>
                         </span>
                         <Button
                             size=ButtonSize::Small
@@ -211,25 +211,22 @@ pub fn Simulator(
                             }
                             on:click=move |_| as_tokens.update(|t| *t = !*t)
                         >
-                            "tokens"
+                            "Tokens"
                         </Button>
                     }
                 >
-                    <div class="px-4 pt-3 text-mini text-meta">
+                    <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                         "Everything below is one document to the model: its instructions, the \
                          tools it was declared, and every turn so far. Select any of it to flag \
                          it."
-                    </div>
-                    <FlagMark
-                        on_flag=on_flag.unwrap_or_else(|| Callback::new(|_: String| ()))
-                        class="p-4"
-                    >
+                    </p>
+                    <FlagMark on_flag=on_flag.unwrap_or_else(|| Callback::new(|_: String| ()))>
                         {move || if as_tokens.get() {
                             view! {
                                 <TokenStream
                                     tokens=prompt
-                                    class="max-h-[32rem] overflow-auto rounded-sm border \
-                                           border-edge bg-panel-alt p-3"
+                                    class="max-h-[32rem] overflow-auto rounded-lg border \
+                                           border-line bg-raise p-3"
                                 />
                             }
                             .into_any()
@@ -237,8 +234,8 @@ pub fn Simulator(
                             view! {
                                 <PromptText
                                     tokens=prompt
-                                    class="max-h-[32rem] overflow-auto rounded-sm border \
-                                           border-edge bg-panel-alt p-3"
+                                    class="max-h-[32rem] overflow-auto rounded-lg border \
+                                           border-line bg-raise p-3"
                                 />
                             }
                             .into_any()
@@ -246,14 +243,14 @@ pub fn Simulator(
                     </FlagMark>
                 </Panel>
 
-                <Panel title="flagged" flush=true>
+                <Panel title="Flagged">
                     // Two branches rather than forwarding the `Option`: the × is drawn only
                     // where a handler exists, and a prop that takes one cannot be handed a
                     // maybe.
                     {match on_unflag {
-                        Some(cb) => view! { <FlagList flags=flags on_drop=cb class="p-4"/> }
+                        Some(cb) => view! { <FlagList flags=flags on_drop=cb/> }
                             .into_any(),
-                        None => view! { <FlagList flags=flags class="p-4"/> }.into_any(),
+                        None => view! { <FlagList flags=flags/> }.into_any(),
                     }}
                 </Panel>
             </div>
@@ -262,10 +259,9 @@ pub fn Simulator(
                 {move || stop.get().map(|stop| view! { <StopLine stop=stop/> })}
 
                 <Panel
-                    title="this turn"
-                    flush=true
+                    title="This turn"
                     actions=move || view! {
-                        <Badge tone=BadgeTone::Neutral mono=true>
+                        <Badge tone=BadgeTone::Neutral>
                             {move || {
                                 let n = blocks.get().len();
                                 if n == 1 { "1 block".to_string() } else { format!("{n} blocks") }
@@ -275,18 +271,21 @@ pub fn Simulator(
                 >
                     {match on_drop_block {
                         Some(cb) => view! {
-                            <TurnBlocks blocks=blocks on_drop=cb class="p-4"/>
+                            <TurnBlocks blocks=blocks on_drop=cb/>
                         }
                         .into_any(),
-                        None => view! { <TurnBlocks blocks=blocks class="p-4"/> }.into_any(),
+                        None => view! { <TurnBlocks blocks=blocks/> }.into_any(),
                     }}
 
-                    <div class="flex items-center gap-1 border-t border-divider px-4 pt-3">
-                        <TabButton tab=tab mine=Tab::Prose>"say something"</TabButton>
-                        <TabButton tab=tab mine=Tab::Call>"call a tool"</TabButton>
+                    // The two composers, as a segmented control (§6): the chosen one is a
+                    // tone change and a weight, never an outline.
+                    <div class="mt-4 inline-grid grid-flow-col gap-0.5 rounded-md border \
+                                border-line-strong bg-raise p-[3px]">
+                        <TabButton tab=tab mine=Tab::Prose>"Say something"</TabButton>
+                        <TabButton tab=tab mine=Tab::Call>"Call a tool"</TabButton>
                     </div>
 
-                    <div class="p-4 pt-3">
+                    <div class="pt-3">
                         <Show
                             when=move || tab.get() == Tab::Prose
                             fallback=move || view! {
@@ -315,18 +314,17 @@ pub fn Simulator(
                                     })
                                     on:click=move |_| add_text()
                                 >
-                                    "add block"
+                                    "Add block"
                                 </Button>
                             </div>
                         </Show>
                     </div>
 
-                    <div class="flex items-center gap-3 border-t border-divider bg-panel-alt \
-                                px-4 py-3">
-                        <span class="min-w-0 flex-1 text-mini text-meta">
+                    <div class="mt-4 flex items-center gap-3 border-t border-line pt-3">
+                        <span class="min-w-0 flex-1 text-small text-ink-3">
                             {move || {
                                 let outcome = outcome.get();
-                                format!("ends as {} — {}", outcome.wire(), outcome.says())
+                                format!("Ends as {} — {}", outcome.wire(), outcome.says())
                             }}
                         </span>
                         <Button
@@ -335,14 +333,14 @@ pub fn Simulator(
                             disabled=Signal::derive(move || busy.get() || blocks.get().is_empty())
                             on:click=move |_| on_end_turn.run(())
                         >
-                            "end turn"
+                            "End turn"
                         </Button>
                     </div>
                 </Panel>
 
-                <Panel title="as yourself" flush=true>
-                    <div class="flex flex-col gap-2 p-4">
-                        <p class="m-0 text-mini text-meta">
+                <Panel title="As yourself">
+                    <div class="flex flex-col gap-2">
+                        <p class="m-0 text-small text-ink-3">
                             {move || if yielded.get() {
                                 "The run yielded. Answer as the person the agent is working for."
                             } else {
@@ -366,17 +364,15 @@ pub fn Simulator(
     }
 }
 
-/// One of the two composer tabs.
+/// One item of the composer's segmented control.
 #[component]
 fn TabButton(tab: RwSignal<Tab>, mine: Tab, children: Children) -> impl IntoView {
     // Both halves spelled out per branch — Tailwind reads this file as text and never runs it.
     let look = move || {
         if tab.get() == mine {
-            "caps cursor-pointer rounded-sm border border-accent-soft-edge bg-accent-soft \
-             px-2 py-1 text-accent"
+            "cursor-pointer rounded-sm bg-active px-3 py-1.5 text-row font-medium text-ink"
         } else {
-            "caps cursor-pointer rounded-sm border border-transparent px-2 py-1 text-faint \
-             hover:text-secondary"
+            "cursor-pointer rounded-sm px-3 py-1.5 text-row text-ink-2 hover:text-ink"
         }
     };
     view! {
@@ -416,7 +412,7 @@ fn CallTab(
                 {move || current.get().map(|tool| {
                     let name = tool.name.clone();
                     view! {
-                        <p class="m-0 text-mini leading-relaxed text-meta">{tool.description}</p>
+                        <p class="m-0 text-small leading-normal text-ink-3">{tool.description}</p>
                         <ToolForm params=tool.params/>
                         <Button
                             size=ButtonSize::Small
@@ -424,7 +420,7 @@ fn CallTab(
                             disabled=busy
                             on:click=move |_| on_call.run(name.clone())
                         >
-                            "add call"
+                            "Add call"
                         </Button>
                     }
                 })}

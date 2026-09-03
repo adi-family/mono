@@ -20,7 +20,7 @@
 //!         {rows.into_iter().map(|r| view! {
 //!             <Row state=table
 //!                 cell=move |col| match col {
-//!                     "Port" => view! { <span class="text-accent">{r.port}</span> }.into_any(),
+//!                     "Port" => view! { <span class="mono">{r.port}</span> }.into_any(),
 //!                     _ => view! { {r.service.clone()} }.into_any(),
 //!                 }
 //!                 actions=move || view! { <Button size=ButtonSize::Small>"Free"</Button> }.into_any()
@@ -54,6 +54,7 @@
 
 use leptos::prelude::*;
 
+use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
 /// How a [`TableState`] is ordered: which column, and which way.
@@ -466,6 +467,10 @@ fn storage() -> Option<web_sys::Storage> {
 /// The table: a scroll box, a click-to-sort header row, and a gear that opens the column
 /// menu.
 ///
+/// No card around it (§6). The header is 12px `--ink-3` sentence case over a strong hairline,
+/// the rows are ruled by hairlines, and the first and last cells sit flush with the section's
+/// edges so the table shares the page's left edge with its title.
+///
 /// It owns the chrome and the state, never the data — `children` is the caller's rows, which
 /// are built with [`Row`] so that hiding and reordering reach them.
 ///
@@ -473,7 +478,7 @@ fn storage() -> Option<web_sys::Storage> {
 /// reordered and may not be hidden, so the menu would open onto nothing but disabled controls.
 ///
 /// ```ignore
-/// <Panel title="Ports" flush=true>
+/// <Panel title="Ports">
 ///     <Table state=table>{rows}</Table>
 /// </Panel>
 /// ```
@@ -492,7 +497,7 @@ pub fn Table(
         <div class=merge("relative", class)>
             <Show when=has_gear>{move || column_menu(state)}</Show>
             <div class="overflow-x-auto">
-                <table class="w-full border-collapse">
+                <table class="w-full border-collapse text-row">
                     <thead>
                         <tr>
                             {move || {
@@ -510,6 +515,7 @@ pub fn Table(
                                         header_cell(
                                             state,
                                             h,
+                                            i == 0,
                                             gear && !layout.has_actions() && i == last,
                                         )
                                     })
@@ -518,9 +524,9 @@ pub fn Table(
                                     cells.push(
                                         view! {
                                             <th class=if gear {
-                                                "w-px bg-card pr-8"
+                                                "w-px border-b border-line-strong pr-8"
                                             } else {
-                                                "w-px bg-card"
+                                                "w-px border-b border-line-strong"
                                             }></th>
                                         }
                                             .into_any(),
@@ -540,29 +546,37 @@ pub fn Table(
 /// One click-to-sort header. The button fills the cell — hence the cell's own padding moves
 /// onto it — so the whole header is the target, and the keyboard reaches it without a custom
 /// handler.
-fn header_cell(state: TableState, header: &'static str, pad_for_gear: bool) -> AnyView {
+fn header_cell(
+    state: TableState,
+    header: &'static str,
+    first: bool,
+    pad_for_gear: bool,
+) -> AnyView {
     let sort = state.sort;
     let active = move || sort.get().col == header;
+    let cell = match (first, pad_for_gear) {
+        (true, _) => "border-b border-line-strong p-0 text-left align-middle whitespace-nowrap",
+        (false, true) => {
+            "border-b border-line-strong p-0 pr-8 text-left align-middle whitespace-nowrap"
+        }
+        (false, false) => {
+            "border-b border-line-strong p-0 text-left align-middle whitespace-nowrap"
+        }
+    };
+    // The first header keeps the page's left edge.
+    let pad = if first { "pr-2.5 pl-0" } else { "px-2.5" };
 
     view! {
-        <th
-            class=if pad_for_gear {
-                "bg-card p-0 pr-8 text-left align-middle whitespace-nowrap"
-            } else {
-                "bg-card p-0 text-left align-middle whitespace-nowrap"
-            }
-            aria-sort=move || sort.get().aria(header)
-        >
+        <th class=cell aria-sort=move || sort.get().aria(header)>
             <button
-                // The active column stays lit while the pointer is on a neighbour, so the
-                // hover colour is only in the inactive arm.
+                // The sorted column is one step up in ink; the others reach it on hover.
                 class=move || {
                     if active() {
-                        "caps group flex w-full cursor-pointer items-center gap-1 px-3.5 \
-                         py-[7px] text-left text-accent"
+                        format!("group flex w-full cursor-pointer items-center gap-1 {pad} py-2 \
+                                 text-left text-label font-medium text-ink-2")
                     } else {
-                        "caps group flex w-full cursor-pointer items-center gap-1 px-3.5 \
-                         py-[7px] text-left text-faint hover:text-ink"
+                        format!("group flex w-full cursor-pointer items-center gap-1 {pad} py-2 \
+                                 text-left text-label font-medium text-ink-3 hover:text-ink-2")
                     }
                 }
                 type="button"
@@ -570,12 +584,16 @@ fn header_cell(state: TableState, header: &'static str, pad_for_gear: bool) -> A
                 on:click=move |_| state.set_sort(sort.get_untracked().toggled(header))
             >
                 {header}
-                // The caret always occupies its space and only its ink changes, so switching
+                // The arrow always occupies its space and only its ink changes, so switching
                 // the sorted column never reflows the header row.
                 <span class=move || {
-                    if active() { "opacity-100" } else { "opacity-0 group-hover:opacity-40" }
+                    if active() { "opacity-100" } else { "opacity-0 group-hover:opacity-50" }
                 }>
-                    {move || if active() && sort.get().desc { "\u{2193}" } else { "\u{2191}" }}
+                    {move || if active() && sort.get().desc {
+                        view! { <Icon icon=Lucide::ArrowDown size=IconSize::Sm/> }
+                    } else {
+                        view! { <Icon icon=Lucide::ArrowUp size=IconSize::Sm/> }
+                    }}
                 </span>
             </button>
         </th>
@@ -589,6 +607,10 @@ fn header_cell(state: TableState, header: &'static str, pad_for_gear: bool) -> A
 /// `cell` is asked for a header by name rather than handed an index, which is what keeps a row
 /// builder in step with a column order the user has rearranged. A header the builder does not
 /// recognise is its own business — return an empty view for it.
+///
+/// Identifier cells are the caller's to set in mono `--ink-2`; a value that repeats in every
+/// row is the caller's to dim (§6). The row only draws the hairline and the hover.
+///
 /// # Why the data cells are reactive and the action cell is not
 ///
 /// Only the *data* cells depend on the layout, so only they are rebuilt when it changes. The
@@ -600,7 +622,8 @@ pub fn Row<F>(
     state: TableState,
     /// This row's content under one header.
     cell: F,
-    /// The row's controls, for a table whose headers end in a blank.
+    /// The row's controls, for a table whose headers end in a blank. A ⋯ menu, not a word
+    /// per row (§8).
     #[prop(optional, into)]
     actions: Option<AnyView>,
     #[prop(optional, into)] class: String,
@@ -611,7 +634,7 @@ where
     F: Fn(&'static str) -> AnyView + Send + 'static,
 {
     view! {
-        <tr class=merge("hover:bg-bubble", class)>
+        <tr class=merge("hover:bg-hover", class)>
             {move || {
                 state
                     .layout
@@ -620,8 +643,8 @@ where
                     .into_iter()
                     .map(|col| {
                         view! {
-                            <td class="border-t border-divider px-3.5 py-[7px] text-row \
-                                       whitespace-nowrap">
+                            <td class="border-b border-line px-2.5 py-[9px] align-top \
+                                       text-row whitespace-nowrap first:pl-0">
                                 {cell(col)}
                             </td>
                         }
@@ -633,8 +656,8 @@ where
             {actions
                 .map(|a| {
                     view! {
-                        <td class="w-px border-t border-divider px-3.5 py-[7px] text-right \
-                                   whitespace-nowrap">
+                        <td class="w-px border-b border-line py-[7px] pl-2.5 text-right \
+                                   align-top whitespace-nowrap">
                             {a}
                         </td>
                     }
@@ -650,7 +673,7 @@ pub fn EmptyRow(state: TableState, children: Children) -> impl IntoView {
     view! {
         <tr>
             <td
-                class="border-t border-divider px-3.5 py-6 text-center text-mini text-meta"
+                class="border-b border-line py-6 text-small text-ink-3"
                 colspan=move || state.layout.get().span()
             >
                 {children()}
@@ -663,7 +686,7 @@ pub fn EmptyRow(state: TableState, children: Children) -> impl IntoView {
 /// move buttons, plus Reset.
 ///
 /// Buttons rather than drag-and-drop — the list is short, and this works from the keyboard
-/// without a custom drop target.
+/// without a custom drop target. The panel is a menu: raised, a strong hairline, no shadow.
 fn column_menu(state: TableState) -> AnyView {
     let open = state.open;
     let rows = move || {
@@ -677,10 +700,10 @@ fn column_menu(state: TableState) -> AnyView {
                 let (header, shown) = (c.header, c.shown);
                 let locked = layout.is_last_shown(i);
                 view! {
-                    <div class="flex items-center gap-1 px-1.5 py-0.5">
+                    <div class="flex items-center gap-1 pr-1">
                         <button
-                            class="flex flex-1 cursor-pointer items-center gap-2 rounded-sm \
-                                   px-1.5 py-1 text-left text-row text-body hover:bg-bubble \
+                            class="flex flex-1 cursor-pointer items-center gap-2 rounded-md \
+                                   px-2 py-1.5 text-left text-row text-ink hover:bg-hover \
                                    disabled:cursor-default disabled:opacity-50"
                             type="button"
                             role="checkbox"
@@ -696,12 +719,13 @@ fn column_menu(state: TableState) -> AnyView {
                             on:click=move |_| state.edit_layout(|l| l.toggle(i))
                         >
                             <span class=if shown {
-                                "grid size-3.5 place-items-center rounded-sm border \
-                                 border-transparent bg-accent-fill text-[9px] text-on-accent"
+                                "grid size-3.5 place-items-center rounded-sm bg-active text-ink"
                             } else {
                                 "grid size-3.5 place-items-center rounded-sm border \
-                                 border-edge bg-card text-[9px]"
-                            }>{if shown { "\u{2713}" } else { "" }}</span>
+                                 border-line-strong"
+                            }>
+                                {shown.then(|| view! { <Icon icon=Lucide::Check size=IconSize::Sm class="size-3"/> })}
+                            </span>
                             <span>{header}</span>
                         </button>
                         {move_button(state, i, true, i == 0)}
@@ -715,27 +739,15 @@ fn column_menu(state: TableState) -> AnyView {
 
     view! {
         <button
-            class="absolute top-1 right-1.5 z-20 grid size-6 cursor-pointer place-items-center \
-                   rounded-sm text-meta hover:bg-card hover:text-ink"
+            class="absolute top-1 right-0 z-20 grid size-6 cursor-pointer place-items-center \
+                   rounded-md text-ink-3 hover:bg-hover hover:text-ink"
             type="button"
             title="Columns"
             aria-label="Configure columns"
             aria-expanded=move || open.get().to_string()
             on:click=move |_| open.update(|o| *o = !*o)
         >
-            <svg
-                class="size-3.5"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-            >
-                <circle cx="8" cy="8" r="2.25"></circle>
-                <path d="M8 1.5v1.75M8 12.75v1.75M1.5 8h1.75M12.75 8h1.75M3.4 3.4l1.25 1.25M11.35 11.35l1.25 1.25M12.6 3.4l-1.25 1.25M4.65 11.35L3.4 12.6"></path>
-            </svg>
+            <Icon icon=Lucide::Settings2/>
         </button>
         <Show when=move || open.get()>
             // The scrim makes the next click anywhere a dismiss, so it has to be its own
@@ -743,12 +755,13 @@ fn column_menu(state: TableState) -> AnyView {
             <div class="fixed inset-0 z-20" on:click=move |_| open.set(false)></div>
             // Anchored under the gear rather than at the click point: this control sits in a
             // fixed corner, so the panel can too.
-            <div class="island absolute top-7 right-1.5 z-30 min-w-55 bg-card py-1">
-                <div class="flex items-center justify-between gap-2 border-b border-divider \
-                            px-3 py-1.5">
-                    <span class="caps text-faint">"Columns"</span>
+            <div class="absolute top-8 right-0 z-30 min-w-55 rounded-lg border \
+                        border-line-strong bg-raise p-1">
+                <div class="mb-1 flex items-center justify-between gap-2 border-b border-line \
+                            px-2 pt-1.5 pb-2">
+                    <span class="text-label text-ink-3">"Columns"</span>
                     <button
-                        class="cursor-pointer text-row text-accent hover:underline"
+                        class="cursor-pointer text-small text-ink-2 hover:text-ink"
                         type="button"
                         on:click=move |_| state.reset()
                     >
@@ -764,15 +777,11 @@ fn column_menu(state: TableState) -> AnyView {
 
 /// One of the pair of arrows that moves a column in the settings menu.
 fn move_button(state: TableState, col: usize, up: bool, at_end: bool) -> AnyView {
-    let (label, glyph) = if up {
-        ("Move up", "\u{2191}")
-    } else {
-        ("Move down", "\u{2193}")
-    };
+    let label = if up { "Move up" } else { "Move down" };
     view! {
         <button
-            class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-meta \
-                   hover:bg-bubble hover:text-ink disabled:cursor-default disabled:opacity-30 \
+            class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-md text-ink-3 \
+                   hover:bg-hover hover:text-ink disabled:cursor-default disabled:opacity-30 \
                    disabled:hover:bg-transparent"
             type="button"
             title=label
@@ -780,7 +789,11 @@ fn move_button(state: TableState, col: usize, up: bool, at_end: bool) -> AnyView
             prop:disabled=at_end
             on:click=move |_| state.edit_layout(|l| l.shift(col, up))
         >
-            {glyph}
+            {if up {
+                view! { <Icon icon=Lucide::ArrowUp size=IconSize::Sm/> }
+            } else {
+                view! { <Icon icon=Lucide::ArrowDown size=IconSize::Sm/> }
+            }}
         </button>
     }
     .into_any()

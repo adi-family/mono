@@ -7,9 +7,10 @@ use crate::merge;
 
 /// A labelled control.
 ///
-/// Laid out as a grid rather than a stack so the hint can sit *beside* the label while the
-/// control below still spans the full width. The payoff is that a hint is written last, in
-/// the call where it reads naturally, and still lands next to the title.
+/// The label is 13px `--ink-2`, sentence case (§6 form page); help text under it is 13px
+/// `--ink-3`. Laid out as a grid rather than a stack so the hint can sit *beside* the label
+/// while the control below still spans the full width — a hint is written last, in the call
+/// where it reads naturally, and still lands next to the title.
 ///
 /// ```ignore
 /// <Field label="Port" hint="Left blank, the registry picks a free one.">
@@ -33,15 +34,15 @@ pub fn Field(
 ) -> impl IntoView {
     let head = !label.is_empty() || !hint.is_empty();
     let own = if grow {
-        "grid min-w-0 flex-1 basis-60 grid-cols-[auto_minmax(0,1fr)] items-center gap-1"
+        "grid min-w-0 flex-1 basis-60 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-1.5"
     } else {
-        "grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-1"
+        "grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-1.5"
     };
 
     view! {
         <div class=merge(own, class)>
             {head.then(|| view! {
-                <span class="caps col-start-1 row-start-1 text-faint">
+                <span class="col-start-1 row-start-1 text-small text-ink-2">
                     {label}
                 </span>
                 {(!hint.is_empty()).then(|| view! {
@@ -53,31 +54,27 @@ pub fn Field(
     }
 }
 
-/// The `?` bubble and the words under it. Opens on hover *and* on keyboard focus — hence
+/// The `?` and the words under it. Opens on hover *and* on keyboard focus — hence
 /// `tabindex`, without which the explanation would be mouse-only.
 ///
-/// The panel is anchored below and slightly left so it opens into the form's own body
-/// rather than off its top or right edge, and it is hidden with `invisible` rather than
-/// `hidden` so the fade has something to animate.
+/// The bubble is a raised surface with a strong hairline, anchored below and slightly left so
+/// it opens into the form's own body rather than off its top or right edge. Hidden with
+/// `invisible` rather than `hidden` so the opacity has something to transition on.
 #[component]
 fn HintBubble(text: String) -> impl IntoView {
     view! {
         <span
             class="group relative col-start-2 row-start-1 inline-grid size-3.5 cursor-help \
-                   place-items-center justify-self-start rounded-full border border-dim \
-                   text-[9px] font-bold leading-none text-faint transition-colors \
-                   duration-100 hover:border-accent hover:text-accent \
-                   focus-visible:border-accent focus-visible:text-accent \
-                   focus-visible:outline-none"
+                   place-items-center justify-self-start rounded-full text-[11px] leading-none \
+                   text-ink-3 hover:text-ink focus-visible:text-ink focus-visible:outline-none"
             tabindex="0"
             role="note"
         >
             "?"
             <span class="invisible absolute top-[calc(100%+6px)] -left-1.5 z-30 w-max \
-                         max-w-65 rounded-sm border border-edge bg-bar px-2.5 py-1.5 \
-                         text-left font-sans text-mini leading-normal font-normal \
-                         tracking-normal normal-case text-body opacity-0 \
-                         shadow-[var(--shadow)] \
+                         max-w-70 rounded-md border border-line-strong bg-raise px-2.5 py-2 \
+                         text-left font-sans text-small leading-normal font-normal \
+                         text-ink opacity-0 \
                          transition-[opacity,visibility] duration-100 \
                          group-hover:visible group-hover:opacity-100 \
                          group-focus-visible:visible group-focus-visible:opacity-100">

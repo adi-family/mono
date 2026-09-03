@@ -19,7 +19,7 @@
 //! a note whose vectors are out of date is marked, because it is findable by word and not by
 //! meaning until something re-embeds it.
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{EmptyRow, Icon, Lucide, Markdown, Row as TableRow, Table};
 use adi_webapp_api::types::{
     KnowledgeBaseDto, KnowledgeHitDto, KnowledgeNoteDto, NewKnowledgeBase, NewKnowledgeNote,
 };
@@ -28,7 +28,9 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{KnowledgeConsole, State};
-use crate::ui::{Key, TableState, TextField, confirm, row_actions, sort_rows};
+use crate::ui::{
+    Key, TableState, TextField, confirm, menu_item, row_actions, segmented, sort_rows,
+};
 
 /// The bases table on the global page. The trailing blank column holds the row actions.
 pub(crate) const BASE_COLS: &[&str] = &["Base", "Level", "Provider", "Notes", "Embedded", ""];
@@ -141,65 +143,62 @@ fn search_panel(kb: KnowledgeConsole, scope: Scope) -> AnyView {
                 <span class="adi-spacer"></span>
                 // Which model is answering, once one has been loaded. Before that it says so
                 // rather than naming a model that isn't in memory yet.
-                <span class="adi-chip adi-mono" title="the embedding model, once loaded">
-                    {move || kb.state.get().and_then(|s| s.model)
-                        .unwrap_or_else(|| "model not loaded".to_string())}
+                <span class="adi-updated" title="the embedding model, once loaded">
+                    {move || match kb.state.get().and_then(|s| s.model) {
+                        Some(model) => view! { <span class="adi-mono">{model}</span> }.into_any(),
+                        None => "model not loaded".into_any(),
+                    }}
                 </span>
             </div>
-            <div class="adi-form">
-                <div style="display:flex; gap:var(--space-2); align-items:flex-end; flex-wrap:wrap">
-                    // The query box is the page's primary control, so it takes the room:
-                    // `flex:1` with a floor wide enough for a real question, and an input that
-                    // fills its field rather than sitting at the browser's default size.
-                    <div class="adi-field" style="flex:1 1 26rem; min-width:16rem">
-                        <label class="adi-label" for="kb-query">"Question"</label>
-                        <input id="kb-query" class="adi-input" type="search" style="width:100%"
-                            placeholder="how do I bring the control panel back up"
-                            prop:value=move || kb.query.get()
-                            on:input=move |ev| kb.query.set(event_target_value(&ev))
-                            on:keydown=move |ev| if ev.key() == "Enter" { run(); } />
-                    </div>
-                    <div class="adi-field">
-                        <label class="adi-label" for="kb-scope">"In"</label>
-                        <select id="kb-scope" class="adi-input adi-mono"
-                            on:change=move |ev| kb.scope.set(event_target_value(&ev))>
-                            <option value="" selected=move || kb.scope.get().is_empty()>
-                                {move || if scope.project().is_some() {
-                                    "this project's bases"
-                                } else {
-                                    "every base"
-                                }}
-                            </option>
-                            {move || scope.bases(kb).into_iter().map(|b| {
-                                let (value, shown) = (b.id.clone(), b.id.clone());
-                                let selected = kb.scope.get() == b.id;
-                                view! { <option value=value selected=selected>{shown}</option> }
-                            }).collect_view()}
-                        </select>
-                    </div>
-                    <button class="adi-btn adi-btn--primary" disabled=move || kb.busy.get()
-                        on:click=move |_| run()>
-                        {move || if kb.busy.get() { "Searching…" } else { "Search" }}
-                    </button>
+            <div class="adi-kb-search">
+                // The query box is the page's primary control, so it takes the room. Sans: what is
+                // typed here is a question, not a value.
+                <div class="adi-field adi-kb-search__q">
+                    <label class="adi-field__label" for="kb-query">"Question"</label>
+                    <input id="kb-query" class="adi-input adi-input--wide" type="search"
+                        placeholder="How do I bring the control panel back up"
+                        prop:value=move || kb.query.get()
+                        on:input=move |ev| kb.query.set(event_target_value(&ev))
+                        on:keydown=move |ev| if ev.key() == "Enter" { run(); } />
                 </div>
-                {rank_toggle(kb)}
-                {error_view(kb)}
+                <div class="adi-field">
+                    <label class="adi-field__label" for="kb-scope">"In"</label>
+                    <select id="kb-scope" class="adi-input adi-mono"
+                        on:change=move |ev| kb.scope.set(event_target_value(&ev))>
+                        <option value="" selected=move || kb.scope.get().is_empty()>
+                            {move || if scope.project().is_some() {
+                                "this project's bases"
+                            } else {
+                                "every base"
+                            }}
+                        </option>
+                        {move || scope.bases(kb).into_iter().map(|b| {
+                            let (value, shown) = (b.id.clone(), b.id.clone());
+                            let selected = kb.scope.get() == b.id;
+                            view! { <option value=value selected=selected>{shown}</option> }
+                        }).collect_view()}
+                    </select>
+                </div>
+                // The page's main action, in ink: the screen has no live state to give the
+                // accent to.
+                <button class="adi-btn adi-btn--primary" disabled=move || kb.busy.get()
+                    on:click=move |_| run()>
+                    {move || if kb.busy.get() { "Searching…" } else { "Search" }}
+                </button>
             </div>
+            {rank_toggle(kb)}
+            {error_view(kb)}
         </section>
     }
     .into_any()
 }
 
-/// The one switch on this page that changes the answer rather than the view.
+/// The one switch on this page that changes the answer rather than the view: a segmented
+/// control, with the cost of the chosen half said beside it.
 fn rank_toggle(kb: KnowledgeConsole) -> AnyView {
     view! {
-        <div style="display:flex; gap:var(--space-2); align-items:center">
-            <button type="button"
-                class=move || if kb.words.get() { "adi-btn" } else { "adi-btn adi-btn--primary" }
-                on:click=move |_| kb.words.set(false)>"By meaning"</button>
-            <button type="button"
-                class=move || if kb.words.get() { "adi-btn adi-btn--primary" } else { "adi-btn" }
-                on:click=move |_| kb.words.set(true)>"By words"</button>
+        <div class="adi-kb-rank">
+            {segmented("What to rank by", kb.words, "By meaning", "By words")}
             <span class="adi-hint">
                 {move || if kb.words.get() {
                     "full text — instant, and finds only the words you typed"
@@ -217,7 +216,7 @@ fn results_panel(kb: KnowledgeConsole) -> AnyView {
     (move || {
         let results = kb.results.get()?;
         let heading = format!(
-            "{} result(s) for “{}” — {} across {} base(s)",
+            "{} results for “{}” — {} across {} bases",
             results.hits.len(),
             results.query,
             if results.semantic {
@@ -234,12 +233,17 @@ fn results_panel(kb: KnowledgeConsole) -> AnyView {
                     <span class="adi-updated">{heading}</span>
                 </div>
                 {if results.hits.is_empty() {
-                    view! { <p class="adi-hint" style="padding:var(--space-3)">
+                    view! { <p class="adi-empty">
                         "Nothing matched. A base with no embedded notes answers only to “By words” —
                          check the Embedded column below."
                     </p> }.into_any()
                 } else {
-                    results.hits.iter().map(|hit| hit_view(kb, hit)).collect_view().into_any()
+                    view! {
+                        <div class="adi-kb-hits">
+                            {results.hits.iter().map(|hit| hit_view(kb, hit)).collect_view()}
+                        </div>
+                    }
+                    .into_any()
                 }}
             </section>
         })
@@ -247,26 +251,24 @@ fn results_panel(kb: KnowledgeConsole) -> AnyView {
     .into_any()
 }
 
-/// One hit: how well it matched, where it came from, and enough of it to recognise.
+/// One hit: how well it matched, what it is, where it came from, and enough of it to recognise.
 fn hit_view(kb: KnowledgeConsole, hit: &KnowledgeHitDto) -> AnyView {
     let note = hit.note.clone();
     let (base, id) = (note.base.clone(), note.id.clone());
     let score = format!("{:.3}", hit.score);
     view! {
-        <button type="button" class="adi-row-btn" style="width:100%; text-align:left"
+        <button type="button" class="adi-kb-hit"
             on:click=move |_| {
                 let (b, i) = (base.clone(), id.clone());
                 spawn_local(open_note(kb, b, i));
             }>
-            <div style="display:flex; gap:var(--space-2); align-items:baseline; padding:var(--space-2) var(--space-3)">
-                <span class="adi-chip adi-mono" title="similarity">{score}</span>
-                <strong>{note.title.clone()}</strong>
-                <span class="adi-chip adi-mono">{note.base.clone()}</span>
-                {(!note.embedded).then(|| view! {
-                    <span class="adi-chip" title="not embedded — found by words only">"stale"</span>
-                })}
-                <span class="adi-hint">{preview(&note.body)}</span>
-            </div>
+            <span class="adi-kb-hit__score" title="similarity">{score}</span>
+            <span class="adi-kb-hit__title">{note.title.clone()}</span>
+            <span class="adi-kb-hit__base">{note.base.clone()}</span>
+            {(!note.embedded).then(|| view! {
+                <span class="adi-kb-stale" title="not embedded — found by words only">"stale"</span>
+            })}
+            <span class="adi-kb-hit__preview">{preview(&note.body)}</span>
         </button>
     }
     .into_any()
@@ -281,33 +283,38 @@ fn reader_panel(kb: KnowledgeConsole) -> AnyView {
             <section class="adi-panel">
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">{note.title.clone()}</h2>
-                    <span class="adi-chip adi-mono">{note.base.clone()}</span>
-                    <span class="adi-chip adi-mono">{note.id.clone()}</span>
+                    <span class="adi-updated">
+                        <span class="adi-mono">{note.base.clone()}</span>" · "
+                        <span class="adi-mono">{note.id.clone()}</span>
+                    </span>
                     <span class="adi-spacer"></span>
-                    <span class="adi-hint">{embedding_label(&note)}</span>
-                    <button class="adi-btn adi-btn--icon-sm" title="Close"
-                        on:click=move |_| kb.open_note.set(None)>"\u{00d7}"</button>
+                    <span class="adi-updated">{embedding_label(&note)}</span>
+                    <button class="adi-btn adi-btn--icon-sm" type="button" title="Close"
+                        aria-label="Close" on:click=move |_| kb.open_note.set(None)>
+                        <Icon icon=Lucide::X/>
+                    </button>
                 </div>
-                <div style="padding:var(--space-3)">
-                    {(!note.tags.is_empty()).then(|| view! {
-                        <p>{note.tags.iter().map(|t| view! {
-                            <span class="adi-chip">{t.clone()}</span>
-                        }).collect_view()}</p>
+                <div class="adi-kb-note">
+                    {(!note.tags.is_empty() || note.source.is_some()).then(|| view! {
+                        <div class="adi-kb-note__meta">
+                            {note.tags.iter().map(|t| view! {
+                                <span class="adi-chip">{t.clone()}</span>
+                            }).collect_view()}
+                            {note.source.clone().map(|s| view! {
+                                <span class="adi-kb-note__source">"source: "<span class="adi-mono">{s}</span></span>
+                            })}
+                        </div>
                     })}
-                    {note.source.clone().map(|s| view! {
-                        <p class="adi-hint">"source: "{s}</p>
-                    })}
-                    // `white-space: pre-wrap` so a note keeps the shape it was written in —
-                    // a runbook is mostly commands and indentation.
-                    <pre style="white-space:pre-wrap; margin:0">{note.body.clone()}</pre>
-                </div>
-                <div class="adi-panel__head">
-                    <button class="adi-btn adi-btn--danger" on:click=move |_| {
-                        if confirm(&format!("Delete “{id}” from {base}?")) {
-                            let (b, i) = (base.clone(), id.clone());
-                            spawn_local(remove_note(kb, b, i));
-                        }
-                    }>"Delete note"</button>
+                    <Markdown source=note.body.clone()/>
+                    <div class="adi-kb-note__foot">
+                        <button class="adi-btn adi-btn--ghost adi-btn--danger" type="button"
+                            on:click=move |_| {
+                                if confirm(&format!("Delete “{id}” from {base}?")) {
+                                    let (b, i) = (base.clone(), id.clone());
+                                    spawn_local(remove_note(kb, b, i));
+                                }
+                            }>"Delete note"</button>
+                    </div>
                 </div>
             </section>
         })
@@ -321,13 +328,15 @@ fn bases_panel(state: State, kb: KnowledgeConsole, scope: Scope) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Bases"</h2>
-                <span class="adi-chip adi-mono">{move || scope.bases(kb).len()}</span>
+                <span class="adi-updated">{move || format!("{} in view", scope.bases(kb).len())}</span>
                 <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--icon-sm" title="Reload"
-                    on:click=move |_| spawn_local(refresh_bases(kb))>"\u{21bb}"</button>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    on:click=move |_| spawn_local(refresh_bases(kb))>
+                    <Icon icon=Lucide::RefreshCw/>"Reload"
+                </button>
             </div>
             <Table state=scope.bases>{move || base_rows(state, kb, scope)}</Table>
-            <div class="adi-panel__head">
+            <div class="adi-panel__head adi-panel__head--divided">
                 <h2 class="adi-panel__title">"New base"</h2>
             </div>
             {new_base_form(kb, scope)}
@@ -381,24 +390,31 @@ fn base_rows(state: State, kb: KnowledgeConsole, scope: Scope) -> AnyView {
 fn base_cell(col: &str, base: &KnowledgeBaseDto, kb: KnowledgeConsole) -> AnyView {
     match col {
         "Level" => view! {
-            <span class="adi-chip">{base.level.clone()}</span>
-            {base.memory.then(|| view! {
-                <span class="adi-chip" title="this agent's own memory">"memory"</span>
-            })}
+            <span class="adi-kb-tags">
+                <span class="adi-chip">{base.level.clone()}</span>
+                {base.memory.then(|| view! {
+                    <span class="adi-chip" title="this agent's own memory">"memory"</span>
+                })}
+            </span>
         }
         .into_any(),
-        "Provider" => view! { <span class="adi-mono">{base.provider.clone()}</span> }.into_any(),
-        "Notes" => view! { <span class="adi-mono">{base.notes}</span> }.into_any(),
+        // The same provider in every row: dimmed.
+        "Provider" => {
+            view! { <span class="adi-mono adi-muted">{base.provider.clone()}</span> }.into_any()
+        }
+        "Notes" => view! { <span class="adi-tabnums">{base.notes}</span> }.into_any(),
         "Embedded" => embedded_cell(base),
         _ => {
             let id = base.id.clone();
             let shown = base.id.clone();
             view! {
-                <button type="button" class="adi-link adi-mono" on:click=move |_| {
-                    let b = id.clone();
-                    spawn_local(open_base(kb, b));
-                }>{shown}</button>
-                {base.description.clone().map(|d| view! { <div class="adi-hint">{d}</div> })}
+                <span class="adi-kb-base">
+                    <button type="button" class="adi-link adi-mono" on:click=move |_| {
+                        let b = id.clone();
+                        spawn_local(open_base(kb, b));
+                    }>{shown}</button>
+                    {base.description.clone().map(|d| view! { <span class="adi-kb-base__desc">{d}</span> })}
+                </span>
             }
             .into_any()
         }
@@ -409,53 +425,53 @@ fn base_cell(col: &str, base: &KnowledgeBaseDto, kb: KnowledgeConsole) -> AnyVie
 /// re-embed catches it up, so the cell says so rather than showing a bare fraction.
 fn embedded_cell(base: &KnowledgeBaseDto) -> AnyView {
     if let Some(err) = base.error.clone() {
-        return view! { <span class="adi-hint" title=err>"unavailable"</span> }.into_any();
+        return view! { <span class="adi-muted" title=err>"unavailable"</span> }.into_any();
     }
     let text = format!("{} / {}", base.embedded, base.notes);
     if base.stale > 0 {
         let stale = format!("{} stale", base.stale);
         view! {
-            <span class="adi-mono">{text}</span>
-            <span class="adi-chip" title="these answer only to “By words”">{stale}</span>
+            <span class="adi-tabnums">{text}</span>
+            " "
+            <span class="adi-kb-stale" title="these answer only to “By words”">{stale}</span>
         }
         .into_any()
     } else {
-        view! { <span class="adi-mono">{text}</span> }.into_any()
+        view! { <span class="adi-tabnums">{text}</span> }.into_any()
     }
 }
 
-/// A base's row controls: re-embed what needs it, or delete the whole thing.
+/// A base's ⋯ menu: re-embed what needs it, or delete the whole thing.
 fn base_actions(state: State, kb: KnowledgeConsole, base: &KnowledgeBaseDto) -> AnyView {
     let (reembed_id, del_id) = (base.id.clone(), base.id.clone());
-    let inline = view! {
-        <button class="adi-btn adi-btn--sm" title="Embed everything in this base that needs it"
-            disabled=move || kb.busy.get()
-            on:click=move |_| { let b = reembed_id.clone(); spawn_local(reembed(kb, b)); }>
-            "Re-embed"
-        </button>
-    };
-    let delete = view! {
-        <button class="adi-btn adi-btn--sm adi-btn--danger" on:click=move |_| {
-            let b = del_id.clone();
-            if confirm(&format!("Delete {b} and every note in it?")) {
-                spawn_local(remove_base(kb, b));
-            }
-        }>"Delete base"</button>
-    }
-    .into_any();
-    row_actions(state, format!("kb-base:{}", base.id), inline, vec![delete])
+    let reembed = menu_item(state, "Re-embed what needs it", false, move || {
+        let b = reembed_id.clone();
+        spawn_local(reembed(kb, b));
+    });
+    let delete = menu_item(state, "Delete base", true, move || {
+        let b = del_id.clone();
+        if confirm(&format!("Delete {b} and every note in it?")) {
+            spawn_local(remove_base(kb, b));
+        }
+    });
+    row_actions(
+        state,
+        format!("kb-base:{}", base.id),
+        (),
+        vec![reembed, delete],
+    )
 }
 
 /// The create form. Inside a project it asks for a *name* and builds the id, so the scope is not
 /// something the user can typo their way out of.
 fn new_base_form(kb: KnowledgeConsole, scope: Scope) -> AnyView {
     view! {
-        <div class="adi-form">
+        <div class="adi-form adi-form--first">
             {move || match scope.project() {
                 Some(id) => view! {
                     <TextField id="kb-new-base" label="Name" mono=true placeholder="notes"
                         hint="filed under this project" value=kb.new_base />
-                    <p class="adi-hint adi-mono">{format!("project:{id}/…")}</p>
+                    <span class="adi-field__note adi-mono">{format!("project:{id}/…")}</span>
                 }
                 .into_any(),
                 None => view! {
@@ -467,7 +483,7 @@ fn new_base_form(kb: KnowledgeConsole, scope: Scope) -> AnyView {
                 .into_any(),
             }}
             <div class="adi-field">
-                <label class="adi-label" for="kb-provider">"Provider"</label>
+                <label class="adi-field__label" for="kb-provider">"Provider"</label>
                 <select id="kb-provider" class="adi-input adi-mono"
                     on:change=move |ev| kb.new_provider.set(event_target_value(&ev))>
                     <option value="">"default (sqlite)"</option>
@@ -497,15 +513,16 @@ fn notes_panel(state: State, kb: KnowledgeConsole, scope: Scope) -> AnyView {
             <section class="adi-panel">
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">"Notes"</h2>
-                    <span class="adi-chip adi-mono">{title}</span>
+                    <span class="adi-updated">"in "<span class="adi-mono">{title}</span></span>
                     <span class="adi-spacer"></span>
-                    <button class="adi-btn adi-btn--icon-sm" title="Close"
+                    <button class="adi-btn adi-btn--icon-sm" type="button" title="Close"
+                        aria-label="Close"
                         on:click=move |_| { kb.open_base.set(String::new()); kb.notes.set(None); }>
-                        "\u{00d7}"
+                        <Icon icon=Lucide::X/>
                     </button>
                 </div>
                 <Table state=scope.notes>{move || note_rows(state, kb, scope)}</Table>
-                <div class="adi-panel__head">
+                <div class="adi-panel__head adi-panel__head--divided">
                     <h2 class="adi-panel__title">"New note"</h2>
                 </div>
                 {new_note_form(kb)}
@@ -549,16 +566,16 @@ fn note_rows(state: State, kb: KnowledgeConsole, scope: Scope) -> AnyView {
 
 fn note_cell(col: &str, note: &KnowledgeNoteDto, kb: KnowledgeConsole) -> AnyView {
     match col {
-        "Tags" => note
-            .tags
-            .iter()
-            .map(|t| view! { <span class="adi-chip">{t.clone()}</span> })
-            .collect_view()
-            .into_any(),
+        "Tags" => view! {
+            <span class="adi-kb-tags">
+                {note.tags.iter().map(|t| view! { <span class="adi-chip">{t.clone()}</span> }).collect_view()}
+            </span>
+        }
+        .into_any(),
         "Note" => view! {
-            <span class="adi-hint">{preview(&note.body)}</span>
+            <span class="adi-muted">{preview(&note.body)}</span>
             {(!note.embedded).then(|| view! {
-                <span class="adi-chip" title="findable by words only until re-embedded">"stale"</span>
+                " "<span class="adi-kb-stale" title="findable by words only until re-embedded">"stale"</span>
             })}
         }
         .into_any(),
@@ -566,11 +583,13 @@ fn note_cell(col: &str, note: &KnowledgeNoteDto, kb: KnowledgeConsole) -> AnyVie
             let (base, id) = (note.base.clone(), note.id.clone());
             let (title, shown_id) = (note.title.clone(), note.id.clone());
             view! {
-                <button type="button" class="adi-link" on:click=move |_| {
-                    let (b, i) = (base.clone(), id.clone());
-                    spawn_local(open_note(kb, b, i));
-                }>{title}</button>
-                <div class="adi-hint adi-mono">{shown_id}</div>
+                <span class="adi-kb-base">
+                    <button type="button" class="adi-link" on:click=move |_| {
+                        let (b, i) = (base.clone(), id.clone());
+                        spawn_local(open_note(kb, b, i));
+                    }>{title}</button>
+                    <span class="adi-kb-base__desc adi-mono">{shown_id}</span>
+                </span>
             }
             .into_any()
         }
@@ -579,28 +598,25 @@ fn note_cell(col: &str, note: &KnowledgeNoteDto, kb: KnowledgeConsole) -> AnyVie
 
 fn note_actions(state: State, kb: KnowledgeConsole, note: &KnowledgeNoteDto) -> AnyView {
     let (base, id) = (note.base.clone(), note.id.clone());
-    let delete = view! {
-        <button class="adi-btn adi-btn--sm adi-btn--danger" on:click=move |_| {
-            let (b, i) = (base.clone(), id.clone());
-            if confirm(&format!("Delete “{i}”?")) {
-                spawn_local(remove_note(kb, b, i));
-            }
-        }>"Delete"</button>
-    }
-    .into_any();
+    let delete = menu_item(state, "Delete note", true, move || {
+        let (b, i) = (base.clone(), id.clone());
+        if confirm(&format!("Delete “{i}”?")) {
+            spawn_local(remove_note(kb, b, i));
+        }
+    });
     row_actions(state, format!("kb-note:{}", note.id), (), vec![delete])
 }
 
 fn new_note_form(kb: KnowledgeConsole) -> AnyView {
     view! {
-        <div class="adi-form">
-            <TextField id="kb-title" label="Title" wide=true
+        <div class="adi-form adi-form--first">
+            <TextField id="kb-title" label="Title" wide=true field_class="adi-kb-wide"
                 placeholder="Restarting the control panel" value=kb.title />
-            <div class="adi-field" style="width:100%">
-                <label class="adi-label" for="kb-body">"Note"</label>
+            <div class="adi-field adi-kb-wide">
+                <label class="adi-field__label" for="kb-body">"Note"</label>
                 // Any length: the store chunks a long note rather than truncating it, so there is
                 // no reason for this box to imply a limit.
-                <textarea id="kb-body" class="adi-input adi-mono" rows="6" style="width:100%"
+                <textarea id="kb-body" class="adi-input adi-input--wide adi-mono" rows="6"
                     placeholder="launchctl kickstart -k gui/$(id -u)/family.adi.app.control-panel"
                     prop:value=move || kb.body.get()
                     on:input=move |ev| kb.body.set(event_target_value(&ev))></textarea>

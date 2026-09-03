@@ -1,156 +1,126 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- adi-shell: 2 — this file's generation. The control panel rewrites the shell of any
+    <!-- adi-shell: 3 — this file's generation. The control panel rewrites the shell of any
          dashboard that does not spell the current one (`handlers/dashboards.rs`), which is how a
          change here reaches dashboards that already exist; bump it whenever this file changes.
          The shell is generated, so a hand-edited one is replaced — a dashboard's own UI belongs
          in `frontend/modules/*.ts`, which migration never reads. -->
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ADI Dashboard</title>
+    <title>adi dashboard</title>
     <style>
-      /* Mirrors the adi design-system tokens so a dashboard looks like the rest of adi.
-         Kept inline (no external requests); see crates/adi-css/scss/_tokens.scss. */
-      :root {
-        color-scheme: light dark;
-        --bg: #fafafb;
-        --panel: #ffffff;
-        --ink: #0d0f12;
-        --muted: #6b7280;
-        --line: #e5e7eb;
-        --accent: #0d9488;
-        --online: #16a34a;
-        --down: #dc2626;
-        --shadow: 0 1px 2px rgba(9, 11, 15, .04);
-      }
-      @media (prefers-color-scheme: dark) {
-        :root {
-          --bg: #0a0b0d;
-          --panel: #101215;
-          --ink: #e9ecf1;
-          --muted: #8b919c;
-          --line: #23262b;
-          --accent: #2dd4bf;
-          --online: #34d399;
-          --down: #f87171;
-          --shadow: 0 1px 2px rgba(0, 0, 0, .3);
-        }
-      }
+      /* @adi-tokens */
+      /* The line above is replaced at build time with design/tokens.css, the one palette every
+         adi surface draws from (`handlers/dashboards.rs`). The shell is self-contained — it is
+         served under a name of its own, with no adi stylesheet to link and no font to load — so
+         the type falls back to the token file's system stack. Everything below is
+         design/DESIGN.md: surfaces and hairlines, sentence case, mono for machine strings only,
+         nothing raised and nothing that moves on its own. */
+      :root { color-scheme: dark; }
       * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--ink);
-        letter-spacing: -0.006em;
-        -webkit-font-smoothing: antialiased;
-        font: 13.5px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      }
+      body { margin: 0; }
       header {
         display: flex;
-        align-items: baseline;
-        gap: 10px;
-        flex-wrap: wrap;
-        padding: 10px 16px;
+        align-items: center;
+        gap: 12px;
+        height: 48px;
+        padding: 0 24px;
+        background: var(--bg-side);
         border-bottom: 1px solid var(--line);
       }
-      h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-      .meta {
-        color: var(--muted);
-        font-size: 12px;
-        font-family: ui-monospace, SFMono-Regular, monospace;
-        font-variant-numeric: tabular-nums;
-      }
+      h1 { font-size: 15px; font-weight: 600; margin: 0; color: var(--ink); }
+      .meta { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+      .meta code { color: var(--ink-2); }
       .dot {
         display: inline-block; width: 6px; height: 6px; border-radius: 50%;
-        background: var(--online); margin-right: 6px; vertical-align: 1px;
+        background: var(--ok); margin-right: 7px; vertical-align: 1px;
       }
-      .dot.off { background: var(--down); }
+      .dot.off { background: var(--err); }
       main {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap: 12px;
-        padding: 16px;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 16px;
+        padding: 24px;
         align-items: start;
       }
+      /* One module is one detachable thing, which is what a card is for: a hairline and the
+         large radius, no fill, no shadow. */
       .panel {
-        background: var(--panel);
         border: 1px solid var(--line);
-        border-radius: 8px;
-        box-shadow: var(--shadow);
-        padding: 10px 14px 12px;
+        border-radius: var(--r-lg);
+        padding: 14px 16px 16px;
         overflow-x: auto;
       }
       .panel > h2 {
-        margin: 0 0 8px;
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        color: var(--muted);
+        margin: 0 0 12px;
+        font-size: var(--fs-section);
         font-weight: 600;
+        color: var(--ink);
       }
-      /* A module that failed to mount — flagged, but not louder than the working panels. */
-      .panel--failed { border-color: color-mix(in srgb, var(--down) 35%, var(--line)); }
-      .panel--failed > h2 { color: var(--down); }
-      .empty { padding: 20px; color: var(--muted); font-size: 12px; }
-      code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
-      a { color: var(--accent); }
+      /* A module that failed to mount: the title says so in the error colour, and that is all. */
+      .panel--failed > h2 { color: var(--err); }
+      .panel--failed > code { display: block; white-space: pre-wrap; word-break: break-word; }
+      .empty { padding: 24px 0; color: var(--ink-3); font-size: var(--fs-small); }
+      a { color: var(--ink-2); text-decoration: underline; text-underline-offset: 3px; }
+      a:hover { color: var(--ink); }
+      svg.ic { width: 16px; height: 16px; display: block; }
 
       /* The adi-agent editor: a floating toolbar and the drawer it opens. The drawer is docked
          to the right and the page reflows beside it — the script sets body's padding, because a
          fixed drawer is out of flow and would otherwise cover the panels you are editing. */
       .adi-edit {
-        position: fixed; right: 14px; bottom: 14px; z-index: 2147483646;
-        display: flex; gap: 2px; padding: 3px; border-radius: 999px;
-        border: 1px solid var(--line); background: var(--panel);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+        position: fixed; right: 16px; bottom: 16px; z-index: 2147483646;
+        display: flex; gap: 2px; padding: 3px; border-radius: var(--r-pill);
+        border: 1px solid var(--line-strong); background: var(--bg-raise);
       }
       .adi-edit__btn {
-        border: 0; border-radius: 999px; padding: 5px 10px; cursor: pointer;
-        background: none; color: var(--ink);
-        font: 600 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+        display: inline-flex; align-items: center; gap: 6px;
+        border: 0; border-radius: var(--r-pill); padding: 5px 10px; cursor: pointer;
+        background: none; color: var(--ink-2);
+        font: 500 12.5px/1.2 var(--sans);
       }
-      .adi-edit__btn:hover { background: var(--bg); }
+      .adi-edit__btn:hover { background: var(--bg-hover); color: var(--ink); }
       .adi-edit__btn[aria-pressed="true"], .adi-edit__btn[aria-expanded="true"] {
-        background: var(--accent); color: var(--panel);
+        background: var(--bg-active); color: var(--ink);
       }
 
       .adi-editor {
         position: fixed; inset: 0 0 0 auto; z-index: 2147483647;
         display: flex; flex-direction: column;
         width: var(--editor-w, 480px); max-width: 100vw;
-        background: var(--panel); border-left: 1px solid var(--line);
-        box-shadow: -8px 0 24px rgba(0, 0, 0, .12);
+        background: var(--bg-side); border-left: 1px solid var(--line);
       }
       /* `display: flex` above outranks the UA's `[hidden] { display: none }`, so restate it. */
       .adi-editor[hidden] { display: none; }
       /* Controls only — the embedded page brands itself, so a title here would say it twice. */
       .adi-editor__head {
         display: flex; align-items: center; justify-content: flex-end; gap: 2px;
-        padding: 5px 8px; border-bottom: 1px solid var(--line);
+        height: 48px; padding: 0 8px; border-bottom: 1px solid var(--line);
       }
       .adi-editor__btn {
-        border: 0; background: none; color: var(--muted); cursor: pointer;
-        font-size: 13px; line-height: 1; padding: 4px 6px; border-radius: 5px;
+        display: inline-grid; place-items: center; width: 28px; height: 28px;
+        border: 0; background: none; color: var(--ink-3); cursor: pointer;
+        border-radius: var(--r);
       }
-      .adi-editor__btn:hover { background: var(--bg); color: var(--ink); }
+      .adi-editor__btn:hover { background: var(--bg-hover); color: var(--ink); }
       .adi-editor__frame { flex: 1; width: 100%; border: 0; }
       .adi-editor__grip { position: absolute; inset: 0 auto 0 0; width: 6px; cursor: ew-resize; }
 
       /* The picker's highlight: one box moved around the page, rather than an outline drawn on
          the hovered element itself — which would change that element's own metrics, and so move
          the thing being measured. It never takes the pointer, so the hit test underneath it
-         keeps returning the page. */
+         keeps returning the page. Ink, not the accent: a hover is not a selection. */
       .adi-pick {
         position: fixed; z-index: 2147483645; pointer-events: none;
-        border: 1px solid var(--accent); border-radius: 3px;
-        background: color-mix(in srgb, var(--accent) 14%, transparent);
+        border: 1px solid var(--ink-2); border-radius: var(--r-sm);
+        background: var(--chip);
       }
       .adi-pick__tag {
         position: absolute; left: 0; bottom: 100%; margin-bottom: 3px; white-space: nowrap;
-        padding: 2px 6px; border-radius: 4px;
-        background: var(--accent); color: var(--panel);
-        font: 600 10.5px/1.3 ui-monospace, SFMono-Regular, monospace;
+        padding: 2px 6px; border-radius: var(--r-sm);
+        background: var(--ink); color: var(--bg);
+        font: 11px/1.3 var(--mono);
       }
       /* Against the top of the viewport the label has nowhere above to go, so it drops inside. */
       .adi-pick--low .adi-pick__tag { bottom: auto; top: 100%; margin: 3px 0 0; }
@@ -159,7 +129,7 @@
   </head>
   <body>
     <header>
-      <h1>ADI Dashboard</h1>
+      <h1>Dashboard</h1>
       <span class="meta" id="status"></span>
     </header>
     <main id="app"></main>
@@ -209,11 +179,13 @@
 
         const bar = document.createElement("div");
         bar.className = "adi-edit";
+        // The glyphs are Lucide's `scan-line`, `square-pen`, `arrow-up-right` and `x`
+        // (crates/adi-ui/icons), drawn at 16px and stroke 1.5 like every icon in adi.
         bar.innerHTML =
           `<button class="adi-edit__btn" type="button" data-pick aria-pressed="false"` +
-          ` title="Point at something and tell the agent about it">⌖ pick</button>` +
+          ` title="Point at something and tell the agent about it"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>Pick</button>` +
           `<button class="adi-edit__btn" type="button" data-open aria-expanded="false"` +
-          ` title="Edit this dashboard with adi-agent">✎ edit</button>`;
+          ` title="Edit this dashboard with adi-agent"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.375 2.625a1 1 0 0 1 3 3l-9.013 9.014a2 2 0 0 1-.853.505l-2.873.84a.5.5 0 0 1-.62-.62l.84-2.873a2 2 0 0 1 .506-.852z"/></svg>Edit</button>`;
         const pickBtn = bar.querySelector("[data-pick]");
         const openBtn = bar.querySelector("[data-open]");
 
@@ -225,9 +197,9 @@
           `<div class="adi-editor__grip" title="Drag to resize"></div>` +
           `<header class="adi-editor__head">` +
             `<button class="adi-editor__btn" type="button" data-pop` +
-            ` title="Open in a separate window" aria-label="Open in a separate window">↗</button>` +
+            ` title="Open in a separate window" aria-label="Open in a separate window"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></svg></button>` +
             `<button class="adi-editor__btn" type="button" data-close` +
-            ` title="Close" aria-label="Close the editor">✕</button>` +
+            ` title="Close" aria-label="Close the editor"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>` +
           `</header>` +
           `<iframe class="adi-editor__frame" title="adi-agent"></iframe>`;
 
@@ -500,8 +472,9 @@
           const r = await fetch(api + "/health");
           online = r.ok;
         } catch {}
+        const n = config.modules.length;
         status.innerHTML = `<span class="dot ${online ? "" : "off"}"></span>` +
-          `${config.dashboard.slice(0, 8)} · ${config.modules.length} module(s) · ` +
+          `<code>${config.dashboard.slice(0, 8)}</code> · ${n} ${n === 1 ? "module" : "modules"} · ` +
           `backend ${online ? "up" : "down"}`;
 
         if (!config.modules.length) {

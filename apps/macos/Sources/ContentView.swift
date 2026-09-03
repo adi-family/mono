@@ -1,45 +1,44 @@
 import SwiftUI
 
-/// The main window, which is whichever of three things the install still needs.
+/// The window, which is whichever of three things the install still needs.
 ///
 /// The order is a gate, not a preference. Until the app is somewhere its services may point at,
 /// nothing can be installed — so nothing is offered. Until both privileged grants exist, the
-/// services can be started but the names they serve go nowhere — so the power button is not
-/// offered either: a stack reporting "Running" while `app.adi` fails to load is worse than one
-/// that has not started. Only past both does the app become the app.
+/// services can be started but the names they serve go nowhere — so the switch is not offered
+/// either: a stack reporting "Running" while `app.adi` fails to load is worse than one that has
+/// not started. Only past both does the app become the app.
+///
+/// One surface (`ADI.bgSide`, the bar and panel surface — this window is all chrome), hairlines
+/// between the bands, one filled orange per step (`design/DESIGN.md` §2.4, §5).
 struct ContentView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        ZStack {
-            VisualEffectView().ignoresSafeArea()
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Hairline()
+                .padding(.vertical, 16)
 
-            VStack(spacing: 20) {
-                VStack(spacing: 9) {
-                    ADILogo(size: 60)
-                    Text("ADI")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .kerning(3)
-                }
-
-                switch model.stage {
-                case .mustMove: moveStep
-                case .needsPermissions: permissionsStep
-                case .ready: readyStep
-                }
-
-                // Below every step, including the two the gate above has not let past yet. The
-                // gate is about what can be *installed*; reporting needs none of it, and a
-                // person stuck on a permission they cannot grant has exactly two useful moves
-                // left — take a version that fixes it, or send somebody the evidence.
-                MaintenanceFooter(model: model, offerUpdate: model.stage != .mustMove)
+            switch model.stage {
+            case .mustMove: moveStep
+            case .needsPermissions: permissionsStep
+            case .ready: readyStep
             }
-            .padding(.horizontal, 36)
-            .padding(.vertical, 34)
-            .frame(width: 340)
+
+            // Below every step, including the two the gate above has not let past yet. The
+            // gate is about what can be *installed*; reporting needs none of it, and a
+            // person stuck on a permission they cannot grant has exactly two useful moves
+            // left — take a version that fixes it, or send somebody the evidence.
+            MaintenanceFooter(model: model, offerUpdate: model.stage != .mustMove)
+                .padding(.top, 16)
         }
+        // The title bar is hidden, so the traffic lights sit over the content's top edge; the
+        // header starts below them.
+        .padding(.top, 36)
+        .padding([.horizontal, .bottom], 24)
         .frame(width: 340)
+        .background(ADI.bgSide.ignoresSafeArea())
+        .preferredColorScheme(.dark)
         .alert(model.notice?.title ?? "",
                isPresented: Binding(get: { model.notice != nil },
                                     set: { if !$0 { model.notice = nil } })) {
@@ -47,6 +46,22 @@ struct ContentView: View {
         } message: {
             Text(model.notice?.body ?? "")
         }
+    }
+
+    /// The mark at 18 beside the wordmark at 15/600 (§10), and the version at the right.
+    private var header: some View {
+        HStack(spacing: 8) {
+            ADILogo(size: 18)
+            Text("adi")
+                .font(ADI.TextStyle.wordmark)
+                .foregroundStyle(ADI.ink)
+            Spacer(minLength: 0)
+            Text(model.installedVersion)
+                .font(ADI.TextStyle.label)
+                .foregroundStyle(ADI.ink3)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("ADI \(model.installedVersion)")
     }
 
     // MARK: step 1 — be somewhere durable
@@ -60,22 +75,24 @@ struct ContentView: View {
     // MARK: step 2 — the two grants
 
     private var permissionsStep: some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Two permissions to set up")
-                .font(.title3.weight(.semibold))
+                .font(ADI.TextStyle.section)
+                .foregroundStyle(ADI.ink)
             Text("Each asks for your password once. ADI starts itself as soon as both are done.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            VStack(spacing: 10) {
+            VStack(spacing: 0) {
                 PermissionRow(
                     title: "Local names",
                     detail: "Lets .\(Core.domain) addresses resolve on this Mac.",
                     granted: model.hasDNS,
                     busy: model.busy
                 ) { model.grantDNS() }
+
+                Hairline()
 
                 PermissionRow(
                     title: "Network access",
@@ -84,39 +101,22 @@ struct ContentView: View {
                     busy: model.busy
                 ) { model.grantNetwork() }
             }
+            .padding(.top, 8)
         }
     }
 
     // MARK: step 3 — the app
 
     private var readyStep: some View {
-        // One thing to read, one thing to press, one thing to change — in that order.
-        //
-        // Two large controls of equal weight was the problem: neither read as the answer, so
-        // the window asked a question instead of offering one. The dashboard is the only
-        // action anyone takes twice, so it is the only prominent control; the state above it
-        // is information and has no button at all; and the switch below the rule is a setting,
-        // which is what turning a background service on and off actually is.
-        VStack(spacing: 14) {
-            // The switch sits above the rule with the identity, where a setting belongs, and
-            // everything below the rule is this session: what ADI is doing, and the one thing
-            // to do about it. Grouping by kind rather than by size is what gives the window a
-            // shape — before, four evenly spaced blocks read as a list of unrelated controls.
+        // One thing to read, one thing to change, one thing to press — in that order. The state
+        // is information and has no button; the switch is a setting; the panel is the action.
+        VStack(alignment: .leading, spacing: 12) {
+            StatusLine(state: model.powerState, title: model.statusSummary)
             ServicesToggle(isOn: model.servicesOn, busy: model.busy)
-
-            // An explicit rule, not `Divider`: the system separator is tuned for lists on an
-            // opaque background and vanishes against the window's vibrancy, which left the
-            // grouping doing nothing at all.
-            Rectangle()
-                .fill(.primary.opacity(0.13))
-                .frame(height: 1)
-                .padding(.vertical, 2)
-
-            StatusCard(state: model.powerState, title: model.statusSummary)
-
-            DashboardButton(busy: model.launching) {
+            DashboardButton(busy: model.launching, accent: !model.updateAvailable) {
                 model.openDashboard()
             }
+            .padding(.top, 8)
         }
     }
 }
@@ -133,17 +133,18 @@ struct MoveStep: View {
     let move: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Move ADI to Applications")
-                .font(.title3.weight(.semibold))
+                .font(ADI.TextStyle.section)
+                .foregroundStyle(ADI.ink)
             Text(reason)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
+                .font(ADI.TextStyle.small)
+                .foregroundStyle(ADI.ink2)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // The spinner sits inside the button rather than beside it, so the layout does not
-            // jump at the moment the user is watching it.
+            // The one thing this step is for, so it is the step's orange. The spinner sits inside
+            // the button rather than beside it, so the layout does not jump at the moment the
+            // user is watching it.
             Button(action: move) {
                 HStack(spacing: 8) {
                     if moving {
@@ -151,23 +152,24 @@ struct MoveStep: View {
                     }
                     Text(moving ? "Moving to Applications…" : "Move to Applications")
                 }
-                .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            .buttonStyle(.adi(.accent, wide: true))
             .disabled(moving)
+            .padding(.top, 8)
 
             if moving {
                 Text("Copying the app, then reopening it from Applications.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .font(ADI.TextStyle.label)
+                    .foregroundStyle(ADI.ink3)
             }
         }
     }
 }
 
-/// One permission: what it is for, and a button that becomes a checkmark once it is granted.
+/// One permission: what it is for, and a button that becomes a granted mark once it is.
+///
+/// Granted is a status, so it is a 6px dot and a word (§9), not an icon and not a colour on
+/// the row.
 struct PermissionRow: View {
     let title: String
     let detail: String
@@ -176,31 +178,36 @@ struct PermissionRow: View {
     let grant: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.callout.weight(.medium))
+                Text(title)
+                    .font(ADI.TextStyle.row)
+                    .foregroundStyle(ADI.ink)
                 Text(detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(ADI.TextStyle.small)
+                    .foregroundStyle(ADI.ink3)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
 
             if granted {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.title3)
-                    .accessibilityLabel("\(title) granted")
+                HStack(spacing: 7) {
+                    StatusDot(color: ADI.ok)
+                    Text("Granted")
+                        .font(ADI.TextStyle.small)
+                        .foregroundStyle(ADI.ink2)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(title) granted")
             } else if busy {
                 // Something is running — probably this grant, and the moment after the password
                 // prompt is dismissed is exactly when there is otherwise nothing to look at.
                 ProgressView().controlSize(.small)
             } else {
                 Button("Allow", action: grant)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.adi(.normal, .small))
             }
         }
-        .padding(12)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.vertical, 10)
     }
 }

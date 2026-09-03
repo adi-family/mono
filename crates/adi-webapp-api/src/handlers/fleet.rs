@@ -21,6 +21,12 @@
 //! Every mutation answers with a fresh [`FleetState`], the one-round-trip contract the mesh
 //! endpoints already keep — the page never has to ask twice to know what it just did.
 //!
+//! **Both halves of pairing are here, and only one of them is whole.** [`fleet_invite`] mints, for
+//! the side that can be dialled; [`fleet_join_token`] and [`fleet_joined`] are the two synchronous
+//! ends of spending one, for the side that dials. The dial itself is not here because it needs the
+//! endpoint the mesh daemon has already bound — `adi-app`'s `fleet_join` owns that, and calls
+//! these on either side of it (`docs/fleet.md` §8).
+//!
 //! The store is passed in rather than opened here ([`FleetRegistry::load`] would reach for
 //! `~/.adi/mono` directly), which is what lets these run against a temp root under test and never
 //! touch the operator's real registry.
@@ -40,7 +46,10 @@ use adi_mesh::fleet::{FleetRegistry, Grant};
 use adi_mesh::{join, ticket};
 use serde::de::DeserializeOwned;
 
-use crate::types::{FleetGrantRef, FleetInvite, FleetNode, FleetRef, FleetRename, FleetState};
+use crate::types::{
+    FleetGrantRef, FleetInvite, FleetJoinRef, FleetJoined, FleetNode, FleetRef, FleetRename,
+    FleetState,
+};
 
 use super::response::{Response, error, ok_json};
 
@@ -117,6 +126,60 @@ fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvit
         // TTL, never a 136-year one.
         ttl_secs: u32::try_from(expires.saturating_sub(now)).unwrap_or(u32::MAX),
         svg,
+    })
+}
+
+/// The token from a `POST /api/fleet/join` body, checked as far as it can be checked *here*.
+///
+/// The two halves of that endpoint are split because only one of them is synchronous: this reads
+/// the body and the clock, and the caller does the dialling (`adi-app`'s `fleet_join`, which owns
+/// the endpoint the handshake must go out on — see [`adi_mesh::Daemon::join`]). Decoding here is
+/// what keeps a typo or a token that expired while it was being carried a **400 before anything
+/// leaves the machine**, instead of a timeout the operator has to wait out and then interpret.
+///
+/// # Errors
+/// 400 for an unusable body, an empty token, or one that does not decode as a live invite.
+pub fn fleet_join_token(body: &[u8], now: u64) -> Result<String, Response> {
+    let req: FleetJoinRef = parse(body)?;
+    let token = trimmed(&req.token);
+    if token.is_empty() {
+        return Err(error(
+            400,
+            "expected JSON body { \"token\": \"adi-invite:…\" }",
+        ));
+    }
+    // The decoded invite is dropped: it is read to be sure it *can* be read, and the dialling side
+    // decodes it again for itself. Nothing here should hold a bearer token a moment longer than
+    // the request that carried it.
+    join::decode_invite(&token, now)
+        .map_err(|e| error(400, &format!("that invite cannot be spent: {e}")))?;
+    Ok(token)
+}
+
+/// `POST /api/fleet/join` — the answer once the handshake has been accepted.
+///
+/// Answers with the credential *and* a fresh [`FleetState`], because this is the one mutation that
+/// changes both books at once: the far side is now in the registry, and the password gating it
+/// exists in plaintext exactly here, exactly once. The registry has already been saved by the time
+/// this runs — [`adi_mesh::join::join_on`] writes it before returning — so the snapshot is taken
+/// after the fact rather than predicted.
+///
+/// # Errors
+/// 500 only if the registry it just wrote cannot be read back.
+#[must_use]
+pub fn fleet_joined(store: &Config, joined: &join::Joined) -> Response {
+    let fleet = match snapshot(store) {
+        Ok(fleet) => fleet,
+        Err(e) => return error(500, &e),
+    };
+    ok_json(&FleetJoined {
+        petname: joined.petname.clone(),
+        viewer: joined.viewer.clone(),
+        viewer_key: joined.viewer_key.to_string(),
+        username: joined.username.clone(),
+        password: joined.password.clone(),
+        grants: joined.grants.iter().map(ToString::to_string).collect(),
+        fleet,
     })
 }
 
@@ -773,6 +836,11 @@ mod tests {
         format!("adimesh:{}", key_of('e'))
     }
 
+    /// A real ed25519 public key, because an `EndpointId` is one and [`key_of`]'s filler is not:
+    /// parsing checks the bytes are a point on the curve. Fixed rather than generated, so this
+    /// crate's tests need no key material of their own.
+    const VIEWER_KEY: &str = "0ccefa176ef3183396e0f13bff258ccefa0d045a0be2f9b412b3c0ee9ea80f78";
+
     #[test]
     fn minting_answers_a_spendable_token_with_its_expiry_and_its_qr() {
         let store = temp_store();
@@ -822,6 +890,92 @@ mod tests {
         // And nothing was written: a refusal must not leave a nonce behind.
         let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
         assert!(book.invites.is_empty());
+    }
+
+    /// A token good enough to spend is handed back untouched — including the whitespace a paste
+    /// out of a terminal or a chat window brings with it, which is the ordinary case here.
+    #[test]
+    fn a_live_invite_is_accepted_for_spending_however_it_was_pasted() {
+        let store = temp_store();
+        let now = 1_700_000_000;
+        let token = mint(&store, Some(sample_endpoint()), now)
+            .expect("mint")
+            .token;
+
+        let body = serde_json::to_vec(&FleetJoinRef {
+            token: format!("  {token}\n"),
+        })
+        .expect("a body");
+        assert_eq!(fleet_join_token(&body, now).expect("live"), token);
+    }
+
+    /// Everything refusable about a token is refused *before* the dial, so the operator reads why
+    /// instead of waiting out a handshake timeout and guessing.
+    #[test]
+    fn an_unspendable_invite_is_a_400_before_anything_is_dialled() {
+        let store = temp_store();
+        let now = 1_700_000_000;
+        let token = mint(&store, Some(sample_endpoint()), now)
+            .expect("mint")
+            .token;
+
+        // Expired: live at `now`, dead ten minutes and a second later.
+        let body = serde_json::to_vec(&FleetJoinRef {
+            token: token.clone(),
+        })
+        .expect("a body");
+        let late = fleet_join_token(&body, now + INVITE_TTL.as_secs() + 1).expect_err("expired");
+        assert_eq!(late.status, 400, "{}", late.body);
+        assert!(late.body.contains("cannot be spent"), "{}", late.body);
+
+        for raw in [
+            br#"{"token":"not-an-invite"}"#.as_slice(),
+            br#"{"token":"   "}"#.as_slice(),
+            b"{}".as_slice(),
+            b"not json".as_slice(),
+        ] {
+            let response = fleet_join_token(raw, now).expect_err("unusable");
+            assert_eq!(
+                response.status,
+                400,
+                "{} → {}",
+                String::from_utf8_lossy(raw),
+                response.body
+            );
+        }
+    }
+
+    /// The answer carries both names and both books: what the far side calls this machine, what
+    /// this machine calls it back, the credential that exists nowhere else, and the registry as it
+    /// stands — so the page needs no second request to show what it just did.
+    #[test]
+    fn a_join_answers_with_the_credential_and_the_fresh_registry() {
+        let store = temp_store();
+        pair(&store, "studio", "studio", &["http:app"], true);
+        let joined = adi_mesh::join::Joined {
+            petname: "igors-macbook-pro".to_string(),
+            viewer: "studio".to_string(),
+            viewer_key: VIEWER_KEY.parse().expect("a real ed25519 public key"),
+            username: "adi".to_string(),
+            password: "correct-horse".to_string(),
+            grants: adi_mesh::join::default_grants(),
+        };
+
+        let v = ok_body(&fleet_joined(&store, &joined));
+
+        // Two names, never conflated: `petname` resolves only over there, `viewer` only here.
+        assert_eq!(v["petname"], "igors-macbook-pro");
+        assert_eq!(v["viewer"], "studio");
+        assert_eq!(v["viewer_key"], VIEWER_KEY);
+        assert_eq!(v["username"], "adi");
+        assert_eq!(v["password"], "correct-horse");
+        assert_eq!(v["grants"][0], "http:app");
+        assert_eq!(v["fleet"]["nodes"][0]["petname"], "studio");
+
+        // And the link the credential was minted to open is the local name, not the remote one.
+        let answer: FleetJoined = serde_json::from_str(&fleet_joined(&store, &joined).body)
+            .expect("the answer deserializes");
+        assert_eq!(answer.app_host(), "app.studio.n.adi");
     }
 
     /// The two renderings the page needs, kept beside the wire they are derived from.

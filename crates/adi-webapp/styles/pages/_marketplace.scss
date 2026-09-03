@@ -1,0 +1,67 @@
+// Page-local styles for `src/pages/marketplace.rs`. Shared components live in adi-css; a shape
+// that exists on one page lives here. Tokens from design/tokens.css only.
+
+// The line under the page title: what the page does, and Sync at the right.
+.adi-market__lead {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 8px;
+  font-size: var(--fs-small);
+  color: var(--ink-2);
+}
+
+// A source's URL in its section head: a machine string, and never wider than the room it has.
+.adi-market__url {
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// One app per row, hairlines between; the about on the left and the one action on the right.
+.adi-market__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.adi-market__about {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adi-market__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.adi-market__name {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.adi-market__desc {
+  font-size: var(--fs-small);
+  color: var(--ink-2);
+}
+
+.adi-market__actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex: none;
+}
+
+// What the row is waiting on, said beside the button rather than as a badge.
+.adi-market__state {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}

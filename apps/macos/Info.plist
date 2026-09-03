@@ -22,6 +22,10 @@
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>adi-family</string>
+    <!-- Where the bundled faces live, relative to Contents/Resources: Geist and Geist Mono
+         (design/DESIGN.md §4), copied there by build.sh from Resources/Fonts. -->
+    <key>ATSApplicationFontsPath</key>
+    <string>Fonts</string>
     <!-- Which install this bundle drives. Restamped per flavour by build.sh; Sources/Core.swift
          reads it back and pins every adi-mono it launches, so ADI Dev.app cannot reach into the
          real install's store, ports or launchd namespace. -->

@@ -150,10 +150,10 @@ pub fn ToolForm(
                     let flag = p.flag;
                     view! {
                         <label class="flex cursor-pointer items-center gap-2 text-row \
-                                      text-secondary">
+                                      text-ink-2">
                             <input
                                 type="checkbox"
-                                class="size-3.5 accent-accent"
+                                class="size-3.5 accent-ink"
                                 prop:checked=move || flag.get()
                                 on:change=move |ev| flag.set(event_target_checked(&ev))
                             />

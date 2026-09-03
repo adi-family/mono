@@ -1,14 +1,14 @@
-//! The adi-ui playground — every component on one page, in both themes, with Trunk
-//! hot-reloading it as you type.
+//! The adi-ui playground — every component on one page, with Trunk hot-reloading it as you
+//! type.
 //!
 //! It is a dev surface: nothing embeds it and nothing depends on it. Its job is to make a
 //! component's states visible all at once — a variant you never render is a variant you
 //! never notice is broken — so when you add a component here, add a row that shows *every*
 //! arm of every enum it takes, not just the default one.
 //!
-//! The first two panels are the design system itself: the type scale and the palette,
-//! rendered from the live tokens. If a value in `styles/tokens.css` is wrong, it is wrong
-//! there on screen rather than three components deep.
+//! The first three panels are the design system itself: the type scale, the palette and the
+//! icon set, rendered from the live tokens. If a value in `design/tokens.css` is wrong, it is
+//! wrong there on screen rather than three components deep.
 //!
 //! ```sh
 //! cd crates/adi-ui && trunk serve --open      # http://127.0.0.1:9081
@@ -21,12 +21,12 @@ use std::time::Duration;
 use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachState, Attached, Attaching, Badge,
     BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame, CodeHeight,
-    CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flag, FlagList, FlagMark, Flash,
-    FlashKind, Form, Hint, Input, InputWidth, Kbd, Lang, Mark, MarkVariant, Markdown, Modal, Panel,
-    Param, ParamKind, PathPicker, PathRoot, PromptText, Qna, Queued, Rail, RailCard, RailGroup,
-    Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table, TableState,
-    Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode,
-    TreeState, Turn, TurnBlocks, dir_of, sort_rows,
+    CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag, FlagList,
+    FlagMark, Flash, FlashKind, Form, Hint, Icon, IconSize, Input, InputWidth, Kbd, Lang, Lucide,
+    Mark, MarkVariant, Markdown, Modal, Panel, Param, ParamKind, PathPicker, PathRoot, PromptText,
+    Qna, Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Simulator,
+    SortKey, Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl,
+    ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -43,46 +43,82 @@ fn main() {
     leptos::mount::mount_to_body(Playground);
 }
 
-/// Every variant of one component, under a caps label. The gallery is a list of these.
+/// Every variant of one component, under a label. The gallery is a list of these.
 #[component]
 fn Row(label: &'static str, children: Children) -> impl IntoView {
     view! {
-        <div class="flex flex-wrap items-center gap-3 border-b border-divider py-3 last:border-b-0">
-            <span class="caps w-28 shrink-0 text-faint">{label}</span>
+        <div class="flex flex-wrap items-center gap-3 border-b border-line py-3 last:border-b-0">
+            <span class="w-28 shrink-0 text-label text-ink-3">{label}</span>
             {children()}
         </div>
     }
 }
 
-/// The type scale, one row per step: what it is called, what it is for, and what it looks
-/// like at that size.
+/// The type scale (DESIGN.md §4), one row per role: the utility, what it is for, and what it
+/// looks like at that size.
 #[component]
 fn TypeSpecimen() -> impl IntoView {
     // Literal class names — Tailwind reads these out of the source, so they cannot be built.
     let steps = [
-        ("text-caps", "caps labels", "text-caps caps"),
-        ("text-mini", "meta, secondary", "text-mini"),
-        ("text-row", "list rows, buttons", "text-row"),
-        ("text-msg", "chat body", "text-msg"),
-        ("text-sub", "answer subheading", "text-sub"),
-        ("text-title", "screen titles", "text-title"),
+        (
+            "text-title",
+            "page title · 600 · 22px",
+            "text-title font-semibold text-ink",
+        ),
+        (
+            "text-section",
+            "section · 600 · 16px",
+            "text-section font-semibold text-ink",
+        ),
+        (
+            "text-body",
+            "transcript · 15.5px · line-height 1.6",
+            "text-body text-ink",
+        ),
+        ("text-ui", "inputs, table cells · 14px", "text-ui text-ink"),
+        (
+            "text-row",
+            "list items, buttons · 13.5px",
+            "text-row text-ink",
+        ),
+        (
+            "text-small",
+            "help text, notices · 13px · ink-2",
+            "text-small text-ink-2",
+        ),
+        (
+            "text-label",
+            "labels, table headers · 12px · ink-3",
+            "text-label text-ink-3",
+        ),
+        (
+            "text-mini",
+            "meta lines · 12px · ink-3",
+            "text-mini text-ink-3",
+        ),
     ];
     view! {
         <div class="flex flex-col">
             {steps
                 .map(|(name, role, class)| view! {
-                    <div class="flex items-baseline gap-4 border-b border-divider py-2.5 last:border-b-0">
-                        <span class="w-24 shrink-0 font-mono text-mini text-accent">{name}</span>
-                        <span class="w-40 shrink-0 text-mini text-meta">{role}</span>
-                        <span class=format!("{class} text-ink")>"Agent finished the run"</span>
+                    <div class="flex items-baseline gap-4 border-b border-line py-2.5">
+                        <span class="w-28 shrink-0 font-mono text-mini text-ink-3">{name}</span>
+                        <span class="w-56 shrink-0 text-mini text-ink-3">{role}</span>
+                        <span class=class>"Agent finished the run"</span>
                     </div>
                 })
                 .into_iter()
                 .collect::<Vec<_>>()}
+            <div class="flex items-baseline gap-4 border-b border-line py-2.5">
+                <span class="w-28 shrink-0 font-mono text-mini text-ink-3">"mono"</span>
+                <span class="w-56 shrink-0 text-mini text-ink-3">"paths, ids, commands · 12.5px"</span>
+                <span class="mono">"/Users/mgorunuch/adi-family · 0ef801d · bypassPermissions"</span>
+            </div>
             <div class="flex items-baseline gap-4 py-2.5">
-                <span class="w-24 shrink-0 font-mono text-mini text-accent">"metric"</span>
-                <span class="w-40 shrink-0 text-mini text-meta">"metric numbers"</span>
-                <span class="metric text-ink">"1,284"</span>
+                <span class="w-28 shrink-0 font-mono text-mini text-ink-3">"metric"</span>
+                <span class="w-56 shrink-0 text-mini text-ink-3">"a stats row · 500 · 20px"</span>
+                <span class="metric text-ink">"$6.78"</span>
+                <span class="metric text-ink">"84.5k"</span>
             </div>
         </div>
     }
@@ -92,20 +128,43 @@ fn TypeSpecimen() -> impl IntoView {
 #[component]
 fn Swatches(label: &'static str, items: Vec<(&'static str, &'static str)>) -> impl IntoView {
     view! {
-        <div class="border-b border-divider py-3 last:border-b-0">
-            <div class="caps mb-2 text-faint">{label}</div>
+        <div class="border-b border-line py-3 last:border-b-0">
+            <div class="mb-2 text-label text-ink-3">{label}</div>
             <div class="flex flex-wrap gap-2">
                 {items
                     .into_iter()
                     .map(|(name, class)| view! {
-                        <div class="flex items-center gap-2 rounded-sm border border-edge \
-                                    bg-card px-2 py-1">
-                            <span class=format!("size-4 rounded-sm border border-dim {class}")></span>
-                            <span class="font-mono text-mini text-secondary">{name}</span>
+                        <div class="flex items-center gap-2 rounded-md border border-line \
+                                    px-2 py-1">
+                            <span class=format!("size-4 rounded-sm border border-line-strong {class}")></span>
+                            <span class="font-mono text-mini text-ink-2">{name}</span>
                         </div>
                     })
                     .collect::<Vec<_>>()}
             </div>
+        </div>
+    }
+}
+
+/// Every icon in the set, at 16px in `--ink-2`, with its lucide.dev name under it. A glyph the
+/// UI needs and this grid lacks is added with `scripts/lucide.sh add <name>`.
+#[component]
+fn IconGrid() -> impl IntoView {
+    view! {
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(7rem,1fr))] gap-1">
+            {Lucide::ALL
+                .iter()
+                .map(|icon| view! {
+                    <div class="flex flex-col items-center gap-1.5 rounded-md py-2.5 text-ink-2 \
+                                hover:bg-hover"
+                         title=icon.name()>
+                        <Icon icon=*icon/>
+                        <span class="max-w-full truncate font-mono text-[11px] text-ink-3">
+                            {icon.name()}
+                        </span>
+                    </div>
+                })
+                .collect::<Vec<_>>()}
         </div>
     }
 }
@@ -224,10 +283,10 @@ fn ToolFormDemo() -> impl IntoView {
         <div class="flex flex-col gap-4">
             <ToolForm params=params/>
             <div>
-                <div class="caps mb-2 text-faint">"sent as"</div>
+                <div class="mb-2 text-label text-ink-3">"Sent as"</div>
                 <PromptText
                     tokens=Signal::derive(wire)
-                    class="rounded-sm border border-edge bg-panel-alt p-3"
+                    class="rounded-lg border border-line bg-raise p-3"
                 />
             </div>
         </div>
@@ -397,7 +456,7 @@ fn FlagDemo() -> impl IntoView {
             >
                 <PromptText
                     tokens=tokens
-                    class="rounded-sm border border-edge bg-panel-alt p-3"
+                    class="rounded-lg border border-line bg-raise p-3"
                 />
             </FlagMark>
             <FlagList
@@ -523,17 +582,16 @@ fn SimulatorShell(
     }
 }
 
-/// The inner markup of a 16×16 `<svg>`, which is what [`TreeNode::icon`] takes. Two are
-/// enough for a file browser; a real screen keeps its own set.
-const FOLDER: &str = "<path d='M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.2 1.6h5A1.5 1.5 0 0 1 14 6.1v5.4A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5z'/>";
-const FILE: &str = "<path d='M4 2h4.5L12 5.5V14H4z'/><path d='M8.5 2v3.5H12'/>";
+/// The two glyphs a file browser needs, as [`TreeNode::icon`] takes them.
+const FOLDER: Lucide = Lucide::Folder;
+const FILE: Lucide = Lucide::File;
 
-/// The same shape again, for [`Button`]'s `icon`.
-const EYE: &str = "<path d='M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z'/><circle cx='8' cy='8' r='2'/>";
-const CODE: &str = "<path d='M6 4 2.5 8 6 12'/><path d='M10 4l3.5 4-3.5 4'/>";
-const SAVE: &str = "<path d='M8 2.5v6'/><path d='M5 6l3 3 3-3'/><path d='M2.5 11v2.5h11V11'/>";
-const QUESTION: &str = "<circle cx='8' cy='8' r='6.25'/><path d='M6.15 6.05a1.9 1.9 0 1 1 2.6 1.75c-.5.2-.75.6-.75 1.1v.35'/><path d='M8 11.75h.01'/>";
-const SPARK: &str = "<path d='M6.5 2.5 8 6l3.5 1.5L8 9l-1.5 3.5L5 9l-3.5-1.5L5 6z'/><path d='M12 2v2.5'/><path d='M13.25 3.25h-2.5'/>";
+/// The same, for [`Button`]'s `icon`.
+const EYE: Lucide = Lucide::Eye;
+const CODE: Lucide = Lucide::Code;
+const SAVE: Lucide = Lucide::Save;
+const QUESTION: Lucide = Lucide::CircleHelp;
+const SPARK: Lucide = Lucide::Sparkles;
 
 /// What a file holds, for the demo. One per format the scanner knows, so clicking down the
 /// tree walks the whole palette.
@@ -766,7 +824,7 @@ fn PathDemo(#[prop(optional)] inline: bool) -> impl IntoView {
                 }
                     .into_any()
             }}
-            <Flash kind=FlashKind::Ok class="bg-transparent px-0">
+            <Flash kind=FlashKind::Ok>
                 {move || {
                     let chosen = picked.get();
                     if chosen.is_empty() {
@@ -850,7 +908,7 @@ fn FilesDemo() -> impl IntoView {
 
     view! {
         <div class="grid gap-4 min-[900px]:grid-cols-[240px_minmax(0,1fr)]">
-            <div class="island h-100 overflow-auto bg-panel">
+            <div class="h-100 overflow-auto rounded-lg bg-side">
                 <Tree nodes=nodes state=tree selected=path empty="No files."/>
             </div>
             <CodeFrame
@@ -921,7 +979,7 @@ fn CodeLogDemo() -> impl IntoView {
 
     view! {
         <div class="flex flex-col items-start gap-2">
-            <CodeLog value=buffer lang=Lang::Sh height=CodeHeight::Form class="island w-full"/>
+            <CodeLog value=buffer lang=Lang::Sh height=CodeHeight::Form class="w-full rounded-lg border border-line"/>
             <Button
                 size=ButtonSize::Small
                 variant=ButtonVariant::Ghost
@@ -1379,7 +1437,7 @@ fn SessionsDemo() -> impl IntoView {
             search=query
             actions=|| {
                 view! {
-                    <Button variant=ButtonVariant::Link size=ButtonSize::Small>"+ New"</Button>
+                    <Button size=ButtonSize::Small>"New"</Button>
                 }
                 .into_any()
             }
@@ -1392,22 +1450,28 @@ fn SessionsDemo() -> impl IntoView {
                     title="Walk the linear board"
                     state=SessionState::Working
                     selected=is_open("linear")
+                    agent="adi-agent"
                     age="14m"
+                    shortcut="\u{2303}1"
                     on:click=move |_| open.set("linear")
                 />
                 <SessionItem
                     title="Viacheslav Teremets, 5 Aug"
                     state=SessionState::Waiting
                     selected=is_open("teremets")
+                    agent="nakityok-lead"
                     alert="agent question"
                     age="2h"
+                    shortcut="\u{2303}2"
                     on:click=move |_| open.set("teremets")
                 />
                 <SessionItem
                     title="Deep-analysis pass"
                     state=SessionState::Working
                     selected=is_open("deep")
+                    agent="bb-finding-writer"
                     age="2m"
+                    shortcut="\u{2303}3"
                     on:click=move |_| open.set("deep")
                 />
             </RailGroup>
@@ -1530,21 +1594,23 @@ fn PortsDemo() -> impl IntoView {
                     <TableRow
                         state=table
                         cell=move |col| match col {
+                            // Identifiers in mono, one step dimmer than the name; an absent
+                            // value is a dash in the meta ink (§6).
                             "Port" => {
-                                view! { <span class="font-medium text-accent">{p.port}</span> }
+                                view! { <span class="mono text-ink-2">{p.port}</span> }
                                     .into_any()
                             }
                             "Service" => view! { <span class="text-ink">{p.service}</span> }.into_any(),
                             "PID" => {
                                 view! {
-                                    <span class="font-mono text-mini text-meta">
+                                    <span class=if p.pid == 0 { "text-ink-3" } else { "mono text-ink-2" }>
                                         {if p.pid == 0 { "—".to_string() } else { p.pid.to_string() }}
                                     </span>
                                 }
                                     .into_any()
                             }
                             "Uptime" => {
-                                view! { <span class="text-meta">{fmt_uptime(p.uptime)}</span> }
+                                view! { <span class="text-ink-3">{fmt_uptime(p.uptime)}</span> }
                                     .into_any()
                             }
                             "State" => {
@@ -1560,10 +1626,14 @@ fn PortsDemo() -> impl IntoView {
                             // A header the row builder does not know is its own business.
                             _ => ().into_any(),
                         }
+                        // Row actions live in a ⋯ menu, never as a word per row (§8).
                         actions=view! {
-                            <Button size=ButtonSize::Small variant=ButtonVariant::Link>
-                                "Free"
-                            </Button>
+                            <Button
+                                size=ButtonSize::Small
+                                variant=ButtonVariant::Ghost
+                                icon=Lucide::Ellipsis
+                                attr:aria-label="More actions"
+                            />
                         }
                             .into_any()
                     />
@@ -1589,41 +1659,25 @@ fn EmptyTableDemo() -> impl IntoView {
 
 #[component]
 fn Playground() -> impl IntoView {
-    // The theme override the tokens read off <html data-theme>. `None` follows the OS — the
-    // third state a two-way toggle would hide, and the one most people are actually in.
-    let theme = RwSignal::new(None::<&'static str>);
-    Effect::new(move |_| {
-        let Some(root) = document().document_element() else {
-            return;
-        };
-        match theme.get() {
-            Some(t) => {
-                let _ = root.set_attribute("data-theme", t);
-            }
-            None => {
-                let _ = root.remove_attribute("data-theme");
-            }
-        }
-    });
-
     // The FAQ the bar opens. Closed by default, and it closes itself three ways.
     let faq_open = RwSignal::new(false);
     let questions = vec![
         Qna::new(
             "What is this page?",
-            "Every component in `adi-ui`, in one place, in **both themes**. It is a dev \
-             surface: nothing embeds it and nothing depends on it.",
+            "Every component in `adi-ui`, in one place. It is a dev surface: nothing embeds it \
+             and nothing depends on it.",
         ),
         Qna::new(
-            "Why is there no `dark:` anywhere?",
-            "Because a token is already both themes. `bg-card` compiles to `var(--card)`, and \
-             that is one `light-dark()` declaration — `color-scheme` picks the half.",
+            "Where do the colours come from?",
+            "One file: `design/tokens.css`. Every utility here — `bg-side`, `text-ink-3`, \
+             `border-line` — is a `var()` onto a token in it, and the rules for choosing \
+             between them are `design/DESIGN.md` §3.",
         ),
         Qna::new(
             "Why did my class do nothing?",
             "Tailwind finds classes by *reading* the source, never by running it. \
              `format!(\"bg-{tone}\")` generates no CSS at all. Write the whole literal per \
-             branch:\n\n```rust\nSelf::Primary => \"bg-accent-fill text-on-accent\",\n```",
+             branch:\n\n```rust\nSelf::Primary => \"bg-accent text-on-accent\",\n```",
         ),
         Qna::new(
             "How do I run it?",
@@ -1641,13 +1695,12 @@ fn Playground() -> impl IntoView {
     let notes = RwSignal::new(String::from("--rm\n--network=host"));
 
     view! {
-        // The page's own lid, and the component under test: wall to wall, hairline at the
+        // The page's own bar, and the component under test: wall to wall, hairline at the
         // bottom, and it stays there while everything below it scrolls.
         //
         // What is *in* it is the point. The mark goes home, the middle says what is open,
         // and the right holds the way out to the other version of the app — the two or
-        // three things a screen owes you at all times. A theme toggle is not one of them;
-        // it lives with the palette it changes, further down the page.
+        // three things a screen owes you at all times.
         <TopBar
             logo="adi"
             home="/"
@@ -1680,125 +1733,106 @@ fn Playground() -> impl IntoView {
         </Modal>
 
         <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-            <Panel title="Type" flush=true>
-                <div class="px-4">
+            <Panel title="Type">
+                <div>
                     <TypeSpecimen/>
                 </div>
             </Panel>
 
-            <Panel
-                title="Palette"
-                flush=true
-                actions=move || {
-                    // Re-rendered as a block on every theme change so the active button can
-                    // switch `variant` — cheaper than a reactive variant prop for a dev
-                    // toggle. It sits here rather than in the bar: this is the panel it
-                    // changes, and a screen's header owes you navigation, not preferences.
-                    view! {
-                        {move || [("OS", None), ("Light", Some("light")), ("Dark", Some("dark"))]
-                            .map(|(label, value)| {
-                                let variant = if theme.get() == value {
-                                    ButtonVariant::Primary
-                                } else {
-                                    ButtonVariant::Default
-                                };
-                                view! {
-                                    <Button
-                                        size=ButtonSize::Small
-                                        variant=variant
-                                        on:click=move |_| theme.set(value)
-                                    >
-                                        {label}
-                                    </Button>
-                                }
-                            })
-                            .into_iter()
-                            .collect::<Vec<_>>()}
-                    }
-                    .into_any()
-                }
-            >
-                <div class="px-4">
+            <Panel title="Palette">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "A grey scale with one accent, from `design/tokens.css`. The surface ladder \
+                     does the structure — lower is further from the reader — and three inks do \
+                     the hierarchy. The semantic colours appear as 6px dots and pills, never as \
+                     fills; the accent fills exactly one element per screen."
+                </p>
+                <div>
                     <Swatches
-                        label="surfaces"
+                        label="Surfaces, lowest first"
                         items=vec![
-                            ("canvas", "bg-canvas"),
-                            ("stage", "bg-stage"),
-                            ("panel", "bg-panel"),
-                            ("panel-alt", "bg-panel-alt"),
-                            ("bar", "bg-bar"),
-                            ("card", "bg-card"),
-                            ("bubble", "bg-bubble"),
-                            ("selected", "bg-selected"),
+                            ("side", "bg-side"),
+                            ("bg", "bg-bg"),
+                            ("hover", "bg-hover"),
+                            ("raise", "bg-raise"),
+                            ("active", "bg-active"),
+                            ("chip", "bg-chip"),
+                            ("btn", "bg-btn"),
                         ]
                     />
                     <Swatches
-                        label="lines"
-                        items=vec![
-                            ("divider", "bg-divider"),
-                            ("frame", "bg-frame"),
-                            ("edge", "bg-edge"),
-                            ("edge-2", "bg-edge-2"),
-                            ("dim", "bg-dim"),
-                        ]
+                        label="Lines"
+                        items=vec![("line", "bg-line"), ("line-strong", "bg-line-strong")]
                     />
                     <Swatches
-                        label="text"
+                        label="Ink"
                         items=vec![
                             ("ink", "bg-ink"),
-                            ("body", "bg-body"),
-                            ("secondary", "bg-secondary"),
-                            ("meta", "bg-meta"),
-                            ("placeholder", "bg-placeholder"),
-                            ("faint", "bg-faint"),
-                            ("fainter", "bg-fainter"),
+                            ("ink-2", "bg-ink-2"),
+                            ("ink-3", "bg-ink-3"),
+                            ("code", "bg-code"),
                         ]
                     />
                     <Swatches
-                        label="accent"
+                        label="Accent — one per screen"
                         items=vec![
                             ("accent", "bg-accent"),
-                            ("accent-fill", "bg-accent-fill"),
+                            ("accent-hover", "bg-accent-hover"),
                             ("on-accent", "bg-on-accent"),
-                            ("accent-soft", "bg-accent-soft"),
-                            ("accent-soft-edge", "bg-accent-soft-edge"),
-                            ("tip", "bg-tip"),
-                            ("tip-edge", "bg-tip-edge"),
                         ]
                     />
                     <Swatches
-                        label="states"
+                        label="Semantic — dots and pills only"
                         items=vec![
+                            ("ok", "bg-ok"),
+                            ("warn", "bg-warn"),
                             ("err", "bg-err"),
-                            ("err-btn", "bg-err-btn"),
-                            ("err-bg", "bg-err-bg"),
-                            ("err-bg-2", "bg-err-bg-2"),
-                            ("err-edge", "bg-err-edge"),
-                            ("queue", "bg-queue"),
-                            ("queue-ink", "bg-queue-ink"),
-                            ("queue-bg", "bg-queue-bg"),
-                            ("attention", "bg-attention"),
+                            ("ok-soft", "bg-ok-soft"),
+                            ("warn-soft", "bg-warn-soft"),
+                            ("err-soft", "bg-err-soft"),
                         ]
                     />
                 </div>
             </Panel>
 
-            <Panel title="Mark" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Icons">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "Lucide, and only Lucide: stroke 1.5, sizes 14 / 16 / 20 / 24, the ink of \
+                     the text beside it, always with a label in the app. DESIGN.md §9 maps each \
+                     noun to its glyph; this is the whole set the build knows."
+                </p>
+                <Row label="sizes">
+                    <span class="flex items-center gap-1.5 text-mini text-ink-3">
+                        <Icon icon=Lucide::Folder size=IconSize::Sm/>"14 · meta, tags"
+                    </span>
+                    <span class="flex items-center gap-1.5 text-row text-ink-2">
+                        <Icon icon=Lucide::Folder/>"16 · rows, tables, buttons"
+                    </span>
+                    <span class="flex items-center gap-2 text-ui text-ink-2">
+                        <Icon icon=Lucide::Folder size=IconSize::Lg/>"20 · landing"
+                    </span>
+                    <span class="flex items-center gap-2 text-ui text-ink-3">
+                        <Icon icon=Lucide::Folder size=IconSize::Xl/>"24 · empty states"
+                    </span>
+                </Row>
+                <IconGrid/>
+            </Panel>
+
+            <Panel title="Mark">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Trefoil \u{2014} three hexagons at 120\u{b0}, painted back to front, weak to \
                      strong. It never names its own ink: every lobe is "<code>"currentColor"</code>" \
                      at one of three tones, which is why the row below only changes the text \
                      colour and the mark follows. The middle lobe is the one exception, and only \
                      when it is asked to be."
-                </div>
-                <div class="px-4 pt-2 text-mini text-meta">
-                    "One drawing cannot serve a 16px tab icon and a 168px error page, so there \
-                     are three. "<code>"Cut"</code>" keeps hairline gaps between the lobes and is \
+                </p>
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "One drawing cannot serve a 16px tab icon and a 104px splash, so there \
+                     are two. "<code>"Cut"</code>" keeps hairline gaps between the lobes and is \
                      the only one that survives being small; "<code>"Solid"</code>" drops them \
-                     above ~64px; "<code>"Glass"</code>" lets the lobes mix, which is rich at \
-                     96px and mud below it. Compare the first column of each row."
-                </div>
-                <div class="px-4">
+                     above ~64px. Monochrome in the app; the coloured build is the app icon's \
+                     and the landing's. Compare the first column of each row."
+                </p>
+                <div>
                     <Row label="cut">
                         <Mark class="size-4"/>
                         <Mark class="size-8"/>
@@ -1811,12 +1845,6 @@ fn Playground() -> impl IntoView {
                         <Mark variant=MarkVariant::Solid accent=true class="size-8"/>
                         <Mark variant=MarkVariant::Solid accent=true class="size-24"/>
                     </Row>
-                    <Row label="glass">
-                        <Mark variant=MarkVariant::Glass class="size-4"/>
-                        <Mark variant=MarkVariant::Glass class="size-8"/>
-                        <Mark variant=MarkVariant::Glass accent=true class="size-8"/>
-                        <Mark variant=MarkVariant::Glass accent=true class="size-24"/>
-                    </Row>
                     <Row label="on a ground">
                         // The mark inherits whatever ink it lands in, which is the whole
                         // reason it is drawn in `currentColor` rather than in a palette.
@@ -1825,7 +1853,7 @@ fn Playground() -> impl IntoView {
                             <Mark class="size-8"/>
                             <Mark variant=MarkVariant::Solid class="size-8"/>
                         </span>
-                        <span class="flex items-center gap-3 rounded-md bg-ink p-3 text-canvas">
+                        <span class="flex items-center gap-3 rounded-md bg-ink p-3 text-bg">
                             <Mark class="size-8"/>
                             <Mark variant=MarkVariant::Solid accent=true class="size-8"/>
                         </span>
@@ -1833,26 +1861,25 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="TopBar" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="TopBar">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The page's own header is this component — scroll and it stays. Here it \
-                     is again inside a window, which is where it lives: wall to wall with a \
-                     hairline under it, and islands below. It is the one thing in the crate \
-                     that is not an island itself, because it is the screen's edge rather \
-                     than an object on the screen."
-                </div>
-                <div class="px-4 pt-2 text-mini text-meta">
+                     is again inside a window, which is where it lives: 48px, on the side \
+                     surface, wall to wall with a hairline under it, and the panels flush \
+                     beneath it."
+                </p>
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The mark has three shapes. With "<code>"home"</code>" it is a link out of \
                      here; with neither prop it is plain text, because a link to the page you \
                      are on does nothing. This one has "<code>"on_home"</code>": open the row \
                      below and click "<code>"adi."</code>" — a screen that keeps \"where you \
                      are\" in state rather than in the URL still owes you the way back, and \
                      the way back is putting it as it opened."
-                </div>
-                <div class="p-4">
-                    // A window, in miniature: the bar's corners are clipped by the island
-                    // around it, which is why that island owns the `overflow-hidden`.
-                    <div class="island overflow-hidden bg-canvas">
+                </p>
+                <div>
+                    // A window, in miniature: the bar's corners are clipped by the frame
+                    // around it, which is why that frame owns the `overflow-hidden`.
+                    <div class="overflow-hidden rounded-lg border border-line bg-bg">
                         <TopBar
                             logo="adi"
                             on_home=Callback::new(move |()| opened.set(false))
@@ -1861,29 +1888,33 @@ fn Playground() -> impl IntoView {
                                     <Button
                                         size=ButtonSize::Small
                                         variant=ButtonVariant::Ghost
-                                        icon=SAVE
+                                        icon=Lucide::Download
                                     >
                                         "Install"
                                     </Button>
-                                    <Button size=ButtonSize::Small variant=ButtonVariant::Primary>
-                                        "+ New"
+                                    <Button
+                                        size=ButtonSize::Small
+                                        variant=ButtonVariant::Primary
+                                        icon=Lucide::ArrowUp
+                                    >
+                                        "Update to 1.2.0"
                                     </Button>
                                 }
                                 .into_any()
                             }
                         >
-                            <span class="font-mono text-mini text-meta">
-                                "/ " <span class="text-secondary">"projects"</span>
+                            <span class="text-small text-ink-3">
+                                "/ " <span class="font-medium text-ink">"Projects"</span>
                             </span>
                         </TopBar>
-                        <div class="flex gap-3 p-3">
-                            <div class="island h-20 w-32 shrink-0 bg-panel"></div>
+                        <div class="flex">
+                            <div class="h-24 w-32 shrink-0 border-r border-line bg-side"></div>
                             // Something to be got out of: with a row open the window is no
                             // longer as it opened, and the mark is what closes it again.
                             {move || if opened.get() {
                                 view! {
-                                    <div class="island flex h-20 flex-1 items-center \
-                                                justify-center bg-card text-mini text-meta">
+                                    <div class="flex h-24 flex-1 items-center justify-center \
+                                                text-small text-ink-3">
                                         "a row is open — click the mark"
                                     </div>
                                 }
@@ -1892,8 +1923,8 @@ fn Playground() -> impl IntoView {
                                 view! {
                                     <button
                                         type="button"
-                                        class="island h-20 flex-1 cursor-pointer bg-card \
-                                               text-mini text-meta hover:border-accent/60"
+                                        class="h-24 flex-1 cursor-pointer text-small text-ink-3 \
+                                               hover:bg-hover hover:text-ink"
                                         on:click=move |_| opened.set(true)
                                     >
                                         "open a row"
@@ -1906,14 +1937,20 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Button" flush=true>
-                <div class="px-4">
+            <Panel title="Button">
+                <div>
                     <Row label="variant">
-                        <Button>"Default"</Button>
-                        <Button variant=ButtonVariant::Primary>"Primary"</Button>
-                        <Button variant=ButtonVariant::Ghost>"Ghost"</Button>
-                        <Button variant=ButtonVariant::Danger>"Danger"</Button>
-                        <Button variant=ButtonVariant::Link>"Link"</Button>
+                        <Button variant=ButtonVariant::Primary>"Save changes"</Button>
+                        <Button variant=ButtonVariant::Strong>"New agent"</Button>
+                        <Button>"Check for updates"</Button>
+                        <Button variant=ButtonVariant::Ghost>"Cancel"</Button>
+                        <Button variant=ButtonVariant::Danger>"Remove"</Button>
+                        <Button variant=ButtonVariant::Link>"Open chat"</Button>
+                    </Row>
+                    <Row label="with an icon">
+                        <Button icon=Lucide::Plus variant=ButtonVariant::Strong>"New agent"</Button>
+                        <Button icon=Lucide::RefreshCw>"Refresh"</Button>
+                        <Button icon=Lucide::Ellipsis variant=ButtonVariant::Ghost attr:aria-label="More actions"/>
                     </Row>
                     <Row label="size">
                         <Button size=ButtonSize::Small>"Small"</Button>
@@ -1935,30 +1972,38 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Badge" flush=true>
-                <div class="px-4">
-                    <Row label="tone">
-                        <Badge>"neutral"</Badge>
-                        <Badge tone=BadgeTone::Online>"running"</Badge>
+            <Panel title="Badge">
+                <div>
+                    <Row label="tag / pill">
+                        <Badge>"bugbounty"</Badge>
+                        <Badge tone=BadgeTone::Online>"set"</Badge>
                         <Badge tone=BadgeTone::Warn>"queued"</Badge>
                         <Badge tone=BadgeTone::Down>"failed"</Badge>
-                        <Badge tone=BadgeTone::Accent>"selected"</Badge>
+                        <Badge tone=BadgeTone::Accent>"composed"</Badge>
                     </Row>
-                    <Row label="mono">
+                    <Row label="chip · mono">
                         <Badge mono=true>":8000"</Badge>
+                        <Badge mono=true>"claude-opus-4-8"</Badge>
                         <Badge mono=true tone=BadgeTone::Accent>"a1b2c3d"</Badge>
+                    </Row>
+                    <Row label="dot">
+                        <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Ok/>"online"</span>
+                        <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Live/>"running"</span>
+                        <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Warn/>"waiting"</span>
+                        <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Err/>"failed"</span>
+                        <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Idle/>"idle"</span>
                     </Row>
                 </div>
             </Panel>
 
-            <Panel title="Kbd" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
-                    "A shortcut, printed as a key cap. Quieter than a badge on purpose: it \
-                     rides a row that already does the thing, and a list wearing forty of \
-                     them is a list nobody scans. It renders the text it is handed — which \
-                     platform's spelling that is belongs to the call site."
-                </div>
-                <div class="px-4">
+            <Panel title="Kbd">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "A shortcut. As quiet as a thing can be and still be read: it rides a row \
+                     that already does the thing, and a list wearing forty badges is a list \
+                     nobody scans. It renders the text it is handed — which platform's \
+                     spelling that is belongs to the call site."
+                </p>
+                <div>
                     <Row label="a key">
                         <Kbd>"\u{2318}1"</Kbd>
                         <Kbd>"\u{2318}K"</Kbd>
@@ -1973,14 +2018,16 @@ fn Playground() -> impl IntoView {
                 actions=|| {
                     view! {
                         <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>"Refresh"</Button>
-                        <Button size=ButtonSize::Small variant=ButtonVariant::Primary>"Add"</Button>
+                        <Button size=ButtonSize::Small variant=ButtonVariant::Strong>"Add"</Button>
                     }
                     .into_any()
                 }
             >
-                <p class="m-0 text-mini text-meta">
-                    "A panel with a title and header actions. The one below has neither, so it \
-                     drops its header and is just a surface."
+                <p class="m-0 max-w-[64ch] text-small text-ink-3">
+                    "A section: its title, its actions, a hairline, and the content flush with \
+                     the title. Not a card — grouping is done with tone and hairlines, never \
+                     boxes. The one below has neither title nor actions, so it drops its header \
+                     and is just a block."
                 </p>
                 <Panel class="mt-3">
                     <span class="text-row">"Bare panel."</span>
@@ -1989,8 +2036,8 @@ fn Playground() -> impl IntoView {
 
             // Controls shown where they actually live — closing a panel, not floating in a
             // row of their own. A form strip only looks right against the body above it.
-            <Panel title="Table" flush=true>
-                <div class="px-4 pt-3 pb-3 text-mini text-meta">
+            <Panel title="Table">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Live: click a header to sort it, click again to reverse, and open the \
                      gear to show, hide and reorder columns. Both are persisted, so the \
                      table is still arranged that way after a reload. What is compared is \
@@ -2007,28 +2054,28 @@ fn Playground() -> impl IntoView {
                     ". Sort either column as text and both of those come out backwards. The \
                      last column is the action column: blank header, never offered by the \
                      gear, and shrink-wrapped so the data keeps the width."
-                </div>
+                </p>
                 <PortsDemo/>
             </Panel>
 
-            <Panel title="Table · empty" flush=true>
-                <div class="px-4 pt-3 pb-3 text-mini text-meta">
+            <Panel title="Table · empty">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The placeholder spans the columns the table is "
                     <em>"currently"</em>
                     " showing, so it stays centred after a column is hidden. This one has no \
                      action column, which is the other half of the gear's rule: three \
                      columns to arrange, so the gear is there — a one-column table has \
                      nothing to offer and shows none."
-                </div>
+                </p>
                 <EmptyTableDemo/>
             </Panel>
 
-            <Panel title="Form · Field · Input" flush=true>
-                <div class="px-4 pt-3 pb-1 text-mini text-meta">
+            <Panel title="Form · Field · Input">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Fields align on their inputs, not their labels. Hover a "
                     <span class="font-mono">"?"</span>
                     " for the hint — it costs the row no height."
-                </div>
+                </p>
                 <Form>
                     <Field label="Name" grow=true hint="Unique within the project.">
                         <Input value=name width=InputWidth::Wide placeholder="service name"/>
@@ -2045,20 +2092,31 @@ fn Playground() -> impl IntoView {
                     </Field>
                     <Button variant=ButtonVariant::Primary submit=true>"Create"</Button>
                 </Form>
+                <div class="mt-4 flex flex-wrap items-end gap-2">
+                    <Field label="Model">
+                        <Input value=backend mono=true placeholder="opus"/>
+                    </Field>
+                    <Field label="Runtime">
+                        <Select value=backend mono=true>
+                            <option value="claude">"claude-sdk"</option>
+                            <option value="codex">"codex"</option>
+                        </Select>
+                    </Field>
+                </div>
                 <Flash kind=FlashKind::Ok>
                     {move || format!("reserved {} on :{}", name.get(), port.get())}
                 </Flash>
                 <Hint>"A hint block is the written-out version of a field's ?."</Hint>
             </Panel>
 
-            <Panel title="Textarea · Select · widths" flush=true>
-                <div class="grid gap-3 p-4">
+            <Panel title="Textarea · Select · widths">
+                <div class="grid gap-3">
                     <Field label="Docker args" hint="One flag per line.">
                         <Textarea value=notes rows=3/>
                     </Field>
                     <div class="flex flex-wrap items-end gap-2">
-                        <Field label="Default"><Input placeholder="140px"/></Field>
-                        <Field label="Num"><Input width=InputWidth::Num placeholder="72"/></Field>
+                        <Field label="Default"><Input placeholder="200px"/></Field>
+                        <Field label="Num"><Input width=InputWidth::Num placeholder="80"/></Field>
                         <Field label="Wide" grow=true>
                             <Input width=InputWidth::Wide placeholder="fills the row"/>
                         </Field>
@@ -2069,19 +2127,20 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Flash · Empty" flush=true>
-                <div class="flex flex-col gap-2 p-4">
+            <Panel title="Flash · Empty">
+                <div class="flex flex-col gap-2">
                     <Flash kind=FlashKind::Ok card=true>"Reserved :8000 for ports."</Flash>
                     <Flash kind=FlashKind::Err card=true>"Port 8000 is already held by app."</Flash>
                     <Flash card=true>"Reserving…"</Flash>
+                    <Flash kind=FlashKind::Ok>"Inline, under a form: reserved :8000."</Flash>
                 </div>
-                <div class="border-t border-divider">
+                <div class="border-t border-line">
                     <Empty>"No ports reserved yet."</Empty>
                 </div>
             </Panel>
 
-            <Panel title="Tree · CodeEditor" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Tree · CodeEditor">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A file browser and the editor a file opens in. The tree takes one flat, \
                      depth-annotated list — depth is what makes it a tree, and a closed row \
                      hides everything deeper than it. The editor is a painted "
@@ -2093,14 +2152,14 @@ fn Playground() -> impl IntoView {
                     <span class="font-mono">".toml"</span> " and a "
                     <span class="font-mono">".yaml"</span>
                     " — the language follows the path."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <FilesDemo/>
                 </div>
             </Panel>
 
-            <Panel title="CodeLog" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="CodeLog">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The read-only half: a log that grows under a poll. It follows the tail \
                      while you are at the bottom and stops the moment you scroll up, so \
                      history holds still while output keeps arriving — scroll back down and \
@@ -2108,14 +2167,14 @@ fn Playground() -> impl IntoView {
                     <span class="font-mono">"<pre>"</span>
                     ", not a read-only editor: writing a textarea's value resets its scroll, \
                      which under a poll means being yanked to the top every second."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <CodeLogDemo/>
                 </div>
             </Panel>
 
-            <Panel title="PathPicker" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="PathPicker">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A directory, typed or browsed to \u{2014} and both at once, because the two \
                      halves are one value. Paste a path and the list is already inside it; \
                      click a folder and the text grows a segment. Typing filters where you \
@@ -2134,21 +2193,21 @@ fn Playground() -> impl IntoView {
                     " for the refusal, and "
                     <span class="font-mono">"Documents"</span>
                     " for a folder with nothing in it."
-                </div>
-                <div class="grid gap-6 p-4 min-[880px]:grid-cols-2">
+                </p>
+                <div class="grid gap-6 min-[880px]:grid-cols-2">
                     <div>
-                        <div class="caps mb-2 text-faint">"in a form row"</div>
+                        <div class="mb-2 text-label text-ink-3">"In a form row"</div>
                         <PathDemo/>
                     </div>
                     <div>
-                        <div class="caps mb-2 text-faint">"inline"</div>
+                        <div class="mb-2 text-label text-ink-3">"Inline"</div>
                         <PathDemo inline=true/>
                     </div>
                 </div>
             </Panel>
 
-            <Panel title="TokenStream · PromptText" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="TokenStream · PromptText">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The same tokens, twice. Above, every split shown — the boundary is the \
                      information, so the colour cycles by position and means nothing else. \
                      Below, the string as a person reads it, with only the template's control \
@@ -2158,41 +2217,41 @@ fn Playground() -> impl IntoView {
                      legible and honest about where it breaks. Hover a chip for its id and its \
                      exact text — that is how you catch a leading space belonging to the next \
                      word."
-                </div>
-                <div class="flex flex-col gap-4 p-4">
+                </p>
+                <div class="flex flex-col gap-4">
                     <div>
-                        <div class="caps mb-2 text-faint">"tokens"</div>
+                        <div class="mb-2 text-label text-ink-3">"Tokens"</div>
                         <TokenStream
                             tokens=Signal::derive(prompt_tokens)
-                            class="max-h-60 overflow-auto rounded-sm border border-edge p-3"
+                            class="max-h-60 overflow-auto rounded-lg border border-line bg-raise p-3"
                         />
                     </div>
                     <div>
-                        <div class="caps mb-2 text-faint">"prompt"</div>
+                        <div class="mb-2 text-label text-ink-3">"Prompt"</div>
                         <PromptText
                             tokens=Signal::derive(prompt_tokens)
-                            class="max-h-60 overflow-auto rounded-sm border border-edge p-3"
+                            class="max-h-60 overflow-auto rounded-lg border border-line bg-raise p-3"
                         />
                     </div>
                 </div>
             </Panel>
 
-            <Panel title="ToolForm" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="ToolForm">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A tool's parameters, built from the schema the tool itself declares — so a \
                      parameter added to the tool shows up here rather than being quietly \
                      missing. Wide controls take their own row. Nothing here builds the call: \
                      the values are signals the caller owns, and the preview under the form is \
                      written by the caller too, because what goes on the wire belongs to \
                      whoever is sending it."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <ToolFormDemo/>
                 </div>
             </Panel>
 
-            <Panel title="TurnBlocks · StopLine" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="TurnBlocks · StopLine">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A model does not answer and then call a tool — it emits one turn made of \
                      blocks, and the turn is over when it stops emitting. So this is a list, \
                      and it is a staging area rather than history: nothing in it has happened, \
@@ -2200,32 +2259,32 @@ fn Playground() -> impl IntoView {
                      component the transcript draws a real one with, because a simulated call \
                      that looked different would be teaching the wrong shape on the one screen \
                      built to teach the right one."
-                </div>
-                <div class="flex flex-col gap-4 p-4">
+                </p>
+                <div class="flex flex-col gap-4">
                     <StagingDemo/>
                     <div>
-                        <div class="caps mb-2 text-faint">"how a turn ends"</div>
+                        <div class="mb-2 text-label text-ink-3">"How a turn ends"</div>
                         <StopLine stop=Stop::ToolUse/>
                         <StopLine stop=Stop::EndTurn/>
                     </div>
                 </div>
             </Panel>
 
-            <Panel title="FlagMark · FlagList" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="FlagMark · FlagList">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Select any of the text below with the mouse or with Shift+arrows. The \
                      offer follows the selection, quotes it as it read at the time — a copy, \
                      not an offset into a document that is about to be edited — and drops a \
                      note field under it. Nothing else is asked for: a form standing between \
                      noticing something and recording it loses most of what gets noticed."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <FlagDemo/>
                 </div>
             </Panel>
 
-            <Panel title="Simulator" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Simulator">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The whole flow, wired to itself. Left is what the model sees — one \
                      document, instructions and tools and every turn so far, because to a model \
                      there is no separate transcript. Right is what the model does. Stack a \
@@ -2235,14 +2294,14 @@ fn Playground() -> impl IntoView {
                      the model; without one the run yields and the bottom composer wakes up so \
                      you can answer as yourself. Only the execution is faked here — the real \
                      screen calls the runner's own tools."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <SimulatorDemo/>
                 </div>
             </Panel>
 
-            <Panel title="Chat" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Chat">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Newest first — an agent's run is long and mostly tool calls, and you come \
                      back to it to find out what just happened, not to re-read it. Nothing \
                      pins to the bottom, so streaming content pushes away from you instead of \
@@ -2252,14 +2311,14 @@ fn Playground() -> impl IntoView {
                      find-in-page away. Tool runs are folded by default and text is the \
                      divider between them; the one still running shows itself in the closed \
                      summary."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <ChatDemo/>
                 </div>
             </Panel>
 
-            <Panel title="Ask" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Ask">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "What a run puts up when it needs a person to decide something. It is the \
                      visible half of a stored question: while the card is there the conversation \
                      is blocked, and when it goes the answer is a turn like any other. One \
@@ -2269,35 +2328,35 @@ fn Playground() -> impl IntoView {
                      than holding the conversation hostage to the one nobody can settle. Every \
                      question keeps a free-text box, because “neither, do this instead” is \
                      regularly the right answer."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <AskDemo/>
                 </div>
             </Panel>
 
-            <Panel title="Apps" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Apps">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The right rail: the living apps on this stack. Same container, same bands \
                      and same card as the sessions on the other side — a different row in \
                      them. An app belongs to two things and the row says both: the project it \
                      is part of is the band, the fleet node it runs on is the name under its \
                      title. The mark is its own favicon, and the state rides its corner."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     <div class="h-140 w-80 max-w-full">
                         <AppsDemo/>
                     </div>
                 </div>
             </Panel>
 
-            <Panel title="Sessions" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
+            <Panel title="Sessions">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The rail is live: click a row. Scroll it and the title goes with the \
                      rows while the filter box stays — that box binds a signal and does \
                      nothing else, since what a query matches is the caller's to decide, and \
                      here it is wired to the done band only."
-                </div>
-                <div class="p-4">
+                </p>
+                <div>
                     // A rail fills the height it is given, so the demo has to give it one.
                     <div class="h-140 w-80 max-w-full">
                         <SessionsDemo/>
@@ -2305,27 +2364,29 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Session card" flush=true>
-                <div class="px-4 pt-3 text-mini text-meta">
-                    "Every state a row can be in, selected and not — the open one is a fill \
-                     and a hairline all the way round, and a waiting one washes amber on a \
-                     5s cycle whether it is open or not."
-                </div>
-                <div class="p-4">
-                    <div class="island bg-panel px-1.5 pb-3">
+            <Panel title="Session card">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "Every state a row can be in, open and not. The open one is a tone \
+                     change; the state is a 6px dot before the title and one word in the \
+                     meta line — orange for running, amber for waiting on you, red for \
+                     broken. Nothing washes and nothing moves."
+                </p>
+                <div>
+                    <div class="rounded-lg bg-side px-1.5 pb-3">
                         // Every state, twice: as it sits in the list and as the open one.
                         // Only the fill and the hairline change between the two.
-                        <RailGroup label="done">
-                            <SessionItem title="Done" agent="nakityok-lead" age="21h"/>
+                        <RailGroup label="Done">
+                            <SessionItem title="Done" agent="nakityok-lead" age="21h" shortcut="\u{2303}4"/>
                             <SessionItem
                                 title="Done · selected"
                                 selected=true
                                 agent="nakityok-lead"
                                 age="21h"
+                                shortcut="\u{2303}5"
                             />
                         </RailGroup>
 
-                        <RailGroup label="waiting">
+                        <RailGroup label="Waiting">
                             <SessionItem
                                 title="Waiting"
                                 state=SessionState::Waiting
@@ -2341,7 +2402,7 @@ fn Playground() -> impl IntoView {
                             />
                         </RailGroup>
 
-                        <RailGroup label="error">
+                        <RailGroup label="Error">
                             <SessionItem
                                 title="Error"
                                 state=SessionState::Error
@@ -2357,7 +2418,7 @@ fn Playground() -> impl IntoView {
                             />
                         </RailGroup>
 
-                        <RailGroup label="working">
+                        <RailGroup label="Working">
                             <SessionItem
                                 title="Working"
                                 state=SessionState::Working
@@ -2373,7 +2434,25 @@ fn Playground() -> impl IntoView {
                             />
                         </RailGroup>
 
-                        <RailGroup label="the rest" count=2>
+                        <RailGroup label="Awaiting">
+                            <SessionItem
+                                title="Awaiting"
+                                state=SessionState::Awaiting
+                                agent="adi-agent"
+                                alert="wakes on webhook"
+                                age="1h"
+                            />
+                            <SessionItem
+                                title="Awaiting · selected"
+                                state=SessionState::Awaiting
+                                selected=true
+                                agent="adi-agent"
+                                alert="wakes on webhook"
+                                age="1h"
+                            />
+                        </RailGroup>
+
+                        <RailGroup label="The rest" count=2>
                             // A title too long for the rail truncates; the line under it
                             // clips rather than wrapping the row to two heights.
                             <SessionItem
@@ -2390,16 +2469,16 @@ fn Playground() -> impl IntoView {
 
                         // The box on its own, for a row a session does not describe. `fill`
                         // is where the state goes; everything inside is the caller's.
-                        <RailGroup label="bare card" count=2>
-                            <RailCard fill="hover:bg-card">
-                                <span class="text-row text-body">"Anything, in a row"</span>
+                        <RailGroup label="Bare card" count=2>
+                            <RailCard fill="hover:bg-hover">
+                                <span class="text-row text-ink">"Anything, in a row"</span>
                             </RailCard>
-                            <RailCard fill="border-edge bg-selected" current=true>
+                            <RailCard fill="bg-active" current=true>
                                 <span class="text-row text-ink">"…and the same one, open"</span>
                             </RailCard>
                         </RailGroup>
 
-                        <RailGroup label="empty">
+                        <RailGroup label="Empty">
                             <Empty>"No sessions yet."</Empty>
                         </RailGroup>
                     </div>
@@ -2555,15 +2634,15 @@ fn FactsPanel() -> impl IntoView {
     ]);
 
     view! {
-        <Panel title="Facts \u{2014} the pair" flush=true>
-            <div class="px-4 pt-3 text-mini text-meta">
+        <Panel title="Facts \u{2014} the pair">
+            <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                 "The decision atom. Two facts of equal weight, the classifier's guess and its \
                  strength as a plain number, its reason underneath and clearly labelled as \
                  its own, and four verdicts of equal weight \u{2014} `coexist` among them, \
                  because confirming that both are true is a decision. Click a card and the \
                  keys work: c / m / s / d rule it, \u{2193}\u{2191} walk the queue."
-            </div>
-            <div class="flex flex-col gap-3 p-4">
+            </p>
+            <div class="flex flex-col gap-3">
                 // One card per relation, so all three tones are on screen at once.
                 <PairCard
                     pair=Pair::new(
@@ -2675,21 +2754,20 @@ fn FactsPanel() -> impl IntoView {
 
         <Panel
             title="Facts \u{2014} the transaction"
-            flush=true
             actions=move || view! {
                 <Button size=ButtonSize::Small variant=ButtonVariant::Ghost on:click=reset>
-                    "reset"
+                    "Reset"
                 </Button>
             }
                 .into_any()
         >
-            <div class="px-4 pt-3 pb-3 text-mini text-meta">
+            <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                 "The queue, live: rule on a card and it keeps its place wearing its verdict, \
                  the count drops, and the commit unlocks only when nothing is open. The \
                  truncation line is drawn either way \u{2014} \"nothing more\" and \"we \
                  stopped looking\" are different facts."
-            </div>
-            <div class="px-4 pb-4">
+            </p>
+            <div>
                 // The other half of the truncation line: nothing was left out, and the queue
                 // says so rather than saying nothing.
                 <TxPanel
@@ -2729,8 +2807,8 @@ fn FactsPanel() -> impl IntoView {
             </div>
         </Panel>
 
-        <Panel title="Facts \u{2014} the node" flush=true>
-            <div class="px-4">
+        <Panel title="Facts \u{2014} the node">
+            <div>
                 <Row label="rows">
                     <div class="flex w-full min-w-0 flex-col">
                         <FactRow fact=cis()/>
@@ -2744,7 +2822,7 @@ fn FactsPanel() -> impl IntoView {
                             .at(4)
                             .kind(NodeKind::Composed)/>
                         <FactRow fact=plan()>
-                            <Badge tone=BadgeTone::Warn mono=true>"stale"</Badge>
+                            <Badge tone=BadgeTone::Warn>"stale"</Badge>
                         </FactRow>
                     </div>
                 </Row>
@@ -2754,7 +2832,7 @@ fn FactsPanel() -> impl IntoView {
                             fact=cis()
                             actions=move || view! {
                                 <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>
-                                    "history"
+                                    "History"
                                 </Button>
                             }
                                 .into_any()
@@ -2769,12 +2847,12 @@ fn FactsPanel() -> impl IntoView {
             </div>
         </Panel>
 
-        <Panel title="Facts \u{2014} stale, and history" flush=true>
-            <div class="px-4 pt-3 text-mini text-meta">
+        <Panel title="Facts \u{2014} stale, and history">
+            <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                 "Both are was/now surfaces. Which fact moved is not the question \u{2014} \
                  whether the derived text still holds is, and only the two sentences answer it."
-            </div>
-            <div class="px-4">
+            </p>
+            <div>
                 <Row label="stale">
                     <div class="w-full min-w-0">
                         <StaleList
