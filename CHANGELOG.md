@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.4.0 — 2026-09-03
+
 ### Fixed
 
 - **A front door that stopped is put back when you open ADI again.** `.adi` names are answered by
