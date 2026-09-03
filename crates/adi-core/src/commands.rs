@@ -39,6 +39,17 @@ pub struct SetupReport {
     pub dns_route: bool,
     /// The front door is installed, so those names have something answering them.
     pub front_door: bool,
+    /// The front door is not merely installed but **answering**.
+    ///
+    /// A separate answer because the one above is a `stat` on a daemon plist, and a plist
+    /// launchd never loaded satisfies it: that machine reports itself fully provisioned while
+    /// every `.adi` name resolves and then hangs. This one is a connect to the address the
+    /// browser uses, which is the only way to tell those two apart without root.
+    ///
+    /// Deliberately **not** part of [`Self::ready`]. `ready` gates onboarding and auto-start,
+    /// and a front door that stopped is not a machine that needs its setup walked through
+    /// again — it needs the one repair, which the DNS service offers as an action.
+    pub front_door_answering: bool,
     /// All three. Nothing should be enabled, and nothing auto-started, until this is true.
     pub ready: bool,
 }
@@ -249,10 +260,14 @@ impl Adi {
         } else {
             (false, false)
         };
+        // Only worth a probe where something is supposed to be listening: with no front door
+        // installed the answer is already no, and this is on the status poll's path.
+        let front_door_answering = front_door && dns.front_door_answering();
         SetupReport {
             location_durable,
             dns_route,
             front_door,
+            front_door_answering,
             ready: location_durable && dns_route && front_door,
         }
     }

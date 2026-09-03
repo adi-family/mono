@@ -371,6 +371,15 @@ fn summary(stamp: &Stamp, report: &Report, findings: &[String]) -> String {
             setup.dns_route,
         ),
         ("front door installed".to_string(), setup.front_door),
+        // Reported beside the gate above rather than folded into it: "installed" is a file and
+        // "answering" is a socket, and the whole point of printing both is the line where they
+        // disagree. Kept inside the label column the other three rows share — the address it
+        // knocked on is in the finding below and in network.txt, and is not worth breaking the
+        // one block a reader scans first.
+        (
+            "front door answering".to_string(),
+            setup.front_door_answering,
+        ),
     ] {
         let _ = writeln!(out, "  {label:<24}{}", gate(granted));
     }
@@ -934,6 +943,15 @@ fn setup_findings(report: &Report) -> Vec<String> {
             flavour.domain
         ));
     }
+    if report.setup.front_door && !report.setup.front_door_answering {
+        findings.push(format!(
+            "the front door is installed but nothing is answering on {}:80 — its plist is on \
+             disk and launchd is not running it, so every .{} name resolves and then hangs \
+             (a browser shows it as loading forever, never as refused). Reopening the app \
+             retries this once; `adi-mono dns grant-network` is the same repair on demand",
+            flavour.frontdoor_addr, flavour.domain
+        ));
+    }
     findings
 }
 
@@ -1182,11 +1200,53 @@ mod tests {
                 location_durable: false,
                 dns_route: false,
                 front_door: false,
+                front_door_answering: false,
                 ready: false,
             },
         };
         let findings = setup_findings(&report);
         assert_eq!(findings.len(), 3);
         assert!(findings[0].contains("Applications"), "{findings:?}");
+    }
+
+    /// The half state this whole check exists for: every gate open, and the front door silent.
+    /// It must read as a fault rather than as a healthy machine, because everything else about
+    /// it — resolver, control panel, both plists — looks perfect.
+    #[test]
+    fn an_installed_front_door_that_answers_nothing_is_a_finding() {
+        let report = Report {
+            any_running: true,
+            services: Vec::new(),
+            setup: crate::SetupReport {
+                location_durable: true,
+                dns_route: true,
+                front_door: true,
+                front_door_answering: false,
+                ready: true,
+            },
+        };
+        let findings = setup_findings(&report);
+        assert_eq!(findings.len(), 1, "{findings:?}");
+        assert!(findings[0].contains("nothing is answering"), "{findings:?}");
+        // The reader has to leave with the command, not just the diagnosis.
+        assert!(findings[0].contains("grant-network"), "{findings:?}");
+    }
+
+    /// The same three gates open and a front door that answers is the ordinary machine, and it
+    /// must stay silent — a findings section that fires on a healthy install is read by nobody.
+    #[test]
+    fn a_front_door_that_answers_is_not_a_finding() {
+        let report = Report {
+            any_running: true,
+            services: Vec::new(),
+            setup: crate::SetupReport {
+                location_durable: true,
+                dns_route: true,
+                front_door: true,
+                front_door_answering: true,
+                ready: true,
+            },
+        };
+        assert!(setup_findings(&report).is_empty());
     }
 }

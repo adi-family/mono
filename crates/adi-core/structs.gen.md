@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-21 structs · 6 enums across 13 files.
+22 structs · 6 enums across 13 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/diagnose.rs`](#srcdiagnosers) — `Error`, `Bundle`, `Diagnose`, `Part`, `Stamp`
-- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `MeshNodeChange`, `Dns`
+- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `RepairStamp`, `MeshNodeChange`, `Dns`
 - [`src/install.rs`](#srcinstallrs) — `Location`
 - [`src/proc.rs`](#srcprocrs) — `Output`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
@@ -110,6 +110,7 @@ pub struct SetupReport {
     pub location_durable: bool,
     pub dns_route: bool,
     pub front_door: bool,
+    pub front_door_answering: bool,
     pub ready: bool,
 }
 ```
@@ -223,6 +224,18 @@ Why one component of a program path leaves a **root** daemon only as privileged 
 enum Unsafe {
     OwnedBy(u32),
     Writable(u32),
+}
+```
+
+### struct `RepairStamp`
+
+The automatic repair's own memory. One field today; a struct because it is a state file like the updater's, and the next thing anyone wants from it is why the last attempt failed.
+
+```rust
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RepairStamp {
+    last_attempt_unix: u64,
 }
 ```
 

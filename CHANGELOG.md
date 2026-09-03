@@ -20,6 +20,23 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **A front door that stopped is put back when you open ADI again.** `.adi` names are answered by
+  a root daemon, and the only question ever asked about it was whether its file was on disk. So a
+  machine where the file had been copied but launchd had never loaded it — a password prompt
+  cancelled halfway through the first install, a background item switched off later — reported
+  itself perfectly set up while every `.adi` name resolved and then went nowhere. It does not even
+  look like a failure: the daemon is also what puts its address onto `lo0`, and macOS drops packets
+  to an address no interface owns, so the browser never gets an error page. It just loads forever,
+  in every browser, and reopening the app fixed nothing because the file was still exactly where it
+  was supposed to be. Opening ADI now asks the address rather than the file, and offers to put the
+  daemon back — at most once every few minutes, so a prompt you dismiss does not follow you around,
+  and never for a front door you repointed at your own build. The services list grows a **Repair the
+  front door** button for as long as it is silent, `adi-mono dns grant-network` is the same repair
+  from a terminal, and a diagnostic report now prints `front door answering  NO` and says which
+  command fixes it, instead of showing three green gates above a machine that does not work.
+
 ## 1.3.0 — 2026-09-03
 
 ### Changed

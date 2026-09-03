@@ -63,8 +63,9 @@
 //! a node's privileged steps testable from a macOS checkout, the same trick `launchd.rs` and
 //! `adi-dns/src/os_routing.rs` use.
 
-use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use adi_config::Flavor;
 use serde::{Deserialize, Serialize};
@@ -120,6 +121,30 @@ const FRONTDOOR_TLS_PORT: u16 = 443;
 fn frontdoor_label() -> String {
     Flavor::current().label("dns-landing")
 }
+
+/// Where [`Dns::front_door_answering`] knocks: the same address a browser reaches for `.adi`.
+fn frontdoor_probe_addr() -> SocketAddr {
+    SocketAddr::from((frontdoor_addr(), FRONTDOOR_PORT))
+}
+
+/// How long that knock waits.
+///
+/// It has to be a *timeout* rather than a plain connect, and the reason is the failure it
+/// exists to catch: the front door is also what aliases its address onto `lo0` (adi-hive's
+/// `ensure_loopback_alias`), so on a machine where it never started, that address belongs to no
+/// interface and macOS **drops** packets to it instead of refusing them. A bare
+/// `TcpStream::connect` there blocks for the OS default — over a minute — which is the same
+/// reason `http://app.adi/` loads forever in a browser instead of failing.
+///
+/// A loopback handshake against a live listener costs microseconds, so this budget is only
+/// ever spent on the broken machine, and 250 ms leaves three orders of magnitude of headroom
+/// for a loaded one.
+const FRONTDOOR_PROBE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// The budget for the *second* knock, the one asked before raising a password prompt. Longer
+/// on purpose: a false negative on the cheap probe costs a spurious button, but a false
+/// negative here costs an admin prompt on a machine that was working.
+const FRONTDOOR_CONFIRM_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The loopback port the local **mesh gateway** listens on — where the front door hands every
 /// `*.n.adi` request (`docs/fleet.md` §3).
@@ -747,6 +772,88 @@ fn frontdoor_plist_current() -> bool {
     std::fs::read_to_string(frontdoor_plist()).is_ok_and(|p| p.contains("ADI_WATCH_SELF"))
 }
 
+// MARK: the automatic front-door repair
+//
+// [`Dns::front_door_installed`] is a `stat`. It says the daemon plist is on disk and nothing
+// whatsoever about whether launchd ever loaded it — and the two come apart in one specific,
+// silent way. The privileged install is a `&&` chain (`cp` the plist … `&& launchctl
+// bootstrap`), so a prompt cancelled after the copy, a bootstrap that lost a race, or a
+// background item switched off later leaves the file installed with nothing running. From then
+// on `route_installed` reports the machine as provisioned for good: `on_enable` skips the
+// install on every later launch, `up` and a relaunch of the app repair nothing, and every
+// `.adi` name resolves and then hangs. So the enable path asks the socket, not the file.
+
+/// Where the automatic repair records its last attempt.
+fn repair_stamp_path_in(store: &adi_config::Config) -> PathBuf {
+    service_dir_in(store).join("frontdoor-repair.json")
+}
+
+/// The automatic repair's own memory. One field today; a struct because it is a state file
+/// like the updater's, and the next thing anyone wants from it is why the last attempt failed.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct RepairStamp {
+    /// When the last automatic attempt raised its prompt — recorded whether or not the prompt
+    /// was answered, because a cancelled one is exactly what must not come straight back.
+    last_attempt_unix: u64,
+}
+
+/// The gap the automatic repair leaves between two prompts.
+///
+/// Not zero, because `up` runs on more than the user's own double-click — the app's launch, a
+/// CLI invocation, the updater's restart — and three password prompts for one gesture is how
+/// an operator learns to cancel them on sight. Not long, because the fix is meant to be "open
+/// ADI again": five minutes is under any deliberate relaunch and over any burst of `up`s. The
+/// button in the services list carries no cooldown at all — an explicit act needs none.
+#[cfg(any(target_os = "macos", test))]
+const REPAIR_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// Whether an automatic repair may prompt now, given what the stamp at `path` remembers.
+///
+/// Unreadable, absent or corrupt all mean *yes*: this gate exists to stop a prompt storm, not
+/// to withhold the fix, so every way of not knowing resolves towards trying.
+#[cfg(any(target_os = "macos", test))]
+fn may_repair_at(path: &Path, now: u64) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    let Ok(stamp) = serde_json::from_str::<RepairStamp>(&raw) else {
+        return true;
+    };
+    // A stamp from the future — a clock that moved, or a store copied off another machine —
+    // must not lock the repair out until it catches up.
+    now < stamp.last_attempt_unix || now - stamp.last_attempt_unix >= REPAIR_COOLDOWN.as_secs()
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn record_repair_at(path: &Path, now: u64) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let stamp = RepairStamp {
+        last_attempt_unix: now,
+    };
+    if let Ok(json) = serde_json::to_string(&stamp) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn may_repair_front_door() -> bool {
+    may_repair_at(
+        &repair_stamp_path_in(&adi_config::Config::open()),
+        adi_config::now_unix(),
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn record_front_door_repair() {
+    record_repair_at(
+        &repair_stamp_path_in(&adi_config::Config::open()),
+        adi_config::now_unix(),
+    );
+}
+
 /// Report the outcome of an elevated step instead of discarding it.
 ///
 /// `proc::run_admin` hands back an `Output` that every call site here used to drop, so a cancelled
@@ -1290,6 +1397,33 @@ impl Dns {
         launchd::is_loaded(&frontdoor_label())
     }
 
+    /// Whether the front door is **answering** — the question every `front_door_installed`
+    /// above cannot ask.
+    ///
+    /// Those check that a file is in place; this checks that something is behind it. Putting a
+    /// process behind that address needs root, but asking it a question needs nothing at all,
+    /// so this is an unprivileged connect to `<frontdoor_addr>:80` — the same move the browser
+    /// makes, and the only check that fails on the machine where the plist is installed and
+    /// launchd never loaded it.
+    ///
+    /// Cheap and wrong-in-the-safe-direction: a machine under enough load to miss the budget
+    /// reads as "not answering", which shows a repair button and, on the enable path, is
+    /// confirmed with a longer knock before anything asks for a password.
+    #[must_use]
+    pub fn front_door_answering(self) -> bool {
+        TcpStream::connect_timeout(&frontdoor_probe_addr(), FRONTDOOR_PROBE_TIMEOUT).is_ok()
+    }
+
+    /// The same question, asked the way it must be asked before spending someone's password:
+    /// twice, the second time patiently.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    fn front_door_confirmed_dead(self) -> bool {
+        !self.front_door_answering()
+            && TcpStream::connect_timeout(&frontdoor_probe_addr(), FRONTDOOR_CONFIRM_TIMEOUT)
+                .is_err()
+    }
+
     /// The one privileged step: install the `/etc/resolver` route AND the root front-door daemon in a single admin prompt.
     #[cfg(target_os = "macos")]
     pub fn install_route(self) {
@@ -1619,6 +1753,26 @@ impl Service for Dns {
             && (!frontdoor_config_current() || !frontdoor_plist_current())
         {
             self.update_frontdoor();
+        } else if frontdoor_plist_managed()
+            && self.front_door_confirmed_dead()
+            && may_repair_front_door()
+        {
+            // Installed, current, and dead: the files say provisioned, the socket says nothing
+            // is there. This is the case that used to survive every restart of the app — the
+            // two branches above are both file comparisons, and files that agree with each
+            // other say nothing about a daemon launchd forgot. [`Self::install_front_door`] is
+            // the narrow repair: it re-stages the plist, boots it out and bootstraps it back,
+            // and `enable`s it (for a background item switched off in System Settings),
+            // without touching `/etc/resolver`, which was never the broken half.
+            //
+            // Recorded *before* the prompt, so a cancelled one counts as an attempt and does
+            // not come straight back on the next `up` in the same sitting.
+            //
+            // Only ever for a plist we manage. A hand-repointed one — a dev machine running
+            // its own build against `hive/hive.yaml` — is reported and left exactly alone,
+            // the same promise the migration branch above makes.
+            record_front_door_repair();
+            self.install_front_door();
         }
     }
 
@@ -1697,7 +1851,14 @@ impl Service for Dns {
     }
 
     fn extra_actions(&self) -> Vec<Action> {
-        vec![route_action(self.route_installed())]
+        let mut actions = vec![route_action(self.route_installed())];
+        // Only when there is something to repair. A button that is always on screen teaches
+        // nobody what it is for, and this one spends a password; offered next to a front door
+        // that is installed and not answering, it says what happened by existing.
+        if self.route_installed() && !self.front_door_answering() {
+            actions.push(repair_action());
+        }
+        actions
     }
 }
 
@@ -1713,6 +1874,19 @@ fn route_action(installed: bool) -> Action {
         id: "route".to_string(),
         title,
         args: vec!["dns".to_string(), verb.to_string()],
+    }
+}
+
+/// The repair offered when the front door is installed but silent.
+///
+/// `grant-network` rather than `install-route`: the route half is already there — re-copying
+/// `/etc/resolver` would be asking for a password to rewrite a file that was never wrong — and
+/// this is the half that reinstalls, bootstraps and enables the daemon.
+fn repair_action() -> Action {
+    Action {
+        id: "front-door".to_string(),
+        title: format!("Repair the front door (.{} not answering)…", domain()),
+        args: vec!["dns".to_string(), "grant-network".to_string()],
     }
 }
 
@@ -2391,5 +2565,77 @@ mod tests {
             "{} must be a real component",
             component.display()
         );
+    }
+
+    /// The probe has to knock where the resolver sends the browser. Asserted against the
+    /// flavour rather than `127.0.0.53:80`, so a `dev` build tests its own address — and so
+    /// that pointing the zone somewhere new can never leave the liveness check behind,
+    /// silently reporting a healthy front door on an address nothing uses.
+    #[test]
+    fn the_probe_knocks_where_the_zone_points() {
+        let flavour = Flavor::current();
+        let addr = frontdoor_probe_addr();
+        assert_eq!(addr.ip().to_string(), flavour.frontdoor_addr.to_string());
+        assert_eq!(addr.port(), FRONTDOOR_PORT);
+        // The rendered front door must bind the address the probe asks, or a working machine
+        // reads as broken on every status poll.
+        assert!(rendered(&[]).contains(&format!("{}:{}", flavour.frontdoor_addr, FRONTDOOR_PORT)));
+    }
+
+    /// The budget is the whole point of the probe: an unaliased loopback address *drops*
+    /// packets rather than refusing them, so an unbounded connect would hang the status poll
+    /// on exactly the machine it is meant to describe.
+    #[test]
+    fn the_probe_is_bounded_and_the_confirmation_is_more_patient() {
+        assert!(FRONTDOOR_PROBE_TIMEOUT <= Duration::from_millis(500));
+        assert!(FRONTDOOR_CONFIRM_TIMEOUT > FRONTDOOR_PROBE_TIMEOUT);
+    }
+
+    /// A machine that has never tried must try. Every way of not knowing — no file, no store,
+    /// unreadable JSON — has to resolve towards the repair, never away from it.
+    #[test]
+    fn a_store_with_no_stamp_may_repair() {
+        let (store, root) = scratch_store("repair-fresh");
+        let path = repair_stamp_path_in(&store);
+        assert!(may_repair_at(&path, 1_700_000_000));
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, "{ this is not json").expect("seed");
+        assert!(may_repair_at(&path, 1_700_000_000));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// One gesture, one prompt: `up` runs from the app launch, the CLI and the updater, and a
+    /// burst of those must not become a burst of password prompts.
+    #[test]
+    fn a_just_recorded_attempt_holds_the_next_one_off() {
+        let (store, root) = scratch_store("repair-cooldown");
+        let path = repair_stamp_path_in(&store);
+        let now = 1_700_000_000;
+        record_repair_at(&path, now);
+        assert!(!may_repair_at(&path, now));
+        assert!(!may_repair_at(&path, now + REPAIR_COOLDOWN.as_secs() - 1));
+        // …and reopening the app later is meant to retry, which is the whole fix.
+        assert!(may_repair_at(&path, now + REPAIR_COOLDOWN.as_secs()));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A clock that moved, or a store carried over from another machine, must not lock the
+    /// repair out until the present catches up with the stamp.
+    #[test]
+    fn a_stamp_from_the_future_does_not_lock_the_repair_out() {
+        let (store, root) = scratch_store("repair-future");
+        let path = repair_stamp_path_in(&store);
+        record_repair_at(&path, 2_000_000_000);
+        assert!(may_repair_at(&path, 1_700_000_000));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The button has to be the *narrow* repair. `install-route` would ask for a password to
+    /// rewrite `/etc/resolver`, which in this failure was never the broken half.
+    #[test]
+    fn the_repair_button_asks_for_the_front_door_only() {
+        let action = repair_action();
+        assert_eq!(action.args, vec!["dns".to_string(), "grant-network".into()]);
+        assert!(action.title.contains(domain()), "{}", action.title);
     }
 }
