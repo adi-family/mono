@@ -59,11 +59,30 @@ cp "$LAYOUT" "$ROOT/.DS_Store"
 # The mark is shared across flavours until the icon work lands.
 cp "$HERE/../ADI.icns" "$ROOT/.VolumeIcon.icns"
 
+# A volume already mounted under this name is one way `create` answers "Resource busy", and
+# the only one we can clear from here. A stale one is not ours to keep: the name comes from
+# the bundle, so anything holding it is a previous run of this script that died mid-flight.
+[ -d "/Volumes/$VOLNAME" ] && hdiutil detach "/Volumes/$VOLNAME" -force >/dev/null 2>&1
+
 # Two stages, because the "this volume has a custom icon" bit lives in the volume root's
 # Finder flags, which only exist once there is a mounted volume to set them on. -nobrowse
 # keeps Finder from adopting the window and rewriting the .DS_Store we just placed.
-hdiutil create -volname "$VOLNAME" -srcfolder "$ROOT" -fs HFS+ \
-    -format UDRW -ov "$TMP/rw.dmg" >/dev/null
+#
+# Retried, because the first stage is flaky on a CI runner in a way it never is on a desktop:
+# v1.3.0's macOS job died on "hdiutil: create failed - Resource busy" after ten minutes of
+# building and signing, and the same script against the same app makes the image in nine
+# seconds locally. Something still had the tree we had just written; a second later it does
+# not. Five tries with a growing pause, and the last failure is still a failure.
+for attempt in 1 2 3 4 5; do
+    if hdiutil create -volname "$VOLNAME" -srcfolder "$ROOT" -fs HFS+ \
+           -format UDRW -ov "$TMP/rw.dmg" >/dev/null 2>"$TMP/create.err"; then
+        break
+    fi
+    cat "$TMP/create.err" >&2
+    [ "$attempt" = 5 ] && { echo "error: could not create the staging image" >&2; exit 1; }
+    echo "    retrying hdiutil create in ${attempt}s ($attempt/5)" >&2
+    sleep "$attempt"
+done
 MOUNT="$(hdiutil attach "$TMP/rw.dmg" -readwrite -noverify -nobrowse -noautoopen \
          | grep -o '/Volumes/.*' | head -1)"
 [ -n "$MOUNT" ] || { echo "error: could not mount the staging image" >&2; exit 1; }
