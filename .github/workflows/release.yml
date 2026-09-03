@@ -462,12 +462,35 @@ jobs:
           # --notes-file, not --notes: the notes are a whole changelog section, and a
           # multi-line value interpolated into this argument list would break apart into
           # separate shell commands.
-          gh release create "$TAG" \
-            --repo "${{ github.repository }}" \
-            --title "ADI $TAG" \
-            --notes-file release-notes.md \
-            --latest \
-            ${{ steps.manifest.outputs.assets }}
+          #
+          # Create *or* update, because this job is expected to run twice. A platform that
+          # fails does not withhold the others (see the `if` above), and the way to ship it
+          # afterwards is to re-run the failed job — at which point the release already
+          # exists and `gh release create` refuses with "a release with the same tag name
+          # already exists". v1.3.0 shipped without its DMG for half an hour for exactly
+          # that reason, and the manifest had to be assembled by hand to fix it.
+          #
+          # `assets` ends with manifest.json, and --clobber uploads in the order given, so
+          # the file naming a payload is replaced only after every payload it names is up.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "release $TAG exists — updating it"
+            gh release upload "$TAG" \
+              --repo "${{ github.repository }}" \
+              --clobber \
+              ${{ steps.manifest.outputs.assets }}
+            gh release edit "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "ADI $TAG" \
+              --notes-file release-notes.md \
+              --latest
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "ADI $TAG" \
+              --notes-file release-notes.md \
+              --latest \
+              ${{ steps.manifest.outputs.assets }}
+          fi
           echo "published: https://github.com/${{ github.repository }}/releases/tag/$TAG"
 
       - name: Dry run summary
