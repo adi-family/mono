@@ -16,7 +16,6 @@
 //! the mesh (where `127.0.0.1` would be the *viewer's* machine), and behind a real domain later.
 //! Dashboards written before that rule are brought up to it by [`migrate`] on the next read.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use adi_config::Config;
