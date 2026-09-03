@@ -558,6 +558,23 @@ fn services_report() -> String {
 /// It cannot ask launchd, but it can read the two files launchd was given, and those answer the
 /// three questions that matter: is the definition ours, does the program it names exist, and is
 /// that program the build this app shipped.
+/// The permission bits, where the platform has any.
+///
+/// Split out and `cfg`-gated rather than written inline: `std::os::unix` does not exist on
+/// Windows, and this whole section is dead code there (the front door is a per-user task, so
+/// [`crate::dns::front_door_files`] hands back `None`) — but dead code still has to compile, and
+/// the release workflow does not find out until the Windows job, twelve minutes in.
+#[cfg(unix)]
+fn file_mode(meta: &fs::Metadata) -> String {
+    use std::os::unix::fs::PermissionsExt as _;
+    format!(", mode {:o}", meta.permissions().mode() & 0o7777)
+}
+
+#[cfg(not(unix))]
+fn file_mode(_meta: &fs::Metadata) -> String {
+    String::new()
+}
+
 fn front_door_daemon_report() -> String {
     let Some(files) = crate::dns::front_door_files() else {
         return String::new();
@@ -573,13 +590,10 @@ fn front_door_daemon_report() -> String {
 
     let describe = |path: &Path| match fs::metadata(path) {
         Ok(meta) => format!(
-            "{}  ({}, mode {:o})",
+            "{}  ({}{})",
             path.display(),
             adi_config::human_bytes(meta.len()),
-            {
-                use std::os::unix::fs::PermissionsExt as _;
-                meta.permissions().mode() & 0o7777
-            }
+            file_mode(&meta)
         ),
         Err(e) => format!("{}  (not there: {e})", path.display()),
     };
