@@ -20,6 +20,35 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **The front door can be installed on a Mac again.** Since 1.0.0 it could not, on any machine,
+  and nothing said so. A root daemon is worth no more than the file it runs, so ADI refuses to
+  point one at a binary an ordinary user could replace — correctly, because with the daemon's
+  self-watch that is a way to become root without a prompt. But the binary it was naming lived
+  inside the app bundle, and an app dragged into `/Applications` belongs to whoever dragged it:
+  the refusal fired on every install, `.adi` route and repair, every time, and it fired *before*
+  the password prompt, printing its reason where only a subprocess could see it. Machines whose
+  front door predated the check kept working and hid it; anyone else got a `.adi` that resolved
+  and then hung, with three green ticks in the setup panel above it. The daemon now runs a
+  root-owned copy of `adi-hive` that the privileged install puts in `/Library/Application
+  Support/ADI/`, which is exactly what the rule was asking for. One consequence worth knowing:
+  a copy in root's keeping cannot be refreshed by an auto-update, so after one the front door
+  goes on proxying with the build it was installed with — the services list says so and offers
+  **Update the front door to this build**, and everything else about the update lands as usual.
+- **The repair now reaches the machines it was written for.** 1.4.0 taught ADI to notice a front
+  door that was installed and answering nothing, but it only offered to fix a daemon definition
+  it recognised — and it recognised them by a filename that daemons installed before 1.0 do not
+  carry. The one machine the check existed for was therefore the one it skipped. A definition is
+  ours if it runs a program we install, whatever generation wrote it; one repointed at somebody
+  else's build is still never rewritten, only started. A dead front door is also now repaired
+  ahead of a merely stale one, since the repair fixes both on its way past.
+- **A diagnostic report describes the root daemon.** It detailed every per-user service and said
+  nothing about the only one that answers `.adi`, so an archive from a broken machine looked
+  exactly like an archive from a working one. It now carries that daemon's definition verbatim,
+  whether the program it names is present, whether that program is the build the app shipped,
+  and whether the automatic repair has ever run here.
+
 ## 1.4.0 — 2026-09-03
 
 ### Fixed

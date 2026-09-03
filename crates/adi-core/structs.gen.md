@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-22 structs · 6 enums across 13 files.
+23 structs · 6 enums across 13 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/diagnose.rs`](#srcdiagnosers) — `Error`, `Bundle`, `Diagnose`, `Part`, `Stamp`
-- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `RepairStamp`, `MeshNodeChange`, `Dns`
+- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `RepairStamp`, `FrontDoorFiles`, `MeshNodeChange`, `Dns`
 - [`src/install.rs`](#srcinstallrs) — `Location`
 - [`src/proc.rs`](#srcprocrs) — `Output`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
@@ -236,6 +236,19 @@ The automatic repair's own memory. One field today; a struct because it is a sta
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RepairStamp {
     last_attempt_unix: u64,
+}
+```
+
+### struct `FrontDoorFiles`
+
+Report the outcome of an elevated step instead of discarding it.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct FrontDoorFiles {
+    pub plist: PathBuf,
+    pub program: PathBuf,
+    pub bundle_source: PathBuf,
 }
 ```
 

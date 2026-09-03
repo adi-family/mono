@@ -176,6 +176,32 @@ fn frontdoor_log() -> String {
     }
 }
 
+/// The binary the **root** daemon runs: a root-owned copy of `adi-hive`, put here by the
+/// privileged install.
+///
+/// Deliberately not the one inside the app bundle, and this is the difference between a front
+/// door that installs and one that does not. A bundle dragged into `/Applications` belongs to
+/// the user who dragged it — uid 501, not root — so [`root_program_objection`] refused to name it
+/// in a root daemon's `ProgramArguments`, and refused *before* the password prompt. Correctly:
+/// with `ADI_WATCH_SELF` and `KeepAlive`, whoever may rewrite that file is root within the
+/// minute. But it left macOS unable to install or repair its own front door at all from 1.0.0
+/// onwards, silently, on every machine whose daemon did not predate the check.
+///
+/// So the privileged step copies the bundle's binary here once, as root, and the daemon runs the
+/// copy. What is left is the window between the check and the copy — a race an attacker must win
+/// while the operator is typing their password — instead of a file they may replace at leisure,
+/// forever, on a machine nobody is watching.
+///
+/// `/Library/Application Support` is `root:admin 0755` on macOS: root-owned and *not*
+/// group-writable, so it passes the same check that `/Applications` (0775) fails.
+#[cfg(target_os = "macos")]
+fn frontdoor_program_path() -> String {
+    format!(
+        "/Library/Application Support/{}/adi-hive",
+        Flavor::current().app_name
+    )
+}
+
 // MARK: file locations (free helpers — all state is on disk / in the OS supervisor)
 
 /// The `dns` module directory inside a *given* store. The `_in` suffix runs through every
@@ -729,27 +755,84 @@ fn root_program_objection(program: &std::path::Path) -> Option<String> {
 /// privileged entry points below all start here, so this is the one gate they share.
 #[cfg(target_os = "macos")]
 fn write_frontdoor_artifacts() -> Result<(), String> {
-    let hive = hive_binary_path();
-    if let Some(objection) = root_program_objection(std::path::Path::new(&hive)) {
+    let plist = render_frontdoor_plist()?;
+    write_frontdoor_config();
+    let _ = std::fs::write(frontdoor_plist_stage(), plist);
+    Ok(())
+}
+
+/// The daemon definition itself, rendered but not written — so what a root daemon is about to be
+/// told to run can be asserted in a test instead of only in a review.
+#[cfg(target_os = "macos")]
+fn render_frontdoor_plist() -> Result<String, String> {
+    // The destination, not the source. What a root daemon may run is a question about the file
+    // it will execute for months, and [`frontdoor_program_path`] is root-owned because
+    // [`install_program_shell`] below puts it there under the same prompt. The check stays in
+    // front of it all the same: a `/Library/Application Support` that some other installer left
+    // group-writable would put the whole hole back, and this is the one place that would notice.
+    let program = frontdoor_program_path();
+    if let Some(objection) = root_program_objection(std::path::Path::new(&program)) {
         return Err(objection);
     }
-    write_frontdoor_config();
-    // The front door is the one root piece the updater can't kickstart without a password, so
-    // it watches its own binary and exits when the bundle is swapped — launchd's KeepAlive
-    // then respawns the new build (see adi-hive's self-watch).
+    // `ADI_WATCH_SELF` makes the front door poll its own binary and exit when it changes, so
+    // launchd's KeepAlive starts whatever is there now. That binary is the root copy, which
+    // changes only under a privileged step — so an auto-update no longer restarts the front door
+    // into the new build. It goes on proxying with the copy it has until a repair refreshes it,
+    // which [`frontdoor_program_stale`] reports and the services list offers as a button.
     let mut env = frontdoor_env(true);
     env.push((
         "HOME".to_string(),
         std::env::var("HOME").unwrap_or_default(),
     ));
-    let plist = launchd::plist_xml(
+    Ok(launchd::plist_xml(
         &frontdoor_label(),
-        &[hive, frontdoor_config_path().to_string_lossy().into_owned()],
+        &[
+            program,
+            frontdoor_config_path().to_string_lossy().into_owned(),
+        ],
         &frontdoor_log(),
         &env,
-    );
-    let _ = std::fs::write(frontdoor_plist_stage(), plist);
-    Ok(())
+    ))
+}
+
+/// The privileged fragment that puts the daemon's program in place, for the three installs below.
+///
+/// Copied through a temporary name and `mv`'d over, rather than written in place: `mv` is a
+/// `rename(2)`, which macOS allows over a *running* executable, while writing into one gives
+/// `ETXTBSY`. The directory is created and owned in the same breath, because a root-owned binary
+/// inside a directory somebody else may write is not a root-owned binary.
+#[cfg(target_os = "macos")]
+fn install_program_shell() -> String {
+    let source = hive_binary_path();
+    let program = frontdoor_program_path();
+    let dir = std::path::Path::new(&program)
+        .parent()
+        .map_or_else(String::new, |p| p.to_string_lossy().into_owned());
+    format!(
+        "mkdir -p '{dir}'\
+         && chown root:wheel '{dir}'\
+         && chmod 755 '{dir}'\
+         && install -o root -g wheel -m 755 '{source}' '{program}.new'\
+         && mv -f '{program}.new' '{program}'"
+    )
+}
+
+/// Whether the daemon's root copy is missing, or is not the build the app bundle now carries.
+///
+/// Length rather than a hash: this is read on the status path, the two files are tens of
+/// megabytes, and the question is "did an update move on without the front door" — for which a
+/// changed size is evidence and a matching size on two different builds is a coincidence nobody
+/// is harmed by. A missing copy counts as stale, since that is the state a repair fixes.
+#[cfg(target_os = "macos")]
+fn frontdoor_program_stale() -> bool {
+    let len = |p: &str| std::fs::metadata(p).ok().map(|m| m.len());
+    match (len(&frontdoor_program_path()), len(&hive_binary_path())) {
+        (Some(copy), Some(bundle)) => copy != bundle,
+        // No copy at all is stale; no bundle binary to compare against is not this check's
+        // problem to report — `write_frontdoor_artifacts` is where that becomes an error.
+        (None, _) => true,
+        (Some(_), None) => false,
+    }
 }
 
 /// True when the installed root daemon plist is the standard one we manage — it runs
@@ -758,9 +841,26 @@ fn write_frontdoor_artifacts() -> Result<(), String> {
 /// `hive/hive.yaml`); that plist is hand-managed and `up` must never overwrite it.
 #[cfg(target_os = "macos")]
 fn frontdoor_plist_managed() -> bool {
-    let marker = frontdoor_config_path();
-    let marker = marker.to_string_lossy();
-    std::fs::read_to_string(frontdoor_plist()).is_ok_and(|p| p.contains(marker.as_ref()))
+    let config = frontdoor_config_path();
+    let config = config.to_string_lossy();
+    std::fs::read_to_string(frontdoor_plist()).is_ok_and(|plist| {
+        // Any of three, because "ours" has had three shapes and the oldest is the one still
+        // sitting on the machines this matters for: the rendered config it points at, the
+        // root-owned program 1.4.1 installs, or — from every build before that — the binary
+        // inside the app bundle. A plist naming only the *config* was the original test, and it
+        // read a pre-1.0 daemon that predates that config as somebody else's to leave alone,
+        // which is precisely the machine whose front door then never got repaired.
+        //
+        // What stays out is the case this exists for: a plist naming a build that is not the one
+        // this process would install from — somebody's own, which `up` must never take over. A
+        // plist naming exactly the binary we would install from *is* taken over, and that is the
+        // migration, not a takeover: the daemon ends up running a root-owned copy of the same
+        // build. It also closes the hole that put this check here, since a later `cargo build`
+        // then replaces a file the daemon no longer runs.
+        plist.contains(config.as_ref())
+            || plist.contains(&frontdoor_program_path())
+            || plist.contains(&hive_binary_path())
+    })
 }
 
 /// True when the installed root daemon plist already carries the self-watch env — the
@@ -860,6 +960,61 @@ fn record_front_door_repair() {
 /// Authorization prompt — or a `launchctl bootstrap` that lost a race — left `up` looking like it
 /// had succeeded. Not fatal: the resolver is a separate, already-running service, and the front
 /// door is retried on the next `up`. But never silent.
+/// The files that decide whether the front door runs at all.
+///
+/// Exposed for the collector. A diagnostic report used to describe every per-user `LaunchAgent`
+/// in detail and say nothing at all about the one **root** job — so a machine whose plist was on
+/// disk, unloaded, and pointing somewhere unexpected looked, in the archive, exactly like a
+/// healthy one. Answering that took a round trip to the person having the problem; now it is in
+/// the file they already sent.
+#[derive(Debug, Clone)]
+pub struct FrontDoorFiles {
+    /// The `LaunchDaemon` definition — what launchd was asked to run.
+    pub plist: PathBuf,
+    /// The program that plist names: the root-owned copy.
+    pub program: PathBuf,
+    /// The bundle binary that copy is made from, so the two can be compared.
+    pub bundle_source: PathBuf,
+}
+
+/// [`FrontDoorFiles`] for this install, or `None` where the front door is not a root install of
+/// its own (Linux and Windows run it as the user, from the binary itself).
+#[cfg(target_os = "macos")]
+#[must_use]
+pub fn front_door_files() -> Option<FrontDoorFiles> {
+    Some(FrontDoorFiles {
+        plist: PathBuf::from(frontdoor_plist()),
+        program: PathBuf::from(frontdoor_program_path()),
+        bundle_source: PathBuf::from(hive_binary_path()),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+#[must_use]
+pub fn front_door_files() -> Option<FrontDoorFiles> {
+    None
+}
+
+/// Load the daemon plist that is already on disk, without rewriting a byte of it.
+///
+/// For the one case [`Dns::install_front_door`] must not touch: a plist somebody repointed at
+/// their own build. Rewriting it would take their machine over; bootstrapping it takes nothing
+/// away, and an unloaded job is the same failure whoever wrote the file.
+#[cfg(target_os = "macos")]
+fn bootstrap_frontdoor_only() {
+    let frontdoor_label = frontdoor_label();
+    let frontdoor_plist = frontdoor_plist();
+    let shell = format!(
+        "(launchctl bootout system/{frontdoor_label} 2>/dev/null || true)\
+         && launchctl bootstrap system '{frontdoor_plist}'\
+         && launchctl enable system/{frontdoor_label}"
+    );
+    report_admin(
+        "starting the front door already installed here",
+        &proc::run_admin(&shell),
+    );
+}
+
 #[cfg(target_os = "macos")]
 fn report_admin(what: &str, out: &proc::Output) {
     if !out.ok() {
@@ -1449,8 +1604,10 @@ impl Dns {
         let resolver = resolver.to_string_lossy();
         let plist_stage = frontdoor_plist_stage();
         let plist_stage = plist_stage.to_string_lossy();
+        let program = install_program_shell();
         let shell = format!(
-            "mkdir -p /etc/resolver\
+            "{program}\
+             && mkdir -p /etc/resolver\
              && cp '{stage}' '{resolver}'\
              && chmod 644 '{resolver}'\
              && cp '{plist_stage}' '{frontdoor_plist}'\
@@ -1511,8 +1668,10 @@ impl Dns {
         }
         let plist_stage = frontdoor_plist_stage();
         let plist_stage = plist_stage.to_string_lossy();
+        let program = install_program_shell();
         let shell = format!(
-            "cp '{plist_stage}' '{frontdoor_plist}'\
+            "{program}\
+             && cp '{plist_stage}' '{frontdoor_plist}'\
              && chown root:wheel '{frontdoor_plist}'\
              && chmod 644 '{frontdoor_plist}'\
              && (launchctl bootout system/{frontdoor_label} 2>/dev/null || true)\
@@ -1629,8 +1788,10 @@ impl Dns {
         // `kickstart -k` restarts the job but never re-reads the plist. bootout is
         // async, so the bootstrap is retried until the old job has fully unloaded and
         // :80 can be rebound.
+        let program = install_program_shell();
         let shell = format!(
             "set -e\
+             ; {program}\
              ; cp '{plist_stage}' '{frontdoor_plist}'\
              ; chown root:wheel '{frontdoor_plist}'\
              ; chmod 644 '{frontdoor_plist}'\
@@ -1749,30 +1910,31 @@ impl Service for Dns {
     fn on_enable(&self) {
         if !self.route_installed() {
             self.install_route();
+        } else if self.front_door_confirmed_dead() && may_repair_front_door() {
+            // Installed and dead: the files say provisioned, the socket says nothing is there.
+            // Asked *before* the drift comparison below, because those two only ever compare
+            // files with other files — and files that agree with each other say nothing about a
+            // daemon launchd forgot. A dead front door is also the bigger fault of the two, and
+            // the repair re-stages the plist anyway, so it fixes any drift on its way past.
+            //
+            // Recorded before the prompt, so a cancelled one counts as an attempt and does not
+            // come straight back on the next `up` in the same sitting.
+            record_front_door_repair();
+            if frontdoor_plist_managed() {
+                // The narrow repair: re-stage the plist and the daemon's program, boot it out,
+                // bootstrap it back, `enable` it (for a background item switched off in System
+                // Settings) — without touching `/etc/resolver`, which was never the broken half.
+                self.install_front_door();
+            } else {
+                // Somebody repointed the daemon at their own build. Rewriting their plist is
+                // still off the table — but *loading* it rewrites nothing, and this branch used
+                // to skip such a machine entirely, leaving the one failure it exists to fix.
+                bootstrap_frontdoor_only();
+            }
         } else if frontdoor_plist_managed()
             && (!frontdoor_config_current() || !frontdoor_plist_current())
         {
             self.update_frontdoor();
-        } else if frontdoor_plist_managed()
-            && self.front_door_confirmed_dead()
-            && may_repair_front_door()
-        {
-            // Installed, current, and dead: the files say provisioned, the socket says nothing
-            // is there. This is the case that used to survive every restart of the app — the
-            // two branches above are both file comparisons, and files that agree with each
-            // other say nothing about a daemon launchd forgot. [`Self::install_front_door`] is
-            // the narrow repair: it re-stages the plist, boots it out and bootstraps it back,
-            // and `enable`s it (for a background item switched off in System Settings),
-            // without touching `/etc/resolver`, which was never the broken half.
-            //
-            // Recorded *before* the prompt, so a cancelled one counts as an attempt and does
-            // not come straight back on the next `up` in the same sitting.
-            //
-            // Only ever for a plist we manage. A hand-repointed one — a dev machine running
-            // its own build against `hive/hive.yaml` — is reported and left exactly alone,
-            // the same promise the migration branch above makes.
-            record_front_door_repair();
-            self.install_front_door();
         }
     }
 
@@ -1857,6 +2019,8 @@ impl Service for Dns {
         // that is installed and not answering, it says what happened by existing.
         if self.route_installed() && !self.front_door_answering() {
             actions.push(repair_action());
+        } else if self.route_installed() {
+            actions.extend(program_refresh_action());
         }
         actions
     }
@@ -1888,6 +2052,31 @@ fn repair_action() -> Action {
         title: format!("Repair the front door (.{} not answering)…", domain()),
         args: vec!["dns".to_string(), "grant-network".to_string()],
     }
+}
+
+/// Offered when the front door answers but runs an older build than the bundle — the standing
+/// cost of pointing a root daemon at a root-owned *copy* instead of at the app.
+///
+/// An auto-update swaps the bundle without a password and therefore cannot refresh the copy, so
+/// the front door goes on proxying with the build it was installed with. Harmless most days,
+/// which is exactly why it needs saying out loud rather than a prompt on every launch.
+///
+/// Never for a plist somebody repointed at their own build: that machine's front door is not the
+/// copy, so "older than the bundle" says nothing true about it.
+#[cfg(target_os = "macos")]
+fn program_refresh_action() -> Option<Action> {
+    (frontdoor_plist_managed() && frontdoor_program_stale()).then(|| Action {
+        id: "front-door-refresh".to_string(),
+        title: "Update the front door to this build…".to_string(),
+        args: vec!["dns".to_string(), "grant-network".to_string()],
+    })
+}
+
+/// Only macOS runs the front door from a copy; elsewhere the unit runs the binary itself and
+/// there is nothing to fall behind.
+#[cfg(not(target_os = "macos"))]
+fn program_refresh_action() -> Option<Action> {
+    None
 }
 
 #[cfg(test)]
@@ -2628,6 +2817,72 @@ mod tests {
         record_repair_at(&path, 2_000_000_000);
         assert!(may_repair_at(&path, 1_700_000_000));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The regression that cost a release. A root daemon may not be pointed at a program an
+    /// ordinary user can rewrite — and from 1.0.0 it was pointed at the binary inside the app
+    /// bundle, which belongs to whoever dragged the app into `/Applications`. So
+    /// `write_frontdoor_artifacts` refused, and *every* install and repair path returned before
+    /// raising its prompt: silently, on every Mac, for four releases.
+    ///
+    /// This asserts the objection against the real path on the machine running the test, which
+    /// is the only way it can say anything about the machines it is meant to protect.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_daemon_is_pointed_at_a_program_it_is_allowed_to_run() {
+        let program = frontdoor_program_path();
+        assert!(
+            !program.starts_with("/Applications"),
+            "the daemon's program is back inside the bundle: {program}"
+        );
+        assert_eq!(
+            root_program_objection(std::path::Path::new(&program)),
+            None,
+            "the front door cannot be installed on this machine"
+        );
+        // Namespaced, or a second install's update swaps the binary under this one's root daemon.
+        assert!(
+            program.contains(&Flavor::current().app_name),
+            "{program} is shared between flavours"
+        );
+    }
+
+    /// What launchd is actually handed. The plist is the artifact that outlives every decision
+    /// above it, so it is asserted directly: the program is the root copy, never the bundle, and
+    /// the rendering succeeds at all — for four releases it did not, and the only sign was a
+    /// front door that never appeared.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_rendered_daemon_definition_runs_the_root_copy() {
+        let plist = render_frontdoor_plist().expect("the front door must be installable");
+        assert!(plist.contains(&frontdoor_program_path()), "{plist}");
+        assert!(
+            !plist.contains(&hive_binary_path()),
+            "the daemon is still being pointed into the app bundle: {plist}"
+        );
+        assert!(plist.contains("ADI_WATCH_SELF"), "{plist}");
+        // It has to name the rendered config, or `frontdoor_plist_managed` stops recognising
+        // our own daemon and `up` starts treating it as somebody else's.
+        assert!(
+            plist.contains(frontdoor_config_path().to_string_lossy().as_ref()),
+            "{plist}"
+        );
+    }
+
+    /// The copy is made as root, and moved rather than written: `rename(2)` over a running
+    /// executable is allowed on macOS, writing into one is `ETXTBSY` — and this runs while the
+    /// front door may well be up.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_program_is_copied_root_owned_and_moved_into_place() {
+        let shell = install_program_shell();
+        assert!(shell.contains("install -o root -g wheel -m 755"), "{shell}");
+        assert!(shell.contains("mv -f"), "{shell}");
+        assert!(shell.contains(&hive_binary_path()), "{shell}");
+        assert!(shell.contains(&frontdoor_program_path()), "{shell}");
+        // The directory has to be root's too: a root-owned binary somebody else may rename over
+        // is not a root-owned binary.
+        assert!(shell.contains("chown root:wheel"), "{shell}");
     }
 
     /// The button has to be the *narrow* repair. `install-route` would ask for a password to

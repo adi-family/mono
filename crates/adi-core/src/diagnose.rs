@@ -543,6 +543,76 @@ fn services_report() -> String {
         let _ = writeln!(out, "log:         {}", service.log_path().display());
         out.push_str(&supervisor_state(&service.label()));
     }
+    out.push_str(&front_door_daemon_report());
+    out
+}
+
+/// The **root** front-door daemon: its definition, and the program that definition names.
+///
+/// Everything above this describes per-user `LaunchAgent`s, which is everything except the one
+/// job that actually answers `.adi`. The collector could not read it — `launchctl print
+/// system/…` needs root — so an archive from a machine whose front door was installed, unloaded,
+/// and pointing at a path that no longer existed was indistinguishable from a healthy one, and
+/// the report cheerfully printed "front door installed  yes" over it.
+///
+/// It cannot ask launchd, but it can read the two files launchd was given, and those answer the
+/// three questions that matter: is the definition ours, does the program it names exist, and is
+/// that program the build this app shipped.
+fn front_door_daemon_report() -> String {
+    let Some(files) = crate::dns::front_door_files() else {
+        return String::new();
+    };
+    let mut out = heading(
+        "the root front-door daemon (not a LaunchAgent — this is the one that answers .adi)",
+    );
+    out.push_str(
+        "`launchctl print system/…` needs root, so this is the definition and the program it \n\
+         names, read off disk. A plist here with nothing listening in network.txt means launchd \n\
+         was never given it, or was given it and let it go.\n",
+    );
+
+    let describe = |path: &Path| match fs::metadata(path) {
+        Ok(meta) => format!(
+            "{}  ({}, mode {:o})",
+            path.display(),
+            adi_config::human_bytes(meta.len()),
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                meta.permissions().mode() & 0o7777
+            }
+        ),
+        Err(e) => format!("{}  (not there: {e})", path.display()),
+    };
+    let _ = writeln!(out, "\nprogram:  {}", describe(&files.program));
+    let _ = writeln!(out, "bundle:   {}", describe(&files.bundle_source));
+    let same = fs::metadata(&files.program)
+        .ok()
+        .zip(fs::metadata(&files.bundle_source).ok())
+        .map(|(a, b)| a.len() == b.len());
+    let _ = writeln!(
+        out,
+        "matching: {}",
+        match same {
+            Some(true) => "yes — the daemon runs this build".to_string(),
+            Some(false) =>
+                "NO — the daemon runs an older build than the app (an update cannot refresh \
+                 a root-owned copy without a password; use Repair the front door)"
+                    .to_string(),
+            None => "unknown — one of the two is missing".to_string(),
+        }
+    );
+
+    out.push_str(&heading(&files.plist.display().to_string()));
+    match fs::read_to_string(&files.plist) {
+        Ok(text) => out.push_str(&text),
+        Err(e) => {
+            let _ = writeln!(
+                out,
+                "(not readable: {e})\nNo daemon definition at all — the front door was never \
+                 installed here, whatever the setup gates say."
+            );
+        }
+    }
     out
 }
 
@@ -774,6 +844,9 @@ fn store_report() -> String {
         "dns/hive-frontdoor.yaml",
         "dns/frontdoor.toml",
         "dns/resolver.json",
+        // Whether the automatic front-door repair has ever run here, and when. Absent is an
+        // answer too: it means the enable path never reached the repair at all.
+        "dns/frontdoor-repair.json",
         "hive/hive.yaml",
         "hive/status.json",
         "ports/registry.json",
