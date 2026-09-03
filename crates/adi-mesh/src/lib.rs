@@ -18,6 +18,7 @@ pub mod node;
 pub mod protocol;
 pub mod relay;
 pub mod ticket;
+pub mod token;
 
 /// Splicing a local TCP connection to an iroh bi-stream. Public because the calling side is not
 /// only [`gateway::serve`]: a viewer with no front door in front of it — the iOS app, which reaches

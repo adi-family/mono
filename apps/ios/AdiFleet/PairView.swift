@@ -152,7 +152,7 @@ struct PairView: View {
                     Task {
                         joining = true
                         defer { joining = false }
-                        if await model.spend(invite: Self.tokenIn(token)) != nil { dismiss() }
+                        if await model.spend(invite: token) != nil { dismiss() }
                     }
                 }
                 .frame(height: 300)
@@ -208,8 +208,10 @@ struct PairView: View {
                     // system-drawn and system-attested: the tap *is* the consent, so there is no
                     // prompt and the app still never sees the pasteboard it was not given.
                     //
-                    // The whole `adi-mono mesh join <token>` command is what people copy, so what
-                    // arrives is trimmed to the token by `tokenIn` rather than refused.
+                    // What arrives is whatever was on the pasteboard — the whole `adi-mono mesh
+                    // join <token>` command, a numbered line out of a note, the payload without
+                    // its name — and it is passed on unedited, because the core reads the token
+                    // out of it. See `hasSomethingToSpend`.
                     PasteButton(payloadType: String.self) { items in
                         guard let pasted = items.first else { return }
                         typed = pasted
@@ -224,7 +226,7 @@ struct PairView: View {
                         Task {
                             joining = true
                             defer { joining = false }
-                            if await model.spend(invite: Self.tokenIn(typed)) != nil { dismiss() }
+                            if await model.spend(invite: typed) != nil { dismiss() }
                         }
                     } label: {
                         Group {
@@ -240,23 +242,25 @@ struct PairView: View {
                     }
                     // The one orange on the pasting path: pairing is what the screen is for.
                     .buttonStyle(.adi(.accent, wide: true))
-                    .disabled(joining || Self.tokenIn(typed).isEmpty)
+                    .disabled(joining || !Self.hasSomethingToSpend(typed))
                 }
         }
         .padding(.top, 8)
     }
 
-    /// The `adi-invite:…` token inside whatever was pasted.
+    /// Whether there is anything here worth spending — the enabled state of **Pair**, and nothing
+    /// more than that.
     ///
-    /// `mesh invite` prints a whole command and the QR path yields the bare token, so both shapes
-    /// arrive here. Splitting on whitespace and taking the part that looks like a token accepts
-    /// each of them, and a token with a stray newline around it — which is what a copy off a
-    /// terminal usually is.
-    private static func tokenIn(_ text: String) -> String {
-        text.split(whereSeparator: \.isWhitespace)
-            .first { $0.hasPrefix("adi-invite:") }
-            .map(String.init)
-            ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// It deliberately does not try to find the token: the core does that, in `adi-mesh`'s `token`
+    /// module, and it is handed the paste *whole* so it can. This screen used to pre-trim to the
+    /// first whitespace-separated part beginning `adi-invite:`, which quietly threw away every
+    /// shape that trimming cannot fix — a payload whose `adi-invite:` was left behind by a
+    /// double-tap (iOS ends a word at `:` and `-`), a token its carrier wrapped across two lines,
+    /// a stray backtick from the copy it was pasted out of. Each of those then failed with "not an
+    /// adi invite", which reads, to the person holding the token, as a lie. That is what an App
+    /// Store reviewer met on 2026-09-02.
+    private static func hasSomethingToSpend(_ text: String) -> Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Shown until the relay session is up. Minting before then would produce a token that only

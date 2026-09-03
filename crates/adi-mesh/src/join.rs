@@ -75,8 +75,9 @@ use crate::{identity, node, ticket};
 /// exception lives in one named place instead of as a branch inside the gate it is bypassing.
 pub const ALPN: &[u8] = b"adi/mesh/join/1";
 
-/// Marks a string as an adi invite (vs. an `adimesh:` ticket, which it contains).
-const PREFIX: &str = "adi-invite:";
+/// Marks a string as an adi invite (vs. an `adimesh:` ticket, which it contains). Owned by
+/// [`crate::token`], which is where the reading of a pasted one lives.
+use crate::token::PREFIX;
 
 /// The invite and handshake version, mirrored in every payload's `v`.
 const VERSION: u8 = 1;
@@ -175,15 +176,39 @@ pub fn encode_invite(invite: &Invite) -> anyhow::Result<String> {
 
 /// Decode and validate an invite token.
 ///
+/// Takes what was pasted, not only what was minted: [`token::candidates`](crate::token::candidates)
+/// reads the token back out of the shapes a copy arrives in, and the first reading that decodes
+/// wins. Tolerance costs a failed parse and buys the case that is otherwise undebuggable from the
+/// spending side — see that module for what those shapes are and which review they cost us.
+///
 /// Expiry is checked here, on the node, purely so a stale token fails before a dial rather than
 /// after one. It is **not** where expiry is enforced — the token is attacker-controlled, so the
 /// authority is [`InviteBook::claim`] on the viewer, against the book of invites it minted.
 ///
 /// # Errors
-/// If the string is not an `adi-invite:` token, is not valid hex, does not decode to an
-/// [`Invite`], names a version this build does not speak, carries a malformed nonce, or has
-/// expired.
+/// If the string names no invite at all, is not valid hex, does not decode to an [`Invite`],
+/// names a version this build does not speak, carries a malformed nonce, or has expired.
 pub fn decode_invite(token: &str, now: u64) -> anyhow::Result<Invite> {
+    let mut refusal = None;
+    for candidate in crate::token::candidates(token) {
+        match decode_exact(&candidate, now) {
+            Ok(invite) => return Ok(invite),
+            // The first reading's refusal, not the last: the readings are ordered by confidence,
+            // so the first one is the one whose complaint describes the token the person meant.
+            // An expired token is refused as expired here rather than as unreadable.
+            Err(refused) => drop(refusal.get_or_insert(refused)),
+        }
+    }
+    Err(refusal.unwrap_or_else(|| {
+        anyhow::anyhow!(
+            "not an adi invite (expected a token starting with `adi-invite:`) — {}",
+            crate::token::describe(token)
+        )
+    }))
+}
+
+/// [`decode_invite`] for one already-canonical token — the whole of what this used to be.
+fn decode_exact(token: &str, now: u64) -> anyhow::Result<Invite> {
     let hex = token
         .trim()
         .strip_prefix(PREFIX)
@@ -999,7 +1024,7 @@ mod tests {
         let token = encode_invite(&invite(&random_nonce(), 2_000)).expect("encode");
         let payload = token.strip_prefix(PREFIX).expect("payload");
 
-        for bad in [payload, &format!("adimesh:{payload}"), "", "adi-invite"] {
+        for bad in [&format!("adimesh:{payload}"), "", "adi-invite"] {
             let err = decode_invite(bad, 1_000).expect_err("prefix");
             assert!(err.to_string().contains("adi-invite"), "{bad:?}: {err}");
         }
@@ -1010,6 +1035,35 @@ mod tests {
             format!("{PREFIX}{payload}ff"),
         ] {
             assert!(decode_invite(&bad, 1_000).is_err(), "{bad:?}");
+        }
+    }
+
+    /// The shapes a token arrives in are [`crate::token`]'s subject; this is the seam where they
+    /// have to become a real [`Invite`] — a pasted token that reads correctly but decodes to
+    /// nothing would be tolerance that only looks like it works.
+    #[test]
+    fn a_token_is_decoded_out_of_the_shapes_a_paste_arrives_in() {
+        let original = invite(&random_nonce(), 2_000);
+        let token = encode_invite(&original).expect("encode");
+        let payload = token.strip_prefix(PREFIX).expect("payload");
+
+        for pasted in [
+            format!("2. {token}"),
+            format!("`{token}`"),
+            format!("adi-mono mesh join {token}\n"),
+            // A keyboard that autocapitalised the first letter of the line it was typed on.
+            token.replace(PREFIX, "Adi-Invite:"),
+            // The double-tap that selects the payload and leaves the name behind: the shape that
+            // cost the 2026-09-02 review, and the reason any of this exists.
+            payload.to_string(),
+            // Wrapped by whatever carried it, and copied back out with the wrapping.
+            format!("{PREFIX}{}\n{}", &payload[..40], &payload[40..]),
+        ] {
+            assert_eq!(
+                decode_invite(&pasted, 1_000).expect("decode"),
+                original,
+                "{pasted:?}"
+            );
         }
     }
 

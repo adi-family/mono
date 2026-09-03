@@ -62,6 +62,16 @@ pub fn start() {
 #[rustfmt::skip]
 pub mod protocol;
 
+/// Reading an `adi-invite:` token out of what was pasted, verbatim from the crate that owns it.
+///
+/// Included rather than re-typed for the same reason [`protocol`] is: a tab and a phone are the
+/// two places a token is pasted by hand, and the whole value of the module is that both of them
+/// forgive the *same* set of mangled shapes. A second copy would forgive a drifting subset.
+#[path = "../../adi-mesh/src/token.rs"]
+// See `protocol` above: `cargo fmt` in this crate would otherwise rewrite another crate's file.
+#[rustfmt::skip]
+pub mod token;
+
 /// `N` bytes from the platform's random source.
 ///
 /// On wasm this reaches `crypto.getRandomValues` — the same source `iroh::SecretKey::generate`

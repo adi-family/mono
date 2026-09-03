@@ -54,8 +54,9 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
 use crate::mesh::{Mesh, Result, with_timeout};
 
-/// Marks a string as an adi invite.
-const INVITE_PREFIX: &str = "adi-invite:";
+/// Marks a string as an adi invite. Owned by [`crate::token`], which is also where the reading of
+/// a pasted one lives.
+use crate::token::PREFIX as INVITE_PREFIX;
 
 /// Marks a string as an `adimesh:` endpoint ticket — what an invite carries inside it.
 const TICKET_PREFIX: &str = "adimesh:";
@@ -124,6 +125,9 @@ pub enum JoinReply {
 
 /// Decode an `adi-invite:` token.
 ///
+/// Takes what was pasted and not only what was minted — see [`crate::token`] for the shapes a
+/// copy arrives in and why forgiving them is the tab's problem too.
+///
 /// Expiry is **not** checked here. The authority on that is the node's own invite book, which is
 /// the side that minted it; refusing locally against a browser's clock would turn a phone whose
 /// time is a minute fast into a phone that cannot pair.
@@ -132,6 +136,24 @@ pub enum JoinReply {
 /// If the string is not an invite, is not valid hex, does not decode to an invite, or names a
 /// version this build does not speak.
 pub fn decode_invite(token: &str) -> Result<Invite> {
+    let mut refusal = None;
+    for candidate in crate::token::candidates(token) {
+        match decode_exact(&candidate) {
+            Ok(invite) => return Ok(invite),
+            // The first reading's complaint, since the readings are ordered by confidence.
+            Err(refused) => drop(refusal.get_or_insert(refused)),
+        }
+    }
+    Err(refusal.unwrap_or_else(|| {
+        format!(
+            "that is not an adi invite — it should start with `adi-invite:`, but {}",
+            crate::token::describe(token)
+        )
+    }))
+}
+
+/// [`decode_invite`] for one already-canonical token.
+fn decode_exact(token: &str) -> Result<Invite> {
     let hex = token
         .trim()
         .strip_prefix(INVITE_PREFIX)
