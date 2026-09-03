@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.4.1 — 2026-09-03
+
 ### Fixed
 
 - **The front door can be installed on a Mac again.** Since 1.0.0 it could not, on any machine,
