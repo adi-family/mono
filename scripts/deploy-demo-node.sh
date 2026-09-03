@@ -162,7 +162,12 @@ id -u "$NODE_USER" >/dev/null 2>&1 || useradd --create-home --shell /bin/bash "$
 loginctl enable-linger "$NODE_USER"
 
 apt-get update -qq
-apt-get install -y -qq curl tar ca-certificates
+# \`lsof\` is not optional, however much it looks it: it is how adi-app finds out what is listening
+# (\`adi-app/src/scan.rs\`), and that scan is the *only* source of a service's running flag. A
+# Debian image ships \`ss\` and not \`lsof\`, so without this line every service on the node reports
+# itself stopped while serving perfectly well — the panel says the fleet is dead, the phone repeats
+# it, and nothing is actually wrong. This node cost a day to that on 2026-09-03.
+apt-get install -y -qq curl tar ca-certificates lsof
 
 uid="\$(id -u "$NODE_USER")"
 # \`systemd --user\` is reached over the user's own bus; without both of these, \`adi-mono up\`

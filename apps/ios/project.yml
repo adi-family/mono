@@ -38,9 +38,11 @@ targets:
         # The build number App Store Connect sees. It must strictly increase across uploads and a
         # number is never reusable, so this is bumped per upload, not per release. Build 1 was
         # accepted on 2026-08-05; 2 followed on 2026-08-31 and predates the QR scanner, so it is
-        # not submittable. 3 is the first build that has it. `Info.plist` reads both of these
-        # through $(...) rather than repeating them.
-        CURRENT_PROJECT_VERSION: 3
+        # not submittable. 3 is the first build that has it, and is the one App Review rejected on
+        # 2026-09-02: the reviewer's token was refused by a paste parser that only accepted the
+        # exact string it was minted as. 4 carries the fix for that. `Info.plist` reads both of
+        # these through $(...) rather than repeating them.
+        CURRENT_PROJECT_VERSION: 4
         MARKETING_VERSION: 0.1.0
         TARGETED_DEVICE_FAMILY: "1,2"
 
