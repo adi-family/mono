@@ -636,6 +636,7 @@ mod tests {
             routes: Vec::new(),
             archived_at: None,
             moved_to: None,
+            never_started: false,
         }
     }
 
