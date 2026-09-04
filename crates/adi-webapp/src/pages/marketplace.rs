@@ -1,35 +1,44 @@
 //! The Marketplace page: apps from the manifests this machine trusts, listed from the cache and
-//! installed without starting anything.
+//! installed as git clones pinned to a commit.
 //!
-//! Grouped by marketplace — the grouping *is* the information, because which manifest an app
-//! came from is the trust question a reader is asking when they look at one — with each source's
-//! URL and freshness said out loud. A stale source says it is stale and why, the same sentence
-//! the CLI prints, rather than looking current.
+//! Grouped by marketplace — the grouping *is* the information, because which manifest an app came
+//! from is the trust question a reader is asking when they look at one — with each source's URL
+//! and freshness said out loud. A stale source says it is stale and why, the same sentence the
+//! CLI prints, rather than looking current.
 //!
 //! **No install counts anywhere on this page.** Under the standing decision an install does not
 //! count toward anything, and a number beside the apps would invite the wrong story at any size.
 //!
-//! The flow the page carries is deliberately two steps: **Install** lands the app's files —
-//! nothing runs — and **Start** is the act that puts it in the supervisor's glob. Installed and
-//! running are different states, and the page keeps them different on purpose: the artifact is
-//! somebody else's TypeScript, and running it is a choice somebody makes.
+//! Three things the page makes visible that the first version of it did not:
+//!
+//! * **You name your copy.** Install opens a form with the entry's own name in it and a note that
+//!   it can be renamed later — because the name becomes the dashboard, its id and its hostname,
+//!   and a machine-chosen one is how a person ends up with a dashboard they cannot find.
+//! * **What installs is a repository at a commit.** Both are on the row, in mono, so "what am I
+//!   about to run" has an answer that does not require trusting the listing text.
+//! * **A copy that is behind says so**, and Update moves it onto the pin the manifest carries now.
+//!
+//! Installed and running stay different states on purpose: the app's backend is somebody else's
+//! TypeScript, and running it is a choice somebody makes.
 
 use adi_ui::{Icon, IconSize, Lucide};
-use adi_webapp_api::types::{MarketplaceApp, MarketplaceSource};
+use adi_webapp_api::types::{MarketplaceApp, MarketplaceInstall, MarketplaceSource};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, MarketplaceForm, State};
-use crate::ui::flash_view;
+use crate::ui::{TextField, confirm, field_hint, flash_view};
 
 /// The Marketplace page: a line on what the page does with Sync beside it, then one section per
-/// source with one row per app. Nothing here is orange: installing and starting are choices, not
-/// the live state of anything.
+/// source with one row per app.
 pub(crate) fn marketplace_view(state: State, form: MarketplaceForm) -> AnyView {
     view! {
         <div class="adi-market__lead">
-            <span>"Apps land installed, not running. Start is the act that runs one."</span>
+            <span>
+                "An app is a git repository at a pinned commit. Installing clones it under a name \
+                 you choose; nothing runs until you start it."
+            </span>
             <span class="adi-spacer"></span>
             {sync_button(state, form)}
         </div>
@@ -125,7 +134,7 @@ fn source_panel(
                 view! { <div class="adi-empty">"Nothing in this manifest yet."</div> }.into_any()
             } else {
                 apps.iter()
-                    .map(|app| app_row(state, form, name.clone(), app))
+                    .map(|app| app_entry(state, form, app))
                     .collect::<Vec<_>>()
                     .into_any()
             }}
@@ -145,62 +154,45 @@ fn freshness_note(source: &MarketplaceSource) -> String {
     }
 }
 
-/// One app: its name, version and one-liner on the left; the one action its state allows on the
-/// right.
+/// One entry: the row itself, the install form when it is open on this entry, and a line per copy
+/// already installed here.
+fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
+    let key = format!("{}/{}", app.marketplace, app.slug);
+    let (row_key, form_key) = (key.clone(), key.clone());
+    let owned = app.clone();
+    view! {
+        <div class="adi-market__entry">
+            {app_row(form, &owned, row_key)}
+            {move || {
+                (form.installing.get() == form_key).then(|| install_form(state, form, &owned))
+            }}
+            {app.installs.iter()
+                .map(|install| copy_row(state, form, install))
+                .collect::<Vec<_>>()}
+        </div>
+    }
+    .into_any()
+}
+
+/// The entry itself: name, version and one-liner on the left; what it installs from underneath, in
+/// mono; the button that opens the install form on the right.
 ///
-/// The three states a row can be in are the page's whole vocabulary: not installed (**Install**),
-/// installed and not running (**Start**, with the note that nothing is running yet), and running
-/// (**Open**, on the host both of its services claim — through `origin::service_url`, so the link
-/// works read over the mesh too). Install is only offered when nothing by that slug is here, so
-/// an install never overwrites; replacing one is the CLI's `--force`, deliberately not a button.
-fn app_row(
-    state: State,
-    form: MarketplaceForm,
-    marketplace: String,
-    app: &MarketplaceApp,
-) -> AnyView {
-    let key = format!("{marketplace}/{}", app.slug);
+/// The repository and the commit are on the row rather than behind a disclosure because they are
+/// the whole answer to "whose code is this, and which version of it" — the question the listing
+/// text cannot answer for you.
+fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView {
     let busy = form.busy;
-    let (name, slug, version, description) = (
+    let (name, version, description) = (
         app.name.clone(),
-        app.slug.clone(),
         app.version.clone(),
         app.description.clone(),
     );
-
-    let action = if app.started {
-        open_link(app)
-    } else if app.installed {
-        let action_key = key.clone();
-        view! {
-            <span class="adi-market__state">"installed, not running"</span>
-            <button class="adi-btn" type="button"
-                prop:disabled=move || busy.get().is_some()
-                on:click=move |_| {
-                    run(state, form, action_key.clone(), fetch::start_marketplace_app(slug.clone()));
-                }>
-                "Start"
-            </button>
-        }
-        .into_any()
-    } else {
-        let action_key = key.clone();
-        view! {
-            <button class="adi-btn" type="button"
-                prop:disabled=move || busy.get().is_some()
-                on:click=move |_| {
-                    run(
-                        state,
-                        form,
-                        action_key.clone(),
-                        fetch::install_marketplace_app(marketplace.clone(), slug.clone(), false),
-                    );
-                }>
-                "Install"
-            </button>
-        }
-        .into_any()
-    };
+    let (repo, commit) = (app.repo.clone(), short_commit(&app.commit));
+    // The full strings, for the `title` of the elements that show them elided.
+    let (repo_title, key_title) = (repo.clone(), key.clone());
+    let again = !app.installs.is_empty();
+    let open_key = key.clone();
+    let default_name = app.name.clone();
 
     view! {
         <div class="adi-market__row">
@@ -210,23 +202,172 @@ fn app_row(
                     {version.map(|v| view! { <span class="adi-mono adi-muted">{v}</span> })}
                 </div>
                 {description.map(|d| view! { <div class="adi-market__desc">{d}</div> })}
-                <div class="adi-mono adi-muted" title=key.clone()>{key.clone()}</div>
+                <div class="adi-mono adi-muted adi-market__origin" title=repo_title>
+                    {repo}" @ "{commit}
+                </div>
+                <div class="adi-mono adi-muted" title=key_title>{key}</div>
             </div>
-            <div class="adi-market__actions">{action}</div>
+            <div class="adi-market__actions">
+                <button class="adi-btn" type="button"
+                    prop:disabled=move || busy.get().is_some()
+                    on:click=move |_| {
+                        // Prefilled with the publisher's name, because it is the answer most
+                        // people want and the form is here to let them disagree with it.
+                        form.name.set(default_name.clone());
+                        // Starting is on by default *here* and off in the CLI, and the difference
+                        // is not an inconsistency: pressing Install on a page is the deliberate
+                        // act, and an install that leaves nothing to open reads as one that did
+                        // not happen — an unstarted app is filed under Archived on the Dashboards
+                        // page, which is the last place anybody goes looking for what they just
+                        // installed. Unticking it is one click for whoever wants it inert.
+                        form.start_now.set(true);
+                        form.installing.update(|open| {
+                            *open = if *open == open_key { String::new() }
+                                    else { open_key.clone() };
+                        });
+                    }>
+                    {if again { "Install another" } else { "Install" }}
+                </button>
+            </div>
         </div>
     }
     .into_any()
 }
 
-/// The running app's way out: a link to the host it answers on. Over the mesh the same host is
-/// the node's name for it, which is exactly why the link goes through `service_url` rather than
-/// being built here.
-fn open_link(app: &MarketplaceApp) -> AnyView {
-    let Some(host) = app.host.as_deref().map(str::trim).filter(|h| !h.is_empty()) else {
+/// The one question an install has to ask: what to call this copy.
+///
+/// The name becomes the dashboard's name, its id (`Sales CRM` → `sales-crm`) and its hostname, so
+/// it is worth a form rather than a guess — and the hint says out loud that it is renameable,
+/// which is what makes the form cheap to answer rather than a decision to agonise over.
+fn install_form(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
+    let key = format!("{}/{}", app.marketplace, app.slug);
+    let busy = form.busy;
+    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
+    view! {
+        <div class="adi-market__install">
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let (name, start) = (form.name.get().trim().to_string(), form.start_now.get());
+                let (marketplace, slug) = (marketplace.clone(), slug.clone());
+                form.installing.set(String::new());
+                run(
+                    state,
+                    form,
+                    key.clone(),
+                    fetch::install_marketplace_app(marketplace, slug, name, start),
+                );
+            }>
+                <TextField id="market-name" label="Name it" placeholder="Sales CRM"
+                    value=form.name />
+                <label class="adi-field adi-field--check">
+                    <input type="checkbox"
+                        prop:checked=move || form.start_now.get()
+                        on:change=move |ev| form.start_now.set(event_target_checked(&ev)) />
+                    <span class="adi-field__label">"Start it right away"</span>
+                    {field_hint("this runs the app's own code on this machine")}
+                </label>
+                <button class="adi-btn adi-btn--primary" type="submit"
+                    prop:disabled=move || busy.get().is_some()>
+                    "Install"
+                </button>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    on:click=move |_| form.installing.set(String::new())>
+                    "Cancel"
+                </button>
+            </form>
+            // Said out loud rather than behind a hint marker: the whole reason the form is worth
+            // filling in is that the answer is cheap, and nobody knows that until they are told.
+            <p class="adi-hint">
+                "This is what you will see it under \u{2014} it becomes the dashboard's name and \
+                 its address, and you can rename it later."
+            </p>
+        </div>
+    }
+    .into_any()
+}
+
+/// One installed copy: what it is called, where it stands, and the one or two acts it allows.
+///
+/// A copy that is behind the manifest's pin says so and offers Update — a fast-forward, so an
+/// operator's own commits on top of the app are never walked over. Force is offered beside it
+/// because the refusal is otherwise a dead end inside the panel, and it is gated by a confirm
+/// that says what it costs.
+fn copy_row(state: State, form: MarketplaceForm, install: &MarketplaceInstall) -> AnyView {
+    let busy = form.busy;
+    let key = format!("install:{}", install.id);
+    let (id, name, commit) = (
+        install.id.clone(),
+        install.name.clone(),
+        short_commit(&install.commit),
+    );
+    let (started, outdated) = (install.started, install.outdated);
+    let host = install.host.clone();
+
+    let start_key = key.clone();
+    let update_key = key.clone();
+    let force_key = key.clone();
+    let (start_id, update_id, force_id) = (id.clone(), id.clone(), id.clone());
+
+    view! {
+        <div class="adi-market__copy">
+            <span class="adi-market__copy-name">{name}</span>
+            <span class="adi-mono adi-muted">{id.clone()}" @ "{commit}</span>
+            {outdated.then(|| view! {
+                <span class="adi-market__state">"an update is waiting"</span>
+            })}
+            <span class="adi-spacer"></span>
+            {outdated.then(move || view! {
+                <button class="adi-btn" type="button"
+                    prop:disabled=move || busy.get().is_some()
+                    on:click=move |_| {
+                        run(state, form, update_key.clone(),
+                            fetch::update_marketplace_app(update_id.clone(), false));
+                    }>
+                    "Update"
+                </button>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    prop:disabled=move || busy.get().is_some()
+                    on:click=move |_| {
+                        if confirm("Reset this copy onto the marketplace's commit? Any changes \
+                                    you made to it here are lost.") {
+                            run(state, form, force_key.clone(),
+                                fetch::update_marketplace_app(force_id.clone(), true));
+                        }
+                    }>
+                    "Force"
+                </button>
+            })}
+            {if started {
+                open_link(host.as_deref())
+            } else {
+                view! {
+                    <span class="adi-market__state">"not running"</span>
+                    <button class="adi-btn" type="button"
+                        prop:disabled=move || busy.get().is_some()
+                        on:click=move |_| {
+                            run(state, form, start_key.clone(),
+                                fetch::start_marketplace_app(start_id.clone()));
+                        }>
+                        "Start"
+                    </button>
+                }
+                .into_any()
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+/// A running copy's way out: a link to the host it answers on. Over the mesh the same host is the
+/// node's name for it, which is exactly why the link goes through `service_url` rather than being
+/// built here.
+fn open_link(host: Option<&str>) -> AnyView {
+    let Some(host) = host.map(str::trim).filter(|h| !h.is_empty()) else {
         return view! { <span class="adi-market__state">"running, no routable name"</span> }
             .into_any();
     };
-    match crate::origin::service_url(host) {
+    let host = host.to_string();
+    match crate::origin::service_url(&host) {
         Some(href) => view! {
             <span class="adi-market__state">{format!("running at {host}")}</span>
             <a class="adi-btn" href=href.clone() target="_blank" rel="noreferrer" title=href>
@@ -238,6 +379,11 @@ fn open_link(app: &MarketplaceApp) -> AnyView {
         None => view! { <span class="adi-market__state">{format!("running at {host}")}</span> }
             .into_any(),
     }
+}
+
+/// A commit as it is read out loud: the first seven characters, the way git prints one.
+fn short_commit(commit: &str) -> String {
+    commit.chars().take(7).collect()
 }
 
 /// Run one marketplace action: mark the row busy while it is in flight, fold the returned state
@@ -322,6 +468,12 @@ mod tests {
             note.starts_with("stale — the last sync failed: dns went away"),
             "{note}"
         );
+    }
+
+    #[test]
+    fn a_commit_is_shown_the_way_git_prints_one() {
+        assert_eq!(short_commit("9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b"), "9f2c1d4");
+        assert_eq!(short_commit(""), "", "an absent pin shows as nothing, not as a panic");
     }
 
     #[test]

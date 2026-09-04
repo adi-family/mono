@@ -22,6 +22,25 @@ extraction script cares about.
 
 ### Changed
 
+- **A marketplace app is a git repository now, and you name your copy of it.** Installing one used
+  to fetch a packed bundle and land it under whatever the publisher called it — so the app arrived
+  as a dashboard you did not name, could not tell apart from a second copy, and had no way to
+  update short of reinstalling over it. It is now a `git clone`, checked out at the **exact commit
+  the manifest pins**, into a dashboard you name at install time (`Sales CRM` → `sales-crm`,
+  `sales-crm.adi`, renameable afterwards like any other). Installing the same app twice is
+  ordinary rather than a collision. What lands stays a clone: `.git` intact, the pin on a branch
+  tracking `origin`, the working tree clean — so you can read the app, edit it, commit your own
+  work on top, and `git pull` it. **Update** moves a copy onto the commit its marketplace pins
+  now, as a fast-forward, and refuses rather than walk over changes you made; forcing it is a
+  separate ask that says what it costs. Two properties come with the pin: what you read on the
+  listing is what installs, whatever the publisher pushes afterwards, and `git log` in the
+  directory is the provenance of every byte in it. A repository that ships a hive file of its own
+  has it dropped on arrival rather than getting a say in what this machine runs. Installing from
+  the panel now starts the app too — pressing Install *is* the deliberate act, and an install you
+  have to go and find under **Archived** reads as one that did not happen; untick "Start it right
+  away" for the old behaviour, which is still what the CLI does unless you pass `--start`. Publishers: an entry now carries `repo` and a full 40-character
+  `commit` instead of `artifact`, and a manifest still written the old way says so on sync
+  (`docs/marketplace.md`).
 - **The chat rail opens on the sessions you started.** The filter box in the Sessions head has
   been there since 1.1.0, but it opened on **All sessions** — and on a machine whose agents launch
   each other, that is a rail where the four conversations you had are somewhere among the four

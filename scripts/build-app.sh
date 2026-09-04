@@ -38,9 +38,8 @@ fi
 #
 # It happens for one reason: `trunk serve` (the dev-ui hive service) writes this same dist, and its
 # partial dev output can land between the two builds below, leaving an index.html from one build
-# beside the assets of another. So the check runs twice — after trunk, and again after cargo, which
-# is the window that matters, because whatever is in dist when `include_dir!` reads it is what
-# shipped.
+# beside the assets of another. The staging below keeps it out of the long half; this check covers
+# the short one, because whatever is in dist when `include_dir!` reads it is what shipped.
 check_dist() {
   local dist="$repo_root/crates/adi-webapp/dist" missing=0 ref
   for ref in $(grep -o '\(href\|src\)="/[^"]*"' "$dist/index.html" | sed 's/.*"\/\(.*\)"/\1/'); do
@@ -49,15 +48,27 @@ check_dist() {
   [ "$missing" -eq 0 ] || {
     echo "error: dist/index.html references assets that are not in dist ($1)" >&2
     echo "       the panel would serve its SPA fallback in their place — an app with no styles" >&2
-    echo "       usually the dev server rewrote dist mid-build; stop it and build again:" >&2
-    echo "         curl -sX POST http://app.adi/api/hive/stop -H 'content-type: application/json' \\" >&2
-    echo "              -d '{\"project\":\"adi\",\"service\":\"dev-ui\"}'" >&2
+    echo "       the dev server rewrote dist between the staging and cargo; just build again." >&2
+    echo "       (killing dev-ui does not help: the supervisor restarts it within seconds and a" >&2
+    echo "        fresh trunk serve rebuilds straight into dist, making a collision *more* likely.)" >&2
     exit 1
   }
 }
 
-echo "==> trunk build ${trunk_flags[*]}  (crates/adi-webapp -> dist/)"
-( cd crates/adi-webapp && trunk build "${trunk_flags[@]}" )
+# Trunk builds into a dist of this build's own, under target/, and it is swapped into place only
+# once it is complete. The shared crates/adi-webapp/dist is *also* what the dev-ui service's
+# `trunk serve` writes — Trunk.toml gives serve and build one dist — and its rebuild deletes the
+# stage directory out from under a build using it. That fails minutes in, nowhere near the cause,
+# as "error writing JS loader file to stage dir: No such file or directory". Nothing watches
+# target/, so the long half of the build cannot collide at all.
+private_dist="$repo_root/target/webapp-dist"
+echo "==> trunk build ${trunk_flags[*]}  (crates/adi-webapp -> target/webapp-dist/)"
+rm -rf "$private_dist"
+( cd crates/adi-webapp && trunk build "${trunk_flags[@]}" --dist "$private_dist" )
+
+echo "==> staging it as crates/adi-webapp/dist/"
+rm -rf "$repo_root/crates/adi-webapp/dist"
+cp -R "$private_dist" "$repo_root/crates/adi-webapp/dist"
 check_dist "after trunk build"
 
 echo "==> cargo build ${cargo_flags[*]} -p adi-app  (embeds dist/)"

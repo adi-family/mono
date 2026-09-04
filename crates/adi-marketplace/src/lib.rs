@@ -1,29 +1,39 @@
-//! adi-marketplace — apps from a manifest you host anywhere.
+//! adi-marketplace — apps from a manifest you host anywhere, installed as git clones.
 //!
 //! A marketplace is one JSON manifest at an HTTPS URL the operator chose (GitHub raw, a gist, any
 //! host); the store keeps an *array* of them, each URL one source. No platform, no hosting, no
 //! accounts — the same shape plugins ship in, which is evidence the shape is sufficient rather
 //! than merely cheap. The full reasoning is the operator's decision of 2026-08-31
 //! (`business/decisions/2026-08-31-marketplaces-are-a-manifest-in-a-git-repo.md`); the schema and
-//! every deliberate v1 limit is written out in `docs/marketplace.md`.
+//! every deliberate limit is written out in `docs/marketplace.md`.
 //!
-//! **An app, in v1, is a dashboard.** The artifact an entry points at is the same
-//! [`DashboardBundle`](adi_dashboards::DashboardBundle) JSON the panel's machine-to-machine
-//! transfer uses, so publishing an app is exporting a dashboard and hosting the file — nothing
-//! new to serialize, and one landing path (the bundle jail, the caps, the one-origin hive file)
-//! shared with the panel's own import.
+//! **An app is a git repository at a pinned commit, and installing one is cloning it.** Three
+//! properties follow from that, and all three are the point:
+//!
+//! * **The pin is what you get.** A manifest names a full 40-hex commit; an install stands at
+//!   that commit or fails. A publisher who pushes something else after the operator read the
+//!   listing changes nothing about what installs, and moving onto a newer pin is
+//!   [`install::update`] — an act somebody takes, with the diff already public.
+//! * **The operator names their copy.** The slug is the published identity; the directory, the id
+//!   and the hostname come from the name the person typed, renameable afterwards like any
+//!   dashboard's. Installing the same app twice is ordinary.
+//! * **It stays a clone.** `.git` is kept and the pin sits on a branch that tracks `origin`, so
+//!   the app can be read, edited, committed to and pulled — the update path is git's, not a
+//!   format of ours.
 //!
 //! **Installed is not started.** An arriving app lands in the dashboard store's own inert state:
 //! files on disk, `archived_at` stamped, and its hive file parked under the name the supervisor's
-//! glob does not match — so nothing executes until somebody starts it (`start`, or Restore on the
-//! Dashboards page). That is the property the store already gives a tool ("creating a tool gives
-//! it to nobody"), kept for a payload whose backend is somebody else's TypeScript.
+//! glob does not match — so nothing executes until somebody starts it ([`install::start`], or
+//! Restore on the Dashboards page). That is the property the store already gives a tool
+//! ("creating a tool gives it to nobody"), kept for a payload whose backend is somebody else's
+//! TypeScript.
 //!
 //! The store layout:
 //!
 //! ```text
 //! marketplace/sources.toml        # [[marketplaces]] — name + url, one per source
 //! marketplace/cache/<name>.json   # the last fetch: when, from where, any error, the manifest
+//! marketplace/staging/<id>/       # a clone being assembled, outside the supervisor's glob
 //! ```
 //!
 //! Sync degrades rather than fails: a URL that cannot be fetched leaves the stale cache standing
@@ -33,6 +43,7 @@
 mod cache;
 mod error;
 mod fetch;
+pub mod git;
 pub mod install;
 mod manifest;
 pub mod sources;
@@ -40,7 +51,7 @@ pub mod sync;
 
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
-pub use install::{CachedApp, Installed, Started};
+pub use install::{AppInstall, CachedApp, InstallRecord, Installed, Started, Updated};
 pub use manifest::{AppEntry, MarketplaceManifest};
 
 use adi_config::Config;

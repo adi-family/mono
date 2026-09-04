@@ -104,7 +104,7 @@ pub fn remove(config: &Config, name: &str) -> Result<bool> {
     // The cache outliving its source is a listing that renders from nowhere; gone is gone.
     let _ = config
         .module(MODULE)
-        .remove_raw(&crate::cache::cache_file_name(name.trim()));
+        .remove_raw(&crate::cache::cache_path(name.trim()));
     Ok(true)
 }
 
@@ -173,20 +173,35 @@ mod tests {
     fn remove_drops_the_source_and_its_cache_and_reports_a_miss() {
         let cfg = config("remove");
         add(&cfg, "adi", URL).expect("add");
-        // A cache file for the source, as a sync would have left it.
-        cfg.module(MODULE)
-            .write_raw(
-                &crate::cache::cache_file_name("adi"),
-                b"{\"url\":\"x\",\"manifest\":null}",
-            )
-            .expect("cache");
+        // A cache file exactly where a sync leaves one — `cache/<name>.json`, not `<name>.json`.
+        // Seeded through the same helper the reader uses, because a test that spells the path
+        // itself is a test that can agree with a bug: this one passed for months while `remove`
+        // deleted a file nothing ever wrote, leaving the real cache standing.
+        crate::cache::write(
+            &cfg,
+            "adi",
+            &crate::cache::Envelope {
+                url: URL.to_string(),
+                fetched_at: Some(1),
+                error: None,
+                manifest: None,
+            },
+        )
+        .expect("cache");
+        assert!(
+            cfg.module(MODULE)
+                .raw_path(&crate::cache::cache_path("adi"))
+                .exists(),
+            "precondition: the cache is on disk"
+        );
 
         assert!(remove(&cfg, "adi").expect("remove"));
         assert!(list(&cfg).expect("list").is_empty());
         assert!(
             !cfg.module(MODULE)
-                .raw_path(&crate::cache::cache_file_name("adi"))
-                .exists()
+                .raw_path(&crate::cache::cache_path("adi"))
+                .exists(),
+            "a removed marketplace leaves no listing behind"
         );
         assert!(!remove(&cfg, "adi").expect("remove again"));
         let _ = std::fs::remove_dir_all(cfg.root());

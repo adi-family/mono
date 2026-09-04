@@ -20,7 +20,8 @@ use adi_webapp_api::types::{
     SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun,
     StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
     ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
-    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateState, UsedPorts,
+    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
+    UpdateState, UsedPorts,
     VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys,
     WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile, WriteToolScript,
 };
@@ -762,26 +763,42 @@ pub async fn sync_marketplace() -> Result<MarketplaceDone, String> {
     post("/api/marketplace/sync", &()).await
 }
 
-/// Install an app: land its files, started nothing.
+/// Install an app: clone its repository at the commit the manifest pins, under the name the
+/// operator chose. Nothing runs unless `start` says so.
 pub async fn install_marketplace_app(
     marketplace: String,
     slug: String,
-    force: bool,
+    name: String,
+    start: bool,
 ) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/install",
         &InstallMarketplaceApp {
             marketplace,
             slug,
-            force,
+            name,
+            start,
         },
     )
     .await
 }
 
-/// Start an installed app — the act that runs it.
-pub async fn start_marketplace_app(slug: String) -> Result<MarketplaceDone, String> {
-    post("/api/marketplace/start", &StartMarketplaceApp { slug }).await
+/// Start an installed copy — the act that runs it.
+pub async fn start_marketplace_app(id: String) -> Result<MarketplaceDone, String> {
+    post("/api/marketplace/start", &StartMarketplaceApp { id }).await
+}
+
+/// Move an installed copy onto the commit its marketplace now pins. `force` resets onto the pin
+/// and loses local work; without it an update that cannot fast-forward is refused.
+pub async fn update_marketplace_app(
+    id: String,
+    force: bool,
+) -> Result<MarketplaceDone, String> {
+    post(
+        "/api/marketplace/update",
+        &UpdateMarketplaceApp { id, force },
+    )
+    .await
 }
 
 /// Scaffold a new dashboard; the supervisor starts it within a few seconds.

@@ -600,14 +600,15 @@ mod tests {
     fn the_marketplace_group_is_reachable_from_the_top_level() {
         // Its own argv surface is tested in `marketplace.rs`; this pins the wiring — that
         // `adi-mono marketplace …` reaches it at all.
-        let cli = Cli::try_parse_from(["adi-mono", "marketplace", "install", "adi/crm", "--force"])
+        let cli = Cli::try_parse_from(["adi-mono", "marketplace", "install", "adi/crm", "--start"])
             .expect("parses");
         assert!(matches!(
             cli.command,
             Command::Marketplace {
                 command: MarketplaceCommand::Install {
                     ref spec,
-                    force: true
+                    start: true,
+                    ..
                 }
             } if spec == "adi/crm"
         ));

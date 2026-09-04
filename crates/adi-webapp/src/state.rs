@@ -632,19 +632,34 @@ pub(crate) struct DashboardsForm {
     pub(crate) transfer_busy: RwSignal<bool>,
 }
 
-/// The Marketplace page's action state. The page has no create form — sources are added from the
-/// CLI (`adi-mono marketplace add`), and the page says so when there are none — so all it holds
-/// is which single action is in flight, keyed `"sync"` or `"<marketplace>/<slug>"`, so exactly
-/// the button a person pressed disables while it runs.
+/// The Marketplace page's action state. Sources are added from the CLI
+/// (`adi-mono marketplace add`), and the page says so when there are none; what the page *does*
+/// own is the one question an install has to ask — what to call this copy.
+///
+/// `installing` holds the `<marketplace>/<slug>` of the row whose install form is open (empty
+/// when none is), so exactly one row expands at a time and `name` can be a single signal rather
+/// than one per row. `busy` is keyed the same way — plus `"sync"` — so exactly the button a
+/// person pressed disables while it runs.
 #[derive(Clone, Copy)]
 pub(crate) struct MarketplaceForm {
     pub(crate) busy: RwSignal<Option<String>>,
+    /// The `<marketplace>/<slug>` whose install form is open, or empty.
+    pub(crate) installing: RwSignal<String>,
+    /// What this copy will be called — prefilled with the entry's own name when the form opens.
+    pub(crate) name: RwSignal<String>,
+    /// Whether to start the app as part of installing it. Set true each time the form opens: on
+    /// the page, pressing Install *is* the deliberate act, and an install that leaves nothing to
+    /// open reads as one that failed. The CLI keeps the opposite default.
+    pub(crate) start_now: RwSignal<bool>,
 }
 
 impl MarketplaceForm {
     pub(crate) fn new() -> Self {
         Self {
             busy: RwSignal::new(None),
+            installing: RwSignal::new(String::new()),
+            name: RwSignal::new(String::new()),
+            start_now: RwSignal::new(false),
         }
     }
 }

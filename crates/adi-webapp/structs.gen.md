@@ -929,12 +929,15 @@ pub(crate) struct DashboardsForm {
 
 ### struct `MarketplaceForm`
 
-The Marketplace page's action state. The page has no create form — sources are added from the CLI (`adi-mono marketplace add`), and the page says so when there are none — so all it holds is which single action is in flight, keyed `"sync"` or `"<marketplace>/<slug>"`, so exactly the button a person pressed disables while it runs.
+The Marketplace page's action state. Sources are added from the CLI (`adi-mono marketplace add`), and the page says so when there are none; what the page *does* own is the one question an install has to ask — what to call this copy.
 
 ```rust
 #[derive(Clone, Copy)]
 pub(crate) struct MarketplaceForm {
     pub(crate) busy: RwSignal<Option<String>>,
+    pub(crate) installing: RwSignal<String>,
+    pub(crate) name: RwSignal<String>,
+    pub(crate) start_now: RwSignal<bool>,
 }
 ```
 

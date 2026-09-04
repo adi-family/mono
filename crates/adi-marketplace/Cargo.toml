@@ -1,6 +1,6 @@
 [package]
 name = "adi-marketplace"
-description = "Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that lands a dashboard without starting it."
+description = "Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,8 @@ repository.workspace = true
 
 [dependencies]
 adi-config = { workspace = true }
-# Landing an app is landing a dashboard bundle: the jail, the caps and the one-origin hive file
-# are the same rules the panel's machine-to-machine transfer lands by.
+# A landed app is a dashboard: the manifest it carries, the one-origin hive file both of its
+# services share, and the hostname it claims are all that crate's rules, not this one's.
 adi-dashboards = { workspace = true }
 
 serde = { workspace = true }
@@ -19,17 +19,14 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 
-# Fetching manifests and artifacts. Blocking, and no tokio: this crate is synchronous
-# throughout, exactly as adi-facts' ollama client is, so a caller inside an async runtime
-# reaches it through spawn_blocking.
+# Fetching manifests — the only bytes this crate pulls over HTTP; an app's own bytes arrive
+# through `git`. Blocking, and no tokio: this crate is synchronous throughout, exactly as
+# adi-facts' ollama client is, so a caller inside an async runtime reaches it through
+# spawn_blocking.
 reqwest = { workspace = true, features = ["blocking"] }
 # reqwest is taken workspace-wide with `rustls-no-provider`, so a client cannot be built until
 # somebody installs a crypto provider process-wide. See the root Cargo.toml's note.
 rustls = { workspace = true }
-
-[dev-dependencies]
-# The install fixtures pack a bundle the way the panel's export does: base64 file bytes.
-base64 = { workspace = true }
 
 [lints]
 workspace = true

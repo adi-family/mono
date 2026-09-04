@@ -45,7 +45,7 @@ pub(crate) enum Route {
     /// Agent-authored dashboards (`/dashboards`).
     Dashboards,
     /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
-    /// from the cache and installed inert.
+    /// from the cache and installed as git clones pinned to a commit, inert.
     Marketplace,
     Hive,
     PortsManager,

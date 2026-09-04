@@ -29,33 +29,51 @@ pub enum Error {
     /// A spec has to name both halves: which marketplace, which app.
     #[error("{0:?} names no app — install takes <marketplace>/<app-slug>, e.g. adi/crm")]
     BadSpec(String),
-    /// The slug an entry carries is not installable as a directory name.
+    /// The slug an entry carries is not one safe path segment.
     #[error("app slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
     BadSlug(String),
+    /// The repository an entry names is not one this build will clone.
+    #[error(
+        "{0:?} is not a repository this installs from — an app's repo must be an https:// url \
+         (or a file:// path while it is being developed)"
+    )]
+    BadRepo(String),
+    /// The commit an entry pins is not a full git object name.
+    #[error(
+        "{0} pins {1:?}, which is not a commit — a manifest pins a full 40-character commit, \
+         never a branch or a tag, because the pin is what makes an install repeatable"
+    )]
+    BadCommit(String, String),
     /// The source has never been synced, so there is no cache to install from.
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),
     /// The manifest carries no such app.
     #[error("{0} carries no app named {1} — it carries: {2}")]
     UnknownApp(String, String, String),
-    /// Something already answers to that slug in the dashboard store. Refused rather than
-    /// numbered or overwritten: a silent `crm-2` is a surprise, and a silent replace is worse.
+    /// An install was asked for with nothing to call the copy.
+    #[error("give the app a name — it is what you will see it under, and you can rename it later")]
+    EmptyName,
+    /// Git itself refused, or is not installed. Carries git's own last line.
+    #[error("{0}")]
+    Git(String),
+    /// The cloned repository is not laid out as a dashboard, so nothing here could run it.
     #[error(
-        "a dashboard named {0} is already there ({1}) — reinstall over it with `--force`, which \
-         replaces its files"
+        "{0} does not look like an ADI app: {1}. An app repository is a dashboard — \
+         `frontend/index.ts` and `backend/index.ts` at its root (guides/dashboards.md)"
     )]
-    Collision(String, String),
-    /// The artifact at the entry's URL is not a bundle this build will land.
-    #[error("the artifact for {0} is not a valid dashboard bundle: {1}")]
-    BadArtifact(String, String),
+    NotAnApp(String, String),
+    /// Nothing on this machine by that id was installed from a marketplace.
+    #[error("no installed app called {0} — `adi-mono marketplace apps` lists what is here")]
+    NotInstalled(String),
+    /// An update was asked for on a copy with uncommitted work in it.
+    #[error(
+        "{0} has uncommitted changes — commit or stash them first, or force the update to reset \
+         onto the pin and lose them"
+    )]
+    Dirty(String),
     /// Nothing could be fetched.
     #[error("{0}")]
     Fetch(String),
-    /// Nothing by that slug is installed, so there is nothing to start.
-    #[error(
-        "no dashboard named {0} is installed — `adi-mono marketplace install <marketplace>/{0}` first"
-    )]
-    NotInstalled(String),
 }
 
 /// The outcome alias every fallible operation answers with.

@@ -923,12 +923,20 @@ pub(crate) enum MarketplaceCommand {
     Install {
         #[arg(value_name = "MARKETPLACE/SLUG")]
         spec: String,
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
         #[arg(long)]
-        force: bool,
+        start: bool,
     },
     Start {
-        #[arg(value_name = "SLUG")]
-        spec: String,
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    Update {
+        #[arg(value_name = "ID")]
+        id: String,
+        #[arg(long)]
+        force: bool,
     },
 }
 ```

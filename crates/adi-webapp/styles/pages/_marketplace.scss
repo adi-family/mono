@@ -20,14 +20,52 @@
   white-space: nowrap;
 }
 
-// One app per row, hairlines between; the about on the left and the one action on the right.
+// One entry: the row, its install form while it is open, and a line per copy installed here.
+// The hairline sits on the entry rather than the row, so a form and its copies read as belonging
+// to the app above them instead of as three separate rows.
+.adi-market__entry {
+  border-bottom: 1px solid var(--line);
+}
+
+// One app per row; the about on the left and the one action on the right.
 .adi-market__row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--line);
+}
+
+// Where the app comes from: repository and pinned commit, a machine string on one line.
+.adi-market__origin {
+  min-width: 0;
+  max-width: 60ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// The install form and the line under it that says the name is not a decision to agonise over.
+.adi-market__install {
+  padding: 0 0 12px;
+
+  .adi-hint {
+    padding-top: 6px;
+  }
+}
+
+// One installed copy, under the entry it came from.
+.adi-market__copy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0 8px 16px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-small);
+}
+
+.adi-market__copy-name {
+  color: var(--ink);
 }
 
 .adi-market__about {

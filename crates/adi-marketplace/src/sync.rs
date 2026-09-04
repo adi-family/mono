@@ -184,12 +184,15 @@ fn uncached_on_write_failure(written: crate::Result<()>, outcome: SyncStatus) ->
 mod tests {
     use super::*;
 
-    /// A manifest small enough to read, with the two fields an install keys on.
+    /// A manifest small enough to read, with the two fields an install keys on: the repository,
+    /// and the commit it is pinned at.
     const MANIFEST: &str = r#"{"name":"ADI starter apps","apps":[
         {"slug":"crm","name":"CRM","version":"0.1.0",
-         "artifact":"https://example/crm.bundle.json"},
+         "repo":"https://example/crm.git",
+         "commit":"9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b"},
         {"slug":"nosh","name":"Nosh",
-         "artifact":"https://example/nosh.bundle.json"}
+         "repo":"https://example/nosh.git",
+         "commit":"1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"}
     ]}"#;
 
     #[test]
@@ -279,7 +282,8 @@ mod tests {
         let market = crate::tests::scratch("bad-manifest");
         sources::add(market.config(), "adi", "https://example/m.json").expect("add");
 
-        let broken = br#"{"apps":[{"slug":"../evil","name":"X","artifact":"https://e/x.json"}]}"#;
+        let broken = br#"{"apps":[{"slug":"../evil","name":"X","repo":"https://e/x.git",
+                                   "commit":"9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b"}]}"#;
         let results = sync_with(&market, |_| Ok(broken.to_vec())).expect("sync");
         assert!(matches!(results[0].status, SyncStatus::Failed { .. }));
         let _ = std::fs::remove_dir_all(market.config().root());

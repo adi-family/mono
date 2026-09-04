@@ -30,21 +30,35 @@ pub(crate) enum MarketplaceCommand {
     Sync,
     /// List the cached entries, grouped by marketplace, with where each stands on this machine.
     Apps,
-    /// Install an app: land its files under dashboards/<slug>/, started nothing. Installed is
-    /// not started — `start` is the act that runs it.
+    /// Install an app: clone its repository at the commit its manifest pins, as a dashboard of
+    /// your own naming. Installed is not started — `start` is the act that runs it.
     Install {
         /// Which app: <marketplace>/<slug>, e.g. adi/crm.
         #[arg(value_name = "MARKETPLACE/SLUG")]
         spec: String,
-        /// Replace an already-installed app's files in place, keeping its run state.
+        /// What to call your copy. It becomes the dashboard's name, its id and its hostname, and
+        /// you can rename it later. Defaults to the name the marketplace published.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+        /// Start it as part of installing it, rather than leaving it inert.
         #[arg(long)]
-        force: bool,
+        start: bool,
     },
     /// Start an installed app: its servers come up on leased ports within a few seconds.
     Start {
-        /// The app to start — <marketplace>/<slug> or the bare slug.
-        #[arg(value_name = "SLUG")]
-        spec: String,
+        /// The dashboard id of the copy to start, as `apps` lists it.
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+    /// Update an installed copy onto the commit its marketplace now pins — a fast-forward, so
+    /// your own commits on top of it are never walked over.
+    Update {
+        /// The dashboard id of the copy to update, as `apps` lists it.
+        #[arg(value_name = "ID")]
+        id: String,
+        /// Reset onto the pin, throwing away uncommitted changes and local commits.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -82,8 +96,11 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
             list_apps(&market);
             Ok(())
         }
-        MarketplaceCommand::Install { spec, force } => install(&market, &spec, force),
-        MarketplaceCommand::Start { spec } => start(&market, &spec),
+        MarketplaceCommand::Install { spec, name, start } => {
+            install(&market, &spec, name.as_deref().unwrap_or(""), start)
+        }
+        MarketplaceCommand::Start { id } => start_app(&market, &id),
+        MarketplaceCommand::Update { id, force } => update(&market, &id, force),
     }
 }
 
@@ -150,59 +167,110 @@ fn list_apps(market: &Marketplace) {
             current.clone_from(&app.marketplace);
             println!("{current}:");
         }
-        let standing = if app.started {
-            match app.host.as_deref() {
-                Some(host) => format!("running at {host}"),
-                None => "running".to_string(),
-            }
-        } else if app.installed {
-            "installed, not started".to_string()
-        } else {
-            "not installed".to_string()
-        };
         let version = app
             .version
             .as_deref()
             .map(|v| format!(" {v}"))
             .unwrap_or_default();
         println!(
-            "  {}/{}  {}{version} — {standing}",
-            app.marketplace, app.slug, app.name
+            "  {}/{}  {}{version} — {} @ {}",
+            app.marketplace,
+            app.slug,
+            app.name,
+            app.repo,
+            adi_marketplace::git::short(&app.commit)
         );
         if let Some(description) = &app.description {
             println!("    {description}");
         }
+        if app.installs.is_empty() {
+            println!("    not installed");
+            continue;
+        }
+        // One line per copy: the same app installed twice under two names is ordinary, and the
+        // listing has to show which of them is behind.
+        for install in &app.installs {
+            let standing = if install.started {
+                match install.host.as_deref() {
+                    Some(host) => format!("running at {host}"),
+                    None => "running".to_string(),
+                }
+            } else {
+                "installed, not started".to_string()
+            };
+            let behind = if install.outdated {
+                format!(
+                    " — behind; `adi-mono marketplace update {}` moves it onto {}",
+                    install.id,
+                    adi_marketplace::git::short(&app.commit)
+                )
+            } else {
+                String::new()
+            };
+            println!(
+                "    {} “{}” @ {} — {standing}{behind}",
+                install.id,
+                install.name,
+                adi_marketplace::git::short(&install.commit)
+            );
+        }
     }
 }
 
-/// `install`: land the app, then say where, and what the next deliberate act is.
-fn install(market: &Marketplace, spec: &str, force: bool) -> Result<(), String> {
-    let done = adi_marketplace::install::install(market, spec, force).map_err(|e| e.to_string())?;
-    let dir = market.dashboards_dir().join(&done.slug);
+/// `install`: clone the app under the name the operator chose, then say where it went and what
+/// the next deliberate act is.
+fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<(), String> {
+    let done =
+        adi_marketplace::install::install(market, spec, name, start).map_err(|e| e.to_string())?;
+    let dir = market.dashboards_dir().join(&done.id);
+    println!(
+        "installed “{}” as {} at {} → {}",
+        done.name,
+        done.id,
+        adi_marketplace::git::short(&done.commit),
+        dir.display()
+    );
+    for note in &done.notes {
+        println!("  note: {note}");
+    }
     if done.started {
-        println!(
-            "reinstalled {} → {} (kept running at {})",
-            done.slug,
-            dir.display(),
-            done.host
-        );
+        println!("started — http://{} (a few seconds for the servers to come up)", done.host);
     } else {
-        println!("installed {} → {}", done.slug, dir.display());
         println!(
             "not started — run it when you want it: adi-mono marketplace start {}",
-            done.slug
+            done.id
         );
     }
+    println!("it is a clone: edit it in place, commit, and `git -C {} pull` when you want the publisher's newer work", dir.display());
     Ok(())
 }
 
-/// `start`: move the app into the supervisor's glob and say where it will answer.
-fn start(market: &Marketplace, spec: &str) -> Result<(), String> {
-    let started = adi_marketplace::install::start(market, spec).map_err(|e| e.to_string())?;
+/// `start`: move the copy into the supervisor's glob and say where it will answer.
+fn start_app(market: &Marketplace, id: &str) -> Result<(), String> {
+    let started = adi_marketplace::install::start(market, id).map_err(|e| e.to_string())?;
     println!(
         "started {} — http://{} (a few seconds for the servers to come up)",
-        started.slug, started.host
+        started.id, started.host
     );
+    Ok(())
+}
+
+/// `update`: fast-forward a copy onto the commit its marketplace pins now.
+fn update(market: &Marketplace, id: &str, force: bool) -> Result<(), String> {
+    let done = adi_marketplace::install::update(market, id, force).map_err(|e| e.to_string())?;
+    let short = adi_marketplace::git::short;
+    if done.changed {
+        println!("updated {} from {} to {}", done.id, short(&done.from), short(&done.to));
+        if done.started {
+            println!("it is running, so bun has already reloaded it");
+        }
+    } else {
+        println!(
+            "{} is already at {}, the commit its marketplace pins",
+            done.id,
+            short(&done.to)
+        );
+    }
     Ok(())
 }
 
@@ -238,21 +306,36 @@ mod tests {
             MarketplaceCommand::Add { ref name, ref url } if name == "adi" && url.contains("https://")
         ));
 
-        let cli =
-            Cli::try_parse_from(["marketplace", "install", "adi/crm", "--force"]).expect("install");
+        let cli = Cli::try_parse_from(["marketplace", "install", "adi/crm", "--name", "Sales CRM"])
+            .expect("install");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Install { ref spec, force: true } if spec == "adi/crm"
+            MarketplaceCommand::Install { ref spec, ref name, start: false }
+                if spec == "adi/crm" && name.as_deref() == Some("Sales CRM")
+        ));
+        // The name is optional — the entry's own is the default — and starting is opt-in.
+        let cli = Cli::try_parse_from(["marketplace", "install", "adi/crm", "--start"])
+            .expect("install");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Install { ref name, start: true, .. } if name.is_none()
         ));
 
         let cli = Cli::try_parse_from(["marketplace", "start", "crm"]).expect("start");
-        assert!(matches!(cli.command, MarketplaceCommand::Start { ref spec } if spec == "crm"));
+        assert!(matches!(cli.command, MarketplaceCommand::Start { ref id } if id == "crm"));
+
+        let cli =
+            Cli::try_parse_from(["marketplace", "update", "crm", "--force"]).expect("update");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Update { ref id, force: true } if id == "crm"
+        ));
 
         for verb in ["list", "sync", "apps"] {
             assert!(Cli::try_parse_from(["marketplace", verb]).is_ok(), "{verb}");
         }
         assert!(Cli::try_parse_from(["marketplace", "remove", "adi"]).is_ok());
-        // The one flag that exists is opt-in; nothing else is.
+        // Only the flags above exist; nothing else is.
         assert!(Cli::try_parse_from(["marketplace", "install", "adi/crm", "--yes"]).is_err());
     }
 

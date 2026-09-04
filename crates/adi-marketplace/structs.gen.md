@@ -2,15 +2,16 @@
 
 # `adi-marketplace` — types
 
-> Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that lands a dashboard without starting it.
+> Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-11 structs · 2 enums · 1 type alias across 7 files.
+15 structs · 2 enums · 1 type alias across 8 files.
 
 ## Index
 
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
-- [`src/install.rs`](#srcinstallrs) — `CachedApp`, `Installed`, `Started`
+- [`src/git.rs`](#srcgitrs) — `Pin`
+- [`src/install.rs`](#srcinstallrs) — `InstallRecord`, `CachedApp`, `AppInstall`, `Installed`, `Started`, `Updated`
 - [`src/lib.rs`](#srclibrs) — `Marketplace`
 - [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `AppEntry`
 - [`src/sources.rs`](#srcsourcesrs) — `Source`, `SourcesFile`
@@ -78,18 +79,26 @@ pub enum Error {
     BadSpec(String),
     #[error("app slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
     BadSlug(String),
+    #[error( "{0:?} is not a repository this installs from — an app's repo must be an https:// url \ (or a file:// path while it is being developed)" )]
+    BadRepo(String),
+    #[error( "{0} pins {1:?}, which is not a commit — a manifest pins a full 40-character commit, \ never a branch or a tag, because the pin is what makes an install repeatable" )]
+    BadCommit(String, String),
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),
     #[error("{0} carries no app named {1} — it carries: {2}")]
     UnknownApp(String, String, String),
-    #[error( "a dashboard named {0} is already there ({1}) — reinstall over it with `--force`, which \ replaces its files" )]
-    Collision(String, String),
-    #[error("the artifact for {0} is not a valid dashboard bundle: {1}")]
-    BadArtifact(String, String),
+    #[error("give the app a name — it is what you will see it under, and you can rename it later")]
+    EmptyName,
+    #[error("{0}")]
+    Git(String),
+    #[error( "{0} does not look like an ADI app: {1}. An app repository is a dashboard — \ `frontend/index.ts` and `backend/index.ts` at its root (guides/dashboards.md)" )]
+    NotAnApp(String, String),
+    #[error("no installed app called {0} — `adi-mono marketplace apps` lists what is here")]
+    NotInstalled(String),
+    #[error( "{0} has uncommitted changes — commit or stash them first, or force the update to reset \ onto the pin and lose them" )]
+    Dirty(String),
     #[error("{0}")]
     Fetch(String),
-    #[error( "no dashboard named {0} is installed — `adi-mono marketplace install <marketplace>/{0}` first" )]
-    NotInstalled(String),
 }
 ```
 
@@ -103,11 +112,46 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 ---
 
+## `src/git.rs`
+
+### struct `Pin`
+
+Where a working copy stands: the commit checked out, and the branch it is on.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pin {
+    pub commit: String,
+    pub branch: String,
+}
+```
+
+---
+
 ## `src/install.rs`
+
+### struct `InstallRecord`
+
+The record an installed app carries at `.adi/marketplace.json`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallRecord {
+    pub marketplace: String,
+    pub slug: String,
+    pub repo: String,
+    pub commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    pub installed_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<u64>,
+}
+```
 
 ### struct `CachedApp`
 
-One app as a listing shows it: the entry's text, and where it stands on this machine.
+One app as a listing shows it: what the manifest published, and every copy of it on this machine.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -117,9 +161,26 @@ pub struct CachedApp {
     pub name: String,
     pub description: Option<String>,
     pub version: Option<String>,
-    pub installed: bool,
+    pub repo: String,
+    pub commit: String,
+    pub branch: Option<String>,
+    pub installs: Vec<AppInstall>,
+}
+```
+
+### struct `AppInstall`
+
+One installed copy of an app.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppInstall {
+    pub id: String,
+    pub name: String,
+    pub commit: String,
     pub started: bool,
     pub host: Option<String>,
+    pub outdated: bool,
 }
 ```
 
@@ -130,10 +191,12 @@ What an install answers with.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Installed {
-    pub slug: String,
+    pub id: String,
     pub name: String,
     pub host: String,
+    pub commit: String,
     pub started: bool,
+    pub notes: Vec<String>,
 }
 ```
 
@@ -144,8 +207,23 @@ What a start answers with.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Started {
-    pub slug: String,
+    pub id: String,
     pub host: String,
+}
+```
+
+### struct `Updated`
+
+What an update answers with.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Updated {
+    pub id: String,
+    pub from: String,
+    pub to: String,
+    pub changed: bool,
+    pub started: bool,
 }
 ```
 
@@ -184,7 +262,7 @@ pub struct MarketplaceManifest {
 
 ### struct `AppEntry`
 
-One app in a marketplace: the listing text, and where the artifact comes from.
+One app in a marketplace: the listing text, and the repository and commit it installs from.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +273,10 @@ pub struct AppEntry {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    pub artifact: String,
+    pub repo: String,
+    pub commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 ```
 

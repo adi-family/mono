@@ -301,7 +301,6 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "adi-dashboards",
- "base64 0.22.1",
  "reqwest",
  "rustls",
  "serde",

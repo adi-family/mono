@@ -16,10 +16,14 @@ use adi_config::Config;
 /// The cache directory within the marketplace module.
 const CACHE_DIR: &str = "cache";
 
-/// The file one source's envelope lives in.
+/// Where one source's envelope lives, relative to the marketplace module.
+///
+/// The **whole** relative path, directory included — spelling it in two halves is how `remove`
+/// came to delete `<name>.json` while `read` and `write` used `cache/<name>.json`, so a removed
+/// marketplace left its listing behind on disk.
 #[must_use]
-pub(crate) fn cache_file_name(name: &str) -> String {
-    format!("{name}.json")
+pub(crate) fn cache_path(name: &str) -> String {
+    format!("{CACHE_DIR}/{name}.json")
 }
 
 /// One source's last fetch, as the cache keeps it.
@@ -43,7 +47,7 @@ pub struct Envelope {
 pub(crate) fn read(config: &Config, name: &str) -> Option<Envelope> {
     let bytes = config
         .module(crate::MODULE)
-        .read_raw(&format!("{CACHE_DIR}/{}", cache_file_name(name)))
+        .read_raw(&cache_path(name))
         .ok()??;
     serde_json::from_slice(&bytes).ok()
 }
@@ -57,7 +61,7 @@ pub(crate) fn write(config: &Config, name: &str, envelope: &Envelope) -> Result<
         .map_err(|e| crate::Error::Fetch(format!("encoding the cache: {e}")))?;
     config
         .module(crate::MODULE)
-        .write_raw(&format!("{CACHE_DIR}/{}", cache_file_name(name)), &bytes)?;
+        .write_raw(&cache_path(name), &bytes)?;
     Ok(())
 }
 

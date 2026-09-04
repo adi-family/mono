@@ -3037,44 +3037,84 @@ pub struct MarketplaceSource {
     pub error: Option<String>,
 }
 
-/// One cached entry: the listing text the manifest published, and where the app stands on this
-/// machine. No counts ride on this DTO or anywhere on the page — under the standing decision an
-/// install does not count toward anything, and a number is not the story the page should tell.
+/// One cached entry: the listing text the manifest published, the repository and commit it
+/// installs from, and every copy of it on this machine. No counts ride on this DTO or anywhere on
+/// the page — under the standing decision an install does not count toward anything, and a number
+/// is not the story the page should tell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MarketplaceApp {
     /// The source's local name — the first half of `<marketplace>/<slug>`.
     pub marketplace: String,
-    /// The entry's slug — the second half, and the directory an install lands as.
+    /// The entry's published slug — the second half, and how an install is addressed. **Not** the
+    /// directory it lands as: that is minted from the name the operator chooses.
     pub slug: String,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// As published. Shown, never enforced.
+    /// As published. Shown, never enforced — the commit is the identity of what installs.
     #[serde(default)]
     pub version: Option<String>,
-    /// Whether a dashboard directory by this slug is on this machine already.
-    pub installed: bool,
-    /// Whether something is running it — the hive file is in the supervisor's glob.
-    pub started: bool,
-    /// The hostname a started app answers on, when it declares one.
+    /// The repository an install clones.
+    pub repo: String,
+    /// The commit the manifest pins right now: a full 40-hex object name.
+    pub commit: String,
+    /// The branch that commit sits on, when the entry names one.
     #[serde(default)]
-    pub host: Option<String>,
+    pub branch: Option<String>,
+    /// Every copy of this app installed here. Empty is "not installed"; more than one is
+    /// ordinary, since each copy is named by whoever installed it.
+    #[serde(default)]
+    pub installs: Vec<MarketplaceInstall>,
 }
 
-/// `POST /api/marketplace/install` — which entry, and whether a collision may be replaced.
+/// One installed copy of a marketplace app — a dashboard like any other, with the pin it stands
+/// at and whether the manifest has moved past it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceInstall {
+    /// The dashboard id — the directory, and what start and update address.
+    pub id: String,
+    /// The name the operator gave this copy.
+    pub name: String,
+    /// The commit this copy stands at.
+    pub commit: String,
+    /// Whether something is running it — the hive file is in the supervisor's glob.
+    pub started: bool,
+    /// The hostname it answers on, or will once started.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Whether the manifest now pins a different commit than this copy stands at.
+    pub outdated: bool,
+}
+
+/// `POST /api/marketplace/install` — which entry, what to call the copy, and whether to start it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallMarketplaceApp {
     pub marketplace: String,
     pub slug: String,
+    /// What the copy is called here. Empty takes the entry's own name; it is renameable
+    /// afterwards like any dashboard's, and the id and hostname are minted from it.
     #[serde(default)]
-    pub force: bool,
+    pub name: String,
+    /// Whether to start it as part of the install. Off by default: an app's backend is somebody
+    /// else's TypeScript, and running it is a choice somebody makes.
+    #[serde(default)]
+    pub start: bool,
 }
 
-/// `POST /api/marketplace/start` — the installed app to start. The dashboard store is the whole
-/// address by then, so the slug alone names it.
+/// `POST /api/marketplace/start` — the installed copy to start, by dashboard id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartMarketplaceApp {
-    pub slug: String,
+    pub id: String,
+}
+
+/// `POST /api/marketplace/update` — move an installed copy onto the commit its marketplace now
+/// pins. `force` resets onto the pin, throwing away uncommitted work and local commits; without
+/// it an update that cannot fast-forward is refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateMarketplaceApp {
+    pub id: String,
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// What a marketplace mutation answers with: the fresh state, and the one line that says what
