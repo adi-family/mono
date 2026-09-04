@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.5.0 — 2026-09-04
+
 ### Added
 
 - **The paperclip takes any file, not just pictures.** Attach a PDF, a CSV, an export somebody sent
