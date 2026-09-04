@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The paperclip takes any file, not just pictures.** Attach a PDF, a CSV, an export somebody sent
+  you — it uploads the moment you pick it, exactly as a screenshot does, and the agent is told
+  **where it is on this machine** so it can open the file with its own tools. That is the point of
+  it: a run happens where the app runs, and until now there was no way to get a document from the
+  browser you are typing in onto the machine that would read it. An image still goes to the model as
+  a picture; anything else reaches it as a path, and now an image carries its path too — a
+  screenshot you want *cropped* is a file, not only pixels. Drop it, paste it, or press the
+  paperclip; up to 25 MB a file (5 MB an image, which is a provider's limit, not ours), six per
+  message. The tray shows a file by name where a picture shows a thumbnail, and a sent one is a link
+  in the transcript rather than a broken image.
+
 ### Changed
 
 - **A marketplace app is a git repository now, and you name your copy of it.** Installing one used

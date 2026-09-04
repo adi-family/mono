@@ -78,7 +78,7 @@ is `SESSIONS_MODULE = "sessions"`, `adi-agents/src/lib.rs:79`). Override the roo
 ```
 <sessions_dir>/sessions.db              sessions, turns, queue, attachments
 <sessions_dir>/settings.toml            the run cap (RunLimits)
-<sessions_dir>/attachments/<id>         one attached image's bytes, exactly as uploaded
+<sessions_dir>/attachments/<id>.<ext>   one attachment's bytes, exactly as uploaded
 <sessions_dir>/<agent>/<id>.log         the raw output a runner spools into
 <sessions_dir>/<agent>/<id>.review.md   the dossier Analyze writes for a reviewing agent
 <sessions_dir>/<agent>/<id>.<whatever>  sidecars a runner invents
@@ -103,16 +103,16 @@ Five tables. The first four are keyed `(agent, id)`, and `turns`, `queue` and `g
 | `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
 | `queue` | what is waiting to be said next, and the images waiting with it | `seq` |
 | `goals` | what the conversation is *for*: text, state, who set it, how often it has been asked | `created_at` (partial index on the open ones) |
-| `attachments` | one row per uploaded image: name, media type, size, and whose message it ended up on | — |
+| `attachments` | one row per uploaded image **or file**: name, media type, size, and whose message it ended up on | — |
 
 ### `attachments` is the one table that cascades off nothing
 
-It cannot. An image is uploaded from a composer **before** the message that carries it exists —
+It cannot. An attachment is uploaded from a composer **before** the message that carries it exists —
 often before the conversation does — so a new row has no session to point at, and a foreign key
 would have to invent one. Its life instead runs:
 
 1. **stored, unclaimed** — `POST /api/agents/attachment` writes the bytes to
-   `<sessions_dir>/attachments/<id>` and a row with empty `agent`/`session`. The id is minted by
+   `<sessions_dir>/attachments/<id>.<ext>` and a row with empty `agent`/`session`. The id is minted by
    SQLite (`hex(randomblob(12))`), so two processes uploading in the same instant cannot agree on
    one.
 2. **claimed** — recording the turn that carries it stamps the row with that conversation, *in the
@@ -126,6 +126,21 @@ type, size), and the page fetches each once from `GET /api/agents/attachment/<id
 `immutable, max-age=1y` because the id *is* the version. A transcript is polled once a second, and
 one that inlined its screenshots would re-send every one of them on every tick.
 
+### An image is shown; anything else is a path
+
+**Any type may be attached**, and the store's only refusals are an empty body and one over the cap
+its kind carries — 5 MiB for an image (`MAX_BYTES`, the strictest provider's limit), 25 MiB for
+anything else (`MAX_FILE_BYTES`, kept under `adi-app`'s 32 MiB body cap so the *handler* refuses an
+oversized upload and can name the file in the sentence). The **four image types** are the ones a
+provider will take in a request body; a PDF, a CSV or a log is stored exactly the same way and never
+goes into a body at all. Its bytes being on the machine the run happens on is the point — the
+message tells the agent where they are, and the agent opens them with its own tools.
+
+The stored file is named `<id>.<ext>`: an image by its media type (a pasted screenshot has no
+filename to go by), everything else by the extension it arrived with, sanitised to lowercase ASCII
+alphanumerics and `bin` when there is nothing usable. The extension is load-bearing — a file-reading
+tool decides what it is looking at by the name.
+
 ### Two ways an image reaches a model
 
 `Runner::image_delivery` answers *how*, and the difference is where the picture ends up rather than
@@ -133,18 +148,25 @@ whether the model sees it:
 
 | delivery | engines | what happens |
 |---|---|---|
-| `Inline` | `harness:adi` | the bytes go into the request body this tree writes, as base64 in each provider's own shape |
+| `Inline` | `harness:adi` | the bytes go into the request body this tree writes, as base64 in each provider's own shape — and the message also names the file, so a picture that is the *material* (crop it, resize it) can be reached and not only seen |
 | `Path` | `harness:claude-sdk`, `process:claude`, `process:codex` | the message gets a block naming the files, and the engine opens them with its own file-reading tool |
 | `None` | `pty:*`, a simulated run | nothing to send to — a pane is typed into, and a simulation has a person in the model's seat |
 
-Path delivery is why the stored file carries its media type's **extension**: a file-reading tool
-decides whether it is looking at a picture by the name, and `<id>` alone reads as text with
-unprintable bytes in it. The block is appended by `for_engine` (`lib.rs`) at the moment of sending
-and is deliberately **not** what the transcript records — the paths are directions for one engine,
-so a reader would see plumbing under a thumbnail it is already drawing, and a turn replayed later to
-a different engine would carry instructions that mean nothing to it.
+A **file** that is not an image gets its block whatever the delivery, because no provider here takes
+one in a body: `Inline` and `Path` both name it, and only a `None` engine — with no tool to open it
+— is told nothing.
 
-A message with images to a `None` engine is **refused** (400) rather than recorded looking sent.
+Both blocks are rendered by `with_attachment_paths` (`lib.rs`), and reach an engine by one of two
+routes. A path-delivery engine is *handed* its message, so `for_engine` prepares it on the way out.
+The adi loop is handed an agent and a conversation instead and rebuilds its messages from the store,
+so it calls the same renderer while seeding (`words_of` in `adi_loop.rs`) — exactly as it rebuilds
+the pre-run block. Either way the paths are deliberately **not** what the transcript records: they
+are directions for one engine, so a reader would see plumbing under a thumbnail it is already
+drawing, and a turn replayed later to a different engine would carry instructions that mean nothing
+to it.
+
+A message with an attachment to a `None` engine is **refused** (400) rather than recorded looking
+sent.
 
 The id is `{unix_millis:013}-{seq:04}` (`store/record.rs`), so it carries its own start time and
 sorts by it.

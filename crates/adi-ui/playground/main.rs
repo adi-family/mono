@@ -19,14 +19,15 @@
 use std::time::Duration;
 
 use adi_ui::{
-    AppItem, AppState, Ask, AskOption, AskQuestion, AttachState, Attached, Attaching, Badge,
-    BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame, CodeHeight,
-    CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag, FlagList,
-    FlagMark, Flash, FlashKind, Form, Hint, Icon, IconSize, Input, InputWidth, Kbd, Lang, Lucide,
-    Mark, MarkVariant, Markdown, Modal, Panel, Param, ParamKind, PathPicker, PathRoot, PromptText,
-    Qna, Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Simulator,
-    SortKey, Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl,
-    ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
+    AppItem, AppState, Ask, AskOption, AskQuestion, AttachKind, AttachState, Attached, Attaching,
+    Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
+    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag,
+    FlagList, FlagMark, Flash, FlashKind, Form, Hint, Icon, IconSize, Input, InputWidth, Kbd, Lang,
+    Lucide, Mark, MarkVariant, Markdown, Modal, Panel, Param, ParamKind, PathPicker, PathRoot,
+    PromptText, Qna, Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState,
+    Simulator, SortKey, Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall,
+    ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of,
+    sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -1233,13 +1234,24 @@ The first two                    are the same bug. I will read the pairing path 
         files,
         on_files: Callback::new(move |picked: Vec<web_sys::File>| {
             for (n, file) in picked.into_iter().enumerate() {
-                let url =
-                    web_sys::Url::create_object_url_with_blob(file.as_ref()).unwrap_or_default();
+                // A picture gets its object URL as a thumbnail; anything else is a file row, drawn
+                // from its name alone — which is the pair this tray has to look right for.
+                let image = file.type_().starts_with("image/");
+                let url = if image {
+                    web_sys::Url::create_object_url_with_blob(file.as_ref()).unwrap_or_default()
+                } else {
+                    String::new()
+                };
                 files.update(|list| {
                     list.push(Attached {
                         key: format!("demo-{}-{n}", list.len()),
                         name: file.name(),
                         preview: url.clone(),
+                        kind: if image {
+                            AttachKind::Image
+                        } else {
+                            AttachKind::File
+                        },
                         state: AttachState::Ready(url),
                     });
                 });

@@ -471,12 +471,17 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
     conversation_snapshot(store, &agent, run_id)
 }
 
-/// `POST /api/agents/attachment` — store one image and answer with the reference a message carries
-/// it by.
+/// `POST /api/agents/attachment` — store one image or file and answer with the reference a message
+/// carries it by.
 ///
 /// The bytes arrive as the **raw body**, with their type in `Content-Type` and their name in
 /// `X-Adi-Filename` — the same shape dictation uses, and for the same reason: the page already holds
 /// bytes and a type, and wrapping them in JSON would cost a base64 third for nothing.
+///
+/// **Any type is taken**, not only the four a model can be shown. An image goes into the request
+/// body the model reads; anything else is written to disk and its *path* is named in the message,
+/// which is the whole point of attaching a PDF to a conversation with an agent that can open it.
+/// The two differ only in their size cap.
 ///
 /// Uploading is deliberately separate from sending. A screenshot is pasted into the composer long
 /// before Send is pressed, so this is what lets the upload happen while the message is still being
@@ -485,47 +490,50 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
 #[must_use]
 pub fn store_attachment(store: &Agents, media_type: &str, filename: &str, body: &[u8]) -> Response {
     // The header arrives as `image/png` or `image/png; charset=…`; only the type is ours to keep.
+    // A client that sent none at all leaves this empty, which reads as a file — the bytes are still
+    // stored, under the extension their name carries.
     let media_type = media_type
         .split(';')
         .next()
         .unwrap_or_default()
         .trim()
         .to_lowercase();
-    if !adi_agents::store::is_supported(&media_type) {
-        return error(
-            415,
-            &format!(
-                "“{media_type}” isn't an image type a message can carry — {} are",
-                adi_agents::store::MEDIA_TYPES.join(", ")
-            ),
-        );
-    }
-    if body.len() > adi_agents::store::MAX_ATTACHMENT_BYTES {
+    let cap = adi_agents::store::max_attachment_bytes(&media_type);
+    if body.len() > cap {
+        let noun = if adi_agents::store::is_image(&media_type) {
+            "image"
+        } else {
+            "file"
+        };
         return error(
             413,
             &format!(
-                "that image is {} bytes, over the {}-byte limit",
-                body.len(),
-                adi_agents::store::MAX_ATTACHMENT_BYTES
+                "that {noun} is {} bytes, over the {cap}-byte limit",
+                body.len()
             ),
         );
     }
     // A pasted screenshot arrives with no name of its own, and a name is only ever shown back to
     // the person who attached it — so an unnamed one is called what it is rather than refused.
-    let name = clean(Some(filename.to_string())).unwrap_or_else(|| "image".to_string());
-    match store.store_image(&name, &media_type, body) {
+    let fallback = if adi_agents::store::is_image(&media_type) {
+        "image"
+    } else {
+        "file"
+    };
+    let name = clean(Some(filename.to_string())).unwrap_or_else(|| fallback.to_string());
+    match store.store_attachment(&name, &media_type, body) {
         Ok(stored) => ok_json(&agent_attachment(stored)),
         Err(e) => Response::from(&e),
     }
 }
 
-/// `GET /api/agents/attachment/<id>` — one stored image's bytes, with its own content type.
+/// `GET /api/agents/attachment/<id>` — one stored attachment's bytes, with its own content type.
 ///
 /// Not a [`Response`], which is JSON by construction: this is the one agents route that answers with
 /// something that is not text. The server writes what this returns straight to the socket.
 #[must_use]
 pub fn attachment_bytes(store: &Agents, id: &str) -> Option<(String, Vec<u8>)> {
-    let (attachment, bytes) = store.image(id)?;
+    let (attachment, bytes) = store.attachment(id)?;
     Some((attachment.media_type, bytes))
 }
 

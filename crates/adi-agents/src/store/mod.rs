@@ -45,7 +45,10 @@ use crate::Backend;
 use crate::error::{Error, Result};
 use crate::progress::TurnContent;
 
-pub use attachments::{Attachment, MAX_BYTES as MAX_ATTACHMENT_BYTES, MEDIA_TYPES, is_supported};
+pub use attachments::{
+    Attachment, MAX_BYTES as MAX_ATTACHMENT_BYTES, MAX_FILE_BYTES as MAX_ATTACHED_FILE_BYTES,
+    MEDIA_TYPES, is_image, max_bytes as max_attachment_bytes,
+};
 pub use db::now_ms;
 pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
 pub use questions::{
@@ -499,15 +502,14 @@ impl SessionStore {
 
     // ---- attachments ---------------------------------------------------------------
 
-    /// Store an image and hand back the reference a message carries it by.
+    /// Store an image or a file and hand back the reference a message carries it by.
     ///
     /// Unclaimed until a turn records it: what is uploaded from a composer may never be sent, so the
     /// same call sweeps whatever was abandoned a day ago. That is the only thing that ever creates
     /// an orphan, so it is the cheapest place to notice one.
     ///
     /// # Errors
-    /// Returns [`Error::Arguments`] for an unsupported media type or an oversized body, plus I/O and
-    /// database errors.
+    /// Returns [`Error::Arguments`] for an empty or oversized body, plus I/O and database errors.
     pub fn put_attachment(&self, name: &str, media_type: &str, bytes: &[u8]) -> Result<Attachment> {
         let conn = self.conn()?;
         attachments::sweep_unclaimed(&conn, &self.dir, db::now_ms());

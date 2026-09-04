@@ -21,9 +21,9 @@ use adi_webapp_api::types::{
     StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
     ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
     TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateState, UsedPorts,
-    VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys,
-    WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile, WriteToolScript,
+    UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
+    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -790,10 +790,7 @@ pub async fn start_marketplace_app(id: String) -> Result<MarketplaceDone, String
 
 /// Move an installed copy onto the commit its marketplace now pins. `force` resets onto the pin
 /// and loses local work; without it an update that cannot fast-forward is refused.
-pub async fn update_marketplace_app(
-    id: String,
-    force: bool,
-) -> Result<MarketplaceDone, String> {
+pub async fn update_marketplace_app(id: String, force: bool) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/update",
         &UpdateMarketplaceApp { id, force },
@@ -1078,12 +1075,13 @@ pub async fn upload_attachment(
     bytes: &[u8],
 ) -> Result<AgentAttachment, String> {
     // The one agent call that does not follow the page to a node (`docs/fleet.md` §13): the
-    // forwarder carries JSON, and this body is a PNG. Refused outright rather than uploaded here
-    // and referenced there, which would put an id in the node's transcript that names bytes only
-    // this machine holds — a broken picture instead of an error anyone can act on.
+    // forwarder carries JSON, and this body is raw bytes. Refused outright rather than uploaded
+    // here and referenced there, which would put an id in the node's transcript that names bytes
+    // only this machine holds — a broken picture, or a path to a file that is not on the machine
+    // the run happens on, instead of an error anyone can act on.
     if let Some(node) = node() {
         return Err(format!(
-            "a picture can only be attached to a session on this machine \u{2014} {node} is being \
+            "a file can only be attached to a session on this machine \u{2014} {node} is being \
              driven through its API, which carries JSON. Open {node}'s own panel to attach one \
              there."
         ));

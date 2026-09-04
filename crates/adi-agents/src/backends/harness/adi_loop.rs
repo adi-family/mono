@@ -52,6 +52,7 @@ use crate::arguments::{
 use crate::backends::adi_events::{self, Sink};
 use crate::error::{Error, Result};
 use crate::progress::TurnMetrics;
+use crate::runner::ImageDelivery;
 
 use super::tools;
 use crate::store::{Attachment, Turn};
@@ -419,7 +420,7 @@ impl<'a> Wire<'a> {
 
     /// The transcript as this provider's opening message list.
     fn seed(&self, turns: &[Turn], images: &ImageStore<'_>) -> Vec<Value> {
-        let plain = merged(turns);
+        let plain = merged(turns, images.store);
         match self {
             // Gemini names the assistant `model` and carries the system prompt outside the list.
             Self::Gemini { .. } => plain
@@ -580,7 +581,15 @@ impl<'a> Wire<'a> {
         }
         let said = Said {
             role: "user",
-            text: said.text.clone(),
+            // The same block a seeded turn gets ([`words_of`]): a file attached to a message typed
+            // at round three is on disk exactly as one attached at round one, and the model has no
+            // other way to learn where.
+            text: crate::with_attachment_paths(
+                images.store,
+                &said.text,
+                &said.images,
+                ImageDelivery::Inline,
+            ),
             images: said.images.clone(),
         };
         // Ollama keeps its pictures beside the message rather than inside it, so there is nothing to
@@ -700,13 +709,13 @@ struct Said<'a> {
 /// A turn with images but no words is **not** blank, whatever its text says: a pasted screenshot on
 /// its own is the whole message, and dropping it would send a request that answers a picture nobody
 /// attached.
-fn merged(turns: &[Turn]) -> Vec<Said<'_>> {
+fn merged<'a>(turns: &'a [Turn], store: &crate::store::SessionStore) -> Vec<Said<'a>> {
     let said = |turn: &Turn| {
         !turn.text.trim().is_empty() || !turn.images.is_empty() || !turn.steps.is_empty()
     };
-    let mut out: Vec<Said<'_>> = Vec::with_capacity(turns.len());
+    let mut out: Vec<Said<'a>> = Vec::with_capacity(turns.len());
     for turn in turns.iter().filter(|t| said(t)) {
-        let words = words_of(turn);
+        let words = words_of(turn, store);
         match out.last_mut() {
             Some(prev) if prev.role == turn.role => {
                 if !words.trim().is_empty() {
@@ -728,19 +737,21 @@ fn merged(turns: &[Turn]) -> Vec<Said<'_>> {
 }
 
 /// One turn as this engine has to receive it: what was said, plus anything the platform ran on its
-/// behalf before it was asked.
+/// behalf before it was asked, plus where anything attached to it is on disk.
 ///
-/// Every other engine is handed its message on a command line, and the launch appends the pre-run
-/// block there. This loop is handed an agent and a conversation instead and replays what the store
-/// holds, so the block has to be rebuilt here or the commands would have really run and the model
-/// would never learn what they said. Same renderer, so the text is byte-identical either way.
-fn words_of(turn: &Turn) -> String {
-    match crate::prelude::block_of_steps(&turn.steps) {
+/// Every other engine is handed its message on a command line, and the launch appends both blocks
+/// there. This loop is handed an agent and a conversation instead and replays what the store holds,
+/// so they have to be rebuilt here — or the commands would have really run with the model never
+/// learning what they said, and the PDF somebody attached would be a file nothing was ever told the
+/// name of. Same renderers, so the text is byte-identical either way.
+fn words_of(turn: &Turn, store: &crate::store::SessionStore) -> String {
+    let words = match crate::prelude::block_of_steps(&turn.steps) {
         Some(block) if turn.role == "user" => {
             format!("{}\n\n{block}", turn.text.trim_end())
         }
         _ => turn.text.clone(),
-    }
+    };
+    crate::with_attachment_paths(store, &words, &turn.images, ImageDelivery::Inline)
 }
 
 /// One image, ready to go into a request body.
@@ -775,9 +786,15 @@ impl<'a> ImageStore<'a> {
     /// Dropping rather than failing the turn: an image deleted from under a recorded transcript is a
     /// message with one fewer picture, and refusing to answer a two-week-old conversation because a
     /// file was swept would be the worse of the two failures.
+    ///
+    /// **Only the images.** A turn may also carry a PDF or a CSV, which no provider here takes in a
+    /// request body — those reach the model as a path in the message
+    /// (`for_engine`), and putting their bytes in an image block would fail the
+    /// whole request rather than one attachment.
     fn encode(&self, images: &[Attachment]) -> Vec<std::rc::Rc<Encoded>> {
         images
             .iter()
+            .filter(|image| crate::store::is_image(&image.media_type))
             .filter_map(|image| {
                 let mut seen = self.seen.borrow_mut();
                 seen.entry(image.id.clone())
@@ -1544,7 +1561,7 @@ mod tests {
         }];
 
         let turns = [opening];
-        let said = merged(&turns);
+        let said = merged(&turns, &scratch("pre-run"));
         assert_eq!(said.len(), 1);
         assert!(
             said[0].text.starts_with("work the task"),
@@ -1577,7 +1594,7 @@ mod tests {
             output: "a.rs".into(),
         }];
         let turns = [answer];
-        assert_eq!(merged(&turns)[0].text, "done");
+        assert_eq!(merged(&turns, &scratch("own-calls"))[0].text, "done");
     }
 
     #[test]
@@ -1847,8 +1864,12 @@ mod tests {
         assert_eq!(seeded[0]["content"][0]["type"], "image");
         assert_eq!(seeded[0]["content"][0]["source"]["media_type"], "image/png");
         assert_eq!(seeded[0]["content"][0]["source"]["data"], data);
-        // Images lead and the words follow — the order Anthropic documents as the better one.
-        assert_eq!(seeded[0]["content"][1]["text"], "what is wrong here?");
+        // Images lead and the words follow — the order Anthropic documents as the better one. The
+        // words carry the file's path behind them: the model can see the picture, and this is how
+        // it can also *reach* it (`Agents::with_attachment_paths`).
+        let words = seeded[0]["content"][1]["text"].as_str().unwrap_or_default();
+        assert!(words.starts_with("what is wrong here?"), "{words}");
+        assert!(words.contains("shot.png"), "{words}");
 
         let openai = args_for(HarnessProvider::Openai);
         let seeded = Wire::of(&openai, "m")
@@ -1872,7 +1893,12 @@ mod tests {
         let seeded = Wire::of(&ollama, "m")
             .expect("wire")
             .seed(std::slice::from_ref(&asked), &images);
-        assert_eq!(seeded[0]["content"], "what is wrong here?");
+        assert!(
+            seeded[0]["content"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("what is wrong here?")),
+            "{seeded:?}",
+        );
         assert_eq!(seeded[0]["images"][0], data);
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -1895,9 +1921,16 @@ mod tests {
         let args = args_for(HarnessProvider::Anthropic);
         let seeded = Wire::of(&args, "m").expect("wire").seed(&[asked], &images);
         assert_eq!(seeded.len(), 1, "the wordless turn survived: {seeded:?}");
-        // And the empty text is left out rather than sent as an empty part.
-        assert_eq!(seeded[0]["content"].as_array().map(Vec::len), Some(1));
         assert_eq!(seeded[0]["content"][0]["type"], "image");
+        // The only text such a turn has is where the file is — never an empty part, which is what
+        // a message with no words at all would otherwise send.
+        assert_eq!(seeded[0]["content"].as_array().map(Vec::len), Some(2));
+        assert!(
+            seeded[0]["content"][1]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("shot.png")),
+            "{seeded:?}",
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
@@ -1921,7 +1954,15 @@ mod tests {
         let args = args_for(HarnessProvider::Anthropic);
         let seeded = Wire::of(&args, "m").expect("wire").seed(&[asked], &images);
         assert_eq!(seeded.len(), 1);
-        assert_eq!(seeded[0]["content"], "still worth answering");
+        // No image part at all — a plain string message, which is what a turn with no picture in it
+        // has always been. The words still name where the file was: the row is what says it was
+        // attached, and a missing file is the reader's to notice, not this turn's to fail on.
+        assert!(
+            seeded[0]["content"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("still worth answering")),
+            "{seeded:?}",
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

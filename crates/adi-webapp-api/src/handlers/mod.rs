@@ -1561,9 +1561,9 @@ mod tests {
     }
 
     /// The upload's whole contract in one pass: what comes back names the bytes, the bytes come back
-    /// by that name with their own type, and the two refusals a person can actually hit — a file
-    /// that is not an image, and one that is too big — are answered here rather than by a model
-    /// provider three steps later.
+    /// by that name with their own type, a file that is not an image is taken too (it reaches the
+    /// agent as a path, not as pixels), and the one refusal a person can actually hit — a body over
+    /// the cap its kind carries — is answered here rather than by a model provider three steps later.
     #[test]
     fn an_uploaded_image_comes_back_by_its_id() {
         let store = temp_agents();
@@ -1591,13 +1591,33 @@ mod tests {
         let Response { status, body } = store_attachment(&store, "image/png", "", png);
         assert_eq!(status, 200, "{body}");
 
+        // A PDF is stored like anything else, and read back with its own type: a message carries it
+        // by naming where it is, so refusing it here would be refusing the only way the bytes ever
+        // reach the machine the agent runs on.
+        let Response { status, body } =
+            store_attachment(&store, "application/pdf", "report.pdf", b"%PDF");
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let pdf_id = v["id"].as_str().expect("an id").to_string();
+        assert_eq!(v["media_type"], "application/pdf");
         assert_eq!(
-            store_attachment(&store, "application/pdf", "report.pdf", b"%PDF").status,
-            415,
+            attachment_bytes(&store, &pdf_id).expect("the bytes").0,
+            "application/pdf"
         );
+
         let huge = vec![0u8; adi_agents::store::MAX_ATTACHMENT_BYTES + 1];
         assert_eq!(
             store_attachment(&store, "image/png", "huge.png", &huge).status,
+            413,
+        );
+        // The same bytes as a file are under the file cap, which is the larger of the two.
+        assert_eq!(
+            store_attachment(&store, "application/pdf", "big.pdf", &huge).status,
+            200,
+        );
+        let too_big = vec![0u8; adi_agents::store::MAX_ATTACHED_FILE_BYTES + 1];
+        assert_eq!(
+            store_attachment(&store, "application/pdf", "huge.pdf", &too_big).status,
             413,
         );
     }

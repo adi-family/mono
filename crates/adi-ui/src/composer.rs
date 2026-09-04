@@ -20,10 +20,11 @@ use crate::merge;
 ///   can be in for a while, and a control that looks live and does nothing is worse than one
 ///   that is visibly out.
 ///
-/// Given [`Attaching`] it also takes **images** — pasted, dropped onto it, or picked through the
-/// paperclip — and shows what is attached above what you are typing. A message that is only a
-/// picture sends; a message whose picture is still uploading does not, because that send would
-/// arrive without it.
+/// Given [`Attaching`] it also takes **files** — pasted, dropped onto it, or picked through the
+/// paperclip — and shows what is attached above what you are typing. A picture or a PDF is the same
+/// act here; what differs is only whether the tray can draw a thumbnail. A message that is only an
+/// attachment sends; a message whose attachment is still uploading does not, because that send
+/// would arrive without it.
 ///
 /// The send button is the chat screen's one filled orange (`design/DESIGN.md` §6). Nothing else
 /// in the box takes a colour: attach, dictate and settings are quiet icon buttons, and Stop is
@@ -86,12 +87,12 @@ pub fn Composer(
     /// deciding for everything that embeds this.
     #[prop(optional, into)]
     settings: Option<ViewFn>,
-    /// Images this message may carry — the tray, the paperclip, and the paste/drop handling. Absent
-    /// (the default) the composer takes text and nothing else, and pasting a picture into it does
-    /// what it did before: nothing.
+    /// What this message may carry — the tray, the paperclip, and the paste/drop handling. Absent
+    /// (the default) the composer takes text and nothing else, and pasting a file into it does what
+    /// it did before: nothing.
     ///
     /// The caller keeps the list and does the uploading, for the same reason [`mic`](Self) is a
-    /// slot: where an image is stored is a question about the app.
+    /// slot: where a file is stored is a question about the app.
     #[prop(optional)]
     attach: Option<Attaching>,
     #[prop(optional, into)] class: String,

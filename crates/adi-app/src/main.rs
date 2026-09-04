@@ -1091,8 +1091,31 @@ async fn serve_attachment(stream: &mut TcpStream, agents: &Agents, id: &str) -> 
     let Some((media_type, bytes)) = handlers::attachment_bytes(agents, id) else {
         return http::write_json(stream, 404, r#"{"ok":false,"error":"no such attachment"}"#).await;
     };
-    http::write_cached(stream, &media_type, &bytes).await
+    let (media_type, disposition) = if RENDERABLE.contains(&media_type.as_str()) {
+        (media_type, "inline")
+    } else {
+        ("application/octet-stream".to_string(), "attachment")
+    };
+    http::write_cached(stream, &media_type, disposition, &bytes).await
 }
+
+/// The types an attachment may be served back **as itself**, for a browser to draw in a tab.
+///
+/// A message can carry any file now, and this route answers on `app.adi` — the panel's own origin,
+/// which holds the whole API. So anything a browser would run as a *document* (`text/html`, an SVG,
+/// an XHTML page) is served as `application/octet-stream` with `Content-Disposition: attachment`
+/// instead: it downloads, and never executes with the panel's origin behind it. The four image
+/// types plus a PDF cover what anybody actually opens from a transcript, and each is drawn by a
+/// viewer rather than as a page. `nosniff` rides along on both branches, so a downloaded file cannot
+/// talk the browser into promoting it back.
+const RENDERABLE: [&str; 6] = [
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "application/pdf",
+    "text/plain",
+];
 
 /// Serve a webapp asset. With a disk override ([`DIST_ENV`]) set, files come from that
 /// directory; otherwise from the embedded copy. Either way, an unknown path falls back to

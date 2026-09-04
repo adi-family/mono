@@ -1,13 +1,20 @@
-//! Images a person attached to a message: the `attachments` table, and the bytes beside it.
+//! Files a person attached to a message: the `attachments` table, and the bytes beside it.
 //!
 //! ```text
 //! <sessions_dir>/attachments/<id>.<ext>    the bytes, exactly as uploaded
 //! ```
 //!
+//! Two kinds live here, and the difference is only in how far they travel. An **image** is one of
+//! the four types every provider takes, so it can go into a request body as base64. **Anything
+//! else** — a PDF, a CSV, a log somebody dragged in — never goes into a body at all: it is written
+//! here and the message *names where it is*, for the engine to open with its own file-reading tool.
+//! That is the whole reason a non-image is accepted rather than refused: the bytes have to be on
+//! the machine the run happens on, and dragging them into the composer is how they get there.
+//!
 //! **The extension is load-bearing**, not decoration. An engine that cannot be handed a picture in
 //! its request body is handed this *path* instead and opens the file itself — and a file-reading
-//! tool decides whether it is looking at an image by the name. `<id>` alone reads as a text file
-//! with unprintable bytes in it.
+//! tool decides whether it is looking at an image, a PDF or a spreadsheet by the name. `<id>` alone
+//! reads as a text file with unprintable bytes in it.
 //!
 //! # Why the bytes are a file and the rest is a row
 //!
@@ -44,6 +51,18 @@ use super::db::{now_ms, sql_err};
 /// costs a provider round trip and comes back rejected there — every model API caps image size, and
 /// the strictest of the four here is well above this.
 pub const MAX_BYTES: usize = 5 << 20;
+
+/// The largest non-image file the store will take, in bytes.
+///
+/// Deliberately larger than [`MAX_BYTES`], because it is a different question. A picture is capped
+/// by what a provider will accept in a request body; a file is never in one — it is written to disk
+/// and named in the message — so the only real limits are the request `adi-app` buffers whole and
+/// what it is sensible to hand a chat message. A 25 MB PDF is a long report, and past that the file
+/// belongs somewhere the agent can be pointed at rather than in a composer.
+///
+/// Kept below `adi-app`'s own body cap on purpose: an oversized upload should be refused *here*,
+/// with a sentence naming the file, rather than by the socket reader that has no idea what it was.
+pub const MAX_FILE_BYTES: usize = 25 << 20;
 
 /// How long an upload that was never sent is kept before a sweep removes it.
 ///
@@ -101,24 +120,59 @@ pub fn path(dir: &Path, attachment: &Attachment) -> PathBuf {
     dir.join(DIR).join(format!(
         "{}.{}",
         attachment.id,
-        extension(&attachment.media_type)
+        extension(&attachment.media_type, &attachment.name)
     ))
 }
 
-/// The extension a media type's file is given. `bin` for anything unknown, which [`put`] refuses
-/// before it can ever be written — so that arm exists only to keep this total.
+/// The extension one attachment's file is given.
+///
+/// An image is named by its **type**, which is the one thing about it that cannot be wrong: the
+/// browser reports `image/png` for a pasted screenshot that has no filename at all. Everything else
+/// is named by the extension it arrived with, because that is what a reader — a person, or a
+/// file-reading tool deciding how to open it — actually goes by, and a media type says far less
+/// (half the world's files arrive as `application/octet-stream`). `bin` when there is nothing
+/// usable in either.
 #[must_use]
-pub fn extension(media_type: &str) -> &'static str {
-    TYPES
-        .iter()
-        .find(|(mime, _)| *mime == media_type)
-        .map_or("bin", |(_, ext)| *ext)
+pub fn extension(media_type: &str, name: &str) -> String {
+    if let Some((_, ext)) = TYPES.iter().find(|(mime, _)| *mime == media_type) {
+        return (*ext).to_string();
+    }
+    from_name(name).unwrap_or_else(|| "bin".to_string())
 }
 
-/// Whether `media_type` is one this store takes.
+/// The extension in a filename, reduced to what is safe to put in a path: ASCII alphanumerics,
+/// lowercased, at most twelve of them. `None` for a name with no extension, and for one whose
+/// extension survives none of that — `notes`, or `report.…`.
+///
+/// Sanitised rather than trusted: the name comes from a header a client wrote, and it is about to
+/// become part of a path this process opens.
+fn from_name(name: &str) -> Option<String> {
+    let raw = Path::new(name).extension()?.to_str()?;
+    let ext: String = raw
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .take(12)
+        .collect::<String>()
+        .to_lowercase();
+    (!ext.is_empty()).then_some(ext)
+}
+
+/// Whether `media_type` is one of the four a message can carry *into a request body* — the
+/// difference between an attachment a model is shown and one it is told the path of.
 #[must_use]
-pub fn is_supported(media_type: &str) -> bool {
+pub fn is_image(media_type: &str) -> bool {
     MEDIA_TYPES.contains(&media_type)
+}
+
+/// The size cap that applies to one media type. See [`MAX_BYTES`] and [`MAX_FILE_BYTES`] for why
+/// the two differ.
+#[must_use]
+pub fn max_bytes(media_type: &str) -> usize {
+    if is_image(media_type) {
+        MAX_BYTES
+    } else {
+        MAX_FILE_BYTES
+    }
 }
 
 /// Store `bytes` and return the attachment that now refers to them.
@@ -129,8 +183,8 @@ pub fn is_supported(media_type: &str) -> bool {
 /// defend against.
 ///
 /// # Errors
-/// Returns [`Error::Arguments`] for an unsupported type or an over-[`MAX_BYTES`] body, and I/O or
-/// database errors.
+/// Returns [`Error::Arguments`] for an empty body or one over the cap its kind carries
+/// ([`max_bytes`]), and I/O or database errors.
 pub(super) fn put(
     conn: &Connection,
     dir: &Path,
@@ -138,18 +192,20 @@ pub(super) fn put(
     media_type: &str,
     bytes: &[u8],
 ) -> Result<Attachment> {
-    if !is_supported(media_type) {
-        return Err(Error::Arguments(format!(
-            "{media_type} isn't an image type a message can carry — {} are",
-            MEDIA_TYPES.join(", ")
-        )));
-    }
+    // What to call it in a refusal. A type is only checked to decide *which* limit applies now —
+    // an unknown one is a file, not a mistake, because a file is never shown to a model.
+    let noun = if is_image(media_type) {
+        "image"
+    } else {
+        "file"
+    };
     if bytes.is_empty() {
-        return Err(Error::Arguments("that image is empty".to_string()));
+        return Err(Error::Arguments(format!("that {noun} is empty")));
     }
-    if bytes.len() > MAX_BYTES {
+    let cap = max_bytes(media_type);
+    if bytes.len() > cap {
         return Err(Error::Arguments(format!(
-            "that image is {} bytes, over the {MAX_BYTES}-byte limit",
+            "that {noun} is {} bytes, over the {cap}-byte limit",
             bytes.len()
         )));
     }
@@ -238,7 +294,7 @@ pub(super) fn delete_for_session(
 ) -> usize {
     let rows = rows_where(
         conn,
-        "SELECT id, media_type FROM attachments WHERE agent = ?1 AND session = ?2",
+        "SELECT id, media_type, name FROM attachments WHERE agent = ?1 AND session = ?2",
         rusqlite::params![agent, session],
     );
     remove(conn, dir, &rows)
@@ -253,7 +309,7 @@ pub(super) fn sweep_unclaimed(conn: &Connection, dir: &Path, now: u64) -> usize 
     let cutoff = now.saturating_sub(UNCLAIMED_TTL_MS);
     let rows = rows_where(
         conn,
-        "SELECT id, media_type FROM attachments WHERE session = '' AND created_at < ?1",
+        "SELECT id, media_type, name FROM attachments WHERE session = '' AND created_at < ?1",
         rusqlite::params![cutoff],
     );
     remove(conn, dir, &rows)
@@ -262,8 +318,9 @@ pub(super) fn sweep_unclaimed(conn: &Connection, dir: &Path, now: u64) -> usize 
 /// The rows one query selects, or nothing at all if it fails — every caller here is a cleanup, and a
 /// cleanup that cannot read is a cleanup that does nothing.
 ///
-/// Whole rows rather than ids, because the file's name is derived from the media type: an id alone
-/// does not say what to unlink.
+/// Whole rows rather than ids, because the file's name is derived from the media type *and* the
+/// name it arrived with ([`extension`]): an id alone does not say what to unlink, and a row read
+/// without its name would unlink `<id>.bin` while the PDF stayed on disk for ever.
 fn rows_where(conn: &Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Vec<Attachment> {
     let Ok(mut stmt) = conn.prepare(sql) else {
         return Vec::new();
@@ -271,8 +328,8 @@ fn rows_where(conn: &Connection, sql: &str, params: &[&dyn rusqlite::ToSql]) -> 
     stmt.query_map(params, |row| {
         Ok(Attachment {
             id: row.get(0)?,
-            name: String::new(),
             media_type: row.get(1)?,
+            name: row.get(2)?,
             size: 0,
         })
     })
@@ -359,15 +416,45 @@ mod tests {
         assert_eq!(get(&conn, &saved.id).expect("row").name, "shot.png");
     }
 
-    /// The two refusals that must happen *here*, before any bytes are written: a type no provider
-    /// takes, and a body over the cap.
+    /// A file that is not an image is stored like any other — under its own extension, so whatever
+    /// opens it by path can tell what it is looking at.
     #[test]
-    fn an_unsupported_type_or_an_oversized_body_is_refused() {
+    fn a_file_is_stored_under_the_extension_it_arrived_with() {
         let (dir, conn) = store();
-        assert!(put(&conn, dir.path(), "a.pdf", "application/pdf", b"%PDF").is_err());
+        let saved = put(
+            &conn,
+            dir.path(),
+            "Q3 report.PDF",
+            "application/pdf",
+            b"%PDF",
+        )
+        .expect("put");
+        assert!(
+            path(dir.path(), &saved).ends_with(format!("{}.pdf", saved.id)),
+            "{:?}",
+            path(dir.path(), &saved),
+        );
+        // A name with no extension, and one whose extension is not something to put in a path.
+        let plain = put(&conn, dir.path(), "notes", "text/plain", b"hi").expect("put");
+        assert!(path(dir.path(), &plain).ends_with(format!("{}.bin", plain.id)));
+        // And the row still names the file it wrote, which is what a later sweep unlinks by.
+        assert!(path(dir.path(), &saved).exists());
+        assert_eq!(delete_for_session(&conn, dir.path(), "", ""), 2);
+        assert!(!path(dir.path(), &saved).exists());
+    }
+
+    /// The two refusals that must happen *here*, before any bytes are written: an empty body, and
+    /// one over the cap its kind carries — a picture's cap being the stricter of the two.
+    #[test]
+    fn an_oversized_or_empty_body_is_refused() {
+        let (dir, conn) = store();
         let huge = vec![0u8; MAX_BYTES + 1];
         assert!(put(&conn, dir.path(), "big.png", "image/png", &huge).is_err());
         assert!(put(&conn, dir.path(), "empty.png", "image/png", b"").is_err());
+        // The same bytes as a file are under the file cap, and stored.
+        assert!(put(&conn, dir.path(), "big.pdf", "application/pdf", &huge).is_ok());
+        let too_big = vec![0u8; MAX_FILE_BYTES + 1];
+        assert!(put(&conn, dir.path(), "huge.pdf", "application/pdf", &too_big).is_err());
     }
 
     /// Claiming is what makes a conversation's delete take its images with it — and what keeps the

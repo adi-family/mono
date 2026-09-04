@@ -1,5 +1,13 @@
-//! Attaching images to a message: picking them up, uploading them, and handing the composer the
+//! Attaching files to a message: picking them up, uploading them, and handing the composer the
 //! ids a send names them by.
+//!
+//! # A picture and a PDF are the same act
+//!
+//! Both are uploaded here and stored the same way; what differs is what happens to them afterwards.
+//! An image is shown to the model in the request body. Anything else — a PDF, a CSV, an export
+//! somebody was sent — reaches the agent as a **path**, because that is what attaching a file to a
+//! conversation is actually for: getting the bytes onto the machine the run happens on, where the
+//! agent's own tools can open them.
 //!
 //! [`attaching`] builds the [`adi_ui::Attaching`] one composer needs, bound to one tray signal.
 //! `adi-ui` draws the tray, the paperclip and the paste/drop handling; everything that touches the
@@ -20,7 +28,7 @@
 //! the object URL is revoked. Keeping the local one would leak a blob per attachment for as long as
 //! the tab is open.
 
-use adi_ui::{AttachState, Attached, Attaching};
+use adi_ui::{AttachKind, AttachState, Attached, Attaching};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
@@ -29,16 +37,28 @@ use wasm_bindgen_futures::JsFuture;
 use crate::fetch;
 use crate::state::State;
 
-/// How many images one message may carry.
+/// How many attachments one message may carry.
 ///
 /// Not a limit the server minds — it is a limit the *model* minds, and the wallet: every image is
 /// thousands of tokens on every round of the turn that answers it. Six is more than a message
 /// realistically needs and well under the point where the reply is mostly pictures.
-const MAX_IMAGES: usize = 6;
+const MAX_ATTACHMENTS: usize = 6;
 
 /// The largest image to accept, mirroring the store's own cap. Checked here so an oversized file is
 /// refused where it was dropped, rather than after the seconds it takes to upload it.
 const MAX_BYTES: f64 = 5.0 * 1024.0 * 1024.0;
+
+/// The largest of anything else — the store's file cap, mirrored for the same reason.
+///
+/// Higher than an image's, because a file is never in a request body: it is written to disk and
+/// named in the message, so the number is about what belongs in a chat rather than what a provider
+/// will take.
+const MAX_FILE_BYTES: f64 = 25.0 * 1024.0 * 1024.0;
+
+/// What the browser calls a file it has no type for. Sent as-is: the store files it by the
+/// extension of its name, and an empty `Content-Type` would be one more thing for the server to
+/// have an opinion about.
+const UNKNOWN_TYPE: &str = "application/octet-stream";
 
 /// Bind one composer's tray to the uploader.
 ///
@@ -107,24 +127,26 @@ pub(crate) fn clear(files: RwSignal<Vec<Attached>>) {
 /// and upload each in the background.
 fn take(state: State, files: RwSignal<Vec<Attached>>, picked: Vec<web_sys::File>) {
     for file in picked {
-        let room = MAX_IMAGES.saturating_sub(files.get_untracked().len());
+        let room = MAX_ATTACHMENTS.saturating_sub(files.get_untracked().len());
         if room == 0 {
             state.flash.set(Some(crate::state::Flash::err(format!(
-                "A message can carry {MAX_IMAGES} images; the rest were left out."
+                "A message can carry {MAX_ATTACHMENTS} attachments; the rest were left out."
             ))));
             return;
         }
-        let media_type = file.type_();
-        if !supported(&media_type) {
+        // Whatever the browser says it is, or nothing at all for a type it does not know — a
+        // `.heic` from a phone, an export with a private extension. Neither is refused: only an
+        // image is *shown* to a model, and everything else is a file the agent opens by path.
+        let media_type = match file.type_() {
+            t if t.trim().is_empty() => UNKNOWN_TYPE.to_string(),
+            t => t,
+        };
+        let image = supported(&media_type);
+        let cap = if image { MAX_BYTES } else { MAX_FILE_BYTES };
+        if file.size() > cap {
+            let limit = if image { "5 MB" } else { "25 MB" };
             state.flash.set(Some(crate::state::Flash::err(format!(
-                "“{}” isn't an image a message can carry — PNG, JPEG, WebP and GIF are.",
-                file.name()
-            ))));
-            continue;
-        }
-        if file.size() > MAX_BYTES {
-            state.flash.set(Some(crate::state::Flash::err(format!(
-                "“{}” is larger than 5 MB — shrink it and attach it again.",
+                "“{}” is larger than {limit} — it was left out.",
                 file.name()
             ))));
             continue;
@@ -142,20 +164,34 @@ fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, medi
         "attach-{}",
         js_sys::Date::now() as u64 + files.get_untracked().len() as u64
     );
+    let kind = if supported(&media_type) {
+        AttachKind::Image
+    } else {
+        AttachKind::File
+    };
     let name = {
         let given = file.name();
         if given.trim().is_empty() {
-            "pasted image".to_string()
+            match kind {
+                AttachKind::Image => "pasted image".to_string(),
+                AttachKind::File => "pasted file".to_string(),
+            }
         } else {
             given
         }
     };
-    let preview = object_url(&file);
+    // Only a picture has anything to preview. A blob URL over a PDF would be a thumbnail the
+    // browser cannot draw, and one more object URL to revoke for nothing.
+    let preview = match kind {
+        AttachKind::Image => object_url(&file),
+        AttachKind::File => String::new(),
+    };
     files.update(|list| {
         list.push(Attached {
             key: key.clone(),
             name: name.clone(),
             preview: preview.clone(),
+            kind,
             state: AttachState::Uploading,
         });
     });
@@ -176,7 +212,12 @@ fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, medi
                 files.update(|list| {
                     if let Some(row) = list.iter_mut().find(|a| a.key == key) {
                         revoke(&row.preview);
-                        row.preview = url_of(&stored.id);
+                        // A file keeps its empty preview: there is nothing to draw, and pointing the
+                        // tray at bytes it cannot render would be a broken image where a name is.
+                        row.preview = match row.kind {
+                            AttachKind::Image => url_of(&stored.id),
+                            AttachKind::File => String::new(),
+                        };
                         row.state = AttachState::Ready(stored.id.clone());
                     }
                 });
@@ -203,12 +244,27 @@ fn settle(files: RwSignal<Vec<Attached>>, key: &str, state: AttachState) {
     });
 }
 
-/// Whether this is one of the four types every provider in the loop accepts.
+/// Whether this is one of the four types every provider in the loop accepts — the line between an
+/// attachment a model is *shown* and one it is told the path of. Not a line between what may be
+/// attached and what may not: both may.
 fn supported(media_type: &str) -> bool {
     matches!(
         media_type,
         "image/png" | "image/jpeg" | "image/webp" | "image/gif"
     )
+}
+
+/// How the transcript should draw one stored attachment, from the type the store recorded.
+///
+/// The same question [`supported`] answers for the composer, asked of a turn that was sent long ago
+/// — a chat re-rendered on a poll has only the media type to go on.
+#[must_use]
+pub(crate) fn kind_of(media_type: &str) -> adi_ui::AttachmentKind {
+    if supported(media_type) {
+        adi_ui::AttachmentKind::Picture
+    } else {
+        adi_ui::AttachmentKind::File
+    }
 }
 
 /// One file's bytes. `None` when the browser refused to read it — a file that was moved or a

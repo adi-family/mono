@@ -916,16 +916,18 @@ impl Agents {
         }
     }
 
-    /// Store an image a message may later carry, and return the reference it is carried by.
+    /// Store an image or a file a message may later carry, and return the reference it is carried
+    /// by.
     ///
     /// Uploading is its own act, before any message exists: a screenshot pasted into a composer is
     /// stored while the message is still being typed, and belongs to no conversation until a turn
     /// records it. One that never is gets swept a day later.
     ///
     /// # Errors
-    /// Returns [`Error::Arguments`] for a type no provider takes or a body over
-    /// [`store::MAX_ATTACHMENT_BYTES`], plus I/O and database errors.
-    pub fn store_image(
+    /// Returns [`Error::Arguments`] for an empty body or one over the cap its kind carries
+    /// ([`store::MAX_ATTACHMENT_BYTES`], [`store::MAX_ATTACHED_FILE_BYTES`]), plus I/O and database
+    /// errors.
+    pub fn store_attachment(
         &self,
         name: &str,
         media_type: &str,
@@ -950,10 +952,10 @@ impl Agents {
             .is_some_and(|runner| runner.takes_images())
     }
 
-    /// One stored image: what it is, and its bytes. `None` when the id names nothing, or when the
-    /// row is there and the file is not.
+    /// One stored attachment: what it is, and its bytes. `None` when the id names nothing, or when
+    /// the row is there and the file is not.
     #[must_use]
-    pub fn image(&self, id: &str) -> Option<(store::Attachment, Vec<u8>)> {
+    pub fn attachment(&self, id: &str) -> Option<(store::Attachment, Vec<u8>)> {
         let sessions = self.sessions();
         let attachment = sessions.attachment(id)?;
         let bytes = sessions.attachment_bytes(&attachment).ok()?;
@@ -2234,15 +2236,29 @@ fn answerable(runner: &dyn Runner) -> bool {
 
 /// The message as *this engine* has to receive it.
 ///
-/// For everything but a path-delivery engine this is the words, unchanged — which is every message
-/// ever sent before images existed, and the overwhelming majority since. An engine that reads its
-/// images off disk gets the words with a block appended naming the files.
+/// A message with nothing attached is the words, unchanged — which is every message ever sent
+/// before attachments existed, and the overwhelming majority since. What is appended otherwise
+/// depends on what was attached and on how this engine takes it:
+///
+/// - **A file that is not an image** — a PDF, a CSV, a log — never goes into any request body here,
+///   whatever the engine. It was uploaded so that it would *be on this machine*, and the message
+///   says where, for the agent to open with its own tools. That is the point of attaching one.
+/// - **An image, to a path-delivery engine** — named the same way, because that engine is handed
+///   its message on a command line where a picture has no representation.
+/// - **An image, to an inline engine** — the bytes are already in the request body and the model
+///   can see them, but the path is still named: a screenshot is sometimes the thing to *work on*
+///   (crop it, run it through a tool) rather than the thing to look at, and an agent that can only
+///   see it has no way to reach it.
+///
+/// The inline engine here — the adi loop — never reads what this returns, because it is handed a
+/// conversation rather than a message and rebuilds its own from the store. It applies the same
+/// rules through [`with_attachment_paths`], which is why that is a function and not this body.
 ///
 /// # Why the transcript does not get this
 ///
-/// What is recorded is the message a person wrote plus the images they attached — see
+/// What is recorded is the message a person wrote plus what they attached — see
 /// [`start_turn`](Agents::start_turn), which appends the turn *before* calling this. The paths are
-/// an instruction to one engine about how to see them, not part of what was said: put them in the
+/// an instruction to one engine about how to reach them, not part of what was said: put them in the
 /// transcript and every reader would show a wall of `/Users/…/attachments/…` under a screenshot it
 /// is already displaying, and a later turn replayed to a *different* engine would carry directions
 /// that mean nothing to it.
@@ -2250,28 +2266,73 @@ fn for_engine(
     runner: &dyn Runner,
     store: &SessionStore,
     text: &str,
-    images: &[store::Attachment],
+    attached: &[store::Attachment],
 ) -> String {
-    if images.is_empty() || runner.image_delivery() != ImageDelivery::Path {
+    with_attachment_paths(store, text, attached, runner.image_delivery())
+}
+
+/// The words with everything attached to them named by path, as one `delivery` needs it.
+///
+/// Its own function because the two engines that need it are reached differently. A path-delivery
+/// engine is *handed* its message, and [`for_engine`] prepares it on the way out. The adi loop is
+/// handed an agent and a conversation instead and rebuilds its messages from the store — so it
+/// calls this itself while seeding, exactly as it rebuilds the pre-run block (`words_of` there).
+/// One renderer, so a PDF is described in the same words whichever engine is answering.
+pub(crate) fn with_attachment_paths(
+    store: &SessionStore,
+    text: &str,
+    attached: &[store::Attachment],
+    delivery: ImageDelivery,
+) -> String {
+    if attached.is_empty() {
         return text.to_string();
     }
+    let (images, files): (Vec<_>, Vec<_>) = attached
+        .iter()
+        .partition(|a| store::is_image(&a.media_type));
     let mut out = text.trim().to_string();
+    match delivery {
+        ImageDelivery::Path => paths_of(&mut out, store, IMAGE_PREAMBLE, &images),
+        ImageDelivery::Inline => paths_of(&mut out, store, IMAGE_SAVED_PREAMBLE, &images),
+        // An engine that cannot be shown a picture is not told where one is either — it has no
+        // tool to open it with. A send never gets here (`takes_images` refuses it first); this is
+        // the arm that keeps that true rather than accidentally readable.
+        ImageDelivery::None => {}
+    }
+    // A file, unlike a picture, is never in anybody's request body — so every engine that can open
+    // one is told where it is, inline or not.
+    if delivery != ImageDelivery::None {
+        paths_of(&mut out, store, FILE_PREAMBLE, &files);
+    }
+    out
+}
+
+/// Append one block — a preamble, then a line per attachment naming where its bytes are. Nothing at
+/// all when there is nothing of that kind, so a message with only a PDF grows only the PDF's block.
+fn paths_of(
+    out: &mut String,
+    store: &SessionStore,
+    preamble: &str,
+    attached: &[&store::Attachment],
+) {
+    if attached.is_empty() {
+        return;
+    }
     if !out.is_empty() {
         out.push_str("\n\n");
     }
-    out.push_str(IMAGE_PREAMBLE);
-    for image in images {
+    out.push_str(preamble);
+    for item in attached {
         // The original name in brackets after the path: the path is what the tool call needs, the
         // name is what makes the model's reply readable ("in screenshot.png the button is…").
         // Writing into a `String` cannot fail, so the result is dropped rather than unwrapped.
         let _ = write!(
             out,
             "\n- {} ({})",
-            store.attachment_path(image).display(),
-            image.name,
+            store.attachment_path(item).display(),
+            item.name,
         );
     }
-    out
 }
 
 /// The opening message with what was pre-run behind it — or the message unchanged, which is every
@@ -2296,6 +2357,24 @@ fn with_prelude(message: &str, ran: &[prelude::Ran], dropped: usize) -> String {
 const IMAGE_PREAMBLE: &str = "Images are attached to this message. Read each of these files with your file-reading tool \
      before answering — they are part of what is being asked, not a reference:";
 
+/// What an **inline** engine is told about the pictures it can already see.
+///
+/// Not an instruction to open anything — the bytes are in the same message, and telling a model to
+/// go and read what it is already looking at spends a tool call on nothing. It is an address, for
+/// the turns where the picture is the material rather than the question ("crop this", "run it
+/// through the resizer"), and the file is the only form of it a tool can take.
+const IMAGE_SAVED_PREAMBLE: &str =
+    "The images above are also saved on this machine, if you need the files themselves:";
+
+/// What every engine is told about a file that is not an image.
+///
+/// Phrased as an instruction, and for the same reason [`IMAGE_PREAMBLE`] is: an agent that merely
+/// *notices* a path tends to reason about the filename instead of opening it. No provider here
+/// takes a PDF in a request body, so this is the only way the contents ever reach the model — and
+/// the file being on disk, on this machine, is what the person attaching it was asking for.
+const FILE_PREAMBLE: &str = "Files are attached to this message and saved on this machine. Open each one with your own \
+     tools before answering — they are part of what is being asked:";
+
 /// The refusal a message with images meets when the engine cannot carry one.
 ///
 /// Named rather than written twice, because the two places that raise it — a reply and a launch —
@@ -2303,8 +2382,8 @@ const IMAGE_PREAMBLE: &str = "Images are attached to this message. Read each of 
 /// it in the other.
 fn images_unsupported() -> Error {
     Error::Unsupported(
-        "this engine takes text only — a message with images needs a harness:adi agent, whose \
-         request this crate writes itself"
+        "this engine takes text only — a message with an image or a file attached needs an agent \
+         that can be shown one, such as harness:adi"
             .to_string(),
     )
 }
@@ -3736,7 +3815,7 @@ mod tests {
         seed_live_run(&store, "process:claude", "other");
 
         let image = store
-            .store_image("shot.png", "image/png", b"\x89PNG")
+            .store_attachment("shot.png", "image/png", b"\x89PNG")
             .expect("store the image");
 
         assert_eq!(
@@ -3763,13 +3842,13 @@ mod tests {
         let turns = store.sessions().turns("chatty", &conv);
         assert_eq!(turns.last().expect("a turn").images, [image.clone()]);
         assert!(
-            store.image(&image.id).is_some(),
+            store.attachment(&image.id).is_some(),
             "the bytes are still there"
         );
 
         store.delete_run("chatty", &conv).expect("delete");
         assert!(
-            store.image(&image.id).is_none(),
+            store.attachment(&image.id).is_none(),
             "a deleted conversation takes its images with it",
         );
     }
@@ -3787,7 +3866,7 @@ mod tests {
         store.save("printer", spec("harness:adi")).expect("save");
         store.save("pane", spec("pty:claude")).expect("save");
         let image = store
-            .store_image("shot.png", "image/png", b"\x89PNG")
+            .store_attachment("shot.png", "image/png", b"\x89PNG")
             .expect("store the image");
 
         let simulated = match store.simulate("printer", "let's begin").expect("simulate") {
@@ -4133,7 +4212,7 @@ mod tests {
             .expect("save");
         let conv = seed_conversation(&store, "printer", "harness:claude-sdk", "/tmp");
         let image = store
-            .store_image("screenshot.png", "image/png", b"\x89PNG")
+            .store_attachment("screenshot.png", "image/png", b"\x89PNG")
             .expect("store the image");
 
         store
@@ -4180,17 +4259,78 @@ mod tests {
             turn.text, "what is wrong here?",
             "no paths in the transcript"
         );
-        assert_eq!(turn.images, [image]);
+        assert_eq!(turn.images, [image.clone()]);
 
-        // The engine that gets its images inline is told nothing extra: its bytes go in the request
-        // body, and a list of paths there would be noise the model has to explain away.
+        // The engine that gets its images inline is not told to go and read them — it is already
+        // looking at them — but it is told where they are, for the turns where the picture is the
+        // material rather than the question.
         let inline = for_engine(
             runner_for(&Backend::HarnessAdi).expect("a runner").as_ref(),
             &sessions,
             "what is wrong here?",
             &turn.images,
         );
-        assert_eq!(inline, "what is wrong here?");
+        assert!(inline.starts_with("what is wrong here?\n\n"), "{inline}");
+        assert!(inline.contains("also saved on this machine"), "{inline}");
+        assert!(!inline.contains("Read each of these files"), "{inline}");
+        assert!(
+            inline.contains(&sessions.attachment_path(&image).display().to_string()),
+            "{inline}",
+        );
+    }
+
+    /// A PDF is the case the paperclip exists for: the bytes get onto the machine the run happens
+    /// on, and *every* engine — the one that writes its own request body included — is told where
+    /// they are, because no provider here takes a PDF in a body.
+    #[test]
+    fn a_file_that_is_not_an_image_reaches_every_engine_as_a_path() {
+        let store = scratch("by-file");
+        // Recorded through a CLI-engine conversation, because seeding one needs an agent that
+        // could really run; what is being checked is the rendering, which is asked of every engine
+        // below whatever wrote the turn.
+        store
+            .save("reader", spec("harness:claude-sdk"))
+            .expect("save");
+        let conv = seed_conversation(&store, "reader", "harness:claude-sdk", "/tmp");
+        let file = store
+            .store_attachment("Q3 report.pdf", "application/pdf", b"%PDF-1.7")
+            .expect("store the file");
+
+        store
+            .reply_with("reader", &conv, "summarise this", &[file.id.clone()])
+            .expect("reply");
+
+        let sessions = store.sessions();
+        for backend in [
+            Backend::HarnessAdi,
+            Backend::HarnessClaudeSdk,
+            Backend::ProcessClaude,
+            Backend::ProcessCodex,
+        ] {
+            let sent = for_engine(
+                runner_for(&backend).expect("a runner").as_ref(),
+                &sessions,
+                "summarise this",
+                std::slice::from_ref(&file),
+            );
+            assert!(sent.starts_with("summarise this\n\n"), "{backend}: {sent}");
+            assert!(sent.contains("Open each one"), "{backend}: {sent}");
+            assert!(
+                sent.contains(&sessions.attachment_path(&file).display().to_string()),
+                "{backend}: {sent}",
+            );
+            // The name it arrived with, and the extension that tells a reading tool what it is.
+            assert!(sent.contains("(Q3 report.pdf)"), "{backend}: {sent}");
+            assert!(sent.contains(".pdf"), "{backend}: {sent}");
+        }
+
+        // And the transcript still holds what was said, not the plumbing under it.
+        let turn = sessions
+            .turns("reader", &conv)
+            .pop()
+            .expect("the recorded question");
+        assert_eq!(turn.text, "summarise this");
+        assert_eq!(turn.images, [file]);
     }
 
     /// Nothing typed into a chat is lost to the cap: a message to an idle conversation queues

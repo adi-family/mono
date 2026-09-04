@@ -4,16 +4,16 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-32 structs · 30 enums across 27 files.
+32 structs · 32 enums across 27 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `AppState`
 - [`src/ask.rs`](#srcaskrs) — `AskQuestion`, `AskOption`, `Picked`
-- [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `Attaching`
+- [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `AttachKind`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`, `DotTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`, `Entry`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Attachment`, `AttachmentKind`, `Turn`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
@@ -115,7 +115,7 @@ pub enum AttachState {
 
 ### struct `Attached`
 
-One image in the composer's tray.
+One attachment in the composer's tray.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,7 +123,21 @@ pub struct Attached {
     pub key: String,
     pub name: String,
     pub preview: String,
+    pub kind: AttachKind,
     pub state: AttachState,
+}
+```
+
+### enum `AttachKind`
+
+What a tray row draws.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttachKind {
+    #[default]
+    Image,
+    File,
 }
 ```
 
@@ -258,15 +272,28 @@ pub struct ToolCall {
 }
 ```
 
-### struct `Image`
+### struct `Attachment`
 
-A picture that was part of a message: where to fetch it, and what to call it.
+Something that was attached to a message: where to fetch it, what to call it, and whether it is a picture at all.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Image {
+pub struct Attachment {
     pub url: String,
     pub name: String,
+    pub kind: AttachmentKind,
+}
+```
+
+### enum `AttachmentKind`
+
+Whether an attachment can be *shown* or only linked to.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    Picture,
+    File,
 }
 ```
 
@@ -280,7 +307,7 @@ pub enum Turn {
     Said {
         role: Role,
         body: String,
-        images: Vec<Image>,
+        images: Vec<Attachment>,
     },
     Did(Vec<ToolCall>),
 }

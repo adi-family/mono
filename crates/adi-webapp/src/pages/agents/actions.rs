@@ -1188,17 +1188,19 @@ fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
     })
 }
 
-/// A turn's attached images, as the transcript draws them: a URL to fetch each by, and its name.
+/// A turn's attachments, as the transcript draws them: a URL to fetch each by, its name, and
+/// whether it is a picture to show or a file to link to.
 ///
 /// The bytes are never in the snapshot — a chat is polled once a second, and one that inlined its
 /// screenshots would re-send every one of them every tick. The address is stable and the content
 /// behind it never changes, so the browser fetches each exactly once.
-fn pictures(turn: &AgentTurn) -> Vec<adi_ui::Image> {
+fn pictures(turn: &AgentTurn) -> Vec<adi_ui::Attachment> {
     turn.images
         .iter()
-        .map(|image| adi_ui::Image {
+        .map(|image| adi_ui::Attachment {
             url: crate::attach::url_of(&image.id),
             name: image.name.clone(),
+            kind: crate::attach::kind_of(&image.media_type),
         })
         .collect()
 }
@@ -1289,15 +1291,16 @@ fn fmt_duration(ms: u64) -> String {
 /// modifier is how you earn a newline instead.
 const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
 
-/// What a composer says instead of offering a paperclip, when this conversation cannot be shown an
-/// image. Said before anything is pasted, because a picture the send would have dropped is one
+/// What a composer says instead of offering a paperclip, when this conversation can be shown
+/// nothing. Said before anything is pasted, because a file the send would have dropped is one
 /// somebody has already decided to send.
 ///
-/// Rare, now that every real engine can be shown one — either in the request body or by being told
-/// where the file is. What is left is a live terminal, which is typed into rather than sent to, and
-/// a simulated run, which has a person in the model's seat and nothing to show a picture to.
-const IMAGES_REFUSED: &str = "this one can't be shown an image — a terminal session takes typing, \
-                              and a simulated run has no model to show it to";
+/// Rare, now that every real engine can take one — a picture in the request body or by being told
+/// where the file is, and a file always by its path. What is left is a live terminal, which is typed
+/// into rather than sent to, and a simulated run, which has a person in the model's seat and nothing
+/// to open a file with.
+const IMAGES_REFUSED: &str = "this one can't be sent a file — a terminal session takes typing, and \
+                              a simulated run has no model to give one to";
 
 /// The reply box: says the next thing into the selected conversation. It never locks you out while
 /// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* (the

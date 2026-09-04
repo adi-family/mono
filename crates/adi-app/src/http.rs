@@ -12,11 +12,14 @@ const MAX_HEAD: usize = 32 * 1024;
 
 /// Cap the request body we'll buffer.
 ///
-/// Nearly every API payload is a few hundred bytes; the one that is not is a dashboard arriving
-/// from another machine (`POST /api/dashboards/import`), which carries the directory's files as
-/// base64. The sending side refuses to pack more than 4 MiB of them, so this leaves room for that
-/// plus base64's third and the JSON around it.
-const MAX_BODY: usize = 8 << 20; // 8 MiB
+/// Nearly every API payload is a few hundred bytes. Two are not: a dashboard arriving from another
+/// machine (`POST /api/dashboards/import`), which carries the directory's files as base64 and is
+/// packed no larger than 4 MiB before that third is added; and a file somebody attached to a message
+/// (`POST /api/agents/attachment`), which is the raw bytes of whatever they dragged in. The
+/// attachment store caps those at 25 MiB, so this sits above it — an oversized upload should be
+/// refused by the handler, which knows what the file was called, rather than by this reader, which
+/// does not.
+const MAX_BODY: usize = 32 << 20; // 32 MiB
 
 /// So a silent client can't tie up a connection forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -194,15 +197,20 @@ pub async fn write_response(
 ///
 /// # Errors
 /// Fails if the socket write fails.
+/// `disposition` is `inline` for what the browser may render in a tab and `attachment` for what it
+/// must download instead — see [`serve_attachment`](crate::serve_attachment), which decides which.
 pub async fn write_cached(
     stream: &mut TcpStream,
     content_type: &str,
+    disposition: &str,
     body: &[u8],
 ) -> anyhow::Result<()> {
     let head = format!(
         "HTTP/1.1 200 OK\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {len}\r\n\
+         Content-Disposition: {disposition}\r\n\
+         X-Content-Type-Options: nosniff\r\n\
          Cache-Control: private, max-age=31536000, immutable\r\n\
          Connection: close\r\n\
          \r\n",

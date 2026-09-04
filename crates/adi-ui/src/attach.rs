@@ -1,10 +1,14 @@
-//! Attaching images to a message: the tray the [`Composer`](crate::Composer) shows above what you
-//! are typing, and the three ways a file gets into it.
+//! Attaching files to a message: the tray the [`Composer`](crate::Composer) shows above what you
+//! are typing, and the three ways one gets into it.
 //!
 //! Presentational, exactly as [`MicButton`](crate::MicButton) is. Nothing here uploads anything,
 //! reads a file, or knows an endpoint: the composer collects the files a person pasted, dropped or
 //! picked and hands them to whoever mounted it. In this tree that is `adi-webapp`, because *where*
-//! an image is stored is a question about the app.
+//! a file is stored is a question about the app.
+//!
+//! A picture and a PDF are the same act here and differ only in what the tray can draw: one has a
+//! thumbnail, the other has its name in a frame. Which it is, is the caller's answer — see
+//! [`Attached::kind`].
 //!
 //! # Why a thumbnail is drawn before the upload finishes
 //!
@@ -32,7 +36,7 @@ pub enum AttachState {
     Failed(String),
 }
 
-/// One image in the composer's tray.
+/// One attachment in the composer's tray.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attached {
     /// This attachment's identity *in the tray*, minted by the caller before any upload — an id
@@ -43,9 +47,24 @@ pub struct Attached {
     pub name: String,
     /// Where to draw the thumbnail from: a local object URL while it uploads, or the stored
     /// image's own URL afterwards. Empty draws the frame with no picture in it, which is what a
-    /// caller with nothing to show yet should pass rather than a broken source.
+    /// caller with nothing to show yet should pass rather than a broken source. Ignored entirely
+    /// for an [`AttachKind::File`], which has no thumbnail to draw.
     pub preview: String,
+    /// Picture or file. The caller decides — the tray has no opinion about media types, and one
+    /// held here would be a second list to keep in step with the store's.
+    pub kind: AttachKind,
     pub state: AttachState,
+}
+
+/// What a tray row draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AttachKind {
+    /// A picture, shown as a thumbnail.
+    #[default]
+    Image,
+    /// Anything else — a PDF, a CSV, a log — shown as its name in the same frame. There is nothing
+    /// to preview, and a file whose row said nothing at all would look like an upload that failed.
+    File,
 }
 
 impl Attached {
@@ -83,9 +102,9 @@ pub struct Attaching {
     /// Files a person just pasted, dropped, or picked. Called with at least one; the caller
     /// decides what to accept, what to name it, and where it goes.
     pub on_files: Callback<Vec<web_sys::File>>,
-    /// Whether this conversation can take images at all. False draws the refusal instead of the
-    /// paperclip — some engines are handed their message as a command-line argument, where a
-    /// picture has no representation, and accepting one there would silently drop it.
+    /// Whether this conversation can take an attachment at all. False draws the refusal instead of
+    /// the paperclip — some engines take text and nothing else, and accepting a file there would
+    /// silently drop it.
     pub can_attach: Signal<bool>,
     /// Why not, shown when `can_attach` is false. One short clause: it sits under the box.
     pub refusal: Signal<String>,
@@ -145,10 +164,11 @@ pub fn AttachTray(attach: Attaching) -> impl IntoView {
     }
 }
 
-/// One attachment: its picture, its state, and the ✕ that takes it back.
+/// One attachment: its picture (or its name), its state, and the ✕ that takes it back.
 #[component]
 fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
     let key = item.key.clone();
+    let is_file = item.kind == AttachKind::File;
     let failed = match &item.state {
         AttachState::Failed(why) => Some(why.clone()),
         _ => None,
@@ -171,7 +191,7 @@ fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
             role="listitem"
             title=title
         >
-            {(!item.preview.is_empty())
+            {(!is_file && !item.preview.is_empty())
                 .then(|| view! {
                     <img
                         class=move || {
@@ -185,6 +205,25 @@ fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
                         src=item.preview.clone()
                         alt=item.name.clone()
                     />
+                })}
+            {is_file
+                .then(|| view! {
+                    // A file has no thumbnail, so the frame carries what a person actually needs to
+                    // tell one attachment from another: its name, wrapped and cut to the tile.
+                    <div class=move || {
+                        // Dimmed while it is still going, exactly as a thumbnail is — the row is
+                        // there, the send is not.
+                        let dim = if uploading { "opacity-50" } else { "" };
+                        format!(
+                            "flex size-full flex-col items-center justify-center gap-1 px-1 \
+                             text-center text-ink-2 {dim}",
+                        )
+                    }>
+                        <Icon icon=Lucide::Paperclip size=IconSize::Sm label="File"/>
+                        <span class="line-clamp-2 break-all text-[10px] leading-tight">
+                            {item.name.clone()}
+                        </span>
+                    </div>
                 })}
             {uploading
                 .then(|| view! {
@@ -203,7 +242,7 @@ fn Thumb(item: Attached, files: RwSignal<Vec<Attached>>) -> impl IntoView {
                 class="absolute right-0.5 top-0.5 grid size-5 cursor-pointer place-items-center \
                        rounded-md bg-raise/90 text-ink-2 hover:text-ink"
                 type="button"
-                title="Remove this image"
+                title="Remove this attachment"
                 on:click=move |_| {
                     let key = key.clone();
                     files.update(|list| list.retain(|a| a.key != key));
@@ -227,8 +266,10 @@ pub fn AttachButton(attach: Attaching) -> impl IntoView {
     view! {
         <input
             class="hidden"
+            // No `accept`: a person attaching a PDF, a CSV or a log is doing the same thing as one
+            // attaching a screenshot, and a filter here would grey out the file they came to send.
+            // What may actually be attached is decided by the caller, where the refusal can say why.
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
             multiple
             node_ref=input
             on:change=move |ev| {
@@ -252,14 +293,14 @@ pub fn AttachButton(attach: Attaching) -> impl IntoView {
             class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-ink-2 \
                    transition-colors duration-100 hover:bg-hover hover:text-ink"
             type="button"
-            title="Attach an image — or paste one, or drop it here"
+            title="Attach a file — or paste one, or drop it here"
             on:click=move |_| {
                 if let Some(el) = input.get_untracked() {
                     el.click();
                 }
             }
         >
-            <Icon icon=Lucide::Paperclip size=IconSize::Md label="Attach an image"/>
+            <Icon icon=Lucide::Paperclip size=IconSize::Md label="Attach a file"/>
         </button>
     }
 }

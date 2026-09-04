@@ -70,10 +70,12 @@ mod voice;
 
 pub use app::{AppItem, AppState};
 pub use ask::{Ask, AskOption, AskQuestion};
-pub use attach::{AttachState, Attached, Attaching, files_of};
+pub use attach::{AttachKind, AttachState, Attached, Attaching, files_of};
 pub use badge::{Badge, BadgeTone, Dot, DotTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
-pub use chat::{Chat, Entry, Image, Queued, Role, ToolCall, ToolState, Turn, by_position};
+pub use chat::{
+    Attachment, AttachmentKind, Chat, Entry, Queued, Role, ToolCall, ToolState, Turn, by_position,
+};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
 pub use facts::{Change, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Stale, StaleList};

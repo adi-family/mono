@@ -177,16 +177,30 @@ impl ToolCall {
     }
 }
 
-/// A picture that was part of a message: where to fetch it, and what to call it.
+/// Something that was attached to a message: where to fetch it, what to call it, and whether it is
+/// a picture at all.
 ///
 /// A URL rather than bytes. A transcript is re-rendered on every poll, and the browser is already
-/// the thing that caches an image by its address — handing it one is how a chat with a dozen
+/// the thing that caches a file by its address — handing it one is how a chat with a dozen
 /// screenshots in it stays a chat rather than a download.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Image {
+pub struct Attachment {
     pub url: String,
     /// The alt text, and what a reader sees on hover — the file's own name in this tree.
     pub name: String,
+    pub kind: AttachmentKind,
+}
+
+/// Whether an attachment can be *shown* or only linked to.
+///
+/// The difference is not decoration: a PDF drawn as an `<img>` is a broken image with a filename
+/// nobody can read, where the same row as a link is a thing you can open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentKind {
+    /// A picture the browser draws — the four types a message can carry into a model's request.
+    Picture,
+    /// Anything else: shown as a named link, and opened by whatever the reader has for it.
+    File,
 }
 
 /// One entry in a transcript.
@@ -198,7 +212,7 @@ pub enum Turn {
         body: String,
         /// Attached images, drawn above the words. Only ever on a [`Role::User`] turn in this
         /// tree — pictures travel from the person to the model, not back.
-        images: Vec<Image>,
+        images: Vec<Attachment>,
     },
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
@@ -365,7 +379,7 @@ fn Said(
     id: String,
     role: Role,
     body: String,
-    #[prop(optional)] images: Vec<Image>,
+    #[prop(optional)] images: Vec<Attachment>,
 ) -> impl IntoView {
     let own = match role {
         // Your own words are on the raised surface so a stretch of work can be scanned for
@@ -382,39 +396,71 @@ fn Said(
     }
 }
 
-/// The pictures attached to a message, above its words.
+/// What was attached to a message, above its words.
 ///
-/// Capped in height rather than shown whole: a screenshot of a full window is taller than the
-/// transcript pane, and a message you have to scroll past to reach the reply is a message that has
-/// taken over the conversation. The whole image is one click away — each opens in its own tab,
-/// which is the browser's own zoom, pan and save rather than a lightbox that reimplements all
+/// A picture is capped in height rather than shown whole: a screenshot of a full window is taller
+/// than the transcript pane, and a message you have to scroll past to reach the reply is a message
+/// that has taken over the conversation. The whole image is one click away — each opens in its own
+/// tab, which is the browser's own zoom, pan and save rather than a lightbox that reimplements all
 /// three.
+///
+/// Anything that is not a picture is a named link instead, for the same reason it reaches the model
+/// as a path: there is nothing to draw. It opens in a tab too, where the browser shows a PDF and
+/// downloads what it cannot.
 #[component]
-fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
+fn Pictures(images: Vec<Attachment>, said: bool) -> impl IntoView {
     let gap = if said { "mb-3" } else { "" };
     view! {
-        <div class=format!("flex flex-wrap gap-2 {gap}")>
+        <div class=format!("flex flex-wrap items-start gap-2 {gap}")>
             {images
                 .into_iter()
                 .map(|image| {
-                    let Image { url, name } = image;
-                    let title = format!("{name} — open full size");
-                    let href = url.clone();
-                    view! {
-                        <a
-                            class="block max-w-full overflow-hidden rounded-md border border-line"
-                            href=href
-                            target="_blank"
-                            rel="noreferrer"
-                            title=title
-                        >
-                            <img
-                                class="max-h-64 max-w-full object-contain"
-                                src=url
-                                alt=name
-                                loading="lazy"
-                            />
-                        </a>
+                    let Attachment { url, name, kind } = image;
+                    match kind {
+                        AttachmentKind::Picture => {
+                            let title = format!("{name} — open full size");
+                            let href = url.clone();
+                            view! {
+                                <a
+                                    class="block max-w-full overflow-hidden rounded-md border \
+                                           border-line"
+                                    href=href
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title=title
+                                >
+                                    <img
+                                        class="max-h-64 max-w-full object-contain"
+                                        src=url
+                                        alt=name
+                                        loading="lazy"
+                                    />
+                                </a>
+                            }
+                                .into_any()
+                        }
+                        AttachmentKind::File => {
+                            let title = format!("{name} — open this file");
+                            view! {
+                                <a
+                                    class="flex max-w-full items-center gap-2 rounded-md border \
+                                           border-line bg-raise px-3 py-2 text-mini text-ink-2 \
+                                           hover:text-ink"
+                                    href=url
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    title=title
+                                >
+                                    <Icon
+                                        icon=Lucide::Paperclip
+                                        size=IconSize::Sm
+                                        label="Attached file"
+                                    />
+                                    <span class="truncate">{name}</span>
+                                </a>
+                            }
+                                .into_any()
+                        }
                     }
                 })
                 .collect::<Vec<_>>()}
@@ -445,7 +491,7 @@ pub fn Queued(
     /// queue with its message, and showing the words without it would misdescribe what is about to
     /// be sent.
     #[prop(optional)]
-    images: Vec<Image>,
+    images: Vec<Attachment>,
     /// Take it back before the agent ever sees it. With no handler the × is not drawn, which
     /// is the honest rendering of a queue you cannot edit.
     #[prop(optional, into)]
