@@ -646,6 +646,14 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         routes: ts_stems(&dir.join("backend").join("routes")),
         archived_at: manifest.archived_at,
         moved_to: manifest.moved_to,
+        // An app that arrived from a marketplace and was never started carries `archived_at` like
+        // an archived dashboard, and means something else entirely by it.
+        //
+        // Gated on being archived at all, and not only on the record: a dashboard that is live
+        // has plainly been started, whatever its record says — which covers both an app started
+        // through Restore (which stamps nothing) and a record written before the stamp existed.
+        never_started: manifest.archived_at.is_some()
+            && adi_marketplace::install::never_started(dir),
         dir: dir.display().to_string(),
         id,
     }

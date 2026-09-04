@@ -111,13 +111,12 @@ pub fn install_marketplace_app(cfg: &Config, body: &[u8]) -> Response {
     let market = Marketplace::with_config(cfg.clone());
     match adi_marketplace::install::install(&market, &spec, &req.name, req.start) {
         Ok(done) => {
-            // Where it went, said in full when it is not running: an unstarted dashboard is filed
-            // under Archived, and somebody who just installed one will not think to look there.
+            // Where it went, said in full when it is not running — an install nobody can find is
+            // an install that did not happen.
             let where_it_is = if done.started {
                 format!("running at http://{}", done.host)
             } else {
-                "not started — press Start below, or find it under Archived on the Dashboards page"
-                    .to_string()
+                "not started — press Start, here or on its row on the Dashboards page".to_string()
             };
             let mut message = format!(
                 "installed “{}” as {} at {} — {where_it_is}",

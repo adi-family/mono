@@ -394,7 +394,7 @@ fn archived_section(state: State, form: DashboardsForm) -> AnyView {
     view! {
         {move || {
             let n = state.dashboards.get().map_or(0,
-                |d| d.dashboards.iter().filter(|x| x.is_archived()).count());
+                |d| d.dashboards.iter().filter(|x| x.is_put_away()).count());
             (n > 0).then(|| {
                 let open = show.get();
                 view! {
@@ -429,10 +429,12 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
     let Some(loaded) = state.dashboards.get() else {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
+    // Not `is_archived`: an app installed from a marketplace and never started is archived in the
+    // manifest and put away by nobody, and it belongs where somebody will see it.
     let mut rows: Vec<Dashboard> = loaded
         .dashboards
         .into_iter()
-        .filter(|d| d.is_archived() == archived)
+        .filter(|d| d.is_put_away() == archived)
         .collect();
     if rows.is_empty() {
         return view! { <EmptyRow state=table>{if archived {
@@ -473,7 +475,7 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
     );
     rows.into_iter()
         .map(|d| {
-            let action = row_action(state, form, &d.id, d.is_archived());
+            let action = row_action(state, form, &d.id, d.is_archived(), d.never_started);
             view! {
                 <TableRow
                     state=table
@@ -496,6 +498,11 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
 fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
     match col {
         "Project" => view! { <span>{project_cell(state, d)}</span> }.into_any(),
+        // An app nobody has started has no ports because nothing has asked for any — which is not
+        // the same as the supervisor having failed to lease them, and must not read as it.
+        "Frontend" | "Backend" if d.never_started => {
+            view! { <span class="adi-muted">"not started"</span> }.into_any()
+        }
         // Only the frontend is a link — the backend serves JSON to the page, not the reader.
         "Frontend" => {
             view! { <span>{service_cell(d.frontend_port, d.frontend_running, open_url(d))}</span> }
@@ -518,6 +525,19 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
                     </a>
                 }
                 .into_any(),
+                // An installed app has nothing to open yet, and the name is where a reader clicks
+                // first — so clicking it does the thing they came to do rather than nothing.
+                None if d.never_started => {
+                    let (id, label) = (d.id.clone(), d.name.clone());
+                    view! {
+                        <button class="adi-btn adi-btn--link" type="button"
+                            title="Not started yet — click to start it"
+                            on:click=move |_| start_installed(state, id.clone())>
+                            {label}
+                        </button>
+                    }
+                    .into_any()
+                }
                 // Nothing is listening, so a link would only fail — show the name plainly.
                 None => view! { <span>{d.name.clone()}</span> }.into_any(),
             };
@@ -525,6 +545,9 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
                 <span class="adi-dash__name">
                     <div>{name}</div>
                     <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
+                    {d.never_started.then(|| view! {
+                        <div class="adi-dash__note">"installed from a marketplace — not started yet"</div>
+                    })}
                     {moved_marker(d)}
                     {no_host_hint(d)}
                 </span>
@@ -659,7 +682,13 @@ fn project_cell(state: State, d: &Dashboard) -> AnyView {
 /// While archived: **Restore**, **Transfer** and **Delete**. An archived dashboard still has all
 /// its files, so sending it to a node is a real thing to want — it is how one that was moved away
 /// comes back up on a *different* node.
-fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> AnyView {
+fn row_action(
+    state: State,
+    form: DashboardsForm,
+    id: &str,
+    archived: bool,
+    never_started: bool,
+) -> AnyView {
     let id = id.to_string();
     let short = short_id(&id);
     let key = format!("dashboard:{id}");
@@ -667,6 +696,32 @@ fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> A
     let transfer = menu_item(state, "Transfer to a node\u{2026}", false, move || {
         start_transfer(form, &transfer_id);
     });
+    // An app that has never been run: the one thing to do with it is run it, so that is a button
+    // on the row rather than an item behind a `⋯` — and Restore would be the wrong word for a
+    // dashboard nobody has put away.
+    if never_started {
+        let (start_id, delete_id, delete_short) = (id.clone(), id, short);
+        let start = view! {
+            <button class="adi-btn" type="button"
+                on:click=move |_| start_installed(state, start_id.clone())>
+                "Start"
+            </button>
+        };
+        let delete = menu_item(state, "Delete", true, move || {
+            if !confirm(&format!(
+                "Permanently delete dashboard {delete_short}? This removes all of its files \
+                 and cannot be undone."
+            )) {
+                return;
+            }
+            apply_dashboards(
+                state,
+                format!("Deleted {delete_short}."),
+                fetch::delete_dashboard(delete_id.clone()),
+            );
+        });
+        return row_actions(state, key, start, vec![transfer, delete]);
+    }
     if archived {
         let (restore_id, restore_short) = (id.clone(), short.clone());
         let restore = menu_item(state, "Restore", false, move || {
@@ -700,6 +755,25 @@ fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> A
         });
         row_actions(state, key, (), vec![transfer, archive])
     }
+}
+
+/// Start an app that was installed from a marketplace and never run: put its hive file into the
+/// supervisor's glob, then reload the listing so the row moves from "not started" to a live one
+/// with ports.
+///
+/// It goes through the marketplace's own start rather than Restore, because the two mean different
+/// things — Restore undoes an archive somebody performed, and nobody archived this — and only this
+/// one records that the app has now been started, which is what keeps it out of the archive later.
+fn start_installed(state: State, id: String) {
+    spawn_local(async move {
+        match fetch::start_marketplace_app(id).await {
+            Ok(done) => state.flash.set(Some(Flash::ok(done.message))),
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        // The supervisor needs a few seconds to lease ports and bring both servers up; the page's
+        // own poll fills those in, and this first load is what moves the row.
+        load(state).await;
+    });
 }
 
 /// Run a dashboards mutation: fold the returned state into the page and flash success, or flash

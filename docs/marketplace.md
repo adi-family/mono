@@ -142,9 +142,14 @@ adi-mono marketplace install adi/crm --name "Sales CRM"
   `--start` installs and starts in one act, for when that is what you meant.
 - **The panel's form starts it by default; the CLI does not.** That difference is deliberate.
   Pressing Install on a page is itself the deliberate act, and an install that leaves nothing to
-  open reads as one that failed — an unstarted dashboard is filed under **Archived**, which is the
-  last place anybody looks for what they just installed. Unticking "Start it right away" is one
-  click. A script, by contrast, should have to say `--start` out loud.
+  open reads as one that failed. Unticking "Start it right away" is one click. A script, by
+  contrast, should have to say `--start` out loud.
+- **An app that has never been started is listed, not filed away.** It carries `archived_at` like
+  an archived dashboard and means something else entirely by it: nobody put it away, it has just
+  not been run. So the Dashboards page keeps it in the main list, its services read *not started*
+  rather than *not allocated*, and both its name and a **Start** button on the row do the one
+  thing there is to do with it. The record's `started_at` is what tells the two apart afterwards —
+  stamped the first time it runs, so a later archive is an archive like any other.
 
 Every installed copy carries `.adi/marketplace.json` — which entry it came from, which commit it
 stands at, and when. That file is what makes "installed" a fact about a directory rather than a

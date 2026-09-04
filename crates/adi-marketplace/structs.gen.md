@@ -146,6 +146,8 @@ pub struct InstallRecord {
     pub installed_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
 }
 ```
 

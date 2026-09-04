@@ -36,9 +36,16 @@ extraction script cares about.
   listing is what installs, whatever the publisher pushes afterwards, and `git log` in the
   directory is the provenance of every byte in it. A repository that ships a hive file of its own
   has it dropped on arrival rather than getting a say in what this machine runs. Installing from
-  the panel now starts the app too — pressing Install *is* the deliberate act, and an install you
-  have to go and find under **Archived** reads as one that did not happen; untick "Start it right
-  away" for the old behaviour, which is still what the CLI does unless you pass `--start`. Publishers: an entry now carries `repo` and a full 40-character
+  the panel now starts the app too — pressing Install *is* the deliberate act; untick "Start it
+  right away" for the old behaviour, which is still what the CLI does unless you pass `--start`.
+- **An app you installed but have not started is on the Dashboards page, not hidden in the
+  archive.** It used to arrive marked archived — which is how it stays out of the supervisor's
+  reach — and that put it behind the Archived disclosure, where nobody looks for something they
+  just installed; the install read as an install that had not happened. Such a row now sits in the
+  main list saying **not started**, with its services reading the same instead of "not allocated",
+  and both its name and a Start button on the row run it. Nothing changes for a dashboard somebody
+  archived on purpose: the two are told apart by whether the app has ever been started, which is
+  recorded the first time it is. Publishers: an entry now carries `repo` and a full 40-character
   `commit` instead of `artifact`, and a manifest still written the old way says so on sync
   (`docs/marketplace.md`).
 - **The chat rail opens on the sessions you started.** The filter box in the Sessions head has

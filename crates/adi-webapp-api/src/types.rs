@@ -2901,6 +2901,15 @@ pub struct Dashboard {
     /// `None` after a `copy` — both machines run it then, and neither is the one that moved.
     #[serde(default)]
     pub moved_to: Option<String>,
+    /// Installed from a marketplace and **never started**.
+    ///
+    /// Such a dashboard carries `archived_at` like any archived one — that is how it arrives
+    /// inert, with its hive file out of the supervisor's glob — but nobody put it away: it has
+    /// simply not been run yet. The two need telling apart, because filing a fresh install under
+    /// an Archived disclosure is how pressing Install comes to look like nothing happened. The
+    /// row belongs in the main list, saying it is not started, offering to start it.
+    #[serde(default)]
+    pub never_started: bool,
 }
 
 impl Dashboard {
@@ -2908,6 +2917,13 @@ impl Dashboard {
     #[must_use]
     pub fn is_archived(&self) -> bool {
         self.archived_at.is_some()
+    }
+
+    /// Whether this row belongs behind the Archived disclosure: archived, and not merely an
+    /// install nobody has started yet ([`never_started`](Self::never_started)).
+    #[must_use]
+    pub fn is_put_away(&self) -> bool {
+        self.is_archived() && !self.never_started
     }
 }
 

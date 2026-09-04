@@ -2910,6 +2910,8 @@ pub struct Dashboard {
     pub archived_at: Option<u64>,
     #[serde(default)]
     pub moved_to: Option<String>,
+    #[serde(default)]
+    pub never_started: bool,
 }
 ```
 

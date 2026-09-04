@@ -78,6 +78,14 @@ pub struct InstallRecord {
     /// When it was last moved onto a new pin, if it ever was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<u64>,
+    /// When it was first started, if it ever was.
+    ///
+    /// What it exists for is the difference between the two states the store spells the same way.
+    /// An app arrives archived, and so does a dashboard somebody deliberately put away — but one
+    /// of them has simply never been run, and hiding it in an Archived disclosure is how an
+    /// install comes to look like an install that did not happen. See [`never_started`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<u64>,
 }
 
 /// One app as a listing shows it: what the manifest published, and every copy of it on this
@@ -425,6 +433,7 @@ fn land(
             branch: Some(pin.branch.clone()),
             installed_at: adi_config::now_unix(),
             updated_at: None,
+            started_at: None,
         },
     )?;
 
@@ -484,6 +493,15 @@ pub fn start(market: &Marketplace, id: &str) -> Result<Started> {
     // This machine runs it again, so it does not live somewhere else.
     manifest.moved_to = None;
     write_manifest(&dir, &manifest)?;
+
+    // Stamped once and kept: it is what tells "archived" apart from "never run" for the rest of
+    // this app's life, including after somebody archives it on purpose later.
+    if let Some(mut record) = read_record(&dir)
+        && record.started_at.is_none()
+    {
+        record.started_at = Some(adi_config::now_unix());
+        write_record(&dir, &record)?;
+    }
 
     Ok(Started {
         id: id.to_string(),
@@ -554,6 +572,16 @@ pub fn update(market: &Marketplace, id: &str, force: bool) -> Result<Updated> {
 #[must_use]
 pub fn is_started(dir: &Path) -> bool {
     dir.join(".adi").join(HIVE_LIVE).is_file()
+}
+
+/// Whether `dir` is an app that arrived from a marketplace and has **never** been started.
+///
+/// The one question the Dashboards page cannot answer from `archived_at` alone: an app landing
+/// inert and a dashboard somebody archived look identical in the manifest, and treating the first
+/// as archived files it under a disclosure nobody opens after pressing Install.
+#[must_use]
+pub fn never_started(dir: &Path) -> bool {
+    read_record(dir).is_some_and(|record| record.started_at.is_none())
 }
 
 #[cfg(test)]
@@ -665,6 +693,17 @@ mod tests {
         assert_eq!((record.marketplace.as_str(), record.slug.as_str()), ("adi", "crm"));
         assert_eq!(record.commit, first);
         assert_eq!(record.branch.as_deref(), Some("main"));
+        assert_eq!(record.started_at, None);
+        assert!(
+            never_started(&dir),
+            "arrived inert, and never run — which is not the same as archived"
+        );
+
+        // Starting stamps it, and it stays stamped through a later archive: from then on this
+        // dashboard was put away on purpose rather than never opened.
+        start(&market, "sales-crm").expect("start");
+        assert!(read_record(&dir).expect("record").started_at.is_some());
+        assert!(!never_started(&dir));
 
         let _ = std::fs::remove_dir_all(market.config().root());
     }
