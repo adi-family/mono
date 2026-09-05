@@ -19,11 +19,13 @@
 //! same-named host on the *viewer's* machine, and a rewritten path would make a dashboard's `/api`
 //! answer at a URL the page never asked for (`docs/fleet.md` §3, §4). What the gateway matched and
 //! what the service reads are the same bytes. Headers are *added* — the password this machine
-//! already holds for the node ([`prefill_auth`]) — which is a different act: nothing that was in
-//! the head changes, and the client's own `Authorization` is left alone. The password travels in
-//! [`auth::MESH_AUTH_HEADER`], and the node strips it again before the service sees it — along
-//! with `Authorization`, but only in the case where *that* header is what verified as the mesh
-//! credential, so a fronted app's own `Bearer` token still arrives untouched ([`authenticated`]).
+//! already holds for the node ([`prefill_auth`]), and, on the node side, the calling node's own
+//! identity ([`auth::FLEET_NODE_HEADER`], [`auth::FLEET_USER_HEADER`], attached in [`negotiate`])
+//! — which is a different act: nothing that was in the head changes, and the client's own
+//! `Authorization` is left alone. The password travels in [`auth::MESH_AUTH_HEADER`], and the
+//! node strips it again before the service sees it — along with `Authorization`, but only in the
+//! case where *that* header is what verified as the mesh credential, so a fronted app's own
+//! `Bearer` token still arrives untouched ([`authenticated`]).
 //!
 //! **Authorization comes before resolution.** [`admit`] asks "may this peer have `nosh`?" before
 //! it asks "do we serve `nosh`?", so an unpaired peer learns nothing about which services exist
@@ -642,6 +644,15 @@ where
     } else {
         head
     };
+
+    // The sender's identity, attached now that the request has cleared both gates: it is a
+    // paired node ([`admit`]) presenting a credential that peer holds ([`authenticated`]). Any
+    // value the peer sent under these names is stripped first — the service must never be able
+    // to mistake a caller's own header for one the gateway vouches for.
+    let head = auth::strip_header(&head, auth::FLEET_NODE_HEADER_LOWER);
+    let head = auth::strip_header(&head, auth::FLEET_USER_HEADER_LOWER);
+    let head = with_header(&head, auth::FLEET_USER_HEADER, &peer_record.record.auth.user);
+    let head = with_header(&head, auth::FLEET_NODE_HEADER, &peer_record.record.nickname);
 
     upstream.write_all(&head).await?;
     Ok(Some(Admitted {
@@ -1507,6 +1518,19 @@ mod tests {
         format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n")
     }
 
+    /// The two headers [`negotiate`] attaches for an admitted peer, in the order they land —
+    /// `Node` above `User`. For building an expected head in the tests below.
+    fn fleet_headers(nickname: &str, user: &str) -> String {
+        format!("X-Adi-Fleet-Node: {nickname}\r\nX-Adi-Fleet-User: {user}\r\n")
+    }
+
+    /// `head` with the sender's identity spliced in where [`negotiate`] puts it — directly below
+    /// the request line, ahead of everything else including `Host`.
+    fn with_fleet_headers(head: &str, nickname: &str, user: &str) -> String {
+        let (request_line, rest) = head.split_once("\r\n").expect("a request line");
+        format!("{request_line}\r\n{}{rest}", fleet_headers(nickname, user))
+    }
+
     /// A listening socket nothing will ever answer on — enough for `connect` to succeed.
     async fn idle_upstream() -> (TcpListener, u16) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
@@ -1717,10 +1741,15 @@ mod tests {
         assert!(upstream.is_some(), "the local service was handed over");
 
         // Everything except the credential, which verified and so is stripped at the gate rather
-        // than handed on (`a_mesh_password_in_authorization_never_reaches_the_service`). Sizing
-        // the read to the *original* head would block here for ever: the upstream stays open, so
-        // the bytes that were removed never arrive and never EOF either.
-        let expected = head.replace(&basic("igor", "hunter2"), "");
+        // than handed on (`a_mesh_password_in_authorization_never_reaches_the_service`), plus the
+        // sender's identity the gate attaches once it admits the request. Sizing the read to the
+        // *original* head would block here for ever: the upstream stays open, so the bytes that
+        // were removed never arrive and never EOF either.
+        let expected = with_fleet_headers(
+            &head.replace(&basic("igor", "hunter2"), ""),
+            "laptop-a",
+            "igor",
+        );
         let (mut served, _) = listener.accept().await.expect("the service was connected");
         let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
@@ -1728,6 +1757,46 @@ mod tests {
             String::from_utf8_lossy(&got),
             expected,
             "the head is forwarded byte for byte — `Host` and target untouched"
+        );
+    }
+
+    /// A peer cannot claim someone else's identity by sending the headers itself: whatever it
+    /// puts under these names is dropped before the gate's own values are written in.
+    #[tokio::test]
+    async fn a_peer_cannot_forge_its_own_fleet_identity_headers() {
+        let key = some_key();
+        let (listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
+
+        let head = get_head(
+            "nosh.laptop-b.n.adi",
+            "/dash",
+            &format!(
+                "X-Adi-Fleet-Node: someone-else\r\nX-Adi-Fleet-User: root\r\n{}",
+                basic("igor", "hunter2")
+            ),
+        );
+        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+        assert_eq!(reply, vec![HttpStatus::Ok as u8]);
+        assert!(upstream.is_some());
+
+        let (mut served, _) = listener.accept().await.expect("connected");
+        let got = read_head(&mut served).await.expect("the head arrived");
+        let got = String::from_utf8_lossy(&got).into_owned();
+        assert!(
+            got.contains("X-Adi-Fleet-Node: laptop-a\r\n"),
+            "the gate's own value wins: {got}"
+        );
+        assert!(
+            got.contains("X-Adi-Fleet-User: igor\r\n"),
+            "the gate's own value wins: {got}"
+        );
+        assert!(
+            !got.contains("someone-else") && !got.contains("root"),
+            "nothing the peer sent under these names survives: {got}"
         );
     }
 
@@ -1759,9 +1828,13 @@ mod tests {
         assert_eq!(reply, vec![HttpStatus::Ok as u8]);
         assert!(upstream.is_some(), "the local service was handed over");
 
-        // Minus the credential, for the reason given in
+        // Minus the credential, plus the sender's identity — see
         // `an_authorized_request_reaches_the_service_with_its_head_verbatim`.
-        let expected = head.replace(&basic("igor", "hunter2"), "");
+        let expected = with_fleet_headers(
+            &head.replace(&basic("igor", "hunter2"), ""),
+            "laptop-a",
+            "igor",
+        );
         let (mut served, _) = listener.accept().await.expect("the service was connected");
         let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
@@ -1911,7 +1984,11 @@ mod tests {
         let got = read_head(&mut served).await.expect("the head arrived");
         let got = String::from_utf8_lossy(&got).into_owned();
         assert!(
-            got.starts_with("GET /api/tasks HTTP/1.1\r\nHost: nosh.laptop-b.n.adi\r\n"),
+            got.starts_with(
+                "GET /api/tasks HTTP/1.1\r\n\
+                 X-Adi-Fleet-Node: laptop-a\r\nX-Adi-Fleet-User: igor\r\n\
+                 Host: nosh.laptop-b.n.adi\r\n"
+            ),
             "the request line and `Host` stay untouched: {got}"
         );
         assert!(
@@ -1957,8 +2034,13 @@ mod tests {
         // this machine's mesh password rather than the app's own header, so the gate strips it —
         // see `a_mesh_password_in_authorization_never_reaches_the_service`. "Verbatim" is about
         // the rewrite this test exists for: no `Connection: close` is inserted and no other header
-        // is touched or reordered. It never meant that the gate hands its credentials on.
-        let expected = head.replace(&basic("adi", "hunter2"), "");
+        // is touched or reordered. It never meant that the gate hands its credentials on, or that
+        // it withholds the identity it attaches to every admitted request.
+        let expected = with_fleet_headers(
+            &head.replace(&basic("adi", "hunter2"), ""),
+            "phone",
+            "adi",
+        );
         let (mut served, _) = listener.accept().await.expect("connected");
         let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
@@ -1998,7 +2080,11 @@ mod tests {
 
         // The credential is stripped at the gate like any other verified one; what this test is
         // about is that `Connection: Upgrade` survives instead of being rewritten to `close`.
-        let expected = head.replace(&basic("igor", "hunter2"), "");
+        let expected = with_fleet_headers(
+            &head.replace(&basic("igor", "hunter2"), ""),
+            "laptop-a",
+            "igor",
+        );
         let (mut served, _) = frontend.accept().await.expect("connected");
         let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
@@ -2044,7 +2130,11 @@ mod tests {
             "neither header reaches the service: {got}"
         );
         assert!(
-            got.starts_with("GET /api/health HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\n"),
+            got.starts_with(
+                "GET /api/health HTTP/1.1\r\n\
+                 X-Adi-Fleet-Node: laptop-a\r\nX-Adi-Fleet-User: igor\r\n\
+                 Host: app.laptop-b.n.adi\r\n"
+            ),
             "and nothing else about the head changed: {got}"
         );
     }

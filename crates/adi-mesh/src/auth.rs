@@ -58,6 +58,26 @@ pub const MESH_AUTH_HEADER: &str = "X-Adi-Authorization";
 /// [`MESH_AUTH_HEADER`] lowercased, for [`parse_basic_credentials_in`].
 pub const MESH_AUTH_HEADER_LOWER: &[u8] = b"x-adi-authorization";
 
+/// The header carrying the calling node's own name — [`crate::fleet::NodeRecord::nickname`] as
+/// this machine has it filed in `fleet.toml` — so a service behind the gateway can tell a mesh
+/// caller from a local one, and which fleet node it came from.
+///
+/// Attached on the node side ([`crate::gateway::negotiate`]), after the request is admitted and
+/// authenticated: any value the caller sent under this name is stripped first, so a peer cannot
+/// forge its own identity by sending the header itself.
+pub const FLEET_NODE_HEADER: &str = "X-Adi-Fleet-Node";
+
+/// [`FLEET_NODE_HEADER`] lowercased, for [`strip_header`].
+pub const FLEET_NODE_HEADER_LOWER: &[u8] = b"x-adi-fleet-node";
+
+/// The header carrying the username paired against the calling node
+/// ([`Credential::user`]) — the human half of the identity [`FLEET_NODE_HEADER`] names the
+/// machine half of. Same attach point, same forgery guard.
+pub const FLEET_USER_HEADER: &str = "X-Adi-Fleet-User";
+
+/// [`FLEET_USER_HEADER`] lowercased, for [`strip_header`].
+pub const FLEET_USER_HEADER_LOWER: &[u8] = b"x-adi-fleet-user";
+
 /// The body of the challenge response. Short and plain: a browser shows its own password
 /// prompt, and only a non-browser client ever reads this.
 const CHALLENGE_BODY: &str = "401 Unauthorized: this adi node requires a username and password.\n";
