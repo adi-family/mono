@@ -429,7 +429,11 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
 /// as defined", so it starts where its manifest and its project say. `overrides` is the rest of the
 /// same panel: the agent's own settings this one run replaces, `None` for a launch that changes
 /// nothing. `force` launches past a full concurrency limit — what the "Run anyway" affordance sends.
+///
+/// `node` is which source the composer is pointed at (`docs/fleet.md` §13) — `None` for this
+/// machine, routed the same way every other agent-scoped call in this file is.
 pub async fn run_agent(
+    node: Option<&str>,
     name: String,
     message: String,
     working_dir: Option<String>,
@@ -437,7 +441,8 @@ pub async fn run_agent(
     force: bool,
     attachments: Vec<String>,
 ) -> Result<AgentRunResult, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/run",
         &RunAgent {
             name,
@@ -512,7 +517,11 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs), from
 /// the source that run actually lives on (`docs/fleet.md` §13) — `None` for this machine.
-pub async fn peek_run(node: Option<&str>, name: String, run_id: String) -> Result<AgentPeek, String> {
+pub async fn peek_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentPeek, String> {
     post_on(node, "/api/agents/run/peek", &RunRef { name, run_id }).await
 }
 
@@ -688,7 +697,12 @@ pub async fn close_agent_goal(
     as_: String,
     note: String,
 ) -> Result<AgentGoals, String> {
-    post_on(node, "/api/agents/goal/close", &CloseGoal { goal, as_, note }).await
+    post_on(
+        node,
+        "/api/agents/goal/close",
+        &CloseGoal { goal, as_, note },
+    )
+    .await
 }
 
 /// Stop waiting on one of a conversation's registered wakes, returning the ones it still holds.
@@ -731,7 +745,11 @@ pub async fn unqueue_from_run(
 
 /// Stop one specific run, returning the fresh run history — from `node`, the row's own origin
 /// (`docs/fleet.md` §13), not necessarily this machine.
-pub async fn stop_run(node: Option<&str>, name: String, run_id: String) -> Result<AgentRuns, String> {
+pub async fn stop_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentRuns, String> {
     post_on(node, "/api/agents/run/stop", &RunRef { name, run_id }).await
 }
 
@@ -798,7 +816,12 @@ pub async fn send_agent_keys(
     text: String,
     key: String,
 ) -> Result<AgentPeek, String> {
-    post_on(node, "/api/agents/send-keys", &AgentKeys { name, text, key }).await
+    post_on(
+        node,
+        "/api/agents/send-keys",
+        &AgentKeys { name, text, key },
+    )
+    .await
 }
 
 // Triggers: every endpoint returns the fresh TriggersState so the page updates in one round-trip.

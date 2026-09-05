@@ -244,17 +244,23 @@ where
 
 /// Launch an interactive (pty) agent straight away — no initial task, since the session is typed
 /// into after it starts. The server supplies the executor-specific success message. `force` is the
-/// human's "run it anyway" past a full concurrency limit.
+/// human's "run it anyway" past a full concurrency limit. Always this machine — the Agents page has
+/// no node concept (`docs/fleet.md` §13).
 pub(crate) fn run_now(state: State, name: String, force: bool) {
-    run_now_with(state, name, force, None, None);
+    run_now_with(state, None, name, force, None, None);
 }
 
 /// [`run_now`], carrying the run settings of the composer that asked for it — a pty session started
 /// from the chat home is started with the same "run here" and the same overrides a headless one
 /// would be. The Agents list's own ▶ Run has no such panel behind it and passes neither: it acts on
 /// a row, which is rarely the agent the composer is pointed at.
+///
+/// `node` is which source the picker above the "Start session" button is pointed at
+/// (`docs/fleet.md` §13) — `None` for this machine, which is every call site except the chat home's
+/// own pty affordance, since a pty agent only ever runs on the machine that defines it.
 fn run_now_with(
     state: State,
+    node: Option<String>,
     name: String,
     force: bool,
     working_dir: Option<String>,
@@ -264,6 +270,7 @@ fn run_now_with(
         // No task and no attachments: a pty session is typed into after it starts, so there is no
         // message here for a picture to belong to.
         match fetch::run_agent(
+            node.as_deref(),
             name,
             String::new(),
             working_dir,
@@ -274,7 +281,7 @@ fn run_now_with(
         .await
         {
             Ok(res) => {
-                state.agents.set(Some(res.state));
+                set_source_agents(state, node.as_deref(), res.state);
                 state.flash.set(Some(Flash::ok(res.message)));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -287,6 +294,12 @@ fn run_now_with(
 /// `working_dir` is the run settings' "run here" and `overrides` the rest of that panel; `None` and
 /// `None` start the agent exactly as it is defined. `force` launches past a full concurrency limit —
 /// the composer sends it once the cap is reached, where the button already reads "Run anyway".
+///
+/// Launches on `watch.node` — whichever source the composer's picker is pointed at
+/// (`docs/fleet.md` §13) — and re-asserts it on the watch once the launch lands, rather than
+/// trusting it is still what it was when the request went out: the picker (and so `watch.node`)
+/// can move while the request is in flight, and the conversation that just started belongs to the
+/// source it was actually sent to, not wherever the picker has since drifted to.
 fn launch_agent(
     state: State,
     watch: AgentsWatch,
@@ -297,16 +310,28 @@ fn launch_agent(
     force: bool,
     images: Vec<String>,
 ) {
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::run_agent(name.clone(), message, working_dir, overrides, force, images).await {
+        match fetch::run_agent(
+            node.as_deref(),
+            name.clone(),
+            message,
+            working_dir,
+            overrides,
+            force,
+            images,
+        )
+        .await
+        {
             Ok(res) => {
-                state.agents.set(Some(res.state));
+                set_source_agents(state, node.as_deref(), res.state);
                 state.flash.set(Some(Flash::ok(res.message)));
                 watch.peek.set(None);
                 watch.log.set(String::new());
                 if !res.run_id.is_empty() {
                     watch.run_id.set(Some(res.run_id));
                 }
+                watch.node.set(node);
                 watch.name.set(Some(name));
                 poll_watch(watch);
                 // A new conversation has none, so this is what clears the last one's off screen.
@@ -372,6 +397,21 @@ fn refresh_source_agents(state: State, node: Option<&str>) {
             }
         }),
         Some(node) => crate::state::refresh_rail_node(state, node.to_string()),
+    }
+}
+
+/// Fold one source's freshly answered `AgentsState` in directly, rather than asking again — this
+/// machine's [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
+/// (`docs/fleet.md` §13). What a launch on that source hands back already *is* its post-launch agent
+/// list, so [`refresh_source_agents`]'s round trip would only repeat the answer just received.
+fn set_source_agents(state: State, node: Option<&str>, agents: AgentsState) {
+    match node {
+        None => state.agents.set(Some(agents)),
+        Some(node) => {
+            state.rail_node_agents.update(|m| {
+                m.insert(node.to_string(), agents);
+            });
+        }
     }
 }
 
@@ -2058,18 +2098,29 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     });
     // A launch typed here is a human asking, so a full cap is an override to offer rather than a
     // refusal to hand back. The send button is the reply box's arrow now and cannot say "anyway",
-    // so the line under the composer is what says it — before Enter is ever pressed.
+    // so the line under the composer is what says it — before Enter is ever pressed. Read against
+    // whichever source the picker above this box is pointed at (`docs/fleet.md` §13) — the same
+    // source `start` below launches on.
     let at_limit = move || {
-        watch
-            .name
-            .get()
-            .is_some_and(|name| at_run_limit(state.agents.get().as_ref(), &name))
+        let Some(name) = watch.name.get() else {
+            return false;
+        };
+        let agents = match watch.node.get() {
+            None => state.agents.get(),
+            Some(node) => state.rail_node_agents.get().get(&node).cloned(),
+        };
+        at_run_limit(agents.as_ref(), &name)
     };
     let start = move |message: String| {
         let Some(name) = watch.name.get_untracked() else {
             return;
         };
-        let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
+        let node = watch.node.get_untracked();
+        let agents = match &node {
+            None => state.agents.get_untracked(),
+            Some(node) => state.rail_node_agents.get_untracked().get(node).cloned(),
+        };
+        let force = at_run_limit(agents.as_ref(), &name);
         let images = crate::attach::ready_ids(watch.input_files);
         watch.input.set(String::new());
         crate::attach::clear(watch.input_files);
@@ -2086,12 +2137,17 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     };
     // Asked of the agent this composer is pointed at, before any conversation exists — which is
     // the only thing that can answer here, and the reason the capability rides on the listing as
-    // well as on a snapshot.
+    // well as on a snapshot. That listing is whichever source the picker chose the agent from, not
+    // always this machine's — a starred agent on a selected node answers for itself the same way.
     let takes_images = Signal::derive(move || {
         let Some(name) = watch.name.get() else {
             return false;
         };
-        state.agents.get().is_some_and(|s| {
+        let agents = match watch.node.get() {
+            None => state.agents.get(),
+            Some(node) => state.rail_node_agents.get().get(&node).cloned(),
+        };
+        agents.is_some_and(|s| {
             s.agents
                 .iter()
                 .find(|a| a.name == name)
@@ -2100,9 +2156,10 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     });
     let attach = crate::attach::attaching(
         state,
-        // The composer that starts a *new* run always launches locally (`fetch::run_agent` follows
-        // no node): the picker above it chooses among this machine's own agents.
-        None,
+        // Whichever source the picker above this box launches on (`docs/fleet.md` §13) — a picture
+        // still refuses there (the forwarder carries JSON, not bytes: `fetch::upload_attachment`),
+        // but with the node named in the refusal instead of one silently sent to the wrong machine.
+        watch.node.get_untracked(),
         watch.input_files,
         takes_images,
         Signal::derive(|| IMAGES_REFUSED.to_string()),
@@ -3641,54 +3698,135 @@ fn toggle_drawer(state: State, which: ChatDrawer) {
     });
 }
 
-/// The agent chooser — which agent this screen is a chat with. It sits where a new chat is *started*
-/// (the composer's own title, and the Start affordance a terminal agent shows in its place) rather
-/// than over the sessions list, the way a model chooser sits with the composer it governs: the one
-/// thing to settle before typing is who the message goes to.
+/// One option [`chat_agent_picker`] offers: an agent, and which of the rail's currently-selected
+/// sources it came from (`docs/fleet.md` §13, multi-select) — `None` for this machine.
+struct PickerOption {
+    node: Option<String>,
+    name: String,
+    running: bool,
+}
+
+/// The agent chooser — which agent this screen is a chat with, and (with more than one source
+/// selected) which of them it starts on. It sits where a new chat is *started* (the composer's own
+/// title, and the Start affordance a terminal agent shows in its place) rather than over the
+/// sessions list, the way a model chooser sits with the composer it governs: the one thing to settle
+/// before typing is who the message goes to, and now, where.
 ///
 /// **Starred agents only** — a fleet grows a long tail of one-off and machine-made agents, and this
 /// is a short list to choose a chat from, not a register of everything installed. The agent already
 /// on screen is always an option whether or not it is starred, so the control can't misreport what
 /// the centre pane is showing; the Agents page is where anything else is reached (and starred).
 ///
-/// The root agent leads, then the list's own name order, and one that is live right now carries a
-/// dot. Choosing one repoints the conversation in the centre and the agent "+ New" starts a session
-/// on; the rail lists every agent's sessions either way, so it only moves in that a different row of
-/// it is now the open one.
+/// Options are drawn from every currently-selected source — this machine's own [`State::agents`],
+/// plus one selected node's own slice of [`State::rail_node_agents`] for each node ticked in the
+/// rail's node menu — the same sources [`session_bands`] merges into the rail below, read the same
+/// way. A remote pty agent is a real option here, not just a rail row: it only ever runs on the
+/// machine that defines it, so starting one *is* starting it there. With only this machine selected
+/// (the common case, and everything this control offered before multi-select existed) the list is
+/// unchanged and carries no source label; ticking anything else besides tags every option with its
+/// source, the same rule the rail's own rows use to decide when to print theirs.
+///
+/// The root agent leads (only when it is local — the one the app is set up around), then each
+/// source's own name order, sources in the order the rail merges them; one that is live right now
+/// carries a dot. Choosing one repoints the conversation in the centre and the agent "+ New" starts
+/// a session on, on whichever source it came from; the rail lists every selected source's sessions
+/// either way, so it only moves in that a different row of it is now the open one.
 fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
-    let Some(list) = state.agents.get() else {
-        return view! { <span class="adi-chome__pickhint">"Loading agents…"</span> }.into_any();
-    };
     let current = watch.name.get().unwrap_or_default();
-    let mut agents: Vec<_> = list
-        .agents
-        .into_iter()
-        .filter(|a| a.starred || a.name == current)
-        .collect();
-    if agents.is_empty() {
-        return view! { <span class="adi-chome__pickhint">"No starred agents"</span> }.into_any();
+    let current_node = watch.node.get();
+    let multi_source = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+
+    let mut options: Vec<PickerOption> = Vec::new();
+    // A source not yet answered is not the same as one with nothing starred — the hint below has to
+    // tell them apart, or a fleet still loading would flash "No starred agents" for a moment.
+    let mut loading = false;
+    if state.session_local.get() {
+        match state.agents.get() {
+            Some(list) => options.extend(
+                list.agents
+                    .into_iter()
+                    .filter(|a| a.starred || (current_node.is_none() && a.name == current))
+                    .map(|a| PickerOption {
+                        node: None,
+                        name: a.name,
+                        running: a.running,
+                    }),
+            ),
+            None => loading = true,
+        }
     }
-    // The root agent leads — it's the one the app is set up around. A stable sort, so the rest keep
-    // the order the list arrived in (by name) behind it.
-    agents.sort_by_key(|a| a.name != ROOT_AGENT);
+    let node_agents = state.rail_node_agents.get();
+    for node in state.session_nodes.get() {
+        match node_agents.get(&node) {
+            Some(list) => options.extend(
+                list.agents
+                    .iter()
+                    .filter(|a| {
+                        a.starred
+                            || (current_node.as_deref() == Some(node.as_str()) && a.name == current)
+                    })
+                    .map(|a| PickerOption {
+                        node: Some(node.clone()),
+                        name: a.name.clone(),
+                        running: a.running,
+                    }),
+            ),
+            None => loading = true,
+        }
+    }
+    if options.is_empty() {
+        let hint = if loading {
+            "Loading agents…"
+        } else {
+            "No starred agents"
+        };
+        return view! { <span class="adi-chome__pickhint">{hint}</span> }.into_any();
+    }
+    // The root agent leads — it's the one the app is set up around, and only ever local. A stable
+    // sort, so the rest keep the order they arrived in (each source's own name order, sources in
+    // [`session_bands`]'s own merge order) behind it.
+    options.sort_by_key(|o| !(o.node.is_none() && o.name == ROOT_AGENT));
+    let selected_idx = options
+        .iter()
+        .position(|o| o.node == current_node && o.name == current);
+    // Indexed rather than the agent's own name, because a name is only unique on the machine that
+    // defines it (`docs/fleet.md` §13): two selected sources may star the same name, and a `<select>`
+    // needs one value per option to tell them apart.
+    let rows: Vec<AnyView> = options
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let selected = Some(i) == selected_idx;
+            // An option carries no markup, so the live dot rides in its text — worth spotting in a
+            // collapsed select, which is all you see of the other agents until you open it.
+            let mut label = if o.running {
+                format!("\u{25CF} {}", o.name)
+            } else {
+                o.name.clone()
+            };
+            if multi_source {
+                label = format!(
+                    "{label} \u{2014} {}",
+                    o.node.as_deref().unwrap_or("this machine")
+                );
+            }
+            view! { <option value=i.to_string() selected=selected>{label}</option> }.into_any()
+        })
+        .collect();
     view! {
         <span class="adi-chome__agentpick">
             <select class="adi-chome__agentsel"
-                title="which agent this chat runs on — starred agents only"
-                prop:value=current.clone()
-                on:change=move |ev| switch_agent(state, watch, event_target_value(&ev))>
-                {agents.into_iter().map(|a| {
-                    let selected = a.name == current;
-                    // An option carries no markup, so the live dot rides in its text — worth
-                    // spotting in a collapsed select, which is all you see of the other agents
-                    // until you open it.
-                    let label = if a.running {
-                        format!("\u{25CF} {}", a.name)
-                    } else {
-                        a.name.clone()
+                title="which agent (and source) this chat runs on — starred agents only"
+                prop:value=selected_idx.map(|i| i.to_string()).unwrap_or_default()
+                on:change=move |ev| {
+                    let Ok(idx) = event_target_value(&ev).parse::<usize>() else {
+                        return;
                     };
-                    view! { <option value=a.name selected=selected>{label}</option> }
-                }).collect::<Vec<_>>()}
+                    if let Some(o) = options.get(idx) {
+                        switch_agent(state, watch, o.node.clone(), o.name.clone());
+                    }
+                }>
+                {rows}
             </select>
             // The chevron the native control gives up under `appearance: none`, laid over the room
             // the select reserves for it.
@@ -3700,23 +3838,33 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// Switch the chat home to another agent. Everything on this screen reads `watch`, so pointing it at
-/// `name` moves the rail, the centre pane and "+ New" together. Whether the agent is interactive
-/// comes from the loaded list; a name that isn't in it is left alone rather than watched blind.
-fn switch_agent(state: State, watch: AgentsWatch, name: String) {
-    if name.is_empty() || watch.name.get_untracked().as_deref() == Some(name.as_str()) {
+/// Switch the chat home to another agent, on `node` (`docs/fleet.md` §13) — `None` for this machine,
+/// otherwise one of the picker's currently-selected sources. Everything on this screen reads `watch`,
+/// so pointing it at `node`/`name` moves the rail, the centre pane and "+ New" together. Whether the
+/// agent is interactive comes from that source's own loaded list; a name that isn't in it is left
+/// alone rather than watched blind.
+fn switch_agent(state: State, watch: AgentsWatch, node: Option<String>, name: String) {
+    if name.is_empty()
+        || (watch.name.get_untracked().as_deref() == Some(name.as_str())
+            && watch.node.get_untracked() == node)
+    {
         return;
     }
-    let Some(interactive) = agent_interactive(state, &name) else {
+    let Some(interactive) = agent_interactive(state, node.as_deref(), &name) else {
         return;
     };
-    point_watch(watch, None, name, interactive);
+    point_watch(watch, node, name, interactive);
 }
 
-/// Whether `name` is a pty (interactive) agent, or `None` when the loaded agents list holds no such
-/// agent — the caller's cue not to point the view at it.
-fn agent_interactive(state: State, name: &str) -> Option<bool> {
-    let list = state.agents.get_untracked()?;
+/// Whether `name` is a pty (interactive) agent on `node`, or `None` when that source's loaded agents
+/// list holds no such agent — the caller's cue not to point the view at it. This machine's own
+/// [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
+/// (`docs/fleet.md` §13).
+fn agent_interactive(state: State, node: Option<&str>, name: &str) -> Option<bool> {
+    let list = match node {
+        None => state.agents.get_untracked()?,
+        Some(node) => state.rail_node_agents.get_untracked().get(node)?.clone(),
+    };
     list.agents
         .iter()
         .find(|a| a.name == name)
@@ -5168,12 +5316,19 @@ fn chat_hidden_row(
 fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
     if watch.interactive.get() {
         let name = watch.name.get().unwrap_or_default();
+        let node = watch.node.get();
         view! {
             <button class="adi-btn adi-btn--sm" type="button"
                 title="start a fresh session"
-                on:click=move |_| run_now_with(state, name.clone(),
-                    at_run_limit(state.agents.get_untracked().as_ref(), &name),
-                    run_dir_of(watch), run_overrides_of(state, watch))>"New"</button>
+                on:click=move |_| {
+                    let agents = match &node {
+                        None => state.agents.get_untracked(),
+                        Some(n) => state.rail_node_agents.get_untracked().get(n).cloned(),
+                    };
+                    run_now_with(state, node.clone(), name.clone(),
+                        at_run_limit(agents.as_ref(), &name),
+                        run_dir_of(watch), run_overrides_of(state, watch));
+                }>"New"</button>
         }
         .into_any()
     } else {
@@ -5234,9 +5389,16 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                                 </p>
                                 {move || run_settings_panel(state, watch)}
                                 <button class="adi-btn adi-btn--primary" type="button"
-                                    on:click=move |_| run_now_with(state, name.clone(),
-                                        at_run_limit(state.agents.get_untracked().as_ref(), &name),
-                                        run_dir_of(watch), run_overrides_of(state, watch))>
+                                    on:click=move |_| {
+                                        let node = watch.node.get_untracked();
+                                        let agents = match &node {
+                                            None => state.agents.get_untracked(),
+                                            Some(n) => state.rail_node_agents.get_untracked().get(n).cloned(),
+                                        };
+                                        run_now_with(state, node, name.clone(),
+                                            at_run_limit(agents.as_ref(), &name),
+                                            run_dir_of(watch), run_overrides_of(state, watch));
+                                    }>
                                     "Start session"
                                 </button>
                             </div>
