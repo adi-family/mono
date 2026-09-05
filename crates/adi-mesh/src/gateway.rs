@@ -73,7 +73,7 @@ use tracing::{debug, info, warn};
 
 use crate::fleet::{FleetRegistry, NodeRecord, Target};
 use crate::protocol::{self, HttpStatus};
-use crate::{auth, tunnel};
+use crate::{activity, auth, tunnel};
 
 // ---------------------------------------------------------------------------------------
 // Where the gateway listens
@@ -341,6 +341,15 @@ pub trait NodeSide: Send + Sync + 'static {
 
     /// The Basic-auth realm — this node's name, which is what a browser shows in its prompt.
     fn realm(&self) -> String;
+
+    /// Record that `nickname` — a paired peer whose request just cleared both gates — was seen
+    /// just now. Called once per admitted, authenticated request, with the same nickname
+    /// [`auth::FLEET_NODE_HEADER`] carries onward, so "last seen" always means "as this node".
+    ///
+    /// Fire-and-forget by contract: an implementor must never let this delay or fail the request
+    /// it was called for, which is why [`Gateway`]'s does the write off the runtime and only logs
+    /// a failure rather than propagating one.
+    fn record_seen(&self, nickname: &str);
 }
 
 /// The node passwords *this* machine already holds, for the calling side to attach.
@@ -473,6 +482,14 @@ impl NodeSide for Gateway {
     fn realm(&self) -> String {
         self.realm.get().as_ref().clone()
     }
+
+    /// Off the runtime, same as every other blocking write this type does: [`activity::record_seen`]
+    /// is a SQLite write, and the caller is a request already on its way to a service. Not awaited —
+    /// the request must not wait on bookkeeping that exists for a page nobody is looking at yet.
+    fn record_seen(&self, nickname: &str) {
+        let nickname = nickname.to_string();
+        tokio::task::spawn_blocking(move || activity::record_seen(&nickname));
+    }
 }
 
 /// Re-read the gateway's on-disk state every [`RELOAD_INTERVAL`] until shutdown, so pairing a
@@ -595,6 +612,9 @@ where
         send.flush().await?;
         return Ok(None);
     }
+    // Past both gates: admitted (`admit`) and now authenticated. This is the identity that rides
+    // onward in `X-Adi-Fleet-Node`, so "last seen" means exactly what that header claims.
+    node.record_seen(&peer_record.record.nickname);
 
     // Re-resolve against the real target now that we have it: the first resolution used the
     // host's fallback route, which is the wrong upstream for a service claiming a path prefix.
@@ -651,7 +671,11 @@ where
     // to mistake a caller's own header for one the gateway vouches for.
     let head = auth::strip_header(&head, auth::FLEET_NODE_HEADER_LOWER);
     let head = auth::strip_header(&head, auth::FLEET_USER_HEADER_LOWER);
-    let head = with_header(&head, auth::FLEET_USER_HEADER, &peer_record.record.auth.user);
+    let head = with_header(
+        &head,
+        auth::FLEET_USER_HEADER,
+        &peer_record.record.auth.user,
+    );
     let head = with_header(&head, auth::FLEET_NODE_HEADER, &peer_record.record.nickname);
 
     upstream.write_all(&head).await?;
@@ -1469,6 +1493,10 @@ mod tests {
     struct StubNode {
         peers: HashMap<EndpointId, Peer>,
         routes: Routes,
+        /// Every nickname [`NodeSide::record_seen`] was called with, in order — so a test can
+        /// assert *that* negotiate reports a sighting without touching a real database for it.
+        /// `std::sync::Mutex` rather than a `RefCell`: [`NodeSide`] must be `Sync`.
+        seen: SyncMutex<Vec<String>>,
     }
 
     impl StubNode {
@@ -1476,6 +1504,7 @@ mod tests {
             Self {
                 peers: HashMap::new(),
                 routes,
+                seen: SyncMutex::new(Vec::new()),
             }
         }
 
@@ -1500,6 +1529,13 @@ mod tests {
 
         fn realm(&self) -> String {
             "laptop-b".to_string()
+        }
+
+        fn record_seen(&self, nickname: &str) {
+            self.seen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(nickname.to_string());
         }
     }
 
@@ -1757,6 +1793,37 @@ mod tests {
             String::from_utf8_lossy(&got),
             expected,
             "the head is forwarded byte for byte — `Host` and target untouched"
+        );
+        assert_eq!(
+            *node.seen.lock().unwrap_or_else(PoisonError::into_inner),
+            vec!["laptop-a".to_string()],
+            "the admitted, authenticated peer's own nickname is reported seen"
+        );
+    }
+
+    /// The gate that decides *whether* a request is admitted must also decide whether it counts as
+    /// a sighting — a stranger or an unauthenticated peer must never move a node's last-seen time.
+    #[tokio::test]
+    async fn an_unauthenticated_request_is_never_recorded_as_a_sighting() {
+        let key = some_key();
+        let (_listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
+
+        // No credentials at all: admitted by grant, but the 401 gate stops it before identity is
+        // ever attached to anything.
+        let head = get_head("nosh.laptop-b.n.adi", "/dash", "");
+        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+        assert!(String::from_utf8_lossy(&reply[1..]).starts_with("HTTP/1.1 401"));
+        assert!(upstream.is_none());
+        assert!(
+            node.seen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
+            "an unauthenticated request must not count as a sighting"
         );
     }
 
@@ -2036,11 +2103,8 @@ mod tests {
         // the rewrite this test exists for: no `Connection: close` is inserted and no other header
         // is touched or reordered. It never meant that the gate hands its credentials on, or that
         // it withholds the identity it attaches to every admitted request.
-        let expected = with_fleet_headers(
-            &head.replace(&basic("adi", "hunter2"), ""),
-            "phone",
-            "adi",
-        );
+        let expected =
+            with_fleet_headers(&head.replace(&basic("adi", "hunter2"), ""), "phone", "adi");
         let (mut served, _) = listener.accept().await.expect("connected");
         let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");

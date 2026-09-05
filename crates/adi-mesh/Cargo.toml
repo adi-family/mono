@@ -16,6 +16,12 @@ path = "src/main.rs"
 adi-config = { workspace = true }
 adi-osext = { workspace = true, features = ["signals"] }
 
+# Where a paired peer's last-seen activity is recorded (`docs/fleet.md` presence work): the
+# platform's shared global database, so a reader outside this process (the control panel's `/api/*`
+# handlers, an operator's own query) sees the same answer the gateway just wrote, with no channel of
+# its own to keep in sync.
+adi-db = { workspace = true }
+
 # The node side of the mesh gateway resolves a service label against *this machine's* hive route
 # table (docs/fleet.md C6), so it depends on the front door's routing brain rather than reimplementing
 # it — a second lookup would be a second set of rules to keep in step. The direction is acyclic

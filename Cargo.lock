@@ -314,6 +314,7 @@ name = "adi-mesh"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-db",
  "adi-hive",
  "adi-osext",
  "adi-ports-manager",

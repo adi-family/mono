@@ -8,6 +8,7 @@
 //! pairing — are public so a caller can inspect/edit mesh state, or enrol a machine, without
 //! starting the daemon. `adi-mono mesh` is exactly that caller.
 
+pub mod activity;
 pub mod auth;
 pub mod config;
 pub mod fleet;
