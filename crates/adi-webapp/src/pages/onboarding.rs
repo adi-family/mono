@@ -1,6 +1,12 @@
 //! The root onboarding wizard (`/`): the guided first run that stands the root agent up, and the
 //! same form again behind the chat bar's "reconfigure agent".
 //!
+//! A first run opens on the **welcome screen**: the greeting and two doors — a simple setup for
+//! someone who has never seen adi, an extended one for someone who has. The door is remembered
+//! ([`SetupMode`]) and decides where the form behind it starts; the steps after it will branch on
+//! the same answer as the wizard grows. A reconfigure is already past that question and opens on
+//! the form itself.
+//!
 //! The wizard asks as little as it can. A **setup preset** — served by the API beside the form
 //! schema — names a backend, pins the arguments that choice implies, and leaves only the real
 //! questions: which model, and the credential it cannot run without. Two named routes in (the
@@ -40,6 +46,17 @@ const ONBOARDING_STEPS: [&str; 2] = ["Set up your primary agent", "You're ready"
 /// well-known and it is global by definition; its runtime is the wizard's own select (the one
 /// carrying "help me to choose?"), and its system prompt its own editor further down the page.
 const MANUAL_SKIP: [&str; 4] = ["name", "backend", "project", "system_prompt"];
+
+/// Which door the user took on the welcome screen. It decides where the setup form starts — the
+/// first named route in, or the manual form with nothing pinned — and is the answer the steps
+/// after it will branch on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetupMode {
+    /// "I'm new to adi": the shortest way to a running agent.
+    Simple,
+    /// "I know adi": the whole form, every runtime and every argument.
+    Extended,
+}
 
 /// One "do you have…?" branch in the runtime picker: the situation, a note on the shared
 /// credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id
@@ -95,6 +112,9 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
 #[derive(Clone, Copy)]
 pub(crate) struct OnboardingForm {
     pub(crate) agent: AgentsForm,
+    /// Which door was taken on the welcome screen; `None` while that screen is still up. Only a
+    /// first run ever sees it — a reconfigure is past the question.
+    mode: RwSignal<Option<SetupMode>>,
     /// The chosen preset id, empty until the first one is applied.
     preset: RwSignal<String>,
     /// The plaintext API key typed into the preset's key field, stored as a secret on submit.
@@ -112,6 +132,7 @@ impl OnboardingForm {
     pub(crate) fn new() -> Self {
         Self {
             agent: AgentsForm::new(),
+            mode: RwSignal::new(None),
             preset: RwSignal::new(String::new()),
             key: RwSignal::new(String::new()),
             error: RwSignal::new(None),
@@ -201,39 +222,140 @@ fn apply_preset(form: OnboardingForm, presets: &[AgentSetupPreset], id: &str) {
     }
 }
 
-/// The wizard: the title and its lead, the stepper, and step 1's form — one element, so the
-/// shell's column spaces nothing inside it and the page keeps its own rhythm.
+/// The wizard: the welcome screen on a first run until a door is taken, then the title and its
+/// lead, the stepper, and step 1's form — one element, so the shell's column spaces nothing
+/// inside it and the page keeps its own rhythm.
 pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
     let first_run = m.agent.is_none();
     view! {
         <div class="adi-onb__wizard">
-            {onb_intro(first_run)}
-            <ol class="adi-onb__steps">{onb_steps(first_run)}</ol>
-            {onb_setup(state, form, m)}
+            {move || {
+                let mode = form.mode.get();
+                if first_run && mode.is_none() {
+                    return welcome_view(form, m.form.presets.clone());
+                }
+                let m = m.clone();
+                view! {
+                    {onb_intro(first_run, mode)}
+                    <ol class="adi-onb__steps">{onb_steps(first_run)}</ol>
+                    {onb_setup(state, form, m)}
+                }
+                    .into_any()
+            }}
         </div>
     }
     .into_any()
 }
 
-/// The wizard's title. "Welcome to adi" is the greeting for an actual first run — no agent
-/// exists yet — so a reconfigure (same form, reached from the chat's bar) gets a title that
-/// says where you are instead of greeting someone who has been here all along.
-fn onb_intro(first_run: bool) -> AnyView {
-    if first_run {
-        view! {
+/// The first screen: the greeting and the two ways in, and nothing else. No stepper — a fork is
+/// not a step — and no form, because the only question here is which of the two people you are.
+fn welcome_view(form: OnboardingForm, presets: Vec<AgentSetupPreset>) -> AnyView {
+    view! {
+        <div class="adi-onb__welcome">
             <h1 class="adi-onb__title">"Welcome to adi"</h1>
             <p class="adi-onb__lead">"Let\u{2019}s set up your primary agent."</p>
-        }
-        .into_any()
+            <div class="adi-onb__doors">
+                {onb_door(
+                    form,
+                    presets.clone(),
+                    SetupMode::Simple,
+                    Lucide::WandSparkles,
+                    "Simple setup",
+                    "I\u{2019}m new to adi. Ask me the least you can and get me running.",
+                    true,
+                )}
+                {onb_door(
+                    form,
+                    presets,
+                    SetupMode::Extended,
+                    Lucide::SlidersHorizontal,
+                    "Extended setup",
+                    "I know adi. Show me the runtime, the model and every argument it takes.",
+                    false,
+                )}
+            </div>
+            <p class="adi-onb__welcome-note">"Either way, you can change all of it later."</p>
+        </div>
+    }
+    .into_any()
+}
+
+/// One door: its icon, what it is, what it asks of you, and the arrow that takes it. The whole
+/// row is the button. The recommended one carries the screen's one orange in its arrow (§4) —
+/// the composer's send square, at the size a row can hold.
+fn onb_door(
+    form: OnboardingForm,
+    presets: Vec<AgentSetupPreset>,
+    mode: SetupMode,
+    icon: Lucide,
+    title: &'static str,
+    note: &'static str,
+    recommended: bool,
+) -> AnyView {
+    let class = if recommended {
+        "adi-onb__door adi-onb__door--primary"
     } else {
-        view! {
+        "adi-onb__door"
+    };
+    view! {
+        <button class=class type="button" on:click=move |_| choose_mode(form, &presets, mode)>
+            <Icon icon=icon class="adi-onb__door-icon"/>
+            <span class="adi-onb__door-text">
+                <span class="adi-onb__door-title">
+                    {title}
+                    {recommended.then(|| view! { <span class="adi-chip">"Recommended"</span> })}
+                </span>
+                <span class="adi-onb__door-note">{note}</span>
+            </span>
+            <span class="adi-onb__door-go"><Icon icon=Lucide::ArrowRight/></span>
+        </button>
+    }
+    .into_any()
+}
+
+/// Take a door: land the form on the preset that door means — the first named route in, or the
+/// manual form that pins nothing — and remember which one was taken. Both doors open the same
+/// form; the choice only decides where it starts and what the steps after it will ask.
+fn choose_mode(form: OnboardingForm, presets: &[AgentSetupPreset], mode: SetupMode) {
+    let landing = match mode {
+        SetupMode::Simple => presets.iter().find(|p| !p.manual),
+        SetupMode::Extended => presets.iter().find(|p| p.manual),
+    };
+    if let Some(id) = landing.map(|p| p.id.clone()) {
+        apply_preset(form, presets, &id);
+    }
+    form.mode.set(Some(mode));
+}
+
+/// The wizard's title once a door is behind it. A first run is titled by the door it took — the
+/// greeting was said on the welcome screen, and saying it again reads as if the wizard restarted.
+/// A reconfigure (same form, reached from the chat's bar) gets a title that says where you are
+/// instead of greeting someone who has been here all along.
+fn onb_intro(first_run: bool, mode: Option<SetupMode>) -> AnyView {
+    if !first_run {
+        return view! {
             <h1 class="adi-onb__title">"Reconfigure your agent"</h1>
             <p class="adi-onb__lead">
                 "Change the runtime it runs on, its credentials, or its system prompt."
             </p>
         }
-        .into_any()
+        .into_any();
     }
+    let (title, lead) = match mode {
+        Some(SetupMode::Extended) => (
+            "Extended setup",
+            "Every runtime adi can run on, and every argument that runtime takes.",
+        ),
+        _ => (
+            "Simple setup",
+            "Pick how your agent should run and give it the one credential it needs.",
+        ),
+    };
+    view! {
+        <h1 class="adi-onb__title">{title}</h1>
+        <p class="adi-onb__lead">{lead}</p>
+    }
+    .into_any()
 }
 
 /// The stepper row: one node per onboarding step, a hairline between. Step 1 is `active` on a
@@ -296,6 +418,12 @@ fn onb_setup(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
             {move || form.error.get().map(|e| view! { <p class="adi-error">{e}</p> })}
 
             <div class="adi-onb__actions">
+                // The same slot, from either side: a first run steps back to the two doors, a
+                // reconfigure gives up and returns to the chat.
+                {creating.then(|| view! {
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        on:click=move |_| form.mode.set(None)>"Back"</button>
+                })}
                 {(!creating).then(|| view! {
                     <button class="adi-btn adi-btn--ghost" type="button"
                         on:click=move |_| form.reconfiguring.set(false)>"Cancel"</button>

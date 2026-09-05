@@ -74,6 +74,95 @@
   border-top: 1px solid var(--line);
 }
 
+// ---- the welcome screen ------------------------------------------------------------------
+// The first thing a stranger sees: the greeting and two doors. It carries the same title and
+// lead as the wizard behind it, then stops — no stepper, no fields.
+.adi-onb__welcome {
+  display: flex;
+  flex-direction: column;
+
+  // The lead sits closer to the doors it introduces than to the stepper it usually precedes.
+  .adi-onb__lead { margin-bottom: 24px; }
+}
+
+.adi-onb__doors {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+// One door. A row, not a card: the hairline is the hit area and the whole row is the button.
+.adi-onb__door {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 16px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+
+  &:hover {
+    background: var(--bg-active);
+    border-color: var(--ink-3);
+  }
+}
+
+.adi-onb__door-icon {
+  flex: none;
+  color: var(--ink-2);
+}
+
+.adi-onb__door-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adi-onb__door-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.adi-onb__door-note {
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  line-height: 1.45;
+}
+
+// The way in. On the recommended door it is the accent square — the composer's send shape (§6),
+// and this screen's one orange; the other door's arrow is a plain glyph in meta ink.
+.adi-onb__door-go {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r);
+  color: var(--ink-3);
+
+  .adi-onb__door--primary & {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+
+  .adi-onb__door--primary:hover & { background: var(--accent-hover); }
+}
+
+.adi-onb__welcome-note {
+  margin-top: 16px;
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+}
+
 // ---- the section -------------------------------------------------------------------------
 .adi-onb__section {
   font-size: 17px;

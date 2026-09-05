@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-63 structs · 9 enums · 1 type alias across 23 files.
+63 structs · 10 enums · 1 type alias across 23 files.
 
 ## Index
 
@@ -18,7 +18,7 @@
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
-- [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
+- [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `SetupMode`, `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/mod.rs`](#srcpagesproject_detailmodrs) — `ProjectScope`
 - [`src/pages/project_detail/services.rs`](#srcpagesproject_detailservicesrs) — `QuickServiceForm`
@@ -420,6 +420,18 @@ struct Scope {
 
 ## `src/pages/onboarding.rs`
 
+### enum `SetupMode`
+
+Which door the user took on the welcome screen. It decides where the setup form starts — the first named route in, or the manual form with nothing pinned — and is the answer the steps after it will branch on.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SetupMode {
+    Simple,
+    Extended,
+}
+```
+
 ### struct `RuntimeGuide`
 
 One "do you have…?" branch in the runtime picker: the situation, a note on the shared credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id (matched against the server form spec for its label) and a short note on how that runtime runs.
@@ -440,6 +452,7 @@ Everything the wizard edits. The agent itself rides in the same `AgentsForm` the
 #[derive(Clone, Copy)]
 pub(crate) struct OnboardingForm {
     pub(crate) agent: AgentsForm,
+    mode: RwSignal<Option<SetupMode>>,
     preset: RwSignal<String>,
     key: RwSignal<String>,
     error: RwSignal<Option<String>>,
