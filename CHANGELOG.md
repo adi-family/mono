@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.5.1 — 2026-09-05
+
+### Added
+
+- **The sessions rail can show several sources at once.** Fleet's node menu used to be a pointer
+  — pick a paired machine and its sessions replace whatever was showing; pick another and it
+  replaces that. It's a checklist now: tick any subset of paired, unlocked nodes, plus this
+  machine, and their sessions merge into one rail instead of taking turns. Every row carries its
+  own source on the meta line the moment more than one is selected, so which machine a session is
+  actually on stays visible at the point you'd act on it — open it, reply, stop it, star it,
+  delete it. The selection is remembered across reloads in this browser now, which it never was
+  before: safe to do only because that per-row source label exists, so you're never acting on a
+  machine you've forgotten you're pointed at.
+
 ## 1.5.0 — 2026-09-04
 
 ### Added
