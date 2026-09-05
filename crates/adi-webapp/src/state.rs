@@ -47,7 +47,8 @@ pub(crate) struct State {
     pub(crate) secs_since: RwSignal<u32>,
     pub(crate) used: RwSignal<Option<UsedPorts>>,
     pub(crate) mesh: RwSignal<Option<MeshState>>,
-    /// The paired remote nodes (`/api/fleet`), shown on the Fleet page.
+    /// The paired remote nodes (`/api/fleet`), shown on the Fleet page and, in its presence half
+    /// alone, as the chat home's presence strip (`active`/`last_seen`, ADI-MONO-11).
     pub(crate) fleet: RwSignal<Option<FleetState>>,
     pub(crate) projects: RwSignal<Option<ProjectsState>>,
     pub(crate) project_detail: RwSignal<Option<ProjectDetail>>,

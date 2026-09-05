@@ -209,6 +209,14 @@ fn Home() -> impl IntoView {
             {
                 state.fleet_nodes.set(Some(n));
             }
+            // The presence strip: every paired node, and whether it's been seen recently. Local
+            // and cheap like the read above, so it rides the same poll rather than the fleet
+            // dashboards' asked-on-demand mesh round trip.
+            if let Ok(f) = fetch::fleet().await
+                && state.fleet.get_untracked().as_ref() != Some(&f)
+            {
+                state.fleet.set(Some(f));
+            }
             // The dashboards rail groups by project, so it needs the project names.
             if let Ok(pp) = fetch::projects().await
                 && state.projects.get_untracked().as_ref() != Some(&pp)
@@ -255,6 +263,13 @@ fn Home() -> impl IntoView {
                 }
             },
         ));
+        // The presence strip beside it: the same registry, joined against who's been seen
+        // recently. Local and cheap for the same reason as the read above.
+        subs.push(live::Sub::get("/api/fleet", move |f: FleetState| {
+            if state.fleet.get_untracked().as_ref() != Some(&f) {
+                state.fleet.set(Some(f));
+            }
+        }));
         subs.push(live::Sub::get("/api/agents", move |a: AgentsState| {
             // Keep the live view shaped to *the agent it is on*: a pty backend is interactive.
             let watched = watch.name.get_untracked();

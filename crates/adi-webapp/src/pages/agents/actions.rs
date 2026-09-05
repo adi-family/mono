@@ -2620,6 +2620,9 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                 // What a top bar would have been, in the width it actually needs: the mark, the
                 // name and the shortcut, over the rail rather than over the whole viewport.
                 {launcher::brand(l, "adi-brand--rail")}
+                // "Who else is working right now" — every paired node, active first. Absent on a
+                // machine paired with nobody, so it costs the rail nothing there.
+                {move || chat_fleet_presence(state)}
                 <adi_ui::Rail
                     title="Sessions"
                     actions=move || {
@@ -3862,6 +3865,43 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
                             </span>
                             {f.label()}
                         </button>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    )
+}
+
+/// Every paired node, active first, as a name beside a status dot (`/api/fleet`'s presence half,
+/// ADI-MONO-11) — "who else is working right now" over the sessions rail it sits above.
+///
+/// `None` on a machine paired with nobody, the same rule [`chat_session_node`] follows below it: a
+/// strip that can only ever say "nobody" costs the column height to say nothing. `active` and
+/// `last_seen` are read straight off the wire rather than computed here, so this and the Fleet
+/// page's own table can never come to answer the question differently.
+fn chat_fleet_presence(state: State) -> Option<AnyView> {
+    let fleet = state.fleet.get()?;
+    if fleet.nodes.is_empty() {
+        return None;
+    }
+    let mut nodes = fleet.nodes;
+    nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
+    Some(
+        view! {
+            <div class="adi-chome__presence">
+                {nodes.into_iter().map(|n| {
+                    let title = if n.active {
+                        format!("{} \u{2014} active now", n.petname)
+                    } else {
+                        format!("{} \u{2014} known, not active", n.petname)
+                    };
+                    let data_state = if n.active { "online" } else { "known" };
+                    view! {
+                        <span class="adi-status" data-state=data_state title=title>
+                            <span class="adi-status__led"></span>
+                            <span>{n.petname}</span>
+                        </span>
                     }
                 }).collect::<Vec<_>>()}
             </div>

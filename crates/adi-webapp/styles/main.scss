@@ -225,6 +225,19 @@
     gap: 2px;
   }
 
+  // The presence strip, over the sessions rail: every paired node as a name beside a status dot
+  // (§6) — a fact stated in a line, not a table, so it costs the column one row rather than a
+  // panel of its own.
+  &__presence {
+    flex: none;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+
   // The rail's "New": the small filled button beside the icon buttons in the head.
   &__new {
     padding: 5px 10px;
