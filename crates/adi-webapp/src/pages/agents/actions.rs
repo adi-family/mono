@@ -10,7 +10,7 @@ use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
     AgentRunInfo, AgentRuns, AgentStep, AgentTokenSource, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentsState, Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
+    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -190,7 +190,7 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
             let stop_name = run_name.clone();
             view! {
                 <button class="adi-btn adi-btn--link" title=view_title
-                    on:click=move |_| open_watch(watch, watch_name.clone(), interactive)>"View"</button>
+                    on:click=move |_| open_watch(watch, None, watch_name.clone(), interactive)>"View"</button>
                 " "
                 <button class="adi-btn adi-btn--link" title=stop_title
                     on:click=move |_| stop_agent(state, watch, stop_name.clone())>"Stop"</button>
@@ -216,14 +216,14 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
             } else if answerable {
                 view! {
                     <button class="adi-btn adi-btn--link" title="start a conversation you can answer"
-                        on:click=move |_| open_watch(watch, run_name.clone(), false)>"Chat…"</button>
+                        on:click=move |_| open_watch(watch, None, run_name.clone(), false)>"Chat…"</button>
                     " "
                 }
                 .into_any()
             } else {
                 view! {
                     <button class="adi-btn adi-btn--link" title="give it a task and run it headless"
-                        on:click=move |_| open_watch(watch, run_name.clone(), false)>"Run…"</button>
+                        on:click=move |_| open_watch(watch, None, run_name.clone(), false)>"Run…"</button>
                     " "
                 }
                 .into_any()
@@ -335,6 +335,9 @@ pub(crate) fn stop_agent(state: State, watch: AgentsWatch, name: String) {
 /// with it anything queued behind that answer. Then refresh the run history and the agent list (so
 /// the row's running flag settles), and re-poll so the cut-short turn appears settled at once rather
 /// than a second later.
+///
+/// Always the *open* conversation, so its source is `watch.node` — a row's own Stop is reached
+/// through the chat pane's controls once the row is open, not from the rail row directly.
 fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
     let Some(name) = watch.name.get_untracked() else {
         return;
@@ -342,20 +345,34 @@ fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
     if run_id.is_empty() {
         return;
     }
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::stop_run(name.clone(), run_id).await {
+        match fetch::stop_run(node.as_deref(), name.clone(), run_id).await {
             Ok(runs) => {
                 if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
                     watch.runs.set(runs.runs);
                     poll_watch(watch);
                 }
-                if let Ok(st) = fetch::agents().await {
-                    state.agents.set(Some(st));
-                }
+                refresh_source_agents(state, node.as_deref());
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
     });
+}
+
+/// Refresh one source's own agent list after a mutation settles its running flag — this machine's
+/// [`State::agents`] for `None`, or one node's slice of [`State::rail_node_agents`]
+/// (`docs/fleet.md` §13). Fire-and-forget: a stale running flag for a second or two is not worth a
+/// caller waiting on.
+fn refresh_source_agents(state: State, node: Option<&str>) {
+    match node {
+        None => spawn_local(async move {
+            if let Ok(st) = fetch::agents().await {
+                state.agents.set(Some(st));
+            }
+        }),
+        Some(node) => crate::state::refresh_rail_node(state, node.to_string()),
+    }
 }
 
 /// Delete one run — for a harness agent, the whole conversation, transcript and all — behind an
@@ -365,7 +382,15 @@ fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
 ///
 /// `agent` is named rather than taken from the watch, because the sessions rail lists every agent's
 /// chats at once: the row's own agent is the one to delete from, not whichever one is on screen.
-fn delete_one_run(state: State, watch: AgentsWatch, agent: String, run_id: String, title: String) {
+/// `node` is the row's own source (`docs/fleet.md` §13) — `None` for this machine.
+fn delete_one_run(
+    state: State,
+    watch: AgentsWatch,
+    node: Option<String>,
+    agent: String,
+    run_id: String,
+    title: String,
+) {
     if agent.is_empty() || run_id.is_empty() {
         return;
     }
@@ -380,22 +405,25 @@ fn delete_one_run(state: State, watch: AgentsWatch, agent: String, run_id: Strin
         return;
     }
     // Only when it is *this* conversation on screen — the rail can delete another agent's chat, and
-    // the run ids of two different agents are no reason to close what is open.
+    // the run ids of two different agents are no reason to close what is open. Matched on the row's
+    // own source too: two sources can each have an agent of the same name, and a run id is only
+    // unique on the machine that minted it.
     if watch.name.get_untracked().as_deref() == Some(agent.as_str())
         && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
+        && watch.node.get_untracked() == node
     {
         close_run_view(watch);
     }
     spawn_local(async move {
-        match fetch::delete_run(agent.clone(), run_id).await {
+        match fetch::delete_run(node.as_deref(), agent.clone(), run_id).await {
             Ok(runs) => {
-                if watch.name.get_untracked().as_deref() == Some(agent.as_str()) {
+                if watch.name.get_untracked().as_deref() == Some(agent.as_str())
+                    && watch.node.get_untracked() == node
+                {
                     watch.runs.set(runs.runs);
                 }
                 // The agent list carries a running flag that a deleted live run may have settled.
-                if let Ok(st) = fetch::agents().await {
-                    state.agents.set(Some(st));
-                }
+                refresh_source_agents(state, node.as_deref());
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -406,7 +434,12 @@ fn delete_one_run(state: State, watch: AgentsWatch, agent: String, run_id: Strin
 /// tail, run selection and history), remember whether this one is interactive, and fetch the first
 /// snapshot — the 1s poll takes over from there. The view moves; nothing on the page scrolls, which
 /// is what the chat home wants when its picker switches agents mid-screen.
-fn point_watch(watch: AgentsWatch, name: String, interactive: bool) {
+///
+/// `node` is which source this agent is being watched *on* (`docs/fleet.md` §13) — `None` for this
+/// machine, which is every call site except the sessions rail's own rows and hotkeys. Set on
+/// [`AgentsWatch::node`] before anything is polled, so the very first request the new view makes
+/// already goes to the right place.
+fn point_watch(watch: AgentsWatch, node: Option<String>, name: String, interactive: bool) {
     watch.peek.set(None);
     watch.log.set(String::new());
     watch.run_id.set(None);
@@ -415,6 +448,7 @@ fn point_watch(watch: AgentsWatch, name: String, interactive: bool) {
     watch.answerable.set(false);
     watch.reply.set(String::new());
     watch.interactive.set(interactive);
+    watch.node.set(node);
     // Before the name is set, so the settings and the agent they belong to land together and the
     // composer is never briefly showing the last agent's directory under this one's name.
     adopt_run_settings(watch, &name);
@@ -424,9 +458,10 @@ fn point_watch(watch: AgentsWatch, name: String, interactive: bool) {
 
 /// Open the run panel on an agent (View / Run…): point the view at it, then scroll to the panel —
 /// on the Agents page it sits below the list, so a click near the bottom would otherwise open it
-/// out of sight.
-pub(crate) fn open_watch(watch: AgentsWatch, name: String, interactive: bool) {
-    point_watch(watch, name, interactive);
+/// out of sight. Always this machine — the Agents page has no node concept — except when a review's
+/// reviewer turns out to be a pty agent, which opens on the reviewed conversation's own source.
+pub(crate) fn open_watch(watch: AgentsWatch, node: Option<String>, name: String, interactive: bool) {
+    point_watch(watch, node, name, interactive);
     scroll_top();
 }
 
@@ -457,8 +492,14 @@ fn with_context(watch: AgentsWatch, message: String) -> String {
 /// Point the shared live view at one specific conversation — its agent *and* that run — so the
 /// transcript is what shows. Interactive agents keep no run history, so `run_id` is only selected
 /// when present. Used wherever a conversation is picked from a list that spans several agents.
-fn point_conversation(watch: AgentsWatch, name: String, run_id: String, interactive: bool) {
-    point_watch(watch, name, interactive);
+fn point_conversation(
+    watch: AgentsWatch,
+    node: Option<String>,
+    name: String,
+    run_id: String,
+    interactive: bool,
+) {
+    point_watch(watch, node, name, interactive);
     if !run_id.is_empty() {
         watch.run_id.set(Some(run_id));
         poll_watch(watch);
@@ -467,14 +508,15 @@ fn point_conversation(watch: AgentsWatch, name: String, run_id: String, interact
 }
 
 /// Open a specific conversation from the cross-agent "All chats" index: as above, plus a scroll to
-/// the panel it opens in, which on the Agents page sits below the index.
+/// the panel it opens in, which on the Agents page sits below the index. Always this machine — the
+/// index this reads from is local.
 pub(crate) fn open_conversation(
     watch: AgentsWatch,
     name: String,
     run_id: String,
     interactive: bool,
 ) {
-    point_conversation(watch, name, run_id, interactive);
+    point_conversation(watch, None, name, run_id, interactive);
     scroll_top();
 }
 
@@ -509,10 +551,15 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
     let Some(name) = watch.name.get_untracked() else {
         return;
     };
+    let node = watch.node.get_untracked();
     if watch.interactive.get_untracked() {
+        let for_peek = node.clone();
         spawn_local(async move {
-            if let Ok(peek) = fetch::peek_agent(name).await
+            if let Ok(peek) = fetch::peek_agent(for_peek.as_deref(), name).await
                 && watch.name.get_untracked().as_deref() == Some(peek.name.as_str())
+                // Checked on the source too, not only the name — two sources can each run an
+                // agent of the same name (`docs/fleet.md` §13).
+                && watch.node.get_untracked() == for_peek
             {
                 watch.peek.set(Some(peek));
             }
@@ -523,9 +570,11 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
     // re-render the table (and its "N ago" ages) every second for nothing.
     {
         let name = name.clone();
+        let for_runs = node.clone();
         spawn_local(async move {
-            if let Ok(runs) = fetch::agent_runs(name.clone()).await
+            if let Ok(runs) = fetch::agent_runs(for_runs.as_deref(), name.clone()).await
                 && watch.name.get_untracked().as_deref() == Some(name.as_str())
+                && watch.node.get_untracked() == for_runs
             {
                 // Whether these runs are answerable conversations — drives the chat vs. log view.
                 if watch.answerable.get_untracked() != runs.answerable {
@@ -543,9 +592,10 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
     // while a live one still updates as it grows.
     if let Some(run_id) = watch.run_id.get_untracked() {
         spawn_local(async move {
-            if let Ok(peek) = fetch::peek_run(name.clone(), run_id).await
+            if let Ok(peek) = fetch::peek_run(node.as_deref(), name.clone(), run_id).await
                 && watch.name.get_untracked().as_deref() == Some(name.as_str())
                 && watch.run_id.get_untracked().as_deref() == Some(peek.run_id.as_str())
+                && watch.node.get_untracked() == node
             {
                 if watch.log.get_untracked() != peek.output {
                     watch.log.set(peek.output.clone());
@@ -1065,7 +1115,7 @@ fn tool_params(input: &str) -> Vec<(String, String)> {
 /// conversation lives, and the keyed list leaves it alone. The parts of a turn still being
 /// written are *not* fixed — a run splits in two the moment the agent says something mid-turn —
 /// which is exactly why that turn is drawn outside the keyed list.
-fn feed_turn(at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
+fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
     use adi_ui::{Entry, Role, ToolCall, ToolState, Turn as T};
 
     // The first part carries the turn's own anchor, unadorned: that is the id the rail hands out
@@ -1085,7 +1135,7 @@ fn feed_turn(at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
             T::Said {
                 role: Role::User,
                 body: turn.text.clone(),
-                images: pictures(turn),
+                images: pictures(node, turn),
             },
         )];
     }
@@ -1169,6 +1219,7 @@ fn feed_turn(at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
 /// because they have been typed rather than said. They still consume a turn index, which is why
 /// this enumerates before it filters.
 fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
+    let node = watch.node.get();
     // `with` rather than `get`: a snapshot holds every turn, every step and every tool result, and
     // this runs once per subscriber per poll. Cloning the transcript to look at it is the kind of
     // cost that does not show up anywhere except the profile.
@@ -1183,7 +1234,7 @@ fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
             .iter()
             .enumerate()
             .filter(|(at, t)| !t.queued && (Some(*at) == last) == live)
-            .flat_map(|(at, t)| feed_turn(at, t))
+            .flat_map(|(at, t)| feed_turn(node.as_deref(), at, t))
             .collect()
     })
 }
@@ -1194,11 +1245,11 @@ fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
 /// The bytes are never in the snapshot — a chat is polled once a second, and one that inlined its
 /// screenshots would re-send every one of them every tick. The address is stable and the content
 /// behind it never changes, so the browser fetches each exactly once.
-fn pictures(turn: &AgentTurn) -> Vec<adi_ui::Attachment> {
+fn pictures(node: Option<&str>, turn: &AgentTurn) -> Vec<adi_ui::Attachment> {
     turn.images
         .iter()
         .map(|image| adi_ui::Attachment {
-            url: crate::attach::url_of(&image.id),
+            url: crate::attach::url_of(node, &image.id),
             name: image.name.clone(),
             kind: crate::attach::kind_of(&image.media_type),
         })
@@ -1209,10 +1260,11 @@ fn pictures(turn: &AgentTurn) -> Vec<adi_ui::Attachment> {
 /// carrying an × that takes it back before the agent ever sees it. The bubble itself is
 /// [`adi_ui::Queued`], which is the same shape as the sent messages above it in the feed.
 fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize) -> AnyView {
+    let node = watch.node.get_untracked();
     view! {
         <adi_ui::Queued
             body=turn.text.clone()
-            images=pictures(&turn)
+            images=pictures(node.as_deref(), &turn)
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }
@@ -1314,6 +1366,7 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let takes_images = Signal::derive(move || watch.peek.get().is_some_and(|p| p.caps.images));
     let attach = crate::attach::attaching(
         state,
+        watch.node.get_untracked(),
         watch.reply_files,
         takes_images,
         Signal::derive(|| IMAGES_REFUSED.to_string()),
@@ -1608,9 +1661,10 @@ fn ignore_await(state: State, watch: AgentsWatch, id: String) {
     else {
         return;
     };
+    let node = watch.node.get_untracked();
     watch.await_busy.set(true);
     spawn_local(async move {
-        let dropped = fetch::ignore_agent_await(name, run_id, id).await;
+        let dropped = fetch::ignore_agent_await(node.as_deref(), name, run_id, id).await;
         watch.await_busy.set(false);
         if let Err(e) = dropped {
             state.flash.set(Some(Flash::err(e)));
@@ -1654,8 +1708,10 @@ fn load_goals(watch: AgentsWatch) {
         watch.goals.set(Vec::new());
         watch.goal_input.set(String::new());
     }
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        let Ok(goals) = fetch::agent_goals(name.clone(), run_id.clone()).await else {
+        let Ok(goals) = fetch::agent_goals(node.as_deref(), name.clone(), run_id.clone()).await
+        else {
             return;
         };
         // Only if the view is still on this conversation — the same guard every other fetch here
@@ -1677,9 +1733,10 @@ fn set_goal(state: State, watch: AgentsWatch, text: String, editing: Option<Stri
     else {
         return;
     };
+    let node = watch.node.get_untracked();
     watch.goal_busy.set(true);
     spawn_local(async move {
-        let saved = fetch::set_agent_goal(name, run_id, text, editing).await;
+        let saved = fetch::set_agent_goal(node.as_deref(), name, run_id, text, editing).await;
         watch.goal_busy.set(false);
         match saved {
             Ok(goals) => {
@@ -1694,9 +1751,11 @@ fn set_goal(state: State, watch: AgentsWatch, text: String, editing: Option<Stri
 /// Close a goal from the chat. `as_` is `met` or anything else, which the endpoint reads as giving
 /// up — the two are named rather than a boolean, because "not met" is not what giving up means.
 fn close_goal(state: State, watch: AgentsWatch, goal: String, as_: &'static str) {
+    let node = watch.node.get_untracked();
     watch.goal_busy.set(true);
     spawn_local(async move {
-        let closed = fetch::close_agent_goal(goal, as_.to_string(), String::new()).await;
+        let closed =
+            fetch::close_agent_goal(node.as_deref(), goal, as_.to_string(), String::new()).await;
         watch.goal_busy.set(false);
         match closed {
             Ok(goals) => watch.goals.set(goals.goals),
@@ -1783,9 +1842,11 @@ fn send_answer(state: State, watch: AgentsWatch, ask: String, replies: Vec<Strin
     let Some(run_id) = watch.run_id.get_untracked() else {
         return;
     };
+    let node = watch.node.get_untracked();
     watch.answering.set(true);
     spawn_local(async move {
-        let answered = fetch::answer_run(name.clone(), run_id.clone(), ask, replies).await;
+        let answered =
+            fetch::answer_run(node.as_deref(), name.clone(), run_id.clone(), ask, replies).await;
         // Only apply if the view is still on this same conversation.
         if watch.name.get_untracked().as_deref() != Some(name.as_str())
             || watch.run_id.get_untracked().as_deref() != Some(run_id.as_str())
@@ -1827,8 +1888,11 @@ fn send_reply(state: State, watch: AgentsWatch, message: String, images: Vec<Str
     let Some(run_id) = watch.run_id.get_untracked() else {
         return;
     };
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::reply_to_run(name.clone(), run_id.clone(), message, images).await {
+        match fetch::reply_to_run(node.as_deref(), name.clone(), run_id.clone(), message, images)
+            .await
+        {
             Ok(peek) => {
                 // Only apply if the view is still on this same conversation.
                 if watch.name.get_untracked().as_deref() == Some(name.as_str())
@@ -1852,8 +1916,9 @@ fn unqueue_message(state: State, watch: AgentsWatch, index: usize) {
     let Some(run_id) = watch.run_id.get_untracked() else {
         return;
     };
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::unqueue_from_run(name.clone(), run_id.clone(), index).await {
+        match fetch::unqueue_from_run(node.as_deref(), name.clone(), run_id.clone(), index).await {
             Ok(peek) => {
                 if watch.name.get_untracked().as_deref() == Some(name.as_str())
                     && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
@@ -1932,6 +1997,7 @@ fn run_row(
         delete_one_run(
             state,
             watch,
+            watch.node.get_untracked(),
             watch.name.get_untracked().unwrap_or_default(),
             del_id.clone(),
             del_title.clone(),
@@ -2034,6 +2100,9 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     });
     let attach = crate::attach::attaching(
         state,
+        // The composer that starts a *new* run always launches locally (`fetch::run_agent` follows
+        // no node): the picker above it chooses among this machine's own agents.
+        None,
         watch.input_files,
         takes_images,
         Signal::derive(|| IMAGES_REFUSED.to_string()),
@@ -2741,7 +2810,7 @@ fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
                 // Asked of `feed_turn` itself rather than re-derived here: the question is
                 // literally "does this turn draw anything", and a second opinion on it would be
                 // a link that goes dead the day the two answers drift apart.
-                if feed_turn(t, turn).is_empty() {
+                if feed_turn(None, t, turn).is_empty() {
                     s.errored_silent += 1;
                 } else {
                     s.errored.push(turn_anchor(t));
@@ -2829,9 +2898,12 @@ fn start_review(state: State, watch: AgentsWatch) {
     if watch.review_busy.get() {
         return;
     }
+    // Runs on the same source as the conversation being reviewed — the reviewer it launches is a
+    // conversation on that machine — so it is carried through to wherever the answer opens.
+    let node = watch.node.get_untracked();
     watch.review_busy.set(true);
     spawn_local(async move {
-        let result = fetch::review_run(name, run_id).await;
+        let result = fetch::review_run(node.as_deref(), name, run_id).await;
         watch.review_busy.set(false);
         match result {
             Ok(started) => {
@@ -2844,9 +2916,9 @@ fn start_review(state: State, watch: AgentsWatch) {
                 if started.run_id.is_empty() {
                     // An interactive reviewer keeps no run history, so there is no conversation to
                     // select — only its live pane to open.
-                    open_watch(watch, started.reviewer, true);
+                    open_watch(watch, node, started.reviewer, true);
                 } else {
-                    open_session(watch, &started.reviewer, &started.run_id);
+                    open_session(watch, node, &started.reviewer, &started.run_id);
                 }
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -3508,10 +3580,11 @@ fn load_token_report(state: State, watch: AgentsWatch) {
     if watch.tokens_busy.get() {
         return;
     }
+    let node = watch.node.get_untracked();
     watch.tokens_busy.set(true);
     watch.tokens_error.set(String::new());
     spawn_local(async move {
-        let result = fetch::run_tokens(name, run_id.clone()).await;
+        let result = fetch::run_tokens(node.as_deref(), name, run_id.clone()).await;
         watch.tokens_busy.set(false);
         match result {
             Ok(report) => {
@@ -3634,7 +3707,7 @@ fn switch_agent(state: State, watch: AgentsWatch, name: String) {
     let Some(interactive) = agent_interactive(state, &name) else {
         return;
     };
-    point_watch(watch, name, interactive);
+    point_watch(watch, None, name, interactive);
 }
 
 /// Whether `name` is a pty (interactive) agent, or `None` when the loaded agents list holds no such
@@ -3797,37 +3870,56 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
     )
 }
 
-/// The rail's node button: **whose** sessions are listed below (`docs/fleet.md` §13).
+/// The rail's node button: **whose** sessions are merged below (`docs/fleet.md` §13, multi-select).
 ///
 /// Absent entirely on a machine paired with nobody, which is most of them — a control that can only
 /// ever say "this machine" is a control that costs the head 24px to say nothing. It appears the
-/// moment there is a fleet, and once a node is picked it takes the accent *and prints the petname*,
-/// because everything under it stops, hides and deletes runs, and which machine that lands on is
-/// not a fact to leave in a tooltip.
+/// moment there is a fleet, and once anything besides this machine alone is selected it takes the
+/// accent and prints a summary, because every row under it can be stopped, hidden or deleted, and
+/// which machines that reaches is not a fact to leave in a tooltip. The full list is always in the
+/// title, whatever the button prints — the short form exists for the head's 264px, not to hide
+/// anything the operator needs before clicking Stop.
 fn chat_session_node(state: State) -> AnyView {
     // Nothing paired: no question to ask. `None` while the list has not arrived either, so the
     // head does not flash a control into existence a beat after the page draws.
     if state.fleet_nodes.get().is_none_or(|n| n.nodes.is_empty()) {
         return ().into_any();
     }
-    let on = state.session_node.get();
-    let picked = on.is_some();
-    let hint = match on.as_deref() {
-        Some(node) => format!(
-            "showing the sessions on {node} \u{2014} starting, replying to and stopping a run here \
-             does it there"
-        ),
-        None => {
-            "showing this machine's sessions \u{2014} pick a paired node to see its".to_string()
+    let local = state.session_local.get();
+    let nodes = state.session_nodes.get();
+    let mut names: Vec<String> = nodes.into_iter().collect();
+    names.sort_unstable();
+    let total = usize::from(local) + names.len();
+    // Exactly this machine, and nothing else — the default, and the one case the button reads
+    // exactly as it did before this had a menu of more than two options.
+    let multi = !(local && names.is_empty());
+    let label = match (local, names.as_slice()) {
+        (false, [one]) => Some(one.clone()),
+        _ if multi => Some(format!("{total} sources")),
+        _ => None,
+    };
+    let hint = if total == 0 {
+        "no sources selected \u{2014} pick this machine or a paired node to see any sessions at all"
+            .to_string()
+    } else {
+        let mut parts: Vec<String> = Vec::new();
+        if local {
+            parts.push("this machine".to_string());
         }
+        parts.extend(names);
+        format!(
+            "showing sessions merged from {} \u{2014} starting, replying to and stopping a run \
+             acts on whichever of these actually owns it",
+            parts.join(", ")
+        )
     };
     view! {
-        <button class="adi-chat__head-btn" class:is-on=picked type="button"
+        <button class="adi-chat__head-btn" class:is-on=multi type="button"
             title=hint.clone() aria-haspopup="menu"
             aria-expanded=move || state.session_node_menu.get().is_some().to_string()
             on:click=move |ev: web_sys::MouseEvent| open_node_menu(state, &ev)>
             <adi_ui::Icon icon=crate::icons::Icon::Node.lucide() label=hint.clone()/>
-            {on.map(|node| view! { <span class="adi-chat__head-btn-name">{node}</span> })}
+            {label.map(|l| view! { <span class="adi-chat__head-btn-name">{l}</span> })}
         </button>
     }
     .into_any()
@@ -3855,7 +3947,9 @@ fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
     state.session_node_menu.set(Some(at));
 }
 
-/// The node menu: this machine, then every paired node.
+/// The node menu: a checklist, this machine then every paired node — any subset may be ticked at
+/// once (`docs/fleet.md` §13, multi-select). Left open after a tick so several sources can be picked
+/// in one visit; the scrim (or the button itself) is what closes it.
 ///
 /// A locked node is **listed and disabled**, not dropped. Dropping it would say the node is gone
 /// when what is true is that this machine holds no password for it, and the item's title says where
@@ -3864,47 +3958,52 @@ fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
 fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let (x, y) = state.session_node_menu.get()?;
     let nodes = state.fleet_nodes.get()?;
-    let current = state.session_node.get();
-    let here = current.is_none();
+    let local = state.session_local.get();
+    let selected = state.session_nodes.get();
     Some(
         view! {
             <div class="adi-menu__scrim"
                 on:click=move |_| state.session_node_menu.set(None)></div>
             <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
-                <div class="adi-menu__head">"Sessions on"</div>
-                <button class="adi-menu__item" class:is-on=here type="button"
-                    role="menuitemradio" aria-checked=here.to_string()
+                <div class="adi-menu__head">"Sessions from"</div>
+                <button class="adi-menu__item" class:is-on=local type="button"
+                    role="menuitemcheckbox" aria-checked=local.to_string()
                     on:click=move |_| {
-                        crate::state::view_sessions_on(state, watch, None);
-                        state.session_node_menu.set(None);
+                        crate::state::toggle_session_source(state, watch, None, !local);
                     }>
                     <span class="adi-menu__tick" aria-hidden="true">
-                        {here.then(|| view! {
+                        {local.then(|| view! {
                             <adi_ui::Icon icon=adi_ui::Lucide::Check size=adi_ui::IconSize::Sm/>
                         })}
                     </span>
                     "This machine"
                 </button>
                 {nodes.nodes.into_iter().map(|node| {
-                    let on = current.as_deref() == Some(node.node.as_str());
+                    let on = selected.contains(&node.node);
                     let name = node.node.clone();
-                    let title = if node.locked {
+                    // Locked blocks *adding* it, never *removing* it: a node persisted here from a
+                    // past session, then locked from the Fleet page since, must still be one click
+                    // to drop — a disabled tick with no way to untick it would strand it in the
+                    // selection forever, checked and unreachable at once.
+                    let locked_out = node.locked && !on;
+                    let title = if node.locked && !on {
                         format!(
                             "{name} is locked here \u{2014} give this machine its password on the \
                              Fleet page first"
                         )
+                    } else if on {
+                        format!("stop merging {name}'s sessions into the rail")
                     } else {
-                        format!("show {name}'s sessions, and drive them from here")
+                        format!("merge {name}'s sessions into the rail, and drive them from here")
                     };
                     view! {
                         <button class="adi-menu__item" class:is-on=on type="button"
-                            role="menuitemradio" aria-checked=on.to_string()
-                            disabled=node.locked title=title
+                            role="menuitemcheckbox" aria-checked=on.to_string()
+                            disabled=locked_out title=title
                             on:click=move |_| {
-                                crate::state::view_sessions_on(
-                                    state, watch, Some(name.clone()),
+                                crate::state::toggle_session_source(
+                                    state, watch, Some(name.clone()), !on,
                                 );
-                                state.session_node_menu.set(None);
                             }>
                             <span class="adi-menu__tick" aria-hidden="true">
                                 {on.then(|| view! {
@@ -3924,30 +4023,6 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
         }
         .into_any(),
     )
-}
-
-/// Which agents the rail may list, or `None` when it may list them all.
-///
-/// `Some` only while the filter is [`SessionFilter::Starred`] *and* the agents list has arrived —
-/// without it there is nothing to say which agents are starred, and narrowing on an empty answer
-/// would blank the rail for a beat on every load. The watched agent is always in the set, so the
-/// filter can never hide the conversation the centre pane is showing (the rule
-/// [`chat_agent_picker`] follows).
-fn starred_agents(state: State, watched: &str) -> Option<std::collections::HashSet<String>> {
-    if state.session_filter.get() != SessionFilter::Starred {
-        return None;
-    }
-    let list = state.agents.get()?;
-    let mut keep: std::collections::HashSet<String> = list
-        .agents
-        .into_iter()
-        .filter(|a| a.starred)
-        .map(|a| a.name)
-        .collect();
-    if !watched.is_empty() {
-        keep.insert(watched.to_string());
-    }
-    Some(keep)
 }
 
 /// The whole left rail: every agent's sessions in one flat list, most recently updated first, and
@@ -4005,12 +4080,18 @@ fn chat_load_more(state: State) -> Option<AnyView> {
     )
 }
 
-/// One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to
-/// — there is no group heading above it to say so.
+/// One row of the rail. The list spans every agent *and every selected source*, so a row has to
+/// carry both which agent it belongs to and which machine that agent is on — there is no group
+/// heading above it to say either (`docs/fleet.md` §13, multi-select).
 ///
 /// `Clone` because the rail lists rows through a keyed `For`, which owns its items.
 #[derive(Clone)]
 struct SessionRow {
+    /// The row's own source — a paired node's petname, or `None` for this machine. Never read off
+    /// `state.session_nodes`/`AgentsWatch::node` by a caller acting on a row: this is the one field
+    /// that says where a row's own action (open, stop, hide, star, delete) actually goes, because
+    /// several sources may be selected at once and only the row itself knows which one it came from.
+    node: Option<String>,
     agent: String,
     /// The conversation, or `None` for an interactive agent's live pty session — which has no run
     /// id, being the agent's single session rather than one of many.
@@ -4065,44 +4146,76 @@ fn hotkey_glyph() -> &'static str {
 /// definition and has no older timestamp to be placed by. That row shows while the session runs, or
 /// while its agent is the one on screen — otherwise there is nothing there to open.
 ///
-/// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
-/// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
-/// number printed on a row and the row that number opens cannot drift apart.
-fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], SessionFilter) {
-    let all = state.all_chats.get();
-    let filter = state.session_filter.get();
-    let watched = watch.name.get().unwrap_or_default();
-    // The conversation on screen, which no filter may hide — the same escape hatch the ★ gives the
-    // watched agent, narrowed to one session because "mine" is a question about sessions.
-    let open = watch.run_id.get().unwrap_or_default();
-    // A pty agent's run history is empty either way; the agents list is what says it's live now.
-    let live: std::collections::HashSet<String> = state
-        .agents
-        .get()
+/// One selected source's own rows, before the merge across sources, the "Mine" filter, the sort and
+/// the bands. This is the per-agent loop [`chat_all_sessions`] used to run once, over one machine's
+/// agents; multi-select (`docs/fleet.md` §13) runs it once per selected source instead of copying it
+/// per source, and [`session_bands`] concatenates the answers before doing anything else.
+///
+/// `all`/`agents` are that source's own `/api/agents/runs/all` and `/api/agents` — this machine's
+/// [`State::all_chats`]/[`State::agents`] for `node: None`, or one node's slice of
+/// [`State::rail_node_chats`]/[`State::rail_node_agents`]. `is_here` is whether the open conversation
+/// lives on *this* source: it is what lets the watched agent's row use the fresher `watch.runs` copy
+/// and what keeps the ★ filter's "always keep the one on screen" escape hatch from also opening every
+/// other source's same-named agent.
+///
+/// Returns the rows and whether this source's own listing already carried the watched agent — the
+/// caller's cue that the "conversation not in any index yet" fallback does not apply to this source.
+#[allow(clippy::too_many_arguments)]
+fn source_rows(
+    state: State,
+    watch: AgentsWatch,
+    node: Option<&str>,
+    all: Option<&AllAgentRuns>,
+    agents: Option<&AgentsState>,
+    watched: &str,
+    is_here: bool,
+    filter: SessionFilter,
+    now: u64,
+) -> (Vec<SessionRow>, bool) {
+    // A pty agent's run history is empty either way; the agents list is what says it's live now —
+    // this source's own list, since a pty agent only ever runs on the machine that defines it.
+    let live: std::collections::HashSet<&str> = agents
         .map(|s| {
             s.agents
-                .into_iter()
+                .iter()
                 .filter(|a| a.running)
-                .map(|a| a.name)
+                .map(|a| a.name.as_str())
                 .collect()
         })
         .unwrap_or_default();
-    let now = js_sys::Date::now() as u64;
-    // `None` unless the head's ★ is on, in which case only these agents' sessions are listed.
-    let keep = starred_agents(state, &watched);
+    // `None` unless the head's ★ is on, in which case only this source's own starred agents are
+    // listed — a fact about that machine's agents, never borrowed from a different one.
+    let keep: Option<std::collections::HashSet<&str>> = (filter == SessionFilter::Starred).then(
+        || {
+            let mut keep: std::collections::HashSet<&str> = agents
+                .map(|s| {
+                    s.agents
+                        .iter()
+                        .filter(|a| a.starred)
+                        .map(|a| a.name.as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if is_here && !watched.is_empty() {
+                keep.insert(watched);
+            }
+            keep
+        },
+    );
 
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
     for ar in all.iter().flat_map(|a| a.agents.iter()) {
-        if keep.as_ref().is_some_and(|k| !k.contains(&ar.name)) {
+        if keep.as_ref().is_some_and(|k| !k.contains(ar.name.as_str())) {
             continue;
         }
-        let is_watched = ar.name == watched;
+        let is_watched = is_here && ar.name == watched;
         listed_watched |= is_watched;
         if ar.interactive {
-            let running = live.contains(&ar.name);
+            let running = live.contains(ar.name.as_str());
             if running || is_watched {
                 rows.push(SessionRow {
+                    node: node.map(str::to_string),
                     agent: ar.name.clone(),
                     run: None,
                     when: now,
@@ -4124,6 +4237,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
             ar.runs.clone()
         };
         rows.extend(runs.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
+            node: node.map(str::to_string),
             agent: ar.name.clone(),
             when: last_touch(&r),
             running: r.running,
@@ -4132,11 +4246,81 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
             hotkey: None,
         }));
     }
-    // The cross-agent index hasn't arrived yet (or doesn't carry this agent): the watch alone still
-    // knows what is on screen, which is the one thing the rail must never be missing.
+    (rows, listed_watched)
+}
+
+/// Every visible session, whichever agent it belongs to, in the five bands the rail reads them in:
+/// blocked on you, then running, then awaiting a wake, then starred, then the rest — each newest
+/// activity first. The [`SessionFilter`] is handed back with them: which of the rail's three
+/// emptinesses an empty answer is depends on which narrowing produced it.
+///
+/// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
+/// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
+/// gone — and from the cross-agent index otherwise. A pty agent keeps no run history, so it
+/// contributes one row for its live session, sorted as though it moved just now: it is active by
+/// definition and has no older timestamp to be placed by. That row shows while the session runs, or
+/// while its agent is the one on screen — otherwise there is nothing there to open.
+///
+/// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
+/// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
+/// number printed on a row and the row that number opens cannot drift apart.
+fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], SessionFilter) {
+    let filter = state.session_filter.get();
+    let watched = watch.name.get().unwrap_or_default();
+    let watched_node = watch.node.get();
+    // The conversation on screen, which no filter may hide — the same escape hatch the ★ gives the
+    // watched agent, narrowed to one session because "mine" is a question about sessions.
+    let open = watch.run_id.get().unwrap_or_default();
+    let now = js_sys::Date::now() as u64;
+
+    // Every selected source's own rows, merged the same way `chat_all_sessions` already merged
+    // across agents on one machine — [`source_rows`] is that same per-agent loop, run once per
+    // source instead of duplicated per source (`docs/fleet.md` §13, multi-select).
+    let mut rows: Vec<SessionRow> = Vec::new();
+    let mut listed_watched = false;
+    if state.session_local.get() {
+        let is_here = watched_node.is_none();
+        let all = state.all_chats.get();
+        let agents = state.agents.get();
+        let (r, lw) = source_rows(
+            state,
+            watch,
+            None,
+            all.as_ref(),
+            agents.as_ref(),
+            &watched,
+            is_here,
+            filter,
+            now,
+        );
+        rows.extend(r);
+        listed_watched |= lw;
+    }
+    let node_chats = state.rail_node_chats.get();
+    let node_agents = state.rail_node_agents.get();
+    for node in state.session_nodes.get() {
+        let is_here = watched_node.as_deref() == Some(node.as_str());
+        let (r, lw) = source_rows(
+            state,
+            watch,
+            Some(&node),
+            node_chats.get(&node),
+            node_agents.get(&node),
+            &watched,
+            is_here,
+            filter,
+            now,
+        );
+        rows.extend(r);
+        listed_watched |= lw;
+    }
+    // The watched source's own cross-agent index hasn't arrived yet (or doesn't carry this agent):
+    // the watch alone still knows what is on screen, which is the one thing the rail must never be
+    // missing.
     if !listed_watched && !watched.is_empty() {
         if watch.interactive.get() {
             rows.push(SessionRow {
+                node: watched_node.clone(),
                 agent: watched.clone(),
                 run: None,
                 when: now,
@@ -4147,6 +4331,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
         } else {
             let own = paged(watch.runs.get(), state);
             rows.extend(own.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
+                node: watched_node.clone(),
                 agent: watched.clone(),
                 when: last_touch(&r),
                 running: r.running,
@@ -4156,7 +4341,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
             }));
         }
     }
-    // "Started by me": applied here rather than in the two loops above, because it asks about the
+    // "Started by me": applied here rather than inside `source_rows`, because it asks about the
     // session rather than the agent it belongs to and so cannot skip a whole listing the way ★ does.
     //
     // A row with no run record is a pty agent's live terminal — nobody wrote down who opened it, and
@@ -4168,7 +4353,10 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
             None => true,
             Some(r) => {
                 launched_by_human(r)
-                    || (row.agent == watched && !open.is_empty() && r.run_id == open)
+                    || (row.node == watched_node
+                        && row.agent == watched
+                        && !open.is_empty()
+                        && r.run_id == open)
             }
         });
     }
@@ -4226,18 +4414,20 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     ([waiting, running, awaiting, starred, rest], filter)
 }
 
-/// Whether the cross-agent index holds any listable session *before* the filter — what tells an
-/// empty rail apart from a rail emptied by the default narrowing.
+/// Whether any selected source's cross-agent index holds a listable session *before* the filter —
+/// what tells an empty rail apart from a rail emptied by the default narrowing.
 ///
 /// Only run records count. A pty agent contributes a row when it is live, and a live one survives
 /// the "mine" filter anyway (nobody records who opened a terminal, so it is never filtered out), so
 /// a rail that is empty despite one cannot exist.
 fn any_session(state: State) -> bool {
-    state.all_chats.get().is_some_and(|all| {
-        all.agents
-            .iter()
-            .any(|ar| ar.runs.iter().any(|r| !r.hidden))
-    })
+    let has_runs = |all: &AllAgentRuns| all.agents.iter().any(|ar| ar.runs.iter().any(|r| !r.hidden));
+    (state.session_local.get() && state.all_chats.get().is_some_and(|all| has_runs(&all)))
+        || state
+            .rail_node_chats
+            .get()
+            .values()
+            .any(|all| has_runs(all))
 }
 
 /// The rail's session list: the five bands, or the one line that says why there are none.
@@ -4291,7 +4481,8 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                         each=move || rows.get_value()
                         key=|row: &SessionRow| {
                             format!(
-                                "{}:{}",
+                                "{}:{}:{}",
+                                row.node.as_deref().unwrap_or(""),
                                 row.agent,
                                 row.run.as_ref().map_or("", |r| r.run_id.as_str()),
                             )
@@ -4323,6 +4514,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// them.
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
     let SessionRow {
+        node,
         agent,
         run,
         when,
@@ -4330,7 +4522,8 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         starred,
         hotkey,
     } = item;
-    let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
+    let on_this_agent =
+        watch.name.get().as_deref() == Some(agent.as_str()) && watch.node.get() == node;
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
     // What it is waiting on the world for. The row says it with the dot and the band it is under,
     // and the rest goes in the tooltip — the meta line's parts are all `shrink-0` inside an
@@ -4345,6 +4538,14 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         .filter(|hint| !hint.is_empty())
         .map(|hint| format!("\n\n{hint}"))
         .unwrap_or_default();
+    // The row's own source, appended to its meta line whenever more than one is on screen at once —
+    // always, not only for a remote row, so "local" reads as a fact about the row rather than the
+    // absence of one (`docs/fleet.md` §13, multi-select). With one source selected (the common case,
+    // and everything this rail showed before multi-select existed) the line is unchanged.
+    let multi_source = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+    let origin = multi_source
+        .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
+        .unwrap_or_default();
     let (title, sub, run_id) = match run {
         Some(r) => {
             let t = truncate_task(&r.message);
@@ -4353,7 +4554,11 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
             } else {
                 t
             };
-            (t, format!("{agent} \u{00b7} {}", run_age(when)), r.run_id)
+            (
+                t,
+                format!("{agent} \u{00b7} {}{origin}", run_age(when)),
+                r.run_id,
+            )
         }
         None => (
             if running {
@@ -4362,7 +4567,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 "No live session"
             }
             .to_string(),
-            format!("{agent} \u{00b7} interactive terminal"),
+            format!("{agent} \u{00b7} interactive terminal{origin}"),
             String::new(),
         ),
     };
@@ -4378,16 +4583,18 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         }
         None => format!("open this session with {agent}{await_hint}"),
     };
-    let menu = SessionRef::of(&agent, &run_id, &title, false, starred);
+    let menu = SessionRef::of(node.clone(), &agent, &run_id, &title, false, starred);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
     // centre pane, and keeps no transcript to take with it.
     let del = (!run_id.is_empty()).then(|| {
-        let (del_agent, del_id, del_title) = (agent.clone(), run_id.clone(), title.clone());
+        let (del_node, del_agent, del_id, del_title) =
+            (node.clone(), agent.clone(), run_id.clone(), title.clone());
         view! {
             <button class="adi-chat__row-btn" type="button"
                 title="delete this chat and its transcript"
                 on:click=move |_| delete_one_run(
-                    state, watch, del_agent.clone(), del_id.clone(), del_title.clone(),
+                    state, watch, del_node.clone(), del_agent.clone(), del_id.clone(),
+                    del_title.clone(),
                 )>
                 <adi_ui::Icon icon=adi_ui::Lucide::X size=adi_ui::IconSize::Sm
                     label="Delete this chat"/>
@@ -4400,7 +4607,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     // mark is the row's state as much as its control, and a keep that only showed under the cursor
     // would be a keep you had to go looking for to confirm.
     let star = (!run_id.is_empty()).then(|| {
-        let (star_agent, star_id) = (agent.clone(), run_id.clone());
+        let (star_node, star_agent, star_id) = (node.clone(), agent.clone(), run_id.clone());
         let hint = if starred {
             "unstar this chat"
         } else {
@@ -4410,7 +4617,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
             <button class="adi-chat__row-btn" class:is-on=starred type="button"
                 title=hint aria-pressed=starred.to_string()
                 on:click=move |_| set_session_starred(
-                    state, watch, star_agent.clone(), star_id.clone(), !starred,
+                    state, watch, star_node.clone(), star_agent.clone(), star_id.clone(), !starred,
                 )>
                 <adi_ui::Icon icon=adi_ui::Lucide::Star size=adi_ui::IconSize::Sm label=hint/>
             </button>
@@ -4471,9 +4678,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 attr:title=hint
                 on:click=move |_| {
                     if run_id.is_empty() {
-                        point_watch(watch, agent.clone(), true);
+                        point_watch(watch, node.clone(), agent.clone(), true);
                     } else {
-                        open_session(watch, &agent, &run_id);
+                        open_session(watch, node.clone(), &agent, &run_id);
                     }
                     // Picking a session is the drawer's whole purpose, so it gets out of the
                     // way — otherwise the chat you just chose opens behind the list you chose
@@ -4508,6 +4715,8 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
 /// without threading four fields (and four clones) through each `on:contextmenu` closure.
 #[derive(Clone)]
 struct SessionRef {
+    /// The row's own source (`docs/fleet.md` §13) — `None` for this machine.
+    node: Option<String>,
     agent: String,
     /// Empty for an interactive agent's live pty session — it is not a run, keeps no per-run record,
     /// and so has nothing to hide, which is why such a row opens no menu at all.
@@ -4518,8 +4727,16 @@ struct SessionRef {
 }
 
 impl SessionRef {
-    fn of(agent: &str, run_id: &str, title: &str, hidden: bool, starred: bool) -> Self {
+    fn of(
+        node: Option<String>,
+        agent: &str,
+        run_id: &str,
+        title: &str,
+        hidden: bool,
+        starred: bool,
+    ) -> Self {
         Self {
+            node,
             agent: agent.to_string(),
             run_id: run_id.to_string(),
             title: title.to_string(),
@@ -4536,6 +4753,7 @@ impl SessionRef {
         }
         ev.prevent_default();
         state.session_menu.set(Some(SessionMenu {
+            node: self.node.clone(),
             agent: self.agent.clone(),
             run_id: self.run_id.clone(),
             title: self.title.clone(),
@@ -4557,6 +4775,7 @@ impl SessionRef {
 fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let menu = state.session_menu.get()?;
     let SessionMenu {
+        node,
         agent,
         run_id,
         title,
@@ -4568,7 +4787,7 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let hide_label = if hidden { "Unhide" } else { "Hide" };
     let star_label = if starred { "Unstar" } else { "Star" };
     let head = format!("{title} \u{00b7} {agent}");
-    let (star_agent, star_id) = (agent.clone(), run_id.clone());
+    let (star_node, star_agent, star_id) = (node.clone(), agent.clone(), run_id.clone());
     Some(
         view! {
             <div class="adi-menu__scrim"
@@ -4581,11 +4800,12 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 <div class="adi-menu__head" title=head.clone()>{head.clone()}</div>
                 <button class="adi-menu__item" type="button"
                     on:click=move |_| set_session_starred(
-                        state, watch, star_agent.clone(), star_id.clone(), !starred,
+                        state, watch, star_node.clone(), star_agent.clone(), star_id.clone(),
+                        !starred,
                     )>{star_label}</button>
                 <button class="adi-menu__item" type="button"
                     on:click=move |_| set_session_hidden(
-                        state, watch, agent.clone(), run_id.clone(), !hidden,
+                        state, watch, node.clone(), agent.clone(), run_id.clone(), !hidden,
                     )>{hide_label}</button>
             </div>
         }
@@ -4602,6 +4822,7 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
 fn set_session_hidden(
     state: State,
     watch: AgentsWatch,
+    node: Option<String>,
     agent: String,
     run_id: String,
     hidden: bool,
@@ -4613,12 +4834,13 @@ fn set_session_hidden(
     if hidden
         && watch.name.get_untracked().as_deref() == Some(agent.as_str())
         && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
+        && watch.node.get_untracked() == node
     {
         close_run_view(watch);
     }
     spawn_local(async move {
-        let flagged = fetch::hide_run(agent.clone(), run_id, hidden).await;
-        settle_session_flag(state, watch, &agent, flagged).await;
+        let flagged = fetch::hide_run(node.as_deref(), agent.clone(), run_id, hidden).await;
+        settle_session_flag(state, watch, node, &agent, flagged).await;
     });
 }
 
@@ -4631,6 +4853,7 @@ fn set_session_hidden(
 fn set_session_starred(
     state: State,
     watch: AgentsWatch,
+    node: Option<String>,
     agent: String,
     run_id: String,
     starred: bool,
@@ -4640,32 +4863,48 @@ fn set_session_starred(
         return;
     }
     spawn_local(async move {
-        let flagged = fetch::star_run(agent.clone(), run_id, starred).await;
-        settle_session_flag(state, watch, &agent, flagged).await;
+        let flagged = fetch::star_run(node.as_deref(), agent.clone(), run_id, starred).await;
+        settle_session_flag(state, watch, node, &agent, flagged).await;
     });
 }
 
 /// What both of the rail's flag toggles do with their answer.
 ///
 /// The endpoint replies with that agent's fresh history, so the row settles into its new band at
-/// once instead of at the socket's next tick — and the cross-agent index the Starred, Recent and
-/// Hidden bands read is re-fetched for the same reason. Refetching it **at the rail's current
-/// page**, not without a limit: an unlimited answer would widen the rail to the whole index until
-/// the socket's next answer narrowed it back.
+/// once instead of at the socket's next tick — and the mutated row's own source's cross-agent index
+/// (the Starred, Recent and Hidden bands' data) is re-fetched for the same reason: this machine's
+/// [`State::all_chats`] for `node: None`, or one node's slice of [`State::rail_node_chats`]
+/// (`docs/fleet.md` §13). Refetching it **at the rail's current page**, not without a limit — an
+/// unlimited answer would widen the rail to the whole index until the socket's next answer narrowed
+/// it back.
 async fn settle_session_flag(
     state: State,
     watch: AgentsWatch,
+    node: Option<String>,
     agent: &str,
     flagged: Result<AgentRuns, String>,
 ) {
     match flagged {
         Ok(runs) => {
-            if watch.name.get_untracked().as_deref() == Some(agent) {
+            if watch.name.get_untracked().as_deref() == Some(agent)
+                && watch.node.get_untracked() == node
+            {
                 watch.runs.set(runs.runs);
             }
             let limit = Some(state.rail_limit.get_untracked());
-            if let Ok(all) = fetch::all_agent_runs(limit).await {
-                state.all_chats.set(Some(all));
+            match node {
+                None => {
+                    if let Ok(all) = fetch::all_agent_runs(limit).await {
+                        state.all_chats.set(Some(all));
+                    }
+                }
+                Some(node) => {
+                    if let Ok(all) = fetch::all_agent_runs_on(&node, limit).await {
+                        state.rail_node_chats.update(|m| {
+                            m.insert(node, all);
+                        });
+                    }
+                }
             }
         }
         Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -4711,9 +4950,9 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
         };
         ev.prevent_default();
         match row.run {
-            Some(run) => open_session(watch, &row.agent, &run.run_id),
+            Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
             // A pty agent's row *is* the agent — there is no run to select, only a screen to point.
-            None => point_watch(watch, row.agent, true),
+            None => point_watch(watch, row.node, row.agent, true),
         }
         // As with a click: on a narrow viewport the rail is a drawer laid over the chat, and the
         // chat you just picked would open behind the list you picked it from.
@@ -4723,13 +4962,14 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
 }
 
 /// Open one session from anywhere in the rail: repoint the whole screen when it belongs to another
-/// agent, or only select the conversation when it is already the picked one — so a click on a chat of
-/// the agent already on screen doesn't tear the centre pane down and rebuild it.
-fn open_session(watch: AgentsWatch, agent: &str, run_id: &str) {
-    if watch.name.get_untracked().as_deref() == Some(agent) {
+/// agent (or the same-named agent on a different source), or only select the conversation when it is
+/// already the picked one — so a click on a chat of the agent already on screen doesn't tear the
+/// centre pane down and rebuild it. `node` is the row's own source (`docs/fleet.md` §13).
+fn open_session(watch: AgentsWatch, node: Option<String>, agent: &str, run_id: &str) {
+    if watch.name.get_untracked().as_deref() == Some(agent) && watch.node.get_untracked() == node {
         select_run(watch, run_id.to_string());
     } else {
-        point_conversation(watch, agent.to_string(), run_id.to_string(), false);
+        point_conversation(watch, node, agent.to_string(), run_id.to_string(), false);
     }
 }
 
@@ -4741,25 +4981,62 @@ fn open_session(watch: AgentsWatch, agent: &str, run_id: &str) {
 /// something to read: a click opens the chat as any other row does, and its right-click menu offers
 /// Unhide — as does the ↩ that rides the row's right edge.
 fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
-    let all = state.all_chats.get()?;
-    // The ★ narrows this band with the list above it — one filter over the whole rail, or unhiding
-    // would offer chats the rail has just been told not to show.
-    let keep = starred_agents(state, &watch.name.get().unwrap_or_default());
-    let mut rows: Vec<(String, AgentRunInfo)> = all
-        .agents
-        .iter()
-        .filter(|ar| keep.as_ref().is_none_or(|k| k.contains(&ar.name)))
-        .flat_map(|ar| {
-            ar.runs
-                .iter()
-                .filter(|r| r.hidden)
-                .map(|r| (ar.name.clone(), r.clone()))
-        })
-        .collect();
+    // One selected source's own hidden rows, tagged with where they came from — the same per-source
+    // merge `session_bands` runs above, kept separate because this band reads `all_chats` /
+    // `rail_node_chats` directly rather than through `source_rows` (`docs/fleet.md` §13).
+    let starred_only = state.session_filter.get() == SessionFilter::Starred;
+    let collect = |node: Option<String>,
+                   all: Option<AllAgentRuns>,
+                   agents: Option<AgentsState>|
+     -> Vec<(Option<String>, String, AgentRunInfo)> {
+        let Some(all) = all else {
+            return Vec::new();
+        };
+        // The ★ narrows this band with the list above it, from *this source's* own starred agents —
+        // one filter over the whole rail, or unhiding would offer chats the rail has just been told
+        // not to show.
+        let keep: Option<std::collections::HashSet<String>> = starred_only.then(|| {
+            agents
+                .map(|s| {
+                    s.agents
+                        .into_iter()
+                        .filter(|a| a.starred)
+                        .map(|a| a.name)
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        all.agents
+            .into_iter()
+            .filter(|ar| keep.as_ref().is_none_or(|k| k.contains(&ar.name)))
+            .flat_map(|ar| {
+                let node = node.clone();
+                let name = ar.name;
+                ar.runs
+                    .into_iter()
+                    .filter(|r| r.hidden)
+                    .map(move |r| (node.clone(), name.clone(), r))
+            })
+            .collect()
+    };
+
+    let mut rows: Vec<(Option<String>, String, AgentRunInfo)> = Vec::new();
+    if state.session_local.get() {
+        rows.extend(collect(None, state.all_chats.get(), state.agents.get()));
+    }
+    let node_chats = state.rail_node_chats.get();
+    let node_agents = state.rail_node_agents.get();
+    for node in state.session_nodes.get() {
+        rows.extend(collect(
+            Some(node.clone()),
+            node_chats.get(&node).cloned(),
+            node_agents.get(&node).cloned(),
+        ));
+    }
     if rows.is_empty() {
         return None;
     }
-    rows.sort_by_key(|(_, r)| std::cmp::Reverse(last_touch(r)));
+    rows.sort_by_key(|(_, _, r)| std::cmp::Reverse(last_touch(r)));
     let open = state.show_hidden.get();
     let label = format!("Hidden \u{00b7} {}", rows.len());
     let chevron = if open {
@@ -4769,7 +5046,7 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
     };
     let body = open.then(|| {
         rows.into_iter()
-            .map(|(agent, r)| chat_hidden_row(state, watch, &agent, &r))
+            .map(|(node, agent, r)| chat_hidden_row(state, watch, node, &agent, &r))
             .collect::<Vec<_>>()
     });
     Some(
@@ -4792,28 +5069,38 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// One hidden session: the same strip as any other agent's, dimmed under the Hidden band, with an
 /// unhide (↩) at its right edge in place of the delete — putting a chat back is the one thing this
 /// band is for, so it doesn't hide behind the right-click menu.
-fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunInfo) -> AnyView {
+fn chat_hidden_row(
+    state: State,
+    watch: AgentsWatch,
+    node: Option<String>,
+    agent: &str,
+    r: &AgentRunInfo,
+) -> AnyView {
     let title = truncate_task(&r.message);
     let title = if title.trim().is_empty() {
         "New chat".to_string()
     } else {
         title
     };
-    let sub = format!("{agent} \u{00b7} {}", run_age(last_touch(r)));
+    let multi_source = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+    let origin = multi_source
+        .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
+        .unwrap_or_default();
+    let sub = format!("{agent} \u{00b7} {}{origin}", run_age(last_touch(r)));
     let dot = if r.running {
         "adi-chome__dot adi-chome__dot--on"
     } else {
         "adi-chome__dot"
     };
     let hint = format!("open this hidden chat with {agent}");
-    let menu = SessionRef::of(agent, &r.run_id, &title, true, r.starred);
-    let (open_name, open_id) = (agent.to_string(), r.run_id.clone());
-    let (show_name, show_id) = (agent.to_string(), r.run_id.clone());
+    let menu = SessionRef::of(node.clone(), agent, &r.run_id, &title, true, r.starred);
+    let (open_node, open_name, open_id) = (node.clone(), agent.to_string(), r.run_id.clone());
+    let (show_node, show_name, show_id) = (node, agent.to_string(), r.run_id.clone());
     view! {
         <div class="adi-chome__sessionrow">
             <button class="adi-chome__session adi-chome__session--hidden"
                 type="button" title=hint
-                on:click=move |_| open_session(watch, &open_name, &open_id)
+                on:click=move |_| open_session(watch, open_node.clone(), &open_name, &open_id)
                 on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
                 <span class=dot></span>
                 <span class="adi-chome__session-main">
@@ -4824,7 +5111,7 @@ fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunIn
             <button class="adi-chome__session-unhide" type="button"
                 title="bring this chat back into the rail"
                 on:click=move |_| set_session_hidden(
-                    state, watch, show_name.clone(), show_id.clone(), false,
+                    state, watch, show_node.clone(), show_name.clone(), show_id.clone(), false,
                 )>
                 <adi_ui::Icon icon=adi_ui::Lucide::Undo2 size=adi_ui::IconSize::Sm
                     label="Bring this chat back"/>
@@ -5001,7 +5288,8 @@ fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         each=move || shown.get_value()
                         key=|row: &SessionRow| {
                             format!(
-                                "{}:{}",
+                                "{}:{}:{}",
+                                row.node.as_deref().unwrap_or(""),
                                 row.agent,
                                 row.run.as_ref().map_or("", |r| r.run_id.as_str()),
                             )

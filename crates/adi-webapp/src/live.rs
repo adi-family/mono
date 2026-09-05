@@ -45,17 +45,29 @@ pub(crate) struct Sub {
 }
 
 impl Sub {
-    /// Watch a `GET` endpoint, deserializing each answer into `T`.
+    /// Watch a `GET` endpoint, deserializing each answer into `T`. Always local — see
+    /// [`Self::get_on`] for a read that follows a specific source (`docs/fleet.md` §13).
     pub(crate) fn get<T, F>(path: impl Into<String>, apply: F) -> Self
     where
         T: DeserializeOwned,
         F: Fn(T) + 'static,
     {
-        Self::new("GET", path.into(), String::new(), apply)
+        Self::new(None, "GET", path.into(), String::new(), apply)
+    }
+
+    /// [`Self::get`], routed at a specific paired node (or this machine, for `None`) — the sessions
+    /// rail's per-source merge and the open conversation's own watches, which may be on any selected
+    /// source at once and so can never share the single implicit routing the first cut of this used.
+    pub(crate) fn get_on<T, F>(node: Option<&str>, path: impl Into<String>, apply: F) -> Self
+    where
+        T: DeserializeOwned,
+        F: Fn(T) + 'static,
+    {
+        Self::new(node, "GET", path.into(), String::new(), apply)
     }
 
     /// Watch one of the reads that is a `POST` because it carries a subject — an agent name, a
-    /// run id — in its body.
+    /// run id — in its body. Always local; see [`Self::post_on`].
     pub(crate) fn post<T, B, F>(path: impl Into<String>, body: &B, apply: F) -> Self
     where
         T: DeserializeOwned,
@@ -63,21 +75,37 @@ impl Sub {
         F: Fn(T) + 'static,
     {
         let body = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
-        Self::new("POST", path.into(), body, apply)
+        Self::new(None, "POST", path.into(), body, apply)
     }
 
-    fn new<T, F>(method: &'static str, path: String, body: String, apply: F) -> Self
+    /// [`Self::post`], routed at a specific paired node (or this machine, for `None`).
+    pub(crate) fn post_on<T, B, F>(
+        node: Option<&str>,
+        path: impl Into<String>,
+        body: &B,
+        apply: F,
+    ) -> Self
+    where
+        T: DeserializeOwned,
+        B: Serialize,
+        F: Fn(T) + 'static,
+    {
+        let body = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
+        Self::new(node, "POST", path.into(), body, apply)
+    }
+
+    fn new<T, F>(node: Option<&str>, method: &'static str, path: String, body: String, apply: F) -> Self
     where
         T: DeserializeOwned,
         F: Fn(T) + 'static,
     {
         Self {
             method,
-            // Through the same mapping a one-off read takes, so a subscription and the fetch it
-            // replaces can never be pointed at two different machines (`crate::fetch::routed`).
-            // The server keys a topic by its path, so a node's read is its own topic and two tabs
-            // watching two nodes get an answer each.
-            path: crate::fetch::routed(&path),
+            // Through the same mapping the fetch this replaces takes, so a subscription and its
+            // one-off equivalent can never be pointed at two different machines
+            // (`crate::fetch::routed_for`). The server keys a topic by its path, so a node's read is
+            // its own topic and two tabs watching two different sources get an answer each.
+            path: crate::fetch::routed_for(node, &path),
             body,
             // A payload that won't parse is dropped rather than surfaced: it means the server and
             // this bundle disagree about a type, which a reload fixes and a flash message doesn't.

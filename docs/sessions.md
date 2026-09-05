@@ -22,23 +22,32 @@ answerable (a harness engine); a one-shot `process:*` run is the same record wit
 A pty agent has **no session record at all** — its live pane is the whole of it, and it is
 synthesized as a row only in the client.
 
-## The pipeline is not always about this machine
+## The pipeline is not always about one machine
 
-Since `docs/fleet.md` §13 the rail can be pointed at a **paired node**, and then every step below
-happens on that node instead: its `sessions.db`, its `Agents`, its `runs_response`. Only the last
-two rows of the diagram are local — the client's signals and the rail it draws.
+Since `docs/fleet.md` §13 the rail can merge in **any number of paired nodes** at once, alongside
+this machine, and then every step below runs once per selected source: each has its own
+`sessions.db`, its own `Agents`, its own `runs_response`. Only the last two rows of the diagram are
+local — the client's signals and the rail it draws, which is what does the merging.
 
-What moves is the *address*, in one place: `fetch::routed` prefixes every `/api/agents…` path with
-`/api/node/<node>`, and `adi-app`'s `viewer::proxy` forwards it on the credential this machine holds
-for that node. So nothing in this document's pipeline is duplicated or conditional; a session is
-read, listed, replied to and stopped by exactly the code below, one machine further away. The two
-consequences worth carrying into any refactor here:
+What moves is the *address*, and (unlike before this was multi-select) it moves per call rather than
+through one implicit pointer: `fetch::routed_for(node, path)` is a pure function from a source and a
+path to the address that reaches it, called explicitly wherever a read, a mutation or a live
+subscription is *about* a specific source, and `adi-app`'s `viewer::proxy` forwards each one on the
+credential this machine holds for that node. So nothing in this document's pipeline is duplicated or
+conditional; a session is read, listed, replied to and stopped by exactly the code below, on whichever
+machine actually holds it — the client just runs the whole pipeline once per selected source and
+concatenates the answers (`session_bands` → `source_rows`, `actions.rs`) the same way it already
+merged across agents on one machine. The consequences worth carrying into any refactor here:
 
-- **A `run_id` is only unique on the machine that minted it.** Switching nodes therefore clears the
-  watch and the rail rather than re-filtering them (`state::view_sessions_on`) — a run id left in
-  place would be asked of a machine that never heard of it.
+- **A `run_id` is only unique on the machine that minted it.** With several sources live at once
+  this is no longer solved by clearing the rail on a switch (there is no "the" source to switch away
+  from) — every row and every action on it is keyed by **`(source, run_id)`** instead:
+  `SessionRow::node` for a row in the rail, `AgentsWatch::node` for whichever conversation is open.
+  Deselecting a source drops its rows and closes the open conversation if it was the one on that
+  source; nothing else about the rail is disturbed.
 - **A node's read is polled at three seconds, not one** (`adi-app`'s `live::watchable`), because
-  each tick is a mesh round trip.
+  each tick is a mesh round trip — per selected node, all of them ticking independently; this
+  machine's own copy stays at one second.
 
 ## The pipeline, end to end
 
@@ -57,12 +66,12 @@ runs_response() -> AgentRuns                             handlers/agents.rs:468
 POST /api/agents/runs   (one agent)  GET /api/agents/runs/all[?limit=N]  (every agent)
         │                            ╲   newest N across agents + every live/asking one
         ▼                              ▼
-   watch.runs: Vec<AgentRunInfo>     state.all_chats: AllAgentRuns     state.rs:51, 979
+   watch.runs: Vec<AgentRunInfo>     state.all_chats: AllAgentRuns     state.rs:67, 1289
         │  paged() cuts it to           │  already cut; `total` says what was left behind
         │  state.rail_limit             │
         ╰──────────────╮   ╭───────────╯
                        ▼   ▼
-        chat_all_sessions() -> Vec<SessionRow>           actions.rs:2338
+        chat_all_sessions() -> Vec<SessionRow>           actions.rs:4434
         │  filter hidden, filter ★, sort by last_touch, partition running
         ▼
    adi_ui::RailGroup / SessionItem                       adi-ui/src/rail.rs, session.rs
@@ -343,29 +352,48 @@ Pressing **Load more** widens `state.rail_limit`, which is read *tracked* where 
 is built — so the effect re-runs, re-subscribes at the wider path, and the next page arrives at
 once rather than at the socket's next tick.
 
-Client subscriptions are declared in `state::chat_subscriptions` (`state.rs:1419`) and
-`state::subscriptions` (`state.rs:1284`, `:1318`) and installed via `live::watch`
-(`adi-webapp/src/live.rs:148`). Every write uses `set_if_changed`, so an unchanged list never
+Client subscriptions are declared in `state::chat_subscriptions` (`state.rs:2024`) and
+`state::subscriptions` (`state.rs:1836`) and installed via `live::watch`
+(`adi-webapp/src/live.rs:180`). Every write uses `set_if_changed`, so an unchanged list never
 re-renders.
 
 ## Layer 5 — client state
 
-`crates/adi-webapp/src/state.rs`. **Two signals hold session lists, and both feed the rail:**
+`crates/adi-webapp/src/state.rs`. **Two signals hold this machine's session lists, and both feed
+the rail:**
 
 | Signal | Source | Scope | Declared |
 |---|---|---|---|
-| `state.all_chats: Option<AllAgentRuns>` | `GET /api/agents/runs/all` | every agent | `state.rs:51` |
-| `watch.runs: Vec<AgentRunInfo>` | `POST /api/agents/runs` | the agent on screen | `state.rs:979` |
+| `state.all_chats: Option<AllAgentRuns>` | `GET /api/agents/runs/all` | every agent, this machine | `state.rs:67` |
+| `watch.runs: Vec<AgentRunInfo>` | `POST /api/agents/runs` | the agent on screen, its own source | `state.rs:1289` |
 
 They overlap on purpose: `watch.runs` is refreshed faster and is updated *synchronously* by
 mutations (hide/delete reply with fresh history), so the row of a chat you just deleted leaves
-immediately instead of at the next 3s tick. `chat_all_sessions` prefers `watch.runs` for the
-watched agent and falls back to `all_chats` (`actions.rs:2377-2384`).
+immediately instead of at the next 3s tick. `chat_all_sessions` (by way of `session_bands` →
+`source_rows`) prefers `watch.runs` for the watched agent *when the watched conversation is on that
+same source*, and falls back to the source's own index otherwise.
 
 That preference is why paging is done twice. `all_chats` arrives already cut; `watch.runs` is the
 watched agent's *whole* history, so `paged` cuts it client-side — otherwise the agent you are
 actually on would be the one agent paging did nothing for, which on this machine is the one with
 nearly every session.
+
+**Multi-select (`docs/fleet.md` §13) adds one source's worth of signals per paired node ticked in
+the rail's node menu**, kept apart from the pair above rather than folded into them:
+
+| Signal | Source | Scope | Declared |
+|---|---|---|---|
+| `state.rail_node_agents: BTreeMap<String, AgentsState>` | one node's `GET /api/agents` | that node's agents, keyed by petname | `state.rs` |
+| `state.rail_node_chats: BTreeMap<String, AllAgentRuns>` | one node's `GET /api/agents/runs/all` | that node's sessions, keyed by petname | `state.rs` |
+
+This machine is never a key in either map — `state.agents`/`state.all_chats` already hold it, kept
+fresh by the poll and the live channel that existed before multi-select did, and a second fetch of
+the same answer under a `None` key would be two clocks telling the same fact. `session_bands` reads
+`state.session_local`/`state.session_nodes` to decide which sources are live, then runs the same
+per-agent merge (`source_rows`) once against each one's pair of signals and concatenates the rows
+before the rest of the pipeline (filter, sort, band) proceeds unchanged. `AgentsWatch::node` and
+`SessionRow::node` are what key a row and an action on it to the right source — see §13's
+"Multi-select" for the full reasoning.
 
 Other state that shapes the list: `state.rail_limit` (the page, `SESSION_PAGE` = 100 to start),
 `state.starred_only`, `state.show_hidden`, `state.session_menu`, `state.chat_drawer`.
@@ -381,20 +409,22 @@ index until the socket's next answer narrowed it back.
 
 ## Layer 6 — render
 
-`crates/adi-webapp/src/pages/agents/actions.rs`, from `chat_home_view` (`:1518`).
+`crates/adi-webapp/src/pages/agents/actions.rs`, from `chat_home_view` (`:2571`).
 
 ```
-chat_rail                       :2307   the whole left rail
-├─ chat_all_sessions            :2338   visible rows
+chat_rail                               the whole left rail
+├─ chat_all_sessions                    visible rows
 │   └─ session_bands                    also what the ⌘1…⌘9 hotkeys read
-│       ├─ starred_agents       :2279   ★ *agent* filter (watched agent always kept)
-│       ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
-│       │   └─ paged                    the watched agent's own list, cut to state.rail_limit
+│       ├─ source_rows  × selected source  the merge (`docs/fleet.md` §13) — one machine's own
+│       │   │                              agents plus one call per selected node, concatenated
+│       │   ├─ ★ filter, per source        each source's own starred agents, never another's
+│       │   ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
+│       │   └─ paged                       the *watched* agent's own list, on its own source only
 │       ├─ sort by last_touch desc      last_touch = max(last_activity, started_at)
 │       ├─ partition ×4                 five bands: asking, running, awaiting, starred, the rest
-│       └─ For(keyed "agent:run_id") -> chat_session_row
+│       └─ For(keyed "node:agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
-└─ chat_hidden_sessions         :2674   the collapsed Hidden band (all_chats only)
+└─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same way
 ```
 
 `chat_session_row` maps a row to `adi_ui::SessionItem` (`crates/adi-ui/src/session.rs`) inside a
@@ -432,11 +462,13 @@ exactly what toggling ★ does) opens whichever session used to sit in that slot
 ### The second list
 
 The Agents page and each project's Agents panel render a *different* list from the same data:
-`all_chats_view` (`actions.rs:520`) → `all_chats_flatten` (`:542`) → `all_chats_rows` (`:577`),
-a sortable table. It differs from the rail in three ways worth knowing before unifying them:
+`all_chats_view` (`actions.rs:627`) → `all_chats_flatten` (`:652`) → `all_chats_rows` (`:687`),
+a sortable table — and, unlike the rail, always this machine's own: it has no node menu and no
+concept of a second source. It differs from the rail in three ways worth knowing before unifying
+them:
 
-- it sorts by **`started_at`**, not `last_activity` (`:570`);
-- it does **not** filter `hidden` — a workbench shows everything (`:2304-2306` explains the rule);
+- it sorts by **`started_at`**, not `last_activity` (`:681`);
+- it does **not** filter `hidden` — a workbench shows everything (`:4038` explains the rule);
 - it filters by *project* instead of by ★.
 
 ---
@@ -468,8 +500,8 @@ a sortable table. It differs from the rail in three ways worth knowing before un
 |---|---|---|
 | `sessions_newest` index | `started_at` desc | the store's contract; deliberately *not* activity |
 | `lib.rs:879` | — | preserved, not re-sorted |
-| `actions.rs:2423` (rail) | `last_touch` desc, stable | pty rows stamped `now` sort first |
-| `actions.rs:570` (table) | `started_at` desc, user-sortable | disagrees with the rail on purpose |
+| `actions.rs:4365` (rail) | `last_touch` desc, stable | pty rows stamped `now` sort first |
+| `actions.rs:681` (table) | `started_at` desc, user-sortable | disagrees with the rail on purpose |
 
 ## Why a session might not be in the list
 
@@ -477,11 +509,14 @@ Work down this list when one is missing:
 
 1. Its agent's backend has **no runner** (`Backend::Other`) → `runs()` returns `[]` (`lib.rs:852`).
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
-   session is live or that agent is on screen (`actions.rs:2363-2375`).
-3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:2387`, `:2674`).
-4. **★ is on** and its agent is not starred (`starred_agents`, `actions.rs`) — off by default, so
-   this only applies once someone has switched it on this page load. Note this is the head's
-   *agent* filter, which is a different mark from a conversation's own star.
+   session is live or that agent is on screen (`actions.rs:4214`, in `source_rows`).
+3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:4983`,
+   `chat_hidden_sessions`).
+4. **★ is on** and its agent is not starred on *its own source* (`source_rows`, `actions.rs`) — off
+   by default, so this only applies once someone has switched it on this page load. Note this is the
+   head's *agent* filter, which is a different mark from a conversation's own star, and — since
+   multi-select — a fact about one source's agent list that a same-named agent on another source
+   does not inherit.
 5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
    A live session is never swept, and neither is a **starred** one.
 6. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
@@ -511,6 +546,11 @@ Things that are duplicated, inconsistent, or load-bearing in a non-obvious way:
   client (deduplicated by the shared-read map, but still).
 - `SessionState::Waiting` / `Error` exist in `adi-ui` and are never produced by this path — the
   wire carries no such state.
+- **`(node, run_id)` is now the identity a row and an action on it carry**, not `run_id` alone —
+  `SessionRow::node`, `AgentsWatch::node`, the `For` key in `chat_all_sessions`. Any code path that
+  compares runs by id alone (a new feature reading `watch.run_id` without also checking `watch.node`,
+  say) will quietly conflate two machines' conversations the day they happen to share one — see
+  `docs/fleet.md` §13's "Multi-select" for the reasoning this is protecting.
 
 ## File index
 

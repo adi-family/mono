@@ -548,7 +548,10 @@ machine in the fleet — there is no node behind it, nothing dials it, and it se
 §11 puts another machine's *dashboards* in this panel. This does the same for its **agents and their
 sessions** — the rail on the chat home lists the node's conversations, and starting, replying to,
 stopping, hiding and deleting one from here does it there. The rail's head grows one control, a node
-menu beside the filter, and picking a node is the whole gesture.
+menu beside the filter, and it is a **checklist**: any subset of paired, unlocked nodes, plus this
+machine, may be ticked at once, and their sessions merge into one rail rather than replacing each
+other one at a time. Picking a set is the whole gesture — see "Multi-select" below for how the merge
+itself works and why it replaced the single pointed node this section originally shipped with.
 
 **Nothing new is drawn.** The screens for this already exist and already work; what they lacked was
 an address for data that is not this machine's. So the pages stay where they are and the *API*
@@ -559,11 +562,17 @@ GET|POST /api/node/<node>/api/…   →  the same request, answered by that node
 ```
 
 One route (`adi-app/src/viewer.rs`, `proxy`), forwarded over the same `node::get`/`node::post` a
-transfer and the dashboards listing use, with the credential this machine already holds (§11). The
-client rewrites its own paths in one place — `fetch::routed`, which every one-off read, every
-mutation and every live subscription passes through — so a page and the socket watching it can never
-be pointed at two different machines. There is no second copy of the sessions rail, no second DTO,
-and nothing to keep in step.
+transfer and the dashboards listing use, with the credential this machine already holds (§11) —
+unchanged by multi-select, since it was already one hop per node and multi-select is simply more of
+them in parallel. The client's own half of the mapping is `fetch::routed_for(node, path)`: a pure
+function from a source and a path to the address that reaches it, called explicitly at the one
+one-off read, the one mutation or the one live subscription that is *about* that source — rather
+than a single implicit "current node" the whole page read through. That change is what multi-select
+needed: several sources are live in one tab at once, so there is no longer one right answer to "which
+node does a bare request mean" for anything to read implicitly. There is still no second copy of the
+sessions rail, no second DTO, and nothing to keep in step — a row is tagged with the source it came
+from at the moment it is fetched, on the client, and that tag is what every later action on that row
+reads back.
 
 **Only the agent API moves, and that is a decision rather than an accident.** `/api/agents…` follows
 the node; projects, ports, hive, secrets and the store browser do not. Sessions are the thing you go
@@ -593,7 +602,9 @@ Four things worth knowing before changing any of it:
   exactly when it would watch the local one — it *is* that read — but each tick is an authenticated
   mesh round trip with a third of a second of relay latency in front of it (§9). A transcript on
   another machine updates every three seconds instead of every one, and that is the cost of it being
-  on another machine.
+  on another machine. Local stays at `FAST`; multi-select does not change either rate, it only means
+  more sources — one at `FAST`, the rest each at their own `SLOW` — ticking in parallel rather than
+  one `SLOW` source replacing another.
 - **Pictures are the one thing that does not follow.** Uploading one is a POST whose body is a PNG,
   which a JSON forwarder cannot carry, so the composer refuses it with a sentence naming the node
   rather than storing bytes here and putting an id in the node's transcript that names them.
@@ -609,11 +620,74 @@ somebody opened. A locked node is listed and disabled rather than hidden, becaus
 reads as "that node is gone" when the truth is "unlock it on the Fleet page", and there is one
 credential per node, so unlocking it for the dashboards rail unlocks it for this.
 
-**The choice is not stored.** A reload comes back to this machine. Most page state here is
-deliberately unstored, but this one is load-bearing rather than tidy: it must be impossible to
-return to a tab tomorrow and stop a run on a machine you have forgotten you were driving. While a
-node *is* picked the rail's button takes the accent and **prints the petname**, for the same reason
-— which machine a Stop lands on is not a fact to leave in a tooltip.
+### Multi-select: several sources, merged into one rail
+
+The single pointed node above is history. Any subset of paired, unlocked nodes may be ticked at
+once, alongside this machine, and their sessions merge into one rail — not one list at a time with a
+menu to swap between them.
+
+**A run id is only unique on the machine that minted it (§13 above), and that is the whole design
+problem.** With one source at a time, switching cleared the rail and started over, so a stale run id
+was never asked of the wrong machine. With several sources live at once that escape hatch does not
+exist — two sources can each answer to the same agent name, or even, in principle, the same run id —
+so every row and every action on it is now keyed by **`(source, run_id)`**, not `run_id` alone.
+Concretely:
+
+- **`AgentsWatch::node`** (`adi-webapp/src/state.rs`) says which source the *open* conversation is
+  on, set the moment a row opens it and read by every fetch that conversation's pane makes from
+  there — its poll, its reply box, Stop, the goals panel, the token report. It is not guessed from
+  the node menu's selection, because several sources may be selected while only one of them is the
+  one actually open.
+- **`SessionRow::node`** (`adi-webapp/src/pages/agents/actions.rs`) says the same for a *rail row*
+  that is not open — what Hide, Star and Delete resolve against when clicked straight off the list,
+  and what the right-click menu carries forward. A row's own source travels with it from the moment
+  it is built; nothing downstream re-derives it from page state.
+- **The merge itself** (`session_bands` → `source_rows`) runs the same per-agent loop
+  `chat_all_sessions` already used for one machine's agents once per selected source — this
+  machine's own `/api/agents` + `/api/agents/runs/all` (kept fresh the way every other page already
+  relies on), plus one fetch of each for every ticked node
+  (`State::rail_node_agents`/`State::rail_node_chats`) — and concatenates the rows before sorting,
+  filtering and banding proceed exactly as they did over one source. The ★ agent filter is applied
+  **per source** for the same reason liveness is: "starred" is a fact about one machine's own agent
+  list, and a name shared by two sources' agents must not let one source's mark keep the other's row
+  in view.
+- **`fetch::routed_for`** replaces the old global "current node" (`fetch::node`/`set_node`) with a
+  plain function from an explicit source to an address — a thread-local flipped before a request and
+  read inside it cannot survive several concurrent fetches for several different sources without one
+  request's `.await` letting another's flip land underneath it. Every agent-scoped call in `fetch.rs`
+  now takes its source as an explicit `Option<&str>` parameter instead of consulting a shared
+  variable, and the live channel's `Sub::get_on`/`post_on` do the same for a subscription.
+
+**Every row keeps every action.** Stop, reply, hide, star and delete are unchanged in what they do —
+only where they are sent changed, from "wherever the rail is currently pointed" to "wherever this
+particular row lives." A mixed rail with three sources selected can have three different Stops in
+flight to three different machines from three different clicks, which is the point of merging them.
+
+**The choice is now persisted, and that is a reversal from the single-node version of this feature.**
+The old rule — a reload always comes back to this machine — existed so a stale tab could never send a
+Stop to a machine the operator had forgotten they were pointed at: the *only* place that fact lived
+was the head button's accent and petname, easy to miss on a tab left open overnight. Multi-select
+removes the reason for the rule rather than the rule's caution: every row now carries its own
+source's name on the meta line whenever more than one source is selected, which is exactly where an
+operator's eye already goes before pressing Stop, Hide or Delete on it — the fact the old rule was
+protecting is back on screen at the point of the click instead of living only in a menu nobody is
+looking at. Persisting a selection an operator built on purpose (most often to keep watching a
+long-running job on a node) is worth more than forcing them to reassemble it every reload, and the
+specific risk the old rule guarded against — acting on a machine you forgot you were pointed at — is
+smaller here, not larger, because acting blind is no longer possible: the row you click always names
+its own machine. The selection lives in this browser's `localStorage`
+(`adi-session-sources`), one entry — never in the store, since it is a preference about how this
+tab reads the panel and not a fact about the fleet. A locked node already selected here stays ticked
+(and its checkbox stays clickable, to remove it) even though it can no longer be *added* while
+locked — see the doc comment on the node menu in `actions.rs` for why disabling both directions would
+strand a persisted, now-locked node in the selection with no way to untick it.
+
+The rail's node button reflects the same logic: unchanged (no accent, no label) while this machine
+alone is selected, and once anything else is ticked it takes the accent and prints either the one
+other node's name (exactly one source besides local) or a `"N sources"` count — with the full list,
+always, in the button's title. Every row also grows its own origin label on the meta line once more
+than one source is selected, so "which machine is this" never depends on the head button at all by
+the time a hand reaches for Stop.
 
 ---
 
@@ -757,12 +831,42 @@ Each item ships with unit tests in the same file.
       so the node menu can be watched rather than clicked for.
 - [x] J3 `fetch::routed` — the client's one rewrite, applied to every one-off read, every mutation
       and (through `live::Sub`) every subscription, so no two of them can name different machines.
+      **Superseded by K3**: multi-select needs several sources addressable at once, which an
+      implicit "current node" cannot give it — see the checklist below.
 - [x] J4 The live channel watches a node's read exactly when it watches the local one, floored to
       `SLOW` because each tick crosses the mesh.
 - [x] J5 The rail's node menu, `state::view_sessions_on` (address, then what is on screen, then the
-      socket), and the petname printed while a node is picked.
+      socket), and the petname printed while a node is picked. **Superseded by K1/K5/K6**:
+      single-select is gone, replaced by the checklist in §13's "Multi-select".
 - [x] J6 Attachments: reading one goes to `app.<node>.n.adi` directly, uploading one is refused with
       a sentence naming the node.
 - [ ] J7 A run's images uploaded to a node. Needs a body the forwarder can carry that is not JSON —
       either a bytes path beside `Response`, or the browser posting at the node's own origin, which
       is a CORS question and not a routing one.
+
+### K — multi-select: several sources, merged into one rail (§13)
+
+- [x] K1 `State::session_local` / `State::session_nodes` replace `State::session_node`: any subset
+      of paired, unlocked nodes plus this machine, rather than one pointed node.
+- [x] K2 `AgentsWatch::node` and `SessionRow::node`: which source the open conversation is on, and
+      which source a rail row not currently open is on — the `(source, run_id)` keys every row and
+      every action on it now needs, since a run id is only unique on the machine that minted it and
+      several sources no longer take turns being "the" one.
+- [x] K3 `fetch::routed_for(node, path)` replaces the thread-local `fetch::node`/`set_node`/`routed`:
+      a pure function from an explicit source to an address, called at each call site that has one,
+      because several concurrent fetches for several sources cannot safely share one flipped
+      variable. `live::Sub::get_on`/`post_on` do the same for a subscription.
+- [x] K4 `session_bands` → `source_rows`: the per-agent merge `chat_all_sessions` already did for one
+      machine's agents, run once per selected source and concatenated — including the ★ filter,
+      which is now evaluated against each source's own agent list rather than one shared one.
+      `chat_hidden_sessions` merges the Hidden band the same way.
+- [x] K5 The node menu is a checklist (`role="menuitemcheckbox"`), left open across ticks so several
+      sources are picked in one visit; a locked node cannot be *added* but can still be *removed* if
+      it was selected before it locked.
+- [x] K6 The rail's node button and every row's meta line show which sources are live whenever more
+      than one is selected — the button with a name or a count and the full list in its title, each
+      row with its own source's name — since a Stop can now reach any of several machines from one
+      list.
+- [x] K7 The selection persists across a reload, in `localStorage` (`adi-session-sources`) — a
+      deliberate reversal of J5's "the choice is not stored", now that every row's own label carries
+      the fact that rule existed to keep visible.

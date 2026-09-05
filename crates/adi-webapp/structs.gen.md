@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-61 structs · 9 enums · 1 type alias across 23 files.
+62 structs · 9 enums · 1 type alias across 23 files.
 
 ## Index
 
@@ -28,7 +28,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -235,11 +235,12 @@ struct ChatStats {
 
 ### struct `SessionRow`
 
-One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to — there is no group heading above it to say so.
+One row of the rail. The list spans every agent *and every selected source*, so a row has to carry both which agent it belongs to and which machine that agent is on — there is no group heading above it to say either (`docs/fleet.md` §13, multi-select).
 
 ```rust
 #[derive(Clone)]
 struct SessionRow {
+    node: Option<String>,
     agent: String,
     run: Option<AgentRunInfo>,
     when: u64,
@@ -256,6 +257,7 @@ Which session a row's right-click menu would act on, packaged so a row can hand 
 ```rust
 #[derive(Clone)]
 struct SessionRef {
+    node: Option<String>,
     agent: String,
     run_id: String,
     title: String,
@@ -698,9 +700,12 @@ pub(crate) struct State {
     pub(crate) show_hidden: RwSignal<bool>,
     pub(crate) session_filter: RwSignal<SessionFilter>,
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
-    pub(crate) session_node: RwSignal<Option<String>>,
+    pub(crate) session_local: RwSignal<bool>,
+    pub(crate) session_nodes: RwSignal<BTreeSet<String>>,
     pub(crate) session_node_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) fleet_nodes: RwSignal<Option<FleetNodes>>,
+    pub(crate) rail_node_agents: RwSignal<BTreeMap<String, AgentsState>>,
+    pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     pub(crate) rail_limit: RwSignal<usize>,
     pub(crate) chat_drawer: RwSignal<Option<ChatDrawer>>,
     pub(crate) tables: Tables,
@@ -822,6 +827,7 @@ An open right-click menu on one of the chat rail's session rows. Carries which s
 ```rust
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionMenu {
+    pub(crate) node: Option<String>,
     pub(crate) agent: String,
     pub(crate) run_id: String,
     pub(crate) title: String,
@@ -1186,6 +1192,7 @@ The Agents page's live view: which agent's pty pane is being watched (`None` = c
 #[derive(Clone, Copy)]
 pub(crate) struct AgentsWatch {
     pub(crate) name: RwSignal<Option<String>>,
+    pub(crate) node: RwSignal<Option<String>>,
     pub(crate) interactive: RwSignal<bool>,
     pub(crate) run_id: RwSignal<Option<String>>,
     pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
@@ -1319,6 +1326,20 @@ A one-line status message under the form; `kind` drives its colour via `data-kin
 pub(crate) struct Flash {
     pub(crate) kind: &'static str,
     pub(crate) msg: String,
+}
+```
+
+### struct `SessionSources`
+
+The selection as it round-trips through `localStorage`: this machine, and which paired nodes.
+
+```rust
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct SessionSources {
+    #[serde(default = "default_true")]
+    local: bool,
+    #[serde(default)]
+    nodes: BTreeSet<String>,
 }
 ```
 

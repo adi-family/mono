@@ -832,8 +832,9 @@ fn send_to_agent(state: State, watch: AgentsWatch, text: String, key: &'static s
         return;
     }
     let key = key.to_string();
+    let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::send_agent_keys(name, text, key).await {
+        match fetch::send_agent_keys(node.as_deref(), name, text, key).await {
             Ok(peek) => {
                 if watch.name.get_untracked().as_deref() == Some(peek.name.as_str()) {
                     watch.peek.set(Some(peek));

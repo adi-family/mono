@@ -134,18 +134,24 @@ pub(crate) struct State {
     /// home is re-rendered whenever `/api/meta` moves, and a signal created inside it would take
     /// the open menu with it twice a second.
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
-    /// **Whose** sessions the rail is showing: `None` for this machine, or the petname of a paired
-    /// node (`docs/fleet.md` §13). Setting it repoints every agent read and every agent mutation at
-    /// that node's own control panel — see [`view_sessions_on`].
+    /// **Which sources** the rail is merging (`docs/fleet.md` §13, multi-select): this machine, when
+    /// true, plus every node named in [`Self::session_nodes`]. Together they replace the single
+    /// "pointed node" of the first cut of this feature — a row's own actions now resolve their own
+    /// source ([`AgentsWatch::node`], or the row's own tag in the rail), so nothing here has to be
+    /// "the" address for a request the way the old single field was.
     ///
-    /// The rendered half of a pair: [`crate::fetch::node`] is what a request consults, and this is
-    /// what the page draws and what makes the live channel re-subscribe. They are only ever set
-    /// together, by [`view_sessions_on`].
-    ///
-    /// Page state rather than a stored preference, deliberately and unlike most such choices: a
-    /// reload comes back to *this* machine, so it is impossible to return to a tab tomorrow and
-    /// stop a run on a machine you have forgotten you were driving.
-    pub(crate) session_node: RwSignal<Option<String>>,
+    /// **Persisted**, unlike that first cut, and deliberately so — see [`session_sources_key`] for
+    /// the full reasoning. In short: the old rule ("a reload comes back to this machine") existed so
+    /// a stale tab could never send a Stop to a machine the operator had forgotten they were
+    /// pointed at. With multi-select every row carries its own source's name right where the Stop
+    /// button is, so the fact that mattered — which machine *this* action reaches — is back on
+    /// screen at the moment of the click rather than living only in a menu nobody is looking at. A
+    /// selection an operator built on purpose (probably to keep watching a long-running remote job)
+    /// is worth more, persisted, than the old single pick was — and the risk the old rule guarded
+    /// against is smaller here, not larger, because acting blind is no longer possible.
+    pub(crate) session_local: RwSignal<bool>,
+    /// The paired nodes selected alongside (or instead of) this machine. See [`Self::session_local`].
+    pub(crate) session_nodes: RwSignal<BTreeSet<String>>,
     /// Where the rail's node menu is open, in viewport coordinates — `None` while it is closed.
     /// On [`State`] for the same reason [`Self::session_filter_menu`] is.
     pub(crate) session_node_menu: RwSignal<Option<(i32, i32)>>,
@@ -153,6 +159,15 @@ pub(crate) struct State {
     /// offers. Local and cheap, unlike [`Self::fleet_dashboards`] beside it, so it is watched with
     /// the rest of the chat page rather than fetched on a click.
     pub(crate) fleet_nodes: RwSignal<Option<FleetNodes>>,
+    /// One selected node's own `/api/agents` — read for the rail's per-agent pty-liveness and its ★
+    /// filter, the same way [`Self::agents`] already is for this machine. Keyed by petname; this
+    /// machine is never a key here; it already keeps [`Self::agents`] fresh on the schedule every
+    /// other page relies on; a second copy under a `None` key would be two clocks telling the same
+    /// fact.
+    pub(crate) rail_node_agents: RwSignal<BTreeMap<String, AgentsState>>,
+    /// One selected node's own `/api/agents/runs/all` — the sessions rail's per-source merge
+    /// (`docs/fleet.md` §13). See [`Self::rail_node_agents`] for why this machine is never a key.
+    pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     /// How many sessions the chat rail has asked the backend for — [`SESSION_PAGE`] to begin with,
     /// another page each time its **Load more** is pressed.
     ///
@@ -309,6 +324,7 @@ impl State {
     /// which reuses the agent chat components but not the main App shell (which seeds its own
     /// project/section from the path).
     pub(crate) fn fresh() -> Self {
+        let sources = load_session_sources();
         Self {
             status: RwSignal::new(Status::Connecting),
             ports: RwSignal::new(None),
@@ -345,9 +361,12 @@ impl State {
             show_hidden: RwSignal::new(false),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
-            session_node: RwSignal::new(None),
+            session_local: RwSignal::new(sources.local),
+            session_nodes: RwSignal::new(sources.nodes),
             session_node_menu: RwSignal::new(None),
             fleet_nodes: RwSignal::new(None),
+            rail_node_agents: RwSignal::new(BTreeMap::new()),
+            rail_node_chats: RwSignal::new(BTreeMap::new()),
             rail_limit: RwSignal::new(SESSION_PAGE),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
@@ -460,6 +479,10 @@ pub(crate) struct RowMenu {
 /// Unstar.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionMenu {
+    /// The row's own source — a paired node's petname, or `None` for this machine
+    /// (`docs/fleet.md` §13, multi-select) — so Hide/Star from this menu lands on the machine that
+    /// actually owns the row, not on whichever source happens to be watched.
+    pub(crate) node: Option<String>,
     pub(crate) agent: String,
     pub(crate) run_id: String,
     /// The row's title, shown as the menu's heading so it is unmistakable which chat is being acted
@@ -1250,6 +1273,13 @@ impl HookEditor {
 pub(crate) struct AgentsWatch {
     /// The watched agent's name, or `None` while the live view is closed.
     pub(crate) name: RwSignal<Option<String>>,
+    /// Which source the open conversation lives on — a paired node's petname, or `None` for this
+    /// machine (`docs/fleet.md` §13). Set whenever `name`/`run_id` are, by whichever rail row (or
+    /// picker) opened them, and read by every fetch this view makes from here on: a poll, a reply, a
+    /// stop, a delete. Never guessed from `state.session_nodes` — the rail may have several sources
+    /// selected at once, and only the row that was actually clicked knows which one this
+    /// conversation is.
+    pub(crate) node: RwSignal<Option<String>>,
     /// Whether the watched agent is interactive (pty) — it then shows a live pane and a send bar.
     /// A headless agent shows its run history and a task composer instead.
     pub(crate) interactive: RwSignal<bool>,
@@ -1349,6 +1379,7 @@ impl AgentsWatch {
     pub(crate) fn new() -> Self {
         Self {
             name: RwSignal::new(None),
+            node: RwSignal::new(None),
             interactive: RwSignal::new(false),
             run_id: RwSignal::new(None),
             runs: RwSignal::new(Vec::new()),
@@ -1382,6 +1413,7 @@ impl AgentsWatch {
     /// Close the live view (stops the polling; `poll_watch` no-ops while `name` is `None`).
     pub(crate) fn close(self) {
         self.name.set(None);
+        self.node.set(None);
         self.interactive.set(false);
         self.run_id.set(None);
         self.runs.set(Vec::new());
@@ -1670,47 +1702,123 @@ pub(crate) fn refresh_fleet_dashboards(s: State) {
     });
 }
 
-/// Point the sessions rail — and everything the chat pane does — at a paired node, or back at this
-/// machine (`docs/fleet.md` §13).
+/// The `localStorage` key the sessions rail's selected sources are kept under (`docs/fleet.md` §13,
+/// multi-select) — see [`Self::session_local`] on [`State`] for why this one, unlike the single-node
+/// pick it replaces, is worth persisting.
+const SESSION_SOURCES_KEY: &str = "adi-session-sources";
+
+/// The selection as it round-trips through `localStorage`: this machine, and which paired nodes.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct SessionSources {
+    #[serde(default = "default_true")]
+    local: bool,
+    #[serde(default)]
+    nodes: BTreeSet<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The saved selection, or this machine alone on a first run, in private mode, or if the stored
+/// value is not readable JSON (a format this build no longer writes, say).
+fn load_session_sources() -> SessionSources {
+    crate::ui::storage()
+        .and_then(|s| s.get_item(SESSION_SOURCES_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_session_sources(local: bool, nodes: &BTreeSet<String>) {
+    let Some(storage) = crate::ui::storage() else {
+        return;
+    };
+    if let Ok(raw) = serde_json::to_string(&SessionSources {
+        local,
+        nodes: nodes.clone(),
+    }) {
+        let _ = storage.set_item(SESSION_SOURCES_KEY, &raw);
+    }
+}
+
+/// Add or drop one source from the sessions rail's merge (`docs/fleet.md` §13): this machine
+/// (`node: None`), or a paired node by petname. Persists the resulting selection and asks the newly
+/// added source for its rail data at once, so ticking a node fills its rows immediately rather than
+/// waiting for the next poll.
 ///
-/// Three things happen together, and they have to:
-///
-/// 1. **The address changes.** [`fetch::set_node`] is what every later agent read and every later
-///    agent write consults, so from here on `/api/agents/…` means that node's.
-/// 2. **What is on screen is dropped.** The rail, the open conversation and its transcript all
-///    describe the machine we are leaving, and a run id is only unique on the machine that minted
-///    it — left in place, the next transcript poll would ask the *new* node for a run it has never
-///    heard of, and the pane would sit on a stale conversation while reporting an error about
-///    another one. Clearing is also what makes the switch legible: the rail visibly refills.
-/// 3. **The socket re-subscribes**, because [`subscriptions`] reads `session_node` tracked. Until
-///    those land, the fetch below fills the rail — the same fallback the panel uses whenever the
-///    live channel is down.
-pub(crate) fn view_sessions_on(s: State, watch: AgentsWatch, node: Option<String>) {
-    if s.session_node.get_untracked() == node {
+/// **Never clears the rail wholesale** — that was right for a single pointed node, where switching
+/// meant leaving one machine for another and everything on screen described the one being left. Here
+/// a toggle only ever adds or removes one source from a set several others may still be in, so only
+/// that source's own rows come or go. The one exception is the open conversation: if it belongs to
+/// the source being turned off, it is closed, for the reason [`AgentsWatch::node`] exists at all — a
+/// run id is only unique on the machine that minted it, and a poll left pointed at a source no longer
+/// selected would ask a machine the rail no longer shows for a run it has no way to name back.
+pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<String>, on: bool) {
+    match &node {
+        None => s.session_local.set(on),
+        Some(node) => s.session_nodes.update(|set| {
+            if on {
+                set.insert(node.clone());
+            } else {
+                set.remove(node);
+            }
+        }),
+    }
+    save_session_sources(
+        s.session_local.get_untracked(),
+        &s.session_nodes.get_untracked(),
+    );
+
+    if !on {
+        s.rail_node_agents.update(|m| {
+            if let Some(node) = &node {
+                m.remove(node);
+            }
+        });
+        s.rail_node_chats.update(|m| {
+            if let Some(node) = &node {
+                m.remove(node);
+            }
+        });
+        if watch.node.get_untracked() == node {
+            watch.close();
+        }
         return;
     }
-    fetch::set_node(node.clone());
-    s.session_node.set(node);
+    if let Some(node) = node {
+        refresh_rail_node(s, node);
+    }
+    // Local was already kept fresh before this source existed — nothing more to fetch for it.
+}
 
-    watch.name.set(None);
-    watch.run_id.set(None);
-    watch.runs.set(Vec::new());
-    watch.peek.set(None);
-    watch.log.set(String::new());
-    s.all_chats.set(None);
-    s.agents.set(None);
-    s.rail_limit.set(SESSION_PAGE);
-
+/// Fetch one node's `/api/agents` and `/api/agents/runs/all` for the rail's per-source merge, and
+/// fold the answer in. Called when a node is newly selected, and again by the 4s fallback poll
+/// (`main.rs`) for as long as it stays selected and the live channel is down — the same two schedules
+/// [`crate::main`]'s `refresh` keeps for this machine's own copies of the same two reads.
+pub(crate) fn refresh_rail_node(s: State, node: String) {
+    let limit = Some(s.rail_limit.get_untracked());
     wasm_bindgen_futures::spawn_local(async move {
-        // The two reads the rail is built from. A failure is a flash and an empty rail, which is
-        // the honest picture: the node was reachable enough to be offered in the menu and is not
-        // answering now, and the way back is the same menu.
-        match fetch::agents().await {
-            Ok(a) => set_if_changed(s.agents, a),
-            Err(e) => s.flash.set(Some(Flash::err(e))),
+        // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
+        // resurrect a row for a source the rail no longer shows.
+        if !s.session_nodes.get_untracked().contains(&node) {
+            return;
         }
-        if let Ok(c) = fetch::all_agent_runs(None).await {
-            set_if_changed(s.all_chats, c);
+        match fetch::agents_on(&node).await {
+            Ok(a) => {
+                if s.session_nodes.get_untracked().contains(&node) {
+                    s.rail_node_agents.update(|m| {
+                        m.insert(node.clone(), a);
+                    });
+                }
+            }
+            Err(e) => s.flash.set(Some(Flash::err(format!("{node}: {e}")))),
+        }
+        if let Ok(c) = fetch::all_agent_runs_on(&node, limit).await
+            && s.session_nodes.get_untracked().contains(&node)
+        {
+            s.rail_node_chats.update(|m| {
+                m.insert(node, c);
+            });
         }
     });
 }
@@ -1917,16 +2025,22 @@ pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
     let Some(name) = watch.name.get() else {
         return Vec::new();
     };
+    // Tracked: which source this conversation is on decides where every sub below is addressed, and
+    // opening a different row's conversation must re-subscribe at the new source rather than go on
+    // watching the old one under the new title (`docs/fleet.md` §13).
+    let node = watch.node.get();
     // An interactive (pty) agent keeps no run history — the pane is the whole of it.
     if watch.interactive.get() {
-        return vec![Sub::post(
+        return vec![Sub::post_on(
+            node.as_deref(),
             "/api/agents/peek",
             &AgentRef { name },
             move |peek: AgentPeek| set_if_changed(watch.peek, peek),
         )];
     }
 
-    let mut subs = vec![Sub::post(
+    let mut subs = vec![Sub::post_on(
+        node.as_deref(),
         "/api/agents/runs",
         &AgentRef { name: name.clone() },
         move |runs: AgentRuns| {
@@ -1943,7 +2057,8 @@ pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
     // that the inline viewer follows; both are written only on real change, so a finished run's
     // viewer sits perfectly still while a live one still grows.
     if let Some(run_id) = watch.run_id.get() {
-        subs.push(Sub::post(
+        subs.push(Sub::post_on(
+            node.as_deref(),
             "/api/agents/run/peek",
             &RunRef { name, run_id },
             move |peek: AgentPeek| {

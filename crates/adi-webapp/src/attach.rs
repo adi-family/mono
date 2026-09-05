@@ -67,6 +67,7 @@ const UNKNOWN_TYPE: &str = "application/octet-stream";
 /// would drop. `refusal` is what it says.
 pub(crate) fn attaching(
     state: State,
+    node: Option<String>,
     files: RwSignal<Vec<Attached>>,
     can_attach: Signal<bool>,
     refusal: Signal<String>,
@@ -74,7 +75,7 @@ pub(crate) fn attaching(
     Attaching {
         files,
         on_files: Callback::new(move |picked: Vec<web_sys::File>| {
-            take(state, files, picked);
+            take(state, node.clone(), files, picked);
         }),
         can_attach,
         refusal,
@@ -89,13 +90,10 @@ pub(crate) fn attaching(
 /// gateway, and the gateway attaches the password this machine already holds (§11). An `<img src>`
 /// is a plain GET, so there is no preflight to fail on the way.
 #[must_use]
-pub(crate) fn url_of(id: &str) -> String {
+pub(crate) fn url_of(node: Option<&str>, id: &str) -> String {
     let path = format!("/api/agents/attachment/{id}");
-    match crate::fetch::node() {
-        Some(node) => format!(
-            "http://{}{path}",
-            adi_webapp_api::types::node_app_host(&node)
-        ),
+    match node {
+        Some(node) => format!("http://{}{path}", adi_webapp_api::types::node_app_host(node)),
         None => path,
     }
 }
@@ -125,7 +123,12 @@ pub(crate) fn clear(files: RwSignal<Vec<Attached>>) {
 
 /// Accept what was pasted, dropped or picked: refuse what cannot be sent, show the rest at once,
 /// and upload each in the background.
-fn take(state: State, files: RwSignal<Vec<Attached>>, picked: Vec<web_sys::File>) {
+fn take(
+    state: State,
+    node: Option<String>,
+    files: RwSignal<Vec<Attached>>,
+    picked: Vec<web_sys::File>,
+) {
     for file in picked {
         let room = MAX_ATTACHMENTS.saturating_sub(files.get_untracked().len());
         if room == 0 {
@@ -151,12 +154,18 @@ fn take(state: State, files: RwSignal<Vec<Attached>>, picked: Vec<web_sys::File>
             ))));
             continue;
         }
-        start(state, files, file, media_type);
+        start(state, node.clone(), files, file, media_type);
     }
 }
 
 /// Put one file in the tray as uploading, then upload it and settle its row.
-fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, media_type: String) {
+fn start(
+    state: State,
+    node: Option<String>,
+    files: RwSignal<Vec<Attached>>,
+    file: web_sys::File,
+    media_type: String,
+) {
     // The tray's own identity for this row, minted before there is a server id — the ✕ has to work
     // during the upload, and `key` is what it removes by. Monotonic within the page, which is all
     // it has to be: it never leaves the browser.
@@ -204,7 +213,7 @@ fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, medi
                 return;
             }
         };
-        match fetch::upload_attachment(&name, &media_type, &bytes).await {
+        match fetch::upload_attachment(node.as_deref(), &name, &media_type, &bytes).await {
             Ok(stored) => {
                 // The stored image replaces the local blob as the thumbnail's source, and the blob
                 // is released: one object URL per attachment held for the life of the tab is a leak
@@ -215,7 +224,7 @@ fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, medi
                         // A file keeps its empty preview: there is nothing to draw, and pointing the
                         // tray at bytes it cannot render would be a broken image where a name is.
                         row.preview = match row.kind {
-                            AttachKind::Image => url_of(&stored.id),
+                            AttachKind::Image => url_of(node.as_deref(), &stored.id),
                             AttachKind::File => String::new(),
                         };
                         row.state = AttachState::Ready(stored.id.clone());

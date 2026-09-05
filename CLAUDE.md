@@ -59,6 +59,15 @@ repoint). Use a pattern that includes the trailing arg — the old
 task seems to require that, ask first. Everything here is about the `app` /
 front-door services.
 
+**On a Linux host, the same service is `family.adi.app.control-panel.service`**
+(`systemd --user`, see `apps/linux/README.md`) — `systemctl --user restart
+family.adi.app.control-panel.service` in place of the launchd bootout/bootstrap
+above. **If you are an agent run on a machine where that service is what's hosting
+your own tool-call connection, restarting it kills the connection mid-run** — you
+will not get to observe the result or finish verifying. Do the restart as your
+*last* action, after everything else (tests, review, commit) is done, not as a step
+you then continue past.
+
 ## Finding duplicated code: `adi-mono indexer clones`
 
 This repo carries its own code index (`crates/adi-indexer`, full docs in `docs/indexer.md`).

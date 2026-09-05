@@ -239,11 +239,11 @@ fn Home() -> impl IntoView {
     // What the chat home watches: the open conversation, plus the rails around it. The same lists
     // `refresh` fetches, arriving only when they change instead of every four seconds.
     Effect::new(move |_| {
-        // Which machine these are about, read *tracked* (`docs/fleet.md` §13). Every agent path
-        // below is rewritten by `fetch::routed` as the `Sub` is built, so picking a node in the
-        // rail has to rebuild them — otherwise the socket would go on reporting the machine that
-        // was chosen when this effect last ran, under the new node's name.
-        let _node = state.session_node.get();
+        // Which sources the rail is merging, read *tracked* (`docs/fleet.md` §13, multi-select):
+        // ticking a node on or off has to add or drop its own subscriptions below, and
+        // `chat_subscriptions` reads `watch.node` tracked for the same reason on the open
+        // conversation's own watches.
+        let nodes = state.session_nodes.get();
         let mut subs = state::chat_subscriptions(watch);
         // The node menu's own list: which paired nodes this machine holds a password for. Local
         // and cheap — it asks no node anything — so it rides the socket with everything else.
@@ -302,6 +302,37 @@ fn Home() -> impl IntoView {
                 state.projects.set(Some(p));
             }
         }));
+        // One pair of subs per selected node — its own `/api/agents` (pty liveness, the ★ filter)
+        // and its own `/api/agents/runs/all` (the rows themselves) — so the rail's per-source merge
+        // (`docs/fleet.md` §13, multi-select) updates live rather than only on the 4s fallback poll.
+        // Floored to `SLOW` on the server regardless (`adi-app`'s `live::watchable`), same as every
+        // other forwarded read.
+        for node in &nodes {
+            let for_agents = node.clone();
+            subs.push(live::Sub::get_on(
+                Some(node),
+                "/api/agents",
+                move |a: AgentsState| {
+                    state.rail_node_agents.update(|m| {
+                        if m.get(&for_agents) != Some(&a) {
+                            m.insert(for_agents.clone(), a);
+                        }
+                    });
+                },
+            ));
+            let for_chats = node.clone();
+            subs.push(live::Sub::get_on(
+                Some(node),
+                fetch::all_runs_path(Some(state.rail_limit.get())),
+                move |c: adi_webapp_api::types::AllAgentRuns| {
+                    state.rail_node_chats.update(|m| {
+                        if m.get(&for_chats) != Some(&c) {
+                            m.insert(for_chats.clone(), c);
+                        }
+                    });
+                },
+            ));
+        }
         live::watch(subs);
     });
 
@@ -315,6 +346,11 @@ fn Home() -> impl IntoView {
     Interval::new(4_000, move || {
         if !live::connected() {
             refresh();
+            // The live subs above cover this while the socket is up; while it's down each selected
+            // node's own rail data needs the same fallback poll this machine's copy already gets.
+            for node in state.session_nodes.get_untracked() {
+                state::refresh_rail_node(state, node);
+            }
         }
     })
     .forget();
@@ -674,11 +710,14 @@ fn App() -> impl IntoView {
         show_hidden: RwSignal::new(false),
         session_filter: RwSignal::new(SessionFilter::default()),
         session_filter_menu: RwSignal::new(None),
-        // The workbench shell has no sessions rail and so no node menu: it is always about this
-        // machine, and `None` here is what keeps `fetch::routed` pointed at it.
-        session_node: RwSignal::new(None),
+        // The workbench shell has no sessions rail and so no node menu: it is always this machine
+        // alone, and nothing here ever reads `session_nodes` to say otherwise.
+        session_local: RwSignal::new(true),
+        session_nodes: RwSignal::new(std::collections::BTreeSet::new()),
         session_node_menu: RwSignal::new(None),
         fleet_nodes: RwSignal::new(None),
+        rail_node_agents: RwSignal::new(BTreeMap::new()),
+        rail_node_chats: RwSignal::new(BTreeMap::new()),
         // No sessions rail on the workbench shell either — its "All chats" table reads the whole
         // index, so nothing here pages. The field exists because `State` is one shape.
         rail_limit: RwSignal::new(state::SESSION_PAGE),

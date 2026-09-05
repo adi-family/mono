@@ -393,6 +393,14 @@ pub async fn agents() -> Result<AgentsState, String> {
     get("/api/agents").await
 }
 
+/// A paired node's own `/api/agents` — one entry in the sessions rail's per-source merge
+/// (`docs/fleet.md` §13, multi-select). Local is never asked through here: [`agents`] above is kept
+/// fresh already, on the schedule every other page that reads it relies on, and a second fetch of the
+/// same answer under a different name would be two clocks for one fact.
+pub async fn agents_on(node: &str) -> Result<AgentsState, String> {
+    get_on(Some(node), "/api/agents").await
+}
+
 pub async fn save_agent(body: SaveAgent) -> Result<AgentsState, String> {
     post("/api/agents/save", &body).await
 }
@@ -455,9 +463,10 @@ pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
     post("/api/agents/stop", &AgentRef { name }).await
 }
 
-/// A headless agent's run history, newest first.
-pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
-    post("/api/agents/runs", &AgentRef { name }).await
+/// A headless agent's run history, newest first — the *open conversation's* own source
+/// (`docs/fleet.md` §13), not necessarily this machine's.
+pub async fn agent_runs(node: Option<&str>, name: String) -> Result<AgentRuns, String> {
+    post_on(node, "/api/agents/runs", &AgentRef { name }).await
 }
 
 /// Every agent's run history in one call — the data behind the cross-agent "All chats" index.
@@ -467,6 +476,12 @@ pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
 /// carries `total` either way, so a paged caller knows whether there is more behind it.
 pub async fn all_agent_runs(limit: Option<usize>) -> Result<AllAgentRuns, String> {
     get(&all_runs_path(limit)).await
+}
+
+/// [`all_agent_runs`], for one paired node's own sessions — the sessions rail's per-source merge
+/// (`docs/fleet.md` §13, multi-select).
+pub async fn all_agent_runs_on(node: &str, limit: Option<usize>) -> Result<AllAgentRuns, String> {
+    get_on(Some(node), &all_runs_path(limit)).await
 }
 
 /// The `/api/agents/runs/all` request for a given page size — one function, because the live
@@ -479,16 +494,21 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
     }
 }
 
-/// A snapshot of one specific run's log (plus the conversation transcript, for harness runs).
-pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String> {
-    post("/api/agents/run/peek", &RunRef { name, run_id }).await
+/// A snapshot of one specific run's log (plus the conversation transcript, for harness runs), from
+/// the source that run actually lives on (`docs/fleet.md` §13) — `None` for this machine.
+pub async fn peek_run(node: Option<&str>, name: String, run_id: String) -> Result<AgentPeek, String> {
+    post_on(node, "/api/agents/run/peek", &RunRef { name, run_id }).await
 }
 
 /// The itemization of one conversation's context: how its tokens split by source, and which runs of
 /// text were sent more than once. Asked for once, when the reader opens the panel — it re-tokenizes
 /// the transcript and has no business on the one-second poll.
-pub async fn run_tokens(name: String, run_id: String) -> Result<AgentTokens, String> {
-    post("/api/agents/run/tokens", &RunRef { name, run_id }).await
+pub async fn run_tokens(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentTokens, String> {
+    post_on(node, "/api/agents/run/tokens", &RunRef { name, run_id }).await
 }
 
 /// Open a run of an agent with a person in the model's seat. Always a fresh run.
@@ -543,8 +563,16 @@ pub async fn simulate_reply(
 /// Hand one conversation to the root agent and ask how the workflow should have gone. Writes the
 /// dossier server-side and launches the reviewer on it; what comes back is where to watch, not the
 /// review itself — the review is a conversation, and it is only starting.
-pub async fn review_run(name: String, run_id: String) -> Result<AgentReviewStarted, String> {
-    post(
+///
+/// Runs on the conversation's own source (`node`): the reviewer it launches is a conversation on
+/// that same machine, so the caller keeps `node` unchanged when it goes to open it.
+pub async fn review_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentReviewStarted, String> {
+    post_on(
+        node,
         "/api/agents/run/review",
         &ReviewRun {
             name,
@@ -559,12 +587,14 @@ pub async fn review_run(name: String, run_id: String) -> Result<AgentReviewStart
 /// behind the answer still in flight. Returns a fresh snapshot with the updated transcript
 /// (including the streaming answer and anything queued).
 pub async fn reply_to_run(
+    node: Option<&str>,
     name: String,
     run_id: String,
     message: String,
     attachments: Vec<String>,
 ) -> Result<AgentPeek, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/run/reply",
         &ReplyToRun {
             name,
@@ -580,12 +610,14 @@ pub async fn reply_to_run(
 /// were asked. `ask` names the ask so a card left open in another tab cannot answer the question
 /// that has since replaced it — a stale one comes back 404, which is the useful answer.
 pub async fn answer_run(
+    node: Option<&str>,
     name: String,
     run_id: String,
     ask: String,
     replies: Vec<String>,
 ) -> Result<AgentPeek, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/run/answer",
         &AnswerRun {
             name,
@@ -598,8 +630,12 @@ pub async fn answer_run(
 }
 
 /// One conversation's goals, open and closed alike — what it is for, and what it already settled.
-pub async fn agent_goals(name: String, run_id: String) -> Result<AgentGoals, String> {
-    post("/api/agents/goals", &GoalsOf { name, run_id }).await
+pub async fn agent_goals(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentGoals, String> {
+    post_on(node, "/api/agents/goals", &GoalsOf { name, run_id }).await
 }
 
 /// Write a goal onto a conversation, or reword one that is open (`goal` names which).
@@ -607,12 +643,14 @@ pub async fn agent_goals(name: String, run_id: String) -> Result<AgentGoals, Str
 /// A goal set here is always recorded as set by a person: a run setting its own goes through the
 /// CLI from inside its turn, and the two are worth telling apart afterward.
 pub async fn set_agent_goal(
+    node: Option<&str>,
     name: String,
     run_id: String,
     text: String,
     goal: Option<String>,
 ) -> Result<AgentGoals, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/goal/set",
         &SetGoal {
             name,
@@ -629,11 +667,12 @@ pub async fn set_agent_goal(
 /// A goal somebody already closed comes back with the ending that happened rather than an error;
 /// only an id naming no goal at all is a 404.
 pub async fn close_agent_goal(
+    node: Option<&str>,
     goal: String,
     as_: String,
     note: String,
 ) -> Result<AgentGoals, String> {
-    post("/api/agents/goal/close", &CloseGoal { goal, as_, note }).await
+    post_on(node, "/api/agents/goal/close", &CloseGoal { goal, as_, note }).await
 }
 
 /// Stop waiting on one of a conversation's registered wakes, returning the ones it still holds.
@@ -642,11 +681,13 @@ pub async fn close_agent_goal(
 /// what a person needs is the other direction — a wake that is never coming, taken off a
 /// conversation that would otherwise sit open until it expires.
 pub async fn ignore_agent_await(
+    node: Option<&str>,
     name: String,
     run_id: String,
     id: String,
 ) -> Result<AgentAwaits, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/await/ignore",
         &IgnoreAwait { name, run_id, id },
     )
@@ -655,11 +696,13 @@ pub async fn ignore_agent_await(
 
 /// Drop the message at `index` from a conversation's queue, returning the fresh snapshot.
 pub async fn unqueue_from_run(
+    node: Option<&str>,
     name: String,
     run_id: String,
     index: usize,
 ) -> Result<AgentPeek, String> {
-    post(
+    post_on(
+        node,
         "/api/agents/run/unqueue",
         &UnqueueFromRun {
             name,
@@ -670,21 +713,33 @@ pub async fn unqueue_from_run(
     .await
 }
 
-/// Stop one specific run, returning the fresh run history.
-pub async fn stop_run(name: String, run_id: String) -> Result<AgentRuns, String> {
-    post("/api/agents/run/stop", &RunRef { name, run_id }).await
+/// Stop one specific run, returning the fresh run history — from `node`, the row's own origin
+/// (`docs/fleet.md` §13), not necessarily this machine.
+pub async fn stop_run(node: Option<&str>, name: String, run_id: String) -> Result<AgentRuns, String> {
+    post_on(node, "/api/agents/run/stop", &RunRef { name, run_id }).await
 }
 
 /// Delete one run outright — for a harness agent, the whole conversation — returning the fresh run
-/// history without it.
-pub async fn delete_run(name: String, run_id: String) -> Result<AgentRuns, String> {
-    post("/api/agents/run/delete", &RunRef { name, run_id }).await
+/// history without it. Routed to the row's own origin, like every other row action.
+pub async fn delete_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+) -> Result<AgentRuns, String> {
+    post_on(node, "/api/agents/run/delete", &RunRef { name, run_id }).await
 }
 
 /// Hide one session from the chat rail, or bring it back (`hidden: false`). Nothing is deleted and
-/// nothing is stopped — the fresh run history still carries the run, now flagged `hidden`.
-pub async fn hide_run(name: String, run_id: String, hidden: bool) -> Result<AgentRuns, String> {
-    post(
+/// nothing is stopped — the fresh run history still carries the run, now flagged `hidden`. Routed to
+/// the row's own origin, like every other row action.
+pub async fn hide_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+    hidden: bool,
+) -> Result<AgentRuns, String> {
+    post_on(
+        node,
         "/api/agents/run/hide",
         &HideRun {
             name,
@@ -697,9 +752,16 @@ pub async fn hide_run(name: String, run_id: String, hidden: bool) -> Result<Agen
 
 /// Star one conversation, or unstar it (`starred: false`), returning the fresh run history with the
 /// flag on it. Nothing is deleted and nothing is stopped — but a starred conversation is also the
-/// one the per-agent cap will not sweep, so this is how a chat is kept past the fifty newest.
-pub async fn star_run(name: String, run_id: String, starred: bool) -> Result<AgentRuns, String> {
-    post(
+/// one the per-agent cap will not sweep, so this is how a chat is kept past the fifty newest. Routed
+/// to the row's own origin, like every other row action.
+pub async fn star_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+    starred: bool,
+) -> Result<AgentRuns, String> {
+    post_on(
+        node,
         "/api/agents/run/star",
         &StarRun {
             name,
@@ -710,12 +772,17 @@ pub async fn star_run(name: String, run_id: String, starred: bool) -> Result<Age
     .await
 }
 
-pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {
-    post("/api/agents/peek", &AgentRef { name }).await
+pub async fn peek_agent(node: Option<&str>, name: String) -> Result<AgentPeek, String> {
+    post_on(node, "/api/agents/peek", &AgentRef { name }).await
 }
 
-pub async fn send_agent_keys(name: String, text: String, key: String) -> Result<AgentPeek, String> {
-    post("/api/agents/send-keys", &AgentKeys { name, text, key }).await
+pub async fn send_agent_keys(
+    node: Option<&str>,
+    name: String,
+    text: String,
+    key: String,
+) -> Result<AgentPeek, String> {
+    post_on(node, "/api/agents/send-keys", &AgentKeys { name, text, key }).await
 }
 
 // Triggers: every endpoint returns the fresh TriggersState so the page updates in one round-trip.
@@ -1070,16 +1137,17 @@ pub async fn transcribe(engine: &str, mime: &str, audio: &[u8]) -> Result<Transc
 /// upload that happens while the message is still being typed, so it has to be as cheap as the
 /// picture itself and not a third larger.
 pub async fn upload_attachment(
+    node: Option<&str>,
     name: &str,
     mime: &str,
     bytes: &[u8],
 ) -> Result<AgentAttachment, String> {
-    // The one agent call that does not follow the page to a node (`docs/fleet.md` §13): the
+    // The one agent call that does not follow the conversation to a node (`docs/fleet.md` §13): the
     // forwarder carries JSON, and this body is raw bytes. Refused outright rather than uploaded
     // here and referenced there, which would put an id in the node's transcript that names bytes
     // only this machine holds — a broken picture, or a path to a file that is not on the machine
     // the run happens on, instead of an error anyone can act on.
-    if let Some(node) = node() {
+    if let Some(node) = node {
         return Err(format!(
             "a file can only be attached to a session on this machine \u{2014} {node} is being \
              driven through its API, which carries JSON. Open {node}'s own panel to attach one \
@@ -1119,63 +1187,53 @@ fn encode_header(name: &str) -> String {
 // Which machine's agents these calls are about (`docs/fleet.md` §13)
 // ---------------------------------------------------------------------------------------
 
-thread_local! {
-    /// The paired node the agent API is currently pointed at, or `None` for this machine.
-    ///
-    /// A thread-local rather than a signal because this is not something the page *renders* — it is
-    /// where a request goes, read once per call at the moment it is made. What the page renders is
-    /// `State::session_node`, set beside it by `state::view_sessions_on`, which is also what makes
-    /// the live channel re-subscribe.
-    static NODE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
-}
-
-/// The node the agent API is pointed at, or `None` for this machine.
-pub(crate) fn node() -> Option<String> {
-    NODE.with(|n| n.borrow().clone())
-}
-
-/// Point the agent API at a paired node, or back at this machine.
-pub(crate) fn set_node(node: Option<String>) {
-    NODE.with(|n| *n.borrow_mut() = node);
-}
-
-/// Where a call actually goes: the path itself, or that path on the node in view.
+/// Where a call to a specific source's agent API goes: that node's forwarding prefix, or the path
+/// itself for this machine (`node: None`).
 ///
 /// **Only the agent API moves**, and that is the whole scope of §13 rather than an accident of
 /// where the prefix was easiest to add. The rest of the panel — projects, ports, the store browser,
-/// the fleet page that chose the node in the first place — is about *this* machine and its files,
-/// and silently repointing it would mean an operator who forgot which node was selected could
-/// create a project on the wrong one. Sessions are the thing you go looking for on another machine.
+/// the fleet page that named the node in the first place — is about *this* machine and its files.
 ///
-/// Applied in exactly two places, which is what keeps it honest: here, for every one-off read and
-/// every mutation, and in [`crate::live::Sub`], for the reads the socket repeats.
-pub(crate) fn routed(path: &str) -> String {
-    match node() {
-        Some(node) if is_agent_path(path) => format!("/api/node/{node}{path}"),
-        _ => path.to_string(),
+/// A pure function rather than a thread-local flipped before a request and read inside it: the
+/// sessions rail now asks several sources **concurrently** (`docs/fleet.md` §13, multi-select), and
+/// a shared "current node" set by one in-flight call would be read by another's request the moment
+/// an `.await` interleaved them. Every caller that needs a node now says so at the call, in
+/// [`get_on`]/[`post_on`] — and in [`crate::live::Sub::get_on`]/[`Sub::post_on`] for the reads the
+/// socket repeats — so two concurrent fetches for two different nodes can never cross wires.
+pub(crate) fn routed_for(node: Option<&str>, path: &str) -> String {
+    match node {
+        Some(node) => format!("/api/node/{node}{path}"),
+        None => path.to_string(),
     }
 }
 
-/// Whether a path belongs to the agent API — the sessions, their transcripts, and the definitions
-/// behind them. Matched on the whole segment, so `/api/agentsomething` is not one of them.
-fn is_agent_path(path: &str) -> bool {
-    let route = path.split('?').next().unwrap_or(path);
-    route == "/api/agents" || route.starts_with("/api/agents/")
-}
-
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
-    let resp = Request::get(&routed(url)).send().await.map_err(stringify)?;
+    let resp = Request::get(url).send().await.map_err(stringify)?;
     finish(resp).await
 }
 
 async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
-    let resp = Request::post(&routed(url))
+    let resp = Request::post(url)
         .json(body)
         .map_err(stringify)?
         .send()
         .await
         .map_err(stringify)?;
     finish(resp).await
+}
+
+/// [`get`], routed at a specific paired node (or this machine, for `None`).
+async fn get_on<T: DeserializeOwned>(node: Option<&str>, path: &str) -> Result<T, String> {
+    get(&routed_for(node, path)).await
+}
+
+/// [`post`], routed at a specific paired node (or this machine, for `None`).
+async fn post_on<B: Serialize, T: DeserializeOwned>(
+    node: Option<&str>,
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    post(&routed_for(node, path), body).await
 }
 
 /// Turn a response into `T`, or a message: the API's `{ error }` if present, else the
