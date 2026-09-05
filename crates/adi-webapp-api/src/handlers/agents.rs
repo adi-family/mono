@@ -24,6 +24,54 @@ use crate::types::{
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
 
+/// The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a
+/// peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/
+/// `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `nickname` is the identity that header carries, and
+/// `user` the credential it authenticated as. `None` for a request that never left this machine,
+/// which is what the control panel's own composer always sends.
+#[derive(Debug, Clone, Copy)]
+pub struct FleetSender<'a> {
+    pub nickname: &'a str,
+    pub user: &'a str,
+}
+
+/// `message`, with a lightweight tag naming who sent it ahead of the words — `[from:
+/// <nickname>/<user>]` — when it arrived from another fleet node. Untagged for a local sender:
+/// tagging the overwhelming majority of messages, which a person typed straight into this
+/// machine's own panel, would be noise nobody asked for.
+///
+/// The tag lives in the message text itself rather than only in structured metadata, because that
+/// is the one place every reader of the transcript — a person, or the model answering it — is
+/// guaranteed to see it.
+fn tag_sender(message: &str, sender: Option<FleetSender<'_>>) -> String {
+    let Some(sender) = sender.filter(|s| !s.nickname.is_empty()) else {
+        return message.to_string();
+    };
+    let who = if sender.user.is_empty() {
+        sender.nickname.to_string()
+    } else {
+        format!("{}/{}", sender.nickname, sender.user)
+    };
+    format!("[from: {who}] {message}")
+}
+
+/// The extra system-prompt instructions `nickname`'s node carries in this machine's `fleet.toml`
+/// (`adi_mesh::fleet::NodeRecord::agent_instructions`), for splicing into a conversation *it*
+/// opens here — see [`adi_agents::LaunchOptions::owner_instructions`].
+///
+/// `None` when the node is not paired here, carries no instructions, or the registry cannot be
+/// read: a missing or unreadable `fleet.toml` must never block an ordinary launch.
+fn owner_instructions_for(store: &Agents, nickname: &str) -> Option<String> {
+    let registry = adi_mesh::fleet::FleetRegistry::load_from(store.config()).ok()?;
+    registry
+        .by_nickname(nickname)?
+        .agent_instructions
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToString::to_string)
+}
+
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
 #[must_use]
@@ -134,7 +182,7 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
 /// so a task is **required** — launching one with no message would just have it act on a placeholder
 /// and do nothing, so that is rejected (400) rather than silently run.
 #[must_use]
-pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
+pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, RunAgent);
     let name = req.name.trim();
     let message = req.message.trim();
@@ -151,6 +199,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
     }
     // A pty backend takes no task, so a blank message is its normal launch, not a missing one.
     let message = if message.is_empty() { "run" } else { message };
+    let message = tag_sender(message, sender);
     let working_dir = req
         .working_dir
         .as_deref()
@@ -170,11 +219,15 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         arguments: o.arguments.clone(),
         unattended: o.unattended,
     });
+    // The sending node's own standing instructions (`fleet.toml`), spliced into this run's system
+    // prompt once at creation — see `owner_instructions_for` and ADI-MONO-13. `None` for a local
+    // launch, which is nearly every one.
+    let owner_instructions = sender.and_then(|s| owner_instructions_for(store, s.nickname));
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
     let launch = store.launch(
         name,
-        message,
+        &message,
         &adi_agents::LaunchOptions {
             working_dir,
             force: req.force,
@@ -182,6 +235,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
             pre_run: &req.pre_run,
             launched_by: Some(launched_by),
             overrides: overrides.as_ref(),
+            owner_instructions: owner_instructions.as_deref(),
         },
     );
     let launch = match launch {
@@ -458,14 +512,15 @@ pub fn review_run(store: &Agents, body: &[u8]) -> Response {
 /// transcript, a queued one flagged as such. Only a backend that keeps no conversation is refused
 /// (400).
 #[must_use]
-pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
+pub fn reply_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, ReplyToRun);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
     };
     let run_id = req.run_id.trim();
-    if let Err(e) = store.reply_with(&agent.name, run_id, req.message.trim(), &req.attachments) {
+    let message = tag_sender(req.message.trim(), sender);
+    if let Err(e) = store.reply_with(&agent.name, run_id, &message, &req.attachments) {
         return Response::from(&e);
     }
     conversation_snapshot(store, &agent, run_id)
@@ -3154,6 +3209,87 @@ mod tests {
         let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(all.total, 5);
         assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);
+    }
+
+    // ---- fleet sender tagging and owner instructions (ADI-MONO-13) --------------------
+
+    /// The tag is what every reader of the transcript sees, so it names both halves of the
+    /// identity when both are known, falls back to the nickname alone when the peer verified
+    /// without a username on the credential, and disappears entirely for a local sender.
+    #[test]
+    fn tag_sender_names_the_fleet_node_or_says_nothing_for_a_local_one() {
+        assert_eq!(
+            tag_sender(
+                "fix the failing test",
+                Some(FleetSender {
+                    nickname: "laptop-b",
+                    user: "igor",
+                })
+            ),
+            "[from: laptop-b/igor] fix the failing test"
+        );
+        assert_eq!(
+            tag_sender(
+                "go",
+                Some(FleetSender {
+                    nickname: "laptop-b",
+                    user: "",
+                })
+            ),
+            "[from: laptop-b] go"
+        );
+        assert_eq!(tag_sender("go", None), "go");
+    }
+
+    /// The node's standing instructions come off this machine's own `fleet.toml`, found by the
+    /// nickname the gateway attached — never by the petname, which the header does not carry.
+    #[test]
+    fn owner_instructions_for_reads_the_senders_fleet_toml_entry() {
+        let store = scratch("owner-instructions-lookup");
+        let mut registry = adi_mesh::fleet::FleetRegistry::load_from(store.config()).expect("load");
+        let mut record = adi_mesh::fleet::NodeRecord {
+            key: "aa".to_string(),
+            nickname: "laptop-b".to_string(),
+            agent_instructions: Some("Always run the tests first.".to_string()),
+            ..adi_mesh::fleet::NodeRecord::default()
+        };
+        record.set_password("igor", "hunter2");
+        registry.nodes.insert("laptop-b".to_string(), record);
+        registry.save_to(store.config()).expect("save");
+
+        assert_eq!(
+            owner_instructions_for(&store, "laptop-b").as_deref(),
+            Some("Always run the tests first.")
+        );
+        assert_eq!(owner_instructions_for(&store, "nobody"), None);
+    }
+
+    /// A node that is paired but never set any instructions, or a `fleet.toml` this machine has
+    /// never written, must never block or affect an ordinary launch.
+    #[test]
+    fn owner_instructions_for_is_none_when_there_is_nothing_to_say() {
+        let store = scratch("owner-instructions-absent");
+        assert_eq!(
+            owner_instructions_for(&store, "laptop-b"),
+            None,
+            "no fleet.toml at all"
+        );
+
+        let mut registry = adi_mesh::fleet::FleetRegistry::load_from(store.config()).expect("load");
+        registry.nodes.insert(
+            "laptop-b".to_string(),
+            adi_mesh::fleet::NodeRecord {
+                key: "aa".to_string(),
+                nickname: "laptop-b".to_string(),
+                ..adi_mesh::fleet::NodeRecord::default()
+            },
+        );
+        registry.save_to(store.config()).expect("save");
+        assert_eq!(
+            owner_instructions_for(&store, "laptop-b"),
+            None,
+            "paired, but nothing to add"
+        );
     }
 }
 

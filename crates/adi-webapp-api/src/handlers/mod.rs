@@ -598,7 +598,7 @@ mod tests {
     #[test]
     fn run_of_a_missing_agent_is_404() {
         let store = temp_agents();
-        let Response { status, .. } = run_agent(&store, br#"{"name":"ghost"}"#);
+        let Response { status, .. } = run_agent(&store, br#"{"name":"ghost"}"#, None);
         assert_eq!(status, 404);
     }
 
@@ -661,7 +661,7 @@ mod tests {
     fn run_of_a_headless_backend_with_no_task_is_400() {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
-        let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#);
+        let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#, None);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(
@@ -679,7 +679,8 @@ mod tests {
     fn run_of_an_unrunnable_backend_is_400() {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
-        let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
+        let Response { status, body } =
+            run_agent(&store, br#"{"name":"looper","message":"go"}"#, None);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(v["error"].as_str().unwrap().contains("can't be run yet"));
@@ -795,7 +796,8 @@ mod tests {
         // One live run — anybody's, under any backend — fills a cap of one.
         seed_live_run(&store, "process:claude", "other");
 
-        let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
+        let Response { status, body } =
+            run_agent(&store, br#"{"name":"looper","message":"go"}"#, None);
         assert_eq!(status, 429, "a launch past the cap is refused");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(
@@ -803,8 +805,11 @@ mod tests {
             "the refusal says what the limit is: {body}"
         );
 
-        let Response { status, .. } =
-            run_agent(&store, br#"{"name":"looper","message":"go","force":true}"#);
+        let Response { status, .. } = run_agent(
+            &store,
+            br#"{"name":"looper","message":"go","force":true}"#,
+            None,
+        );
         assert_eq!(
             status, 400,
             "force gets past the cap, to the backend's verdict"
@@ -837,7 +842,8 @@ mod tests {
         // One live run of the project fills its cap, while the machine as a whole is still idle.
         seed_live_run(&store, "harness:adi", "solver");
 
-        let Response { status, body } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
+        let Response { status, body } =
+            run_agent(&store, br#"{"name":"solver","message":"go"}"#, None);
         assert_eq!(status, 429);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(
@@ -846,7 +852,8 @@ mod tests {
         );
 
         // The unfiled agent is untouched by it, and the state says which rows are at their cap.
-        let Response { status, .. } = run_agent(&store, br#"{"name":"loose","message":"go"}"#);
+        let Response { status, .. } =
+            run_agent(&store, br#"{"name":"loose","message":"go"}"#, None);
         assert_eq!(status, 400, "no cap applies, so the backend answers");
         let Response { body, .. } = agents(&store);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -874,7 +881,8 @@ mod tests {
             0,
             "the row stays while runs are live, now with no cap of its own"
         );
-        let Response { status, .. } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
+        let Response { status, .. } =
+            run_agent(&store, br#"{"name":"solver","message":"go"}"#, None);
         assert_eq!(status, 400);
     }
 

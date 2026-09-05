@@ -4,11 +4,11 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-226 structs · 9 enums across 8 files.
+227 structs · 9 enums across 8 files.
 
 ## Index
 
-- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `RunCaps`, `Waiting`, `Awaiting`
+- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `Waiting`, `Awaiting`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
@@ -20,6 +20,18 @@
 ---
 
 ## `src/handlers/agents.rs`
+
+### struct `FleetSender`
+
+The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/ `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `nickname` is the identity that header carries, and `user` the credential it authenticated as. `None` for a request that never left this machine, which is what the control panel's own composer always sends.
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct FleetSender<'a> {
+    pub nickname: &'a str,
+    pub user: &'a str,
+}
+```
 
 ### struct `RunCaps`
 

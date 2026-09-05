@@ -155,6 +155,8 @@ pub struct NodeRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_nickname: Option<String>,
     pub grants: Vec<Grant>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_instructions: Option<String>,
     pub auth: Credential,
 }
 ```

@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     outcome       TEXT,
     tool_help     TEXT,
     runner        TEXT,
+    owner_instructions TEXT,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -172,6 +173,11 @@ const MIGRATIONS: &[&str] = &[
     // the reason `outcome` is — the set of settings an engine takes is the engine's business, and a
     // column per dial would be a table mostly full of nulls. See `SessionRecord::overrides`.
     "ALTER TABLE sessions ADD COLUMN overrides TEXT",
+    // The fleet node that opened this conversation's own extra system-prompt instructions, frozen
+    // the moment it was created. NULL for every session opened before this existed, and for the
+    // overwhelming majority ever after: a launch not driven by another node over the mesh sets
+    // nothing here. See `SessionStore::freeze_owner_instructions`.
+    "ALTER TABLE sessions ADD COLUMN owner_instructions TEXT",
 ];
 
 // One connection per thread per database.

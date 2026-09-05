@@ -355,6 +355,12 @@ pub struct NodeRecord {
     pub pending_nickname: Option<String>,
     /// What this peer may reach here. **Empty denies everything.**
     pub grants: Vec<Grant>,
+    /// Extra system-prompt instructions for any agent conversation *this node* opens here over the
+    /// mesh — spliced in once, at the moment the conversation is created, and never re-read
+    /// afterwards (`crate::gateway`'s `X-Adi-Fleet-Node` is what says a request came from this
+    /// node). `None` adds nothing, which is every node until an operator sets one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_instructions: Option<String>,
     /// The Basic-auth credential this node's requests must carry.
     pub auth: Credential,
 }
@@ -584,6 +590,22 @@ impl FleetRegistry {
             .map(|(petname, record)| (petname.as_str(), record))
     }
 
+    /// The record for the node that declares itself `nickname` — the identity
+    /// [`crate::auth::FLEET_NODE_HEADER`] carries (`crate::gateway::negotiate` attaches the
+    /// *nickname*, not the petname).
+    ///
+    /// A scan rather than a map lookup, on purpose: `nickname` is what a node calls *itself*, and
+    /// two different petnames could in principle carry the same one (§2 warns against conflating
+    /// them, but nothing here enforces uniqueness of what a peer declares). The first match is
+    /// good enough for what this answers — extra prompt instructions for a node that opened a
+    /// conversation — which is best-effort by nature.
+    #[must_use]
+    pub fn by_nickname(&self, nickname: &str) -> Option<&NodeRecord> {
+        self.nodes
+            .values()
+            .find(|record| record.nickname == nickname)
+    }
+
     /// Every petname, in sorted order.
     pub fn petnames(&self) -> impl Iterator<Item = &str> {
         self.nodes.keys().map(String::as_str)
@@ -711,6 +733,7 @@ impl FleetRegistry {
                 paired_at: adi_config::now_unix(),
                 pending_nickname: None,
                 grants: Vec::new(),
+                agent_instructions: None,
                 auth: Credential::default(),
             },
         );
@@ -1323,6 +1346,54 @@ grants = ["ftp:*"]
         assert!(registry.by_key(&other).is_none());
 
         assert_eq!(registry.petnames().collect::<Vec<_>>(), vec!["laptop-b"]);
+    }
+
+    #[test]
+    fn by_nickname_finds_the_record_a_declared_nickname_names() {
+        let mut registry = FleetRegistry::default();
+        pair_ok(&mut registry, &some_key(), "laptop-b");
+        registry
+            .get_mut("laptop-b")
+            .expect("record")
+            .agent_instructions = Some("Always run tests before answering.".to_string());
+
+        let found = registry.by_nickname("laptop-b").expect("found by nickname");
+        assert_eq!(
+            found.agent_instructions.as_deref(),
+            Some("Always run tests before answering.")
+        );
+        assert!(registry.by_nickname("nobody").is_none());
+    }
+
+    #[test]
+    fn agent_instructions_round_trips_through_toml_and_defaults_to_none() {
+        let mut registry = FleetRegistry::default();
+        pair_ok(&mut registry, &some_key(), "laptop-b");
+        assert!(
+            registry
+                .get("laptop-b")
+                .expect("record")
+                .agent_instructions
+                .is_none(),
+            "a freshly paired node adds nothing by default"
+        );
+
+        registry
+            .get_mut("laptop-b")
+            .expect("record")
+            .agent_instructions = Some("Be terse.".to_string());
+        let written = toml::to_string(&registry).expect("save");
+        assert!(written.contains("Be terse."), "{written}");
+
+        let reloaded: FleetRegistry = toml::from_str(&written).expect("reload");
+        assert_eq!(
+            reloaded
+                .get("laptop-b")
+                .expect("record")
+                .agent_instructions
+                .as_deref(),
+            Some("Be terse.")
+        );
     }
 
     #[test]

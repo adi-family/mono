@@ -1632,6 +1632,7 @@ pub struct LaunchOptions<'a> {
     pub pre_run: &'a [String],
     pub launched_by: Option<&'a str>,
     pub overrides: Option<&'a crate::RunOverrides>,
+    pub owner_instructions: Option<&'a str>,
 }
 ```
 

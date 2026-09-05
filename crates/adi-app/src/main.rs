@@ -570,6 +570,18 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
     ))
 }
 
+/// The fleet node behind `req`, off the headers the mesh gateway attaches when it forwards a
+/// peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/
+/// `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `None` for a request that never left this machine,
+/// which is every request the control panel's own pages send.
+fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
+    let nickname = req.header("x-adi-fleet-node")?;
+    Some(handlers::FleetSender {
+        nickname,
+        user: req.header("x-adi-fleet-user").unwrap_or_default(),
+    })
+}
+
 /// Route a synchronous request. Runs on the blocking pool ([`blocking`]), never on an async
 /// worker: nearly every arm reads files, and several spawn a subprocess.
 // One flat table of routes, deliberately: splitting it by prefix would hide the ordering the
@@ -750,7 +762,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
-        ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
+        ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body, fleet_sender(req)),
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
         // `?limit=N` is the chat rail's page — the newest N sessions across every agent. Absent
@@ -761,7 +773,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             req.query_param("limit").and_then(|n| n.parse().ok()),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
-        ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
+        ("POST", "/api/agents/run/reply") => {
+            handlers::reply_run(agents, &req.body, fleet_sender(req))
+        }
         // An image on its way into a message. Raw bytes with their type in the header, like the
         // dictation clip above — the page already holds both, and JSON would cost a base64 third.
         // The bytes are read back out at `GET /api/agents/attachment/<id>`, which is not routed
@@ -1233,6 +1247,28 @@ mod tests {
             body: body.as_bytes().to_vec(),
             rest: Vec::new(),
         }
+    }
+
+    /// The identity headers the mesh gateway attaches when it forwards a peer's request here
+    /// (`docs/fleet.md` §13) name the sending node, or say nothing for a request that never left
+    /// this machine.
+    #[test]
+    fn fleet_sender_reads_the_mesh_gateways_identity_headers() {
+        let mut forwarded = request("POST", "/api/agents/run", "{}");
+        forwarded
+            .headers
+            .insert("x-adi-fleet-node".to_string(), "laptop-b".to_string());
+        forwarded
+            .headers
+            .insert("x-adi-fleet-user".to_string(), "igor".to_string());
+        let sender = fleet_sender(&forwarded).expect("a sender");
+        assert_eq!(sender.nickname, "laptop-b");
+        assert_eq!(sender.user, "igor");
+
+        assert!(
+            fleet_sender(&request("POST", "/api/agents/run", "{}")).is_none(),
+            "a local request carries no fleet identity"
+        );
     }
 
     /// What may be shared and what may not. The distinction is the whole safety argument for

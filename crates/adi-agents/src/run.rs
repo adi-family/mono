@@ -66,6 +66,13 @@ pub struct LaunchOptions<'a> {
     /// [`overrides`](crate::overrides), which is also where the "leave it alone" / "unset it"
     /// distinction lives.
     pub overrides: Option<&'a crate::RunOverrides>,
+    /// Extra system-prompt instructions spliced in behind the agent's own, for this launch and
+    /// every later turn of the conversation it opens — the standing per-node addition a fleet node
+    /// carries in this machine's `fleet.toml` when *it* is the one opening the conversation
+    /// (`docs/fleet.md` §13). Read once, here, and never again: a later edit to that node's
+    /// instructions must not reach back into a conversation already running under the old ones.
+    /// `None` is the ordinary launch — every one not driven by another node over the mesh.
+    pub owner_instructions: Option<&'a str>,
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent

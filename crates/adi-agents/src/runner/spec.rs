@@ -44,7 +44,10 @@ pub struct RunSpec {
     /// did the same thing. Freezing what the conversation opened with keeps the stated bargain
     /// exactly: edit a tool and the *next run* sees it, not the turn you are in the middle of.
     pub tool_help: Option<String>,
-    /// The agent's own system prompt, unmodified. Nothing above the runner writes into it.
+    /// The agent's own system prompt. Unmodified, with one exception: a conversation opened by a
+    /// fleet node carrying its own standing instructions (`fleet.toml`'s `agent_instructions`) has
+    /// them spliced in behind it, once, before its first turn, and frozen from then on. Nothing
+    /// else above the runner writes into it.
     pub system_prompt: Option<String>,
     /// Where the run starts, stated in prose for the prompt — `None` when there is nothing to say.
     ///

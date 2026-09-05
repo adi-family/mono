@@ -717,6 +717,7 @@ impl Agents {
             pre_run,
             launched_by,
             overrides,
+            owner_instructions,
             ..
         } = *options;
         let stored = self
@@ -763,6 +764,8 @@ impl Agents {
             store.set_overrides(&agent.name, &record.id, overrides)?;
         }
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
+        freeze_owner_instructions(&store, &agent.name, &record.id, owner_instructions);
+        pin_owner_instructions(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
         // Run before the opening turn is recorded, and after `name_conversation` — a pre-run
@@ -1361,6 +1364,7 @@ impl Agents {
         let agent = &*as_launched;
         let mut spec = self.spec_in(agent, session_dir(&self.config, record));
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
+        pin_owner_instructions(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
@@ -2216,6 +2220,38 @@ fn pin_tool_help(store: &SessionStore, agent: &str, id: &str, spec: &mut RunSpec
     spec.tool_help = store.tool_help(agent, id).or(Some(block));
 }
 
+/// `spec`'s prompt with this conversation's frozen owner instructions behind it, when it opened
+/// under a fleet node that carries any (see [`SessionStore::owner_instructions`]).
+///
+/// Unlike [`pin_tool_help`] there is nothing to derive here — the text was decided once, at
+/// launch, by [`freeze_owner_instructions`] below, and this only ever reads it back. Appended
+/// after the agent's own prompt, the same rule [`crate::runner::prompt::compose`] appends every
+/// other section by: what the agent was told to be survives, with the addition after it.
+fn pin_owner_instructions(store: &SessionStore, agent: &str, id: &str, spec: &mut RunSpec) {
+    let Some(instructions) = store.owner_instructions(agent, id) else {
+        return;
+    };
+    spec.system_prompt = Some(match spec.system_prompt.take() {
+        Some(prompt) => format!("{prompt}\n\n{instructions}"),
+        None => instructions,
+    });
+}
+
+/// Freeze `instructions` as this conversation's owner instructions, when the launch carried any —
+/// see [`LaunchOptions::owner_instructions`]. A no-op for the ordinary launch, which is nearly
+/// every one.
+fn freeze_owner_instructions(
+    store: &SessionStore,
+    agent: &str,
+    id: &str,
+    instructions: Option<&str>,
+) {
+    let Some(instructions) = instructions.map(str::trim).filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let _ = store.freeze_owner_instructions(agent, id, instructions);
+}
+
 /// Tell the run which conversation it is, by exporting [`CONV_ENV`].
 ///
 /// Applied after the record is minted, alongside [`pin_tool_help`], because until then there is no
@@ -2699,6 +2735,58 @@ mod tests {
         assert_eq!(
             second_run.tool_help, None,
             "nothing to render, nothing kept"
+        );
+    }
+
+    /// A fleet node's standing instructions are spliced in once, behind the agent's own prompt, and
+    /// stay exactly that even on a later turn whose spec is rebuilt from scratch — the same freeze
+    /// [`pin_tool_help`] gives the tool section, for the same reason: the model must not be handed a
+    /// prompt that moved under it mid-thread.
+    #[test]
+    fn owner_instructions_are_frozen_behind_the_agents_own_prompt() {
+        let store = scratch("owner-instructions-pin");
+        let agent = agent_with_tools(&store, "solver", "process:claude", Vec::new());
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::ProcessClaude, "/tmp/work", "go")
+            .expect("create");
+
+        freeze_owner_instructions(
+            &sessions,
+            "solver",
+            &record.id,
+            Some("Always run the test suite first."),
+        );
+        let mut opening = store.launch_spec(&agent, None);
+        pin_owner_instructions(&sessions, "solver", &record.id, &mut opening);
+        assert_eq!(
+            opening.system_prompt.as_deref(),
+            Some("You are a careful operator.\n\nAlways run the test suite first."),
+            "the agent's own words survive, with the node's instructions behind them"
+        );
+
+        // A second call to freeze — as a later turn would make, were it ever wired up to try — is a
+        // no-op: whichever call got there first decided this conversation's instructions.
+        freeze_owner_instructions(
+            &sessions,
+            "solver",
+            &record.id,
+            Some("Something else entirely."),
+        );
+        let mut later = store.launch_spec(&agent, None);
+        pin_owner_instructions(&sessions, "solver", &record.id, &mut later);
+        assert_eq!(later.system_prompt, opening.system_prompt);
+
+        // A conversation nobody froze anything for is untouched.
+        let plain = sessions
+            .create("solver", Backend::ProcessClaude, "/tmp/work", "again")
+            .expect("create");
+        let mut untouched = store.launch_spec(&agent, None);
+        pin_owner_instructions(&sessions, "solver", &plain.id, &mut untouched);
+        assert_eq!(
+            untouched.system_prompt.as_deref(),
+            Some("You are a careful operator.")
         );
     }
 

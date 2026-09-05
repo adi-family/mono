@@ -438,6 +438,45 @@ impl SessionStore {
         Ok(())
     }
 
+    /// The extra system-prompt instructions this conversation opened with, if a fleet node ever
+    /// froze any for it. See [`freeze_owner_instructions`](Self::freeze_owner_instructions).
+    #[must_use]
+    pub fn owner_instructions(&self, agent: &str, id: &str) -> Option<String> {
+        self.conn()
+            .ok()?
+            .query_row(
+                "SELECT owner_instructions FROM sessions WHERE agent = ?1 AND id = ?2",
+                [agent, id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+    }
+
+    /// Record the fleet node's extra system-prompt instructions this conversation was opened
+    /// under, so every later turn re-uses them rather than asking `fleet.toml` again. Written
+    /// once — a second call is a no-op, on the same `IS NULL` gate as
+    /// [`freeze_tool_help`](Self::freeze_tool_help) — because in practice there is only ever one
+    /// caller, right after the session is opened.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn freeze_owner_instructions(
+        &self,
+        agent: &str,
+        id: &str,
+        instructions: &str,
+    ) -> Result<()> {
+        self.conn()?
+            .execute(
+                "UPDATE sessions SET owner_instructions = ?3
+                 WHERE agent = ?1 AND id = ?2 AND owner_instructions IS NULL",
+                rusqlite::params![agent, id, instructions],
+            )
+            .map_err(|e| db::sql_err("freeze the owner instructions of", e))?;
+        Ok(())
+    }
+
     /// The runner's scratch space for this session, as it is on disk right now.
     #[must_use]
     pub fn runner_state(&self, agent: &str, id: &str) -> Option<serde_json::Value> {
