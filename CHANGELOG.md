@@ -20,6 +20,24 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.6.0 — 2026-09-05
+
+### Added
+
+- **The chat home shows which paired machines are online.** A strip above the sessions rail
+  lists every paired node, active ones first, each as a name beside the same status dot the
+  Fleet page uses — reading the one presence record both draw from, so the two screens can never
+  disagree about who's up. Under it: any request a node sends across the mesh now updates a
+  shared last-seen record for that node, and a node reads as active for the minute after. The
+  strip is absent on a machine paired with nobody.
+- **A paired node's agent can be given instructions of its own, and a message it sends now says
+  so.** Fleet settings gains an editor: write instructions for one specific paired node, and the
+  next conversation *that node* opens here splices them in behind the agent's own system prompt —
+  frozen the moment the conversation starts, so editing them afterwards never reaches back into a
+  run already underway. Every message arriving from a paired node's own request is now tagged
+  with that node's name in the transcript, so a conversation another machine started reads as
+  such rather than looking like you had it yourself.
+
 ## 1.5.1 — 2026-09-05
 
 ### Added
