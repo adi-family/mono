@@ -277,6 +277,18 @@ pub struct FleetNode {
     /// another's links, and ignoring this line is exactly the case that rule guards.
     #[serde(default)]
     pub pending_nickname: Option<String>,
+    /// Unix seconds at which a request from this node last cleared both of §5's gates
+    /// (`adi_mesh::activity::record_seen`), or `None` when it has never been seen making one —
+    /// paired, but silent since. Presence, not the pairing record: a node can be long paired and
+    /// still have no entry here.
+    #[serde(default)]
+    pub last_seen: Option<u64>,
+    /// Whether [`last_seen`](Self::last_seen) falls inside `adi_mesh::activity::ACTIVE_WINDOW_SECS`
+    /// of the moment this was answered — "known" (paired, in the registry) and "active" (seen
+    /// recently) are different questions, and this is the answer to the second one. Always `false`
+    /// with no sighting at all.
+    #[serde(default)]
+    pub active: bool,
 }
 
 impl FleetNode {

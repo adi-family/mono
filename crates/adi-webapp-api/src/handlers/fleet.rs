@@ -42,8 +42,9 @@
 use std::time::Duration;
 
 use adi_config::Config;
+use adi_db::Db;
 use adi_mesh::fleet::{FleetRegistry, Grant};
-use adi_mesh::{join, ticket};
+use adi_mesh::{activity, join, ticket};
 use serde::de::DeserializeOwned;
 
 use crate::types::{
@@ -61,7 +62,8 @@ use super::response::{Response, error, ok_json};
 /// token is carried to a cloud-init file and a machine is booted with it.
 const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
 
-/// `GET /api/fleet` — every node paired with this machine, in petname order.
+/// `GET /api/fleet` — every node paired with this machine, in petname order, each with whether it
+/// is currently active (`adi_mesh::activity`'s presence bookkeeping) and when it was last seen.
 ///
 /// A first read materializes an empty `fleet.toml`, so a machine that has never paired answers
 /// an empty list rather than an error: nothing paired is a state, not a failure.
@@ -334,23 +336,38 @@ pub fn fleet_dismiss_nickname(store: &Config, body: &[u8]) -> Response {
 }
 
 /// The registry as the wire sees it: every node, in petname order (the registry is a `BTreeMap`,
-/// so the order is the file's own and is stable between reads).
+/// so the order is the file's own and is stable between reads), joined against the shared
+/// database's presence bookkeeping.
+///
+/// The join key is `nickname`, not `petname`: [`activity::record_seen`] is called with the
+/// identity riding [`adi_mesh::auth::FLEET_NODE_HEADER`], which is the peer's own nickname — so a
+/// node this machine has since renamed is still matched by what it calls itself, not by the label
+/// filed for it here.
 fn snapshot(store: &Config) -> Result<FleetState, String> {
     let registry =
         FleetRegistry::load_from(store).map_err(|e| format!("reading the fleet registry: {e}"))?;
+    let seen = activity::last_seen_all(&Db::with_config(store.clone()));
+    let now = adi_config::now_unix();
     Ok(FleetState {
         nodes: registry
             .nodes
             .into_iter()
-            .map(|(petname, record)| FleetNode {
-                petname,
-                key: record.key,
-                nickname: record.nickname,
-                paired_at: record.paired_at,
-                grants: record.grants.iter().map(ToString::to_string).collect(),
-                // The one thing said about the credential. Never `auth.digest`, never `auth.salt`.
-                has_password: record.auth.is_set(),
-                pending_nickname: record.pending_nickname,
+            .map(|(petname, record)| {
+                let last_seen = seen.get(&record.nickname).copied();
+                let active = last_seen.is_some_and(|seen| activity::is_active(seen, now));
+                FleetNode {
+                    petname,
+                    key: record.key,
+                    nickname: record.nickname,
+                    paired_at: record.paired_at,
+                    grants: record.grants.iter().map(ToString::to_string).collect(),
+                    // The one thing said about the credential. Never `auth.digest`, never
+                    // `auth.salt`.
+                    has_password: record.auth.is_set(),
+                    pending_nickname: record.pending_nickname,
+                    last_seen,
+                    active,
+                }
             })
             .collect(),
     })
@@ -534,6 +551,11 @@ mod tests {
         );
         assert_eq!(laptop["has_password"], true);
         assert!(laptop["pending_nickname"].is_null());
+        assert!(
+            laptop["last_seen"].is_null(),
+            "paired, but never recorded as seen"
+        );
+        assert_eq!(laptop["active"], false);
 
         // The node that calls itself something else than we file it under still reads clearly.
         assert_eq!(nodes[0]["nickname"], "workstation");
@@ -828,6 +850,32 @@ mod tests {
         let store = temp_store();
         let v = ok_body(&fleet(&store));
         assert!(v["nodes"].as_array().unwrap().is_empty());
+    }
+
+    /// `active` and `known` are different questions: every paired node is known, but only one
+    /// seen inside the window is active. The join is by nickname (what a node calls itself), the
+    /// same identity `record_seen` is called with — not petname (what this machine calls it).
+    #[test]
+    fn presence_reports_active_within_the_window_and_merely_known_past_it() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        pair(&store, "desk", "desk", &[], false);
+
+        let db = Db::with_config(store.clone());
+        let now = adi_config::now_unix();
+        activity::try_record_seen(&db, "laptop-b", now - 10).expect("recent sighting");
+        activity::try_record_seen(&db, "desk", now - 3600).expect("stale sighting");
+
+        let v = ok_body(&fleet(&store));
+        let nodes = v["nodes"].as_array().unwrap();
+        let laptop = nodes.iter().find(|n| n["petname"] == "laptop-b").unwrap();
+        let desk = nodes.iter().find(|n| n["petname"] == "desk").unwrap();
+
+        assert_eq!(laptop["active"], true, "seen 10s ago, well inside the window");
+        assert_eq!(laptop["last_seen"], now - 10);
+
+        assert_eq!(desk["active"], false, "seen an hour ago: known, not active");
+        assert_eq!(desk["last_seen"], now - 3600);
     }
 
     /// An `adimesh:` ticket of the shape [`ticket::published`] hands back — the endpoint an invite

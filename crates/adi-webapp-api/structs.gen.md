@@ -525,6 +525,10 @@ pub struct FleetNode {
     pub has_password: bool,
     #[serde(default)]
     pub pending_nickname: Option<String>,
+    #[serde(default)]
+    pub last_seen: Option<u64>,
+    #[serde(default)]
+    pub active: bool,
 }
 ```
 
