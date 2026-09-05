@@ -6,14 +6,14 @@ use adi_webapp_api::types::{
     AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
     DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
-    FleetGrantRef, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState, FsContent,
-    FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait,
-    InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes,
-    KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState,
-    LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MarketplaceDone, MarketplaceState, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
-    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
-    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
+    FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
+    IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
+    KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
+    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MarketplaceDone, MarketplaceState,
+    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
+    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
+    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
     RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
@@ -152,6 +152,22 @@ pub async fn fleet_revoke(petname: String, grant: String) -> Result<FleetState, 
     post(
         "/api/fleet/grants/remove",
         &FleetGrantRef { petname, grant },
+    )
+    .await
+}
+
+/// Set or clear a node's standing agent instructions (ADI-MONO-15). An empty `instructions`
+/// clears it — see `adi_webapp_api::handlers::fleet::fleet_instructions`.
+pub async fn fleet_instructions(
+    petname: String,
+    instructions: String,
+) -> Result<FleetState, String> {
+    post(
+        "/api/fleet/instructions",
+        &FleetInstructions {
+            petname,
+            instructions,
+        },
     )
     .await
 }

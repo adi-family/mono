@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-62 structs · 9 enums · 1 type alias across 23 files.
+63 structs · 9 enums · 1 type alias across 23 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StoredRunSettings`, `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StoredRunSettings`, `StepRef`, `ChatStats`, `PickerOption`, `SessionRow`, `SessionRef`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -230,6 +230,18 @@ struct ChatStats {
     work_ms: u64,
     first_at: u64,
     last_at: u64,
+}
+```
+
+### struct `PickerOption`
+
+One option `chat_agent_picker` offers: an agent, and which of the rail's currently-selected sources it came from (`docs/fleet.md` §13, multi-select) — `None` for this machine.
+
+```rust
+struct PickerOption {
+    node: Option<String>,
+    name: String,
+    running: bool,
 }
 ```
 
@@ -1257,13 +1269,15 @@ pub(crate) struct MeshForm {
 
 ### struct `FleetForm`
 
-The Fleet page's local signals: the grant form's node picker and grant text, the pairing invite on screen, plus a shared busy flag. Renaming and unpairing are row actions rather than form fields — they name their node by the row you clicked — so nothing here holds a petname of its own. `Copy`, so it threads into the page view and its handlers.
+The Fleet page's local signals: the grant form's node picker and grant text, the instructions form's own node picker and text, the pairing invite on screen, plus a shared busy flag. Renaming and unpairing are row actions rather than form fields — they name their node by the row you clicked — so nothing here holds a petname of its own for those two. `Copy`, so it threads into the page view and its handlers.
 
 ```rust
 #[derive(Clone, Copy)]
 pub(crate) struct FleetForm {
     pub(crate) grant_node: RwSignal<String>,
     pub(crate) grant: RwSignal<String>,
+    pub(crate) instructions_node: RwSignal<String>,
+    pub(crate) instructions: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) invite: RwSignal<Option<adi_webapp_api::types::FleetInvite>>,
     pub(crate) invite_until: RwSignal<f64>,

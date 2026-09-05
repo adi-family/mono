@@ -17,6 +17,13 @@
 //! Basic-auth credential — the second, human-scoped half of the gate, without which the mesh grant
 //! alone lets *any* process on a paired machine through.
 //!
+//! **§13 — a node's own standing instructions.** The instructions row under the table
+//! (ADI-MONO-15) edits `NodeRecord::agent_instructions`, which a fresh conversation *that node*
+//! opens here splices in behind the agent's own system prompt — and, per ADI-MONO-13, only a fresh
+//! one: it is spliced once, at creation, and frozen from then on, so an edit here never reaches a
+//! conversation already running. The hint under the form says exactly that, because the one way
+//! this setting could surprise somebody is believing it applies retroactively.
+//!
 //! **Pairing starts here.** A node arrives by spending an invite this machine minted (§8), and the
 //! panel at the foot of the page is where one is minted: a button, then the token drawn as a QR to
 //! point a phone at, the text underneath for the camera that will not cooperate, and the two
@@ -52,7 +59,7 @@ use crate::ui::{
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
 /// calls itself); `Key` is the identity of record behind them.
-pub(crate) const COLS: &[&str] = &["Node", "Key", "Grants", "Password", "Paired", ""];
+pub(crate) const COLS: &[&str] = &["Node", "Key", "Grants", "Password", "Instructions", "Paired", ""];
 
 /// The Fleet page: pending name changes, the paired nodes with their grants, and how to pair one.
 pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
@@ -68,6 +75,19 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
         {
             form.clear_invite();
         }
+    });
+    // Picking a node in the instructions form loads what it already carries, so editing means
+    // changing that text rather than retyping it from nothing — and picking a fresh one wipes
+    // whatever was left over from the last.
+    Effect::new(move |_| {
+        let node = form.instructions_node.get();
+        let current = state
+            .fleet
+            .get_untracked()
+            .and_then(|f| f.nodes.into_iter().find(|n| n.petname == node))
+            .and_then(|n| n.agent_instructions)
+            .unwrap_or_default();
+        form.instructions.set(current);
     });
     view! {
         {move || state.flash.get().map(|f| view! {
@@ -107,7 +127,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                 apply_fleet(state, Some(form.busy), format!("Granted {grant} to {node}."),
                     fetch::fleet_grant(node, grant));
             }>
-                {node_picker(state, form)}
+                {node_picker(state, "fleet-grant-node", form.grant_node)}
                 <TextField id="fleet-grant" label="Grant" placeholder=GRANT_PLACEHOLDER
                     wide=true mono=true value=form.grant />
                 <button class="adi-btn" type="submit" prop:disabled=move || form.busy.get()>
@@ -120,6 +140,41 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                 " all of them), and that is the whole of it — "<code>"tcp:"</code>" and "
                 <code>"ctl:"</code>" still parse for old files but nothing enforces them, so
                  neither opens anything."
+            </div>
+
+            // The node's own standing instructions (ADI-MONO-15): a second row, the same shape as
+            // the grant row above, because it names a node and edits one free-text setting on it.
+            <form class="adi-fleet-grantrow" on:submit=move |ev| {
+                ev.prevent_default();
+                let node = form.instructions_node.get();
+                if node.is_empty()
+                    || !state.fleet.get().is_some_and(|f| f.nodes.iter().any(|n| n.petname == node))
+                {
+                    form.instructions_node.set(String::new());
+                    return;
+                }
+                let instructions = form.instructions.get();
+                let msg = if instructions.trim().is_empty() {
+                    format!("Cleared {node}'s agent instructions.")
+                } else {
+                    format!("Updated {node}'s agent instructions.")
+                };
+                apply_fleet(state, Some(form.busy), msg,
+                    fetch::fleet_instructions(node, instructions));
+            }>
+                {node_picker(state, "fleet-instructions-node", form.instructions_node)}
+                <TextField id="fleet-instructions" label="Agent instructions"
+                    placeholder="Always run the tests before answering…" wide=true
+                    value=form.instructions />
+                <button class="adi-btn" type="submit" prop:disabled=move || form.busy.get()>
+                    "Save"
+                </button>
+            </form>
+            <div class="adi-hint">
+                "Spliced behind this agent's own system prompt, once, the moment a fresh
+                 conversation from this node is opened here — never into one already running,
+                 so a change here only ever reaches the next conversation that node starts.
+                 Leave it blank and save to clear it."
             </div>
         </section>
 
@@ -226,6 +281,7 @@ fn node_rows(state: State) -> AnyView {
             "Key" => Key::text(&n.key),
             "Grants" => Key::count(n.grants.len()),
             "Password" => Key::Bool(n.has_password),
+            "Instructions" => Key::Bool(n.agent_instructions.is_some()),
             "Paired" => Key::num(n.paired_at),
             _ => Key::text(&n.petname),
         },
@@ -254,6 +310,7 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
         .into_any(),
         "Grants" => view! { <span>{grants_cell(state, n)}</span> }.into_any(),
         "Password" => view! { <span>{password_cell(n.has_password)}</span> }.into_any(),
+        "Instructions" => view! { <span>{instructions_cell(n)}</span> }.into_any(),
         // A date is not a machine string: sans, and dimmed, since it says the same kind of thing
         // in every row.
         "Paired" => view! {
@@ -366,6 +423,25 @@ fn password_cell(has_password: bool) -> AnyView {
     .into_any()
 }
 
+/// Whether a node carries standing agent instructions (ADI-MONO-15) — never the text itself, which
+/// can run long and belongs in the edit field below the table, not a table cell. The full text
+/// rides the hover, the same way the Key cell's full key does.
+fn instructions_cell(n: &FleetNode) -> AnyView {
+    match n.agent_instructions.as_deref() {
+        Some(text) => view! {
+            <span class="adi-muted" title=text.to_string()>"set"</span>
+        }
+        .into_any(),
+        None => view! {
+            <span class="adi-muted"
+                title="Nothing spliced into a conversation this node opens here.">
+                "\u{2014}"
+            </span>
+        }
+        .into_any(),
+    }
+}
+
 /// The row's ⋯ menu: Rename (the local rename of §2 rule 5), the two answers to a declared rename
 /// when one is outstanding — so the row can settle it without scrolling back to the section above
 /// — and Unpair.
@@ -438,20 +514,22 @@ fn start_rename(state: State, from: &str) {
     );
 }
 
-/// The grant form's node picker: which paired node the grant lands on. A `<select>` rather than a
-/// typed name — every valid answer is on the page already, and a typo would be a 404 the operator
-/// has to decode.
-fn node_picker(state: State, form: FleetForm) -> AnyView {
+/// A node picker: which paired node an under-table form's action lands on. A `<select>` rather
+/// than a typed name — every valid answer is on the page already, and a typo would be a 404 the
+/// operator has to decode. Shared by the grant row and the agent-instructions row, each with its
+/// own `id` (for the `<label for>`) and its own signal, so picking a node in one form never moves
+/// what the other is doing.
+fn node_picker(state: State, id: &'static str, node: RwSignal<String>) -> AnyView {
     view! {
         <div class="adi-field">
-            <label class="adi-field__label" for="fleet-grant-node">"Node"</label>
-            <select class="adi-input adi-input--wide" id="fleet-grant-node"
-                on:change=move |ev| form.grant_node.set(event_target_value(&ev))>
-                <option value="" selected=move || form.grant_node.get().is_empty()>
+            <label class="adi-field__label" for=id>"Node"</label>
+            <select class="adi-input adi-input--wide" id=id
+                on:change=move |ev| node.set(event_target_value(&ev))>
+                <option value="" selected=move || node.get().is_empty()>
                     "Pick a node"
                 </option>
                 {move || {
-                    let current = form.grant_node.get();
+                    let current = node.get();
                     state.fleet.get().map(|f| f.nodes.into_iter().map(|n| {
                         let (petname, selected) = (n.petname.clone(), n.petname == current);
                         view! { <option value=petname selected=selected>{n.petname}</option> }

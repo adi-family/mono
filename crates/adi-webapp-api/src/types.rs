@@ -289,6 +289,13 @@ pub struct FleetNode {
     /// with no sighting at all.
     #[serde(default)]
     pub active: bool,
+    /// Extra system-prompt instructions spliced into any agent conversation *this node* opens here
+    /// over the mesh — `adi_mesh::fleet::NodeRecord::agent_instructions`, edited from
+    /// `POST /api/fleet/instructions` (ADI-MONO-15). Frozen once, at the moment such a conversation
+    /// is created (ADI-MONO-13): an edit here reaches only a conversation that node starts *after*
+    /// it, never one already running. `None` is every node until an operator sets one.
+    #[serde(default)]
+    pub agent_instructions: Option<String>,
 }
 
 impl FleetNode {
@@ -344,6 +351,16 @@ pub struct FleetRename {
 pub struct FleetGrantRef {
     pub petname: String,
     pub grant: String,
+}
+
+/// Request body setting or clearing one node's standing agent instructions —
+/// `POST /api/fleet/instructions`. An empty `instructions` clears it: fewer states than an
+/// `Option`, and every other fleet edit already treats blank the same way (`grant_ref`'s trim,
+/// `node_ref`'s empty-petname check).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInstructions {
+    pub petname: String,
+    pub instructions: String,
 }
 
 /// Where a pairing QR is meant to be pointed: the browser mesh client (`docs/fleet.md` §12).

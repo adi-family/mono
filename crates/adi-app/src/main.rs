@@ -706,6 +706,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/fleet/grants/remove") => {
             handlers::fleet_revoke(projects.config(), &req.body)
         }
+        ("POST", "/api/fleet/instructions") => {
+            handlers::fleet_instructions(projects.config(), &req.body)
+        }
         ("POST", "/api/fleet/nickname/accept") => {
             handlers::fleet_accept_nickname(projects.config(), &req.body)
         }

@@ -48,8 +48,8 @@ use adi_mesh::{activity, join, ticket};
 use serde::de::DeserializeOwned;
 
 use crate::types::{
-    FleetGrantRef, FleetInvite, FleetJoinRef, FleetJoined, FleetNode, FleetRef, FleetRename,
-    FleetState,
+    FleetGrantRef, FleetInstructions, FleetInvite, FleetJoinRef, FleetJoined, FleetNode, FleetRef,
+    FleetRename, FleetState,
 };
 
 use super::response::{Response, error, ok_json};
@@ -284,6 +284,44 @@ pub fn fleet_revoke(store: &Config, body: &[u8]) -> Response {
     })
 }
 
+/// `POST /api/fleet/instructions` — set or clear a node's standing agent instructions
+/// (`adi_mesh::fleet::NodeRecord::agent_instructions`), spliced into any conversation *it* opens
+/// here from now on (`docs/fleet.md` §13, ADI-MONO-13). An empty `instructions` clears it.
+///
+/// Frozen once per conversation, at the moment it is created, and never re-read afterwards (see
+/// `adi_agents::LaunchOptions::owner_instructions`) — so an edit here only ever reaches a
+/// conversation that node starts *after* it; nothing already running picks it up.
+///
+/// # Errors
+/// 400 for an unusable body, 404 when no node goes by that petname here.
+#[must_use]
+pub fn fleet_instructions(store: &Config, body: &[u8]) -> Response {
+    let req: FleetInstructions = match parse(body) {
+        Ok(req) => req,
+        Err(response) => return response,
+    };
+    let petname = trimmed(&req.petname);
+    if petname.is_empty() {
+        return error(
+            400,
+            "expected JSON body { \"petname\": \"<node>\", \"instructions\": \"<text>\" }",
+        );
+    }
+    let instructions = req.instructions.trim();
+    let instructions = if instructions.is_empty() {
+        None
+    } else {
+        Some(instructions.to_string())
+    };
+    fleet_edit(store, move |registry| {
+        let record = registry
+            .get_mut(&petname)
+            .ok_or_else(|| not_paired(&petname))?;
+        record.agent_instructions = instructions.clone();
+        Ok(())
+    })
+}
+
 /// `POST /api/fleet/nickname/accept` — adopt the nickname a node now declares: acknowledge it
 /// **and** move the petname to it. The one path by which a node's own declaration can change what
 /// this machine calls it, and it still cannot land on a name another node holds.
@@ -367,6 +405,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
                     pending_nickname: record.pending_nickname,
                     last_seen,
                     active,
+                    agent_instructions: record.agent_instructions,
                 }
             })
             .collect(),
@@ -729,6 +768,54 @@ mod tests {
             ok_body(&fleet(&store))["nodes"][0]["grants"][0],
             "tcp:127.0.0.1:22"
         );
+    }
+
+    /// Setting instructions is what freezes into a fresh conversation that node opens
+    /// (ADI-MONO-13); this only checks what the registry now holds and what the next read answers.
+    #[test]
+    fn setting_and_clearing_instructions_changes_what_the_next_read_returns() {
+        let store = temp_store();
+        pair(&store, "desk", "desk", &[], false);
+
+        // A fresh node adds nothing by default.
+        assert!(ok_body(&fleet(&store))["nodes"][0]["agent_instructions"].is_null());
+
+        let v = ok_body(&fleet_instructions(
+            &store,
+            br#"{"petname":"desk","instructions":"Always run the tests first."}"#,
+        ));
+        assert_eq!(
+            v["nodes"][0]["agent_instructions"],
+            "Always run the tests first."
+        );
+
+        // Surrounding whitespace is trimmed, the same as every other free-text field here.
+        let v = ok_body(&fleet_instructions(
+            &store,
+            br#"{"petname":"desk","instructions":"  Be terse.  "}"#,
+        ));
+        assert_eq!(v["nodes"][0]["agent_instructions"], "Be terse.");
+
+        // An empty (or all-whitespace) body clears it, rather than leaving the last value stuck.
+        let v = ok_body(&fleet_instructions(
+            &store,
+            br#"{"petname":"desk","instructions":"   "}"#,
+        ));
+        assert!(v["nodes"][0]["agent_instructions"].is_null());
+
+        // And the file, read afresh, agrees.
+        assert!(ok_body(&fleet(&store))["nodes"][0]["agent_instructions"].is_null());
+
+        // An unusable body or an unknown node is refused, and neither writes anything.
+        assert_eq!(
+            fleet_instructions(&store, br#"{"petname":"  ","instructions":"x"}"#).status,
+            400
+        );
+        assert_eq!(
+            fleet_instructions(&store, br#"{"petname":"ghost","instructions":"x"}"#).status,
+            404
+        );
+        assert_eq!(fleet_instructions(&store, b"not json").status, 400);
     }
 
     #[test]

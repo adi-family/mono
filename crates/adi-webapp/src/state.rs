@@ -1469,16 +1469,24 @@ pub(crate) struct MeshForm {
     pub(crate) ticket_ref: NodeRef<leptos::html::Input>,
 }
 
-/// The Fleet page's local signals: the grant form's node picker and grant text, the pairing invite
-/// on screen, plus a shared busy flag. Renaming and unpairing are row actions rather than form
-/// fields — they name their node by the row you clicked — so nothing here holds a petname of its
-/// own. `Copy`, so it threads into the page view and its handlers.
+/// The Fleet page's local signals: the grant form's node picker and grant text, the instructions
+/// form's own node picker and text, the pairing invite on screen, plus a shared busy flag.
+/// Renaming and unpairing are row actions rather than form fields — they name their node by the
+/// row you clicked — so nothing here holds a petname of its own for those two. `Copy`, so it
+/// threads into the page view and its handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct FleetForm {
     /// Which node the grant lands on (a petname, empty until picked).
     pub(crate) grant_node: RwSignal<String>,
     /// The grant in its string form: `http:*`, `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`.
     pub(crate) grant: RwSignal<String>,
+    /// Which node the standing agent instructions form edits (a petname, empty until picked) —
+    /// its own signal rather than [`grant_node`](Self::grant_node), because picking a node for one
+    /// form has no business moving what the other is doing.
+    pub(crate) instructions_node: RwSignal<String>,
+    /// The instructions text being edited, pre-filled from the picked node's current value —
+    /// see `pages::fleet`'s node-picker `on:change`.
+    pub(crate) instructions: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     /// The invite being shown, or `None` when none is. A bearer token until it is spent, so it
     /// lives here for exactly as long as it is on the screen — [`clear_invite`](Self::clear_invite)
@@ -1512,6 +1520,8 @@ impl FleetForm {
         Self {
             grant_node: RwSignal::new(String::new()),
             grant: RwSignal::new(String::new()),
+            instructions_node: RwSignal::new(String::new()),
+            instructions: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             invite: RwSignal::new(None),
             invite_until: RwSignal::new(0.0),
