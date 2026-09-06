@@ -81,8 +81,8 @@
 	   tokens.css's --bar-h (48px). */
 	--sl-nav-height: 48px;
 
-	/* One orange: links and the active sidebar item's marker (see the [aria-current] override
-	   below) — never a fill. */
+	/* One orange: links only — the active sidebar item (see the [aria-current] override below)
+	   is background + ink, no orange. */
 	--sl-color-accent-low: color-mix(in srgb, var(--accent) 12%, var(--bg));
 	--sl-color-accent: var(--accent);
 	--sl-color-accent-high: var(--accent-hover);
@@ -159,13 +159,12 @@ a.large {
 }
 
 /* Starlight fills the active sidebar item with a solid accent background by default.
-   DESIGN.md §2 rule 4 / §8: orange is never a selected/active-state fill — active nav items get
-   a 3px marker instead. */
+   DESIGN.md §8: orange is never a selected/active-state fill. For this sidebar the active
+   state is background + ink alone, per DESIGN.md's plain List item spec — no marker, opting
+   out of §2 rule 4's marker carve-out. */
 .sidebar-content [aria-current='page'] {
 	background-color: var(--bg-active);
 	color: var(--ink);
-	border-inline-start: 2px solid var(--accent);
-	padding-inline-start: calc(var(--sl-sidebar-item-padding-inline, 0.5rem) - 2px);
 }
 .sidebar-content [aria-current='page']:hover,
 .sidebar-content [aria-current='page']:focus {
