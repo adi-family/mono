@@ -10,7 +10,7 @@ use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
     AgentRunInfo, AgentRuns, AgentStep, AgentTokenSource, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
+    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard, NodeDashboards,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -2705,9 +2705,6 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                 // What a top bar would have been, in the width it actually needs: the mark, the
                 // name and the shortcut, over the rail rather than over the whole viewport.
                 {launcher::brand(l, "adi-brand--rail")}
-                // "Who else is working right now" — every paired node, active first. Absent on a
-                // machine paired with nobody, so it costs the rail nothing there.
-                {move || chat_fleet_presence(state)}
                 <adi_ui::Rail
                     title="Sessions"
                     actions=move || {
@@ -2733,6 +2730,11 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
 
             <aside class="adi-chome__side adi-chome__side--right"
                 class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Right)>
+                // The viewers: who is paired with this machine, and who is on right now. Above
+                // whichever panel this column is showing, because it is a fact about the fleet
+                // rather than about either of them — and beside the Apps rail, which is the same
+                // fleet asked the other question: which of them has something to open.
+                {move || chat_fleet_viewers(state)}
                 // Rebuilt when the title changes, which is the same moment the body does: this
                 // column is either the dashboards or the open conversation — who is running it,
                 // what it has come to, and what can be asked of it — and it swaps whole.
@@ -4031,45 +4033,6 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
                     }
                 }).collect::<Vec<_>>()}
             </adi_ui::Menu>
-        }
-        .into_any(),
-    )
-}
-
-/// Every paired node, active first, as a name beside a status dot (`/api/fleet`'s presence half,
-/// ADI-MONO-11) — "who else is working right now" over the sessions rail it sits above.
-///
-/// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the column
-/// height to say nothing. (Unlike [`chat_session_node`] under it, which stays whatever the fleet
-/// looks like — that one is a control, and where the rail's rows come from is worth a click even
-/// when the answer is "only here".) `active` and `last_seen` are read straight off the wire rather
-/// than computed here, so this and the Fleet page's own table can never come to answer the question
-/// differently.
-fn chat_fleet_presence(state: State) -> Option<AnyView> {
-    let fleet = state.fleet.get()?;
-    if fleet.nodes.is_empty() {
-        return None;
-    }
-    let mut nodes = fleet.nodes;
-    nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
-    Some(
-        view! {
-            <div class="adi-chome__presence">
-                {nodes.into_iter().map(|n| {
-                    let title = if n.active {
-                        format!("{} \u{2014} active now", n.petname)
-                    } else {
-                        format!("{} \u{2014} known, not active", n.petname)
-                    };
-                    let data_state = if n.active { "online" } else { "known" };
-                    view! {
-                        <span class="adi-status" data-state=data_state title=title>
-                            <span class="adi-status__led"></span>
-                            <span>{n.petname}</span>
-                        </span>
-                    }
-                }).collect::<Vec<_>>()}
-            </div>
         }
         .into_any(),
     )
@@ -5705,13 +5668,89 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
     .into_any()
 }
 
-// ---- the fleet's half of the rail ---------------------------------------------------------
-// What the *other* machines run, asked of each node's own control panel over the mesh
+// ---- the fleet, in the right column ---------------------------------------------------------
+// The same registry asked two questions, one per block, and each block takes its list by name
+// rather than deciding for itself which peers belong in it: [`viewer_nodes`] is who is paired
+// with this machine (the viewers strip at the top of the column), [`app_nodes`] is which of them
+// has something to open (the bands under the Apps rail).
+//
+// What the *other* machines run is asked of each node's own control panel over the mesh
 // (`docs/fleet.md` §5, and `adi-app/src/viewer.rs` for why it is the panel that is asked). Three
 // things can be true of a node and each wants something different from the reader: it is locked
 // (this machine has no password for it), it refused (a sentence saying why), or it answered.
 
-/// One group per paired node, under a rule that says the rest of the rail is somewhere else.
+/// The viewers: every peer paired with this machine, active first, then by petname.
+///
+/// **Every** peer, not the half of them that serves something: a phone or a browser tab is a peer
+/// in this registry exactly as a node is (`docs/fleet.md` §12), and "who can see this machine right
+/// now" is a question about all of them. `active` and `last_seen` are read straight off the wire
+/// rather than computed here, so this and the Fleet page's own table can never come to answer the
+/// question differently.
+fn viewer_nodes(state: State) -> Vec<FleetNode> {
+    let Some(fleet) = state.fleet.get() else {
+        return Vec::new();
+    };
+    let mut nodes = fleet.nodes;
+    nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
+    nodes
+}
+
+/// The app hosts: the peers with something to open here, each of which gets a band in the Apps
+/// rail.
+///
+/// Every peer whose listing is real or still to come — answered, refused, or locked, since locked
+/// is a password away from answering. That is §11's "every state is a row", and it is why a node
+/// that is asleep still holds its place instead of a fleet appearing to shrink.
+///
+/// The one peer dropped is the one that answered and listed nothing: it has *said* it serves
+/// nothing, which is what a viewer is (§12), and the viewers strip above names it already. Without
+/// this, a phone would take a band in the rail that could only ever read "no dashboards".
+fn app_nodes(state: State) -> Vec<NodeDashboards> {
+    let Some(fleet) = state.fleet_dashboards.get() else {
+        return Vec::new();
+    };
+    fleet
+        .nodes
+        .into_iter()
+        .filter(|n| n.locked || n.error.is_some() || !n.dashboards.is_empty())
+        .collect()
+}
+
+/// The viewers strip: [`viewer_nodes`] as a name beside a status dot (`/api/fleet`'s presence
+/// half, ADI-MONO-11) — "who else is working right now", at the head of the column where the rest
+/// of what the fleet is doing already lives.
+///
+/// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the
+/// column height to say nothing.
+fn chat_fleet_viewers(state: State) -> Option<AnyView> {
+    let nodes = viewer_nodes(state);
+    if nodes.is_empty() {
+        return None;
+    }
+    Some(
+        view! {
+            <div class="adi-chome__presence">
+                {nodes.into_iter().map(|n| {
+                    let title = if n.active {
+                        format!("{} \u{2014} active now", n.petname)
+                    } else {
+                        format!("{} \u{2014} known, not active", n.petname)
+                    };
+                    let data_state = if n.active { "online" } else { "known" };
+                    view! {
+                        <span class="adi-status" data-state=data_state title=title>
+                            <span class="adi-status__led"></span>
+                            <span>{n.petname}</span>
+                        </span>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    )
+}
+
+/// One group per app host, under a rule that says the rest of the rail is somewhere else.
 ///
 /// That rule is load-bearing rather than decorative: a node's header and a project's are the same
 /// band, so without it `TEREMEC` and `BUGBOUNTY` read as two projects, and the one thing this half
@@ -5720,14 +5759,12 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
 /// Empty until the first listing arrives, and empty forever on a machine paired with nobody, which
 /// is what keeps the whole half invisible for anyone not running a fleet.
 fn chat_fleet_groups(state: State) -> Vec<AnyView> {
-    let Some(fleet) = state.fleet_dashboards.get() else {
-        return Vec::new();
-    };
-    if fleet.nodes.is_empty() {
+    let nodes = app_nodes(state);
+    if nodes.is_empty() {
         return Vec::new();
     }
     let mut out = vec![view! { <div class="mt-4 border-t border-line pt-1"></div> }.into_any()];
-    out.extend(fleet.nodes.iter().map(|n| chat_node_group(state, n)));
+    out.extend(nodes.iter().map(|n| chat_node_group(state, n)));
     out
 }
 
@@ -5785,14 +5822,15 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
         }
     });
 
+    // Nothing here for a node that answered with an empty listing: [`app_nodes`] keeps it out of
+    // the rail entirely, because a peer that serves nothing is a viewer and the strip above says
+    // so already.
     let body = if locked && opening {
         chat_unlock_form(state)
     } else if let Some(error) = node.error.clone() {
         view! { <div class="adi-chome__nodeerr">{error}</div> }.into_any()
     } else if locked {
         ().into_any()
-    } else if node.dashboards.is_empty() {
-        view! { <div class="adi-chome__nodeerr">"No dashboards on this node."</div> }.into_any()
     } else {
         node.dashboards
             .iter()
@@ -5853,11 +5891,23 @@ fn submit_unlock(state: State) {
     if node.is_empty() || password.is_empty() {
         return;
     }
+    let asked = node.clone();
     unlock.busy.set(true);
     unlock.error.set(None);
     spawn_local(async move {
         match fetch::unlock_node(node, password).await {
             Ok(f) => {
+                // The password took and the node turned out to serve nothing, so [`app_nodes`]
+                // drops its band: say where it went, rather than letting it vanish under the
+                // password somebody just typed.
+                if f.nodes.iter().any(|n| {
+                    n.node == asked && !n.locked && n.error.is_none() && n.dashboards.is_empty()
+                }) {
+                    state.flash.set(Some(Flash::ok(format!(
+                        "{asked} runs no dashboards — it is a viewer, and it stays in the strip \
+                         at the top of this column."
+                    ))));
+                }
                 state.fleet_dashboards.set(Some(f));
                 unlock.close();
             }
