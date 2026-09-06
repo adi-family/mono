@@ -20,6 +20,7 @@ export default defineConfig({
 			customCss: ['./src/styles/wiki-link.css'],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
 			sidebar: [
+				{ label: 'Fleet', link: '/fleet/' },
 				{
 					label: 'Guides',
 					items: [{ autogenerate: { directory: 'guides' } }],

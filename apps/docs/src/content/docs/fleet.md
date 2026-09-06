@@ -1,0 +1,873 @@
+---
+title: Fleet
+description: Remote adi nodes reached over the mesh — the namespace, naming, routing, access control, and wire protocols that make it work.
+---
+
+A **node** is a full adi machine (hive + dns + app + dashboards) whose only network-facing
+action is an *outbound* QUIC session to an iroh relay. It listens on nothing but loopback:
+no `:22`, no `:80`, no `:443`. You reach it from your own machine through the mesh, and its
+services appear in your browser under real hostnames.
+
+This document is the contract. Everything below is normative; the checklist at the end is
+what has to be built.
+
+## 1. The namespace
+
+```
+<service>.<node>.n.adi
+```
+
+`n.adi` is **reserved**: any hostname ending in it addresses a remote node, never a local
+service. Local services keep their existing `<service>.adi`, so the two can never collide.
+
+- `nosh.laptop-b.n.adi` — the `nosh` dashboard on node `laptop-b`
+- `app.laptop-b.n.adi` — that node's control panel (adi-app)
+- On the node itself the same service is also reachable locally as `nosh.adi`.
+
+**`<node>` is one label; `<service>` is one *or more*.** The node label is always the one
+immediately before `n.adi`, and everything to its left is the service — which is exactly the
+node's own hostname with its `.adi` zone taken off. A machine's local hosts are not all two
+labels deep (`app.nosh.adi` and `ivr-analytics.nosh.adi` sit beside `nosh.adi`), so a name that
+carried only the first label would address a *different* service, or none:
+
+- `app.nosh.zomro-de1.n.adi` — the service at `app.nosh.adi` on node `zomro-de1`
+- the wire header carries `app.nosh`, and the node resolves `app.nosh.adi` against its own
+  front-door route table — the same lookup the one-label case makes
+- the grant that opens it is `http:app.nosh`; `http:nosh` is a different service and does not
+  cover it
+
+`adi-dns` already resolves this: it suffix-matches with `zone_of` (`adi-dns/src/main.rs:206`),
+so every `*.adi` name of any depth lands on the front door. No DNS change is required for
+resolution — the work is in the front door and the gateway.
+
+## 2. Names: nickname, petname, key
+
+Three roles, never conflated:
+
+| Role | What it is | Scope |
+| --- | --- | --- |
+| **Key** | the node's `EndpointId` (Ed25519) | global, true name |
+| **Nickname** | what the node calls itself | a *suggestion* |
+| **Petname** | what *this* machine calls it | local, unique |
+
+Rules:
+
+1. A name is one DNS label: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`, lowercase.
+2. At pairing the node offers its nickname. If free in the local registry it becomes the
+   petname; if taken, the operator picks another (or we suggest `<name>-2`).
+3. **A name collision never refuses the connection.** Authorization is by key; the name is
+   presentation. Refusing to pair over a cosmetic clash is a bug.
+4. The petname→key binding is **pinned** at pairing (TOFU). If the node later re-declares a
+   different nickname, that is a *notification*, never a silent re-point — otherwise any node
+   could rename itself to `main` and hijack links.
+5. The petname is renameable **locally**, without the far side's involvement. This is the
+   escape hatch when you belong to two fleets that both use `main`.
+6. The key is the identity of record. It is shown at pairing and on the not-paired error page,
+   so an operator has something to act on. It never appears in everyday URLs.
+
+Within one organisation names are agreed socially, like ordinary hostnames — that is the
+intended mode. The petname layer only exists so cross-fleet collisions stay solvable.
+
+## 3. Routing
+
+```
+browser → local adi-hive (front door)
+        → local mesh gateway (loopback)
+        → [iroh, ALPN adi/mesh/http/1] → node's mesh gateway
+        → node's local service port
+```
+
+- The front door routes any `*.n.adi` host to the local gateway's loopback port. One rule
+  covers every node; there is no per-node route and no per-service local port.
+- The gateway parses the host into `(service, node)`, resolves `node` → key through the local
+  fleet registry, and opens one bi-stream on a **pooled** connection to that peer.
+- **Over the mesh the route is the peer key plus the service name.** The host suffix is not
+  used for routing on the far side, because the node cannot know what *you* call it. This is
+  also why the `Host` header is never rewritten: rewriting it would send the node's absolute
+  redirects to a same-named host on the viewer's machine.
+- Unknown node (not in the registry, or paired but unreachable) → a dedicated error page
+  naming the node and, when known, its key: *"node `x` is not paired with this machine — ask
+  its administrator to pair key `…`"*. This is distinct from the existing 404 and 502 pages.
+
+## 4. One origin per dashboard
+
+A dashboard is **one** hostname. Its backend lives under `/api` on that same host, served
+through hive path routing (the `proxy.path` field already exists in the schema and is
+currently unused, `adi-hive/src/config.rs:90`).
+
+The page must therefore use **relative URLs only**. It must never learn its own address.
+This is what makes the same dashboard work under `nosh.adi`, `nosh.laptop-b.n.adi` and a real
+customer domain later, for every viewer, with no substitution and no cookies.
+
+The current scaffold violates this: `frontend/index.ts` reads the backend's leased port out of
+`ports/registry.json` and injects `backendPort` into the HTML, so the browser talks to
+`127.0.0.1:<port>` directly. Over the mesh that address is the *viewer's* machine. This must go.
+
+**One origin, but not one address.** The rule above is what a dashboard's *own* page must obey. The
+control panel is the other side of it: every host it prints — `nosh.adi` in the dashboards rail, in
+the Dashboards table, in the Hive table — is a name the machine *serving that panel* routes, and the
+panel is the same page whether it is read at `app.adi` or at `app.<node>.n.adi`. Read through a node,
+a bare `nosh.adi` link resolves on the reader's own front door and opens their `nosh`, or nothing.
+
+The panel therefore maps every address it prints through the node in its own location
+(`adi-webapp/src/origin.rs`), which is the only thing on that page that knows: §3 keeps the `Host`
+header byte-for-byte, so the node cannot tell a mesh reader from a local one, and §2 says it cannot
+know its own petname anyway. `nosh.adi` becomes `nosh.<node>.n.adi` — the same name
+`adi-app/src/node.rs` builds server-side when this machine asks a node what it runs. Anything with no
+address from where the page is being read loses its link and keeps its name: a `127.0.0.1:<port>`
+fallback (the reader's machine), and any `n.adi` name from the serving machine's own registry, since
+the gateway routes one hop and not a chain of them.
+
+## 5. Access control
+
+Two independent layers. Both are required.
+
+**Mesh layer (machine-to-machine).** Per-peer grants, **default-deny** — and since 2026-08-24 that
+is true of the legacy raw-forward list too: an empty `authorized_peers` now admits **nobody**
+(`adi-mesh/src/host.rs`, `peer_authorized`). It used to mean *any peer*, which on an endpoint
+reachable through a public relay was an open door to anyone who learned the id. Nothing was lost by
+closing it: pairing writes a fleet record, never this list, so "empty" never meant "the peers I
+paired" — it meant everyone. A grant names what the peer may
+reach: `http:*`, `http:app`, `http:app.nosh` — and **`http:` is the only family anything enforces**.
+`tcp:<ip>:<port>` and `ctl:<scope>` still parse, so a `fleet.toml` already carrying one loads, but
+no code path consults either: `Target::Http` has exactly one enforcement call site
+(`gateway::admit`) and `Target::Tcp` / `Target::Ctl` have none outside tests. What actually gates
+the raw-forward path is the separate legacy list described just above — `authorized_peers` for the
+peer, `host.allow` for the port. Neither withdrawn family is offered by the fleet page or by
+`adi-mono mesh grant` any more, because a grant that grants nothing is worse than no grant at all:
+it makes an operator believe they opened (or closed) something they did not. `ctl:` is *reserved*
+rather than deleted — there is no control plane behind it yet to wire it to.
+An unknown key is refused before it
+reaches anything local — but say where, because it is not where this doc used to claim. There is no
+`after_handshake` hook anywhere in the tree: the raw-forward check runs in `host::handle_connection`
+*after* `accept_bi`, and the HTTP one in `gateway::admit` on the accepted stream. The stream is
+opened; nothing behind it is.
+
+**HTTP layer (human-to-service).** Basic authentication, enforced **on the node**, for
+everything reachable over the mesh — including `app.<node>.n.adi`. The mesh grant is
+machine-scoped: once your laptop is paired, *any process on it* can reach the node through your
+front door. The password is what stops that, and what stops another person on a shared machine
+from modifying the node.
+
+- `401` with `WWW-Authenticate: Basic realm="<node>"` when absent or wrong.
+- Credentials per node, stored hashed (salted SHA-256), compared in constant time.
+- The check happens before the request reaches any service, and applies to WebSocket upgrades
+  too — a gate that only covers plain requests is not a gate.
+- Fail-closed: a node refuses to bind a non-loopback address unless credentials are configured.
+
+**Grants are added through the panel, and that is not a hole in the first layer.** A peer that holds
+`http:app` and the node's password can call `POST /api/fleet/grants/add` and give itself `http:nosh`
+— which is exactly how a phone opens a dashboard it was not granted at pairing (`apps/ios`). Nothing
+is escalated by it: the control panel already creates dashboards, moves ports and runs tasks, so a
+peer that can ask for a grant can already ask for far more. What the grant changes is reach, not
+authority — the browser gets the page on its own origin (§4) instead of driving it through the
+panel. Both layers still have to be passed to reach the panel at all, which is the property that
+matters: a key nobody authorized gets nothing, and an authorized key without the password gets a
+`401`.
+
+## 6. What runs on a node
+
+`adi-mono`, `adi-hive`, `adi-dns`, `adi-app`, and the mesh daemon. The node keeps its own hive
+(so a real domain can be attached to a service later) and its own DNS (so its services resolve
+each other locally). Supervision is systemd: `adi-core`'s supervisor abstraction now has a
+`systemd --user` back-end beside the launchd and Task Scheduler ones (`adi-core/src/launchd.rs`).
+A node's units live in `~/.config/systemd/user`, and lingering is enabled so they survive the
+installing session logging out — without it a headless node stops the moment you disconnect.
+
+**Two front-door configs exist, and a node has only one of them.** A developer machine carries a
+hand-managed `~/.adi/mono/hive/hive.yaml` — the richer one, which imports every project and
+dashboard. A freshly installed node has only the config `adi-core` generates,
+`~/.adi/mono/dns/hive-frontdoor.yaml`. Anything resolving a service label must therefore prefer
+the hand-managed file *and fall back* to the generated one; reading only the canonical path leaves
+a node with an empty route table, and it then refuses every request with `ServiceUnknown` while
+looking entirely healthy — paired, authorized, reachable, serving nothing. This was invisible on
+a developer machine and total on a real node; it is pinned by
+`gateway::tests::the_route_table_follows_the_front_door_a_node_actually_runs`.
+
+## 7. Wire protocol — `adi/mesh/http/1`
+
+One bi-stream is one HTTP connection. Connections to a peer are **pooled**: one iroh
+`Connection` per peer, one bi-stream per HTTP connection. (Today a fresh iroh connection is
+dialled per TCP accept — `adi-mesh/src/client.rs:7` — which would mean a handshake per request.)
+
+Request header, then the raw HTTP bytes:
+
+```
+[version: u8 = 1][service_len: u8][service: utf-8, 1..=63 bytes]
+```
+
+Reply: one status byte, then the raw HTTP bytes on `Ok`.
+
+| Byte | Status | Meaning |
+| --- | --- | --- |
+| 0 | `Ok` | resolved and connected; HTTP follows |
+| 1 | `ServiceUnknown` | no such service label on this node |
+| 2 | `NotAuthorized` | the peer holds no grant for this service |
+| 3 | `UpstreamUnavailable` | the service is known but nothing is listening |
+
+HTTP-level failures (`401`, `502`) are ordinary HTTP responses on an `Ok` stream. Transport
+failures are the status byte, so the caller can render a precise local error page.
+
+The existing raw-TCP forward keeps its own ALPN (`adi/mesh/forward/0`) for ssh, databases and
+anything not HTTP. iroh's `protocol::Router` accepts several ALPNs on one endpoint.
+
+## 8. Pairing — `adi/mesh/join/1`
+
+Pairing is what makes §6's "no inbound anything" real: **whoever needs no open port dials out**. A
+node never needs one, and the operator never needs ssh reachable to enrol it — a cloud-init line is
+enough.
+
+**The protocol is symmetric, and which machine is "the node" is not a fact the bytes carry.** One
+side mints an invite and *accepts* the stream; the other spends it and *dials*. The accepting side
+files the dialler's key in its registry with the default grant and the password it just minted; the
+dialling side records the acceptor the same way. Both roles are the same code
+(`adi-mesh/src/join.rs`: `serve_join` accepts, `join` dials), and every machine running the mesh
+listens on this ALPN already. So the direction is a **deployment choice**, decided by which side can
+be dialled at all:
+
+| Who mints the invite | Who dials | When this is the right way round |
+| --- | --- | --- |
+| the viewer (a Mac you are sitting at) | the node | enrolling a headless machine — `adi-mono mesh join <token>` in cloud-init, no inbound port on the node |
+| **the node** | **the browser client** | pairing a phone or a tab (ADI-13). **Nothing can dial a browser**: it registers no ALPN, publishes no address, and there is no listener to reach. The tab must be the dialler, so the node mints. |
+
+For the browser case the operator runs `adi-mono mesh invite` **on the machine they want to reach**
+and pastes the token into the client. The node then files the tab's key with `http:app` and mints
+its password, which is exactly the record the browser needs — and nothing about the handshake
+changed to allow it.
+
+**A token is 953 characters, so it is also drawn as a QR code.** At a terminal `mesh invite` prints
+one under the token (`--no-qr` suppresses it, `--qr` forces one into a redirect, and `--json` never
+carries one), and the browser client's **Scan** button reads it with the camera. The QR holds the
+token and nothing else — not a URL, so it never reaches an address bar or a history entry, and a
+phone's own camera app will only offer to copy it. Nothing about the protocol changes: it is the
+same string, taking a shorter path from one screen to another. The paste field is not going
+anywhere, because a camera can be refused and an invite that cannot be typed is a dead end.
+
+**Minting is not a terminal-only act.** The control panel's Fleet page mints one too — `POST
+/api/fleet/invite`, through the same `join::mint_invite_for`, so there is one way an invite comes
+into existence and one book recording its nonce. It answers with the token, its expiry, and the
+token already drawn as an `<svg>`, which is why the panel's wasm carries no QR encoder. Three
+differences from the CLI, all deliberate:
+
+- **Ten minutes, not fifteen.** The flow here is *show a QR, scan it, done*, which takes seconds.
+  The CLI's longer default is for the other shape of pairing, where a token is carried to a
+  cloud-init file and a machine is booted with it.
+- **The code comes down when it expires,** and the token is dropped from the page's memory with it
+  — as it is when the operator navigates away. An invite is a bearer credential until it is spent,
+  and a dead code left on screen is an offer to scan something that cannot work.
+- **Anything that can reach the panel can mint.** Locally that is loopback; over the mesh it is the
+  node's password plus an `http:app` grant. §5 already makes the equivalent argument for grants — a
+  peer that can ask for one can already create a dashboard here and run a task on this machine — so
+  a panel reached over the mesh may mint, and the gate is the grant that let it in rather than a
+  second one at this endpoint.
+
+**Spending is not a terminal-only act either.** The Fleet page has a paste field, and it posts to
+`POST /api/fleet/join` — the same `join::join_on` handshake `adi-mono mesh join <token>` runs. This
+half was missing for longer than the minting half, and the asymmetry cost something specific:
+minting only ever helps the side that *can be dialled*, so the machine that has to dial — a laptop
+handed to somebody who was sent an invite — could be paired only by an operator with a shell on it.
+Three things about the endpoint:
+
+- **It dials over the endpoint the mesh already has.** `adi-app`'s `MeshCtl::join` calls
+  `Daemon::join` when the in-process daemon is up and only falls back to `join::join` when it is
+  not. Binding a second endpoint on this machine's secret key while the first is live makes the two
+  race for the same relay session, and the loser's peers quietly stop reaching it. The CLI may bind
+  its own because it is a short-lived process beside a daemon that is usually not up yet; a control
+  panel is neither.
+- **The token is decoded before anything is dialled.** A typo, or an invite that expired while it
+  was being carried, is a 400 that says so — not a handshake timeout the operator waits out and
+  then has to interpret.
+- **The password is answered once and kept nowhere.** It is the same single copy the CLI prints:
+  both machines store a salted verifier, so the response is the only place it will ever exist, and
+  the page drops it when the operator navigates away. The same is true of the token on its way in.
+
+**A pairing is not usable the instant it is accepted.** The node's gateway serves from an in-memory
+snapshot of `fleet.toml` and re-reads it every `RELOAD_INTERVAL` — five seconds
+(`adi-mesh/src/gateway.rs`). The join handshake writes the file and answers immediately, so for up
+to those five seconds `admit` is still consulting a registry that has never heard of the new key and
+refuses it with the same sentence it gives a stranger: *this machine holds no grant for that
+service*. Measured, not reasoned — without a wait, the first request after pairing failed every
+time. **A client must wait out that window before it reports a pairing as done**, or the operator
+pairs successfully and is then told they are not authorized.
+
+The minting side mints an invite:
+
+```
+adi-invite:<hex(json({ v:1, endpoint:"adimesh:…", nonce:"<32 hex>", expires:<unix> }))>
+```
+
+One bi-stream on the join ALPN, both frames `[len: u32 BE][json]`, capped at 64 KiB:
+
+```
+dialler  → minter   { "v":1, "nonce":"…", "nickname":"laptop-b" }
+minter   → dialler  { "result":"accepted", "petname":"laptop-b", "username":"adi",
+                      "password":"…", "grants":["http:app"] }
+         or         { "result":"refused",  "reason":"…" }
+```
+
+`petname` is what the **minting** side has decided to call the dialler. It is not a name for the
+minter, and §2 rule 5 makes a petname local anyway — a browser names the node itself, on its own
+screen.
+
+- **The key never appears in a payload.** It is `Connection::remote_id()`, authenticated by the
+  QUIC handshake. A key read out of JSON would be a claim, not a fact. This is what makes the
+  symmetry safe: whichever side accepts, it is authorizing a key it verified itself.
+- **A nonce is single-use.** The minting side records every minted nonce and stamps it spent
+  *before* the reply goes out, so a replayed invite cannot enrol a second machine. Expiry is checked
+  before spentness, and pruning only ever moves a nonce from *expired* to *unknown* — never back
+  to usable. Expiry is enforced **on the minter**, against its own book and its own clock; a
+  dialler must not refuse a token locally, or a phone whose clock runs fast cannot pair at all.
+- **A name clash still pairs** (§2 rule 3): the accepting side answers with a free suggestion, and
+  the dialler is enrolled under it.
+- **The password is generated by the accepting side, stored as a verifier on both sides, and
+  exists in plaintext exactly once** — in the reply. When a node dials a viewer it is printed on
+  the node, where the operator ran `join`; when a browser dials a node it goes straight into that
+  browser's IndexedDB and is never shown. Re-pairing a known key keeps the pinned petname and
+  rotates the password, because a lost password is precisely why you re-invite.
+- **The default grant is `http:app`** — the node's control panel and nothing else. Not `http:*`
+  (no dashboard is exposed until it is named), and never `tcp:`, which is not offered at all now
+  (§5) and which, if it ever *is* wired up, would splice a raw socket past the HTTP password layer
+  entirely.
+
+## 9. Relay and offline
+
+Measured, not assumed (2026-07-31, two consumer NATs in Moscow, both on the public n0 relays):
+pairing and every request worked with no inbound port on either side, but the round trip settled
+at **0.3–0.4 s and never improved** — no direct path formed between the two NATs, so every request
+crossed a relay in Frankfurt or Virginia. That is the number a **self-hosted relay** buys back:
+functionally nothing changes, but a relay near the users turns a transatlantic round trip into
+tens of milliseconds. Worth knowing before promising interactive latency over the default relays.
+
+**The relay is a fallback data path, not a discovery service.** iroh's path selector files IPv4 and
+IPv6 as `primary` and the relay as `backup`, switching across tiers immediately — so while a direct
+path exists the relay carries nothing, and while one does not it carries *everything*. Treating it
+as "just signalling" is the mistake that makes a flapping relay look like a mystery outage.
+
+Relays are configured per machine, as a **list**, in `mesh.toml`:
+
+```toml
+relays = [
+  "https://mad.mono-relay.withadi.dev",   # GCE europe-southwest1 (Madrid)
+  "https://iad.mono-relay.withadi.dev",   # GCE us-east4 (N. Virginia)
+]
+```
+
+Empty means **the adi relays** (`adi-mesh/src/relay.rs`, `DEFAULT_RELAYS`) as of 2026-08-24. It
+used to mean n0's public relays, which is what every machine ran before the field existed, and the
+reason it changed is not preference: n0's relay answers a websocket upgrade without echoing
+`sec-websocket-protocol`, which RFC 6455 §4.1 requires a client to fail on, so a browser gets
+`CloseEvent { code: 1006 }` and a machine left on the public default is unreachable from the
+browser client **entirely**. Ours only, never mixed with n0's — iroh settles each machine on its own
+*nearest* relay, so a map holding both would make browser reachability a coin flip decided by
+geography. Two of *ours* is the opposite case, and is what the list is for: since 2026-08-27 the
+default carries both `mad` and `iad`, both echo `iroh-relay-v2`, and each machine takes the near
+one. Naming your own here still overrides the default —
+deliberately *not* `RelayMode::Disabled`, because off-LAN that reads as "unreachable" far more often
+than "direct only". A list rather than one URL because iroh probes every relay in the map and each
+machine settles on its own nearest as its home (`net_report`'s `preferred_relay`): a second region
+is a line in this file, never a re-issue of anything. Nothing routes through a relay name a peer was
+once handed — peers are dialled by key and resolved through discovery — so moving a machine between
+relays is a live operation, and pre-sharding names across relays would solve a problem that does not
+exist. Entries that do not parse, or that are not `http(s)`, are skipped with a warning; a config
+that parses to *nothing* falls back to the public relays rather than to an empty map.
+
+**Only the machines that get dialled need configuring.** iroh keeps a relay actor per relay it
+needs, home or not, so a peer is reached through *its* home relay whatever the caller's own map
+says. A viewer that is never dialled — the iOS app — therefore works over the fleet's relay the
+moment the nodes are on it, with no release of its own.
+
+On a shared LAN, `RelayMode::Disabled` plus mDNS address lookup gives direct QUIC with no internet
+at all. Off-LAN with no outbound connectivity is impossible by construction — the minimum is one
+outbound UDP/443 session.
+
+Running one: `iroh-relay` with the `server` feature, `cert_mode = "LetsEncrypt"` (which **requires**
+a `contact` email or it exits at start-up), TCP 443 for the protocol, TCP 80 for ACME, and **UDP
+7842 for QUIC address discovery** — that last one is what lets a direct path form at all, so a relay
+behind anything that drops UDP is worse than no relay. Access defaults to `Everyone`.
+
+**Adding a region is one command**: `scripts/deploy-relay.sh <label> <zone>` — it reserves a static
+address, reuses the `adi-relay-ingress` firewall rule, and boots a Debian 12 `e2-micro` in project
+`mono-504617` that installs the binary, `/etc/iroh-relay/relay.toml` and a hardened unit, then
+verifies the three things that matter: HTTPS answers, the `101` echoes `sec-websocket-protocol:
+iroh-relay-v2`, and UDP 7842 is reachable. The label becomes the hostname's first label, so use the
+IATA code of the city the zone is in.
+
+Two things it cannot and will not do. **The DNS A record** must exist *before* the relay first
+starts, because LetsEncrypt's http-01 challenge is answered by the relay itself on :80 — and it must
+be an unproxied (grey-cloud) record, since the relay terminates its own TLS and needs raw UDP. And
+**it does not track the workspace's iroh version**: the relays are pinned to **1.0.1**, because
+1.0.3 aborts the whole process on an inbound control message —
+`noq-udp-1.1.0/src/cmsg/mod.rs:81: assertion failed: align_of::<T>() <= align_of::<C>()`, reachable
+from received UDP, i.e. from the QUIC-address-discovery half itself (measured on `adi-relay-iad`,
+2026-08-27; the assert is still in noq-udp 1.1.1). The relay need not match the client: nodes on
+iroh 1.0.3 have talked to 1.0.1 relays since August, because `iroh-relay-v2` is the surface that
+actually has to agree.
+
+## 10. Moving a dashboard to a node
+
+A dashboard is a directory, and every machine in the fleet already knows how to turn one into a
+running pair of bun servers. So "run this in the cloud" needs no deployment machinery: pack the
+directory, hand it to the node's own control panel, let the node's supervisor do there exactly what
+ours does here. Two clicks — **Transfer**, then a node — plus the node's password.
+
+```
+POST /api/dashboards/transfer   (here)  → packs, calls out, then stands the local copy down
+POST /api/dashboards/import     (there) → writes the directory, rebuilds the hive file
+```
+
+- **The call goes through the local gateway, not through DNS.** The request is addressed to
+  `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi` — byte for byte what the front door
+  would forward for the same URL typed into a browser here. Resolving the name instead would put
+  the system resolver and the root front door on the path, both of which can be down while the mesh
+  is fine.
+- **The password is asked for per transfer and stored nowhere.** This machine holds a verifier, not
+  a credential (§8), and a deploy button is not a reason to start keeping one.
+- **What travels is what was authored.** The manifest and `.adi/hive.yaml` are omitted and rebuilt
+  on the far side: the hive file carries an absolute `working_dir`, and its `proxy.host` may
+  already belong to a different dashboard over there. `node_modules` and `.git` never travel.
+  Files ride as base64, so an icon or a fixture arrives intact. Symlinks are skipped, never
+  followed — one pointing out of the dashboard would otherwise put whatever it names on the wire.
+- **The hostname is a preference, not an instruction.** The node keeps the label when it is free
+  there (so the same dashboard is `nosh.adi` locally and `nosh.<node>.n.adi` through the mesh) and
+  derives a fresh one when it is not. Two dashboards on one hostname is a routing coin-flip.
+- **The same id imported twice updates, it does not duplicate** — which is what makes transfer
+  double as redeploy. It is a mirror and not a merge: a module deleted here stops being served
+  there. `node_modules` on the node survives, so a re-transfer is not a re-install.
+- **The transfer asks the node for `http:<label>` on this machine's behalf**, since pairing grants
+  only `http:app` (§8) and the new dashboard would otherwise be *not authorized* from here. Reading
+  the node's fleet for our own key is how we learn what it calls us — the petname is the node's to
+  choose. Best-effort: a grant it would not give is a link that refuses, not a transfer that failed.
+- **The local copy is stood down last, and only on a `200`.** A move archives it and records
+  `moved_to`; Restore is still the way back, and deleting the directory is a separate opt-in. A
+  transfer whose upload failed leaves this machine exactly as it was.
+
+## 11. Seeing the whole fleet's dashboards
+
+The control panel's dashboards rail lists what *this* machine runs and then what every paired node
+runs, in one list. Where a dashboard happens to execute is a property of the row, not a reason to go
+looking somewhere else for it.
+
+```
+GET  /api/fleet/dashboards          → one entry per paired node: locked, errored, or its dashboards
+POST /api/fleet/dashboards/unlock   → check a node's password against it, then keep it
+POST /api/fleet/dashboards/forget   → drop it again
+POST /api/fleet/dashboards/allow    → ask a node for `http:<label>` on this machine's behalf
+```
+
+This is `apps/ios` on a desktop, and the reasoning is the phone's
+(`adi-mesh-ffi/src/viewer/catalog.rs`) unchanged:
+
+- **The list comes from the node's control panel, not from the protocol.** `adi/mesh/http/1`
+  deliberately cannot answer "what do you serve?" — §5's default-deny refuses an unauthorized peer
+  *before* the route table is consulted, precisely so nobody can enumerate a machine's services by
+  watching `ServiceUnknown` and `NotAuthorized` differ. `app` is a service like any other, it is
+  what pairing grants (§8), it is behind the node's Basic-auth gate, and it already publishes
+  `GET /api/dashboards`. Asking it needs no new wire format, no new grant kind, no version bump.
+- **Listing may also grant.** Pairing hands out `http:app` and nothing else, so a bare list would be
+  a list of rows that all refuse to open. A row that is not yet granted asks for `http:<label>`
+  rather than offering a link that would answer *not authorized*, and that escalates nothing —
+  `http:app` plus the password *is* the control panel. The grant adds reach, not authority.
+- **The node itself opens, always.** Beside the group's lock sits a link to `app.<node>.n.adi` — the
+  node's own panel, the one service pairing already granted. It is offered in every state, including
+  locked: what "locked" means here is that *this machine* holds no password to ask with, and a
+  browser opening that host asks the operator for one instead. So a node whose rows all read as asks,
+  or which lists nothing at all, is still one click from the panel that can answer why.
+- **This machine keeps the node's password, and that is the one departure from §8.** A transfer asks
+  per transfer and stores nothing, which is right for a button pressed once; a rail refreshes, so
+  re-prompting would make it unusable. The credential goes into `adi-secrets` (XChaCha20-Poly1305
+  under a `0600` master key) in a reserved **scope**, never as a global secret: `Secrets::resolve`
+  injects every global secret into every agent run's environment, and a node's password has no
+  business in a subprocess's env. It is checked against the node before it is stored — a credential
+  that does not work is worse than none, because the rail would then report a fault where the answer
+  is a password. Nothing puts it back on the wire: the DTO says only whether a node is locked.
+- **And once kept, it is spent on the way out.** An unlocked node's links used to open a browser
+  prompt for the password this machine was already holding — the panel could ask the node anything
+  and the browser beside it could ask nothing. So the **calling side of the gateway** attaches it:
+  on the first head of each connection to `<service>.<node>.n.adi`, if this machine holds that node's
+  credential and the client sent none, an `Authorization` header is added
+  (`adi-mesh::gateway::NodeCredentials`, answered by `adi-app/src/viewer.rs`). Three properties make
+  it the right place. It *adds* to the head and rewrites nothing, so §3's byte-for-byte `Host` and
+  target still hold. A client that authenticated itself always wins, so a stored password gone stale
+  self-heals — the node's `401` reaches the browser, the person types the new one, and their header
+  is never overwritten. And the first head is enough: the node authenticates the request it admits
+  and splices the rest, so a connection that opened authenticated stays that way. What this does
+  **not** do is widen the mesh: both halves of §5 are still enforced on the node, and the password is
+  still one this machine's operator gave it. It moves authority the panel already had onto the client
+  they browse with, and the undo is on screen — **Lock** forgets the password, and the node
+  challenges again on the next connection.
+- **Every state is a row.** A node that is down, locked or refusing still appears, with what it said.
+  A fleet that appeared to shrink whenever a machine slept would be worse than one that says so. The
+  order is answered, then refused, then locked — which is also where a *viewer* lands, since a phone
+  is a peer in this registry and serves nothing at all.
+
+## 12. The browser client
+
+`crates/adi-mesh-client` is a tab that is its own iroh peer: it holds an `EndpointId`, dials nodes
+by key, speaks `adi/mesh/http/1`, and renders each node's control panel. It is a **reader**, not a
+machine in the fleet — there is no node behind it, nothing dials it, and it serves nothing.
+
+- **It reaches `app` by default, and a node's dashboards when the reader asks for them.** `http:app`
+  is §8's default grant and the only thing a pairing hands out, so it is the one service a node is
+  certain to open. What a machine *runs* comes from that panel's own `GET /api/dashboards`, exactly
+  as §11's fleet rail reads it, and each row is opened by naming the service in the path the worker
+  keys on: `/n/<service>.<petname>/`, the same `<service>.<node>` shape §1 addresses. A row the
+  browser holds no grant for asks the node for `http:<service>` on the first tap (§11's "listing may
+  also grant") and opens once the node's five-second registry reload has taken it up.
+- **That shares one origin with the key store, and it is the client's weakest point.** This origin's
+  IndexedDB holds the browser's secret key *and* every node's password, so anything rendered here
+  can read the credentials for every machine in the list. On a Mac each service gets its own
+  hostname and on iOS its own loopback port; a browser has one origin. Two things bound it rather
+  than fix it: the code is the operator's own, on the operator's own machines, and nothing is
+  reached that a tap did not ask a node to allow. The fix is still **I8** — a sub-origin per
+  `(node, service)` under a wildcard domain, with the key store staying on the parent.
+- **A node's app is served at the origin root, and the client id says which node.** A panel fetches
+  everything with root-absolute URLs (§4 requires that it never learn its own address), so it cannot
+  be mounted under a path. The client opens it at the reserved `/n/<petname>/`, the service worker
+  records `client id → petname`, and every later request from that client — whatever its path — is
+  answered from that node. A shim injected into the panel's `<head>` then rewrites the iframe's URL
+  back to `/`, so the panel's own router, its `pushState` and the back button behave exactly as they
+  do at `app.adi`.
+- **`new WebSocket()` is the one thing a service worker cannot see**, so the shim replaces it and
+  the tab speaks RFC 6455 itself over the QUIC stream. The node needs no part in this: `negotiate`
+  already exempts an upgrade from the `Connection: close` it forces on a carved host, and `splice`
+  pumps bytes rather than buffering them. **Measured 2026-08-27**, against a real daemon over
+  `mad.mono-relay.withadi.dev`: an event stream's events arrived spread over their own emission
+  interval rather than together, a websocket upgrade completed and was verified against its
+  `Sec-WebSocket-Accept`, echoes round-tripped in ~55 ms, and an unprompted server push arrived. So
+  the splice carries long-lived streams in both directions, and the panel's live channel works
+  through it.
+- **The identity is browser storage, and that is the weak point.** Clearing site data destroys the
+  key and every pairing with it; the node is left holding a record for a key that no longer exists
+  anywhere. There is no Keychain here and nothing to fall back on — re-pair.
+- **The relay is not optional here.** A browser has no UDP, so 100% of every session is relayed for
+  its whole duration (§9), and a node left on n0's public default is unreachable from a browser
+  entirely. The client pins ours as its home relay and carries each node's own relay in that node's
+  record, so a fleet spread over several still works from one domain.
+
+## 13. Driving a node's sessions from here
+
+§11 puts another machine's *dashboards* in this panel. This does the same for its **agents and their
+sessions** — the rail on the chat home lists the node's conversations, and starting, replying to,
+stopping, hiding and deleting one from here does it there. The rail's head grows one control, a node
+menu beside the filter, and it is a **checklist**: any subset of paired, unlocked nodes, plus this
+machine, may be ticked at once, and their sessions merge into one rail rather than replacing each
+other one at a time. Picking a set is the whole gesture — see "Multi-select" below for how the merge
+itself works and why it replaced the single pointed node this section originally shipped with.
+
+**Nothing new is drawn.** The screens for this already exist and already work; what they lacked was
+an address for data that is not this machine's. So the pages stay where they are and the *API*
+moves:
+
+```
+GET|POST /api/node/<node>/api/…   →  the same request, answered by that node's control panel
+```
+
+One route (`adi-app/src/viewer.rs`, `proxy`), forwarded over the same `node::get`/`node::post` a
+transfer and the dashboards listing use, with the credential this machine already holds (§11) —
+unchanged by multi-select, since it was already one hop per node and multi-select is simply more of
+them in parallel. The client's own half of the mapping is `fetch::routed_for(node, path)`: a pure
+function from a source and a path to the address that reaches it, called explicitly at the one
+one-off read, the one mutation or the one live subscription that is *about* that source — rather
+than a single implicit "current node" the whole page read through. That change is what multi-select
+needed: several sources are live in one tab at once, so there is no longer one right answer to "which
+node does a bare request mean" for anything to read implicitly. There is still no second copy of the
+sessions rail, no second DTO, and nothing to keep in step — a row is tagged with the source it came
+from at the moment it is fetched, on the client, and that tag is what every later action on that row
+reads back.
+
+**Only the agent API moves, and that is a decision rather than an accident.** `/api/agents…` follows
+the node; projects, ports, hive, secrets and the store browser do not. Sessions are the thing you go
+looking for on another machine — the rest of the panel is about *this* one's files and services, and
+silently repointing all of it would mean an operator who forgot which node was selected creates a
+project on the wrong machine. The node menu is in the sessions rail for the same reason: it is
+scoped to what it actually changes.
+
+**It grants no authority that was not already granted.** Holding a node's password means this panel
+can list it, grant against it and transfer to it; a forwarded `POST /api/agents/run` spends the same
+authority through a different screen. Both halves of §5 are still enforced **on the node** — the
+mesh grant that admitted the connection, and the Basic-auth gate behind it — and both are the node's
+to withdraw. Without a stored credential the forwarder answers `401` and says the node is locked
+rather than reaching anything, and **Lock** on the Fleet page is still the undo.
+
+Four things worth knowing before changing any of it:
+
+- **`/api` and nothing else.** A node's own page, its wasm and its assets are not reachable through
+  the forwarder — a `Response` here is a status and a JSON string, and the point is that the UI is
+  *this* machine's while only the data is the node's. `app.<node>.n.adi` is still how you open the
+  node's own panel, and always was. `/api/ws` is refused by name: it is a socket upgrade, and what
+  this forwards is one request and one response.
+- **No chains.** `/api/node/a/api/node/b/…` is refused, for the reason §4 refuses an `n.adi` name
+  inside a page already read through one: one hop is what this machine can reason about, and a chain
+  would put a third machine's data on screen under the second one's name.
+- **A node's read is watched at `SLOW`, never `FAST`.** The live channel will watch a forwarded read
+  exactly when it would watch the local one — it *is* that read — but each tick is an authenticated
+  mesh round trip with a third of a second of relay latency in front of it (§9). A transcript on
+  another machine updates every three seconds instead of every one, and that is the cost of it being
+  on another machine. Local stays at `FAST`; multi-select does not change either rate, it only means
+  more sources — one at `FAST`, the rest each at their own `SLOW` — ticking in parallel rather than
+  one `SLOW` source replacing another.
+- **Pictures are the one thing that does not follow.** Uploading one is a POST whose body is a PNG,
+  which a JSON forwarder cannot carry, so the composer refuses it with a sentence naming the node
+  rather than storing bytes here and putting an id in the node's transcript that names them.
+  *Reading* one does follow, by a different road: `<img src>` points at
+  `http://app.<node>.n.adi/api/agents/attachment/<id>`, which needs nothing new — the front door
+  routes it, the gateway attaches the password (§11), and a plain GET has no preflight to fail on.
+
+**The menu's list is its own endpoint, and a cheap one.** `GET /api/fleet/nodes` is the registry
+joined to the credentials kept here: which nodes are paired, and which of them this machine holds a
+password for. It leaves the machine not at all, which is what makes it watchable beside every other
+list — where `/api/fleet/dashboards` is one authenticated mesh call *per node* and belongs to a rail
+somebody opened. A locked node is listed and disabled rather than hidden, because a missing row
+reads as "that node is gone" when the truth is "unlock it on the Fleet page", and there is one
+credential per node, so unlocking it for the dashboards rail unlocks it for this.
+
+### Multi-select: several sources, merged into one rail
+
+The single pointed node above is history. Any subset of paired, unlocked nodes may be ticked at
+once, alongside this machine, and their sessions merge into one rail — not one list at a time with a
+menu to swap between them.
+
+**A run id is only unique on the machine that minted it (§13 above), and that is the whole design
+problem.** With one source at a time, switching cleared the rail and started over, so a stale run id
+was never asked of the wrong machine. With several sources live at once that escape hatch does not
+exist — two sources can each answer to the same agent name, or even, in principle, the same run id —
+so every row and every action on it is now keyed by **`(source, run_id)`**, not `run_id` alone.
+Concretely:
+
+- **`AgentsWatch::node`** (`adi-webapp/src/state.rs`) says which source the *open* conversation is
+  on, set the moment a row opens it and read by every fetch that conversation's pane makes from
+  there — its poll, its reply box, Stop, the goals panel, the token report. It is not guessed from
+  the node menu's selection, because several sources may be selected while only one of them is the
+  one actually open.
+- **`SessionRow::node`** (`adi-webapp/src/pages/agents/actions.rs`) says the same for a *rail row*
+  that is not open — what Hide, Star and Delete resolve against when clicked straight off the list,
+  and what the right-click menu carries forward. A row's own source travels with it from the moment
+  it is built; nothing downstream re-derives it from page state.
+- **The merge itself** (`session_bands` → `source_rows`) runs the same per-agent loop
+  `chat_all_sessions` already used for one machine's agents once per selected source — this
+  machine's own `/api/agents` + `/api/agents/runs/all` (kept fresh the way every other page already
+  relies on), plus one fetch of each for every ticked node
+  (`State::rail_node_agents`/`State::rail_node_chats`) — and concatenates the rows before sorting,
+  filtering and banding proceed exactly as they did over one source. The ★ agent filter is applied
+  **per source** for the same reason liveness is: "starred" is a fact about one machine's own agent
+  list, and a name shared by two sources' agents must not let one source's mark keep the other's row
+  in view.
+- **`fetch::routed_for`** replaces the old global "current node" (`fetch::node`/`set_node`) with a
+  plain function from an explicit source to an address — a thread-local flipped before a request and
+  read inside it cannot survive several concurrent fetches for several different sources without one
+  request's `.await` letting another's flip land underneath it. Every agent-scoped call in `fetch.rs`
+  now takes its source as an explicit `Option<&str>` parameter instead of consulting a shared
+  variable, and the live channel's `Sub::get_on`/`post_on` do the same for a subscription.
+
+**Every row keeps every action.** Stop, reply, hide, star and delete are unchanged in what they do —
+only where they are sent changed, from "wherever the rail is currently pointed" to "wherever this
+particular row lives." A mixed rail with three sources selected can have three different Stops in
+flight to three different machines from three different clicks, which is the point of merging them.
+
+**The choice is now persisted, and that is a reversal from the single-node version of this feature.**
+The old rule — a reload always comes back to this machine — existed so a stale tab could never send a
+Stop to a machine the operator had forgotten they were pointed at: the *only* place that fact lived
+was the head button's accent and petname, easy to miss on a tab left open overnight. Multi-select
+removes the reason for the rule rather than the rule's caution: every row now carries its own
+source's name on the meta line whenever more than one source is selected, which is exactly where an
+operator's eye already goes before pressing Stop, Hide or Delete on it — the fact the old rule was
+protecting is back on screen at the point of the click instead of living only in a menu nobody is
+looking at. Persisting a selection an operator built on purpose (most often to keep watching a
+long-running job on a node) is worth more than forcing them to reassemble it every reload, and the
+specific risk the old rule guarded against — acting on a machine you forgot you were pointed at — is
+smaller here, not larger, because acting blind is no longer possible: the row you click always names
+its own machine. The selection lives in this browser's `localStorage`
+(`adi-session-sources`), one entry — never in the store, since it is a preference about how this
+tab reads the panel and not a fact about the fleet. A locked node already selected here stays ticked
+(and its checkbox stays clickable, to remove it) even though it can no longer be *added* while
+locked — see the doc comment on the node menu in `actions.rs` for why disabling both directions would
+strand a persisted, now-locked node in the selection with no way to untick it.
+
+The rail's node button reflects the same logic: unchanged (no accent, no label) while this machine
+alone is selected, and once anything else is ticked it takes the accent and prints either the one
+other node's name (exactly one source besides local) or a `"N sources"` count — with the full list,
+always, in the button's title. Every row also grows its own origin label on the meta line once more
+than one source is selected, so "which machine is this" never depends on the head button at all by
+the time a hand reaches for Stop.
+
+---
+
+## Checklist
+
+Each item ships with unit tests in the same file.
+
+### A — front door (`adi-hive`)
+
+- [x] A1 Expose the crate as a library (`lib.rs`) beside the binary, so the gateway can reuse
+      the config loader and route table without duplicating it.
+- [x] A2 Implement `proxy.path`: a service may claim a path prefix on another service's host.
+      Longest-prefix wins; host-only routes keep working unchanged.
+- [x] A3 Route every `*.n.adi` host to the local gateway port; parse `(service, node)`.
+- [x] A4 A "mesh gateway unavailable" error page, distinct from 404 and 502, for a `*.n.adi`
+      host when no gateway is configured or it cannot be reached. The *not-paired* page belongs
+      to the gateway (C), not here: the front door must not know about the fleet registry — it
+      sees a reserved suffix and hands the connection on. That boundary is what keeps "routes
+      bytes" and "knows about peers" separate.
+- [x] A5 TLS: cover `*.<node>.n.adi` in the leaf's SAN list.
+
+### B — fleet registry (`adi-mesh`)
+
+- [x] B1 Name validation (one DNS label, lowercase, length).
+- [x] B2 The registry: petname → {key, nickname, paired_at, grants, auth}. Load/save.
+- [x] B3 Pairing: accept a nickname, resolve collisions by suggestion, never fail on a clash.
+- [x] B4 Pinning: a changed nickname is reported, never applied silently.
+- [x] B5 Local rename, and lookup by petname and by key.
+- [x] B6 Grants: default-deny, `http:<service>` (a service name, so `http:app.nosh` too) and
+      `http:*`. `tcp:<addr>:<port>` and `ctl:*` parse and round-trip, and nothing enforces either
+      — withdrawn from the UI and the CLI, kept so existing files load (§5).
+
+### C — gateway (`adi-mesh`)
+
+- [x] C1 The `adi/mesh/http/1` frame: encode/decode, version and length validation.
+- [x] C2 Status byte encode/decode, with a reason string per status.
+- [x] C3 Basic auth: parse the header, salted-SHA-256 verify, constant-time compare, 401 with
+      `WWW-Authenticate`; applies to upgrade requests too.
+- [x] C4 Host parsing: `<service>.<node>.n.adi` → `(service, node)`, with `<service>` one or
+      more labels and `<node>` the label before the zone; rejecting anything else.
+- [x] C5 Connection pool: one iroh connection per peer, a bi-stream per request, reconnect with
+      backoff.
+- [x] C6 The node side: resolve the service label against the node's hive route table, honour
+      grants, splice.
+
+### D — dashboards
+
+- [x] D1 Scaffold emits `proxy.path: /api` for the backend on the frontend's host.
+- [x] D2 `frontend/index.ts` stops reading `ports/registry.json` and stops injecting
+      `backendPort`; `ctx.api.base` becomes the relative `/api`.
+- [x] D3 Existing dashboards migrate on next read.
+
+### F — wiring (found while building A–D)
+
+- [x] F1 `adi-core/src/dns.rs` generates the front-door `hive.yaml` and does not emit
+      `proxy.mesh_gateway`. Until it does, the `*.n.adi` route exists in code but is never live
+      on a real machine.
+- [x] F2 Pairing must append the new petname to the front door's `proxy.mesh_nodes`, so the next
+      hive start mints a leaf covering `*.<node>.n.adi`. Routing works immediately; only HTTPS
+      waits for that restart.
+- [x] F3 The panel links a dashboard as `http://127.0.0.1:<frontend_port>`
+      (`adi-webapp/src/pages/dashboards.rs`). That URL now yields a page whose `/api` does not
+      route. Link the dashboard's host instead — needs a `host` field on the `Dashboard` DTO in
+      `adi-webapp-api/src/types.rs`.
+
+### E — node (later rounds)
+
+- [x] E1 systemd backend in `adi-core`'s supervisor abstraction.
+- [x] E2 `apps/linux/build.sh` — static musl package with the five binaries.
+- [x] E3 Pull-only bootstrap: one-time pairing token, node dials out, no inbound ssh needed.
+- [x] E4 Fleet page in the control panel: nodes, status, grants, audit.
+- [x] E5 Pairing *from* the panel (§8): `POST /api/fleet/invite` mints through the same
+      `join::mint_invite_for` the CLI uses and answers with the token already drawn as an SVG, and
+      the Fleet page shows it as a QR with a countdown, the token under it, and where to point a
+      phone. Until this, the only way to see the code was a terminal — which is exactly how the
+      operator failed to find it.
+- [x] E6 *Spending* an invite from the panel (§8): `POST /api/fleet/join` runs the same
+      `join::join_on` handshake as `adi-mono mesh join`, over the endpoint the in-process daemon
+      already holds, and answers with the credential plus a fresh `FleetState`. The Fleet page's
+      **Join a fleet** panel is the paste field, and it shows the password once. Both directions of
+      the handshake are now reachable without a shell, which matters most on the machine that has
+      to be the dialler and is least likely to have one.
+
+### G — moving a dashboard to a node (§10)
+
+- [x] G1 `export_bundle` / `POST /api/dashboards/import`: pack the authored files, rebuild the
+      manifest and hive file on the far side, keep the hostname when it is free there.
+- [x] G2 `POST /api/dashboards/transfer`: the outbound call through the local gateway, the
+      per-transfer credential, and `complete_move` for the copy left behind.
+- [x] G3 The node grants this machine `http:<label>` for what it just took, so the link works on
+      the first click.
+- [x] G4 Transfer on every dashboard row, and a panel that asks for node, mode and password.
+
+### H — seeing the whole fleet's dashboards (§11)
+
+- [x] H1 `adi-app/src/node.rs`: the one call to a node's control panel through the local gateway,
+      shared by the transfer and the viewer instead of written twice.
+- [x] H2 `adi-app/src/viewer.rs`: `GET /api/fleet/dashboards` — every paired node asked
+      concurrently, each answering with its dashboards, a refusal, or a lock.
+- [x] H3 The credential store: one encrypted secret in a reserved scope, so a node password is
+      never a global secret and so never reaches a run's environment.
+- [x] H4 `unlock` / `forget` / `allow`, each answering with the fresh listing so the rail updates
+      in one round-trip.
+- [x] H5 The chat home's dashboards rail: the local groups, then one group per node, with an
+      inline password field for a locked one, an "Allow" on a row the node has not granted, and a
+      "Panel" link to the node's own `app.<node>.n.adi` beside its lock.
+- [x] H6 The gateway spends a held password: `NodeCredentials` on the calling side, so an unlocked
+      node's links open without a browser prompt, and a client's own header always wins.
+
+### I — the browser client (§12)
+
+- [x] I1 `crates/adi-mesh-client`: an `iroh::Endpoint` on wasm32, pooled per node, dial-only.
+- [x] I2 HTTP/1.1 as a client over a mesh stream, with the body delivered as chunks — a response
+      that does not end is the normal case here, not an edge one.
+- [x] I3 An RFC 6455 client, spoken by the tab over the same stream, with the accept digest
+      verified. Proved against a real daemon; see §12.
+- [x] I4 Browser-initiated pairing: decode an `adi-invite:`, dial the minter on `adi/mesh/join/1`,
+      and wait out the node's registry reload before reporting success (§8).
+- [x] I5 IndexedDB: the browser's secret key and one record per node — endpoint id, relay, petname,
+      username, password, grants.
+- [x] I6 The service worker: `/n/<petname>/` opens a panel and `/n/<service>.<petname>/` one of that
+      node's dashboards, the client id decides which node *and service* every later request belongs
+      to, and the shim gives the page back `/`.
+- [x] I7 An installable PWA — manifest, icons, offline shell — sized for a phone.
+- [x] I10 What a machine runs, under it in the list: the node's own `GET /api/dashboards` read over
+      `app`, its grants read from `GET /api/fleet` by key, and a row that is not yet granted asking
+      for `http:<service>` when it is opened (§11 from a phone). End to end in `harness/e2e.sh`,
+      which pairs, lists, allows and opens a second service against a real node.
+- [ ] I8 A sub-origin per `(node, service)` under a wildcard domain, so a dashboard can be opened
+      without sharing an origin with the key store. Needs a wildcard certificate and a postMessage
+      bridge; ADI-13's origin-isolation recommendation. **Still open, and now load-bearing**: I10
+      renders another machine's dashboard on the origin that holds the key and every password.
+- [ ] I9 A backgrounded tab: what a phone's browser does to a relayed QUIC session while the
+      screen is off, and whether the reconnect path is enough. Untested.
+
+### J — driving a node's sessions from here (§13)
+
+- [x] J1 `viewer::proxy` + `split_node_path`: `GET|POST /api/node/<node>/api/…` forwarded on the
+      held credential, `/api` only, no `/api/ws`, no chains, a lock answered as a `401`.
+- [x] J2 `GET /api/fleet/nodes`: the registry joined to the credentials kept here, local and cheap,
+      so the node menu can be watched rather than clicked for.
+- [x] J3 `fetch::routed` — the client's one rewrite, applied to every one-off read, every mutation
+      and (through `live::Sub`) every subscription, so no two of them can name different machines.
+      **Superseded by K3**: multi-select needs several sources addressable at once, which an
+      implicit "current node" cannot give it — see the checklist below.
+- [x] J4 The live channel watches a node's read exactly when it watches the local one, floored to
+      `SLOW` because each tick crosses the mesh.
+- [x] J5 The rail's node menu, `state::view_sessions_on` (address, then what is on screen, then the
+      socket), and the petname printed while a node is picked. **Superseded by K1/K5/K6**:
+      single-select is gone, replaced by the checklist in §13's "Multi-select".
+- [x] J6 Attachments: reading one goes to `app.<node>.n.adi` directly, uploading one is refused with
+      a sentence naming the node.
+- [ ] J7 A run's images uploaded to a node. Needs a body the forwarder can carry that is not JSON —
+      either a bytes path beside `Response`, or the browser posting at the node's own origin, which
+      is a CORS question and not a routing one.
+
+### K — multi-select: several sources, merged into one rail (§13)
+
+- [x] K1 `State::session_local` / `State::session_nodes` replace `State::session_node`: any subset
+      of paired, unlocked nodes plus this machine, rather than one pointed node.
+- [x] K2 `AgentsWatch::node` and `SessionRow::node`: which source the open conversation is on, and
+      which source a rail row not currently open is on — the `(source, run_id)` keys every row and
+      every action on it now needs, since a run id is only unique on the machine that minted it and
+      several sources no longer take turns being "the" one.
+- [x] K3 `fetch::routed_for(node, path)` replaces the thread-local `fetch::node`/`set_node`/`routed`:
+      a pure function from an explicit source to an address, called at each call site that has one,
+      because several concurrent fetches for several sources cannot safely share one flipped
+      variable. `live::Sub::get_on`/`post_on` do the same for a subscription.
+- [x] K4 `session_bands` → `source_rows`: the per-agent merge `chat_all_sessions` already did for one
+      machine's agents, run once per selected source and concatenated — including the ★ filter,
+      which is now evaluated against each source's own agent list rather than one shared one.
+      `chat_hidden_sessions` merges the Hidden band the same way.
+- [x] K5 The node menu is a checklist (`role="menuitemcheckbox"`), left open across ticks so several
+      sources are picked in one visit; a locked node cannot be *added* but can still be *removed* if
+      it was selected before it locked.
+- [x] K6 The rail's node button and every row's meta line show which sources are live whenever more
+      than one is selected — the button with a name or a count and the full list in its title, each
+      row with its own source's name — since a Stop can now reach any of several machines from one
+      list.
+- [x] K7 The selection persists across a reload, in `localStorage` (`adi-session-sources`) — a
+      deliberate reversal of J5's "the choice is not stored", now that every row's own label carries
+      the fact that rule existed to keep visible.
