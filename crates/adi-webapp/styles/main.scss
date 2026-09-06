@@ -225,18 +225,31 @@
     gap: 2px;
   }
 
-  // The viewers strip, at the head of the right column: every paired peer as a circle in an
-  // `adi_ui::Faces` pile — a fact stated in one row, not a table, and one row is all it can ever
-  // be, since the pile folds its own tail rather than wrapping. It sits above the rail whichever
-  // panel the column is showing, so the hairline under it is what separates it from both.
+  // The viewers strip, at the head of the right column: the peers this rail draws sessions from,
+  // as circles in an `adi_ui::Faces` pile with a line beside it saying how many are on — a fact
+  // stated in one row, not a table, and one row is all it can ever be, since the pile folds its
+  // own tail rather than wrapping. It sits above the rail whichever panel the column is showing,
+  // so the hairline under it is what separates it from both.
   //
-  // The pile lays itself out; what is here is the band it sits in.
+  // The pile lays itself out; what is here is the band it sits in, and the sentence after it.
   &__presence {
     flex: none;
     display: flex;
     align-items: center;
+    gap: 8px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--line);
+  }
+  // The count in words. It gives up its width before the pile does — a name elides, a circle
+  // cannot.
+  &__presence-note {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
   }
 
   // The rail's "New": the small filled button beside the icon buttons in the head.

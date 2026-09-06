@@ -65,8 +65,26 @@
   --color-inherit: inherit;
   --color-white: #ffffff;
 
+  /* The face pile's palette (`src/faces.rs`): six fills that have to stay apart at 24px, so one
+   * peer is told from another by its circle rather than by reading a letter. The second place a
+   * hue steps outside the greys, and it is deliberately the same family as the code view's —
+   * desaturated, mid-tone, quiet beside Geist.
+   *
+   * None of them is the accent, and none is a semantic colour: a face says *who*, never how it
+   * is doing. The letter on top is `--on-face`, dark enough to read on every one of them. Grey
+   * is not in this list on purpose — a peer that is not on gets `--bg-active`, and that
+   * grey-against-colour is what says which is which (§3's rule, with the colour carrying the
+   * state instead of a dot). */
+  --color-face-1: #9db8e8; /* blue */
+  --color-face-2: #7fbfcf; /* cyan */
+  --color-face-3: #c99ad4; /* violet */
+  --color-face-4: #d9b06a; /* sand */
+  --color-face-5: #e0998a; /* clay */
+  --color-face-6: #8fc9a8; /* sage */
+  --color-on-face: var(--bg);
+
   /* The code view's own palette (`src/highlight.rs`): eight roles that have to stay apart at a
-   * glance inside a file. The one place a hue steps outside the greys. */
+   * glance inside a file. The other place a hue steps outside the greys. */
   --color-syn-plain: var(--code);
   --color-syn-comment: var(--ink-3);
   --color-syn-str: #9ccc8a;

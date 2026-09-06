@@ -2272,21 +2272,42 @@ fn Playground() -> impl IntoView {
 
             <Panel title="Faces" id="faces">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
-                    "Who is here, in the width of a few characters. The first circle is drawn \
-                     over the second, not under it, so every right edge stays clear for the \
-                     live dot; the name is a hover away, and everyone past the fifth becomes \
-                     the count at the end \u{2014} which names them on hover too. The ring \
-                     between two circles is the surface underneath, so a pile has to be told \
-                     which one it is on."
+                    "Who is here, in the width of a few characters. On is one of six colours, \
+                     picked from the name itself so it never changes; off is grey \u{2014} two \
+                     solid fills, never one of them dimmed, because a dimmed pile reads as a \
+                     switched-off one. The first circle is drawn over the second, not under it, \
+                     so the face that matters most is the whole circle. The name is a hover \
+                     away, everyone past the fifth becomes the count at the end \u{2014} which \
+                     names them on hover too \u{2014} and how many are on belongs in a line \
+                     beside the pile, which is the caller's sentence to write."
                 </p>
                 <div>
                     <Row label="a pile">
-                        <span class="rounded-lg bg-side p-2">
+                        <span class="flex items-center gap-2 rounded-lg bg-side p-2">
                             <Faces faces=vec![
                                 Face::new("hetzner", true).note("hetzner \u{2014} active now"),
                                 Face::new("studio", false).note("studio \u{2014} known, not active"),
                                 Face::new("phone", false).note("phone \u{2014} known, not active"),
                             ]/>
+                            <span class="text-label text-ink-3">"hetzner active now"</span>
+                        </span>
+                    </Row>
+                    // Six names that happen to land one per colour — the whole palette at once.
+                    // Nothing here picks a colour by position: swap two of these names and the
+                    // circles swap with them.
+                    <Row label="the six colours">
+                        <span class="rounded-lg bg-side p-2">
+                            <Faces
+                                max=7
+                                faces=vec![
+                                    Face::new("paris", true),
+                                    Face::new("lyon", true),
+                                    Face::new("zurich", true),
+                                    Face::new("porto", true),
+                                    Face::new("milan", true),
+                                    Face::new("turin", true),
+                                ]
+                            />
                         </span>
                     </Row>
                     <Row label="folded at five">

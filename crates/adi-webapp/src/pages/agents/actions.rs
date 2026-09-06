@@ -5679,18 +5679,36 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
 // things can be true of a node and each wants something different from the reader: it is locked
 // (this machine has no password for it), it refused (a sentence saying why), or it answered.
 
-/// The viewers: every peer paired with this machine, active first, then by petname.
+/// The viewers: the peers this rail is **currently drawing sessions from**, active first, then by
+/// petname.
 ///
-/// **Every** peer, not the half of them that serves something: a phone or a browser tab is a peer
-/// in this registry exactly as a node is (`docs/fleet.md` §12), and "who can see this machine right
-/// now" is a question about all of them. `active` and `last_seen` are read straight off the wire
-/// rather than computed here, so this and the Fleet page's own table can never come to answer the
-/// question differently.
+/// The selection is the sessions rail's own — `state.session_nodes`, what the head's node button
+/// calls "N sources" — and not the whole registry. A pile of every machine ever paired is a fact
+/// about the past; what this column is for is the machines whose work is on screen right now, so
+/// the strip and the rail below it always name the same set. Untick a node in that menu and its
+/// circle goes with its rows.
+///
+/// Two consequences worth knowing. This machine is never in the pile even though it is always a
+/// source (the floor in [`toggle_session_source`]): the pile is who *else* is around. And a
+/// machine with no node ticked has no strip at all, which is the honest answer — there is nobody
+/// else to show.
+///
+/// Any peer may be in it, not just the ones that serve something: a phone or a browser tab is a
+/// peer in this registry exactly as a node is (`docs/fleet.md` §12). `active` and `last_seen` are
+/// read straight off the wire rather than computed here, so this and the Fleet page's own table
+/// can never come to answer the question differently.
+///
+/// [`toggle_session_source`]: crate::state::toggle_session_source
 fn viewer_nodes(state: State) -> Vec<FleetNode> {
     let Some(fleet) = state.fleet.get() else {
         return Vec::new();
     };
-    let mut nodes = fleet.nodes;
+    let selected = state.session_nodes.get();
+    let mut nodes: Vec<FleetNode> = fleet
+        .nodes
+        .into_iter()
+        .filter(|n| selected.contains(&n.petname))
+        .collect();
     nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
     nodes
 }
@@ -5724,28 +5742,41 @@ fn app_nodes(state: State) -> Vec<NodeDashboards> {
 /// bounded: names wrap, circles fold. [`adi_ui::Faces`] takes the order it is given and folds the
 /// tail, and [`viewer_nodes`] sorts active first — so what survives the fold is whoever is on.
 ///
-/// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the
-/// column height to say nothing.
+/// **The sentence beside it is not decoration.** The pile says colour-for-on, and a rule nobody
+/// has been told is a rule nobody reads; the line spells the same fact in words, which is also
+/// what a reader who cannot tell the colours apart is left with. One name when one machine is on,
+/// because at that point the name is shorter than the count and says more.
+///
+/// `None` when no node is a source: a strip that can only ever say "nobody" costs the column
+/// height to say nothing.
 fn chat_fleet_viewers(state: State) -> Option<AnyView> {
     let nodes = viewer_nodes(state);
     if nodes.is_empty() {
         return None;
     }
+    // Sorted active-first, so the one active machine — when there is exactly one — is the head.
+    let active = nodes.iter().filter(|n| n.active).count();
+    let note = match (active, nodes.first()) {
+        (0, _) => "nobody active now".to_string(),
+        (1, Some(first)) => format!("{} active now", first.petname),
+        (n, _) => format!("{n} active now"),
+    };
     let faces = nodes
         .into_iter()
         .map(|n| {
-            let note = if n.active {
+            let hover = if n.active {
                 format!("{} \u{2014} active now", n.petname)
             } else {
                 format!("{} \u{2014} known, not active", n.petname)
             };
-            adi_ui::Face::new(n.petname, n.active).note(note)
+            adi_ui::Face::new(n.petname, n.active).note(hover)
         })
         .collect::<Vec<_>>();
     Some(
         view! {
             <div class="adi-chome__presence">
                 <adi_ui::Faces faces=faces/>
+                <span class="adi-chome__presence-note">{note}</span>
             </div>
         }
         .into_any(),
