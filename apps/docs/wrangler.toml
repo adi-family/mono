@@ -1,0 +1,12 @@
+# Cloudflare **Pages** config for the docs site.
+#
+# Pure static output: Starlight's own build (`astro build`) is plain HTML/CSS/JS in `dist/`, so
+# there is no Function or adapter here, unlike apps/oauth-router.
+#
+# First-time setup on a fresh Cloudflare account:  ./scripts/setup-cf.sh
+# Deploy:                                          bun run deploy
+# Local:                                            bun run dev
+
+name = "adi-docs"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-06-01"

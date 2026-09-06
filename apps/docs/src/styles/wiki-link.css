@@ -1,0 +1,7 @@
+/* An unresolved [[Wiki Link]] still renders as an anchor (see wiki-links.mjs) so a broken link
+   is visible in place rather than failing the build; this is what makes it visually distinct. */
+a.wiki-link-broken {
+	color: var(--sl-color-red);
+	border-bottom: 1px dashed var(--sl-color-red);
+	text-decoration: none;
+}
