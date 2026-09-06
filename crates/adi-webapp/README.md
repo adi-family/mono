@@ -73,6 +73,11 @@ stays within the 80%-diameter safe zone.
 
 ## Notes
 
+- **Addresses live in two files, and only two.** Inside the app: [`src/routing.rs`](./src/routing.rs)
+  — build every internal link from `Route`, never from a `/extended/…` literal, because that prefix
+  has moved before. Outside it: [`src/links.rs`](./src/links.rs) — the docs, the donate page, the
+  OAuth router. An outbound URL is the string here most likely to rot with nothing failing, so it
+  is kept where somebody can read the list and check it.
 - Targets `wasm32-unknown-unknown`; **excluded from the workspace's `default-members`**, so
   a bare `cargo build`/`cargo test` skips it. Build with Trunk (or
   `cargo … -p adi-webapp --target wasm32-unknown-unknown`).

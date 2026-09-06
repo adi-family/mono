@@ -2745,7 +2745,10 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                             actions=move || {
                                 view! {
                                     {chat_fleet_refresh(state)}
-                                    <a class="adi-chat__link" href="/extended/dashboards">"Manage"</a>
+                                    // Through `Route`, not the literal: `/extended` is a prefix
+                                    // this app has moved once already.
+                                    <a class="adi-chat__link"
+                                        href=Route::Dashboards.path()>"Manage"</a>
                                     <button class="adi-chome__drawer-close" type="button"
                                         on:click=move |_| state.chat_drawer.set(None)>
                                         <adi_ui::Icon icon=adi_ui::Lucide::X label="Close"/>
@@ -2781,20 +2784,6 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
     .into_any()
 }
 
-/// Where the donate link goes. Off this machine, so it is written out in full rather than as a
-/// path — every other link in this screen is local, and one of them is not.
-const DONATE_URL: &str = "https://withadi.dev/mono-donate";
-
-/// Where the docs are.
-const DOCS_URL: &str = "https://github.com/adi-family/mono/tree/main/docs";
-
-/// What a *source* is, for the `?` on the sessions rail's source menu: `docs/fleet.md` §13, which
-/// is where merging another machine's sessions into this rail is written down. Deep-linked to the
-/// section rather than to the docs tree — a menu's `?` that lands the reader on a directory
-/// listing has answered nothing.
-const SOURCES_DOC_URL: &str = "https://github.com/adi-family/mono/blob/main/docs/fleet.md\
-                               #13-driving-a-nodes-sessions-from-here";
-
 /// The foot of the right column: two 12px links, under whichever panel is showing. adi runs on
 /// this machine and asks for nothing to do it, so this is the one place it asks at all.
 ///
@@ -2803,9 +2792,9 @@ const SOURCES_DOC_URL: &str = "https://github.com/adi-family/mono/blob/main/docs
 fn chat_foot() -> impl IntoView {
     view! {
         <div class="adi-chat__foot">
-            <a href=DONATE_URL target="_blank" rel="noopener noreferrer"
+            <a href=crate::links::DONATE target="_blank" rel="noopener noreferrer"
                 title="support adi — opens withadi.dev/mono-donate in a new tab">"Donate"</a>
-            <a href=DOCS_URL target="_blank" rel="noopener noreferrer">"Docs"</a>
+            <a href=crate::links::DOCS target="_blank" rel="noopener noreferrer">"Docs"</a>
         </div>
     }
 }
@@ -4207,7 +4196,7 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
         view! {
             <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
                 on_dismiss=Callback::new(move |()| state.session_node_menu.set(None))>
-                <adi_ui::MenuHead help=SOURCES_DOC_URL
+                <adi_ui::MenuHead help=crate::links::FLEET_SESSIONS
                     help_label="What a session source is, and what merging one in does">
                     "Sessions from"
                 </adi_ui::MenuHead>

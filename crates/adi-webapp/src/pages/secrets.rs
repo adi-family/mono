@@ -28,9 +28,6 @@ use crate::ui::{
     row_actions, sort_rows, updated_text,
 };
 
-/// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
-const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
-
 /// The localStorage key holding the secret we're mid-OAuth for, across the provider round-trip.
 const PENDING_KEY: &str = "adi.oauth.pending";
 
@@ -580,7 +577,8 @@ fn oauth_initiate(pending: &PendingOAuth, requested_scope: Option<&str>) {
     let redirect: String =
         js_sys::encode_uri_component(&format!("{origin}{}", Route::Secrets.path())).into();
     let mut url = format!(
-        "{OAUTH_ROUTER}/login/{}?redirect={redirect}",
+        "{}/login/{}?redirect={redirect}",
+        crate::links::OAUTH_ROUTER,
         pending.provider
     );
     if let Some(scope) = requested_scope.filter(|s| !s.trim().is_empty()) {

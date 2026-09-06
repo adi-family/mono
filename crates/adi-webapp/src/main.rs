@@ -16,6 +16,7 @@ mod attach;
 mod fetch;
 mod icons;
 mod launcher;
+mod links;
 mod live;
 mod menu;
 mod origin;
