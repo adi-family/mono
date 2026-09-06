@@ -4,7 +4,8 @@
 //! It is a dev surface: nothing embeds it and nothing depends on it. Its job is to make a
 //! component's states visible all at once — a variant you never render is a variant you
 //! never notice is broken — so when you add a component here, add a row that shows *every*
-//! arm of every enum it takes, not just the default one.
+//! arm of every enum it takes, not just the default one. Give its `Panel` an `id` and a line
+//! in [`CHAPTERS`] while you are there, or the index in the gutter cannot reach it.
 //!
 //! The first three panels are the design system itself: the type scale, the palette and the
 //! icon set, rendered from the live tokens. If a value in `design/tokens.css` is wrong, it is
@@ -1670,6 +1671,94 @@ fn EmptyTableDemo() -> impl IntoView {
     }
 }
 
+/// Every chapter of this page, in the order it appears: the id on the `Panel`, and what the
+/// index calls it.
+///
+/// The rail and the bar's menu are both this one list, and a `Panel` whose title is not in it is
+/// a chapter the index cannot reach — so add the line when you add the panel.
+const CHAPTERS: &[(&str, &str)] = &[
+    ("type", "Type"),
+    ("palette", "Palette"),
+    ("icons", "Icons"),
+    ("mark", "Mark"),
+    ("topbar", "TopBar"),
+    ("button", "Button"),
+    ("badge", "Badge"),
+    ("kbd", "Kbd"),
+    ("menu", "Menu"),
+    ("panel", "Panel"),
+    ("table", "Table"),
+    ("table-empty", "Table \u{00b7} empty"),
+    ("form-field-input", "Form \u{00b7} Field \u{00b7} Input"),
+    ("textarea-select-widths", "Textarea \u{00b7} Select \u{00b7} widths"),
+    ("flash-empty", "Flash \u{00b7} Empty"),
+    ("tree-codeeditor", "Tree \u{00b7} CodeEditor"),
+    ("codelog", "CodeLog"),
+    ("pathpicker", "PathPicker"),
+    ("tokenstream-prompttext", "TokenStream \u{00b7} PromptText"),
+    ("toolform", "ToolForm"),
+    ("turnblocks-stopline", "TurnBlocks \u{00b7} StopLine"),
+    ("flagmark-flaglist", "FlagMark \u{00b7} FlagList"),
+    ("simulator", "Simulator"),
+    ("chat", "Chat"),
+    ("ask", "Ask"),
+    ("apps", "Apps"),
+    ("sessions", "Sessions"),
+    ("session-card", "Session card"),
+    ("facts-the-pair", "Facts \u{2014} the pair"),
+    ("facts-the-transaction", "Facts \u{2014} the transaction"),
+    ("facts-the-node", "Facts \u{2014} the node"),
+    ("facts-stale-and-history", "Facts \u{2014} stale, and history"),
+];
+
+/// A menu anchored under the button that opened it, left edges flush.
+fn under(ev: &web_sys::MouseEvent) -> MenuAt {
+    use leptos::wasm_bindgen::JsCast as _;
+    ev.current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .map(|el: web_sys::Element| {
+            let r = el.get_bounding_client_rect();
+            MenuAt::Point(r.left() as i32, r.bottom() as i32 + 4)
+        })
+        .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
+}
+
+/// The chapter index, pinned in the left gutter: this page is thirty-odd components long, and
+/// scrolling to the one you came for is its own small chore.
+///
+/// Hidden below `xl`, where the centred 896px column leaves no gutter to put it in — the bar's
+/// own "Chapters" menu is the way in at those widths, off the same list. Real `<a href="#id">`
+/// links rather than scroll handlers, so the address bar carries the chapter and a link to one
+/// can be sent to somebody.
+#[component]
+fn ChapterRail() -> impl IntoView {
+    view! {
+        <nav
+            // 160px is what the gutter beside a centred 896px column can spare at `xl`, and the
+            // longest two titles clip there; at `2xl` there is room for all of them.
+            class="fixed top-16 left-4 hidden max-h-[calc(100vh-5rem)] w-40 overflow-y-auto \
+                   xl:block 2xl:w-52"
+            aria-label="Chapters"
+        >
+            <span class="mb-1 block px-2 text-label text-ink-3">"Chapters"</span>
+            {CHAPTERS
+                .iter()
+                .map(|(id, label)| {
+                    view! {
+                        <a
+                            class="block truncate rounded-md px-2 py-1 text-mini text-ink-3 \
+                                   no-underline hover:bg-hover hover:text-ink-2"
+                            href=format!("#{id}")
+                        >
+                            {*label}
+                        </a>
+                    }
+                })
+                .collect::<Vec<_>>()}
+        </nav>
+    }
+}
+
 /// Three live menus: the two anchorings, and every kind of line one can hold.
 ///
 /// Live rather than drawn open, because the half of this component that is worth reviewing is
@@ -1682,19 +1771,6 @@ fn MenuDemo() -> impl IntoView {
     let context = RwSignal::new(None::<MenuAt>);
     // What the checklist is a checklist of.
     let (here, nodes) = (RwSignal::new(true), RwSignal::new(false));
-
-    // Under the button that opened it, left edges flush — the same anchoring a header control
-    // uses in the app.
-    let under = move |ev: &web_sys::MouseEvent| -> MenuAt {
-        use leptos::wasm_bindgen::JsCast as _;
-        ev.current_target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .map(|el: web_sys::Element| {
-                let r = el.get_bounding_client_rect();
-                MenuAt::Point(r.left() as i32, r.bottom() as i32 + 4)
-            })
-            .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
-    };
 
     view! {
         <div class="flex flex-wrap items-center gap-3">
@@ -1808,6 +1884,8 @@ fn Playground() -> impl IntoView {
     ];
 
     let disabled = RwSignal::new(false);
+    // Where the bar's chapter menu is dropped, and whether it is open at all.
+    let chapters_at = RwSignal::new(None::<MenuAt>);
     // The TopBar panel's miniature window: whether its row is open — what its mark resets.
     let opened = RwSignal::new(false);
     let name = RwSignal::new(String::from("ports"));
@@ -1827,6 +1905,16 @@ fn Playground() -> impl IntoView {
             home="/"
             actions=move || {
                 view! {
+                    // The index, for the width where the rail in the gutter is not there —
+                    // and the fastest way to a chapter at any width.
+                    <Button
+                        size=ButtonSize::Small
+                        variant=ButtonVariant::Ghost
+                        icon=Lucide::ListTree
+                        on:click=move |ev| chapters_at.set(Some(under(&ev)))
+                    >
+                        "Chapters"
+                    </Button>
                     // Left of the way out: the way to have this explained.
                     <Button
                         size=ButtonSize::Small
@@ -1849,18 +1937,45 @@ fn Playground() -> impl IntoView {
             ]/>
         </TopBar>
 
+        // Thirty-odd chapters is taller than any viewport, so this one scrolls inside itself
+        // rather than running off the bottom of the screen.
+        <Menu
+            at=chapters_at
+            on_dismiss=Callback::new(move |()| chapters_at.set(None))
+            class="max-h-[70vh] overflow-y-auto"
+        >
+            <MenuHead>"Chapters"</MenuHead>
+            {CHAPTERS
+                .iter()
+                .map(|(id, label)| {
+                    view! {
+                        <MenuItem on_select=Callback::new(move |()| {
+                            if let Some(w) = web_sys::window() {
+                                let _ = w.location().set_hash(id);
+                            }
+                            chapters_at.set(None);
+                        })>{*label}</MenuItem>
+                    }
+                })
+                .collect::<Vec<_>>()}
+        </Menu>
+
+        <ChapterRail/>
+
         <Modal open=faq_open title="Questions" width="max-w-3xl">
             <Faq items=questions.clone()/>
         </Modal>
 
-        <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-            <Panel title="Type">
+        // `scroll-mt` on every chapter: the bar is sticky, so a jump to `#chat` would otherwise
+        // land with the title underneath it.
+        <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6 [&_section[id]]:scroll-mt-16">
+            <Panel title="Type" id="type">
                 <div>
                     <TypeSpecimen/>
                 </div>
             </Panel>
 
-            <Panel title="Palette">
+            <Panel title="Palette" id="palette">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A grey scale with one accent, from `design/tokens.css`. The surface ladder \
                      does the structure — lower is further from the reader — and three inks do \
@@ -1915,7 +2030,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Icons">
+            <Panel title="Icons" id="icons">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Lucide, and only Lucide: stroke 1.5, sizes 14 / 16 / 20 / 24, the ink of \
                      the text beside it, always with a label in the app. DESIGN.md §9 maps each \
@@ -1938,7 +2053,7 @@ fn Playground() -> impl IntoView {
                 <IconGrid/>
             </Panel>
 
-            <Panel title="Mark">
+            <Panel title="Mark" id="mark">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Trefoil \u{2014} three hexagons at 120\u{b0}, painted back to front, weak to \
                      strong. It never names its own ink: every lobe is "<code>"currentColor"</code>" \
@@ -1982,7 +2097,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="TopBar">
+            <Panel title="TopBar" id="topbar">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The page's own header is this component — scroll and it stays. Here it \
                      is again inside a window, which is where it lives: 48px, on the side \
@@ -2058,7 +2173,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Button">
+            <Panel title="Button" id="button">
                 <div>
                     <Row label="variant">
                         <Button variant=ButtonVariant::Primary>"Save changes"</Button>
@@ -2093,7 +2208,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Badge">
+            <Panel title="Badge" id="badge">
                 <div>
                     <Row label="tag / pill">
                         <Badge>"bugbounty"</Badge>
@@ -2117,7 +2232,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Kbd">
+            <Panel title="Kbd" id="kbd">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A shortcut. As quiet as a thing can be and still be read: it rides a row \
                      that already does the thing, and a list wearing forty badges is a list \
@@ -2134,7 +2249,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Menu">
+            <Panel title="Menu" id="menu">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The panel a control drops under itself: a row's "
                     <span class="font-mono">"\u{22ef}"</span>
@@ -2155,6 +2270,7 @@ fn Playground() -> impl IntoView {
 
             <Panel
                 title="Panel"
+                id="panel"
                 actions=|| {
                     view! {
                         <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>"Refresh"</Button>
@@ -2176,7 +2292,7 @@ fn Playground() -> impl IntoView {
 
             // Controls shown where they actually live — closing a panel, not floating in a
             // row of their own. A form strip only looks right against the body above it.
-            <Panel title="Table">
+            <Panel title="Table" id="table">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Live: click a header to sort it, click again to reverse, and open the \
                      gear to show, hide and reorder columns. Both are persisted, so the \
@@ -2198,7 +2314,7 @@ fn Playground() -> impl IntoView {
                 <PortsDemo/>
             </Panel>
 
-            <Panel title="Table · empty">
+            <Panel title="Table · empty" id="table-empty">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The placeholder spans the columns the table is "
                     <em>"currently"</em>
@@ -2210,7 +2326,7 @@ fn Playground() -> impl IntoView {
                 <EmptyTableDemo/>
             </Panel>
 
-            <Panel title="Form · Field · Input">
+            <Panel title="Form · Field · Input" id="form-field-input">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Fields align on their inputs, not their labels. Hover a "
                     <span class="font-mono">"?"</span>
@@ -2249,7 +2365,7 @@ fn Playground() -> impl IntoView {
                 <Hint>"A hint block is the written-out version of a field's ?."</Hint>
             </Panel>
 
-            <Panel title="Textarea · Select · widths">
+            <Panel title="Textarea · Select · widths" id="textarea-select-widths">
                 <div class="grid gap-3">
                     <Field label="Docker args" hint="One flag per line.">
                         <Textarea value=notes rows=3/>
@@ -2267,7 +2383,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Flash · Empty">
+            <Panel title="Flash · Empty" id="flash-empty">
                 <div class="flex flex-col gap-2">
                     <Flash kind=FlashKind::Ok card=true>"Reserved :8000 for ports."</Flash>
                     <Flash kind=FlashKind::Err card=true>"Port 8000 is already held by app."</Flash>
@@ -2279,7 +2395,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Tree · CodeEditor">
+            <Panel title="Tree · CodeEditor" id="tree-codeeditor">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A file browser and the editor a file opens in. The tree takes one flat, \
                      depth-annotated list — depth is what makes it a tree, and a closed row \
@@ -2298,7 +2414,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="CodeLog">
+            <Panel title="CodeLog" id="codelog">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The read-only half: a log that grows under a poll. It follows the tail \
                      while you are at the bottom and stops the moment you scroll up, so \
@@ -2313,7 +2429,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="PathPicker">
+            <Panel title="PathPicker" id="pathpicker">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A directory, typed or browsed to \u{2014} and both at once, because the two \
                      halves are one value. Paste a path and the list is already inside it; \
@@ -2346,7 +2462,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="TokenStream · PromptText">
+            <Panel title="TokenStream · PromptText" id="tokenstream-prompttext">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The same tokens, twice. Above, every split shown — the boundary is the \
                      information, so the colour cycles by position and means nothing else. \
@@ -2376,7 +2492,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="ToolForm">
+            <Panel title="ToolForm" id="toolform">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A tool's parameters, built from the schema the tool itself declares — so a \
                      parameter added to the tool shows up here rather than being quietly \
@@ -2390,7 +2506,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="TurnBlocks · StopLine">
+            <Panel title="TurnBlocks · StopLine" id="turnblocks-stopline">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "A model does not answer and then call a tool — it emits one turn made of \
                      blocks, and the turn is over when it stops emitting. So this is a list, \
@@ -2410,7 +2526,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="FlagMark · FlagList">
+            <Panel title="FlagMark · FlagList" id="flagmark-flaglist">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Select any of the text below with the mouse or with Shift+arrows. The \
                      offer follows the selection, quotes it as it read at the time — a copy, \
@@ -2423,7 +2539,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Simulator">
+            <Panel title="Simulator" id="simulator">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The whole flow, wired to itself. Left is what the model sees — one \
                      document, instructions and tools and every turn so far, because to a model \
@@ -2440,7 +2556,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Chat">
+            <Panel title="Chat" id="chat">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Newest first — an agent's run is long and mostly tool calls, and you come \
                      back to it to find out what just happened, not to re-read it. Nothing \
@@ -2457,7 +2573,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Ask">
+            <Panel title="Ask" id="ask">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "What a run puts up when it needs a person to decide something. It is the \
                      visible half of a stored question: while the card is there the conversation \
@@ -2474,7 +2590,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Apps">
+            <Panel title="Apps" id="apps">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The right rail: the living apps on this stack. Same container, same bands \
                      and same card as the sessions on the other side — a different row in \
@@ -2489,7 +2605,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Sessions">
+            <Panel title="Sessions" id="sessions">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The rail is live: click a row. Scroll it and the title goes with the \
                      rows while the filter box stays — that box binds a signal and does \
@@ -2504,7 +2620,7 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
-            <Panel title="Session card">
+            <Panel title="Session card" id="session-card">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "Every state a row can be in, open and not. The open one is a tone \
                      change; the state is a 6px dot before the title and one word in the \
@@ -2774,7 +2890,7 @@ fn FactsPanel() -> impl IntoView {
     ]);
 
     view! {
-        <Panel title="Facts \u{2014} the pair">
+        <Panel title="Facts \u{2014} the pair" id="facts-the-pair">
             <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                 "The decision atom. Two facts of equal weight, the classifier's guess and its \
                  strength as a plain number, its reason underneath and clearly labelled as \
@@ -2894,6 +3010,7 @@ fn FactsPanel() -> impl IntoView {
 
         <Panel
             title="Facts \u{2014} the transaction"
+            id="facts-the-transaction"
             actions=move || view! {
                 <Button size=ButtonSize::Small variant=ButtonVariant::Ghost on:click=reset>
                     "Reset"
@@ -2947,7 +3064,7 @@ fn FactsPanel() -> impl IntoView {
             </div>
         </Panel>
 
-        <Panel title="Facts \u{2014} the node">
+        <Panel title="Facts \u{2014} the node" id="facts-the-node">
             <div>
                 <Row label="rows">
                     <div class="flex w-full min-w-0 flex-col">
@@ -2987,7 +3104,7 @@ fn FactsPanel() -> impl IntoView {
             </div>
         </Panel>
 
-        <Panel title="Facts \u{2014} stale, and history">
+        <Panel title="Facts \u{2014} stale, and history" id="facts-stale-and-history">
             <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                 "Both are was/now surfaces. Which fact moved is not the question \u{2014} \
                  whether the derived text still holds is, and only the two sentences answer it."

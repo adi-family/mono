@@ -23,7 +23,7 @@ nothing else is shared.
 | `Button` | `Default` (translucent), `Primary` (**the** orange — one per screen), `Strong` (ink fill, the main action when orange is spent), `Ghost` (quiet), `Danger` (red text), `Link`; two sizes; an optional `Lucide` icon |
 | `Badge` / `BadgeTone` | A pill on a 12% tint — `set`, `idle`, `blocked`. Never a filled block, never orange |
 | `Dot` / `DotTone` | The 6px dot before a word: `Ok`, `Live` (orange — the one live state), `Warn`, `Err`, `Idle` |
-| `Panel` | A section, not a card: a 16px/600 title line, a hairline, the content. Flush |
+| `Panel` | A section, not a card: a 16px/600 title line, a hairline, the content. Flush. An `id` makes it an anchor, for a page long enough to be linked into by chapter |
 | `Form` / `Hint` | The strip of controls under a section — a hairline above, fields aligned on their inputs; stacks below 620px. `toolbar` for bare controls |
 | `Field` | Label above in 13px `ink-2`, an optional `?` whose text opens on hover or focus |
 | `Input` / `Textarea` / `Select` | The raised frame with a strong hairline. **Sans by default**; `mono=true` when the value is a machine value. `Select` draws its own Lucide chevron |

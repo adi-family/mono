@@ -25,13 +25,19 @@ pub fn Panel(
     /// Controls pinned to the right of the header — usually a [`crate::Button`] or two.
     #[prop(optional, into)]
     actions: Option<ViewFn>,
+    /// An anchor for the section, so a long page can be linked and jumped into by chapter.
+    /// Pair it with a `scroll-mt-*` in `class`, or the sticky bar lands on the title.
+    #[prop(optional, into)]
+    id: String,
     #[prop(optional, into)] class: String,
     children: Children,
 ) -> impl IntoView {
     let has_head = !title.is_empty() || actions.is_some();
+    // `None` rather than `""`: an empty id is a valid attribute and a useless one.
+    let id = (!id.is_empty()).then_some(id);
 
     view! {
-        <section class=merge("flex flex-col text-ink", class)>
+        <section id=id class=merge("flex flex-col text-ink", class)>
             {has_head.then(|| view! {
                 <header class="mb-3 flex min-h-8 items-center justify-between gap-3 border-b \
                                border-line pb-2.5">
