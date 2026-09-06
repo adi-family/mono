@@ -767,6 +767,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body, fleet_sender(req)),
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
+        ("POST", "/api/agents/auto-title") => handlers::set_auto_title(agents, &req.body),
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
         // `?limit=N` is the chat rail's page — the newest N sessions across every agent. Absent
         // (or unparseable) means the whole index, which is what the pages that read all of it ask

@@ -18,8 +18,8 @@ use crate::types::{
     AgentStep, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
     AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
     GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, RenameRun, ReplyToRun,
-    ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit, SimulateAgent,
-    SimulateTurn, StarRun, UnqueueFromRun,
+    ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetAutoTitle, SetGoal, SetRunLimit,
+    SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -104,6 +104,7 @@ pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreErro
         max_concurrent_runs: caps.limits.max_concurrent_runs,
         running_runs: count(caps.load.total()),
         project_run_limits,
+        auto_title_enabled: store.auto_title_enabled(),
     })
 }
 
@@ -168,6 +169,22 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
         }
     };
     if let Err(e) = stored {
+        return Response::from(&e);
+    }
+    match agents_state(store) {
+        Ok(state) => ok_json(&state),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/auto-title` — turn the auto-title guesser on or off. Answers with the fresh
+/// state, like every other setting on this page.
+#[must_use]
+pub fn set_auto_title(store: &Agents, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<SetAutoTitle>(body) else {
+        return error(400, "expected JSON body { \"enabled\": true|false }");
+    };
+    if let Err(e) = store.set_auto_title_enabled(req.enabled) {
         return Response::from(&e);
     }
     match agents_state(store) {
@@ -2775,6 +2792,27 @@ mod tests {
             answer_run(&store, answer.to_string().as_bytes()).status,
             404
         );
+    }
+
+    /// The toggle is on by default, `POST /api/agents/auto-title` flips it, and the answer already
+    /// carries the fresh value — the same round-trip contract as the run limit beside it.
+    #[test]
+    fn auto_title_defaults_on_and_the_toggle_answers_with_the_fresh_state() {
+        let store = scratch("auto-title");
+        assert!(agents_state(&store).expect("state").auto_title_enabled);
+
+        let off = set_auto_title(&store, br#"{"enabled":false}"#);
+        assert_eq!(off.status, 200);
+        let state: AgentsState = serde_json::from_str(&off.body).expect("json");
+        assert!(!state.auto_title_enabled);
+        assert!(!store.auto_title_enabled(), "the store itself agrees");
+
+        let on = set_auto_title(&store, br#"{"enabled":true}"#);
+        assert_eq!(on.status, 200);
+        let state: AgentsState = serde_json::from_str(&on.body).expect("json");
+        assert!(state.auto_title_enabled);
+
+        assert_eq!(set_auto_title(&store, b"not json").status, 400);
     }
 
     /// Starring answers with the listing that already has the mark on it. That is the whole contract

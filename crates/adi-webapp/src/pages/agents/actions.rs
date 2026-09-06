@@ -22,7 +22,9 @@ use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionMenu, State,
     refresh_fleet_dashboards,
 };
-use crate::ui::{Key, Sort, TableState, apply_mutation, display_message, prompt, sort_rows};
+use crate::ui::{
+    Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
+};
 
 use super::send_bar;
 
@@ -108,6 +110,32 @@ pub(crate) fn project_run_limit_view(state: State) -> impl IntoView {
             apply_agents(state, None, msg, fetch::set_run_limit(max, Some(id)));
         },
     )
+}
+
+/// The auto-title toggle: whether a fresh conversation is retitled from its opening message by a
+/// local model once one answers (`adi_agents::AutoTitleSettings`). Lives beside the run cap for the
+/// same reason: it is a standing preference about how a chat behaves, not a per-agent setting, so it
+/// belongs next to the agents rather than behind a settings screen the panel doesn't otherwise have.
+pub(crate) fn auto_title_view(state: State) -> impl IntoView {
+    let agents = state.agents;
+    let checked = move || agents.get().is_some_and(|a| a.auto_title_enabled);
+    view! {
+        <label class="adi-field adi-field--check">
+            <input type="checkbox"
+                prop:checked=checked
+                on:change=move |ev| {
+                    let enabled = event_target_checked(&ev);
+                    let msg = if enabled {
+                        "New chats will be renamed from a local model's guess.".to_string()
+                    } else {
+                        "New chats will keep the title their opening message gives them.".to_string()
+                    };
+                    apply_agents(state, None, msg, fetch::set_auto_title(enabled));
+                } />
+            <span class="adi-field__label">"Auto-name new chats"</span>
+            {field_hint("Guess a name for a new chat from its opening message, using a local model, once one answers. Off costs nothing — chats keep the title their opening message gives them either way.")}
+        </label>
+    }
 }
 
 /// The shape both caps are read and edited by: a "N/M running" chip and a box that sets M. `load`

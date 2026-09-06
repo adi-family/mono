@@ -16,13 +16,13 @@ use adi_webapp_api::types::{
     NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
-    RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
-    SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun,
-    StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
-    ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
-    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
-    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetAutoTitle,
+    SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent,
+    SimulateTurn, StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef,
+    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun,
+    UpdateMarketplaceApp, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
@@ -478,6 +478,11 @@ pub async fn set_run_limit(
         },
     )
     .await
+}
+
+/// Turn the auto-title guesser on or off — see `SetAutoTitle`.
+pub async fn set_auto_title(enabled: bool) -> Result<AgentsState, String> {
+    post("/api/agents/auto-title", &SetAutoTitle { enabled }).await
 }
 
 pub async fn stop_agent(name: String) -> Result<AgentsState, String> {

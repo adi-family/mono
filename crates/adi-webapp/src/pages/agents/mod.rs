@@ -33,8 +33,8 @@ mod simulate;
 use actions::apply_agents;
 pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, adopt_run_settings, agent_actions,
-    all_chats_view, chat_home_view, live_view, poll_watch, project_run_limit_view, reset_chat_home,
-    run_limit_view,
+    all_chats_view, auto_title_view, chat_home_view, live_view, poll_watch, project_run_limit_view,
+    reset_chat_home, run_limit_view,
 };
 // The onboarding wizard renders the same fields from the same schema, so its half of the form
 // lives here rather than as a second copy of these renderers.
@@ -100,6 +100,7 @@ pub(crate) fn agents_view(
         {move || limit_open.get().then(|| view! {
             <div class="adi-agents__limit-row">{run_limit_view(state)}</div>
         })}
+        <div class="adi-agents__limit-row">{auto_title_view(state)}</div>
 
         <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim, route)}</Table>
         {flash_view(state.flash)}

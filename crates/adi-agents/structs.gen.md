@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-102 structs · 24 enums · 5 type aliases across 42 files.
+103 structs · 24 enums · 5 type aliases across 43 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `PromptToken`, `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
+- [`src/auto_title.rs`](#srcauto_titlers) — `AutoTitleSettings`
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
@@ -543,6 +544,22 @@ enum U64ish {
 enum F64ish {
     Number(f64),
     String(String),
+}
+```
+
+---
+
+## `src/auto_title.rs`
+
+### struct `AutoTitleSettings`
+
+Whether `spawn` does anything at all. Lives beside `RunLimits` — a `sessions/auto_title.toml` next to `sessions/settings.toml` — because it is the same kind of thing: a person's standing preference about how runs behave, not a fact about any one of them.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoTitleSettings {
+    pub enabled: bool,
 }
 ```
 

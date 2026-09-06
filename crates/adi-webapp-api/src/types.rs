@@ -1149,6 +1149,10 @@ pub struct AgentsState {
     /// something running. A project not listed here has no cap of its own and nothing live.
     #[serde(default)]
     pub project_run_limits: Vec<ProjectRunLimit>,
+    /// Whether a fresh conversation is retitled from its opening message by a local model, once one
+    /// answers (`POST /api/agents/auto-title`). On by default.
+    #[serde(default)]
+    pub auto_title_enabled: bool,
 }
 
 /// One project's slice of the run caps: what it is allowed and what it is using.
@@ -1173,6 +1177,14 @@ pub struct SetRunLimit {
     pub max_concurrent_runs: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+}
+
+/// Request body for `POST /api/agents/auto-title` — turn the auto-title guesser on or off. It is
+/// the standing preference, not a per-chat setting: a person who never wants a model naming their
+/// chats turns it off once here rather than undoing a guess on every conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetAutoTitle {
+    pub enabled: bool,
 }
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert

@@ -30,6 +30,7 @@
 mod agent;
 pub mod analytics;
 pub mod arguments;
+mod auto_title;
 pub mod awaits;
 mod backend;
 mod backends;
@@ -64,6 +65,7 @@ pub use agent::{
     Agent, AgentManifest, RawAgentArguments, SecretAttachment, StoredAgent, StoredAgentManifest,
     contains_json_null,
 };
+pub use auto_title::AutoTitleSettings;
 pub use backend::Backend;
 /// A tool as a model is told about it — see [`Agents::simulated_tools`].
 pub use backends::harness::tools::ToolDeclaration;
@@ -463,6 +465,21 @@ impl Agents {
         self.set_limits(limits)
     }
 
+    /// Whether a fresh conversation is retitled from its opening message once the local model has a
+    /// guess ready — see [`AutoTitleSettings`] and [`Self::launch_run`].
+    #[must_use]
+    pub fn auto_title_enabled(&self) -> bool {
+        AutoTitleSettings::load(&self.config.module(SESSIONS_MODULE)).enabled
+    }
+
+    /// Turn the auto-title guesser on or off.
+    ///
+    /// # Errors
+    /// [`Error::Config`] if the settings file can't be written.
+    pub fn set_auto_title_enabled(&self, enabled: bool) -> Result<()> {
+        AutoTitleSettings { enabled }.save(&self.config.module(SESSIONS_MODULE))
+    }
+
     /// This store's sessions: the record, the queue, the transcript, and the log of every run.
     ///
     /// A path and no cached state, so it is taken per call rather than held — which is only
@@ -757,6 +774,17 @@ impl Agents {
             message,
             launched_by.unwrap_or_default(),
         )?;
+        // Only for an answerable conversation — a one-shot `process` run's task is a line the
+        // caller already wrote deliberately, and a pty's launch message is not a message at all.
+        // Off this thread entirely: see [`auto_title::spawn`] for why a launch never waits on it.
+        if capabilities(&agent.manifest.backend).answerable {
+            auto_title::spawn(
+                self.config.clone(),
+                agent.name.clone(),
+                record.id.clone(),
+                message.to_string(),
+            );
+        }
         // Written onto the session before its first turn goes out, because from here on the
         // conversation is what says how it runs: every later turn re-reads the agent, and re-applies
         // this over it.

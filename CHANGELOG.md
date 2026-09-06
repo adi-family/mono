@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **Chats can be renamed.** Right-click a conversation in the rail for a Rename… item alongside
+  Star and Hide — the same prompt-style rename the Fleet page's nodes already use. A blank answer
+  clears the name back to the title the opening message would give it, and the new name is what
+  every other listing (the rail, the run history tables, Analytics) shows for that conversation
+  from then on.
+- **New chats can name themselves.** Once a conversation's opening message is sent, a local model
+  (an [ollama](https://ollama.com) `llama3.2:1b` on this machine — nothing leaves it) guesses a
+  short title and renames the chat in the background, without holding up the reply. A manual
+  rename always wins if it lands first. Turn it off from the Agents page, next to the run limit —
+  the toggle is "Auto-name new chats", on by default.
+
 ## 1.6.0 — 2026-09-05
 
 ### Added
