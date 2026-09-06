@@ -124,6 +124,31 @@ body {
 	color: var(--ink);
 }
 
+/* Sidebar top level: SidebarSublist.astro gives a standalone top-level page link (an <a class=
+   "large">, e.g. "Fleet") and a group-header divider (a <span class="group-label"><span class=
+   "large">, e.g. "Guides") the exact same `.large` rule — 18px/600/--sl-color-white for both.
+   One class doing duty for a page title and a section divider is DESIGN.md §2 rule 1's "uniform
+   loudness" tell; split them into what each actually is. Both overrides are plain (unlayered),
+   same reasoning as the file header: `.large` itself, and Starlight's @media (min-width: 50rem)
+   variant of it, both live inside `@layer starlight.core`, so an unlayered rule here beats either
+   regardless of viewport width — no `!important` or extra specificity needed. */
+.group-label .large {
+	/* Section divider, not a heading — DESIGN.md §4 Label row / §6 group-h ("Running now",
+	   "This chat"): 12px, --ink-3, sentence case, not bold. */
+	font-size: 12px;
+	font-weight: 400;
+	color: var(--ink-3);
+}
+a.large {
+	/* An ordinary top-level nav link, not a heading — DESIGN.md §4 UI row. Matches the sidebar's
+	   plain nested links (also --sl-text-sm past the 50rem breakpoint) in scale; --ink instead of
+	   their --ink-2 and 500 weight because it's still a page title (§3's color-choice order), not
+	   extra emphasis piled on for contrast. */
+	font-size: var(--sl-text-sm);
+	font-weight: 500;
+	color: var(--ink);
+}
+
 /* Sidebar nav: hover gets --bg-hover per DESIGN.md §3. Higher specificity than the rule below
    so the active item's own colors aren't clobbered by it on hover. */
 .sidebar-content a:hover,
