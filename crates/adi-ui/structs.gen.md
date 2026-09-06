@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-32 structs · 33 enums across 28 files.
+33 structs · 34 enums across 29 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
 - [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Attachment`, `AttachmentKind`, `Turn`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
+- [`src/faces.rs`](#srcfacesrs) — `FaceRing`, `Face`
 - [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
@@ -340,6 +341,37 @@ pub enum CodeHeight {
     #[default]
     Fill,
     Form,
+}
+```
+
+---
+
+## `src/faces.rs`
+
+### enum `FaceRing`
+
+The surface a pile sits on.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FaceRing {
+    #[default]
+    Side,
+    Bg,
+    Raise,
+}
+```
+
+### struct `Face`
+
+One face: a name, whether it is on right now, and what a hover should say.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Face {
+    pub name: String,
+    pub online: bool,
+    pub note: String,
 }
 ```
 

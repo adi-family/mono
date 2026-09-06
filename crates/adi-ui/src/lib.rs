@@ -40,6 +40,7 @@ mod button;
 mod chat;
 mod code;
 mod composer;
+mod faces;
 mod facts;
 mod faq;
 mod feedback;
@@ -80,6 +81,7 @@ pub use chat::{
 };
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
+pub use faces::{Face, FaceRing, Faces};
 pub use facts::{Change, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Stale, StaleList};
 pub use faq::{Faq, Qna};
 pub use feedback::{Empty, Flash, FlashKind};

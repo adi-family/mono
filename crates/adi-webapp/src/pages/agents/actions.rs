@@ -5716,9 +5716,13 @@ fn app_nodes(state: State) -> Vec<NodeDashboards> {
         .collect()
 }
 
-/// The viewers strip: [`viewer_nodes`] as a name beside a status dot (`/api/fleet`'s presence
-/// half, ADI-MONO-11) — "who else is working right now", at the head of the column where the rest
-/// of what the fleet is doing already lives.
+/// The viewers strip: [`viewer_nodes`] as a face pile (`/api/fleet`'s presence half,
+/// ADI-MONO-11) — "who else is working right now", at the head of the column where the rest of
+/// what the fleet is doing already lives.
+///
+/// A pile rather than the names in a line, because this column is 316px and a fleet is not
+/// bounded: names wrap, circles fold. [`adi_ui::Faces`] takes the order it is given and folds the
+/// tail, and [`viewer_nodes`] sorts active first — so what survives the fold is whoever is on.
 ///
 /// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the
 /// column height to say nothing.
@@ -5727,23 +5731,21 @@ fn chat_fleet_viewers(state: State) -> Option<AnyView> {
     if nodes.is_empty() {
         return None;
     }
+    let faces = nodes
+        .into_iter()
+        .map(|n| {
+            let note = if n.active {
+                format!("{} \u{2014} active now", n.petname)
+            } else {
+                format!("{} \u{2014} known, not active", n.petname)
+            };
+            adi_ui::Face::new(n.petname, n.active).note(note)
+        })
+        .collect::<Vec<_>>();
     Some(
         view! {
             <div class="adi-chome__presence">
-                {nodes.into_iter().map(|n| {
-                    let title = if n.active {
-                        format!("{} \u{2014} active now", n.petname)
-                    } else {
-                        format!("{} \u{2014} known, not active", n.petname)
-                    };
-                    let data_state = if n.active { "online" } else { "known" };
-                    view! {
-                        <span class="adi-status" data-state=data_state title=title>
-                            <span class="adi-status__led"></span>
-                            <span>{n.petname}</span>
-                        </span>
-                    }
-                }).collect::<Vec<_>>()}
+                <adi_ui::Faces faces=faces/>
             </div>
         }
         .into_any(),

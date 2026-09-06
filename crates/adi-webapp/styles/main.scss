@@ -225,16 +225,16 @@
     gap: 2px;
   }
 
-  // The viewers strip, at the head of the right column: every paired peer as a name beside a
-  // status dot (§6) — a fact stated in a line, not a table, so it costs the column one row rather
-  // than a panel of its own. It sits above the rail whichever panel the column is showing, so the
-  // hairline under it is the one that separates it from both.
+  // The viewers strip, at the head of the right column: every paired peer as a circle in an
+  // `adi_ui::Faces` pile — a fact stated in one row, not a table, and one row is all it can ever
+  // be, since the pile folds its own tail rather than wrapping. It sits above the rail whichever
+  // panel the column is showing, so the hairline under it is what separates it from both.
+  //
+  // The pile lays itself out; what is here is the band it sits in.
   &__presence {
     flex: none;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 6px 12px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--line);
   }

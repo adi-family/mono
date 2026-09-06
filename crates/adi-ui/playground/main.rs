@@ -22,7 +22,8 @@ use std::time::Duration;
 use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachKind, AttachState, Attached, Attaching,
     Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
-    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag,
+    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Face, FaceRing,
+    Faces, Faq, Field, Flag,
     FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint, Icon, IconSize, Input, InputWidth,
     Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt, MenuHead, MenuItem, MenuLink,
     MenuNote, MenuTick, Modal, Panel, Param, ParamKind, PathPicker, PathRoot, PromptText, Qna,
@@ -1683,6 +1684,7 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("topbar", "TopBar"),
     ("button", "Button"),
     ("badge", "Badge"),
+    ("faces", "Faces"),
     ("kbd", "Kbd"),
     ("menu", "Menu"),
     ("panel", "Panel"),
@@ -2264,6 +2266,71 @@ fn Playground() -> impl IntoView {
                         <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Warn/>"waiting"</span>
                         <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Err/>"failed"</span>
                         <span class="flex items-center gap-2 text-row"><Dot tone=DotTone::Idle/>"idle"</span>
+                    </Row>
+                </div>
+            </Panel>
+
+            <Panel title="Faces" id="faces">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "Who is here, in the width of a few characters. The first circle is drawn \
+                     over the second, not under it, so every right edge stays clear for the \
+                     live dot; the name is a hover away, and everyone past the fifth becomes \
+                     the count at the end \u{2014} which names them on hover too. The ring \
+                     between two circles is the surface underneath, so a pile has to be told \
+                     which one it is on."
+                </p>
+                <div>
+                    <Row label="a pile">
+                        <span class="rounded-lg bg-side p-2">
+                            <Faces faces=vec![
+                                Face::new("hetzner", true).note("hetzner \u{2014} active now"),
+                                Face::new("studio", false).note("studio \u{2014} known, not active"),
+                                Face::new("phone", false).note("phone \u{2014} known, not active"),
+                            ]/>
+                        </span>
+                    </Row>
+                    <Row label="folded at five">
+                        <span class="rounded-lg bg-side p-2">
+                            <Faces faces=vec![
+                                Face::new("hetzner", true),
+                                Face::new("studio", true),
+                                Face::new("phone", false),
+                                Face::new("pi", false),
+                                Face::new("bench", false),
+                                Face::new("laptop", false),
+                                Face::new("nas", false),
+                            ]/>
+                        </span>
+                    </Row>
+                    <Row label="folded at three">
+                        <span class="rounded-lg bg-side p-2">
+                            <Faces
+                                max=3
+                                faces=vec![
+                                    Face::new("hetzner", true),
+                                    Face::new("studio", false),
+                                    Face::new("phone", false),
+                                    Face::new("pi", false),
+                                ]
+                            />
+                        </span>
+                    </Row>
+                    <Row label="one, and nobody on">
+                        <span class="rounded-lg bg-side p-2">
+                            <Faces faces=vec![Face::new("hetzner", false)]/>
+                        </span>
+                    </Row>
+                    // On the page rather than in a rail: the same pile with the ring it needs
+                    // there. Set it wrong and the gap between two circles is the wrong grey.
+                    <Row label="on the page">
+                        <Faces
+                            ring=FaceRing::Bg
+                            faces=vec![
+                                Face::new("hetzner", true),
+                                Face::new("studio", false),
+                                Face::new("phone", false),
+                            ]
+                        />
                     </Row>
                 </div>
             </Panel>
