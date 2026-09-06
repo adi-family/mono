@@ -5683,15 +5683,19 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
 /// petname.
 ///
 /// The selection is the sessions rail's own — `state.session_nodes`, what the head's node button
-/// calls "N sources" — and not the whole registry. A pile of every machine ever paired is a fact
-/// about the past; what this column is for is the machines whose work is on screen right now, so
-/// the strip and the rail below it always name the same set. Untick a node in that menu and its
-/// circle goes with its rows.
+/// calls "N sources". A pile of every machine ever paired is a fact about the past; what this
+/// column is for is the machines whose work is on screen, so with a selection made the strip and
+/// the rail below it name the same set. Untick a node in that menu and its circle goes with its
+/// rows.
 ///
-/// Two consequences worth knowing. This machine is never in the pile even though it is always a
-/// source (the floor in [`toggle_session_source`]): the pile is who *else* is around. And a
-/// machine with no node ticked has no strip at all, which is the honest answer — there is nobody
-/// else to show.
+/// **An unset filter is not an empty one.** Nothing ticked is the state every machine starts in,
+/// and it means "sessions from here" rather than "show me nobody" — so it falls back to the whole
+/// registry, the way an empty search box matches everything. Without that the strip is invisible
+/// until somebody finds a menu they have no reason to open, which is a feature that may as well
+/// not exist.
+///
+/// This machine is never in the pile even though it is always a source (the floor in
+/// [`toggle_session_source`]): the pile is who *else* is around.
 ///
 /// Any peer may be in it, not just the ones that serve something: a phone or a browser tab is a
 /// peer in this registry exactly as a node is (`docs/fleet.md` §12). `active` and `last_seen` are
@@ -5707,7 +5711,7 @@ fn viewer_nodes(state: State) -> Vec<FleetNode> {
     let mut nodes: Vec<FleetNode> = fleet
         .nodes
         .into_iter()
-        .filter(|n| selected.contains(&n.petname))
+        .filter(|n| selected.is_empty() || selected.contains(&n.petname))
         .collect();
     nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
     nodes
@@ -5747,8 +5751,8 @@ fn app_nodes(state: State) -> Vec<NodeDashboards> {
 /// what a reader who cannot tell the colours apart is left with. One name when one machine is on,
 /// because at that point the name is shorter than the count and says more.
 ///
-/// `None` when no node is a source: a strip that can only ever say "nobody" costs the column
-/// height to say nothing.
+/// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the
+/// column height to say nothing.
 fn chat_fleet_viewers(state: State) -> Option<AnyView> {
     let nodes = viewer_nodes(state);
     if nodes.is_empty() {
