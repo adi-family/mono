@@ -4266,8 +4266,12 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 }).collect::<Vec<_>>()}
                 {unpaired.then(|| view! {
                     <p class="adi-menu__note">
-                        "No paired nodes yet. Pair one on the Fleet page to merge its sessions in \
-                         here."
+                        "No paired nodes yet. Pair one on the "
+                        // A plain href, not `spa_click`: the Fleet page lives in the other shell
+                        // (`/extended`), which every cross-shell link on this screen loads the same
+                        // way — the "Manage" beside Apps, the "Settings" beside the agent's name.
+                        <a class="adi-link" href=Route::Fleet.path()>"Fleet page"</a>
+                        " to merge its sessions in here."
                     </p>
                 })}
             </div>

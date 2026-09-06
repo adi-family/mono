@@ -698,7 +698,9 @@ other node's name (exactly one source besides local) or a `"N sources"` count â€
 always, in the button's title. It sits in the rail's head on every machine, fleet or no fleet: where
 the rows come from is part of reading the rail, and a control that only appears once a node is paired
 is one the operator has to already know about to go looking for. With nothing paired it is the icon
-alone, and its menu is this machine plus a line saying where a second source would come from. Every
+alone, and its menu is this machine plus a line saying where a second source would come from â€” with
+the Fleet page in that line as a link, since being told where to go and having to go find it are two
+different things. Every
 row also grows its own origin label on the meta line once more than one source is selected, so
 "which machine is this" never depends on the head button at all by the time a hand reaches for Stop.
 
