@@ -162,19 +162,16 @@ fn menu_view(state: State) -> Option<AnyView> {
     let (for_file, for_dir) = (menu.dir.clone(), menu.dir);
     Some(
         view! {
-            <div class="adi-menu__scrim"
-                on:click=move |_| store.menu.set(None)
-                on:contextmenu=move |ev: web_sys::MouseEvent| {
-                    ev.prevent_default();
-                    store.menu.set(None);
-                }></div>
-            <div class="adi-menu" style=format!("left:{}px; top:{}px", menu.x, menu.y)>
-                <div class="adi-menu__head adi-mono" title=target.clone()>{target.clone()}</div>
-                <button class="adi-menu__item" type="button"
-                    on:click=move |_| start_create(state, for_file.clone(), false)>"New file"</button>
-                <button class="adi-menu__item" type="button"
-                    on:click=move |_| start_create(state, for_dir.clone(), true)>"New folder"</button>
-            </div>
+            <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(menu.x, menu.y))
+                on_dismiss=Callback::new(move |()| store.menu.set(None))>
+                <adi_ui::MenuHead mono=true title=target.clone()>{target.clone()}</adi_ui::MenuHead>
+                <adi_ui::MenuItem on_select=Callback::new(move |()| start_create(
+                    state, for_file.clone(), false,
+                ))>"New file"</adi_ui::MenuItem>
+                <adi_ui::MenuItem on_select=Callback::new(move |()| start_create(
+                    state, for_dir.clone(), true,
+                ))>"New folder"</adi_ui::MenuItem>
+            </adi_ui::Menu>
         }
         .into_any(),
     )

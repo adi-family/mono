@@ -4011,39 +4011,30 @@ fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
 
 /// The filter menu itself: the three narrowings, the current one ticked.
 ///
-/// The same `adi-menu` the rail's right-click menu is, for the same reason it is: a scrim behind it
-/// makes the next click anywhere a dismiss, which is the gesture a person tries first on a menu
-/// they opened by accident.
+/// [`adi_ui::Menu`], like every other menu in the panel — the scrim that makes the next click
+/// anywhere a dismiss is the gesture a person tries first on a menu they opened by accident, and
+/// it is the component's, not this screen's.
 fn chat_filter_menu(state: State) -> Option<AnyView> {
     let (x, y) = state.session_filter_menu.get()?;
     let current = state.session_filter.get();
     Some(
         view! {
-            <div class="adi-menu__scrim"
-                on:click=move |_| state.session_filter_menu.set(None)></div>
-            <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
-                <div class="adi-menu__head">"Show"</div>
+            <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
+                on_dismiss=Callback::new(move |()| state.session_filter_menu.set(None))>
+                <adi_ui::MenuHead>"Show"</adi_ui::MenuHead>
                 {SessionFilter::ALL.into_iter().map(|f| {
-                    let on = f == current;
+                    // Radio, not checkbox: picking one of these un-picks the other two.
                     view! {
-                        <button class="adi-menu__item" class:is-on=on type="button"
-                            role="menuitemradio" aria-checked=on.to_string()
-                            on:click=move |_| {
+                        <adi_ui::MenuItem checked=f == current radio=true
+                            on_select=Callback::new(move |()| {
                                 state.session_filter.set(f);
                                 state.session_filter_menu.set(None);
-                            }>
-                            // A tick in a column of its own, so the labels line up under each
-                            // other whether or not one of them is carrying it.
-                            <span class="adi-menu__tick" aria-hidden="true">
-                                {on.then(|| view! {
-                                    <adi_ui::Icon icon=adi_ui::Lucide::Check size=adi_ui::IconSize::Sm/>
-                                })}
-                            </span>
+                            })>
                             {f.label()}
-                        </button>
+                        </adi_ui::MenuItem>
                     }
                 }).collect::<Vec<_>>()}
-            </div>
+            </adi_ui::Menu>
         }
         .into_any(),
     )
@@ -4207,22 +4198,15 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     };
     Some(
         view! {
-            <div class="adi-menu__scrim"
-                on:click=move |_| state.session_node_menu.set(None)></div>
-            <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
-                <div class="adi-menu__head">"Sessions from"</div>
-                <button class="adi-menu__item" class:is-on=local type="button"
-                    role="menuitemcheckbox" aria-checked=local.to_string() title=local_title
-                    on:click=move |_| {
+            <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
+                on_dismiss=Callback::new(move |()| state.session_node_menu.set(None))>
+                <adi_ui::MenuHead>"Sessions from"</adi_ui::MenuHead>
+                <adi_ui::MenuItem checked=local title=local_title
+                    on_select=Callback::new(move |()| {
                         crate::state::toggle_session_source(state, watch, None, !local);
-                    }>
-                    <span class="adi-menu__tick" aria-hidden="true">
-                        {local.then(|| view! {
-                            <adi_ui::Icon icon=adi_ui::Lucide::Check size=adi_ui::IconSize::Sm/>
-                        })}
-                    </span>
+                    })>
                     "This machine"
-                </button>
+                </adi_ui::MenuItem>
                 {nodes.into_iter().map(|node| {
                     let on = selected.contains(&node.node);
                     let name = node.node.clone();
@@ -4242,39 +4226,32 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         format!("merge {name}'s sessions into the rail, and drive them from here")
                     };
                     view! {
-                        <button class="adi-menu__item" class:is-on=on type="button"
-                            role="menuitemcheckbox" aria-checked=on.to_string()
-                            disabled=locked_out title=title
-                            on:click=move |_| {
+                        <adi_ui::MenuItem checked=on disabled=locked_out title=title
+                            on_select=Callback::new(move |()| {
                                 crate::state::toggle_session_source(
                                     state, watch, Some(name.clone()), !on,
                                 );
-                            }>
-                            <span class="adi-menu__tick" aria-hidden="true">
-                                {on.then(|| view! {
-                                    <adi_ui::Icon icon=adi_ui::Lucide::Check size=adi_ui::IconSize::Sm/>
-                                })}
-                            </span>
+                            })>
                             {node.node}
                             {node.locked.then(|| view! {
-                                <span class="adi-menu__tick" aria-hidden="true">
+                                <adi_ui::MenuTick trailing=true>
                                     <adi_ui::Icon icon=adi_ui::Lucide::Lock size=adi_ui::IconSize::Sm/>
-                                </span>
+                                </adi_ui::MenuTick>
                             })}
-                        </button>
+                        </adi_ui::MenuItem>
                     }
                 }).collect::<Vec<_>>()}
                 {unpaired.then(|| view! {
-                    <p class="adi-menu__note">
+                    <adi_ui::MenuNote>
                         "No paired nodes yet. Pair one on the "
                         // A plain href, not `spa_click`: the Fleet page lives in the other shell
                         // (`/extended`), which every cross-shell link on this screen loads the same
                         // way — the "Manage" beside Apps, the "Settings" beside the agent's name.
-                        <a class="adi-link" href=Route::Fleet.path()>"Fleet page"</a>
+                        <adi_ui::MenuLink href=Route::Fleet.path()>"Fleet page"</adi_ui::MenuLink>
                         " to merge its sessions in here."
-                    </p>
+                    </adi_ui::MenuNote>
                 })}
-            </div>
+            </adi_ui::Menu>
         }
         .into_any(),
     )
@@ -5048,29 +5025,21 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let (star_node, star_agent, star_id) = (node.clone(), agent.clone(), run_id.clone());
     Some(
         view! {
-            <div class="adi-menu__scrim"
-                on:click=move |_| state.session_menu.set(None)
-                on:contextmenu=move |ev: web_sys::MouseEvent| {
-                    ev.prevent_default();
-                    state.session_menu.set(None);
-                }></div>
-            <div class="adi-menu" style=format!("left:{x}px; top:{y}px")>
-                <div class="adi-menu__head" title=head.clone()>{head.clone()}</div>
-                <button class="adi-menu__item" type="button"
-                    on:click=move |_| start_rename_session(
-                        state, watch, rename_node.clone(), rename_agent.clone(),
-                        rename_id.clone(), &rename_title,
-                    )>"Rename\u{2026}"</button>
-                <button class="adi-menu__item" type="button"
-                    on:click=move |_| set_session_starred(
-                        state, watch, star_node.clone(), star_agent.clone(), star_id.clone(),
-                        !starred,
-                    )>{star_label}</button>
-                <button class="adi-menu__item" type="button"
-                    on:click=move |_| set_session_hidden(
-                        state, watch, node.clone(), agent.clone(), run_id.clone(), !hidden,
-                    )>{hide_label}</button>
-            </div>
+            <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
+                on_dismiss=Callback::new(move |()| state.session_menu.set(None))>
+                <adi_ui::MenuHead title=head.clone()>{head.clone()}</adi_ui::MenuHead>
+                <adi_ui::MenuItem on_select=Callback::new(move |()| start_rename_session(
+                    state, watch, rename_node.clone(), rename_agent.clone(),
+                    rename_id.clone(), &rename_title,
+                ))>"Rename\u{2026}"</adi_ui::MenuItem>
+                <adi_ui::MenuItem on_select=Callback::new(move |()| set_session_starred(
+                    state, watch, star_node.clone(), star_agent.clone(), star_id.clone(),
+                    !starred,
+                ))>{star_label}</adi_ui::MenuItem>
+                <adi_ui::MenuItem on_select=Callback::new(move |()| set_session_hidden(
+                    state, watch, node.clone(), agent.clone(), run_id.clone(), !hidden,
+                ))>{hide_label}</adi_ui::MenuItem>
+            </adi_ui::Menu>
         }
         .into_any(),
     )

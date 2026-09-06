@@ -679,7 +679,7 @@
   }
   &__drawer-icon { display: inline-flex; line-height: 1; }
 
-  // Below `.adi-menu`'s 59/60 on purpose: a session's right-click menu is opened *from* the
+  // Below `adi_ui::Menu`'s 59/60 on purpose: a session's right-click menu is opened *from* the
   // drawer, so it has to draw over it — and its own dismiss-scrim has to sit over the drawer too,
   // or a tap on the rail would leave the menu hanging.
   &__scrim {

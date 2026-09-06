@@ -687,6 +687,10 @@ pub fn EmptyRow(state: TableState, children: Children) -> impl IntoView {
 ///
 /// Buttons rather than drag-and-drop — the list is short, and this works from the keyboard
 /// without a custom drop target. The panel is a menu: raised, a strong hairline, no shadow.
+///
+/// Not [`Menu`](crate::Menu), though it looks like one: this panel is anchored *inside* the
+/// tablebox rather than to the viewport, so it travels with the table as the page scrolls, and
+/// its rows are three controls each rather than one item. The surface is the same by hand.
 fn column_menu(state: TableState) -> AnyView {
     let open = state.open;
     let rows = move || {

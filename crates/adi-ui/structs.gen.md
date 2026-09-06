@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-32 structs · 32 enums across 27 files.
+32 structs · 33 enums across 28 files.
 
 ## Index
 
@@ -24,6 +24,7 @@
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/mark.rs`](#srcmarkrs) — `MarkVariant`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
+- [`src/menu.rs`](#srcmenurs) — `MenuAt`
 - [`src/pair.rs`](#srcpairrs) — `Relation`, `Verdict`, `PairSide`, `Decided`, `Pair`, `Ruling`, `Truncated`, `Mode`, `Order`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
@@ -615,6 +616,22 @@ enum Align {
     Left,
     Center,
     Right,
+}
+```
+
+---
+
+## `src/menu.rs`
+
+### enum `MenuAt`
+
+Where a `Menu`'s top corner goes, in viewport coordinates.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAt {
+    Point(i32, i32),
+    RightOf(i32, i32),
 }
 ```
 

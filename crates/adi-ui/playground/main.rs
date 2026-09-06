@@ -23,7 +23,8 @@ use adi_ui::{
     Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag,
     FlagList, FlagMark, Flash, FlashKind, Form, Hint, Icon, IconSize, Input, InputWidth, Kbd, Lang,
-    Lucide, Mark, MarkVariant, Markdown, Modal, Panel, Param, ParamKind, PathPicker, PathRoot,
+    Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote,
+    MenuTick, Modal, Panel, Param, ParamKind, PathPicker, PathRoot,
     PromptText, Qna, Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState,
     Simulator, SortKey, Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall,
     ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of,
@@ -1669,6 +1670,114 @@ fn EmptyTableDemo() -> impl IntoView {
     }
 }
 
+/// Three live menus: the two anchorings, and every kind of line one can hold.
+///
+/// Live rather than drawn open, because the half of this component that is worth reviewing is
+/// what a click does — where it lands, and that the scrim, `Escape` and the opener itself all
+/// close it again.
+#[component]
+fn MenuDemo() -> impl IntoView {
+    let actions = RwSignal::new(None::<MenuAt>);
+    let sources = RwSignal::new(None::<MenuAt>);
+    let context = RwSignal::new(None::<MenuAt>);
+    // What the checklist is a checklist of.
+    let (here, nodes) = (RwSignal::new(true), RwSignal::new(false));
+
+    // Under the button that opened it, left edges flush — the same anchoring a header control
+    // uses in the app.
+    let under = move |ev: &web_sys::MouseEvent| -> MenuAt {
+        use leptos::wasm_bindgen::JsCast as _;
+        ev.current_target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .map(|el: web_sys::Element| {
+                let r = el.get_bounding_client_rect();
+                MenuAt::Point(r.left() as i32, r.bottom() as i32 + 4)
+            })
+            .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
+    };
+
+    view! {
+        <div class="flex flex-wrap items-center gap-3">
+            <Button
+                size=ButtonSize::Small
+                variant=ButtonVariant::Ghost
+                on:click=move |ev| sources.set(Some(under(&ev)))
+            >
+                "Checklist"
+            </Button>
+            <Button
+                size=ButtonSize::Small
+                variant=ButtonVariant::Ghost
+                on:click=move |ev: web_sys::MouseEvent| {
+                    actions.set(Some(MenuAt::RightOf(24, ev.client_y() + 12)));
+                }
+            >
+                "Row actions"
+            </Button>
+            <div
+                class="cursor-context-menu rounded-md border border-dashed border-line-strong \
+                       px-3 py-2 text-row text-ink-3"
+                on:contextmenu=move |ev: web_sys::MouseEvent| {
+                    ev.prevent_default();
+                    context.set(Some(MenuAt::Point(ev.client_x(), ev.client_y())));
+                }
+            >
+                "Right-click here"
+            </div>
+        </div>
+
+        // A checklist: a head, boxes that stay open across ticks, one listed-but-not-takeable
+        // item, and a note carrying the way to make the list longer.
+        <Menu at=sources on_dismiss=Callback::new(move |()| sources.set(None))>
+            <MenuHead>"Sessions from"</MenuHead>
+            <MenuItem
+                checked=here.get()
+                on_select=Callback::new(move |()| here.update(|v| *v = !*v))
+            >
+                "This machine"
+            </MenuItem>
+            <MenuItem
+                checked=nodes.get()
+                on_select=Callback::new(move |()| nodes.update(|v| *v = !*v))
+            >
+                "workshop"
+            </MenuItem>
+            <MenuItem
+                checked=false
+                disabled=true
+                title="studio is locked here — give this machine its password on the Fleet page"
+                on_select=Callback::new(move |()| ())
+            >
+                "studio"
+                <MenuTick trailing=true>
+                    <Icon icon=Lucide::Lock size=IconSize::Sm/>
+                </MenuTick>
+            </MenuItem>
+            <MenuNote>
+                "Only two nodes paired. Pair another on the "
+                <MenuLink href="#">"Fleet page"</MenuLink>
+                " to merge its sessions in here."
+            </MenuNote>
+        </Menu>
+
+        // A row's overflow: plain actions, the destructive one last and red.
+        <Menu at=actions on_dismiss=Callback::new(move |()| actions.set(None))>
+            <MenuItem on_select=Callback::new(move |()| actions.set(None))>"Rename"</MenuItem>
+            <MenuItem on_select=Callback::new(move |()| actions.set(None))>"Duplicate"</MenuItem>
+            <MenuItem danger=true on_select=Callback::new(move |()| actions.set(None))>
+                "Delete"
+            </MenuItem>
+        </Menu>
+
+        // A right-click, headed by what was clicked — a path, so mono.
+        <Menu at=context on_dismiss=Callback::new(move |()| context.set(None))>
+            <MenuHead mono=true title="agents/adi-ui/memory">"agents/adi-ui/memory"</MenuHead>
+            <MenuItem on_select=Callback::new(move |()| context.set(None))>"New file"</MenuItem>
+            <MenuItem on_select=Callback::new(move |()| context.set(None))>"New folder"</MenuItem>
+        </Menu>
+    }
+}
+
 #[component]
 fn Playground() -> impl IntoView {
     // The FAQ the bar opens. Closed by default, and it closes itself three ways.
@@ -2022,6 +2131,25 @@ fn Playground() -> impl IntoView {
                         <Kbd>"Esc"</Kbd>
                         <Kbd>"Ctrl+9"</Kbd>
                     </Row>
+                </div>
+            </Panel>
+
+            <Panel title="Menu">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "The panel a control drops under itself: a row's "
+                    <span class="font-mono">"\u{22ef}"</span>
+                    ", a right-click, a checklist under a header button. Fixed to the viewport, so \
+                     a menu opened from a row deep in a scroll container is never clipped by it, \
+                     and anchored either from the left (a point) or from the right edge (a control \
+                     that sits on one). Three ways out, like a dialog: the scrim, the opener, and "
+                    <Kbd>"Esc"</Kbd>
+                    ". A checked item is ticked "
+                    <em class="not-italic text-ink-2">"and"</em>
+                    " set in the ink — a tick alone reads as decoration. A disabled item stays \
+                     listed, because dropping it would say the thing behind it is gone."
+                </p>
+                <div>
+                    <MenuDemo/>
                 </div>
             </Panel>
 

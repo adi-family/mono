@@ -213,80 +213,11 @@
   }
 }
 
-// ---- menu (a row's ⋯ menu, the store tree's right-click, the column picker) ---------------
-// Fixed to the viewport and anchored at the pointer, so it is never clipped by a scroll
-// container. The scrim behind it turns the next click into a dismiss. A raised surface with a
-// strong hairline; no blur, no shadow.
-.adi-menu {
-  position: fixed;
-  z-index: 60;
-  min-width: 168px;
-  max-width: 280px;
-  padding: 4px;
-  background: var(--bg-raise);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg);
-
-  &__scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 59;
-  }
-
-  &__head {
-    @include label;
-    padding: 6px 8px 8px;
-    border-bottom: 1px solid var(--line);
-    margin-bottom: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__item {
-    display: block;
-    width: 100%;
-    padding: 6px 8px;
-    border-radius: var(--r);
-    color: var(--ink);
-    font-size: var(--fs-ui-sm);
-    text-align: left;
-    cursor: pointer;
-
-    &:hover { background: var(--bg-hover); }
-
-    // The destructive item: red text, nothing more (§3).
-    &--danger { color: var(--err); }
-
-    // The chosen one, where the menu is a set to pick from: a tick, not a colour.
-    &.is-on { color: var(--ink); font-weight: 500; }
-
-    // Listed but not takeable — a fleet node this machine holds no password for. Shown rather
-    // than hidden, because its absence would read as "that node is gone".
-    &:disabled {
-      color: var(--ink-3);
-      cursor: default;
-
-      &:hover { background: none; }
-    }
-  }
-
-  // Why the list is as short as it is — an empty state inside the menu, not another item: it is
-  // read, never picked, so it wraps and takes no hover.
-  &__note {
-    padding: 2px 8px 6px;
-    color: var(--ink-3);
-    font-size: var(--fs-label);
-    line-height: 1.45;
-  }
-
-  // The tick column: a fixed width whether or not it carries the mark, so the labels line up.
-  &__tick {
-    display: inline-block;
-    width: 14px;
-    color: var(--ink-2);
-  }
-}
+// ---- menu ---------------------------------------------------------------------------------
+// The anchored popover — a row's ⋯, a right-click, a checklist — is `adi_ui::Menu`, not a class
+// here: it carries behaviour (the scrim, `Escape`, where it is anchored) that a stylesheet cannot,
+// and every menu in the panel is that one component. Its look is the same rules, in Tailwind
+// utilities over the same tokens: `crates/adi-ui/src/menu.rs`.
 
 // ---- run-log console (the expanded log under a selected run) -----------------------------
 // A code block (§6): raised surface, hairline, large radius, mono at 12.5. The bar above it names
@@ -756,20 +687,15 @@
   overflow-x: auto;
 }
 
-// The gear's panel: the shared menu chrome, one row per column.
+// The gear's panel: one row per column. No consumer in this tree draws it any more — the panel's
+// tables are `adi_ui::Table`, which owns its own column picker — but it is the library's, not the
+// app's, so it stays until something says otherwise.
 .adi-colmenu {
   position: absolute;
   top: 30px;
   right: 0;
   min-width: 220px;
   padding-bottom: 4px;
-
-  .adi-menu__head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
 
   &__row {
     display: flex;

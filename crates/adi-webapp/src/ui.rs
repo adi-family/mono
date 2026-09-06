@@ -110,9 +110,9 @@ pub(crate) fn row_actions(
     let rm = state.row_menu;
     let toggle_key = key.clone();
     let aria_key = key.clone();
-    let scrim_key = key.clone();
-    // The menu and its scrim stay mounted but `display:none` until this row is the open one, so
-    // each item's click handler can stay a plain move-closure instead of something rebuildable.
+    // The menu stays mounted but positionless until this row is the open one, so each item's
+    // click handler can stay a plain move-closure instead of something rebuildable — which is
+    // what [`adi_ui::Menu`]'s `at: Option` is for.
     view! {
         <div class="adi-rowacts">
             {inline}
@@ -123,17 +123,14 @@ pub(crate) fn row_actions(
                 <adi_ui::Icon icon=adi_ui::Lucide::Ellipsis/>
             </button>
         </div>
-        <div class="adi-menu__scrim"
-            style=move || if rm.get().is_some_and(|m| m.key == scrim_key) { String::new() } else { "display:none".to_string() }
-            on:click=move |_| rm.set(None)
-            on:contextmenu=move |ev: web_sys::MouseEvent| { ev.prevent_default(); rm.set(None); }></div>
-        <div class="adi-menu"
-            style=move || match rm.get() {
-                Some(m) if m.key == key => format!("right:{}px; top:{}px", m.right, m.top),
-                _ => "display:none".to_string(),
-            }>
+        <adi_ui::Menu
+            at=move || match rm.get() {
+                Some(m) if m.key == key => Some(adi_ui::MenuAt::RightOf(m.right, m.top)),
+                _ => None,
+            }
+            on_dismiss=Callback::new(move |()| rm.set(None))>
             {items}
-        </div>
+        </adi_ui::Menu>
     }
     .into_any()
 }
@@ -145,19 +142,15 @@ pub(crate) fn menu_item(
     state: State,
     label: &str,
     danger: bool,
-    on_select: impl Fn() + 'static,
+    on_select: impl Fn() + Send + Sync + 'static,
 ) -> AnyView {
     let rm = state.row_menu;
-    let class = if danger {
-        "adi-menu__item adi-menu__item--danger"
-    } else {
-        "adi-menu__item"
-    };
     let label = label.to_string();
     view! {
-        <button class=class type="button" on:click=move |_| { rm.set(None); on_select(); }>
+        <adi_ui::MenuItem danger=danger
+            on_select=Callback::new(move |()| { rm.set(None); on_select(); })>
             {label}
-        </button>
+        </adi_ui::MenuItem>
     }
     .into_any()
 }

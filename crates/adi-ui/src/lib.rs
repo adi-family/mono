@@ -52,6 +52,7 @@ mod input;
 mod kbd;
 mod mark;
 mod markdown;
+mod menu;
 mod modal;
 mod pair;
 mod panel;
@@ -90,6 +91,7 @@ pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};
 pub use markdown::Markdown;
+pub use menu::{Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote, MenuTick};
 pub use modal::Modal;
 pub use pair::{
     Decided, Pair, PairCard, PairQueue, PairSide, Relation, Ruling, Truncated, Verdict,

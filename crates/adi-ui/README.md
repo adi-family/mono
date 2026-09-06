@@ -30,6 +30,7 @@ nothing else is shared.
 | `Flash` / `Empty` | One line of 13px text — `Ok` in `ok`, `Err` in `err`, `Info` in `ink-2`; and the quiet line an empty list shows |
 | `TopBar` / `Crumbs` / `Crumb` | 48px on `bg-side` with a hairline under it. The monochrome mark at 18px, `adi` in 15px/600 sans, the path in 13px sans (a location is not a machine string) |
 | `Modal` | A card over a scrim; three ways out. No blur, no shadow, no fade |
+| `Menu` / `MenuAt` / `MenuHead` / `MenuItem` / `MenuTick` / `MenuNote` / `MenuLink` | The popover a control drops under itself — a row's `⋯`, a right-click, a checklist. Fixed to the viewport (so a scroll container can never clip it), anchored from the left at a point or in from the right edge, and dismissed three ways like a dialog. `MenuItem` is an action, or a `checked` box (or `radio`), or `danger`, or listed-but-`disabled` |
 | `Faq` / `Qna` | Questions folded under themselves, on native `<details>` |
 | `PathPicker` / `DirEntry` / `PathRoot` | A directory, typed or browsed to. Names in mono, the sheet raised, the confirm `Strong` |
 | `Tree` / `TreeNode` / `TreeState` | The explorer: rows in `ink-2`, the open row `bg-active` with a 3px `accent` marker, glyphs at 14 in `ink-3`, a Lucide chevron for the twisty. Knows nothing about files |
