@@ -6,7 +6,19 @@
    Docs are dark, matching the app (DESIGN.md §3: light mode is for the landing only) — the
    toggle is removed via the ThemeSelect/ThemeProvider component overrides, and the values here
    are plain (unlayered) so they win over Starlight's own `@layer`-scoped light/dark rules
-   regardless of the `data-theme` attribute. */
+   regardless of the `data-theme` attribute.
+
+   This isn't a specificity trick — it doesn't need to be. Every `--sl-*` custom property
+   Starlight defines (@astrojs/starlight/style/props.css) lives inside `@layer starlight.base`,
+   dark ramp, light-mode override, and the two responsive @media blocks alike; dark is the
+   *unscoped* default there (`:root, ::backdrop`), light is the one gated on
+   `:root[data-theme='light']`. Per the CSS cascade layers spec, unlayered normal-priority
+   declarations always beat layered ones, full stop — no amount of selector specificity or
+   `[data-theme]` scoping on Starlight's side changes that. So a bare `:root { }` here already
+   has maximum priority against anything in props.css; don't reach for `!important` or selector-
+   matching gymnastics to "win" against a `@layer`-scoped rule, that's solving a problem this file
+   doesn't have. (It would matter if Starlight ever shipped an *unlayered* override of its own —
+   it doesn't, as of @astrojs/starlight ^0.42.) */
 :root {
 	--bg-side: #101010;
 	--bg: #161616;
