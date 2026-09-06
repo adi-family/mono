@@ -1,0 +1,107 @@
+---
+// A small, thematically-relevant interactive widget: estimate the cost of an agent run from
+// token counts and a rate. Plain Astro + vanilla JS — one input/output widget doesn't need a
+// framework dependency (design/DESIGN.md's rulebook has nothing to say about frameworks, but
+// there's no reason to reach for one here).
+//
+// Styled as a detachable widget per DESIGN.md §5 ("Cards ... are for genuinely detachable
+// things"): --r-lg radius, --line border. Inputs follow §6's Input spec exactly; the result
+// follows §6's Stats spec (20px/500 value, 12px --ink-3 label, money to cents).
+---
+
+<div class="cost-estimator">
+	<div class="fields">
+		<div class="field">
+			<label for="ce-input-tokens">Input tokens</label>
+			<input id="ce-input-tokens" type="number" min="0" step="1" value="120000" />
+		</div>
+		<div class="field">
+			<label for="ce-output-tokens">Output tokens</label>
+			<input id="ce-output-tokens" type="number" min="0" step="1" value="8000" />
+		</div>
+		<div class="field">
+			<label for="ce-rate">Rate ($ / M tokens)</label>
+			<input id="ce-rate" type="number" min="0" step="0.01" value="3.00" />
+		</div>
+	</div>
+	<div class="result">
+		<span class="result-value" id="ce-cost">$0.38</span>
+		<span class="result-label">Estimated cost</span>
+	</div>
+</div>
+
+<script>
+	function centsFormat(value: number) {
+		return `$${value.toFixed(2)}`;
+	}
+
+	function init() {
+		const inputTokens = document.getElementById('ce-input-tokens') as HTMLInputElement | null;
+		const outputTokens = document.getElementById('ce-output-tokens') as HTMLInputElement | null;
+		const rate = document.getElementById('ce-rate') as HTMLInputElement | null;
+		const cost = document.getElementById('ce-cost');
+		if (!inputTokens || !outputTokens || !rate || !cost) return;
+
+		function recalculate() {
+			const tokens = (Number(inputTokens!.value) || 0) + (Number(outputTokens!.value) || 0);
+			const dollarsPerMillion = Number(rate!.value) || 0;
+			cost!.textContent = centsFormat((tokens / 1_000_000) * dollarsPerMillion);
+		}
+
+		for (const field of [inputTokens, outputTokens, rate]) {
+			field.addEventListener('input', recalculate);
+		}
+		recalculate();
+	}
+
+	init();
+</script>
+
+<style>
+	.cost-estimator {
+		border: 1px solid var(--line);
+		border-radius: var(--r-lg);
+		padding: 24px;
+		margin-block: 24px;
+	}
+	.fields {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+		gap: 16px;
+	}
+	.field label {
+		display: block;
+		font-size: 13px;
+		color: var(--ink-2);
+		margin-bottom: 8px;
+	}
+	.field input {
+		width: 100%;
+		box-sizing: border-box;
+		background: var(--bg-raise);
+		border: 1px solid var(--line-strong);
+		border-radius: var(--r);
+		padding: 9px 12px;
+		font-size: 14px;
+		font-family: var(--sans);
+		color: var(--ink);
+	}
+	.result {
+		margin-top: 24px;
+		padding-top: 16px;
+		border-top: 1px solid var(--line);
+	}
+	.result-value {
+		display: block;
+		font-size: 20px;
+		font-weight: 500;
+		font-feature-settings: 'tnum';
+		color: var(--ink);
+	}
+	.result-label {
+		display: block;
+		font-size: 12px;
+		color: var(--ink-3);
+		margin-top: 4px;
+	}
+</style>

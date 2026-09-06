@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+	<defs>
+		<mask id="mk0" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+			<rect width="200" height="200" fill="#fff" />
+			<path
+				d="M127.71 65.00 L178.81 94.50 L178.81 153.50 L127.71 183.00 L76.62 153.50 L76.62 94.50 Z"
+				fill="#000"
+			/>
+			<path
+				d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z"
+				fill="#000"
+			/>
+		</mask>
+		<mask id="mk1" maskUnits="userSpaceOnUse" x="0" y="0" width="200" height="200">
+			<rect width="200" height="200" fill="#fff" />
+			<path
+				d="M100.00 17.00 L151.10 46.50 L151.10 105.50 L100.00 135.00 L48.90 105.50 L48.90 46.50 Z"
+				fill="#000"
+			/>
+		</mask>
+	</defs>
+	<path
+		d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"
+		fill="#8C8780"
+		mask="url(#mk0)"
+	/>
+	<path
+		d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"
+		fill="#E8532A"
+		mask="url(#mk1)"
+	/>
+	<path
+		d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"
+		fill="#ECEAE6"
+	/>
+</svg>

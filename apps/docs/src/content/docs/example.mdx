@@ -1,0 +1,97 @@
+---
+title: Example
+description: The living reference for the rich-content conventions agents writing docs here should follow.
+---
+
+import VersionBadge from '../../components/VersionBadge.astro';
+import Flags from '../../components/Flags.astro';
+import CostEstimator from '../../components/CostEstimator.astro';
+
+This page is the living reference for documentation conventions in this tree. Each section
+below demonstrates one convention end to end — the markup an author writes, and what it
+produces — so a future page can copy the pattern instead of inventing a new one. See
+[[index|Home]] for the docs' entry point.
+
+## Mermaid diagrams
+
+A fenced ` ```mermaid ` block renders to a real, static SVG at build time — not a code block, and
+not a client-side mermaid.js runtime shipped to the browser. The diagram below is true of this
+project: it's how a `[[Page#Section]]` wikilink on this very page turns into a working link.
+
+```mermaid
+flowchart TD
+    A["[[Page#Section]] in markdown"] --> B["remark-wiki-link parses the syntax"]
+    B --> C["pageResolver() normalizes the name"]
+    C --> D{Found in permalinkMap?}
+    D -- yes --> E["hrefTemplate() builds /mono/slug/#anchor"]
+    D -- no --> F["a.wiki-link-broken, href #"]
+    E --> G["rendered a.wiki-link in the built HTML"]
+```
+
+`permalinkMap` is built once, at `astro.config.mjs` load time, by reading every file under
+`src/content/docs` off disk (see `wiki-links.mjs`) — before Astro's content-collection pipeline
+exists to ask instead.
+
+## Interactive elements
+
+A one-input widget doesn't need a UI framework — plain Astro markup plus a vanilla `<script>` is
+enough, and it ships nothing a framework runtime would add. This one estimates the cost of an
+agent run from token counts and a rate, styled per `design/DESIGN.md` §6's Input and Stats specs.
+
+<CostEstimator />
+
+## Images
+
+The three-hexagon ADI mark (`design/reference/design-system.html`), saved as a real asset under
+`src/assets/` so Astro's image pipeline optimizes it, referenced with ordinary markdown image
+syntax:
+
+![The ADI mark: three overlapping hexagons in grey, orange and ink — the design system's colored brand mark, used here at document scale rather than the monochrome top-bar version.](../../assets/adi-mark.svg)
+
+## Cross-references
+
+### Linking to a page
+
+`[[Page Name]]` resolves against this project's own content collection by title or file slug —
+[[index|Home]] links to the docs' index page (`src/content/docs/index.mdx`, titled "ADI Mono
+docs") without either side needing to know the other's exact spelling.
+
+### Linking to a section
+
+`[[Page#Section]]` resolves the same way, then appends the section's real heading id — this
+links to [[Example#Linking to a section]], the very subsection you're reading, which proves the
+anchor actually resolves rather than just parsing.
+
+## Sections
+
+Every one of these seven features gets its own `##` heading; subparts inside a feature (like
+"Linking to a page" above) get `###`. This is what feeds the "on this page" nav at right — a
+heading hierarchy for its own sake, and a table of contents as a side effect of writing one.
+
+## Version markers <VersionBadge version="1.2" />
+
+A small pill next to a heading or feature marks when it shipped, without implying a status (it
+isn't colored or semantic — just `design/DESIGN.md` §6's plain Tag, `.07`-tint fill, `--ink-2`
+text). Use it inline in a heading, or anywhere in body text: `<VersionBadge version="1.2" />`.
+Because embedding a component means this page is `.mdx`, not `.md`.
+
+## Flags
+
+Exactly three flags exist: **Preview**, **Expert area**, and **Enterprise interest**. A section
+can carry zero, one, or several at once. They're built the same way as the version marker —
+a small reusable component, `<Flags>Preview</Flags>` — but with one difference that matters:
+the flag text is a *slotted child*, not a prop. Astro's own heading/table-of-contents extraction
+only ever reads a heading's text content, never what a component renders from its props — so a
+prop-based flag would be invisible in the sidebar TOC, and "flagged" would only be visible once
+a reader had already scrolled to the section. A slotted child is a real text node inside the
+heading, so it rides along into the TOC entry for free.
+
+### A preview section <Flags>Preview</Flags>
+
+Use `## Heading <Flags>Preview</Flags>` for a section describing something not yet stable.
+
+### An expert-and-enterprise section <Flags>Expert area</Flags> <Flags>Enterprise interest</Flags>
+
+Two `<Flags>` components, used together, prove the multi-flag case: this heading carries both
+"Expert area" and "Enterprise interest" at once, and both markers are visible in the "on this
+page" nav next to this entry, not just in the page body.

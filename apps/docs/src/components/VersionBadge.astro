@@ -1,0 +1,25 @@
+---
+// design/DESIGN.md §6 Tag: sans, 12px, pill, `.07` tint fill, `--ink-2` text — not a status, so
+// no semantic color. Used inline next to a heading or feature, e.g. `<VersionBadge version="1.2" />`
+// renders "Introduced in v1.2".
+interface Props {
+	version: string;
+}
+const { version } = Astro.props;
+---
+
+<span class="version-badge">Introduced in v{version}</span>
+
+<style>
+	.version-badge {
+		display: inline-block;
+		font-size: 12px;
+		font-weight: 400;
+		padding: 2px 8px;
+		border-radius: 999px;
+		background: var(--chip);
+		color: var(--ink-2);
+		white-space: nowrap;
+		vertical-align: middle;
+	}
+</style>

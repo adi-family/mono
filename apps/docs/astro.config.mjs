@@ -1,6 +1,8 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
+import rehypeMermaid from 'rehype-mermaid';
 import wikiLinkPlugin from 'remark-wiki-link';
 import { wikiLinkOptions } from './wiki-links.mjs';
 
@@ -12,7 +14,15 @@ export default defineConfig({
 	site: 'https://docs.withadi.dev',
 	base: BASE,
 	markdown: {
-		remarkPlugins: [[wikiLinkPlugin, wikiLinkOptions(BASE)]],
+		// `remarkPlugins`/`rehypePlugins` on `markdown` directly are deprecated in Astro 7 in
+		// favor of building the processor explicitly — see `markdown.processor` in the config
+		// reference. `rehypeMermaid` defaults to `inline-svg`, rendering each ```mermaid fence
+		// to a real `<svg>` at build time via a headless Chromium (mermaid-isomorphic +
+		// playwright), not a client-shipped runtime.
+		processor: unified({
+			remarkPlugins: [[wikiLinkPlugin, wikiLinkOptions(BASE)]],
+			rehypePlugins: [rehypeMermaid],
+		}),
 	},
 	integrations: [
 		starlight({

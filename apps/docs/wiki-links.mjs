@@ -7,6 +7,7 @@
 // exists, so it reads the docs directory straight off disk instead of importing `astro:content`.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
+import GithubSlugger from 'github-slugger';
 
 const DOCS_DIR = new URL('./src/content/docs/', import.meta.url).pathname;
 
@@ -42,8 +43,30 @@ function titleFor(file) {
 	return frontmatter.match(/^title:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '');
 }
 
+// Heading text, in document order, for the `Page#Section` wikilink form. This is a light
+// approximation of how Astro itself derives a heading's visible text (see
+// `@astrojs/markdown-remark`'s `rehype-collect-headings`): strip inline HTML/JSX tags (so
+// `## Foo <Flags>Bar</Flags>` reads as "Foo Bar", matching what actually reaches the page's
+// heading and its auto-generated id) and simple emphasis/code markers, keeping their contents.
+function headingsFor(file) {
+	const body = readFileSync(file, 'utf-8').replace(/^---\r?\n[\s\S]*?\r?\n---/, '');
+	const headings = [];
+	for (const match of body.matchAll(/^#{1,6}\s+(.+)$/gm)) {
+		const text = match[1]
+			.replace(/<[^>]+>/g, '')
+			.replace(/[*_`]/g, '')
+			.trim();
+		if (text) headings.push(text);
+	}
+	return headings;
+}
+
 // One normalized key per title *and* per slug, both pointing at the real slug `hrefTemplate`
-// needs — a link can name either.
+// needs — a link can name either. Also one normalized `page#section` key per heading, pointing
+// at `slug#anchor-id` — the anchor id comes from `github-slugger`, the same slugger
+// `rehype-collect-headings` uses, run in the same document order, so it matches the id Starlight
+// actually renders. Matching itself still goes through `normalize()`, not the slugger, so a
+// `[[Page#Some Heading]]` reference doesn't have to guess at slugger's punctuation handling.
 function buildPermalinkMap() {
 	const map = new Map();
 	for (const file of collectDocFiles(DOCS_DIR)) {
@@ -51,6 +74,14 @@ function buildPermalinkMap() {
 		map.set(normalize(slug || 'index'), slug);
 		const title = titleFor(file);
 		if (title) map.set(normalize(title), slug);
+
+		const slugger = new GithubSlugger();
+		for (const heading of headingsFor(file)) {
+			const anchor = slugger.slug(heading);
+			const target = `${slug}#${anchor}`;
+			map.set(normalize(`${slug || 'index'}#${heading}`), target);
+			if (title) map.set(normalize(`${title}#${heading}`), target);
+		}
 	}
 	return map;
 }
@@ -66,11 +97,15 @@ export function wikiLinkOptions(base) {
 	return {
 		aliasDivider: '|',
 		permalinks: [...permalinkMap.keys()],
+		// `[[Page#Section]]` is a single candidate string here, `#` and all — buildPermalinkMap
+		// registered the composite key the same way, so the two either match whole or not at all.
 		pageResolver: (name) => [normalize(name)],
 		hrefTemplate: (permalink) => {
-			const slug = permalinkMap.get(permalink);
-			if (slug === undefined) return '#';
-			return slug === '' ? base : `${base}${slug}/`;
+			const target = permalinkMap.get(permalink);
+			if (target === undefined) return '#';
+			const [slug, anchor] = target.split('#');
+			const href = slug === '' ? base : `${base}${slug}/`;
+			return anchor === undefined ? href : `${href}#${anchor}`;
 		},
 		wikiLinkClassName: 'wiki-link',
 		newClassName: 'wiki-link-broken',
