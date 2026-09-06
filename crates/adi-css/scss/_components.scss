@@ -271,6 +271,15 @@
     }
   }
 
+  // Why the list is as short as it is — an empty state inside the menu, not another item: it is
+  // read, never picked, so it wraps and takes no hover.
+  &__note {
+    padding: 2px 8px 6px;
+    color: var(--ink-3);
+    font-size: var(--fs-label);
+    line-height: 1.45;
+  }
+
   // The tick column: a fixed width whether or not it carries the mark, so the labels line up.
   &__tick {
     display: inline-block;

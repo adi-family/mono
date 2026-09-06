@@ -685,9 +685,12 @@ strand a persisted, now-locked node in the selection with no way to untick it.
 The rail's node button reflects the same logic: unchanged (no accent, no label) while this machine
 alone is selected, and once anything else is ticked it takes the accent and prints either the one
 other node's name (exactly one source besides local) or a `"N sources"` count — with the full list,
-always, in the button's title. Every row also grows its own origin label on the meta line once more
-than one source is selected, so "which machine is this" never depends on the head button at all by
-the time a hand reaches for Stop.
+always, in the button's title. It sits in the rail's head on every machine, fleet or no fleet: where
+the rows come from is part of reading the rail, and a control that only appears once a node is paired
+is one the operator has to already know about to go looking for. With nothing paired it is the icon
+alone, and its menu is this machine plus a line saying where a second source would come from. Every
+row also grows its own origin label on the meta line once more than one source is selected, so
+"which machine is this" never depends on the head button at all by the time a hand reaches for Stop.
 
 ---
 

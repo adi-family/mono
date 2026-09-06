@@ -4052,10 +4052,12 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
 /// Every paired node, active first, as a name beside a status dot (`/api/fleet`'s presence half,
 /// ADI-MONO-11) — "who else is working right now" over the sessions rail it sits above.
 ///
-/// `None` on a machine paired with nobody, the same rule [`chat_session_node`] follows below it: a
-/// strip that can only ever say "nobody" costs the column height to say nothing. `active` and
-/// `last_seen` are read straight off the wire rather than computed here, so this and the Fleet
-/// page's own table can never come to answer the question differently.
+/// `None` on a machine paired with nobody: a strip that can only ever say "nobody" costs the column
+/// height to say nothing. (Unlike [`chat_session_node`] under it, which stays whatever the fleet
+/// looks like — that one is a control, and where the rail's rows come from is worth a click even
+/// when the answer is "only here".) `active` and `last_seen` are read straight off the wire rather
+/// than computed here, so this and the Fleet page's own table can never come to answer the question
+/// differently.
 fn chat_fleet_presence(state: State) -> Option<AnyView> {
     let fleet = state.fleet.get()?;
     if fleet.nodes.is_empty() {
@@ -4088,19 +4090,18 @@ fn chat_fleet_presence(state: State) -> Option<AnyView> {
 
 /// The rail's node button: **whose** sessions are merged below (`docs/fleet.md` §13, multi-select).
 ///
-/// Absent entirely on a machine paired with nobody, which is most of them — a control that can only
-/// ever say "this machine" is a control that costs the head 24px to say nothing. It appears the
-/// moment there is a fleet, and once anything besides this machine alone is selected it takes the
+/// Always in the head, including on a machine paired with nobody — where the rail comes from is
+/// part of reading the rail, and a control that appears only once a fleet exists is one the
+/// operator has to already know about to look for. With one source it is the icon alone, `--ink-3`
+/// like the filter beside it; once anything besides this machine alone is selected it takes the
 /// accent and prints a summary, because every row under it can be stopped, hidden or deleted, and
 /// which machines that reaches is not a fact to leave in a tooltip. The full list is always in the
 /// title, whatever the button prints — the short form exists for the head's 264px, not to hide
 /// anything the operator needs before clicking Stop.
 fn chat_session_node(state: State) -> AnyView {
-    // Nothing paired: no question to ask. `None` while the list has not arrived either, so the
-    // head does not flash a control into existence a beat after the page draws.
-    if state.fleet_nodes.get().is_none_or(|n| n.nodes.is_empty()) {
-        return ().into_any();
-    }
+    // Only once the fleet list has actually answered — while it is in flight the neutral "merged
+    // from" wording below is the honest one, since a fleet may be about to arrive.
+    let unpaired = state.fleet_nodes.get().is_some_and(|n| n.nodes.is_empty());
     let local = state.session_local.get();
     let nodes = state.session_nodes.get();
     let mut names: Vec<String> = nodes.into_iter().collect();
@@ -4116,6 +4117,12 @@ fn chat_session_node(state: State) -> AnyView {
     };
     let hint = if total == 0 {
         "no sources selected \u{2014} pick this machine or a paired node to see any sessions at all"
+            .to_string()
+    } else if unpaired {
+        // The only source there is. Saying "merged from" here would name a merge that has nothing
+        // to merge with, so the title says where the one source is and where a second comes from.
+        "sessions on this machine \u{2014} pair a node on the Fleet page to drive its sessions \
+         from here too"
             .to_string()
     } else {
         let mut parts: Vec<String> = Vec::new();
@@ -4171,9 +4178,18 @@ fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
 /// when what is true is that this machine holds no password for it, and the item's title says where
 /// to fix that — the same Fleet page that took the password for the dashboards rail. There is only
 /// ever one credential per node, so unlocking a node for its dashboards unlocks it for this too.
+///
+/// With nothing paired the menu is this machine and a line saying so, rather than nothing at all:
+/// the button is in the head whatever the fleet looks like, so the click it invites has to land on
+/// an answer to "where else could these come from?".
 fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let (x, y) = state.session_node_menu.get()?;
-    let nodes = state.fleet_nodes.get()?;
+    // Empty rather than absent while `/api/fleet/nodes` is still in flight: the button opens this
+    // menu from the first paint, and a `None` here would be a click that does nothing at all. The
+    // note, though, waits for the answer — "no paired nodes yet" is a claim, not a loading state.
+    let fleet = state.fleet_nodes.get();
+    let unpaired = fleet.as_ref().is_some_and(|f| f.nodes.is_empty());
+    let nodes = fleet.map(|f| f.nodes).unwrap_or_default();
     let local = state.session_local.get();
     let selected = state.session_nodes.get();
     Some(
@@ -4194,7 +4210,7 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                     </span>
                     "This machine"
                 </button>
-                {nodes.nodes.into_iter().map(|node| {
+                {nodes.into_iter().map(|node| {
                     let on = selected.contains(&node.node);
                     let name = node.node.clone();
                     // Locked blocks *adding* it, never *removing* it: a node persisted here from a
@@ -4235,6 +4251,12 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         </button>
                     }
                 }).collect::<Vec<_>>()}
+                {unpaired.then(|| view! {
+                    <p class="adi-menu__note">
+                        "No paired nodes yet. Pair one on the Fleet page to merge its sessions in \
+                         here."
+                    </p>
+                })}
             </div>
         }
         .into_any(),

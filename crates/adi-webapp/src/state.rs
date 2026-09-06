@@ -1719,12 +1719,24 @@ pub(crate) fn refresh_fleet_dashboards(s: State) {
 const SESSION_SOURCES_KEY: &str = "adi-session-sources";
 
 /// The selection as it round-trips through `localStorage`: this machine, and which paired nodes.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct SessionSources {
     #[serde(default = "default_true")]
     local: bool,
     #[serde(default)]
     nodes: BTreeSet<String>,
+}
+
+/// This machine alone — what a first run, a private window and an unreadable stored value all mean.
+/// Written out rather than derived: `#[derive(Default)]` ignores the `serde` attribute above and
+/// would hand back `local: false`, which is "no sources selected" and an empty rail on first paint.
+impl Default for SessionSources {
+    fn default() -> Self {
+        Self {
+            local: true,
+            nodes: BTreeSet::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {

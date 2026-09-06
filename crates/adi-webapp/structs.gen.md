@@ -1361,7 +1361,7 @@ pub(crate) struct Flash {
 The selection as it round-trips through `localStorage`: this machine, and which paired nodes.
 
 ```rust
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct SessionSources {
     #[serde(default = "default_true")]
     local: bool,
