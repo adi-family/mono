@@ -20,9 +20,13 @@ export default defineConfig({
 			customCss: ['./src/styles/wiki-link.css', './src/styles/theme.css'],
 			// Dark only, per design/DESIGN.md §3 — these two replace Starlight's default
 			// dark/light toggle with a fixed dark theme; see the components themselves.
+			// SiteTitle adds the ADI mark + wordmark (§10); Header adds the withadi.dev link
+			// (no built-in labeled-link slot exists for it) — see the components themselves.
 			components: {
 				ThemeProvider: './src/components/ThemeProvider.astro',
 				ThemeSelect: './src/components/ThemeSelect.astro',
+				SiteTitle: './src/components/SiteTitle.astro',
+				Header: './src/components/Header.astro',
 			},
 			head: [
 				// Geist / Geist Mono, loaded the same way design/examples/landing.html does.

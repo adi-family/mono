@@ -65,6 +65,10 @@
 	--sl-color-hairline-light: var(--line);
 	--sl-color-hairline-shade: var(--line);
 
+	/* Starlight's default nav is 3.5–4rem; DESIGN.md §5's shell spec puts the top bar at
+	   tokens.css's --bar-h (48px). */
+	--sl-nav-height: 48px;
+
 	/* One orange: links and the active sidebar item's marker (see the [aria-current] override
 	   below) — never a fill. */
 	--sl-color-accent-low: color-mix(in srgb, var(--accent) 12%, var(--bg));
@@ -129,6 +133,16 @@ body {
 .sidebar-content [aria-current='page']:hover,
 .sidebar-content [aria-current='page']:focus {
 	background-color: var(--bg-active);
+	color: var(--ink);
+}
+
+/* Header social icons (GitHub) — DESIGN.md §9: icon color follows the text next to it, never
+   full brightness. `.social-icons` is Header.astro's own literal class (stable across Starlight
+   versions, unlike its Astro scoped-style hash). */
+.social-icons a {
+	color: var(--ink-2);
+}
+.social-icons a:hover {
 	color: var(--ink);
 }
 
