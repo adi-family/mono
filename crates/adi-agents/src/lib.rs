@@ -1678,6 +1678,7 @@ impl Agents {
                 started_at: record.started_at,
                 last_activity: record.last_activity,
                 message: record.message,
+                title: record.title,
                 hidden: record.hidden,
                 starred: record.starred,
                 launched_by: record.launched_by,
@@ -1879,6 +1880,23 @@ impl Agents {
             return Ok(false);
         }
         self.sessions().set_starred(name, run_id, starred)
+    }
+
+    /// Give a conversation a name of its own, or (`title: None`) clear it back to the title its
+    /// opening message derives. Returns whether there was a run there to rename; renaming one that
+    /// is already gone is not an error.
+    ///
+    /// Unlike [`Self::set_run_hidden`] and [`Self::set_run_starred`] this never touches `message` —
+    /// see [`store::SessionRecord::title`] for why the two must stay independent.
+    ///
+    /// # Errors
+    /// Returns name validation errors.
+    pub fn set_run_title(&self, name: &str, run_id: &str, title: Option<&str>) -> Result<bool> {
+        validate_name(name)?;
+        if self.get(name)?.is_none() {
+            return Ok(false);
+        }
+        self.sessions().set_title(name, run_id, title)
     }
 
     /// Stops a run, returning whether one was found.

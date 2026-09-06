@@ -22,7 +22,7 @@ use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionMenu, State,
     refresh_fleet_dashboards,
 };
-use crate::ui::{Key, Sort, TableState, apply_mutation, sort_rows};
+use crate::ui::{Key, Sort, TableState, apply_mutation, display_message, prompt, sort_rows};
 
 use super::send_bar;
 
@@ -741,7 +741,7 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
         |(agent, answerable, _, r), col| match col {
             "Agent" => Key::text(agent),
             "Status" => Key::text(run_status(*answerable, r)),
-            "Conversation" => Key::text(&r.message),
+            "Conversation" => Key::text(display_message(r)),
             _ => Key::num(r.started_at),
         },
         |(_, _, _, r)| Key::num(u64::MAX - r.started_at),
@@ -837,7 +837,7 @@ fn run_cell(col: &str, r: &AgentRunInfo, answerable: bool) -> AnyView {
             .into_any()
         }
         "Conversation" | "Task" => {
-            let full = r.message.clone();
+            let full = display_message(r).to_string();
             let short = truncate_task(&full);
             view! { <span title=full>{short}</span> }.into_any()
         }
@@ -942,7 +942,7 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
         table.sort.get(),
         |r, col| match col {
             "Status" => Key::text(run_status(answerable, r)),
-            "Conversation" | "Task" => Key::text(&r.message),
+            "Conversation" | "Task" => Key::text(display_message(r)),
             _ => Key::num(r.started_at),
         },
         |r| Key::num(u64::MAX - r.started_at),
@@ -1995,7 +1995,7 @@ fn run_row(
     let stop_id = run_id.clone();
     let del_id = run_id.clone();
     // Truncated, because it goes into a confirm dialog — not the whole first message.
-    let del_title = truncate_task(&r.message);
+    let del_title = truncate_task(display_message(r));
     // The selected row tints itself; `Row`'s `class` takes it, so this still goes through the
     // shared row rather than a hand-built `<tr>`.
     let row_class = if is_selected { "bg-active" } else { "" };
@@ -4736,7 +4736,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         .unwrap_or_default();
     let (title, sub, run_id) = match run {
         Some(r) => {
-            let t = truncate_task(&r.message);
+            let t = truncate_task(display_message(&r));
             let t = if t.trim().is_empty() {
                 "New chat".to_string()
             } else {
@@ -4953,13 +4953,14 @@ impl SessionRef {
     }
 }
 
-/// The rail's right-click menu on a session: which chat it is, then Star (or Unstar) and Hide (or,
-/// for one already put away, Unhide). A full-viewport scrim behind it makes the next click a
-/// dismiss, as on the store tree's menu.
+/// The rail's right-click menu on a session: which chat it is, then Rename, Star (or Unstar), and
+/// Hide (or, for one already put away, Unhide). A full-viewport scrim behind it makes the next
+/// click a dismiss, as on the store tree's menu.
 ///
-/// Star comes first because it is the one of the two that is reached from here rather than from the
-/// row — the row's own edge carries a star, but the Hidden band's rows have no edge control for it
-/// and this menu is the whole of their way to one.
+/// Rename leads because it is the one item here that opens a further prompt rather than acting at
+/// once. Star comes next because, of the two flags, it is the one reached from here rather than
+/// from the row — the row's own edge carries a star, but the Hidden band's rows have no edge
+/// control for it and this menu is the whole of their way to one.
 fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let menu = state.session_menu.get()?;
     let SessionMenu {
@@ -4975,6 +4976,8 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let hide_label = if hidden { "Unhide" } else { "Hide" };
     let star_label = if starred { "Unstar" } else { "Star" };
     let head = format!("{title} \u{00b7} {agent}");
+    let (rename_node, rename_agent, rename_id, rename_title) =
+        (node.clone(), agent.clone(), run_id.clone(), title.clone());
     let (star_node, star_agent, star_id) = (node.clone(), agent.clone(), run_id.clone());
     Some(
         view! {
@@ -4986,6 +4989,11 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 }></div>
             <div class="adi-menu" style=format!("left:{x}px; top:{y}px")>
                 <div class="adi-menu__head" title=head.clone()>{head.clone()}</div>
+                <button class="adi-menu__item" type="button"
+                    on:click=move |_| start_rename_session(
+                        state, watch, rename_node.clone(), rename_agent.clone(),
+                        rename_id.clone(), &rename_title,
+                    )>"Rename\u{2026}"</button>
                 <button class="adi-menu__item" type="button"
                     on:click=move |_| set_session_starred(
                         state, watch, star_node.clone(), star_agent.clone(), star_id.clone(),
@@ -5001,7 +5009,7 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     )
 }
 
-/// Hide a session from the rail, or bring it back. See [`settle_session_flag`] for what happens to
+/// Hide a session from the rail, or bring it back. See [`settle_session_change`] for what happens to
 /// the answer.
 ///
 /// Nothing is stopped and nothing is deleted — a hidden run keeps working and keeps its transcript.
@@ -5028,7 +5036,7 @@ fn set_session_hidden(
     }
     spawn_local(async move {
         let flagged = fetch::hide_run(node.as_deref(), agent.clone(), run_id, hidden).await;
-        settle_session_flag(state, watch, node, &agent, flagged).await;
+        settle_session_change(state, watch, node, &agent, flagged).await;
     });
 }
 
@@ -5052,11 +5060,43 @@ fn set_session_starred(
     }
     spawn_local(async move {
         let flagged = fetch::star_run(node.as_deref(), agent.clone(), run_id, starred).await;
-        settle_session_flag(state, watch, node, &agent, flagged).await;
+        settle_session_change(state, watch, node, &agent, flagged).await;
     });
 }
 
-/// What both of the rail's flag toggles do with their answer.
+/// Ask for a new name for a conversation and post it — a prompt rather than a form field, for the
+/// reason the fleet's rename uses one (`pages/fleet.rs::start_rename`): a rename names the row it
+/// was started from, and carrying that in a form would let the row you meant and the row the form
+/// remembers drift apart between the click and the submit.
+///
+/// A blank answer clears the title rather than setting an empty one, which doubles as the way
+/// back to the title `message` derives once a chat has been renamed.
+fn start_rename_session(
+    state: State,
+    watch: AgentsWatch,
+    node: Option<String>,
+    agent: String,
+    run_id: String,
+    from: &str,
+) {
+    state.session_menu.set(None);
+    if run_id.is_empty() {
+        return;
+    }
+    let Some(to) = prompt(&format!("Rename “{from}” to:"), from) else {
+        return;
+    };
+    let to = to.trim().to_string();
+    if to == from {
+        return;
+    }
+    spawn_local(async move {
+        let flagged = fetch::rename_run(node.as_deref(), agent.clone(), run_id, to).await;
+        settle_session_change(state, watch, node, &agent, flagged).await;
+    });
+}
+
+/// What the rail's row mutations — the two flag toggles, and a rename — do with their answer.
 ///
 /// The endpoint replies with that agent's fresh history, so the row settles into its new band at
 /// once instead of at the socket's next tick — and the mutated row's own source's cross-agent index
@@ -5065,7 +5105,7 @@ fn set_session_starred(
 /// (`docs/fleet.md` §13). Refetching it **at the rail's current page**, not without a limit — an
 /// unlimited answer would widen the rail to the whole index until the socket's next answer narrowed
 /// it back.
-async fn settle_session_flag(
+async fn settle_session_change(
     state: State,
     watch: AgentsWatch,
     node: Option<String>,
@@ -5264,7 +5304,7 @@ fn chat_hidden_row(
     agent: &str,
     r: &AgentRunInfo,
 ) -> AnyView {
-    let title = truncate_task(&r.message);
+    let title = truncate_task(display_message(r));
     let title = if title.trim().is_empty() {
         "New chat".to_string()
     } else {

@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     tool_help     TEXT,
     runner        TEXT,
     owner_instructions TEXT,
+    title         TEXT,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -178,6 +179,9 @@ const MIGRATIONS: &[&str] = &[
     // overwhelming majority ever after: a launch not driven by another node over the mesh sets
     // nothing here. See `SessionStore::freeze_owner_instructions`.
     "ALTER TABLE sessions ADD COLUMN owner_instructions TEXT",
+    // A reader's own name for a session, replacing the title `message` would otherwise derive. NULL
+    // for every session ever opened until somebody renames it. See `SessionRecord::title`.
+    "ALTER TABLE sessions ADD COLUMN title TEXT",
 ];
 
 // One connection per thread per database.

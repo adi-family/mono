@@ -119,6 +119,9 @@ pub struct RunInfo {
     pub last_activity: u64,
     /// The task the run was launched with.
     pub message: String,
+    /// A reader's own name for this conversation, replacing the title derived from `message` in
+    /// any listing. `None` for the overwhelming majority.
+    pub title: Option<String>,
     pub running: bool,
     /// Whether a reader has hidden this session from the chat rail. Purely a listing preference,
     /// kept in the run's metadata so it survives a reload: a hidden run still runs, still keeps its

@@ -64,6 +64,13 @@ pub struct SessionRecord {
     /// never swept by [`prune_old`](super::SessionStore::prune_old). Starring a conversation that
     /// the cap then deleted out from under it would be the one thing the mark is *for*, undone.
     pub starred: bool,
+    /// A reader's own name for this session, replacing the title [`message`](Self::message) would
+    /// otherwise derive in any listing. `None` for the overwhelming majority, which are still known
+    /// by what they were opened with.
+    ///
+    /// Deliberately not the same field as `message`: that is quoted verbatim in a review's "Opened
+    /// with:" line, and a rename must not rewrite what a conversation was actually asked to do.
+    pub title: Option<String>,
     /// Who asked for this run — see [`launcher`](crate::launcher) for the vocabulary
     /// (`human`, `agent:<name>`, `automation`).
     ///
@@ -194,6 +201,9 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         hidden: row.get::<_, i64>(7)? != 0,
         starred: row.get::<_, i64>(11)? != 0,
         launched_by: row.get(12)?,
+        title: row
+            .get::<_, Option<String>>(14)?
+            .filter(|t| !t.trim().is_empty()),
         // As with the two slots below: overrides written by a newer build must not make an older
         // one unable to list the session. Unreadable reads as "none", i.e. the agent as defined.
         overrides: row

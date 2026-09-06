@@ -15,8 +15,8 @@ use adi_webapp_api::types::{
     NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
     NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
-    RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
-    RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
+    RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
+    RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
     SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun,
     StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
     ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
@@ -801,6 +801,27 @@ pub async fn star_run(
             name,
             run_id,
             starred,
+        },
+    )
+    .await
+}
+
+/// Give one conversation a name of its own, or (`title: ""`) clear it back to the title derived
+/// from what it was opened with, returning the fresh run history with the new title on it. Routed
+/// to the row's own origin, like every other row action.
+pub async fn rename_run(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+    title: String,
+) -> Result<AgentRuns, String> {
+    post_on(
+        node,
+        "/api/agents/run/rename",
+        &RenameRun {
+            name,
+            run_id,
+            title,
         },
     )
     .await

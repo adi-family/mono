@@ -17,9 +17,9 @@ use crate::types::{
     AgentSimFieldKind, AgentSimResult, AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn,
     AgentStep, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
     AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
-    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, ReplyToRun, ReviewRun,
-    RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit, SimulateAgent, SimulateTurn,
-    StarRun, UnqueueFromRun,
+    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, RenameRun, ReplyToRun,
+    ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit, SimulateAgent,
+    SimulateTurn, StarRun, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -877,6 +877,20 @@ pub fn star_run(store: &Agents, body: &[u8]) -> Response {
     })
 }
 
+/// `POST /api/agents/run/rename` — give one conversation a name of its own, or clear a blank `title`
+/// back to the title its opening message derives, then report the fresh run history. Nothing about
+/// the run changes and nothing is stopped. Idempotent, and for a run that is already gone a no-op;
+/// only an unknown agent is a 404.
+#[must_use]
+pub fn rename_run(store: &Agents, body: &[u8]) -> Response {
+    let req = require!(body, RenameRun);
+    let title = req.title.trim();
+    let title = (!title.is_empty()).then_some(title);
+    run_mutation(store, req.name.trim(), |name| {
+        store.set_run_title(name, req.run_id.trim(), title)
+    })
+}
+
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
 /// store's list order; the client flattens and sorts them.
@@ -1085,6 +1099,7 @@ fn runs_response_with(
                 started_at: r.started_at,
                 last_activity: r.last_activity,
                 message: title_of(&r.message),
+                title: r.title,
                 running: r.running,
                 hidden: r.hidden,
                 starred: r.starred,
@@ -2451,6 +2466,14 @@ impl FromBody for StarRun {
     }
 }
 
+impl FromBody for RenameRun {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"title\": \"…\" } with a non-empty name and run_id (title may be blank, to clear it)";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
+}
+
 impl FromBody for ReplyToRun {
     const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" } with all three non-empty";
 
@@ -2811,6 +2834,70 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.config().root());
     }
 
+    /// Renaming answers with the listing already carrying the new title, and a blank title clears it
+    /// back to `None` rather than setting it to the empty string — the same round-trip contract as
+    /// starring, and the reason a second rename with nothing typed is how a reader undoes the first.
+    #[test]
+    fn renaming_a_run_answers_with_the_history_already_retitled() {
+        let store = scratch("rename");
+        assert_eq!(
+            save_agent(
+                &store,
+                serde_json::json!({ "name": "solver", "backend": "harness:adi" })
+                    .to_string()
+                    .as_bytes(),
+            )
+            .status,
+            200
+        );
+        let sessions =
+            adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        let run = sessions
+            .create(
+                "solver",
+                adi_agents::Backend::from("harness:adi"),
+                "/tmp",
+                "go",
+            )
+            .expect("create")
+            .id;
+
+        let renamed = |title: &str| {
+            let body = serde_json::json!({ "name": "solver", "run_id": run, "title": title });
+            let response = rename_run(&store, body.to_string().as_bytes());
+            assert_eq!(response.status, 200);
+            let runs: AgentRuns = serde_json::from_str(&response.body).expect("json");
+            runs.runs
+                .iter()
+                .find(|r| r.run_id == run)
+                .expect("the run is still listed")
+                .title
+                .clone()
+        };
+
+        assert_eq!(renamed("Weekly report"), Some("Weekly report".to_string()));
+        assert_eq!(
+            renamed(""),
+            None,
+            "a blank title clears it back to the default"
+        );
+
+        // A run that is not there is a no-op, not an error — the same contract as starring.
+        let stale = serde_json::json!({
+            "name": "solver", "run_id": "1750000000000-0001", "title": "x",
+        });
+        assert_eq!(rename_run(&store, stale.to_string().as_bytes()).status, 200);
+        // An unknown agent is still a 404, and a body missing `run_id` is still a 400.
+        let unknown = serde_json::json!({ "name": "nobody", "run_id": "x", "title": "x" });
+        assert_eq!(
+            rename_run(&store, unknown.to_string().as_bytes()).status,
+            404
+        );
+        assert_eq!(rename_run(&store, b"{}").status, 400);
+
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
     /// The listing carries what a conversation is waiting on, and dropping one answers with the
     /// remainder.
     ///
@@ -3076,6 +3163,7 @@ mod tests {
                     started_at: at,
                     last_activity: at,
                     message: String::new(),
+                    title: None,
                     running: false,
                     hidden: false,
                     starred: false,

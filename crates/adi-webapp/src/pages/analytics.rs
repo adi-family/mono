@@ -16,7 +16,7 @@ use adi_webapp_api::types::{AgentDto, AgentRunInfo};
 use leptos::prelude::*;
 
 use crate::state::State;
-use crate::ui::{Key, Sort, fmt_date, segmented, sort_rows, updated_text};
+use crate::ui::{Key, Sort, display_message, fmt_date, segmented, sort_rows, updated_text};
 
 /// The per-agent table's columns. No trailing blank: this page is a reading surface — every
 /// control that acts on an agent lives on the Agents page, and offering half of them here would
@@ -108,7 +108,7 @@ fn busy_now(state: State) -> Vec<Busy> {
                 agent: ar.name.clone(),
                 backend: backend.clone(),
                 project: project.clone(),
-                task: r.message.clone(),
+                task: display_message(r).to_string(),
                 started_at: r.started_at,
                 last_activity: r.last_activity,
                 session: false,

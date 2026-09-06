@@ -73,7 +73,7 @@ const DB_FILE: &str = "sessions.db";
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
                               hidden, runner_state, outcome, runner, starred, launched_by, \
-                              overrides";
+                              overrides, title";
 
 /// The sessions under one root.
 ///
@@ -231,6 +231,7 @@ impl SessionStore {
             message: message.to_string(),
             hidden: false,
             starred: false,
+            title: None,
             launched_by: launched_by.to_string(),
             // Set by [`set_overrides`](Self::set_overrides) immediately after, on the rare launch
             // that has any — a session is opened by far more callers than can have an opinion here.
@@ -353,6 +354,27 @@ impl SessionStore {
                 rusqlite::params![agent, id, i64::from(starred)],
             )
             .map_err(|e| db::sql_err("star a session in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Give a session a name of its own, or (`title: None`) clear it back to the title `message`
+    /// derives. Returns whether there was a session there to rename; renaming one that is already
+    /// gone is not an error, the same contract as [`set_hidden`](Self::set_hidden).
+    ///
+    /// A blank string is treated the same as `None` — typing nothing and confirming a rename reads
+    /// as "never mind", not as naming the chat the empty string.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn set_title(&self, agent: &str, id: &str, title: Option<&str>) -> Result<bool> {
+        let title = title.map(str::trim).filter(|t| !t.is_empty());
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET title = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, title],
+            )
+            .map_err(|e| db::sql_err("rename a session in", e))?;
         Ok(changed > 0)
     }
 

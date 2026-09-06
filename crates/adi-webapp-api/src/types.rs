@@ -1357,6 +1357,16 @@ pub struct StarRun {
     pub starred: bool,
 }
 
+/// `POST /api/agents/run/rename` request — give one conversation a name of its own, replacing the
+/// title a listing would otherwise derive from what it was opened with. A blank `title` clears it
+/// back to that default rather than setting an empty one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameRun {
+    pub name: String,
+    pub run_id: String,
+    pub title: String,
+}
+
 /// `POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations
 /// (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still
 /// answering — waits in that conversation's queue. Only harness backends keep answerable
@@ -1744,6 +1754,11 @@ pub struct AgentRunInfo {
     /// conversation's first turn, so a reader that wants it opens the chat.
     #[serde(default)]
     pub message: String,
+    /// A reader's own name for this conversation (`POST /api/agents/run/rename`), when one has been
+    /// set — a listing shows this in place of the title `message` derives. Absent for the
+    /// overwhelming majority, which are still known by what they were opened with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub running: bool,
     /// Whether this session has been hidden from the chat rail (`POST /api/agents/run/hide`). The run
     /// is listed either way — hiding is a listing preference the client applies, not a filter the

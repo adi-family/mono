@@ -1115,6 +1115,7 @@ mod tests {
             last_activity: 2_000,
             hidden: false,
             starred: false,
+            title: None,
             launched_by: String::new(),
             overrides: None,
             runner_state: None,

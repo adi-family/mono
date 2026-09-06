@@ -1,6 +1,6 @@
 //! Shared view helpers, formatters, and the generic mutation runner the pages compose from.
 
-use adi_webapp_api::types::{ProcessUsage, ServicePort, TaskRow};
+use adi_webapp_api::types::{AgentRunInfo, ProcessUsage, ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -411,6 +411,17 @@ pub(crate) fn fmt_ports(ports: &[ServicePort]) -> String {
 /// An optional string for a table cell, falling back to an em dash when it's absent.
 pub(crate) fn dash(value: Option<String>) -> String {
     value.unwrap_or_else(|| "—".to_string())
+}
+
+/// What a conversation is known by: a reader's own name for it, if one has been set (`POST
+/// /api/agents/run/rename`), else the task it was opened with. Every surface that names a
+/// conversation — the rail, the history tables, Analytics — reads it through here, so a rename
+/// takes over the row's title wherever it appears rather than only in the rail it was set from.
+pub(crate) fn display_message(r: &AgentRunInfo) -> &str {
+    r.title
+        .as_deref()
+        .filter(|t| !t.trim().is_empty())
+        .unwrap_or(&r.message)
 }
 
 /// Format a byte count as `N KB` / `N.N MB` / `N.NN GB` — decimal units, so the numbers read the
