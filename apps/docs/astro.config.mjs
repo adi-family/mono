@@ -17,7 +17,25 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'ADI Mono',
-			customCss: ['./src/styles/wiki-link.css'],
+			customCss: ['./src/styles/wiki-link.css', './src/styles/theme.css'],
+			// Light mode only, per design/DESIGN.md §3 — these two replace Starlight's default
+			// dark/light toggle with a fixed light theme; see the components themselves.
+			components: {
+				ThemeProvider: './src/components/ThemeProvider.astro',
+				ThemeSelect: './src/components/ThemeSelect.astro',
+			},
+			head: [
+				// Geist / Geist Mono, loaded the same way design/examples/landing.html does.
+				{ tag: 'link', attrs: { rel: 'preconnect', href: 'https://fonts.googleapis.com' } },
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'stylesheet',
+						href: 'https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap',
+					},
+				},
+				{ tag: 'meta', attrs: { name: 'theme-color', content: '#FBFAF8' } },
+			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
 			sidebar: [
 				{ label: 'Fleet', link: '/fleet/' },

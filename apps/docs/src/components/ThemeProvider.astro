@@ -1,0 +1,6 @@
+{/* ADI docs are light-mode only (design/DESIGN.md §3: light mode is for the landing and docs;
+   the app is dark) — set unconditionally, before first paint, rather than reading a stored or
+   system preference. Inlined to avoid a flash, same as Starlight's own default. */}
+<script is:inline>
+	document.documentElement.dataset.theme = 'light';
+</script>

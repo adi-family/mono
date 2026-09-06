@@ -1,0 +1,141 @@
+/* ADI design system, applied to Starlight's own theming hooks — see design/DESIGN.md and
+   design/tokens.css at the repo root. This app has no build-time access to that shared
+   stylesheet, so the light-mode values below are copied from it the same way
+   design/examples/landing.html does; change tokens.css and mirror the change here.
+
+   Docs are light-mode only (DESIGN.md §3: light mode is for the landing and docs; the app is
+   dark) — the toggle is removed via the ThemeSelect/ThemeProvider component overrides, and the
+   values here are plain (unlayered) so they win over Starlight's own `@layer`-scoped light/dark
+   rules regardless of the `data-theme` attribute. */
+:root {
+	--bg-side: #f4f3f0;
+	--bg: #fbfaf8;
+	--bg-hover: #f1efeb;
+	--bg-raise: #ffffff;
+	--bg-active: #ebe8e2;
+
+	--line: rgba(0, 0, 0, 0.07);
+	--line-strong: rgba(0, 0, 0, 0.13);
+
+	--ink: #17150f;
+	--ink-2: #55514a;
+	--ink-3: #8c8780;
+	--code: #3d3a34;
+	--chip: rgba(0, 0, 0, 0.06);
+
+	--accent: #d6431c;
+	--accent-hover: #c23a15;
+
+	--sans: 'Geist', system-ui, sans-serif;
+	--mono: 'Geist Mono', ui-monospace, monospace;
+
+	--r-sm: 4px;
+	--r: 6px;
+	--r-lg: 10px;
+}
+
+/* Starlight's own custom properties — see @astrojs/starlight/style/props.css for the full set
+   this overrides. Mapped per DESIGN.md §3: surfaces to the --bg ladder, hairlines to --line /
+   --line-strong, ink to the --ink ladder, accent used only for links and the active nav marker. */
+:root {
+	--sl-font: var(--sans);
+	--sl-font-mono: var(--mono);
+
+	/* Base ramp. gray-5/6 are Starlight's border *and* raised-surface colors, so they get solid
+	   tones (line-strong, bg-raise) rather than translucent lines; the hairline-* variables below
+	   are re-pointed at --line directly so panel boundaries stay a hairline regardless. */
+	--sl-color-white: var(--ink);
+	--sl-color-gray-1: var(--ink);
+	--sl-color-gray-2: var(--ink-2);
+	--sl-color-gray-3: var(--ink-3);
+	--sl-color-gray-4: var(--ink-3);
+	--sl-color-gray-5: var(--line-strong);
+	--sl-color-gray-6: var(--bg-raise);
+	--sl-color-gray-7: var(--bg-hover);
+	--sl-color-black: var(--bg);
+
+	--sl-color-text: var(--ink);
+	--sl-color-text-invert: #ffffff;
+	--sl-color-bg: var(--bg);
+	--sl-color-bg-nav: var(--bg-side);
+	--sl-color-bg-sidebar: var(--bg-side);
+	--sl-color-bg-inline-code: var(--chip);
+	--sl-color-bg-accent: var(--accent);
+	--sl-color-hairline: var(--line);
+	--sl-color-hairline-light: var(--line);
+	--sl-color-hairline-shade: var(--line);
+
+	/* One orange: links and the active sidebar item's marker (see the [aria-current] override
+	   below) — never a fill. DESIGN.md §3: accent is darker on paper for contrast. */
+	--sl-color-accent-low: color-mix(in srgb, var(--accent) 12%, var(--bg));
+	--sl-color-accent: var(--accent);
+	--sl-color-accent-high: var(--accent-hover);
+	--sl-color-text-accent: var(--accent);
+
+	/* Type scale — DESIGN.md §4. Sizes only move a little between roles on purpose (§1: uniform
+	   loudness is a bug, but so is a page that shouts); hierarchy also comes from weight/color. */
+	--sl-text-h1: 22px; /* page title, 600 */
+	--sl-text-h2: 17px; /* section header, top of the 15–17px band */
+	--sl-text-h3: 16px;
+	--sl-text-h4: 15.5px;
+	--sl-text-h5: 15px; /* bottom of the section-header band */
+	--sl-text-h6: 14px;
+	--sl-text-body: 15.5px; /* the Transcript row is the closest analogue to docs prose */
+	--sl-text-sm: 13.5px; /* UI chrome: sidebar nav items, TOC */
+	--sl-text-code: 12.5px; /* Mono role */
+	--sl-line-height: 1.6;
+}
+
+/* --sl-text-body has no default consumer (Starlight only sets an explicit body font-size via
+   Card.astro's clamp) — apply it to the page itself, and turn on tabular numbers per DESIGN.md §4. */
+body {
+	font-size: var(--sl-text-body);
+	font-feature-settings: 'tnum';
+}
+
+/* Code blocks — DESIGN.md §6: --bg-raise, --line border, radius 10. Per-token syntax colors are
+   Expressive Code's shiki theme and are left as-is; this only themes the block chrome. */
+:root {
+	--ec-brdRad: var(--r-lg);
+	--ec-brdCol: var(--line);
+	--ec-codeBg: var(--bg-raise);
+	--ec-codeFg: var(--code);
+}
+
+/* The site title defaults to Starlight's accent color; DESIGN.md §10 keeps the wordmark ink,
+   not orange — the docs' one orange is links and the active nav marker only. */
+.site-title {
+	color: var(--ink);
+}
+
+/* Sidebar nav: hover gets --bg-hover per DESIGN.md §3. Higher specificity than the rule below
+   so the active item's own colors aren't clobbered by it on hover. */
+.sidebar-content a:hover,
+.sidebar-content a:focus {
+	background-color: var(--bg-hover);
+	color: var(--ink);
+	border-radius: var(--r-sm);
+}
+
+/* Starlight fills the active sidebar item with a solid accent background by default.
+   DESIGN.md §2 rule 4 / §8: orange is never a selected/active-state fill — active nav items get
+   a 3px marker instead. */
+.sidebar-content [aria-current='page'] {
+	background-color: var(--bg-active);
+	color: var(--ink);
+	border-inline-start: 2px solid var(--accent);
+	padding-inline-start: calc(var(--sl-sidebar-item-padding-inline, 0.5rem) - 2px);
+}
+.sidebar-content [aria-current='page']:hover,
+.sidebar-content [aria-current='page']:focus {
+	background-color: var(--bg-active);
+	color: var(--ink);
+}
+
+/* Search modal and button — DESIGN.md §5: radius 10 for a dialog, 6 (default) for a button. */
+site-search dialog {
+	border-radius: var(--r-lg);
+}
+site-search button[data-open-modal] {
+	border-radius: var(--r);
+}
