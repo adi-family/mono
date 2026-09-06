@@ -158,6 +158,13 @@ body {
 	color: var(--ink);
 }
 
+/* Starlight draws a hairline divider between the search box and the icons via a `:after` on
+   `.social-icons` itself; there's no icon-row content to separate it from here, so drop it
+   rather than recolor it. */
+.social-icons:after {
+	content: none;
+}
+
 /* Search modal and button — DESIGN.md §5: radius 10 for a dialog, 6 (default) for a button. */
 site-search dialog {
 	border-radius: var(--r-lg);
