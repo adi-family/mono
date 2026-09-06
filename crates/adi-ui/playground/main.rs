@@ -1713,14 +1713,31 @@ const CHAPTERS: &[(&str, &str)] = &[
 
 /// A menu anchored under the button that opened it, left edges flush.
 fn under(ev: &web_sys::MouseEvent) -> MenuAt {
+    rect_of(ev)
+        .map(|r| MenuAt::Point(r.left() as i32, r.bottom() as i32 + 4))
+        .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
+}
+
+/// The same, from the other edge: the menu's **right** edge lands on the opener's, so it grows
+/// leftward. What a row's `⋯` wants — it sits at the right of its table, and a menu opening the
+/// other way would run off the screen.
+fn under_right(ev: &web_sys::MouseEvent) -> MenuAt {
+    let width = web_sys::window()
+        .and_then(|w| w.inner_width().ok())
+        .and_then(|v| v.as_f64())
+        .unwrap_or_default();
+    rect_of(ev)
+        .map(|r| MenuAt::RightOf((width - r.right()) as i32, r.bottom() as i32 + 4))
+        .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
+}
+
+/// The opener's own box — `current_target`, not `target`, so a click on the icon inside a button
+/// still measures the button.
+fn rect_of(ev: &web_sys::MouseEvent) -> Option<web_sys::DomRect> {
     use leptos::wasm_bindgen::JsCast as _;
     ev.current_target()
         .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-        .map(|el: web_sys::Element| {
-            let r = el.get_bounding_client_rect();
-            MenuAt::Point(r.left() as i32, r.bottom() as i32 + 4)
-        })
-        .unwrap_or(MenuAt::Point(ev.client_x(), ev.client_y()))
+        .map(|el: web_sys::Element| el.get_bounding_client_rect())
 }
 
 /// The chapter index, pinned in the left gutter: this page is thirty-odd components long, and
@@ -1781,12 +1798,13 @@ fn MenuDemo() -> impl IntoView {
             >
                 "Checklist"
             </Button>
+            // Stands in for a row's ⋯: same anchoring, so it opens leftward from this button
+            // rather than rightward off the edge of the table it would be sitting in.
             <Button
                 size=ButtonSize::Small
                 variant=ButtonVariant::Ghost
-                on:click=move |ev: web_sys::MouseEvent| {
-                    actions.set(Some(MenuAt::RightOf(24, ev.client_y() + 12)));
-                }
+                icon=Lucide::Ellipsis
+                on:click=move |ev| actions.set(Some(under_right(&ev)))
             >
                 "Row actions"
             </Button>
@@ -2254,9 +2272,11 @@ fn Playground() -> impl IntoView {
                     "The panel a control drops under itself: a row's "
                     <span class="font-mono">"\u{22ef}"</span>
                     ", a right-click, a checklist under a header button. Fixed to the viewport, so \
-                     a menu opened from a row deep in a scroll container is never clipped by it, \
-                     and anchored either from the left (a point) or from the right edge (a control \
-                     that sits on one). Three ways out, like a dialog: the scrim, the opener, and "
+                     a menu opened from a row deep in a scroll container is never clipped by it. \
+                     Two anchorings: from a point, growing right — and from the right edge, \
+                     growing left, which is what a row's ⋯ takes, since it sits at the right of \
+                     its table and the other way would run off the screen. Three ways out, like a \
+                     dialog: the scrim, the opener, and "
                     <Kbd>"Esc"</Kbd>
                     ". A checked item is ticked "
                     <em class="not-italic text-ink-2">"and"</em>
