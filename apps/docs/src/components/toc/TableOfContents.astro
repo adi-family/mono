@@ -1,0 +1,21 @@
+---
+// Override of `@astrojs/starlight`'s `TableOfContents.astro` — same shell, but renders our own
+// `TableOfContentsList` (which prepends flag icons to each entry) instead of Starlight's
+// internal, non-overridable one. See `TableOfContentsList.astro`.
+import TableOfContentsList from './TableOfContentsList.astro';
+
+const { toc, id: pageSlug } = Astro.locals.starlightRoute;
+---
+
+{
+	toc && (
+		<starlight-toc data-min-h={toc.minHeadingLevel} data-max-h={toc.maxHeadingLevel}>
+			<nav aria-labelledby="starlight__on-this-page">
+				<h2 id="starlight__on-this-page">{Astro.locals.t('tableOfContents.onThisPage')}</h2>
+				<TableOfContentsList toc={toc.items} pageSlug={pageSlug} />
+			</nav>
+		</starlight-toc>
+	)
+}
+
+<script src="./starlight-toc.js"></script>

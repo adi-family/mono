@@ -43,20 +43,27 @@ function titleFor(file) {
 	return frontmatter.match(/^title:\s*(.+)$/m)?.[1]?.trim().replace(/^["']|["']$/g, '');
 }
 
-// Heading text, in document order, for the `Page#Section` wikilink form. This is a light
-// approximation of how Astro itself derives a heading's visible text (see
-// `@astrojs/markdown-remark`'s `rehype-collect-headings`): strip inline HTML/JSX tags (so
-// `## Foo <Flags>Bar</Flags>` reads as "Foo Bar", matching what actually reaches the page's
-// heading and its auto-generated id) and simple emphasis/code markers, keeping their contents.
+// Heading text, in document order, for the `Page#Section` wikilink form, alongside any `<Flags>`
+// names that heading carries. This is a light approximation of how Astro itself derives a
+// heading's visible text (see `@astrojs/markdown-remark`'s `rehype-collect-headings`) *after*
+// `remark-flags.mjs` has run: that plugin moves a `<Flags>Bar</Flags>` child's text off the
+// heading entirely (onto a `kind` attribute `visit`-based text collectors never look at), so a
+// flagged heading's real text and id are the title alone. Strip `<Flags>...</Flags>` blocks
+// *with* their content first, so a flag's own name isn't mistaken for part of the title, then
+// strip any remaining inline HTML/JSX tags and simple emphasis/code markers, keeping their
+// contents.
 function headingsFor(file) {
 	const body = readFileSync(file, 'utf-8').replace(/^---\r?\n[\s\S]*?\r?\n---/, '');
 	const headings = [];
 	for (const match of body.matchAll(/^#{1,6}\s+(.+)$/gm)) {
+		const flags = [...match[1].matchAll(/<Flags>([^<]*)<\/Flags>/g)].map(([, name]) => name.trim());
 		const text = match[1]
+			.replace(/<Flags>[^<]*<\/Flags>/g, '')
 			.replace(/<[^>]+>/g, '')
 			.replace(/[*_`]/g, '')
+			.replace(/\s+/g, ' ')
 			.trim();
-		if (text) headings.push(text);
+		if (text) headings.push({ text, flags });
 	}
 	return headings;
 }
@@ -77,10 +84,30 @@ function buildPermalinkMap() {
 
 		const slugger = new GithubSlugger();
 		for (const heading of headingsFor(file)) {
-			const anchor = slugger.slug(heading);
+			const anchor = slugger.slug(heading.text);
 			const target = `${slug}#${anchor}`;
-			map.set(normalize(`${slug || 'index'}#${heading}`), target);
-			if (title) map.set(normalize(`${title}#${heading}`), target);
+			map.set(normalize(`${slug || 'index'}#${heading.text}`), target);
+			if (title) map.set(normalize(`${title}#${heading.text}`), target);
+		}
+	}
+	return map;
+}
+
+// slug::title -> ordered flag names for that heading, read off disk the same way as
+// `permalinkMap` above — once, before content collections exist — so the table-of-contents
+// override (`src/components/toc/`) can look up a page's flags without re-parsing its MDX itself.
+// Keyed on the heading's *title text*, not its anchor id: reproducing `github-slugger`'s exact
+// output (it does not trim trailing hyphens left by trailing whitespace before a self-closing
+// component, e.g. a lone `<Flags />`'s heading text ending "...section ") off disk is exactly
+// the kind of thing that's fragile to approximate — Starlight's own `heading.text` at the
+// reading side needs the same whitespace-collapse this file's `headingsFor()` already does
+// before either side is compared, but nothing slugger-specific.
+export function buildHeadingFlagsMap() {
+	const map = new Map();
+	for (const file of collectDocFiles(DOCS_DIR)) {
+		const slug = slugFor(file);
+		for (const heading of headingsFor(file)) {
+			if (heading.flags.length > 0) map.set(`${slug}::${heading.text}`, heading.flags);
 		}
 	}
 	return map;

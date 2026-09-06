@@ -3,16 +3,22 @@
 // Expert area / Enterprise interest) are categorical labels on a section, not a live state, so
 // they reuse Tag's plain non-semantic look rather than inventing a colored dot.
 //
-// The label is a slotted child, not a prop, on purpose: when `<Flags>` is used inline in a
-// heading (`## Some section <Flags>Preview</Flags>`), Astro's own heading-id/table-of-contents
-// extraction only ever reads a heading's *text* children — it never evaluates what a component
-// renders — so a prop like `kind="preview"` would be invisible to the "on this page" nav, but
-// text sitting inside the component's own tags is picked straight up alongside the heading title.
-// That's what makes a flag show up next to its section in the sidebar TOC, not just in the page
-// body once you've scrolled to it.
+// Authored as `<Flags>Preview</Flags>`, a slotted child — but inside a heading,
+// `remark-flags.mjs` rewrites that slotted text into a `kind` attribute before this component
+// ever renders, specifically so it *doesn't* ride along into Astro's heading-text/anchor-id
+// extraction (which used to duplicate a flag's name into the heading's own title and slug — see
+// that plugin's comment). The sidebar's flag icons come from a separate mechanism entirely
+// (`src/components/toc/`, reading the flag names straight off the source file), so `kind` here
+// only has to reproduce the in-body pill. The `<slot />` fallback keeps `<Flags>` usable as
+// authored outside a heading, where no such rewrite happens.
+interface Props {
+	kind?: string;
+}
+
+const { kind } = Astro.props;
 ---
 
-<span class="flag"><slot /></span>
+<span class="flag">{kind ?? <slot />}</span>
 
 <style>
 	.flag {

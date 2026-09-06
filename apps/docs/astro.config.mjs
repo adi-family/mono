@@ -4,6 +4,8 @@ import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import rehypeMermaid from 'rehype-mermaid';
 import wikiLinkPlugin from 'remark-wiki-link';
+import { headingFlagsPlugin } from './heading-flags-plugin.mjs';
+import { remarkFlags } from './remark-flags.mjs';
 import { wikiLinkOptions } from './wiki-links.mjs';
 
 // Lives at docs.withadi.dev/mono/, alongside a sibling /cloud/ section added later.
@@ -20,7 +22,7 @@ export default defineConfig({
 		// to a real `<svg>` at build time via a headless Chromium (mermaid-isomorphic +
 		// playwright), not a client-shipped runtime.
 		processor: unified({
-			remarkPlugins: [[wikiLinkPlugin, wikiLinkOptions(BASE)]],
+			remarkPlugins: [[wikiLinkPlugin, wikiLinkOptions(BASE)], remarkFlags],
 			rehypePlugins: [rehypeMermaid],
 		}),
 	},
@@ -31,12 +33,18 @@ export default defineConfig({
 			// Dark only, per design/DESIGN.md §3 — these two replace Starlight's default
 			// dark/light toggle with a fixed dark theme; see the components themselves.
 			// SiteTitle adds the ADI mark + wordmark (§10); Header adds the withadi.dev link
-			// (no built-in labeled-link slot exists for it) — see the components themselves.
+			// (no built-in labeled-link slot exists for it). TableOfContents/MobileTableOfContents
+			// prepend each flagged heading's icon(s) to its sidebar entry — Starlight's own
+			// `headings`/`toc` data only ever carries a heading's plain text, so there's no
+			// prop-based way to do this without overriding the component itself; see
+			// `src/components/toc/`.
 			components: {
 				ThemeProvider: './src/components/ThemeProvider.astro',
 				ThemeSelect: './src/components/ThemeSelect.astro',
 				SiteTitle: './src/components/SiteTitle.astro',
 				Header: './src/components/Header.astro',
+				TableOfContents: './src/components/toc/TableOfContents.astro',
+				MobileTableOfContents: './src/components/toc/MobileTableOfContents.astro',
 			},
 			head: [
 				// Geist / Geist Mono, loaded the same way design/examples/landing.html does.
@@ -54,4 +62,7 @@ export default defineConfig({
 			sidebar: [{ label: 'Example', link: '/example/' }],
 		}),
 	],
+	vite: {
+		plugins: [headingFlagsPlugin()],
+	},
 });

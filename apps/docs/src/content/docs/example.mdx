@@ -78,13 +78,22 @@ Because embedding a component means this page is `.mdx`, not `.md`.
 ## Flags
 
 Exactly three flags exist: **Preview**, **Expert area**, and **Enterprise interest**. A section
-can carry zero, one, or several at once. They're built the same way as the version marker —
-a small reusable component, `<Flags>Preview</Flags>` — but with one difference that matters:
-the flag text is a *slotted child*, not a prop. Astro's own heading/table-of-contents extraction
-only ever reads a heading's text content, never what a component renders from its props — so a
-prop-based flag would be invisible in the sidebar TOC, and "flagged" would only be visible once
-a reader had already scrolled to the section. A slotted child is a real text node inside the
-heading, so it rides along into the TOC entry for free.
+can carry zero, one, or several at once. Author them the same way as the version marker — a
+small reusable component, `<Flags>Preview</Flags>`, its label a slotted child rather than a
+prop — but a flagged heading renders differently in two places at once:
+
+- In the page body, `<Flags>` renders its usual `design/DESIGN.md` §6 pill next to the title.
+- In the sidebar "on this page" nav, the same flag shows as a small Lucide icon — one per flag,
+  in declaration order, ahead of the entry's title — with the flag's name as its accessible
+  label rather than visible text, since there's no room for a pill in the TOC.
+
+Making both true at once takes more than the version marker's trick of relying on Astro's
+heading-text extraction: a `remark` plugin (`remark-flags.mjs`) strips a flagged heading's
+`<Flags>` children out of its *own* text before Astro ever computes that heading's title or
+anchor id from it — otherwise the flag's name would leak into both — and a small
+build-time-generated map (`heading-flags-plugin.mjs`, read off this file directly) tells an
+overridden `TableOfContents` which icons belong on which entry, since Starlight's real
+`headings`/TOC data only ever carries a heading's plain text, nothing structured.
 
 ### A preview section <Flags>Preview</Flags>
 
@@ -93,5 +102,5 @@ Use `## Heading <Flags>Preview</Flags>` for a section describing something not y
 ### An expert-and-enterprise section <Flags>Expert area</Flags> <Flags>Enterprise interest</Flags>
 
 Two `<Flags>` components, used together, prove the multi-flag case: this heading carries both
-"Expert area" and "Enterprise interest" at once, and both markers are visible in the "on this
-page" nav next to this entry, not just in the page body.
+"Expert area" and "Enterprise interest" at once, and both icons appear — in that order — next to
+this entry in the "on this page" nav, not just as pills once you've scrolled to the section.
