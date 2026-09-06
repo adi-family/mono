@@ -82,7 +82,7 @@ Ask in this order.
 
 **Is it the main action?** `--accent` fill, white text, `--accent-hover` on hover. One per screen. Otherwise `.btn` default or `.btn.strong`.
 
-**Light mode** exists only for the landing and docs. Use the `.light` token set in `tokens.css`. Orange is darker there (`#D6431C`) for contrast on paper. Never mix: a screen is dark or light, and the app is dark.
+**Light mode** exists only for the landing. Use the `.light` token set in `tokens.css`. Orange is darker there (`#D6431C`) for contrast on paper. Never mix: a screen is dark or light, and the app and docs are dark.
 
 ---
 

@@ -18,8 +18,8 @@ export default defineConfig({
 		starlight({
 			title: 'ADI Mono',
 			customCss: ['./src/styles/wiki-link.css', './src/styles/theme.css'],
-			// Light mode only, per design/DESIGN.md §3 — these two replace Starlight's default
-			// dark/light toggle with a fixed light theme; see the components themselves.
+			// Dark only, per design/DESIGN.md §3 — these two replace Starlight's default
+			// dark/light toggle with a fixed dark theme; see the components themselves.
 			components: {
 				ThemeProvider: './src/components/ThemeProvider.astro',
 				ThemeSelect: './src/components/ThemeSelect.astro',
@@ -34,7 +34,7 @@ export default defineConfig({
 						href: 'https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400&display=swap',
 					},
 				},
-				{ tag: 'meta', attrs: { name: 'theme-color', content: '#FBFAF8' } },
+				{ tag: 'meta', attrs: { name: 'theme-color', content: '#161616' } },
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
 			sidebar: [

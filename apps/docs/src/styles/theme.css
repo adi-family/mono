@@ -1,30 +1,30 @@
 /* ADI design system, applied to Starlight's own theming hooks — see design/DESIGN.md and
    design/tokens.css at the repo root. This app has no build-time access to that shared
-   stylesheet, so the light-mode values below are copied from it the same way
+   stylesheet, so the dark-mode values below are copied from it the same way
    design/examples/landing.html does; change tokens.css and mirror the change here.
 
-   Docs are light-mode only (DESIGN.md §3: light mode is for the landing and docs; the app is
-   dark) — the toggle is removed via the ThemeSelect/ThemeProvider component overrides, and the
-   values here are plain (unlayered) so they win over Starlight's own `@layer`-scoped light/dark
-   rules regardless of the `data-theme` attribute. */
+   Docs are dark, matching the app (DESIGN.md §3: light mode is for the landing only) — the
+   toggle is removed via the ThemeSelect/ThemeProvider component overrides, and the values here
+   are plain (unlayered) so they win over Starlight's own `@layer`-scoped light/dark rules
+   regardless of the `data-theme` attribute. */
 :root {
-	--bg-side: #f4f3f0;
-	--bg: #fbfaf8;
-	--bg-hover: #f1efeb;
-	--bg-raise: #ffffff;
-	--bg-active: #ebe8e2;
+	--bg-side: #101010;
+	--bg: #161616;
+	--bg-hover: #1b1b1b;
+	--bg-raise: #1e1e1e;
+	--bg-active: #232323;
 
-	--line: rgba(0, 0, 0, 0.07);
-	--line-strong: rgba(0, 0, 0, 0.13);
+	--line: rgba(255, 255, 255, 0.07);
+	--line-strong: rgba(255, 255, 255, 0.13);
 
-	--ink: #17150f;
-	--ink-2: #55514a;
-	--ink-3: #8c8780;
-	--code: #3d3a34;
-	--chip: rgba(0, 0, 0, 0.06);
+	--ink: #eceae6;
+	--ink-2: #a9a6a0;
+	--ink-3: #6f6c67;
+	--code: #d6d3cd;
+	--chip: rgba(255, 255, 255, 0.07);
 
-	--accent: #d6431c;
-	--accent-hover: #c23a15;
+	--accent: #e8532a;
+	--accent-hover: #f05f35;
 
 	--sans: 'Geist', system-ui, sans-serif;
 	--mono: 'Geist Mono', ui-monospace, monospace;
@@ -66,7 +66,7 @@
 	--sl-color-hairline-shade: var(--line);
 
 	/* One orange: links and the active sidebar item's marker (see the [aria-current] override
-	   below) — never a fill. DESIGN.md §3: accent is darker on paper for contrast. */
+	   below) — never a fill. */
 	--sl-color-accent-low: color-mix(in srgb, var(--accent) 12%, var(--bg));
 	--sl-color-accent: var(--accent);
 	--sl-color-accent-high: var(--accent-hover);
