@@ -1746,10 +1746,17 @@ fn default_true() -> bool {
 /// The saved selection, or this machine alone on a first run, in private mode, or if the stored
 /// value is not readable JSON (a format this build no longer writes, say).
 fn load_session_sources() -> SessionSources {
-    crate::ui::storage()
+    let mut sources: SessionSources = crate::ui::storage()
         .and_then(|s| s.get_item(SESSION_SOURCES_KEY).ok().flatten())
         .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // The same floor [`toggle_session_source`] holds the live selection to, applied to what is on
+    // disk: an older build could persist "nothing selected", and a rail that opens with no sources
+    // at all reads as a panel with no sessions rather than as a selection to fix.
+    if !sources.local && sources.nodes.is_empty() {
+        sources.local = true;
+    }
+    sources
 }
 
 fn save_session_sources(local: bool, nodes: &BTreeSet<String>) {
@@ -1776,6 +1783,12 @@ fn save_session_sources(local: bool, nodes: &BTreeSet<String>) {
 /// the source being turned off, it is closed, for the reason [`AgentsWatch::node`] exists at all — a
 /// run id is only unique on the machine that minted it, and a poll left pointed at a source no longer
 /// selected would ask a machine the rail no longer shows for a run it has no way to name back.
+///
+/// **This machine is the floor.** Whatever the last untick was, a selection that would come out
+/// empty comes back as this machine instead: an empty rail says "you have no sessions", which is a
+/// different and alarming claim, and the only way out of it is the same menu the operator just used
+/// to get there. Nothing else about a toggle changes — a selection with anything at all left in it
+/// is left exactly as it was built.
 pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<String>, on: bool) {
     match &node {
         None => s.session_local.set(on),
@@ -1787,11 +1800,22 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
             }
         }),
     }
+    let floored = !s.session_local.get_untracked() && s.session_nodes.get_untracked().is_empty();
+    if floored {
+        s.session_local.set(true);
+    }
     save_session_sources(
         s.session_local.get_untracked(),
         &s.session_nodes.get_untracked(),
     );
 
+    // Unticking this machine when it was the only source is a no-op, not a close: the floor put it
+    // straight back, so the conversation on screen still belongs to a selected source. Unticking the
+    // last *node* still tears that node down — the floor selects this machine, which does not make a
+    // run on the node it just dropped any more reachable.
+    if floored && node.is_none() {
+        return;
+    }
     if !on {
         s.rail_node_agents.update(|m| {
             if let Some(node) = &node {

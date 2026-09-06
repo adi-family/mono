@@ -682,6 +682,16 @@ tab reads the panel and not a fact about the fleet. A locked node already select
 locked — see the doc comment on the node menu in `actions.rs` for why disabling both directions would
 strand a persisted, now-locked node in the selection with no way to untick it.
 
+**This machine is the floor.** The selection can be any subset except the empty one: unticking the
+last source ticks this machine again, in `state::toggle_session_source` and again when a stored
+selection is read back, so no reload can open on nothing either. An empty rail is not a selection an
+operator would build on purpose — it says "you have no sessions", which is a different and alarming
+claim from "you are looking at no machines", and the only way out of it is the same menu that
+produced it. Unticking this machine while it is the only source is therefore a no-op: the tick stays,
+the item's title says why, and the open conversation is *not* closed, since its source never actually
+went away. Unticking the last *node* still tears that node down as any untick does — the floor
+selecting this machine does not make a run on the node just dropped any more reachable.
+
 The rail's node button reflects the same logic: unchanged (no accent, no label) while this machine
 alone is selected, and once anything else is ticked it takes the accent and prints either the one
 other node's name (exactly one source besides local) or a `"N sources"` count — with the full list,

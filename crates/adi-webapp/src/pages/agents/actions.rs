@@ -4115,10 +4115,9 @@ fn chat_session_node(state: State) -> AnyView {
         _ if multi => Some(format!("{total} sources")),
         _ => None,
     };
-    let hint = if total == 0 {
-        "no sources selected \u{2014} pick this machine or a paired node to see any sessions at all"
-            .to_string()
-    } else if unpaired {
+    // There is no "nothing selected" wording to write: `state::toggle_session_source` holds the
+    // selection to a floor of this machine, so `total` is never 0.
+    let hint = if unpaired {
         // The only source there is. Saying "merged from" here would name a merge that has nothing
         // to merge with, so the title says where the one source is and where a second comes from.
         "sessions on this machine \u{2014} pair a node on the Fleet page to drive its sessions \
@@ -4182,6 +4181,11 @@ fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
 /// With nothing paired the menu is this machine and a line saying so, rather than nothing at all:
 /// the button is in the head whatever the fleet looks like, so the click it invites has to land on
 /// an answer to "where else could these come from?".
+///
+/// **This machine while it is the only source ticked is a no-op**, not a disabled item: the item is
+/// live, the tick stays, and its title says why (`state::toggle_session_source`'s floor). Disabling
+/// it would read as "this machine cannot be turned off *here*" and send the operator looking for the
+/// place it can be, which does not exist.
 fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let (x, y) = state.session_node_menu.get()?;
     // Empty rather than absent while `/api/fleet/nodes` is still in flight: the button opens this
@@ -4192,6 +4196,15 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let nodes = fleet.map(|f| f.nodes).unwrap_or_default();
     let local = state.session_local.get();
     let selected = state.session_nodes.get();
+    // The floor is on this item exactly when it is holding the rail up on its own.
+    let only_source = local && selected.is_empty();
+    let local_title = if only_source {
+        "the rail keeps at least one source, so this stays on until a node is ticked too"
+    } else if local {
+        "stop merging this machine's sessions into the rail"
+    } else {
+        "merge this machine's own sessions back into the rail"
+    };
     Some(
         view! {
             <div class="adi-menu__scrim"
@@ -4199,7 +4212,7 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
             <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
                 <div class="adi-menu__head">"Sessions from"</div>
                 <button class="adi-menu__item" class:is-on=local type="button"
-                    role="menuitemcheckbox" aria-checked=local.to_string()
+                    role="menuitemcheckbox" aria-checked=local.to_string() title=local_title
                     on:click=move |_| {
                         crate::state::toggle_session_source(state, watch, None, !local);
                     }>
