@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.7.0 — 2026-09-06
+
 ### Added
 
 - **Chats can be renamed.** Right-click a conversation in the rail for a Rename… item alongside
