@@ -2,6 +2,7 @@
 
 use leptos::{ev, prelude::*};
 
+use crate::help::HelpLink;
 use crate::icon::{Icon, IconSize, Lucide};
 use crate::merge;
 
@@ -114,6 +115,10 @@ pub fn Menu(
 /// A label rather than a title (§2.6, sentence case, 12px `--ink-3`) — the menu is the answer
 /// and this is only the question, so it never competes with the items under it. One line: a head
 /// long enough to wrap is a path or an id, and those are what `title` and `mono` are for.
+///
+/// `help` puts a [`HelpLink`] on the right of the same line. It belongs on the head rather than
+/// on any one item because what it explains is the menu's *subject* — what a "source" is, what
+/// starring does — and a `?` per item would be four links to the same page.
 #[component]
 pub fn MenuHead(
     /// The full string when the head is one the 280px will clip — a store path, a long name.
@@ -122,16 +127,27 @@ pub fn MenuHead(
     /// The head *is* a machine string: a path, an id, a command (§2.3).
     #[prop(optional)]
     mono: bool,
+    /// The documentation for what this menu is about. Opens in a new tab (see [`HelpLink`]).
+    #[prop(optional, into)]
+    help: String,
+    /// What the `?` is about, for its tooltip — the head's own words are the default.
+    #[prop(optional, into)]
+    help_label: String,
     children: Children,
 ) -> impl IntoView {
     let class = if mono {
-        "mb-1 truncate border-b border-line px-2 pt-1.5 pb-2 text-label text-ink-3 mono"
+        "mb-1 flex items-center gap-2 border-b border-line px-2 pt-1.5 pb-2 text-label \
+         text-ink-3 mono"
     } else {
-        "mb-1 truncate border-b border-line px-2 pt-1.5 pb-2 text-label text-ink-3"
+        "mb-1 flex items-center gap-2 border-b border-line px-2 pt-1.5 pb-2 text-label text-ink-3"
     };
     view! {
         <div class=class title=title>
-            {children()}
+            // The head takes the width and the `?` the right edge, so a long head clips against
+            // the link rather than pushing it out of the panel.
+            <span class="min-w-0 flex-1 truncate">{children()}</span>
+            {(!help.is_empty())
+                .then(|| view! { <HelpLink href=help label=help_label class="-my-1"/> })}
         </div>
     }
 }
@@ -218,10 +234,7 @@ pub fn MenuItem(
 /// A fixed width whether or not it carries a mark, so a checklist's labels line up. `trailing`
 /// puts the gap on the other side, for a mark that follows the label rather than opening it.
 #[component]
-pub fn MenuTick(
-    #[prop(optional)] trailing: bool,
-    children: Children,
-) -> impl IntoView {
+pub fn MenuTick(#[prop(optional)] trailing: bool, children: Children) -> impl IntoView {
     let class = if trailing {
         "ml-1 inline-block w-3.5 align-text-bottom text-ink-2"
     } else {

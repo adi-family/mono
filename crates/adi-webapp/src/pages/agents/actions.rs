@@ -2788,6 +2788,13 @@ const DONATE_URL: &str = "https://withadi.dev/mono-donate";
 /// Where the docs are.
 const DOCS_URL: &str = "https://github.com/adi-family/mono/tree/main/docs";
 
+/// What a *source* is, for the `?` on the sessions rail's source menu: `docs/fleet.md` §13, which
+/// is where merging another machine's sessions into this rail is written down. Deep-linked to the
+/// section rather than to the docs tree — a menu's `?` that lands the reader on a directory
+/// listing has answered nothing.
+const SOURCES_DOC_URL: &str = "https://github.com/adi-family/mono/blob/main/docs/fleet.md\
+                               #13-driving-a-nodes-sessions-from-here";
+
 /// The foot of the right column: two 12px links, under whichever panel is showing. adi runs on
 /// this machine and asks for nothing to do it, so this is the one place it asks at all.
 ///
@@ -4200,7 +4207,10 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
         view! {
             <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
                 on_dismiss=Callback::new(move |()| state.session_node_menu.set(None))>
-                <adi_ui::MenuHead>"Sessions from"</adi_ui::MenuHead>
+                <adi_ui::MenuHead help=SOURCES_DOC_URL
+                    help_label="What a session source is, and what merging one in does">
+                    "Sessions from"
+                </adi_ui::MenuHead>
                 <adi_ui::MenuItem checked=local title=local_title
                     on_select=Callback::new(move |()| {
                         crate::state::toggle_session_source(state, watch, None, !local);

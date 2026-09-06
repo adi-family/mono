@@ -26,6 +26,7 @@ nothing else is shared.
 | `Panel` | A section, not a card: a 16px/600 title line, a hairline, the content. Flush. An `id` makes it an anchor, for a page long enough to be linked into by chapter |
 | `Form` / `Hint` | The strip of controls under a section — a hairline above, fields aligned on their inputs; stacks below 620px. `toolbar` for bare controls |
 | `Field` | Label above in 13px `ink-2`, an optional `?` whose text opens on hover or focus |
+| `HelpLink` | The other `?`: 14px `ink-3` beside a label, going to the page that explains the thing. Always a new tab — it is opened from a menu or a header, mid-task. Reach for `Field`'s hint first; a link followed is a worse answer than a sentence read where you stand |
 | `Input` / `Textarea` / `Select` | The raised frame with a strong hairline. **Sans by default**; `mono=true` when the value is a machine value. `Select` draws its own Lucide chevron |
 | `Flash` / `Empty` | One line of 13px text — `Ok` in `ok`, `Err` in `err`, `Info` in `ink-2`; and the quiet line an empty list shows |
 | `TopBar` / `Crumbs` / `Crumb` | 48px on `bg-side` with a hairline under it. The monochrome mark at 18px, `adi` in 15px/600 sans, the path in 13px sans (a location is not a machine string) |

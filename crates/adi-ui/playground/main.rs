@@ -23,13 +23,12 @@ use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachKind, AttachState, Attached, Attaching,
     Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Faq, Field, Flag,
-    FlagList, FlagMark, Flash, FlashKind, Form, Hint, Icon, IconSize, Input, InputWidth, Kbd, Lang,
-    Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote,
-    MenuTick, Modal, Panel, Param, ParamKind, PathPicker, PathRoot,
-    PromptText, Qna, Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState,
-    Simulator, SortKey, Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall,
-    ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of,
-    sort_rows,
+    FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint, Icon, IconSize, Input, InputWidth,
+    Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt, MenuHead, MenuItem, MenuLink,
+    MenuNote, MenuTick, Modal, Panel, Param, ParamKind, PathPicker, PathRoot, PromptText, Qna,
+    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey,
+    Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm,
+    ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -1690,7 +1689,10 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("table", "Table"),
     ("table-empty", "Table \u{00b7} empty"),
     ("form-field-input", "Form \u{00b7} Field \u{00b7} Input"),
-    ("textarea-select-widths", "Textarea \u{00b7} Select \u{00b7} widths"),
+    (
+        "textarea-select-widths",
+        "Textarea \u{00b7} Select \u{00b7} widths",
+    ),
     ("flash-empty", "Flash \u{00b7} Empty"),
     ("tree-codeeditor", "Tree \u{00b7} CodeEditor"),
     ("codelog", "CodeLog"),
@@ -1708,7 +1710,10 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("facts-the-pair", "Facts \u{2014} the pair"),
     ("facts-the-transaction", "Facts \u{2014} the transaction"),
     ("facts-the-node", "Facts \u{2014} the node"),
-    ("facts-stale-and-history", "Facts \u{2014} stale, and history"),
+    (
+        "facts-stale-and-history",
+        "Facts \u{2014} stale, and history",
+    ),
 ];
 
 /// A menu anchored under the button that opened it, left edges flush.
@@ -1823,7 +1828,15 @@ fn MenuDemo() -> impl IntoView {
         // A checklist: a head, boxes that stay open across ticks, one listed-but-not-takeable
         // item, and a note carrying the way to make the list longer.
         <Menu at=sources on_dismiss=Callback::new(move |()| sources.set(None))>
-            <MenuHead>"Sessions from"</MenuHead>
+            // The `?` sits on the head, not on an item: what it explains is what the whole menu
+            // is about.
+            <MenuHead
+                help="https://github.com/adi-family/mono/blob/main/docs/fleet.md\
+                      #13-driving-a-nodes-sessions-from-here"
+                help_label="What a session source is, and what merging one in does"
+            >
+                "Sessions from"
+            </MenuHead>
             <MenuItem
                 checked=here.get()
                 on_select=Callback::new(move |()| here.update(|v| *v = !*v))
@@ -2281,7 +2294,15 @@ fn Playground() -> impl IntoView {
                     ". A checked item is ticked "
                     <em class="not-italic text-ink-2">"and"</em>
                     " set in the ink — a tick alone reads as decoration. A disabled item stays \
-                     listed, because dropping it would say the thing behind it is gone."
+                     listed, because dropping it would say the thing behind it is gone. The head \
+                     takes a "
+                    <HelpLink
+                        href="https://github.com/adi-family/mono/tree/main/docs"
+                        label="The docs"
+                        class="align-text-bottom"
+                    />
+                    " when the menu is about something with a page written on it — on the head, \
+                     because a ? per item would be four links to the same page."
                 </p>
                 <div>
                     <MenuDemo/>
