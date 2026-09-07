@@ -41,9 +41,12 @@ pub(crate) fn argv(
     if config.skip_git_repo_check {
         argv.push("--skip-git-repo-check".into());
     }
-    if config.json_events {
-        argv.push("--json".into());
-    }
+    // Always structured, never optional: `codex_stream::parse` is what turns this into steps, an
+    // answer and metrics, and a plain-text run has none of those — worse, its answer is Codex's
+    // own human-formatted transcript (a duplicated echo of the prompt and the reply, a token
+    // count, all of it merged with the engine's own tracing), which is exactly the shape that
+    // reads as corrupted prose once it reaches a reader. See `runner::detached::DetachedRunner`.
+    argv.push("--json".into());
     argv.push(run_prompt(config, message));
     argv
 }
@@ -76,7 +79,6 @@ mod tests {
                 approval: Some(CodexApproval::Never),
                 reasoning_effort: Some(CodexReasoningEffort::High),
                 skip_git_repo_check: true,
-                json_events: true,
                 ..ProcessCodexArguments::default()
             },
             ..AgentManifest::default()
@@ -103,5 +105,14 @@ mod tests {
                 "Work carefully.\n\nfix the tests",
             ]
         );
+    }
+
+    /// `--json` is not a knob: `codex_stream::parse` is the only thing that turns a run into
+    /// steps, an answer and metrics, so a default-configured agent gets it same as one that asks
+    /// for everything else.
+    #[test]
+    fn argv_always_asks_for_structured_events() {
+        let argv = argv(&ProcessCodexArguments::default(), "go", None);
+        assert!(argv.iter().any(|arg| arg == "--json"), "{argv:?}");
     }
 }

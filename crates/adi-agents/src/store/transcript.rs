@@ -69,6 +69,14 @@ pub struct Turn {
     /// The assistant turn's telemetry (tokens / cost / duration), when the engine reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<TurnMetrics>,
+    /// Whether `text` is undifferentiated bytes rather than the engine's own structured answer —
+    /// see [`TurnContent::raw`]. Always false for a user turn: what a person typed is never
+    /// mistaken for a log. `#[serde(default)]` reads every turn recorded before this existed as
+    /// `false`, which is the correct reading — every one of them was already being shown as
+    /// Markdown, so nothing about how they render should change under a build that has not been
+    /// told otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub raw: bool,
 }
 
 /// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a
@@ -106,6 +114,7 @@ pub fn user_turn_with(text: impl Into<String>, images: Vec<Attachment>) -> Turn 
         images,
         steps: Vec::new(),
         metrics: None,
+        raw: false,
     }
 }
 
@@ -124,6 +133,7 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         images: Vec::new(),
         steps: content.steps.clone(),
         metrics: content.metrics.clone(),
+        raw: content.raw,
     }
 }
 
@@ -271,6 +281,7 @@ pub(super) fn view(
             images: Vec::new(),
             steps,
             metrics: content.metrics,
+            raw: content.raw,
         });
     }
     turns.extend(queued.into_iter().map(|message| Turn {
@@ -282,6 +293,7 @@ pub(super) fn view(
         images: message.images,
         steps: Vec::new(),
         metrics: None,
+        raw: false,
     }));
     turns
 }
@@ -415,6 +427,7 @@ mod tests {
                     text: String::new(),
                     steps: vec![open_call()],
                     metrics: None,
+                    raw: false,
                 }),
             )
             .expect("append");
@@ -470,6 +483,7 @@ mod tests {
             text: "working".to_string(),
             steps: vec![open_call()],
             metrics: None,
+            raw: false,
         };
         let asked = vec![user_turn("go")];
 

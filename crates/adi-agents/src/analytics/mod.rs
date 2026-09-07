@@ -647,6 +647,7 @@ mod tests {
             text: text.to_string(),
             steps,
             metrics: Some(TurnMetrics::default()),
+            raw: false,
         })
     }
 

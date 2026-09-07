@@ -528,7 +528,12 @@ fn point_watch(watch: AgentsWatch, node: Option<String>, name: String, interacti
 /// on the Agents page it sits below the list, so a click near the bottom would otherwise open it
 /// out of sight. Always this machine — the Agents page has no node concept — except when a review's
 /// reviewer turns out to be a pty agent, which opens on the reviewed conversation's own source.
-pub(crate) fn open_watch(watch: AgentsWatch, node: Option<String>, name: String, interactive: bool) {
+pub(crate) fn open_watch(
+    watch: AgentsWatch,
+    node: Option<String>,
+    name: String,
+    interactive: bool,
+) {
     point_watch(watch, node, name, interactive);
     scroll_top();
 }
@@ -1204,6 +1209,7 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
                 role: Role::User,
                 body: turn.text.clone(),
                 images: pictures(node, turn),
+                raw: false,
             },
         )];
     }
@@ -1223,6 +1229,10 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
                         role: Role::Agent,
                         body: text.clone(),
                         images: Vec::new(),
+                        // A `Step::Message` only ever exists because a structured parser put it
+                        // on the timeline — the raw fallback has no timeline at all, just the one
+                        // whole-turn answer below.
+                        raw: false,
                     });
                 }
             }
@@ -1267,6 +1277,7 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
             role: Role::Agent,
             body: turn.text.clone(),
             images: Vec::new(),
+            raw: turn.raw,
         });
     }
     out.into_iter()
@@ -1958,8 +1969,14 @@ fn send_reply(state: State, watch: AgentsWatch, message: String, images: Vec<Str
     };
     let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::reply_to_run(node.as_deref(), name.clone(), run_id.clone(), message, images)
-            .await
+        match fetch::reply_to_run(
+            node.as_deref(),
+            name.clone(),
+            run_id.clone(),
+            message,
+            images,
+        )
+        .await
         {
             Ok(peek) => {
                 // Only apply if the view is still on this same conversation.
@@ -4051,7 +4068,11 @@ fn chat_fleet_presence(state: State) -> Option<AnyView> {
         return None;
     }
     let mut nodes = fleet.nodes;
-    nodes.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.petname.cmp(&b.petname)));
+    nodes.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then_with(|| a.petname.cmp(&b.petname))
+    });
     Some(
         view! {
             <div class="adi-chome__presence">
@@ -4416,8 +4437,8 @@ fn source_rows(
         .unwrap_or_default();
     // `None` unless the head's ★ is on, in which case only this source's own starred agents are
     // listed — a fact about that machine's agents, never borrowed from a different one.
-    let keep: Option<std::collections::HashSet<&str>> = (filter == SessionFilter::Starred).then(
-        || {
+    let keep: Option<std::collections::HashSet<&str>> =
+        (filter == SessionFilter::Starred).then(|| {
             let mut keep: std::collections::HashSet<&str> = agents
                 .map(|s| {
                     s.agents
@@ -4431,8 +4452,7 @@ fn source_rows(
                 keep.insert(watched);
             }
             keep
-        },
-    );
+        });
 
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
@@ -4652,7 +4672,11 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
 /// the "mine" filter anyway (nobody records who opened a terminal, so it is never filtered out), so
 /// a rail that is empty despite one cannot exist.
 fn any_session(state: State) -> bool {
-    let has_runs = |all: &AllAgentRuns| all.agents.iter().any(|ar| ar.runs.iter().any(|r| !r.hidden));
+    let has_runs = |all: &AllAgentRuns| {
+        all.agents
+            .iter()
+            .any(|ar| ar.runs.iter().any(|r| !r.hidden))
+    };
     (state.session_local.get() && state.all_chats.get().is_some_and(|all| has_runs(&all)))
         || state
             .rail_node_chats

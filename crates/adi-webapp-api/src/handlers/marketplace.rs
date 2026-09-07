@@ -351,7 +351,12 @@ mod tests {
         let res = install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"crm"}"#);
         assert_eq!(res.status, 200, "{}", res.body);
         let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
-        assert_eq!(done.state.apps[0].installs.len(), 2, "{:?}", done.state.apps);
+        assert_eq!(
+            done.state.apps[0].installs.len(),
+            2,
+            "{:?}",
+            done.state.apps
+        );
         assert!(
             done.state.apps[0].installs.iter().any(|i| i.id == "crm"),
             "an unnamed copy takes the entry's own name: {:?}",
@@ -414,8 +419,14 @@ mod tests {
             done.state.apps[0].installs[0].host.as_deref(),
             Some("crm.adi")
         );
-        assert!(live.exists(), "the hive file is in the supervisor's glob now");
-        assert_eq!(start_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status, 404);
+        assert!(
+            live.exists(),
+            "the hive file is in the supervisor's glob now"
+        );
+        assert_eq!(
+            start_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status,
+            404
+        );
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -439,7 +450,10 @@ mod tests {
             "and it says which: {}",
             done.message
         );
-        assert_eq!(update_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(
+            update_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status,
+            404
+        );
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -473,7 +487,10 @@ mod tests {
         assert_eq!(status(&E::BadSlug("../x".into())), 502);
         assert_eq!(status(&E::BadRepo("git://x".into())), 502);
         assert_eq!(status(&E::BadCommit("crm".into(), "main".into())), 502);
-        assert_eq!(status(&E::NotAnApp("crm".into(), "no frontend".into())), 502);
+        assert_eq!(
+            status(&E::NotAnApp("crm".into(), "no frontend".into())),
+            502
+        );
         assert_eq!(status(&E::Git("clone failed".into())), 502);
         assert_eq!(status(&E::Fetch("unreachable".into())), 502);
         assert_eq!(status(&E::Duplicate("adi".into())), 409);

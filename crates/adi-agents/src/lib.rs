@@ -1451,6 +1451,7 @@ impl Agents {
                 text: text.clone(),
                 steps: Vec::new(),
                 metrics: None,
+                raw: false,
             }),
         );
         let mut outcome = store::RunOutcome::of(None, &text, store::now_ms());
@@ -2503,7 +2504,10 @@ fn live_content(runner: &dyn Runner, session: &SessionRef<'_>, running: bool) ->
         for event in batch.events {
             match event {
                 RunEvent::Step(step) => content.steps.push(step),
-                RunEvent::Answer { text } => content.text = text,
+                RunEvent::Answer { text, raw } => {
+                    content.text = text;
+                    content.raw = raw;
+                }
                 RunEvent::Metrics(metrics) => content.metrics = Some(metrics),
                 // The turn ending is not part of what it said; liveness is asked of the runner.
                 RunEvent::Finished { .. } => {}
@@ -3714,6 +3718,7 @@ mod tests {
                 text: String::new(),
                 steps: Vec::new(),
                 metrics: None,
+                raw: false,
             },
         );
         assert_eq!(

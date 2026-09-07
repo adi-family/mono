@@ -48,7 +48,7 @@
 use leptos::prelude::*;
 
 use crate::icon::{Icon, IconSize, Lucide};
-use crate::{Markdown, merge};
+use crate::{Markdown, Preformatted, merge};
 
 /// Who said it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -206,13 +206,19 @@ pub enum AttachmentKind {
 /// One entry in a transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Turn {
-    /// Something said, in Markdown, with whatever was attached to it.
+    /// Something said, with whatever was attached to it.
     Said {
         role: Role,
         body: String,
         /// Attached images, drawn above the words. Only ever on a [`Role::User`] turn in this
         /// tree — pictures travel from the person to the model, not back.
         images: Vec<Attachment>,
+        /// Whether `body` is prose to run through [`Markdown`], or undifferentiated bytes to show
+        /// byte for byte instead — a log a structured parser could not make sense of, shown
+        /// preformatted rather than risk reading a stray `_` as emphasis or losing its line
+        /// breaks to Markdown's paragraph joining. Prose a model actually composed is never this;
+        /// see `adi_agents::progress::TurnContent::raw` for where it is decided.
+        raw: bool,
     },
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
@@ -349,9 +355,12 @@ pub fn Chat(
 fn entry(entry: Entry) -> AnyView {
     let Entry { key, turn } = entry;
     match turn {
-        Turn::Said { role, body, images } => {
-            view! { <Said id=key role=role body=body images=images/> }.into_any()
-        }
+        Turn::Said {
+            role,
+            body,
+            images,
+            raw,
+        } => view! { <Said id=key role=role body=body images=images raw=raw/> }.into_any(),
         Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
     }
 }
@@ -380,6 +389,7 @@ fn Said(
     role: Role,
     body: String,
     #[prop(optional)] images: Vec<Attachment>,
+    #[prop(optional)] raw: bool,
 ) -> impl IntoView {
     let own = match role {
         // Your own words are on the raised surface so a stretch of work can be scanned for
@@ -391,7 +401,11 @@ fn Said(
     view! {
         <div id=id class=format!("{LAZY} {own}")>
             {(!images.is_empty()).then(|| view! { <Pictures images=images said=said/> })}
-            {said.then(|| view! { <Markdown source=body/> })}
+            {said.then(move || if raw {
+                view! { <Preformatted source=body/> }.into_any()
+            } else {
+                view! { <Markdown source=body/> }.into_any()
+            })}
         </div>
     }
 }

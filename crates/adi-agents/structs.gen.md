@@ -404,7 +404,7 @@ pub struct ProcessCodexArguments {
     #[serde(default, deserialize_with = "boolish")]
     pub web_search: bool,
     #[serde(default, deserialize_with = "boolish")]
-    pub json_events: bool,
+    pub debug_logging: bool,
 }
 ```
 
@@ -1484,6 +1484,7 @@ pub struct TurnContent {
     pub text: String,
     pub steps: Vec<Step>,
     pub metrics: Option<TurnMetrics>,
+    pub raw: bool,
 }
 ```
 
@@ -1773,6 +1774,7 @@ pub enum RunEvent {
     Step(Step),
     Answer {
         text: String,
+        raw: bool,
     },
     Metrics(TurnMetrics),
     Finished {
@@ -2277,6 +2279,8 @@ pub struct Turn {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<TurnMetrics>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub raw: bool,
 }
 ```
 

@@ -92,7 +92,7 @@ pub use icon::{Icon, IconSize, Lucide, STROKE, svg as icon_svg};
 pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};
-pub use markdown::Markdown;
+pub use markdown::{Markdown, Preformatted};
 pub use menu::{Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote, MenuTick};
 pub use modal::Modal;
 pub use pair::{

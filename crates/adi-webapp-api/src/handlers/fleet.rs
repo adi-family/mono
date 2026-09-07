@@ -958,7 +958,10 @@ mod tests {
         let laptop = nodes.iter().find(|n| n["petname"] == "laptop-b").unwrap();
         let desk = nodes.iter().find(|n| n["petname"] == "desk").unwrap();
 
-        assert_eq!(laptop["active"], true, "seen 10s ago, well inside the window");
+        assert_eq!(
+            laptop["active"], true,
+            "seen 10s ago, well inside the window"
+        );
         assert_eq!(laptop["last_seen"], now - 10);
 
         assert_eq!(desk["active"], false, "seen an hour ago: known, not active");

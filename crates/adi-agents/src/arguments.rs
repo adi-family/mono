@@ -252,8 +252,14 @@ pub struct ProcessCodexArguments {
     pub skip_git_repo_check: bool,
     #[serde(default, deserialize_with = "boolish")]
     pub web_search: bool,
+    /// Let Codex's own `RUST_LOG` through at its default verbosity instead of quieting it to
+    /// `error` for the run. Off by default: the engine traces at `INFO` and every line lands in
+    /// the same merged stdout+stderr the turn's structured events do
+    /// (`backends::detached::spawn_child`), so a normal run wants it quiet — see
+    /// `runner::detached::quiet_codex_tracing`. On for whoever is actually debugging a run; the
+    /// extra output still only ever reaches the log, never a reader's transcript.
     #[serde(default, deserialize_with = "boolish")]
-    pub json_events: bool,
+    pub debug_logging: bool,
 }
 
 /// Arguments accepted by the `harness:claude-sdk` backend: the `claude` CLI run headless by ADI's

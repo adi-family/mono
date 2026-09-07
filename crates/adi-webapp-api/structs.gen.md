@@ -1744,6 +1744,8 @@ pub struct AgentTurn {
     pub steps: Vec<AgentStep>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<AgentTurnMetrics>,
+    #[serde(default)]
+    pub raw: bool,
 }
 ```
 

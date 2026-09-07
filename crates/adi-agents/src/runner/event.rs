@@ -15,7 +15,15 @@ pub enum RunEvent {
     /// and its result.
     Step(Step),
     /// The turn's final message — its answer.
-    Answer { text: String },
+    Answer {
+        text: String,
+        /// Whether `text` is the engine's own structured answer, or a log read as
+        /// undifferentiated bytes because nothing recognisable was in it. See
+        /// [`crate::progress::TurnContent::raw`] — this is that same flag, carried across the
+        /// runner boundary so a reader downstream of the event stream still knows not to run it
+        /// through Markdown.
+        raw: bool,
+    },
     /// Per-turn telemetry from the engine's closing event.
     Metrics(TurnMetrics),
     /// The turn is over. `error` carries the reason when it ended badly.

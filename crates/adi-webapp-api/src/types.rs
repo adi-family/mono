@@ -1665,6 +1665,11 @@ pub struct AgentTurn {
     /// The assistant turn's telemetry (tokens / cost / duration), when the engine reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<AgentTurnMetrics>,
+    /// Whether `text` is undifferentiated bytes rather than the engine's own structured answer —
+    /// a client renders it preformatted instead of as Markdown. Mirrors
+    /// `adi_agents::store::Turn::raw`.
+    #[serde(default)]
+    pub raw: bool,
 }
 
 /// A tool step's lifecycle status. `unanswered` is a call the run ended on top of — it went out and

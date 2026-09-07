@@ -1164,6 +1164,7 @@ fn ChatDemo() -> impl IntoView {
             role: Role::User,
             body: "Walk the linear board and tell me what is actually blocked.".into(),
             images: Vec::new(),
+            raw: false,
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1185,6 +1186,7 @@ fn ChatDemo() -> impl IntoView {
 The first two                    are the same bug. I will read the pairing path before saying more."
                 .into(),
             images: Vec::new(),
+            raw: false,
         },
         Turn::Did(vec![
             ToolCall::new("Grep")
@@ -1207,6 +1209,7 @@ The first two                    are the same bug. I will read the pairing path 
             role: Role::User,
             body: "Stopped that — just the pairing tests.".into(),
             images: Vec::new(),
+            raw: false,
         },
         Turn::Did(vec![
             ToolCall::new("Bash")

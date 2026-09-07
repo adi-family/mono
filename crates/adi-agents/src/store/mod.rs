@@ -1661,6 +1661,7 @@ mod tests {
                 text: "one moment".into(),
             }],
             metrics: None,
+            raw: false,
         };
         store
             .enqueue("chat", id, "and restart it", &[])

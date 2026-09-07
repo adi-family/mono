@@ -1,5 +1,6 @@
 pub(crate) mod adi_events;
 pub(crate) mod claude_stream;
+pub(crate) mod codex_stream;
 pub(crate) mod detached;
 pub(crate) mod harness;
 // A `Bash` command that outlives the turn that started it, and the wake that reports it.

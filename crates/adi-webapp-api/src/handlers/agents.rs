@@ -1216,6 +1216,7 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
         images: t.images.into_iter().map(agent_attachment).collect(),
         steps: t.steps.into_iter().map(agent_step).collect(),
         metrics: t.metrics.map(agent_metrics),
+        raw: t.raw,
     }
 }
 
@@ -1846,7 +1847,13 @@ fn agent_form_spec() -> AgentFormSpec {
         &["process:codex"],
     ));
     fields.push(chk_field("web_search", "Web search", CODEX_BACKENDS));
-    fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
+    // No `json_events` toggle: `process:codex` always asks for structured events now (see
+    // `backends::process::codex::argv`), so there is nothing left for this checkbox to decide.
+    fields.push(chk_field(
+        "debug_logging",
+        "Debug logging",
+        &["process:codex"],
+    ));
 
     // ---- pty/process shared (a vendor CLI runs either way) ----
     let mut add_dir = field_executors(

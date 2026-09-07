@@ -1,11 +1,18 @@
-//! [`Markdown`] — the rendered half of a `.md` file, and of anything an agent says.
+//! [`Markdown`] — the rendered half of a `.md` file, and of prose an agent says — plus
+//! [`Preformatted`], the same body shown byte for byte for the bodies that are not prose at all.
 //!
-//! A small subset, scanned rather than parsed: headings, fenced code, lists, quotes, rules,
-//! GitHub-style tables, paragraphs, and inline `code` / `**strong**` / `*em*` /
+//! [`Markdown`] is a small subset, scanned rather than parsed: headings, fenced code, lists,
+//! quotes, rules, GitHub-style tables, paragraphs, and inline `code` / `**strong**` / `*em*` /
 //! `[links](url)`. Like [`crate::highlight`] it is **total** — no input is invalid, an
 //! unterminated fence runs to the end, and anything it does not recognise stays text.
 //!
-//! It renders through Leptos views, never `inner_html`, so a document cannot inject markup
+//! A single underscore never opens or closes emphasis from *inside* a word (`CommonMark`'s
+//! left/right-flanking rule, narrowed to the one case that matters here): `snake_case_identifier`
+//! stays a word, while `_word_` and `**strong**` still work. Without that guard a log line's
+//! `field_name=value` reads as alternating plain text and italics — the underscores are eaten
+//! as delimiters and never shown at all, which is worse than merely misformatted.
+//!
+//! Both render through Leptos views, never `inner_html`, so a document cannot inject markup
 //! however it is written. Link targets are checked separately (see `safe_href`) because a
 //! URL is the one thing here that becomes a live capability.
 
@@ -30,6 +37,29 @@ pub fn Markdown(
         <div class=merge("flex flex-col gap-4 text-body text-ink [&_strong]:font-semibold", class)>
             {move || blocks(&source.get()).into_iter().map(block).collect::<Vec<_>>()}
         </div>
+    }
+}
+
+/// The same body [`Markdown`] would show, kept byte for byte instead — a tool's own output, a
+/// vendor CLI's log, anything that is not prose a model composed. No scanning at all, so nothing
+/// in it can be misread as a heading, a list or emphasis; wrapping is CSS (`white-space:
+/// pre-wrap`), never a re-flow, so a line break is the line break that was actually there.
+///
+/// ```ignore
+/// <Preformatted source=Signal::derive(move || buffer.get())/>
+/// ```
+#[component]
+pub fn Preformatted(
+    #[prop(into)] source: Signal<String>,
+    #[prop(optional, into)] class: String,
+) -> impl IntoView {
+    view! {
+        <pre class=merge(
+            "m-0 whitespace-pre-wrap break-words font-mono text-mono leading-[1.6] text-ink-2",
+            class,
+        )>
+            {move || source.get()}
+        </pre>
     }
 }
 
@@ -395,8 +425,8 @@ fn block(b: Block) -> AnyView {
     }
 }
 
-/// Inline spans: `code`, `**strong**`, `*em*`, `[text](url)`. Anything unmatched — a lone
-/// asterisk, an unclosed bracket — stays the character it is.
+/// Inline spans: `code`, `**strong**`, `*em*`/`_em_`, `[text](url)`. Anything unmatched — a lone
+/// asterisk, an unclosed bracket, an underscore inside a word — stays the character(s) it is.
 fn inline(src: &str) -> Vec<AnyView> {
     let chars: Vec<char> = src.chars().collect();
     let mut out: Vec<AnyView> = Vec::new();
@@ -416,11 +446,13 @@ fn inline(src: &str) -> Vec<AnyView> {
             }),
             '*' if chars.get(i + 1) == Some(&'*') => delimited(&chars, i, "**")
                 .map(|(text, next)| (view! { <strong>{text}</strong> }.into_any(), next)),
-            '*' | '_' => {
-                let d = chars[i].to_string();
-                delimited(&chars, i, &d)
-                    .map(|(text, next)| (view! { <em>{text}</em> }.into_any(), next))
-            }
+            '*' => delimited(&chars, i, "*")
+                .map(|(text, next)| (view! { <em>{text}</em> }.into_any(), next)),
+            // An underscore inside a word opens and closes nothing — see the module doc — so
+            // `snake_case_identifier` is never even offered to `closing_underscore` as a
+            // candidate opener.
+            '_' if !is_intraword_underscore(&chars, i) => closing_underscore(&chars, i)
+                .map(|(text, next)| (view! { <em>{text}</em> }.into_any(), next)),
             '[' => link(&chars, i),
             _ => None,
         };
@@ -441,6 +473,36 @@ fn inline(src: &str) -> Vec<AnyView> {
         out.push(view! { <span>{plain}</span> }.into_any());
     }
     out
+}
+
+/// Whether the character at `i` (already known to be `_`) sits strictly inside a word — a letter,
+/// digit or underscore on both sides. `*` has no such rule (`a*b*c` is vanishingly rare and
+/// `**`/`*` are unambiguous either way), but `_` is common punctuation inside an identifier, and
+/// `CommonMark` reserves it for word-boundary emphasis for exactly that reason.
+fn is_intraword_underscore(chars: &[char], i: usize) -> bool {
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let before = i
+        .checked_sub(1)
+        .and_then(|j| chars.get(j))
+        .is_some_and(|&c| is_word(c));
+    let after = chars.get(i + 1).is_some_and(|&c| is_word(c));
+    before && after
+}
+
+/// The text between an opening `_` at `i` and the next `_` that is itself eligible to close —
+/// not intraword, by the same rule as the opener. Without that second check a trailing
+/// underscore that is itself intraword (`_em_bar`, closing on the `_` between `m` and `b`) would
+/// still end the span and split `bar` off the word it belongs to.
+fn closing_underscore(chars: &[char], i: usize) -> Option<(String, usize)> {
+    let mut j = i + 1;
+    while j < chars.len() {
+        if chars[j] == '_' && !is_intraword_underscore(chars, j) {
+            let text: String = chars[i + 1..j].iter().collect();
+            return (!text.is_empty()).then_some((text, j + 1));
+        }
+        j += 1;
+    }
+    None
 }
 
 /// The text between `delim` at `i` and the next `delim`, and the index past the closing one.
@@ -674,6 +736,48 @@ x
 | 1 |"
             ),
             ["ul:one more", "table:[ a ] 1 "],
+        );
+    }
+
+    /// The bug this pair of functions exists to fix: a log line's `field_name=value` pairs used
+    /// to be read as alternating plain text and italics, eating every underscore in the process.
+    /// `ssl_cert_file_configured=false` is the exact identifier from the report.
+    #[test]
+    fn an_underscore_inside_a_word_never_opens_or_closes() {
+        let chars: Vec<char> = "ssl_cert_file_configured=false".chars().collect();
+        for (i, c) in chars.iter().enumerate() {
+            if *c == '_' {
+                assert!(is_intraword_underscore(&chars, i), "underscore at {i}");
+            }
+        }
+    }
+
+    /// A leading or trailing underscore is not intraword — only one side is a word character —
+    /// so `_word_` still opens and closes exactly like `CommonMark`'s own examples.
+    #[test]
+    fn a_word_boundary_underscore_still_opens_and_closes() {
+        let chars: Vec<char> = "_word_".chars().collect();
+        assert!(
+            !is_intraword_underscore(&chars, 0),
+            "opener, nothing before it"
+        );
+        assert!(
+            !is_intraword_underscore(&chars, 5),
+            "closer, nothing after it"
+        );
+        assert_eq!(closing_underscore(&chars, 0), Some(("word".to_string(), 6)));
+    }
+
+    /// A closing candidate that is itself intraword does not close — the opener's span keeps
+    /// scanning past it rather than splitting the word in two.
+    #[test]
+    fn a_closing_candidate_that_is_itself_intraword_is_skipped() {
+        // `_em_bar_` — the middle `_` sits between `m` and `b`, both word characters, so it
+        // cannot close; the last `_` (after `r`, at the end of the string) can.
+        let chars: Vec<char> = "_em_bar_".chars().collect();
+        assert_eq!(
+            closing_underscore(&chars, 0),
+            Some(("em_bar".to_string(), 8)),
         );
     }
 

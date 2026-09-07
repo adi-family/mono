@@ -28,7 +28,7 @@ use crate::arguments::{
 use crate::backend::Backend;
 use crate::backends::detached::Spawned;
 use crate::backends::harness::claude_sdk::Continuation;
-use crate::backends::{adi_events, claude_stream, detached, harness, process};
+use crate::backends::{adi_events, claude_stream, codex_stream, detached, harness, process};
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, MAX_WHOLE_PARSE_BYTES, TurnContent};
 use crate::runner::prompt::{compose, own_prompt, with_knowledge, with_tool_help, with_workspace};
@@ -163,6 +163,9 @@ impl DetachedRunner {
         {
             env.push((SYSTEM_PROMPT_ENV.to_string(), prompt));
         }
+        if self.backend == Backend::ProcessCodex {
+            quiet_codex_tracing(&spec.arguments, &mut env);
+        }
         env
     }
 
@@ -172,21 +175,18 @@ impl DetachedRunner {
     fn parse(&self, log: &[u8]) -> TurnContent {
         match self.backend {
             Backend::ProcessClaude | Backend::HarnessClaudeSdk => claude_stream::parse(log),
+            Backend::ProcessCodex => codex_stream::parse(log),
             Backend::HarnessAdi => adi_events::parse(log),
-            // UNIMPLEMENTED: `process:codex`. Codex emits a structured stream under `--json` and
-            // nothing here reads it, so a Codex run's log arrives as plain text: the answer is
-            // whole, the turn has no tool steps and no metrics. What it wants is a
-            // `codex_stream::parse` beside `claude_stream::parse` and an arm above; the rest of
-            // the runner is complete for that backend.
-            //
-            // Note what this does *not* line up with: `emits` below already claims `tool_call` and
-            // `metrics` for `ProcessCodex`, so `crate::progress::capabilities` advertises steps a
-            // reader will never be shown. The claim is about the engine, the gap is here — fixing
-            // it is writing the parser, not lowering the flags.
+            // No backend below here has a wire format of its own to read — either it is not
+            // runnable through this runner at all (`argv` already refused it in `send`), or it
+            // has none by design. `raw: true` either way: whatever bytes ended up in the log were
+            // not written as this crate's idea of an answer, so a reader must not treat them as
+            // prose the engine composed.
             _ => TurnContent {
                 text: progress::text_of(log),
                 steps: Vec::new(),
                 metrics: None,
+                raw: true,
             },
         }
     }
@@ -548,12 +548,39 @@ pub(super) fn decode<T: DeserializeOwned>(arguments: &Value) -> Result<T> {
     serde_json::from_value(value).map_err(|e| Error::Arguments(e.to_string()))
 }
 
+/// Quiet Codex's own `tracing` output unless the agent's arguments ask to see it.
+///
+/// The engine traces at `INFO` by default, and every line of it lands in the same merged
+/// stdout+stderr the JSON events do ([`crate::backends::detached::spawn_child`]) — an unset
+/// `RUST_LOG` is what put a trace line's `field=value` pairs in front of the codex parser (and,
+/// on a run with no parser at all, in front of a reader) in the first place. Quiet by default;
+/// `debug_logging` gets it back for whoever is actually debugging a run, and the extra lines still
+/// only ever reach the log — [`codex_stream::parse`] only ever folds a line that decodes as one of
+/// its own events, and [`progress::text_of`]'s fallback filters a trace line on top of that.
+///
+/// Never overrides an env the spec already set: an agent (or a human) that exported its own
+/// `RUST_LOG` said something on purpose, and this must not be the second thing to decide it.
+fn quiet_codex_tracing(arguments: &Value, env: &mut Vec<(String, String)>) {
+    const RUST_LOG: &str = "RUST_LOG";
+    if env.iter().any(|(key, _)| key == RUST_LOG) {
+        return;
+    }
+    let verbose =
+        decode::<ProcessCodexArguments>(arguments).is_ok_and(|config| config.debug_logging);
+    if !verbose {
+        env.push((RUST_LOG.to_string(), "error".to_string()));
+    }
+}
+
 /// One turn's content as an event sequence: its timeline in order, then its answer, then the
 /// telemetry the engine closed with.
 fn translate(content: TurnContent) -> Vec<RunEvent> {
     let mut events: Vec<RunEvent> = content.steps.into_iter().map(RunEvent::Step).collect();
     if !content.text.trim().is_empty() {
-        events.push(RunEvent::Answer { text: content.text });
+        events.push(RunEvent::Answer {
+            text: content.text,
+            raw: content.raw,
+        });
     }
     if let Some(metrics) = content.metrics {
         events.push(RunEvent::Metrics(metrics));
@@ -1145,7 +1172,7 @@ mod tests {
             RunEvent::Step(Step::Tool { name, status, output, .. })
                 if name == "Read" && *status == ToolStatus::Ok && output == "fn main() {}"
         ));
-        assert!(matches!(&batch.events[2], RunEvent::Answer { text } if text == "done"));
+        assert!(matches!(&batch.events[2], RunEvent::Answer { text, .. } if text == "done"));
         assert!(matches!(&batch.events[3], RunEvent::Metrics(m) if m.input_tokens == Some(12)));
 
         assert_eq!(batch.events.len(), 5, "{:?}", batch.events);
@@ -1202,7 +1229,7 @@ mod tests {
             .events(&session, Some(&first.cursor))
             .expect("events");
         assert_eq!(second.events.len(), 1, "{:?}", second.events);
-        assert!(matches!(&second.events[0], RunEvent::Answer { text } if text == "found it"));
+        assert!(matches!(&second.events[0], RunEvent::Answer { text, .. } if text == "found it"));
     }
 
     /// A log replaced under a stale cursor (the next turn spawns into the same slot and truncates
@@ -1218,7 +1245,7 @@ mod tests {
             )
             .expect("events");
         assert!(
-            matches!(&batch.events[0], RunEvent::Answer { text } if text == "short"),
+            matches!(&batch.events[0], RunEvent::Answer { text, .. } if text == "short"),
             "{:?}",
             batch.events
         );
@@ -1268,7 +1295,7 @@ mod tests {
             batch
                 .events
                 .iter()
-                .any(|e| matches!(e, RunEvent::Answer { text } if text == "all done")),
+                .any(|e| matches!(e, RunEvent::Answer { text, .. } if text == "all done")),
             "the answer is at the end of the log and must survive the read",
         );
         assert!(
@@ -1328,7 +1355,7 @@ mod tests {
             second
                 .events
                 .iter()
-                .any(|e| matches!(e, RunEvent::Answer { text } if text == "after")),
+                .any(|e| matches!(e, RunEvent::Answer { text, .. } if text == "after")),
             "and what follows it must still be read: {:?}",
             second.events,
         );

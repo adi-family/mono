@@ -244,7 +244,10 @@ mod tests {
             None,
             &scope_tools(None),
         );
-        let at = argv.iter().position(|a| a == "--settings").expect("--settings");
+        let at = argv
+            .iter()
+            .position(|a| a == "--settings")
+            .expect("--settings");
         assert_eq!(argv[at + 1], format!("{home}/.claude/settings.glm.json"));
     }
 
@@ -265,7 +268,10 @@ mod tests {
             None,
             &scope_tools(None),
         );
-        let at = argv.iter().position(|a| a == "--settings").expect("--settings");
+        let at = argv
+            .iter()
+            .position(|a| a == "--settings")
+            .expect("--settings");
         assert_eq!(argv[at + 1], json);
     }
 

@@ -26,7 +26,9 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics, text_of};
+use crate::progress::{
+    Step, ToolStatus, TurnContent, TurnMetrics, pop_trailing_message_if, text_of,
+};
 
 pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let text = String::from_utf8_lossy(log);
@@ -68,6 +70,7 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
             text: text_of(log),
             steps: Vec::new(),
             metrics: None,
+            raw: true,
         };
     }
 
@@ -83,25 +86,7 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         text,
         steps,
         metrics: metrics.filter(|m| !m.is_empty()),
-    }
-}
-
-/// Lift the timeline's trailing [`Step::Message`] out of `steps` when it satisfies `want`, returning
-/// its text. Only a *trailing* message is a candidate: a message with tool calls after it is
-/// commentary the agent wrote mid-turn, and belongs where it happened.
-fn pop_trailing_message_if(
-    steps: &mut Vec<Step>,
-    want: impl FnOnce(&str) -> bool,
-) -> Option<String> {
-    let Some(Step::Message { text }) = steps.last() else {
-        return None;
-    };
-    if !want(text) {
-        return None;
-    }
-    match steps.pop() {
-        Some(Step::Message { text }) => Some(text),
-        _ => None,
+        raw: false,
     }
 }
 

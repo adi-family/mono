@@ -128,11 +128,16 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         }
     }
 
+    // `raw` when there was no `answer` event to trust: what a reader gets instead is whatever this
+    // loop could not parse, concatenated — a crash message, or an old plain-text log — and that is
+    // not the model's prose, whatever it happens to contain.
+    let raw = answer.is_none();
     let text = answer.unwrap_or_else(|| plain.trim().to_string());
     TurnContent {
         text,
         steps,
         metrics: metrics.filter(|m| !m.is_empty()),
+        raw,
     }
 }
 

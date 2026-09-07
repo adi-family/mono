@@ -132,6 +132,14 @@ pub struct TurnContent {
     pub text: String,
     pub steps: Vec<Step>,
     pub metrics: Option<TurnMetrics>,
+    /// Whether `text` is a wire format's own structured answer, or an engine's log read as
+    /// undifferentiated bytes because nothing recognisable was in it — a crash, an older CLI, a
+    /// run with structured output turned off. A reader renders the two differently: the first is
+    /// prose the model composed and is safe to run through Markdown, the second is whatever the
+    /// process happened to print (banners, a human-formatted transcript, a stray trace line this
+    /// crate's own filtering missed) and belongs in a preformatted block instead — see
+    /// `adi_ui::chat::Said`, the one place that reads this flag.
+    pub raw: bool,
 }
 
 /// What a backend can surface — the single source of truth the API reports and the UI renders from,
@@ -200,8 +208,63 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
 
 /// A best-effort UTF-8 view of a log, trimmed — the answer for a backend with no structured stream,
 /// and for a log written by something that died before it could say anything.
+///
+/// A vendor engine's own startup tracing is dropped first. This is belt-and-braces beside quieting
+/// the child's `RUST_LOG` at the spawn ([`crate::runner::detached`]) and beside every structured
+/// parser reading straight past a non-JSON line: the log a runner reads is the child's *whole*
+/// merged stdout+stderr ([`crate::backends::detached::spawn_child`]), so a line here is one this
+/// crate could not make sense of at all — by a backend with no parser, or one whose parser found
+/// nothing it recognised in the entire log. Filtering it in this one shared fallback, rather than
+/// per-backend, is what keeps a future backend with no parser of its own from reintroducing the
+/// exact bug this exists to prevent. The log file itself is untouched — only what a caller reads as
+/// "the text" is filtered, so the lines are still there for anyone who opens the run's own log.
 pub(crate) fn text_of(log: &[u8]) -> String {
-    String::from_utf8_lossy(log).trim().to_string()
+    let text = String::from_utf8_lossy(log);
+    text.lines()
+        .filter(|line| !is_engine_tracing(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// Whether a line is a vendor CLI's own startup noise rather than anything an agent said:
+/// `tracing`'s default line shape (`2026-09-07T19:37:40.559219Z INFO …`) or Codex's
+/// "read from stdin" banner, printed to stderr before the child has any output of its own.
+fn is_engine_tracing(line: &str) -> bool {
+    // Compiled once: an open chat's poll calls `text_of` roughly once a second for as long as a
+    // run without a structured parser stays running, and this crate already treats a per-poll
+    // syscall as worth engineering around (see `store::db`'s connection cache).
+    static TRACING_LINE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+(TRACE|DEBUG|INFO|WARN|ERROR)\s")
+            .expect("static pattern is valid")
+    });
+    let line = line.trim_start();
+    line == "Reading additional input from stdin..." || TRACING_LINE.is_match(line)
+}
+
+/// Lift the timeline's trailing [`Step::Message`] out of `steps` when it satisfies `want`,
+/// returning its text. Only a *trailing* message is a candidate: a message with tool calls after
+/// it is commentary the agent wrote mid-turn, and belongs where it happened.
+///
+/// Shared by every stream parser whose engine reports a final answer text alongside a timeline of
+/// messages (`claude_stream`, `codex_stream`): both need to tell "the last thing said was the
+/// answer" from "the last thing said was commentary before a call that never got a reply", and the
+/// rule is the same rule regardless of whose wire format it was read off.
+pub(crate) fn pop_trailing_message_if(
+    steps: &mut Vec<Step>,
+    want: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let Some(Step::Message { text }) = steps.last() else {
+        return None;
+    };
+    if !want(text) {
+        return None;
+    }
+    match steps.pop() {
+        Some(Step::Message { text }) => Some(text),
+        _ => None,
+    }
 }
 
 /// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a

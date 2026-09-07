@@ -705,6 +705,7 @@ mod tests {
                     images: Vec::new(),
                     steps: Vec::new(),
                     metrics: None,
+                    raw: false,
                 },
             )
             .expect("record a turn");

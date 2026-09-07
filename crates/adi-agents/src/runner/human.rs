@@ -185,7 +185,10 @@ impl Runner for HumanRunner {
 
         let mut events: Vec<RunEvent> = content.steps.into_iter().map(RunEvent::Step).collect();
         if !content.text.trim().is_empty() {
-            events.push(RunEvent::Answer { text: content.text });
+            events.push(RunEvent::Answer {
+                text: content.text,
+                raw: content.raw,
+            });
         }
         if let Some(metrics) = content.metrics {
             events.push(RunEvent::Metrics(metrics));
@@ -311,7 +314,7 @@ mod tests {
             RunEvent::Step(crate::progress::Step::Tool { .. })
         ));
         assert!(
-            matches!(&batch.events[2], RunEvent::Answer { text } if text == "one file"),
+            matches!(&batch.events[2], RunEvent::Answer { text, .. } if text == "one file"),
             "the answer closes the turn: {:?}",
             batch.events,
         );

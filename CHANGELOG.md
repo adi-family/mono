@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **`process:codex` transcripts no longer show the engine's own startup noise.** A codex run's
+  answer used to be read out of the raw, unparsed process log — so a run's tracing (`INFO
+  codex_http_client::custom_ca: …`) and its "Reading additional input from stdin…" banner could
+  land in the transcript verbatim, and the panel's Markdown renderer went on to read every
+  `field_name=value` underscore as emphasis, eating them. `codex exec --json` is now always
+  requested and its structured event stream is parsed into proper steps, an answer and metrics;
+  the engine's own tracing is quieted for a normal run and, belt-and-braces, filtered out of
+  anything that still reaches a transcript unparsed. Non-prose output (a raw log a parser could
+  not make sense of) now renders preformatted rather than as Markdown, and a bare underscore
+  inside a word (`snake_case_identifier`) no longer opens or closes emphasis anywhere Markdown
+  is shown.
+
 ## 1.7.0 — 2026-09-06
 
 ### Added
