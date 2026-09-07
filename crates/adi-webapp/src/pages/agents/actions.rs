@@ -1239,11 +1239,11 @@ fn feed_turn(
                 role: Role::User,
                 body: turn.text.clone(),
                 images: pictures(node, turn),
-                // A message that already names its sender in its own words wears no label: the
-                // `[from: …]` tag the server stamps on once this machine has more than one voice
-                // (`adi_webapp_api::handlers::agents`'s `tag_sender`) answers "who is talking"
-                // more precisely than the conversation's machine can, and twice is once too often.
-                from: source.filter(|_| !is_tagged(&turn.text)).map(str::to_string),
+                from: source.map(str::to_string),
+                // The sender the server stamped on it, where there is one: it answers "who is
+                // talking" more precisely than the conversation's machine can, so it takes the
+                // label rather than sitting beside it.
+                by: sender_of(&turn.markers),
             },
         )];
     }
@@ -1264,6 +1264,7 @@ fn feed_turn(
                         body: text.clone(),
                         images: Vec::new(),
                         from: None,
+                        by: None,
                     });
                 }
             }
@@ -1309,6 +1310,7 @@ fn feed_turn(
             body: turn.text.clone(),
             images: Vec::new(),
             from: None,
+            by: None,
         });
     }
     out.into_iter()
@@ -1358,15 +1360,14 @@ fn feed_entries(
     })
 }
 
-/// Whether a message already carries the server's sender tag — the `[from: <who>]` prefix
-/// `adi_webapp_api::handlers::agents`'s `tag_sender` writes into the words themselves once more
-/// than one voice can reach this machine.
+/// Who sent this message, if the server said — `<node>` or `<node>/<user>`, off the `from` marker
+/// it stamps once more than one voice can reach this machine.
 ///
-/// Matched on the literal prefix rather than parsed, because nothing here needs the name: the tag
-/// is left in the text where the model and the reader both see it, and this only decides whether
-/// the block *also* wears the conversation's machine.
-fn is_tagged(message: &str) -> bool {
-    message.trim_start().starts_with("[from: ")
+/// Read off the turn rather than out of its words: the marker travels as data now
+/// (`adi_agents::marker`), and the text a reader sees is only ever the message. `None` for every
+/// message typed at this machine, and for the platform's own — a wake names an await, not a person.
+fn sender_of(markers: &[adi_webapp_api::types::TurnMarker]) -> Option<String> {
+    markers.iter().find_map(adi_webapp_api::types::TurnMarker::sender)
 }
 
 /// A turn's attachments, as the transcript draws them: a URL to fetch each by, its name, and
@@ -1403,7 +1404,8 @@ fn queued_bubble(
             images=pictures(node.as_deref(), &turn)
             // Queued the same way a sent message is: `reply_run` tags before it queues, so a
             // message waiting its turn already names its sender if anything does.
-            from=chat_source_label(state, watch, sourced).filter(|_| !is_tagged(&turn.text))
+            from=chat_source_label(state, watch, sourced)
+            by=sender_of(&turn.markers)
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }

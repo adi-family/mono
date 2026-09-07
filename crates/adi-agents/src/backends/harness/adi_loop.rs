@@ -575,8 +575,9 @@ impl<'a> Wire<'a> {
         said: &crate::store::QueuedMessage,
         images: &ImageStore<'_>,
     ) {
+        let text = crate::marked(&said.markers, &said.text);
         if said.images.is_empty() {
-            self.interject(messages, &said.text);
+            self.interject(messages, &text);
             return;
         }
         let said = Said {
@@ -586,7 +587,7 @@ impl<'a> Wire<'a> {
             // other way to learn where.
             text: crate::with_attachment_paths(
                 images.store,
-                &said.text,
+                &text,
                 &said.images,
                 ImageDelivery::Inline,
             ),
@@ -745,11 +746,15 @@ fn merged<'a>(turns: &'a [Turn], store: &crate::store::SessionStore) -> Vec<Said
 /// learning what they said, and the PDF somebody attached would be a file nothing was ever told the
 /// name of. Same renderers, so the text is byte-identical either way.
 fn words_of(turn: &Turn, store: &crate::store::SessionStore) -> String {
+    // Stamped before the pre-run block is appended, not after: that block announces itself with a
+    // marker of its own, and a stamp applied over the top of it would read that as a tag somebody
+    // typed and escape it.
+    let words = crate::marked(&turn.markers, &turn.text);
     let words = match crate::prelude::block_of_steps(&turn.steps) {
         Some(block) if turn.role == "user" => {
-            format!("{}\n\n{block}", turn.text.trim_end())
+            format!("{}\n\n{block}", words.trim_end())
         }
-        _ => turn.text.clone(),
+        _ => words,
     };
     crate::with_attachment_paths(store, &words, &turn.images, ImageDelivery::Inline)
 }
@@ -1531,6 +1536,7 @@ mod tests {
             images: Vec::new(),
             steps: Vec::new(),
             metrics: None,
+            markers: Vec::new(),
         }
     }
 
@@ -1576,7 +1582,7 @@ mod tests {
         assert!(
             said[0]
                 .text
-                .contains("<pre-run command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">"),
+                .contains("<ran command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">"),
             "and framed exactly as every other engine sees it: {}",
             said[0].text
         );

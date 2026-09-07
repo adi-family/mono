@@ -171,18 +171,26 @@ fn run_one(command: &str, spec: &RunSpec, shell: &Shell) -> Ran {
 
 /// What gets appended to the opening message, or `None` when nothing was run.
 ///
-/// The heading and the sentence under it are doing real work: they say the calls already happened,
-/// that the text is the command's own output, and that re-running is unnecessary. Without that last
-/// part a model reliably re-runs the command anyway to "verify" it, which is the round trip this
-/// exists to save.
+/// The tag and the sentence under it are doing real work: they say the calls already happened, that
+/// the text is the command's own output, and that re-running is unnecessary. Without that last part
+/// a model reliably re-runs the command anyway to "verify" it, which is the round trip this exists
+/// to save.
+///
+/// The marker is written here rather than carried on the turn, because this block is *appended* —
+/// it announces a section of a message somebody else wrote, where [`Turn::markers`](crate::Turn)
+/// say what the whole message is.
 #[must_use]
 pub(crate) fn block(ran: &[Ran], dropped: usize) -> Option<String> {
     if ran.is_empty() && dropped == 0 {
         return None;
     }
-    let mut out = String::from(
-        "# Already run for you\n\n\
-         Before this message reached you, the commands below were run as `Bash` tool calls — in \
+    let mut out = crate::marker::Marker::PreRun {
+        ran: ran.len(),
+        dropped,
+    }
+    .tag();
+    out.push_str(
+        "\nBefore this message reached you, the commands below were run as `Bash` tool calls — in \
          this run's own shell, in its working directory. Each block holds that command's real \
          output and its real exit status. Treat it as a tool result you already have: use it, and \
          do not run the command again unless you need a fresher answer or it failed.\n",
@@ -190,11 +198,12 @@ pub(crate) fn block(ran: &[Ran], dropped: usize) -> Option<String> {
     for one in ran {
         // Tagged rather than fenced: the output routinely contains code fences of its own, and a
         // fence inside a fence ends the wrong one. The status rides on the open tag so it cannot be
-        // read as part of the output.
+        // read as part of the output. A *paired* tag, where the announcement above is
+        // self-closing — the two arities are what tell an announcement from a payload.
         // Writing into a `String` cannot fail, so the result is dropped rather than unwrapped.
         let _ = write!(
             out,
-            "\n<pre-run command=\"{}\" status=\"{}\">\n{}\n</pre-run>\n",
+            "\n<ran command=\"{}\" status=\"{}\">\n{}\n</ran>\n",
             one.command.replace('"', "'"),
             one.status(),
             one.output.trim_end(),
@@ -288,6 +297,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         }
     }
 
@@ -395,11 +405,11 @@ mod tests {
         }];
         let block = block(&ran, 0).expect("a block");
 
-        assert!(block.contains("Already run for you"));
+        assert!(block.starts_with("<pre-run ran=\"1\"/>"), "{block}");
         assert!(block.contains("`Bash` tool calls"));
         assert!(block.contains("do not run the command again"));
         assert!(
-            block.contains("<pre-run command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">")
+            block.contains("<ran command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">")
         );
         assert!(block.contains("Title: probe the auth flow"));
     }

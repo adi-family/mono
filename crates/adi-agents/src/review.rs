@@ -1143,6 +1143,7 @@ mod tests {
                 images: Vec::new(),
                 steps: Vec::new(),
                 metrics: None,
+                markers: Vec::new(),
             },
             Turn {
                 role: "assistant".to_string(),
@@ -1161,6 +1162,7 @@ mod tests {
                     permission_denials: vec!["WebFetch".to_string()],
                     ..Default::default()
                 }),
+                markers: Vec::new(),
             },
         ]
     }
@@ -1306,6 +1308,7 @@ mod tests {
                     "",
                 )],
                 metrics: None,
+                markers: Vec::new(),
             });
         }
         let doc = document(
@@ -1357,6 +1360,7 @@ mod tests {
                 images: Vec::new(),
                 steps: Vec::new(),
                 metrics: None,
+                markers: Vec::new(),
             },
             Turn {
                 role: "assistant".to_string(),
@@ -1367,6 +1371,7 @@ mod tests {
                 images: Vec::new(),
                 steps,
                 metrics: None,
+                markers: Vec::new(),
             },
         ];
 

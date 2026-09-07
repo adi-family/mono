@@ -31,7 +31,9 @@ use crate::backends::harness::claude_sdk::Continuation;
 use crate::backends::{adi_events, claude_stream, detached, harness, process};
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, MAX_WHOLE_PARSE_BYTES, TurnContent};
-use crate::runner::prompt::{compose, own_prompt, with_knowledge, with_tool_help, with_workspace};
+use crate::runner::prompt::{
+    compose, own_prompt, with_knowledge, with_markers, with_tool_help, with_workspace,
+};
 use crate::runner::{
     EventBatch, EventKinds, ImageDelivery, RunEvent, RunSpec, Runner, RunnerKind, Session,
     StateWriter, Stopped,
@@ -89,7 +91,10 @@ impl DetachedRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt = with_tool_help(
                     spec,
-                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    with_markers(
+                        spec,
+                        with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    ),
                 );
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(process::claude::argv(
@@ -112,7 +117,10 @@ impl DetachedRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt = with_tool_help(
                     spec,
-                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    with_markers(
+                        spec,
+                        with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    ),
                 );
                 let cont = if session.has_started() {
                     Continuation::Resume { session_id }
@@ -748,6 +756,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         }
     }
 

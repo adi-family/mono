@@ -41,6 +41,7 @@ mod knowledge;
 mod launch;
 pub mod launcher;
 mod limits;
+pub mod marker;
 mod memo;
 pub mod overrides;
 mod prelude;
@@ -76,6 +77,7 @@ pub use events::{
     AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
+pub use marker::{Marker, Settled, Woke};
 pub use overrides::RunOverrides;
 pub use progress::{BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities};
 pub use run::{
@@ -735,6 +737,7 @@ impl Agents {
             launched_by,
             overrides,
             owner_instructions,
+            markers,
             ..
         } = *options;
         let stored = self
@@ -812,12 +815,14 @@ impl Agents {
         if runner.as_terminal().is_none() {
             let mut turn = store::user_turn_with(message, images.to_vec());
             // What was run goes on the turn as steps, not into its text: the transcript keeps the
-            // message a person actually wrote, exactly as it does for an image's file paths.
+            // message a person actually wrote, exactly as it does for an image's file paths — and,
+            // since `marker`, for who wrote it.
             turn.steps = prelude::steps(&ran);
+            turn.markers = markers.to_vec();
             store.append_turn(&agent.name, &record.id, turn)?;
         }
         let message = &with_prelude(
-            &for_engine(runner.as_ref(), &store, message, images),
+            &for_engine(runner.as_ref(), &store, markers, message, images),
             &ran,
             dropped,
         );
@@ -890,6 +895,26 @@ impl Agents {
         self.reply_with(name, conv_id, message, &[])
     }
 
+    /// [`reply`](Self::reply), said by somebody the conversation has to be told about — a fleet
+    /// peer through this machine's panel, most of all.
+    ///
+    /// The marker is recorded on the turn and rendered in front of the words for the engine; see
+    /// [`crate::marker`]. A reply that also settles a pending question carries **both** that and
+    /// the ask's own tag, because both are true of it.
+    ///
+    /// # Errors
+    /// As [`reply`](Self::reply).
+    pub fn reply_as(
+        &self,
+        name: &str,
+        conv_id: &str,
+        message: &str,
+        image_ids: &[String],
+        markers: &[Marker],
+    ) -> Result<Sent> {
+        self.reply_inner(name, conv_id, message, image_ids, markers)
+    }
+
     /// [`reply`](Self::reply), with images attached — what a message composed with a screenshot
     /// pasted into it sends.
     ///
@@ -905,6 +930,18 @@ impl Agents {
         conv_id: &str,
         message: &str,
         image_ids: &[String],
+    ) -> Result<Sent> {
+        self.reply_inner(name, conv_id, message, image_ids, &[])
+    }
+
+    /// What both reply verbs are: settle a pending question if this answers one, then deliver.
+    fn reply_inner(
+        &self,
+        name: &str,
+        conv_id: &str,
+        message: &str,
+        image_ids: &[String],
+        markers: &[Marker],
     ) -> Result<Sent> {
         self.check_deliverable(name, conv_id)?;
         // Refused rather than recorded-and-ignored. The images would sit in the transcript looking
@@ -938,12 +975,20 @@ impl Agents {
             .flatten();
         match settled {
             Some(ask) => {
-                let text = ask.render_reply(message);
-                let sent = self.deliver_with(name, conv_id, &text, &images)?;
+                // Both tags: which ask this closes, and — on a machine with more than one voice —
+                // who closed it. Neither is recoverable from the other, and the person who
+                // answered is exactly what a transcript read later cannot work out.
+                let mut markers = markers.to_vec();
+                markers.push(ask.marker(&Answer {
+                    at: now_ms(),
+                    by: AnsweredBy::Human,
+                    replies: Vec::new(),
+                }));
+                let sent = self.deliver_with(name, conv_id, &markers, message, &images)?;
                 self.emit_answered(&ask, AnsweredBy::Human);
                 Ok(sent)
             }
-            None => self.deliver_with(name, conv_id, message, &images),
+            None => self.deliver_with(name, conv_id, markers, message, &images),
         }
     }
 
@@ -1027,7 +1072,7 @@ impl Agents {
                      deadline took its default"
                 ))
             })?;
-        let sent = self.deliver(name, conv_id, &ask.render(&answer))?;
+        let sent = self.deliver(name, conv_id, &[ask.marker(&answer)], &ask.render(&answer))?;
         self.emit_answered(&ask, AnsweredBy::Human);
         Ok(sent)
     }
@@ -1095,19 +1140,29 @@ impl Agents {
     /// as an answer: an [await](crate::awaits) firing, and the deadline sweep delivering a question's
     /// own default (which has settled it already, by a different route). Both are the platform
     /// speaking, and a person's question stays open until a person answers it.
-    pub(crate) fn deliver(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
-        self.deliver_with(name, conv_id, message, &[])
+    /// `markers` is what the platform is stamping on it — never empty here, because everything that
+    /// reaches this is the platform speaking and every one of those says which thing it is.
+    pub(crate) fn deliver(
+        &self,
+        name: &str,
+        conv_id: &str,
+        markers: &[Marker],
+        message: &str,
+    ) -> Result<Sent> {
+        self.deliver_with(name, conv_id, markers, message, &[])
     }
 
     /// [`deliver`](Self::deliver), with images attached to the message.
     ///
     /// The pictures travel with the words wherever the words go — into the turn that starts now, or
     /// into the queue behind the answer still being written. Anything else and a screenshot pasted
-    /// mid-answer arrives attached to a message that is not the one it was pasted into.
+    /// mid-answer arrives attached to a message that is not the one it was pasted into. The markers
+    /// travel the same road, for the same reason.
     pub(crate) fn deliver_with(
         &self,
         name: &str,
         conv_id: &str,
+        markers: &[Marker],
         message: &str,
         images: &[store::Attachment],
     ) -> Result<Sent> {
@@ -1133,23 +1188,25 @@ impl Agents {
         let _gate = turn_gate();
         let session = store.session(name, conv_id);
         if !may_start || runner.is_alive(&session) {
-            let place = store.enqueue(name, conv_id, message, images)?;
+            let place = store.enqueue(name, conv_id, message, images, markers)?;
             return Ok(Sent::Queued { place });
         }
         // Idle, but with a queue no read has drained yet: join the back of the line and start its
         // head instead, so messages are always answered in the order they were typed.
         let next = if store.queue_len(name, conv_id) > 0 {
-            store.enqueue(name, conv_id, message, images)?;
+            store.enqueue(name, conv_id, message, images, markers)?;
             store
                 .dequeue(name, conv_id)?
                 .unwrap_or_else(|| store::QueuedMessage {
                     text: message.to_string(),
                     images: images.to_vec(),
+                    markers: markers.to_vec(),
                 })
         } else {
             store::QueuedMessage {
                 text: message.to_string(),
                 images: images.to_vec(),
+                markers: markers.to_vec(),
             }
         };
 
@@ -1397,12 +1454,16 @@ impl Agents {
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
-        store.append_turn(
-            &agent.name,
-            &record.id,
-            store::user_turn_with(&message.text, message.images.clone()),
-        )?;
-        let sent = for_engine(runner, store, &message.text, &message.images);
+        let mut turn = store::user_turn_with(&message.text, message.images.clone());
+        turn.markers.clone_from(&message.markers);
+        store.append_turn(&agent.name, &record.id, turn)?;
+        let sent = for_engine(
+            runner,
+            store,
+            &message.markers,
+            &message.text,
+            &message.images,
+        );
         self.send_or_note_failure(runner, &spec, store, &agent.name, &record.id, &sent)?;
         Ok(launch_of(agent, runner, &session))
     }
@@ -1626,6 +1687,9 @@ impl Agents {
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
             knowledge_note,
+            // Every run, not only the ones that can be woken: a pre-run block is stamped for all of
+            // them, and a section naming all five costs less than one run misreading one of them.
+            marker_note: Some(crate::marker::block()),
         }
     }
 
@@ -2347,10 +2411,27 @@ fn answerable(runner: &dyn Runner) -> bool {
 fn for_engine(
     runner: &dyn Runner,
     store: &SessionStore,
+    markers: &[Marker],
     text: &str,
     attached: &[store::Attachment],
 ) -> String {
-    with_attachment_paths(store, text, attached, runner.image_delivery())
+    let text = with_attachment_paths(store, text, attached, runner.image_delivery());
+    marked(markers, &text)
+}
+
+/// `text` with its markers in front, or `text` unchanged when nothing stamped it.
+///
+/// The one place a stored marker becomes words, for engines that are *handed* their message; the
+/// adi loop rebuilds its own from the store and calls this itself (`words_of` there), exactly as it
+/// rebuilds the pre-run block.
+///
+/// A turn recorded before markers were data carries its own in its text already, and is left
+/// alone — stamping it again would put two tags on one message.
+pub(crate) fn marked(markers: &[Marker], text: &str) -> String {
+    if markers.is_empty() || marker::is_marked(text) {
+        return text.to_string();
+    }
+    marker::stamp(markers, text)
 }
 
 /// The words with everything attached to them named by path, as one `delivery` needs it.
@@ -3641,6 +3722,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         }
     }
 
@@ -4175,8 +4257,59 @@ mod tests {
         );
         // …and framed so the model reads it as a call that already happened rather than as a claim
         // the person made.
-        assert!(prompt.contains("Already run for you"), "{prompt}");
+        assert!(prompt.contains("<pre-run ran=\"1\"/>"), "{prompt}");
         assert!(prompt.contains("status=\"ok\""), "{prompt}");
+    }
+
+    /// The other half of the same promise, for the sender tag: the model is told who is talking on
+    /// its own command line, and the transcript keeps the words that person actually typed.
+    ///
+    /// Both ends asserted together, because the whole design is that they differ — a marker stored
+    /// as data is worth nothing if the render step is ever skipped, and a marker still glued into
+    /// the stored text is the bug this replaced.
+    #[test]
+    #[cfg(unix)]
+    fn a_senders_tag_reaches_the_engine_while_the_transcript_keeps_the_words() {
+        let store = scratch("marker-reaches");
+        let (bin, argv_file) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        store.save("solver", m).expect("save");
+
+        let from = Marker::From {
+            node: "laptop-b".to_string(),
+            user: "igor".to_string(),
+        };
+        let launch = store
+            .launch(
+                "solver",
+                "супер пуш коммит",
+                &LaunchOptions {
+                    markers: std::slice::from_ref(&from),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch");
+        let Launch::Process { run_id, .. } = launch else {
+            panic!("process:claude is not a terminal");
+        };
+
+        let prompt = engine_argv(&argv_file)
+            .pop()
+            .expect("the engine's positional prompt");
+        assert_eq!(
+            prompt, "<from node=\"laptop-b\" user=\"igor\"/> супер пуш коммит",
+            "the model reads who is talking"
+        );
+
+        let turn = store
+            .sessions()
+            .transcript("solver", &run_id, None, false)
+            .into_iter()
+            .next()
+            .expect("the opening turn");
+        assert_eq!(turn.text, "супер пуш коммит", "the transcript is the words");
+        assert_eq!(turn.markers, vec![from], "and the sender rides beside them");
     }
 
     /// The transcript keeps what was *said*; the pre-run is recorded as the tool calls it was.
@@ -4364,6 +4497,7 @@ mod tests {
             let sent = for_engine(
                 runner_for(&backend).expect("a runner").as_ref(),
                 &sessions,
+                &[],
                 "what is wrong here?",
                 std::slice::from_ref(&image),
             );
@@ -4401,6 +4535,7 @@ mod tests {
         let inline = for_engine(
             runner_for(&Backend::HarnessAdi).expect("a runner").as_ref(),
             &sessions,
+            &[],
             "what is wrong here?",
             &turn.images,
         );
@@ -4444,6 +4579,7 @@ mod tests {
             let sent = for_engine(
                 runner_for(&backend).expect("a runner").as_ref(),
                 &sessions,
+                &[],
                 "summarise this",
                 std::slice::from_ref(&file),
             );
@@ -4789,7 +4925,7 @@ mod tests {
         );
 
         sessions
-            .enqueue("recon", &second, "and then diff them", &[])
+            .enqueue("recon", &second, "and then diff them", &[], &[])
             .expect("enqueue");
         assert!(
             !store.stop_run("recon", &second).expect("stop"),

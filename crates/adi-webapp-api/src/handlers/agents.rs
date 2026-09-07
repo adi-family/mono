@@ -4,6 +4,7 @@ use adi_agents::AgentManifest;
 use adi_agents::Agents;
 use adi_agents::Backend;
 use adi_agents::Error as AgentStoreError;
+use adi_agents::Marker;
 use adi_agents::SecretAttachment;
 use adi_agents::StoredAgent;
 use adi_agents::contains_json_null;
@@ -19,7 +20,7 @@ use crate::types::{
     AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
     GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, RenameRun, ReplyToRun,
     ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetAutoTitle, SetGoal, SetRunLimit,
-    SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
+    SimulateAgent, SimulateTurn, StarRun, TurnMarker, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -67,8 +68,8 @@ fn shared_with_others(store: &Agents) -> bool {
         .any(|node| node.allows(adi_mesh::fleet::Target::Http(PANEL_SERVICE)))
 }
 
-/// `message`, with a lightweight tag naming who sent it ahead of the words — `[from:
-/// <nickname>/<user>]` for a fleet peer, `[from: <this node>]` for the panel here.
+/// The marker naming who sent this message — `<from node="…" user="…"/>` for a fleet peer, the same
+/// tag naming this machine for the panel here — or `None` when nobody needs naming.
 ///
 /// **A message is tagged whenever the conversation has more than one possible voice**
 /// ([`shared_with_others`]), and that is the rule in both directions: a peer's message always
@@ -80,20 +81,21 @@ fn shared_with_others(store: &Agents) -> bool {
 /// The local half names the machine rather than a person because that is the only identity this
 /// end has: the panel is unauthenticated on loopback, so there is no username to print, while a
 /// peer authenticated as one and its half says so. Both halves are then the same kind of name —
-/// `laptop-b/igor` and `studio` — and neither says "me", which a transcript read on another
+/// `laptop-b`/`igor` and `studio` — and neither says "me", which a transcript read on another
 /// machine could not resolve.
 ///
-/// The tag lives in the message text itself rather than only in structured metadata, because that
-/// is the one place every reader of the transcript — a person, or the model answering it — is
-/// guaranteed to see it.
-fn tag_sender(store: &Agents, message: &str, sender: Option<FleetSender<'_>>) -> String {
-    let who = match sender.filter(|s| !s.nickname.is_empty()) {
-        Some(sender) if sender.user.is_empty() => sender.nickname.to_string(),
-        Some(sender) => format!("{}/{}", sender.nickname, sender.user),
-        None if shared_with_others(store) => adi_mesh::node::nickname_in(store.config()),
-        None => return message.to_string(),
+/// Returned as **data**, not as words in front of the message: `adi_agents` records it on the turn
+/// and renders it into the text on the way to the engine, so the transcript keeps what the person
+/// typed and every reader still sees who typed it. See `adi_agents::marker`.
+fn sender_marker(store: &Agents, sender: Option<FleetSender<'_>>) -> Option<Marker> {
+    let (node, user) = match sender.filter(|s| !s.nickname.is_empty()) {
+        Some(sender) => (sender.nickname.to_string(), sender.user.to_string()),
+        None if shared_with_others(store) => {
+            (adi_mesh::node::nickname_in(store.config()), String::new())
+        }
+        None => return None,
     };
-    format!("[from: {who}] {message}")
+    Some(Marker::From { node, user })
 }
 
 /// The extra system-prompt instructions `nickname`'s node carries in this machine's `fleet.toml`
@@ -257,7 +259,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     }
     // A pty backend takes no task, so a blank message is its normal launch, not a missing one.
     let message = if message.is_empty() { "run" } else { message };
-    let message = tag_sender(store, message, sender);
+    let markers: Vec<Marker> = sender_marker(store, sender).into_iter().collect();
     let working_dir = req
         .working_dir
         .as_deref()
@@ -285,7 +287,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     // limit, and never something an automatic launch sends.
     let launch = store.launch(
         name,
-        &message,
+        message,
         &adi_agents::LaunchOptions {
             working_dir,
             force: req.force,
@@ -294,6 +296,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
             launched_by: Some(launched_by),
             overrides: overrides.as_ref(),
             owner_instructions: owner_instructions.as_deref(),
+            markers: &markers,
         },
     );
     let launch = match launch {
@@ -577,8 +580,14 @@ pub fn reply_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         Err(e) => return Response::from(&e),
     };
     let run_id = req.run_id.trim();
-    let message = tag_sender(store, req.message.trim(), sender);
-    if let Err(e) = store.reply_with(&agent.name, run_id, &message, &req.attachments) {
+    let markers: Vec<Marker> = sender_marker(store, sender).into_iter().collect();
+    if let Err(e) = store.reply_as(
+        &agent.name,
+        run_id,
+        req.message.trim(),
+        &req.attachments,
+        &markers,
+    ) {
         return Response::from(&e);
     }
     conversation_snapshot(store, &agent, run_id)
@@ -1179,7 +1188,14 @@ fn runs_response_with(
 const TITLE_MAX: usize = 300;
 
 /// A run's task, cut to [`TITLE_MAX`] characters on a character boundary.
+///
+/// Any marker the message opens with is dropped first. A conversation opened from a paired phone is
+/// *about* what was asked, not about which machine asked it, and a rail of forty rows each starting
+/// `[from: igors-macbook-pro]` says nothing and costs the width that would have. New sessions store
+/// the sender as data and never had it in these words; the strip is for every one recorded before
+/// that (see `adi_agents::marker`).
 fn title_of(message: &str) -> String {
+    let message = adi_agents::marker::split(message).1;
     if message.chars().count() <= TITLE_MAX {
         return message.to_string();
     }
@@ -1247,16 +1263,68 @@ fn agent_ask(ask: &adi_agents::store::Ask) -> AgentAsk {
 }
 
 /// Map a store [`adi_agents::Turn`] onto its wire [`AgentTurn`], including its steps and metrics.
+///
+/// A turn recorded before markers were data still carries them in its words, so those are read back
+/// out of the text here and the text handed on without them. Every reader downstream then sees one
+/// shape — `markers` beside a `text` that is only ever the message — whichever era the row is from.
 fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
+    let (markers, text) = match t.markers.is_empty() {
+        true => {
+            let (parsed, body) = adi_agents::marker::split(&t.text);
+            (parsed, body.to_string())
+        }
+        false => (t.markers, t.text),
+    };
     AgentTurn {
         role: t.role,
-        text: t.text,
+        text,
         at: t.at,
         pending: t.pending,
         queued: t.queued,
         images: t.images.into_iter().map(agent_attachment).collect(),
         steps: t.steps.into_iter().map(agent_step).collect(),
         metrics: t.metrics.map(agent_metrics),
+        markers: markers.iter().map(turn_marker).collect(),
+    }
+}
+
+/// Map a stored [`Marker`] onto its wire shape. Written out rather than shared through serde so the
+/// page's copy can gain a kind, or fail to have one, without the store's enum changing.
+fn turn_marker(m: &Marker) -> TurnMarker {
+    match m {
+        Marker::From { node, user } => TurnMarker::From {
+            node: node.clone(),
+            user: user.clone(),
+        },
+        Marker::AwaitWoken {
+            id,
+            cause,
+            event,
+            check,
+        } => TurnMarker::AwaitWoken {
+            id: id.clone(),
+            cause: match cause {
+                adi_agents::Woke::Event => "event",
+                adi_agents::Woke::Timer => "timer",
+                adi_agents::Woke::Expired => "expired",
+            }
+            .to_string(),
+            event: event.clone(),
+            check: *check,
+        },
+        Marker::AskAnswered { id, by } => TurnMarker::AskAnswered {
+            id: id.clone(),
+            by: match by {
+                adi_agents::Settled::Person => "person",
+                adi_agents::Settled::Default => "default",
+            }
+            .to_string(),
+        },
+        Marker::GoalCheck { open } => TurnMarker::GoalCheck { open: *open },
+        Marker::PreRun { ran, dropped } => TurnMarker::PreRun {
+            ran: *ran,
+            dropped: *dropped,
+        },
     }
 }
 
@@ -3396,33 +3464,37 @@ mod tests {
         registry.save_to(store.config()).expect("save");
     }
 
-    /// The tag is what every reader of the transcript sees, so it names both halves of the
-    /// identity when both are known, and falls back to the nickname alone when the peer verified
-    /// without a username on the credential.
+    /// The marker is what every reader of the transcript sees, so it names both halves of the
+    /// identity when both are known, and carries the nickname alone when the peer verified without
+    /// a username on the credential.
     #[test]
-    fn tag_sender_names_the_fleet_node_it_came_from() {
+    fn sender_marker_names_the_fleet_node_it_came_from() {
         let store = scratch("tag-sender-fleet");
         assert_eq!(
-            tag_sender(
+            sender_marker(
                 &store,
-                "fix the failing test",
                 Some(FleetSender {
                     nickname: "laptop-b",
                     user: "igor",
                 })
             ),
-            "[from: laptop-b/igor] fix the failing test"
+            Some(Marker::From {
+                node: "laptop-b".to_string(),
+                user: "igor".to_string(),
+            })
         );
         assert_eq!(
-            tag_sender(
+            sender_marker(
                 &store,
-                "go",
                 Some(FleetSender {
                     nickname: "laptop-b",
                     user: "",
                 })
             ),
-            "[from: laptop-b] go"
+            Some(Marker::From {
+                node: "laptop-b".to_string(),
+                user: String::new(),
+            })
         );
     }
 
@@ -3430,14 +3502,14 @@ mod tests {
     /// nobody there is only one voice and the tag would name the only person it could be, while a
     /// paired phone makes "who said this" a real question about every message in the transcript.
     #[test]
-    fn tag_sender_names_this_machine_only_once_somebody_else_can_reach_it() {
+    fn sender_marker_names_this_machine_only_once_somebody_else_can_reach_it() {
         let store = scratch("tag-sender-local");
-        assert_eq!(tag_sender(&store, "go", None), "go", "paired with nobody");
+        assert_eq!(sender_marker(&store, None), None, "paired with nobody");
 
         // Paired, but granted nothing: `NodeRecord::allows` is default-deny, so this peer cannot
         // reach the panel and cannot be a second voice in a conversation.
         pair_with(&store, "laptop-b", &[]);
-        assert_eq!(tag_sender(&store, "go", None), "go", "no grant on the panel");
+        assert_eq!(sender_marker(&store, None), None, "no grant on the panel");
 
         adi_mesh::node::NodeConfig {
             nickname: "studio".to_string(),
@@ -3446,10 +3518,25 @@ mod tests {
         .expect("name this machine");
         pair_with(&store, "laptop-b", &["http:app"]);
         assert_eq!(
-            tag_sender(&store, "go", None),
-            "[from: studio] go",
+            sender_marker(&store, None),
+            Some(Marker::From {
+                node: "studio".to_string(),
+                user: String::new(),
+            }),
             "a peer holds http:app, so who is talking is now a question"
         );
+    }
+
+    /// A rail row is named by what was *asked*, never by who asked it — including for the sessions
+    /// recorded while the sender was still being written into the words.
+    #[test]
+    fn a_listing_names_the_task_and_not_the_sender() {
+        assert_eq!(
+            title_of("[from: igors-macbook-pro] pooong"),
+            "pooong",
+            "a session opened before markers were data"
+        );
+        assert_eq!(title_of("pooong"), "pooong", "and one opened since");
     }
 
     /// The node's standing instructions come off this machine's own `fleet.toml`, found by the

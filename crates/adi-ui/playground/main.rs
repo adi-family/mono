@@ -1169,6 +1169,7 @@ fn ChatDemo() -> impl IntoView {
             body: "Walk the linear board and tell me what is actually blocked.".into(),
             images: Vec::new(),
             from: Some("hetzner".into()),
+            by: None,
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1191,6 +1192,7 @@ The first two                    are the same bug. I will read the pairing path 
                 .into(),
             images: Vec::new(),
             from: None,
+            by: None,
         },
         Turn::Did(vec![
             ToolCall::new("Grep")
@@ -1209,11 +1211,14 @@ The first two                    are the same bug. I will read the pairing path 
                 .param("description", "Run the whole mesh suite")
                 .state(ToolState::Unanswered),
         ]),
+        // …and the other half of the rule: a message the platform stamped a *sender* on, which is
+        // never "You" — this one was typed on a paired phone and arrived over the mesh.
         Turn::Said {
             role: Role::User,
             body: "Stopped that — just the pairing tests.".into(),
             images: Vec::new(),
             from: Some("hetzner".into()),
+            by: Some("phone/igor".into()),
         },
         Turn::Did(vec![
             ToolCall::new("Bash")

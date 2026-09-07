@@ -26,6 +26,7 @@
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
+use crate::marker::Marker;
 
 use super::attachments::Attachment;
 use super::db::sql_err;
@@ -40,6 +41,10 @@ use super::db::sql_err;
 pub struct QueuedMessage {
     pub text: String,
     pub images: Vec<Attachment>,
+    /// What the platform stamped on it, waiting here with the words for the same reason the images
+    /// do: a message queued behind an answer is asked minutes later, and by then nothing else
+    /// remembers that a peer sent it.
+    pub markers: Vec<Marker>,
 }
 
 impl QueuedMessage {
@@ -49,6 +54,7 @@ impl QueuedMessage {
         Self {
             text: text.into(),
             images: Vec::new(),
+            markers: Vec::new(),
         }
     }
 }
@@ -67,6 +73,7 @@ pub(super) fn enqueue(
     id: &str,
     message: &str,
     images: &[Attachment],
+    markers: &[Marker],
 ) -> Result<usize> {
     let tx = conn
         .unchecked_transaction()
@@ -79,8 +86,16 @@ pub(super) fn enqueue(
         )
         .map_err(|e| sql_err("queue a message in", e))?;
     tx.execute(
-        "INSERT INTO queue (agent, session, seq, message, images) VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![agent, id, seq, message, encode(images)],
+        "INSERT INTO queue (agent, session, seq, message, images, marker)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            agent,
+            id,
+            seq,
+            message,
+            encode(images),
+            encode_markers(markers)
+        ],
     )
     .map_err(|e| sql_err("queue a message in", e))?;
     let place: i64 = tx
@@ -137,12 +152,9 @@ pub(super) fn take_as_turn(
     let Some(message) = take_head(&tx, agent, id)? else {
         return Ok(None);
     };
-    super::transcript::insert(
-        &tx,
-        agent,
-        id,
-        super::transcript::user_turn_with(&message.text, message.images.clone()),
-    )?;
+    let mut turn = super::transcript::user_turn_with(&message.text, message.images.clone());
+    turn.markers.clone_from(&message.markers);
+    super::transcript::insert(&tx, agent, id, turn)?;
     tx.commit()
         .map_err(|e| sql_err("take from the queue of", e))?;
     Ok(Some(message))
@@ -151,16 +163,16 @@ pub(super) fn take_as_turn(
 /// Remove the oldest message and hand it back, inside a transaction the caller owns and commits —
 /// what both ways of taking one are built from. `None` when the line is empty.
 fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
-    let head: Option<(i64, String, Option<String>)> = tx
+    let head: Option<(i64, String, Option<String>, Option<String>)> = tx
         .query_row(
-            "SELECT seq, message, images FROM queue WHERE agent = ?1 AND session = ?2
+            "SELECT seq, message, images, marker FROM queue WHERE agent = ?1 AND session = ?2
              ORDER BY seq LIMIT 1",
             [agent, id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some((seq, text, images)) = head else {
+    let Some((seq, text, images, marker)) = head else {
         return Ok(None);
     };
     tx.execute(
@@ -171,6 +183,7 @@ fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMess
     Ok(Some(QueuedMessage {
         text,
         images: decode(images.as_deref()),
+        markers: decode_markers(marker.as_deref()),
     }))
 }
 
@@ -188,7 +201,7 @@ pub(super) fn len(conn: &Connection, agent: &str, id: &str) -> usize {
 /// The messages waiting their turn, oldest first.
 pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<QueuedMessage> {
     let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT message, images FROM queue WHERE agent = ?1 AND session = ?2 ORDER BY seq",
+        "SELECT message, images, marker FROM queue WHERE agent = ?1 AND session = ?2 ORDER BY seq",
     ) else {
         return Vec::new();
     };
@@ -196,6 +209,7 @@ pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<QueuedMessag
         Ok(QueuedMessage {
             text: row.get(0)?,
             images: decode(row.get::<_, Option<String>>(1)?.as_deref()),
+            markers: decode_markers(row.get::<_, Option<String>>(2)?.as_deref()),
         })
     })
     .map(|rows| rows.flatten().collect())
@@ -211,6 +225,19 @@ fn encode(images: &[Attachment]) -> Option<String> {
 /// The attachments column, as it is read. Unparseable is the same as absent: the queue's job is to
 /// deliver the message, and a row whose images cannot be decoded still has words worth asking.
 fn decode(json: Option<&str>) -> Vec<Attachment> {
+    json.and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+/// The marker column, as it is written. `NULL` for the messages nobody stamped, which is most of
+/// them — and all of them on a machine paired with nobody.
+fn encode_markers(markers: &[Marker]) -> Option<String> {
+    (!markers.is_empty()).then(|| serde_json::to_string(markers).unwrap_or_default())
+}
+
+/// The marker column, as it is read. Unparseable reads as unstamped, on the same rule the images
+/// keep: a row whose marker cannot be decoded still has words worth asking.
+fn decode_markers(json: Option<&str>) -> Vec<Marker> {
     json.and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default()
 }

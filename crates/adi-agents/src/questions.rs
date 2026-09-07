@@ -68,7 +68,12 @@ pub fn tick(agents: &Agents) -> Vec<Settled> {
             // reporting it as a settlement would be a lie, so it is left overdue and visible.
             Err(_) => continue,
         }
-        let sent = agents.deliver(&ask.agent, &ask.conv, &ask.render(&default));
+        let sent = agents.deliver(
+            &ask.agent,
+            &ask.conv,
+            &[ask.marker(&default)],
+            &ask.render(&default),
+        );
         agents.emit_answered(&ask, AnsweredBy::Default);
         settled.push(Settled {
             id: ask.id.clone(),

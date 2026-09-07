@@ -73,6 +73,14 @@ pub struct LaunchOptions<'a> {
     /// instructions must not reach back into a conversation already running under the old ones.
     /// `None` is the ordinary launch — every one not driven by another node over the mesh.
     pub owner_instructions: Option<&'a str>,
+    /// What the platform stamps on the opening message — in practice
+    /// [`Marker::From`](crate::Marker::From), when this machine has more than one voice and the
+    /// conversation has to say which one opened it.
+    ///
+    /// Recorded on the opening turn and rendered into the text the engine reads; see
+    /// [`crate::marker`] for why those are two different things. Empty is every launch nobody
+    /// needed to attribute.
+    pub markers: &'a [crate::marker::Marker],
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent
@@ -169,6 +177,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         })
         .is_ok()
 }
@@ -296,7 +305,8 @@ mod tests {
                 tool_help: None,
                 system_prompt: None,
                 workspace_note: None,
-            knowledge_note: None,
+                knowledge_note: None,
+                marker_note: None,
             }),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));

@@ -1665,6 +1665,74 @@ pub struct AgentTurn {
     /// The assistant turn's telemetry (tokens / cost / duration), when the engine reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<AgentTurnMetrics>,
+    /// What the platform stamped on this message: who sent it, and which wake, answer or nudge it
+    /// *is*. Empty for an ordinary message typed at this machine, and for every assistant turn.
+    ///
+    /// The client never parses this out of [`text`](Self::text) — the server reads it off the turn,
+    /// or, for a turn recorded before markers were data, out of the words it was written into. So a
+    /// reader gets one shape whichever it is, and `text` is always the message itself.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<TurnMarker>,
+}
+
+/// One thing the platform stamped on a message — the wire twin of `adi_agents::Marker`, whose
+/// module explains what each kind means and why they exist at all.
+///
+/// Its own type rather than the store's because this crate is compiled to wasm without the store:
+/// the page cannot depend on `adi-agents`, which links SQLite. The JSON is identical, so the two
+/// stay one contract as long as this file and that module agree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TurnMarker {
+    /// Who said the words after it, on a machine more than one voice can reach. `user` is empty for
+    /// a node that authenticated as no particular credential.
+    From {
+        node: String,
+        #[serde(default)]
+        user: String,
+    },
+    /// An await this conversation registered has fired, come due, or expired.
+    AwaitWoken {
+        id: String,
+        /// `event`, `timer` or `expired`.
+        cause: String,
+        #[serde(default)]
+        event: String,
+        #[serde(default)]
+        check: bool,
+    },
+    /// A question this conversation asked has been settled — `by` is `person` or `default`.
+    AskAnswered { id: String, by: String },
+    /// A quiet conversation being asked whether its open goals are met.
+    GoalCheck {
+        #[serde(default)]
+        open: usize,
+    },
+    /// Commands were run before the message reached the model.
+    PreRun {
+        #[serde(default)]
+        ran: usize,
+        #[serde(default)]
+        dropped: usize,
+    },
+    /// A kind this build has no variant for. A newer server may stamp a marker this page has never
+    /// heard of, and a transcript that fails to deserialize over one unknown tag would be a blank
+    /// chat — so it reads as "something, but not one I can draw".
+    #[serde(other)]
+    Unknown,
+}
+
+impl TurnMarker {
+    /// Who sent the message, `<node>/<user>` or just `<node>` — `None` for every marker that is not
+    /// a sender. What a reader shows beside a bubble instead of the conversation's own machine.
+    #[must_use]
+    pub fn sender(&self) -> Option<String> {
+        match self {
+            Self::From { node, user } if user.is_empty() => Some(node.clone()),
+            Self::From { node, user } => Some(format!("{node}/{user}")),
+            _ => None,
+        }
+    }
 }
 
 /// A tool step's lifecycle status. `unanswered` is a call the run ended on top of — it went out and

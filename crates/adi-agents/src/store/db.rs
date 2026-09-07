@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS queue (
     seq     INTEGER NOT NULL,
     message TEXT    NOT NULL,
     images  TEXT,
+    marker  TEXT,
     PRIMARY KEY (agent, session, seq),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
@@ -182,6 +183,10 @@ const MIGRATIONS: &[&str] = &[
     // A reader's own name for a session, replacing the title `message` would otherwise derive. NULL
     // for every session ever opened until somebody renames it. See `SessionRecord::title`.
     "ALTER TABLE sessions ADD COLUMN title TEXT",
+    // What the platform stamped on a queued message — who sent it, most often. JSON, and NULL for
+    // every message ever queued before this existed. A turn needs no such column: it is stored as
+    // one JSON blob, so its `marker` field simply reads back absent. See `crate::marker`.
+    "ALTER TABLE queue ADD COLUMN marker TEXT",
 ];
 
 // One connection per thread per database.

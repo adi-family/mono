@@ -74,6 +74,7 @@ use serde_json::Value;
 use crate::Agents;
 use crate::backends::harness::tools::wait_with_timeout;
 use crate::error::{Error, Result};
+use crate::marker::{Marker, Woke};
 
 /// The store module awaits live under, and each record's extension.
 const MODULE: &str = "awaits";
@@ -829,7 +830,7 @@ fn wake(
     // platform speaking. Sent through `reply` it would answer the run's own question with this
     // wake note — leaving the person it was actually asked of with nothing to answer.
     let error = agents
-        .deliver(&a.agent, &a.conv, &message)
+        .deliver(&a.agent, &a.conv, &[wake_marker(a, cause)], &message)
         .err()
         .map(|e| e.to_string());
     Some(Woken {
@@ -841,31 +842,53 @@ fn wake(
     })
 }
 
+/// What the wake is, as data: the tag that goes in front of the message below.
+///
+/// The facts the old sentence carried in prose — which await, what woke it, whether a check ran —
+/// with the sentence left to say them again in words. See [`crate::marker`] for why both.
+fn wake_marker(a: &Await, cause: Cause<'_>) -> Marker {
+    Marker::AwaitWoken {
+        id: a.id.clone(),
+        cause: match cause {
+            Cause::Event { .. } => Woke::Event,
+            Cause::Timer => Woke::Timer,
+            Cause::Expired => Woke::Expired,
+        },
+        event: match cause {
+            Cause::Event { name, .. } => name.to_string(),
+            _ => String::new(),
+        },
+        // An await with a check only ever wakes when the check passed, so this says there *was*
+        // one — never that it failed, which is a wake that does not happen.
+        check: a.check.is_some(),
+    }
+}
+
 /// The user turn a wake delivers. Written to be read by the model that asked for it: what woke it,
 /// what it told itself, and everything the wake carried — because the turn it wrote this in is long
 /// over and this message is all the run gets.
+///
+/// The tag in front of it is [`wake_marker`]'s; this is the prose behind it.
 fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> String {
     let mut text = String::new();
-    let id = &a.id;
     let checked = a.check.is_some();
     match cause {
         Cause::Event { name, .. } if checked => {
-            let _ = writeln!(text, "[await {id} — {name} fired and your check passed]");
+            let _ = writeln!(text, "{name} fired, and your check passed.");
         }
         Cause::Event { name, .. } => {
-            let _ = writeln!(text, "[await {id} — woken by {name}]");
+            let _ = writeln!(text, "Woken by {name}.");
         }
         Cause::Timer if checked => {
-            let _ = writeln!(text, "[await {id} — your check passed]");
+            let _ = writeln!(text, "Your check passed.");
         }
         Cause::Timer => {
-            let _ = writeln!(text, "[await {id} — the time you asked for]");
+            let _ = writeln!(text, "The time you asked for.");
         }
         Cause::Expired => {
             let _ = writeln!(
                 text,
-                "[await {id} — expired without ever firing; nothing you were waiting for happened \
-                 in time]"
+                "It expired without ever firing; nothing you were waiting for happened in time."
             );
         }
     }
@@ -1511,8 +1534,24 @@ mod tests {
             Some("build green"),
         );
         assert!(
-            text.contains("adi.tasks.created fired and your check passed"),
+            text.contains("adi.tasks.created fired, and your check passed"),
             "{text}"
+        );
+        assert_eq!(
+            wake_marker(
+                &a,
+                Cause::Event {
+                    name: "adi.tasks.created",
+                    payload: r#"{"id":"t1"}"#,
+                },
+            ),
+            Marker::AwaitWoken {
+                id: "w-42".into(),
+                cause: Woke::Event,
+                event: "adi.tasks.created".into(),
+                check: true,
+            },
+            "and the tag says the same in fields"
         );
         assert!(text.contains("check whether the deploy landed"), "{text}");
         assert!(text.contains(r#"{"id":"t1"}"#), "{text}");
@@ -1526,15 +1565,25 @@ mod tests {
         assert!(expired.contains("expired"), "{expired}");
 
         let polled = wake_message(&a, Cause::Timer, Some("build green"));
-        assert!(polled.contains("your check passed"), "{polled}");
-        assert!(!polled.contains("the time you asked for"), "{polled}");
+        assert!(polled.contains("Your check passed"), "{polled}");
+        assert!(!polled.contains("The time you asked for"), "{polled}");
         let bare = Await {
             check: None,
             ..a.clone()
         };
         assert!(
-            wake_message(&bare, Cause::Timer, None).contains("the time you asked for"),
+            wake_message(&bare, Cause::Timer, None).contains("The time you asked for"),
             "a checkless timer is the clock and nothing else"
+        );
+        assert_eq!(
+            wake_marker(&bare, Cause::Timer),
+            Marker::AwaitWoken {
+                id: "w-42".into(),
+                cause: Woke::Timer,
+                event: String::new(),
+                check: false,
+            },
+            "and its tag carries no check it never had"
         );
     }
 

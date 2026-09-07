@@ -33,7 +33,10 @@ use super::RunSpec;
 pub fn compose(spec: &RunSpec, stored: Option<String>) -> Option<String> {
     with_tool_help(
         spec,
-        with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))),
+        with_markers(
+            spec,
+            with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))),
+        ),
     )
 }
 
@@ -146,6 +149,15 @@ pub(super) fn with_knowledge(spec: &RunSpec, existing: Option<String>) -> Option
     behind(existing, spec.knowledge_note.as_deref())
 }
 
+/// `existing` with the platform's own message tags behind it, or `existing` unchanged when the
+/// caller had nothing to say about them.
+///
+/// After the knowledge section and before the tools, where it reads as what it is: a fact about the
+/// conversation this run is having, rather than about the machine or the equipment.
+pub(super) fn with_markers(spec: &RunSpec, existing: Option<String>) -> Option<String> {
+    behind(existing, spec.marker_note.as_deref())
+}
+
 /// `existing` with the run's tool help behind it, or `existing` unchanged when there are no tools.
 ///
 /// Appended, never substituted: whatever the agent was told to be survives, with the inventory
@@ -192,6 +204,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         }
     }
 

@@ -47,6 +47,7 @@ use crate::error::Result;
 use crate::events::{
     AgentGoalClosed, AgentGoalNudged, AgentGoalSet, GOAL_GIVEN_UP, GOAL_MET, GOAL_NUDGED, GOAL_SET,
 };
+use crate::marker::Marker;
 use crate::runner::runner_of;
 use crate::store::{Goal, GoalClosed, GoalState, SetBy, now_ms};
 use crate::{Agents, answerable};
@@ -104,7 +105,12 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
             continue;
         }
         let error = agents
-            .deliver(&agent, &conv, &nudge_message(&goals))
+            .deliver(
+                &agent,
+                &conv,
+                &[Marker::GoalCheck { open: goals.len() }],
+                &nudge_message(&goals),
+            )
             .err()
             .map(|e| e.to_string());
         agents.emit(
@@ -183,7 +189,7 @@ fn quiet(
     awaits.for_conversation(agent, conv).is_empty()
 }
 
-/// The user turn a nudge delivers.
+/// The user turn a nudge delivers, behind its `<goal-check/>` tag.
 ///
 /// Written to be read by a model replaying a long transcript, so it repeats the goal in full rather
 /// than referring to it: the turn that set it may be hundreds of messages back, or may have been a
@@ -194,7 +200,7 @@ fn quiet(
 /// a paragraph about having closed it. With several there is no single id to substitute, so the
 /// placeholder stands and the ids are listed directly above it.
 fn nudge_message(goals: &[Goal]) -> String {
-    let mut text = String::from("[goal check]\n\n");
+    let mut text = String::new();
     let plural = if goals.len() == 1 { "" } else { "s" };
     let _ = writeln!(
         text,
@@ -447,7 +453,7 @@ mod tests {
         let queued = quiet_conversation(&agents, "queued");
         create(&agents, "queued", &queued, "finish", SetBy::Human).expect("create");
         store
-            .enqueue("queued", &queued, "one more thing", &[])
+            .enqueue("queued", &queued, "one more thing", &[], &[])
             .expect("enqueue");
 
         let asking = quiet_conversation(&agents, "asking");

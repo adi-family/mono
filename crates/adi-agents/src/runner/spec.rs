@@ -68,4 +68,12 @@ pub struct RunSpec {
     /// script the agent writes, but an agent that is never *told* it has a memory does not use
     /// one.
     pub knowledge_note: Option<String>,
+    /// What the tags the platform stamps onto messages mean, stated in prose for the prompt — see
+    /// [`crate::marker`].
+    ///
+    /// Travels beside [`knowledge_note`](Self::knowledge_note), and folded in by the runner for the
+    /// same reason. It exists for the same reason too: a marker a model has never been told about
+    /// is one it has to infer from an English word, and the one it infers wrongest is the one that
+    /// says a message came from somebody other than the person it has been talking to.
+    pub marker_note: Option<String>,
 }

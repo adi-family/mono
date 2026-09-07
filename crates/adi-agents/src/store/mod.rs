@@ -651,9 +651,10 @@ impl SessionStore {
         id: &str,
         message: &str,
         images: &[Attachment],
+        markers: &[crate::marker::Marker],
     ) -> Result<usize> {
         let conn = self.conn()?;
-        queue::enqueue(&conn, agent, id, message, images)
+        queue::enqueue(&conn, agent, id, message, images, markers)
     }
 
     /// Take the head of the queue, or `None` when nothing is waiting. The removal is committed
@@ -1391,7 +1392,7 @@ mod tests {
         std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
         std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
         store
-            .enqueue("talker", &id, "waiting", &[])
+            .enqueue("talker", &id, "waiting", &[], &[])
             .expect("enqueue");
         store.set_hidden("talker", &id, true).expect("hide");
         store
@@ -1441,7 +1442,7 @@ mod tests {
                 .expect("append");
         }
         store
-            .enqueue("chat", &doomed.id, "waiting", &[])
+            .enqueue("chat", &doomed.id, "waiting", &[], &[])
             .expect("enqueue");
 
         assert!(store.delete("chat", &doomed.id).expect("delete"));
@@ -1529,16 +1530,20 @@ mod tests {
         assert!(store.dequeue("chat", &a.id).expect("dequeue").is_none());
 
         assert_eq!(
-            store.enqueue("chat", &a.id, "one", &[]).expect("enqueue"),
+            store
+                .enqueue("chat", &a.id, "one", &[], &[])
+                .expect("enqueue"),
             1
         );
         assert_eq!(
-            store.enqueue("chat", &a.id, "two", &[]).expect("enqueue"),
+            store
+                .enqueue("chat", &a.id, "two", &[], &[])
+                .expect("enqueue"),
             2
         );
         assert_eq!(
             store
-                .enqueue("chat", &b.id, "elsewhere", &[])
+                .enqueue("chat", &b.id, "elsewhere", &[], &[])
                 .expect("enqueue"),
             1
         );
@@ -1561,7 +1566,9 @@ mod tests {
         assert_eq!(texts(store.queued("chat", &a.id)), ["two"]);
 
         assert_eq!(
-            store.enqueue("chat", &a.id, "three", &[]).expect("enqueue"),
+            store
+                .enqueue("chat", &a.id, "three", &[], &[])
+                .expect("enqueue"),
             2
         );
         assert!(store.unqueue("chat", &a.id, 0).expect("unqueue"));
@@ -1602,10 +1609,10 @@ mod tests {
         );
 
         store
-            .enqueue("chat", id, "also handle CRLF", &[])
+            .enqueue("chat", id, "also handle CRLF", &[], &[])
             .expect("enqueue");
         store
-            .enqueue("chat", id, "and add a test", &[])
+            .enqueue("chat", id, "and add a test", &[], &[])
             .expect("enqueue");
         assert_eq!(
             store
@@ -1663,10 +1670,10 @@ mod tests {
             metrics: None,
         };
         store
-            .enqueue("chat", id, "and restart it", &[])
+            .enqueue("chat", id, "and restart it", &[], &[])
             .expect("enqueue");
         store
-            .enqueue("chat", id, "then tell me", &[])
+            .enqueue("chat", id, "then tell me", &[], &[])
             .expect("enqueue");
 
         let view = store.transcript("chat", id, Some(live.clone()), true);
@@ -1731,10 +1738,10 @@ mod tests {
             "no queues anywhere is the common answer, and it costs one query",
         );
         store
-            .enqueue("chat", &busy.id, "one", &[])
+            .enqueue("chat", &busy.id, "one", &[], &[])
             .expect("enqueue");
         store
-            .enqueue("chat", &busy.id, "two", &[])
+            .enqueue("chat", &busy.id, "two", &[], &[])
             .expect("enqueue");
         assert_eq!(
             store.sessions_with_queue("chat"),

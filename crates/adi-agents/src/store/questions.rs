@@ -37,6 +37,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::marker::{Marker, Settled};
 
 use super::db::{now_ms, sql_err};
 
@@ -165,15 +166,26 @@ impl Ask {
     /// for a reason that is easy to miss: the reply lands in a transcript the model replays from
     /// the top, and "Postgres" on its own is an answer to whichever question the model *believes*
     /// it asked. Pairing them makes the transcript answer that for it.
+    /// What settling this ask is, as data: the tag that goes in front of either rendering below.
+    #[must_use]
+    pub fn marker(&self, answer: &Answer) -> Marker {
+        Marker::AskAnswered {
+            id: self.id.clone(),
+            by: match answer.by {
+                AnsweredBy::Default => Settled::Default,
+                AnsweredBy::Human => Settled::Person,
+            },
+        }
+    }
+
     #[must_use]
     pub fn render(&self, answer: &Answer) -> String {
         use std::fmt::Write as _;
 
-        let mut text = format!("[ask {} — answered", self.id);
+        let mut text = String::new();
         if answer.by == AnsweredBy::Default {
-            text.push_str(" by default, because nobody answered in time");
+            text.push_str("Nobody answered in time, so the defaults were taken.\n");
         }
-        text.push_str("]\n");
         for (index, question) in self.questions.iter().enumerate() {
             let reply = answer
                 .replies
@@ -195,16 +207,6 @@ impl Ask {
              deciding.",
         );
         text
-    }
-
-    /// The user turn a *typed* answer is delivered as: the marker, then what they wrote, verbatim.
-    ///
-    /// Nobody made this person fill the card in, so nothing here pretends they did. Prose written
-    /// at three questions is not three answers, and splitting it across three slots would put words
-    /// in their mouth — the marker says which ask is closed and the rest is theirs.
-    #[must_use]
-    pub fn render_reply(&self, text: &str) -> String {
-        format!("[ask {} — answered]\n\n{text}", self.id)
     }
 
     /// The answer to fall back on when the deadline passes, or `None` if there is nothing to fall
@@ -817,13 +819,22 @@ mod tests {
             "a question left blank says so rather than vanishing: {text}"
         );
 
-        let by_default = ask.render(&Answer {
+        let taken = Answer {
             by: AnsweredBy::Default,
             ..human(&["Postgres", "eu-west"])
-        });
+        };
+        let by_default = ask.render(&taken);
         assert!(
-            by_default.contains("nobody answered in time"),
+            by_default.contains("Nobody answered in time"),
             "a default says it is one — it is read differently: {by_default}"
+        );
+        assert_eq!(
+            ask.marker(&taken),
+            Marker::AskAnswered {
+                id: ask.id.clone(),
+                by: Settled::Default,
+            },
+            "and its tag says so in a field"
         );
 
         let _ = std::fs::remove_dir_all(store.dir());

@@ -311,6 +311,7 @@ pub enum Turn {
         body: String,
         images: Vec<Attachment>,
         from: Option<String>,
+        by: Option<String>,
     },
     Did(Vec<ToolCall>),
 }

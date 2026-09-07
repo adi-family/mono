@@ -31,6 +31,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::marker::Marker;
 use crate::progress::{Step, TurnContent, TurnMetrics, close_open_calls};
 
 use super::attachments::Attachment;
@@ -69,6 +70,17 @@ pub struct Turn {
     /// The assistant turn's telemetry (tokens / cost / duration), when the engine reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<TurnMetrics>,
+    /// What the platform stamped on this message — who sent it, and which wake, answer or nudge it
+    /// *is*. Only ever on a user turn, and more than one when more than one is true of it.
+    ///
+    /// Data rather than words in [`text`](Self::text), on the same rule as the images and the
+    /// pre-run steps beside it: the transcript keeps the message a person actually wrote, and
+    /// [`marker::stamp`](crate::marker::stamp) puts the tags back on the way to the engine. Empty
+    /// on every turn nobody stamped — and on every turn recorded before this field existed, whose
+    /// markers are still in its text and are read back out of it by
+    /// [`marker::split`](crate::marker::split).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
 }
 
 /// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a
@@ -106,6 +118,7 @@ pub fn user_turn_with(text: impl Into<String>, images: Vec<Attachment>) -> Turn 
         images,
         steps: Vec::new(),
         metrics: None,
+        markers: Vec::new(),
     }
 }
 
@@ -124,6 +137,9 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         images: Vec::new(),
         steps: content.steps.clone(),
         metrics: content.metrics.clone(),
+        // Nothing stamps an answer: a marker says who put a message *into* the conversation, and
+        // the engine is not one of the things that can.
+        markers: Vec::new(),
     }
 }
 
@@ -271,6 +287,7 @@ pub(super) fn view(
             images: Vec::new(),
             steps,
             metrics: content.metrics,
+            markers: Vec::new(),
         });
     }
     turns.extend(queued.into_iter().map(|message| Turn {
@@ -282,6 +299,9 @@ pub(super) fn view(
         images: message.images,
         steps: Vec::new(),
         metrics: None,
+        // Carried onto the synthesized turn so a queued message reads as what it is before it is
+        // ever asked: the chat draws its bubble from this, minutes before the turn exists.
+        markers: message.markers,
     }));
     turns
 }

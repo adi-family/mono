@@ -216,6 +216,9 @@ pub enum Turn {
         /// Which machine the conversation this was said in runs on. `None` says nothing, which
         /// is the right answer whenever there is only one machine to be on.
         from: Option<String>,
+        /// Who said it, when the platform stamped a name on the message itself. Wins over
+        /// [`from`](Self::Said::from) — see the `by` prop on [`Said`].
+        by: Option<String>,
     },
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
@@ -357,7 +360,8 @@ fn entry(entry: Entry) -> AnyView {
             body,
             images,
             from,
-        } => view! { <Said id=key role=role body=body images=images from=from/> }.into_any(),
+            by,
+        } => view! { <Said id=key role=role body=body images=images from=from by=by/> }.into_any(),
         Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
     }
 }
@@ -396,6 +400,15 @@ fn Said(
     // Option off the setter, so the only way to pass one through would be to unwrap it first.
     #[prop(optional_no_strip)]
     from: Option<String>,
+    /// Who said it, when that is known rather than assumed — the sender the platform stamped on the
+    /// message (`adi_agents::marker`), which a fleet peer's message carries and yours does not.
+    ///
+    /// It **replaces** the line [`from`] would have drawn rather than joining it, because the two
+    /// answer the same question and this one answers it better: `from` can only say which machine
+    /// the conversation is on, and prefixes "You" because on one machine that is a safe assumption.
+    /// A stamped name is exactly the case where it is not — the message may be somebody else's.
+    #[prop(optional_no_strip)]
+    by: Option<String>,
 ) -> impl IntoView {
     let own = match role {
         // Your own words are on the raised surface so a stretch of work can be scanned for
@@ -406,9 +419,11 @@ fn Said(
     // Your own words did not come *from* the far machine — you typed them here and they were
     // carried there — so yours reads as the sessions rail reads a row: you, then the source you
     // are acting on. The agent's answer really was produced there, and needs no such hedge.
-    let source = from.map(|from| match role {
-        Role::User => format!("You \u{b7} {from}"),
-        Role::Agent => from,
+    let source = by.or_else(|| {
+        from.map(|from| match role {
+            Role::User => format!("You \u{b7} {from}"),
+            Role::Agent => from,
+        })
     });
     let said = !body.trim().is_empty();
     view! {
@@ -527,11 +542,17 @@ pub fn Queued(
     // Option off the setter, so the only way to pass one through would be to unwrap it first.
     #[prop(optional_no_strip)]
     from: Option<String>,
+    /// Who queued it, when the platform stamped a name on the message — a peer's typed message
+    /// waits in the same line as yours, and "You" would be the wrong word for it. Replaces the
+    /// machine above for the reason the `by` prop on [`Said`] gives.
+    #[prop(optional_no_strip)]
+    by: Option<String>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
-    let head = match from {
-        Some(from) => format!("You \u{b7} queued \u{b7} {from}"),
-        None => "You \u{b7} queued".to_string(),
+    let head = match (by, from) {
+        (Some(by), _) => format!("{by} \u{b7} queued"),
+        (None, Some(from)) => format!("You \u{b7} queued \u{b7} {from}"),
+        (None, None) => "You \u{b7} queued".to_string(),
     };
     view! {
         <div class=merge(

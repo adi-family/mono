@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-103 structs · 24 enums · 5 type aliases across 43 files.
+103 structs · 27 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -29,6 +29,7 @@
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
+- [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
 - [`src/prelude.rs`](#srcpreluders) — `Ran`
@@ -1329,6 +1330,73 @@ pub struct RunLoad {
 
 ---
 
+## `src/marker.rs`
+
+### enum `Woke`
+
+Why an await woke its conversation.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Woke {
+    Event,
+    Timer,
+    Expired,
+}
+```
+
+### enum `Settled`
+
+Who settled an ask.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Settled {
+    Person,
+    Default,
+}
+```
+
+### enum `Marker`
+
+What the platform stamped onto one message, and why.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum Marker {
+    From {
+        node: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        user: String,
+    },
+    AwaitWoken {
+        id: String,
+        cause: Woke,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        event: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        check: bool,
+    },
+    AskAnswered {
+        id: String,
+        by: Settled,
+    },
+    GoalCheck {
+        open: usize,
+    },
+    PreRun {
+        ran: usize,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        dropped: usize,
+    },
+}
+```
+
+---
+
 ## `src/memo.rs`
 
 ### struct `Stamp`
@@ -1650,6 +1718,7 @@ pub struct LaunchOptions<'a> {
     pub launched_by: Option<&'a str>,
     pub overrides: Option<&'a crate::RunOverrides>,
     pub owner_instructions: Option<&'a str>,
+    pub markers: &'a [crate::marker::Marker],
 }
 ```
 
@@ -1937,6 +2006,7 @@ pub struct RunSpec {
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
     pub knowledge_note: Option<String>,
+    pub marker_note: Option<String>,
 }
 ```
 
@@ -2152,6 +2222,7 @@ A message waiting its turn: what was typed, and whatever was attached to it.
 pub struct QueuedMessage {
     pub text: String,
     pub images: Vec<Attachment>,
+    pub markers: Vec<Marker>,
 }
 ```
 
@@ -2277,6 +2348,8 @@ pub struct Turn {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<TurnMetrics>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
 }
 ```
 

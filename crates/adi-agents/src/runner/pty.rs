@@ -20,7 +20,9 @@ use crate::backend::Backend;
 use crate::backends::pty;
 use crate::error::{Error, Result};
 use crate::runner::detached::decode;
-use crate::runner::prompt::{own_prompt, with_knowledge, with_tool_help, with_workspace};
+use crate::runner::prompt::{
+    own_prompt, with_knowledge, with_markers, with_tool_help, with_workspace,
+};
 use crate::runner::{
     EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, Stopped, Terminal,
 };
@@ -56,7 +58,10 @@ impl PtyRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt = with_tool_help(
                     spec,
-                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    with_markers(
+                        spec,
+                        with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                    ),
                 );
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(pty::claude::argv(
@@ -323,6 +328,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            marker_note: None,
         }
     }
 
