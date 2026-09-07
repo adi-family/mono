@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-33 structs · 34 enums across 29 files.
+34 structs · 35 enums across 29 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `AttachKind`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`, `DotTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Attachment`, `AttachmentKind`, `Turn`, `Entry`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Attachment`, `AttachmentKind`, `Turn`, `Word`, `Note`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faces.rs`](#srcfacesrs) — `FaceRing`, `Face`
 - [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
@@ -314,6 +314,33 @@ pub enum Turn {
         by: Option<String>,
     },
     Did(Vec<ToolCall>),
+    Noted(Note),
+}
+```
+
+### enum `Word`
+
+One run of a `Note`'s header: human words, or a machine string.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Word {
+    Text(String),
+    Code(String),
+}
+```
+
+### struct `Note`
+
+Something the platform said into a conversation: an await firing, an ask settling, a goal going unanswered.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    pub icon: Lucide,
+    pub head: Vec<Word>,
+    pub id: Option<String>,
+    pub body: String,
 }
 ```
 

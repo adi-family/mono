@@ -224,6 +224,48 @@ pub enum Turn {
     /// the agent did between one thing it said and the next folds into a single run, which
     /// is exactly the unit you want to open or ignore.
     Did(Vec<ToolCall>),
+    /// Something the **platform** put into the conversation rather than either speaker — a
+    /// wake, a settled question, a nudge. See [`Note`].
+    Noted(Note),
+}
+
+/// One run of a [`Note`]'s header: human words, or a machine string.
+///
+/// Split so the header can obey the mono rule (`design/DESIGN.md` §3) mid-sentence: an event
+/// name is a string a machine produced and gets Geist Mono, while the words around it are
+/// prose and do not. Each run is its own flex item, so nothing has to carry its own spaces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Word {
+    /// Prose — sans, in the header's own colour.
+    Text(String),
+    /// A path, an id, an event name: mono, `--code`.
+    Code(String),
+}
+
+/// Something the platform said into a conversation: an [await](https://docs.rs/) firing, an
+/// ask settling, a goal going unanswered.
+///
+/// **A third speaker.** The transcript has had two — you, on the raised surface, and the agent,
+/// as plain paragraphs — and these are neither. Drawn as neither: the [`Ask`](crate::Ask) block's
+/// shape (a 2px left rule and 18px of padding, §6), a 12px `--ink-3` header, and the body a
+/// step quieter than the agent's words. It is narration about the conversation, so it reads
+/// below the things being narrated.
+///
+/// The header is where the facts go — which await, what woke it, whether a check ran — because
+/// they arrive as data (`adi_agents::marker`) and a header is where a reader looks for "what is
+/// this block". The body is whatever prose came with it, unedited.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Note {
+    /// The kind, at a glance. Paired with the words beside it, never alone (§9).
+    pub icon: Lucide,
+    /// The header line: what happened, in sentence case.
+    pub head: Vec<Word>,
+    /// The id this thing is addressed by — `a7f3` for an await, the ask's id. Set in mono at
+    /// the far right, out of the sentence's way, because it is what you would type to look the
+    /// thing up and not what you read the line for. `None` when there is nothing to name.
+    pub id: Option<String>,
+    /// Markdown, the same as anything else said. Empty draws no body at all.
+    pub body: String,
 }
 
 /// A turn with the identity that keeps it still.
@@ -363,6 +405,43 @@ fn entry(entry: Entry) -> AnyView {
             by,
         } => view! { <Said id=key role=role body=body images=images from=from by=by/> }.into_any(),
         Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
+        Turn::Noted(note) => view! { <Noted id=key note=note/> }.into_any(),
+    }
+}
+
+/// A note the platform left in the conversation — see [`Note`] for what it is and why it looks
+/// like neither speaker.
+#[component]
+fn Noted(id: String, note: Note) -> impl IntoView {
+    let Note {
+        icon,
+        head,
+        id: code,
+        body,
+    } = note;
+    let said = !body.trim().is_empty();
+    let words = head
+        .into_iter()
+        .map(|word| match word {
+            Word::Text(text) => view! { <span>{text}</span> }.into_any(),
+            Word::Code(code) => {
+                view! { <span class="font-mono text-code">{code}</span> }.into_any()
+            }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div id=id class=format!("{LAZY} border-l-2 border-line-strong py-1 pl-[18px]")>
+            <div class="flex items-center gap-1.5 text-label text-ink-3">
+                <Icon icon=icon size=IconSize::Sm class="shrink-0"/>
+                {words}
+                // The id sits out at the right rather than in the sentence: it is what you would
+                // type to address this thing, not what you read the line for.
+                {code.map(|code| view! {
+                    <span class="ml-auto shrink-0 pl-3 font-mono text-code">{code}</span>
+                })}
+            </div>
+            {said.then(|| view! { <Markdown source=body class="mt-1.5 text-small text-ink-2"/> })}
+        </div>
     }
 }
 

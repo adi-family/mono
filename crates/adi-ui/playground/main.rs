@@ -23,13 +23,13 @@ use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachKind, AttachState, Attached, Attaching,
     Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Face, FaceRing,
-    Faces, Faq, Field, Flag,
-    FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint, Icon, IconSize, Input, InputWidth,
-    Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt, MenuHead, MenuItem, MenuLink,
-    MenuNote, MenuTick, Modal, Panel, Param, ParamKind, PathPicker, PathRoot, PromptText, Qna,
-    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey,
-    Stop, StopLine, Table, TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm,
-    ToolState, TopBar, Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
+    Faces, Faq, Field, Flag, FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint, Icon,
+    IconSize, Input, InputWidth, Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt,
+    MenuHead, MenuItem, MenuLink, MenuNote, MenuTick, Modal, Note, Panel, Param, ParamKind,
+    PathPicker, PathRoot, PromptText, Qna, Queued, Rail, RailCard, RailGroup, Role, Select,
+    SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table, TableState, Textarea,
+    Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState,
+    Turn, TurnBlocks, Word, dir_of, sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -1317,6 +1317,108 @@ The first two                    are the same bug. I will read the pairing path 
     }
 }
 
+/// Every kind of note the platform can leave in a conversation, in one transcript.
+///
+/// The bodies are the real prose — what `adi_agents`' awaits, questions and goals actually write —
+/// because the point of the block is how a header of *facts* reads above a paragraph of *words*,
+/// and shortened filler would not test that.
+#[component]
+fn NotesDemo() -> impl IntoView {
+    let note = |icon, head, id: Option<&str>, body: &str| {
+        Turn::Noted(Note {
+            icon,
+            head,
+            id: id.map(ToString::to_string),
+            body: body.to_string(),
+        })
+    };
+    let turns: Vec<Turn> = vec![
+        Turn::Said {
+            role: Role::User,
+            body: "Fix the flaky pairing test, then wake me when CI is green.".into(),
+            images: Vec::new(),
+            from: Some("hetzner".into()),
+            by: None,
+        },
+        Turn::Did(vec![
+            ToolCall::new("Bash")
+                .param("command", "cargo test -p adi-mesh pair")
+                .result("1 failed · pair::retries_without_backoff"),
+            ToolCall::new("Await")
+                .param("events", "adi.ci.finished")
+                .param("check", "gh run view --json conclusion | grep success")
+                .result("registered await a7f3"),
+        ]),
+        Turn::Said {
+            role: Role::Agent,
+            body: "The retry loop has no backoff — three attempts, all inside 200ms. I have \
+                   pushed a fix and registered a wake on CI."
+                .into(),
+            images: Vec::new(),
+            from: None,
+            by: None,
+        },
+        note(
+            Lucide::Flag,
+            vec![
+                Word::Text("Goal check".into()),
+                Word::Text("· 2 open".into()),
+            ],
+            None,
+            "This conversation has fallen quiet with 2 open goals, and nothing is queued or \
+             waiting on anybody. Is it met?\n\n  g-1\n    the flaky pairing test is fixed\n\n  \
+             g-2\n    docs updated\n",
+        ),
+        note(
+            Lucide::Check,
+            vec![
+                Word::Text("Answered".into()),
+                Word::Text("· phone/igor".into()),
+            ],
+            Some("4"),
+            "Ship it behind the flag, and leave the old path in for a week.",
+        ),
+        note(
+            Lucide::Check,
+            vec![Word::Text("Answered by default".into())],
+            Some("5"),
+            "Nobody answered in time, so the defaults were taken.\n\nWhich database?\n> \
+             Postgres\n\nWhich region?\n> (no answer)\n\nThis ask is settled. Carry on from \
+             here — ask again only if something new needs deciding.",
+        ),
+        note(
+            Lucide::Bell,
+            vec![
+                Word::Text("Woken by".into()),
+                Word::Code("adi.ci.finished".into()),
+                Word::Text("· check passed".into()),
+            ],
+            Some("a7f3"),
+            "adi.ci.finished fired, and your check passed.\n\nWhat you asked to be told:\n\ntell \
+             Igor the pairing fix is green, then close g-1\n\nWhat your check printed:\n\n\
+             success\n\nThis await is spent. Register another one if you still need to be woken \
+             later.",
+        ),
+        note(
+            Lucide::Bell,
+            vec![Word::Text("Woken by the clock".into())],
+            Some("b104"),
+            "The time you asked for.\n\nWhat you asked to be told:\n\nlook at the nightly \
+             benchmark before standup",
+        ),
+        note(
+            Lucide::Bell,
+            vec![Word::Text("Expired without firing".into())],
+            Some("c9d2"),
+            "It expired without ever firing; nothing you were waiting for happened in time.\n\n\
+             What you asked to be told:\n\nthe relay was meant to come back up",
+        ),
+    ];
+    // No height cap, unlike the chat above: this one is here to be *seen*, and a scroll box would
+    // hide half the kinds it exists to show.
+    view! { <Chat turns=adi_ui::by_position(turns) class="p-1"/> }
+}
+
 /// The question card, in both of its shapes: the one-question ask a click settles outright, and
 /// the batched one that has to be read before it can be sent.
 #[component]
@@ -1717,6 +1819,7 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("flagmark-flaglist", "FlagMark \u{00b7} FlagList"),
     ("simulator", "Simulator"),
     ("chat", "Chat"),
+    ("notes", "Chat \u{00b7} platform notes"),
     ("ask", "Ask"),
     ("apps", "Apps"),
     ("sessions", "Sessions"),
@@ -2716,6 +2819,21 @@ fn Playground() -> impl IntoView {
                 </p>
                 <div>
                     <ChatDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="Chat · platform notes" id="notes">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "A third speaker. Four things besides you and the agent can put a message \
+                     into a conversation — an await firing, a question settling, a goal going \
+                     unanswered — and each arrives stamped with what it is rather than saying so \
+                     in its own words. Neither a bubble nor a paragraph: the ask block's left \
+                     rule, a header carrying the facts, and the prose that came with it a step \
+                     quieter than the agent's. Ids sit out at the right in mono, where you go \
+                     looking for them rather than read past them."
+                </p>
+                <div>
+                    <NotesDemo/>
                 </div>
             </Panel>
 

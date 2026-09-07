@@ -1233,6 +1233,12 @@ fn feed_turn(
     };
 
     if turn.role == "user" {
+        // A message the *platform* put here — a wake, a settled ask, a nudge — is neither of the
+        // two speakers and is not drawn as one. Only when nothing but a sender stamped it does it
+        // stay your bubble.
+        if let Some(note) = platform_note(turn) {
+            return vec![Entry::new(key(0), T::Noted(note))];
+        }
         return vec![Entry::new(
             key(0),
             T::Said {
@@ -1367,7 +1373,76 @@ fn feed_entries(
 /// (`adi_agents::marker`), and the text a reader sees is only ever the message. `None` for every
 /// message typed at this machine, and for the platform's own — a wake names an await, not a person.
 fn sender_of(markers: &[adi_webapp_api::types::TurnMarker]) -> Option<String> {
-    markers.iter().find_map(adi_webapp_api::types::TurnMarker::sender)
+    markers
+        .iter()
+        .find_map(adi_webapp_api::types::TurnMarker::sender)
+}
+
+/// The platform's own note on this turn, or `None` for a message somebody actually typed.
+///
+/// Composed here rather than in `adi_ui` because this is where the vocabulary lives: the component
+/// takes an icon, some words and an id, and knows nothing about awaits. The header carries the
+/// facts off the marker and the body is the prose that came with them, unedited — see
+/// [`adi_ui::Note`].
+///
+/// A `from` marker alone is not a note: somebody typed that message, and it keeps its own bubble
+/// with their name on it. When a `from` rides *with* a platform marker — a peer answering a
+/// question — the sender joins the header, because the block is then about both.
+fn platform_note(turn: &AgentTurn) -> Option<adi_ui::Note> {
+    use adi_ui::Lucide;
+    use adi_ui::Word::{Code, Text};
+    use adi_webapp_api::types::TurnMarker as M;
+
+    let sender = sender_of(&turn.markers);
+    let by_them = |head: &mut Vec<adi_ui::Word>| {
+        if let Some(who) = &sender {
+            head.push(Text(format!("· {who}")));
+        }
+    };
+    let (icon, head, id) = turn.markers.iter().find_map(|marker| match marker {
+        M::AwaitWoken {
+            id,
+            cause,
+            event,
+            check,
+        } => {
+            let mut head = match (cause.as_str(), event.is_empty()) {
+                ("event", false) => vec![Text("Woken by".into()), Code(event.clone())],
+                ("event", true) => vec![Text("Woken by an event".into())],
+                ("expired", _) => vec![Text("Expired without firing".into())],
+                _ => vec![Text("Woken by the clock".into())],
+            };
+            if *check {
+                head.push(Text("· check passed".into()));
+            }
+            Some((Lucide::Bell, head, Some(id.clone())))
+        }
+        M::AskAnswered { id, by } => {
+            let mut head = vec![Text(match by.as_str() {
+                "default" => "Answered by default".into(),
+                _ => "Answered".to_string(),
+            })];
+            by_them(&mut head);
+            Some((Lucide::Check, head, Some(id.clone())))
+        }
+        M::GoalCheck { open } => {
+            let mut head = vec![Text("Goal check".into())];
+            if *open > 0 {
+                head.push(Text(format!("· {open} open")));
+            }
+            Some((Lucide::Flag, head, None))
+        }
+        // A sender is not a note, and `pre-run` never reaches a turn — its commands are recorded
+        // as the tool calls they were. An `Unknown` kind is one this build cannot draw, and a
+        // plain bubble showing the words is a better answer than a blank block.
+        M::From { .. } | M::PreRun { .. } | M::Unknown => None,
+    })?;
+    Some(adi_ui::Note {
+        icon,
+        head,
+        id,
+        body: turn.text.clone(),
+    })
 }
 
 /// A turn's attachments, as the transcript draws them: a URL to fetch each by, its name, and

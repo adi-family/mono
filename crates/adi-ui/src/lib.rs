@@ -77,7 +77,8 @@ pub use attach::{AttachKind, AttachState, Attached, Attaching, files_of};
 pub use badge::{Badge, BadgeTone, Dot, DotTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use chat::{
-    Attachment, AttachmentKind, Chat, Entry, Queued, Role, ToolCall, ToolState, Turn, by_position,
+    Attachment, AttachmentKind, Chat, Entry, Note, Queued, Role, ToolCall, ToolState, Turn, Word,
+    by_position,
 };
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
