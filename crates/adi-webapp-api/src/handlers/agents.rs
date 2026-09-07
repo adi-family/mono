@@ -35,22 +35,63 @@ pub struct FleetSender<'a> {
     pub user: &'a str,
 }
 
+/// The service label the control panel is served under, and so the grant a peer needs before it
+/// can say anything into a conversation here — pairing hands out exactly `http:app`, and
+/// "`http:app` plus the password *is* the control panel" (`crates/adi-app/src/viewer.rs`).
+///
+/// Written out rather than imported because the constant is a DNS label fixed by the front door,
+/// and every crate that needs it already keeps its own (`adi_mesh::join`'s `DEFAULT_SERVICE`,
+/// `adi_app::node::APP_SERVICE`, `adi_mesh_client::bridge::PANEL_SERVICE`).
+const PANEL_SERVICE: &str = "app";
+
+/// Whether anybody besides the person sitting at this machine can put a message into a
+/// conversation here: a paired node whose grants reach [`PANEL_SERVICE`].
+///
+/// This is the whole of "more than one user". A machine paired with nobody has exactly one voice,
+/// and on it a tag on every message would name the only person it could possibly be. The moment a
+/// phone or a second machine holds a credential for this panel, that stops being true — and it
+/// stops being true for the messages *already in the transcript*, which is why the question is
+/// asked per send rather than once at startup.
+///
+/// Read off the store on each send rather than cached: pairing and unpairing happen while the app
+/// runs, and one small TOML read next to launching a model is nothing. An unreadable registry
+/// answers "not shared" — the same fail-quiet choice [`owner_instructions_for`] makes, and for the
+/// same reason: a broken `fleet.toml` must not change how an ordinary local message reads.
+fn shared_with_others(store: &Agents) -> bool {
+    let Ok(registry) = adi_mesh::fleet::FleetRegistry::load_from(store.config()) else {
+        return false;
+    };
+    registry
+        .nodes
+        .values()
+        .any(|node| node.allows(adi_mesh::fleet::Target::Http(PANEL_SERVICE)))
+}
+
 /// `message`, with a lightweight tag naming who sent it ahead of the words — `[from:
-/// <nickname>/<user>]` — when it arrived from another fleet node. Untagged for a local sender:
-/// tagging the overwhelming majority of messages, which a person typed straight into this
-/// machine's own panel, would be noise nobody asked for.
+/// <nickname>/<user>]` for a fleet peer, `[from: <this node>]` for the panel here.
+///
+/// **A message is tagged whenever the conversation has more than one possible voice**
+/// ([`shared_with_others`]), and that is the rule in both directions: a peer's message always
+/// qualifies, since its arrival proves somebody else is here; a local one qualifies only once
+/// somebody else *could* be. On a machine paired with nobody a local message stays untouched,
+/// because tagging the overwhelming majority of messages — the ones a person typed straight into
+/// this machine's own panel, with nobody else able to reach it — would be noise nobody asked for.
+///
+/// The local half names the machine rather than a person because that is the only identity this
+/// end has: the panel is unauthenticated on loopback, so there is no username to print, while a
+/// peer authenticated as one and its half says so. Both halves are then the same kind of name —
+/// `laptop-b/igor` and `studio` — and neither says "me", which a transcript read on another
+/// machine could not resolve.
 ///
 /// The tag lives in the message text itself rather than only in structured metadata, because that
 /// is the one place every reader of the transcript — a person, or the model answering it — is
 /// guaranteed to see it.
-fn tag_sender(message: &str, sender: Option<FleetSender<'_>>) -> String {
-    let Some(sender) = sender.filter(|s| !s.nickname.is_empty()) else {
-        return message.to_string();
-    };
-    let who = if sender.user.is_empty() {
-        sender.nickname.to_string()
-    } else {
-        format!("{}/{}", sender.nickname, sender.user)
+fn tag_sender(store: &Agents, message: &str, sender: Option<FleetSender<'_>>) -> String {
+    let who = match sender.filter(|s| !s.nickname.is_empty()) {
+        Some(sender) if sender.user.is_empty() => sender.nickname.to_string(),
+        Some(sender) => format!("{}/{}", sender.nickname, sender.user),
+        None if shared_with_others(store) => adi_mesh::node::nickname_in(store.config()),
+        None => return message.to_string(),
     };
     format!("[from: {who}] {message}")
 }
@@ -216,7 +257,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     }
     // A pty backend takes no task, so a blank message is its normal launch, not a missing one.
     let message = if message.is_empty() { "run" } else { message };
-    let message = tag_sender(message, sender);
+    let message = tag_sender(store, message, sender);
     let working_dir = req
         .working_dir
         .as_deref()
@@ -536,7 +577,7 @@ pub fn reply_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         Err(e) => return Response::from(&e),
     };
     let run_id = req.run_id.trim();
-    let message = tag_sender(req.message.trim(), sender);
+    let message = tag_sender(store, req.message.trim(), sender);
     if let Err(e) = store.reply_with(&agent.name, run_id, &message, &req.attachments) {
         return Response::from(&e);
     }
@@ -3339,13 +3380,31 @@ mod tests {
 
     // ---- fleet sender tagging and owner instructions (ADI-MONO-13) --------------------
 
+    /// Pair a node under `petname` and let it reach `grants`, so the registry says what this
+    /// machine's fleet actually is.
+    fn pair_with(store: &Agents, petname: &str, grants: &[&str]) {
+        let mut registry = adi_mesh::fleet::FleetRegistry::load_from(store.config()).expect("load");
+        registry.nodes.insert(
+            petname.to_string(),
+            adi_mesh::fleet::NodeRecord {
+                key: "aa".to_string(),
+                nickname: petname.to_string(),
+                grants: grants.iter().map(|g| g.parse().expect("grant")).collect(),
+                ..adi_mesh::fleet::NodeRecord::default()
+            },
+        );
+        registry.save_to(store.config()).expect("save");
+    }
+
     /// The tag is what every reader of the transcript sees, so it names both halves of the
-    /// identity when both are known, falls back to the nickname alone when the peer verified
-    /// without a username on the credential, and disappears entirely for a local sender.
+    /// identity when both are known, and falls back to the nickname alone when the peer verified
+    /// without a username on the credential.
     #[test]
-    fn tag_sender_names_the_fleet_node_or_says_nothing_for_a_local_one() {
+    fn tag_sender_names_the_fleet_node_it_came_from() {
+        let store = scratch("tag-sender-fleet");
         assert_eq!(
             tag_sender(
+                &store,
                 "fix the failing test",
                 Some(FleetSender {
                     nickname: "laptop-b",
@@ -3356,6 +3415,7 @@ mod tests {
         );
         assert_eq!(
             tag_sender(
+                &store,
                 "go",
                 Some(FleetSender {
                     nickname: "laptop-b",
@@ -3364,7 +3424,32 @@ mod tests {
             ),
             "[from: laptop-b] go"
         );
-        assert_eq!(tag_sender("go", None), "go");
+    }
+
+    /// A local message is tagged exactly when somebody else could have sent one: paired with
+    /// nobody there is only one voice and the tag would name the only person it could be, while a
+    /// paired phone makes "who said this" a real question about every message in the transcript.
+    #[test]
+    fn tag_sender_names_this_machine_only_once_somebody_else_can_reach_it() {
+        let store = scratch("tag-sender-local");
+        assert_eq!(tag_sender(&store, "go", None), "go", "paired with nobody");
+
+        // Paired, but granted nothing: `NodeRecord::allows` is default-deny, so this peer cannot
+        // reach the panel and cannot be a second voice in a conversation.
+        pair_with(&store, "laptop-b", &[]);
+        assert_eq!(tag_sender(&store, "go", None), "go", "no grant on the panel");
+
+        adi_mesh::node::NodeConfig {
+            nickname: "studio".to_string(),
+        }
+        .save_to(store.config())
+        .expect("name this machine");
+        pair_with(&store, "laptop-b", &["http:app"]);
+        assert_eq!(
+            tag_sender(&store, "go", None),
+            "[from: studio] go",
+            "a peer holds http:app, so who is talking is now a question"
+        );
     }
 
     /// The node's standing instructions come off this machine's own `fleet.toml`, found by the

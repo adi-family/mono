@@ -1239,7 +1239,11 @@ fn feed_turn(
                 role: Role::User,
                 body: turn.text.clone(),
                 images: pictures(node, turn),
-                from: source.map(str::to_string),
+                // A message that already names its sender in its own words wears no label: the
+                // `[from: …]` tag the server stamps on once this machine has more than one voice
+                // (`adi_webapp_api::handlers::agents`'s `tag_sender`) answers "who is talking"
+                // more precisely than the conversation's machine can, and twice is once too often.
+                from: source.filter(|_| !is_tagged(&turn.text)).map(str::to_string),
             },
         )];
     }
@@ -1354,6 +1358,17 @@ fn feed_entries(
     })
 }
 
+/// Whether a message already carries the server's sender tag — the `[from: <who>]` prefix
+/// `adi_webapp_api::handlers::agents`'s `tag_sender` writes into the words themselves once more
+/// than one voice can reach this machine.
+///
+/// Matched on the literal prefix rather than parsed, because nothing here needs the name: the tag
+/// is left in the text where the model and the reader both see it, and this only decides whether
+/// the block *also* wears the conversation's machine.
+fn is_tagged(message: &str) -> bool {
+    message.trim_start().starts_with("[from: ")
+}
+
 /// A turn's attachments, as the transcript draws them: a URL to fetch each by, its name, and
 /// whether it is a picture to show or a file to link to.
 ///
@@ -1386,7 +1401,9 @@ fn queued_bubble(
         <adi_ui::Queued
             body=turn.text.clone()
             images=pictures(node.as_deref(), &turn)
-            from=chat_source_label(state, watch, sourced)
+            // Queued the same way a sent message is: `reply_run` tags before it queues, so a
+            // message waiting its turn already names its sender if anything does.
+            from=chat_source_label(state, watch, sourced).filter(|_| !is_tagged(&turn.text))
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }

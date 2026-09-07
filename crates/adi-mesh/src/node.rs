@@ -138,10 +138,20 @@ impl NodeConfig {
 /// taking down the handshake it was only supposed to label.
 #[must_use]
 pub fn nickname() -> String {
+    nickname_in(&Config::open())
+}
+
+/// [`nickname`] against an explicit store — the same `load`/`load_from` split every other reader
+/// of this crate's files has.
+///
+/// Worth having beyond tests: a caller that already holds the store the rest of its answer came
+/// from (the fleet registry, say) must not have half of it read from a different install.
+#[must_use]
+pub fn nickname_in(store: &Config) -> String {
     if let Some(name) = override_from(std::env::var(NAME_ENV).ok().as_deref()) {
         return name;
     }
-    NodeConfig::load().map_or_else(
+    NodeConfig::load_from(store).map_or_else(
         |e| {
             warn!(error = %e, "node: could not read node.toml; falling back to a derived name");
             nickname_from_hostname(machine_hostname().as_deref())
