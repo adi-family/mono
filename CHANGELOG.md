@@ -20,6 +20,46 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.8.0 — 2026-09-07
+
+### Added
+
+- **Who is around, in the width of a few characters.** The strip of paired machines has moved out
+  of the sessions rail and into the head of the right column, beside the Apps list, and it is a
+  pile of faces now: one circle per name, active ones first, everyone past the fifth folded into
+  a `+N` that names them on hover. An active machine wears one of six solid colours picked from
+  its own name; an idle one is a flat grey circle — on a dark rail "brighter" read as switched
+  *off*, so brightness no longer carries the meaning. The line beside the pile says it in words
+  as well: "2 active now", the machine's name when there is exactly one, or "nobody active now".
+  The pile follows the sources ticked in the rail's head, so unticking a machine takes its circle
+  away with its rows, and a machine with nothing ticked shows everybody — an unset filter matches
+  everything, the way an empty search box does. It used to show nothing at all, which left the
+  whole strip invisible until you happened to open a menu you had no reason to open.
+- **A message says who sent it.** On a machine more than one person can reach — a paired phone, a
+  second laptop, a browser tab somebody left open on theirs — every message in a conversation now
+  carries the machine and account it came from, and the reply box says which machine your words
+  are about to leave for. On a machine paired with nobody nothing changes: there is one voice,
+  and naming it on every message would be noise.
+
+### Changed
+
+- **The platform's own messages stopped pretending to be yours.** An await firing, a question you
+  were asked settling, a quiet conversation being nudged about its open goals — each of those
+  arrives as a message in the transcript, and each used to wear your bubble under a label reading
+  "You", which named the wrong speaker every time. They have a shape of their own now: a rule
+  down the left, a line saying what happened — "Woken by `adi.ci.finished` · check passed",
+  "Answered by default", "Goal check · 2 open" — the id you would use to look the thing up set
+  off at the right, and the message itself under it. The agent reading the conversation is told
+  the same facts in the same place, so what you see and what it acts on cannot drift apart.
+
+### Fixed
+
+- **A chat opened from a paired machine is named by what was asked, not by who asked it.** Since
+  1.6.0 the sender's name was written into the message text itself, so it led every title the
+  rail, the run history tables and Analytics showed for that conversation, and the local model
+  that names new chats read it too. The name now travels beside the message rather than inside
+  it, and those listings show the words that were typed.
+
 ## 1.7.0 — 2026-09-06
 
 ### Added
