@@ -213,6 +213,9 @@ pub enum Turn {
         /// Attached images, drawn above the words. Only ever on a [`Role::User`] turn in this
         /// tree — pictures travel from the person to the model, not back.
         images: Vec<Attachment>,
+        /// Which machine the conversation this was said in runs on. `None` says nothing, which
+        /// is the right answer whenever there is only one machine to be on.
+        from: Option<String>,
     },
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
@@ -349,9 +352,12 @@ pub fn Chat(
 fn entry(entry: Entry) -> AnyView {
     let Entry { key, turn } = entry;
     match turn {
-        Turn::Said { role, body, images } => {
-            view! { <Said id=key role=role body=body images=images/> }.into_any()
-        }
+        Turn::Said {
+            role,
+            body,
+            images,
+            from,
+        } => view! { <Said id=key role=role body=body images=images from=from/> }.into_any(),
         Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
     }
 }
@@ -380,6 +386,16 @@ fn Said(
     role: Role,
     body: String,
     #[prop(optional)] images: Vec<Attachment>,
+    /// The machine this conversation is on, named above the words. `None` draws no line at all.
+    ///
+    /// Deciding *when* a machine is worth naming is the caller's, not this component's: on an app
+    /// showing one machine's sessions every message is on it, and a label saying so on every block
+    /// is a sentence repeated forty times. The panel's rule is in `chat_source_label`.
+    // `optional_no_strip`, not `optional`: the caller has an `Option<String>` in hand (a
+    // conversation either has a source worth naming or has not), and plain `optional` strips the
+    // Option off the setter, so the only way to pass one through would be to unwrap it first.
+    #[prop(optional_no_strip)]
+    from: Option<String>,
 ) -> impl IntoView {
     let own = match role {
         // Your own words are on the raised surface so a stretch of work can be scanned for
@@ -387,9 +403,17 @@ fn Said(
         Role::User => "rounded-lg bg-raise px-4 py-3",
         Role::Agent => "",
     };
+    // Your own words did not come *from* the far machine — you typed them here and they were
+    // carried there — so yours reads as the sessions rail reads a row: you, then the source you
+    // are acting on. The agent's answer really was produced there, and needs no such hedge.
+    let source = from.map(|from| match role {
+        Role::User => format!("You \u{b7} {from}"),
+        Role::Agent => from,
+    });
     let said = !body.trim().is_empty();
     view! {
         <div id=id class=format!("{LAZY} {own}")>
+            {source.map(|source| view! { <div class="label mb-1 text-ink-3">{source}</div> })}
             {(!images.is_empty()).then(|| view! { <Pictures images=images said=said/> })}
             {said.then(|| view! { <Markdown source=body/> })}
         </div>
@@ -496,15 +520,26 @@ pub fn Queued(
     /// is the honest rendering of a queue you cannot edit.
     #[prop(optional, into)]
     on_unqueue: Option<Callback<()>>,
+    /// The machine it is queued on — the same fact [`Said`] carries, and wanted more here than
+    /// there: this one has not gone yet, so it is the last moment taking it back is free.
+    // `optional_no_strip`, not `optional`: the caller has an `Option<String>` in hand (a
+    // conversation either has a source worth naming or has not), and plain `optional` strips the
+    // Option off the setter, so the only way to pass one through would be to unwrap it first.
+    #[prop(optional_no_strip)]
+    from: Option<String>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
+    let head = match from {
+        Some(from) => format!("You \u{b7} queued \u{b7} {from}"),
+        None => "You \u{b7} queued".to_string(),
+    };
     view! {
         <div class=merge(
             &format!("{LAZY} rounded-lg border border-dashed border-line-strong px-4 py-3 text-ink-3"),
             class,
         )>
             <div class="label mb-1 flex items-center gap-1 text-ink-3">
-                "You · queued"
+                {head}
                 {on_unqueue.map(|cb| view! {
                     <button
                         class="-my-0.5 ml-auto grid size-6 place-items-center rounded-md \

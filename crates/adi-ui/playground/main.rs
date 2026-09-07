@@ -1161,10 +1161,14 @@ fn AppsDemo() -> impl IntoView {
 #[component]
 fn ChatDemo() -> impl IntoView {
     let turns: Vec<Turn> = vec![
+        // Drawn as the panel draws a conversation on a *paired machine*: the source rides your own
+        // blocks, where the act of sending is, and not the agent's — its words came from there, but
+        // saying so under every paragraph is the same sentence forty times.
         Turn::Said {
             role: Role::User,
             body: "Walk the linear board and tell me what is actually blocked.".into(),
             images: Vec::new(),
+            from: Some("hetzner".into()),
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1186,6 +1190,7 @@ fn ChatDemo() -> impl IntoView {
 The first two                    are the same bug. I will read the pairing path before saying more."
                 .into(),
             images: Vec::new(),
+            from: None,
         },
         Turn::Did(vec![
             ToolCall::new("Grep")
@@ -1208,6 +1213,7 @@ The first two                    are the same bug. I will read the pairing path 
             role: Role::User,
             body: "Stopped that — just the pairing tests.".into(),
             images: Vec::new(),
+            from: Some("hetzner".into()),
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1294,6 +1300,7 @@ The first two                    are the same bug. I will read the pairing path 
                 <div class="px-1">
                     <Queued
                         body="And once that lands, run the migration against staging.".to_string()
+                        from=Some("hetzner".to_string())
                         on_unqueue=Callback::new(move |()| queued.set(false))
                     />
                 </div>

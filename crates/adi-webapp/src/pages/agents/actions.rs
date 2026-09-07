@@ -1022,7 +1022,9 @@ fn run_detail_row(
                         <button class="adi-runlog__close" type="button" title="close this"
                             on:click=move |_| close_run_view(watch)>"Close"</button>
                     </div>
-                    {feed_view(state, watch, answerable)}
+                    // Not sourced: this pane is opened from the Agents page's own runs table, which
+                    // lists this machine's runs and has no node concept to point it anywhere else.
+                    {feed_view(state, watch, answerable, false)}
                 </div>
             </td>
         </tr>
@@ -1053,14 +1055,38 @@ fn run_detail_row(
 ///
 /// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
 /// the very top: what you have already said is nearest the box you said it in.
-fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
+/// Which machine the open conversation is on, as its messages and its composer name it — a node's
+/// petname, or "this machine" (`docs/fleet.md` §13).
+///
+/// `None` means there is nothing worth saying, and the rule is not the rail's. A rail row prints its
+/// source only once more than one is ticked, because the head button above it names the source when
+/// there is just one. Down here that button is a rail's width away from the box you are typing into,
+/// so a conversation on a **node** always says so however few sources are selected: those words are
+/// about to run on somebody else's computer. "This machine" is the one that needs a contrast to be
+/// worth printing — with only this machine on screen every message is on it, and saying so on each
+/// is one sentence forty times.
+///
+/// `sourced` is that argument taken one step further: the Agents page's inline run pane cannot be
+/// pointed anywhere, so a source line there contrasts with nothing that exists on the screen.
+fn chat_source_label(state: State, watch: AgentsWatch, sourced: bool) -> Option<String> {
+    if !sourced {
+        return None;
+    }
+    if let Some(node) = watch.node.get() {
+        return Some(node);
+    }
+    let multi = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+    multi.then(|| "this machine".to_string())
+}
+
+fn feed_view(state: State, watch: AgentsWatch, answerable: bool, sourced: bool) -> AnyView {
     // Memos, not derived signals, and that is the whole optimisation on this side: a poll writes a
     // fresh snapshot whenever *anything* in it moved, and a plain derive would hand that on as
     // "the transcript changed" every time. A memo compares what it produced, so the settled list
     // notifies only when a turn is genuinely added or finalised — which, for a conversation being
     // watched, is a handful of times rather than once a second.
-    let settled = Memo::new(move |_| feed_entries(watch, false));
-    let live = Memo::new(move |_| feed_entries(watch, true));
+    let settled = Memo::new(move |_| feed_entries(state, watch, sourced, false));
+    let live = Memo::new(move |_| feed_entries(state, watch, sourced, true));
     // Narrowed for the same reason: the question card owns the selections you are making in it,
     // and rebuilding it re-creates them empty. Bound to the whole snapshot it was thrown away and
     // rebuilt on every poll, so a tool call finishing behind an open question cleared the answer
@@ -1093,7 +1119,7 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
             <div class="adi-chat__top">
                 {goal_bar(state, watch)}
                 {awaits_bar(state, watch)}
-                {reply_bar(state, watch)}
+                {reply_bar(state, watch, sourced)}
             </div>
         })}
 
@@ -1115,7 +1141,7 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                             .get()
                             .into_iter()
                             .enumerate()
-                            .map(|(place, t)| queued_bubble(state, watch, t, place))
+                            .map(|(place, t)| queued_bubble(state, watch, t, place, sourced))
                             .collect();
                         if bubbles.is_empty() {
                             return None;
@@ -1178,12 +1204,21 @@ fn tool_params(input: &str) -> Vec<(String, String)> {
 /// from, and [`collect_stats`] counts the same way, so the rail's links address the elements this
 /// actually renders.
 ///
+/// `source` is [`chat_source_label`]'s answer, and it rides your own messages only. The agent's
+/// words were produced on that machine too, but a transcript is one conversation on one machine and
+/// the reader needs telling once per thing they *do*, not once per paragraph they read.
+///
 /// The keys are the point of the split ([`adi_ui::Entry`] explains what they buy). A settled
 /// turn's parts are a fixed sequence, so `{turn}-{part}` names the same bubble for as long as the
 /// conversation lives, and the keyed list leaves it alone. The parts of a turn still being
 /// written are *not* fixed — a run splits in two the moment the agent says something mid-turn —
 /// which is exactly why that turn is drawn outside the keyed list.
-fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
+fn feed_turn(
+    node: Option<&str>,
+    source: Option<&str>,
+    at: usize,
+    turn: &AgentTurn,
+) -> Vec<adi_ui::Entry> {
     use adi_ui::{Entry, Role, ToolCall, ToolState, Turn as T};
 
     // The first part carries the turn's own anchor, unadorned: that is the id the rail hands out
@@ -1204,6 +1239,7 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
                 role: Role::User,
                 body: turn.text.clone(),
                 images: pictures(node, turn),
+                from: source.map(str::to_string),
             },
         )];
     }
@@ -1223,6 +1259,7 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
                         role: Role::Agent,
                         body: text.clone(),
                         images: Vec::new(),
+                        from: None,
                     });
                 }
             }
@@ -1267,6 +1304,7 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
             role: Role::Agent,
             body: turn.text.clone(),
             images: Vec::new(),
+            from: None,
         });
     }
     out.into_iter()
@@ -1286,8 +1324,17 @@ fn feed_turn(node: Option<&str>, at: usize, turn: &AgentTurn) -> Vec<adi_ui::Ent
 /// Queued messages are in the snapshot but not in either list: they are drawn as the feed's lead,
 /// because they have been typed rather than said. They still consume a turn index, which is why
 /// this enumerates before it filters.
-fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
+fn feed_entries(
+    state: State,
+    watch: AgentsWatch,
+    sourced: bool,
+    live: bool,
+) -> Vec<adi_ui::Entry> {
     let node = watch.node.get();
+    // Read here, inside the memo that calls this, rather than passed in from the pane: the source
+    // selection is a signal, and a label resolved once when the pane was built would still name the
+    // machine that was ticked then.
+    let source = chat_source_label(state, watch, sourced);
     // `with` rather than `get`: a snapshot holds every turn, every step and every tool result, and
     // this runs once per subscriber per poll. Cloning the transcript to look at it is the kind of
     // cost that does not show up anywhere except the profile.
@@ -1302,7 +1349,7 @@ fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
             .iter()
             .enumerate()
             .filter(|(at, t)| !t.queued && (Some(*at) == last) == live)
-            .flat_map(|(at, t)| feed_turn(node.as_deref(), at, t))
+            .flat_map(|(at, t)| feed_turn(node.as_deref(), source.as_deref(), at, t))
             .collect()
     })
 }
@@ -1327,12 +1374,19 @@ fn pictures(node: Option<&str>, turn: &AgentTurn) -> Vec<adi_ui::Attachment> {
 /// A message still waiting its turn: your own bubble, dashed and dimmed — said, but not yet asked —
 /// carrying an × that takes it back before the agent ever sees it. The bubble itself is
 /// [`adi_ui::Queued`], which is the same shape as the sent messages above it in the feed.
-fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize) -> AnyView {
+fn queued_bubble(
+    state: State,
+    watch: AgentsWatch,
+    turn: AgentTurn,
+    place: usize,
+    sourced: bool,
+) -> AnyView {
     let node = watch.node.get_untracked();
     view! {
         <adi_ui::Queued
             body=turn.text.clone()
             images=pictures(node.as_deref(), &turn)
+            from=chat_source_label(state, watch, sourced)
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }
@@ -1427,7 +1481,7 @@ const IMAGES_REFUSED: &str = "this one can't be sent a file — a terminal sessi
 /// button says so), and is picked up either by the turn in flight, at its next round, or by the one
 /// that starts when this answer lands. Beside it, while an answer is streaming, a Stop that cuts the
 /// turn short and drops anything lined up behind it.
-fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
+fn reply_bar(state: State, watch: AgentsWatch, sourced: bool) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
     // What the open conversation's own backend can take — the snapshot's capability profile, not
     // the agent's current settings, because a conversation is answered by whatever started it.
@@ -1439,11 +1493,17 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
         takes_images,
         Signal::derive(|| IMAGES_REFUSED.to_string()),
     );
+    // The box names the machine as well as the agent whenever [`chat_source_label`] has one to
+    // name: this is the moment the words leave for it, and the head button that would otherwise
+    // answer "which machine" is a rail's width away and above the fold of a long transcript.
     let placeholder = Signal::derive(move || {
-        watch
-            .name
-            .get()
-            .map_or_else(|| "Write…".to_string(), |name| format!("Write to {name}…"))
+        let on = chat_source_label(state, watch, sourced)
+            .map(|source| format!(" on {source}"))
+            .unwrap_or_default();
+        watch.name.get().map_or_else(
+            || "Write…".to_string(),
+            |name| format!("Write to {name}{on}…"),
+        )
     });
     view! {
         <adi_ui::Composer
@@ -2896,7 +2956,7 @@ fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
                 // Asked of `feed_turn` itself rather than re-derived here: the question is
                 // literally "does this turn draw anything", and a second opinion on it would be
                 // a link that goes dead the day the two answers drift apart.
-                if feed_turn(None, t, turn).is_empty() {
+                if feed_turn(None, None, t, turn).is_empty() {
                     s.errored_silent += 1;
                 } else {
                     s.errored.push(turn_anchor(t));
@@ -5461,7 +5521,11 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
         <div class="adi-chome__chatwrap">
             {move || match watch.run_id.get() {
                 Some(_) => view! {
-                    <div class="adi-chome__feed">{feed_view(state, watch, watch.answerable.get())}</div>
+                    <div class="adi-chome__feed">
+                        // Sourced: the rail under this feed merges several machines, so which one a
+                        // conversation is on is a fact the feed has to carry itself.
+                        {feed_view(state, watch, watch.answerable.get(), true)}
+                    </div>
                 }
                 .into_any(),
                 None => view! {
