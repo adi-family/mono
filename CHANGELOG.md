@@ -20,7 +20,31 @@ extraction script cares about.
 
 ## Unreleased
 
-## 1.8.0 — 2026-09-07
+## 1.9.0 — 2026-09-08
+
+### Added
+
+- **The control panel opens inside ADI now, in a window of its own with tabs.** *Open control
+  panel* used to hand `app.adi` to whichever browser the Mac opens `.adi` links with. It now comes
+  up in the app: one icon in the Dock, one window that is where you left it, and no tab lost in a
+  window of thirty. The panel is the **first tab, always** — it cannot be closed, and nothing can
+  navigate it somewhere else, because a link that would opens a tab instead. So there is always
+  something to come back to.
+
+  Dashboards and hive services open beside it as tabs, named by the page rather than by their host.
+  Clicking a dashboard you already have open brings that tab forward instead of opening a second
+  copy of it. ⌘1–⌘9 select a tab, ⌘-click opens one, the ⨯ closes it and drops you back to the tab
+  on its left. A link that leaves this machine — an issue tracker, someone's docs — still opens in
+  your own browser, where your logins and extensions are.
+
+  There is no address bar and no back, forward or reload button: everything this window can reach is
+  a click away on the page it opens on, and the web view keeps all three of those on its right-click
+  menu for the times it doesn't. The window's tab strip carries the mark and the wordmark as that
+  first tab, so the page stops drawing its own while the app is around it — and ⌘K still opens the
+  menu, from the keyboard, exactly as before.
+
+  macOS only. Nothing about the panel itself changed: it is the same page on the same address, and
+  opening `app.adi` in a browser works as it always did.
 
 ### Added
 
