@@ -55,10 +55,16 @@ pub struct Settings {
 /// Whether the gateway may rewrite a body on its way past, and what it does when a client expresses
 /// no preference.
 ///
-/// Off by default, and deliberately: the substitution changes the prompt a provider sees, which is
-/// the one thing this gateway otherwise promises never to do. Switching `enabled` on only makes the
-/// `x-adi-macros: full|tail` header work; `default_mode` is what a request with no such header
-/// gets, and an empty string means nothing.
+/// **Experimental, and off for a reason.** The substitution changes the prompt a provider sees,
+/// which is the one thing this gateway otherwise promises never to do, and it was measured to be a
+/// losing trade on this machine: 98.6% of input tokens here are cache reads billed at a tenth, and
+/// `full` invalidates that cached prefix to save a percent of a prompt. Read `crate::macros` before
+/// switching this on — it lists what else can go wrong.
+///
+/// Switching `enabled` on only makes the `x-adi-macros: full|tail` header work; `default_mode` is
+/// what a request with no such header gets, and an empty string means nothing. Turning it on for
+/// every request at once (`default_mode = "full"`) is the configuration most likely to surprise
+/// somebody: prefer the header, one client at a time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Macros {

@@ -24,9 +24,13 @@
 //! something a human can read.
 //!
 //! The single exception is [`macros`], which rewrites a body on its way past to spend fewer tokens
-//! on the literals a prompt repeats. It is off in a fresh config and does nothing until a request
-//! asks for it by header, because changing what a model is shown is a different promise from
-//! carrying it unaltered — and one an operator should make on purpose.
+//! on the literals a prompt repeats. It is **experimental and off**, in a fresh config and in this
+//! store's own, and it does nothing until an operator enables it *and* a request asks for it by
+//! header. Treat it as a sharp tool rather than an optimisation: it shows the model text its author
+//! never wrote, it loses to the prompt cache on any prompt the provider is caching, and an
+//! unexpanded placeholder is a plausible-looking wrong path in an answer. Its own module
+//! documentation carries the measurements and the full list of ways it can hurt; read that before
+//! switching it on.
 
 pub mod config;
 pub mod http;

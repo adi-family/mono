@@ -35,6 +35,29 @@
 //! by character. Fields the provider matches against a list of its own — `model`, tool names, ids —
 //! are left alone in every mode, because a placeholder there is a 404 rather than a saving. A body
 //! this does not understand is forwarded unchanged, which is always the safe answer.
+//!
+//! # Why this stays off — the risks, not just the arithmetic
+//!
+//! The measurements above are the reason it is not worth switching on. These are the reasons it can
+//! be actively harmful, and why enabling it is an operator's deliberate act rather than a default:
+//!
+//! - **The model is shown text nobody wrote.** Every prompt through an enabled gateway carries an
+//!   instruction its author never saw and cannot read in their own logs. A behaviour change — a
+//!   refusal, a differently-shaped answer, an agent that stops following its own system prompt — is
+//!   then being caused by a config file two layers away from whoever is debugging it.
+//! - **An unexpanded placeholder is a wrong answer that looks right.** Expansion covers the text
+//!   fields of the shapes in [`Shape`]; anything else — a field a provider adds, a body form not
+//!   modelled here — passes through with `§1` still in it. Downstream that is a path that does not
+//!   exist, in a tool call that may well be run.
+//! - **It costs more than it saves wherever a prompt cache is in play**, which is nearly everywhere
+//!   that matters. `Mode::Full` is a cache miss by construction.
+//! - **Compliance is the model's choice, not this gateway's.** GLM writes the placeholders when
+//!   told to; Claude, measured inside Claude Code's own system prompt, took the shorter input and
+//!   wrote every path out in full — paying the instruction's cost and collecting none of its
+//!   saving.
+//!
+//! None of that makes the substitution wrong; it makes it a thing to reach for knowingly, on a
+//! one-shot call to a provider with no caching, by header, for one client at a time.
 
 use std::collections::HashMap;
 

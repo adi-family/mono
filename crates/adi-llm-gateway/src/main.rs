@@ -40,6 +40,15 @@ async fn main() -> anyhow::Result<()> {
         providers = ?settings.prefixes(),
         "adi-llm-gateway listening"
     );
+    // Loud on purpose. An operator reading this log after a model started behaving oddly should
+    // find out here, on line two, that the prompts are not the ones their clients sent.
+    if settings.macros.enabled {
+        warn!(
+            default_mode = %settings.macros.default_mode,
+            "placeholder substitution is ENABLED — prompts are rewritten before they leave this \
+             machine; it is experimental and loses to prompt caching (see adi_llm_gateway::macros)"
+        );
+    }
 
     let shutdown = adi_osext::shutdown_signal();
     tokio::pin!(shutdown);

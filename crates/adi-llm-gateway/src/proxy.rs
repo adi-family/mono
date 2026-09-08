@@ -284,12 +284,14 @@ impl Gateway {
         let Some(rewritten) = dict.apply(&request.body, mode, shape) else {
             return (request.body.clone(), None);
         };
-        info!(
+        // A warning rather than a note: every one of these is a request the provider read
+        // differently from how its client wrote it, and that should be greppable.
+        warn!(
             provider = %entry.provider,
             ?mode,
             entries = dict.len(),
             saved = dict.estimated_saving(&request.body),
-            "placeholders applied"
+            "placeholders applied — prompt rewritten"
         );
         entry.request_body = journal::body_text(&rewritten, self.settings.max_logged_body);
         (rewritten, Some(dict))
