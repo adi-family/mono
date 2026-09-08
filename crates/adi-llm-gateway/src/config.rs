@@ -1,4 +1,5 @@
-//! Which upstream each path prefix belongs to, and how much of a body the journal keeps.
+//! Which upstream each path prefix belongs to, how much of a body the journal keeps, and whether
+//! placeholder substitution is available at all.
 //!
 //! Written out with its defaults on first start (`~/.adi/mono/llm-gateway/config.toml`), so the
 //! route table is a file the operator can read and extend rather than a list compiled in here.
@@ -47,6 +48,24 @@ pub struct Settings {
     pub routes: BTreeMap<String, String>,
     /// Bodies longer than this are journalled truncated, with a marker saying so.
     pub max_logged_body: usize,
+    /// Placeholder substitution (`crate::macros`) — off unless switched on here.
+    pub macros: Macros,
+}
+
+/// Whether the gateway may rewrite a body on its way past, and what it does when a client expresses
+/// no preference.
+///
+/// Off by default, and deliberately: the substitution changes the prompt a provider sees, which is
+/// the one thing this gateway otherwise promises never to do. Switching `enabled` on only makes the
+/// `x-adi-macros: full|tail` header work; `default_mode` is what a request with no such header
+/// gets, and an empty string means nothing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Macros {
+    /// Master switch. While this is false the header is ignored and every body is forwarded as sent.
+    pub enabled: bool,
+    /// `full`, `tail`, or empty for no rewrite unless a request asks by header.
+    pub default_mode: String,
 }
 
 impl Default for Settings {
@@ -57,6 +76,7 @@ impl Default for Settings {
                 .map(|(prefix, base)| ((*prefix).to_string(), (*base).to_string()))
                 .collect(),
             max_logged_body: DEFAULT_MAX_LOGGED_BODY,
+            macros: Macros::default(),
         }
     }
 }
@@ -137,6 +157,12 @@ mod tests {
             settings().resolve("/openai?x=1").unwrap().url,
             "https://api.openai.com/?x=1"
         );
+    }
+
+    #[test]
+    fn a_fresh_install_rewrites_nothing() {
+        assert!(!settings().macros.enabled);
+        assert!(settings().macros.default_mode.is_empty());
     }
 
     #[test]

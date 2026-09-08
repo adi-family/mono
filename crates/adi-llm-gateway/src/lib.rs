@@ -18,12 +18,18 @@
 //! `POST /anthropic/v1/messages` becomes `https://api.anthropic.com/v1/messages`. So a client only
 //! ever learns one new thing, its base URL, and goes on building every path below it itself.
 //!
-//! What the gateway does *not* do is as deliberate as what it does: it adds no key, rewrites no
-//! body, and answers from no cache. Authorization is the client's own header, forwarded as sent.
-//! The one header it drops on the way out is `accept-encoding`, so the provider answers in plain
-//! text and the journal holds something a human can read.
+//! What the gateway does *not* do is as deliberate as what it does: it adds no key and answers from
+//! no cache. Authorization is the client's own header, forwarded as sent. The one header it drops
+//! on the way out is `accept-encoding`, so the provider answers in plain text and the journal holds
+//! something a human can read.
+//!
+//! The single exception is [`macros`], which rewrites a body on its way past to spend fewer tokens
+//! on the literals a prompt repeats. It is off in a fresh config and does nothing until a request
+//! asks for it by header, because changing what a model is shown is a different promise from
+//! carrying it unaltered — and one an operator should make on purpose.
 
 pub mod config;
 pub mod http;
 pub mod journal;
+pub mod macros;
 pub mod proxy;

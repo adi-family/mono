@@ -4,13 +4,14 @@
 
 > The adi LLM gateway: one loopback endpoint every model client is pointed at, which forwards each request verbatim to the provider and journals it to the shared store.
 
-7 structs · 1 enum across 4 files.
+11 structs · 4 enums across 5 files.
 
 ## Index
 
-- [`src/config.rs`](#srcconfigrs) — `Settings`, `Route`
+- [`src/config.rs`](#srcconfigrs) — `Settings`, `Macros`, `Route`
 - [`src/http.rs`](#srchttprs) — `Request`, `Reader`
 - [`src/journal.rs`](#srcjournalrs) — `Entry`, `Message`, `Journal`
+- [`src/macros.rs`](#srcmacrosrs) — `Mode`, `Shape`, `Dict`, `Rewriter`, `Expander`, `Frames`
 - [`src/proxy.rs`](#srcproxyrs) — `Gateway`
 
 ---
@@ -27,6 +28,20 @@ The gateway's settings.
 pub struct Settings {
     pub routes: BTreeMap<String, String>,
     pub max_logged_body: usize,
+    pub macros: Macros,
+}
+```
+
+### struct `Macros`
+
+Whether the gateway may rewrite a body on its way past, and what it does when a client expresses no preference.
+
+```rust
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Macros {
+    pub enabled: bool,
+    pub default_mode: String,
 }
 ```
 
@@ -122,6 +137,83 @@ A handle onto the writing thread. Cloning it is how each connection gets one.
 #[derive(Debug, Clone)]
 pub struct Journal {
     tx: Sender<Message>,
+}
+```
+
+---
+
+## `src/macros.rs`
+
+### enum `Mode`
+
+How the substitution is applied.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Full,
+    Tail,
+}
+```
+
+### enum `Shape`
+
+The request shape a provider speaks, which is what decides where the dictionary can safely go.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Anthropic,
+    OpenAi,
+}
+```
+
+### struct `Dict`
+
+A placeholder and what it stands for, in the order they were named.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Dict {
+    entries: Vec<(String, String)>,
+}
+```
+
+### enum `Rewriter`
+
+Puts the literals back in a response, whatever shape the response arrives in.
+
+```rust
+#[derive(Debug)]
+pub enum Rewriter {
+    Whole(Expander),
+    Frames(Frames),
+}
+```
+
+### struct `Expander`
+
+Expands placeholders in a response body, one chunk at a time.
+
+```rust
+#[derive(Debug)]
+pub struct Expander {
+    dict: Dict,
+    carry: Vec<u8>,
+}
+```
+
+### struct `Frames`
+
+Expands placeholders in a server-sent event stream, frame by frame.
+
+```rust
+#[derive(Debug)]
+pub struct Frames {
+    dict: Dict,
+    carry: String,
+    line: Vec<u8>,
+    template: Option<(Value, String)>,
 }
 ```
 
