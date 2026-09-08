@@ -54,7 +54,7 @@
 //! discriminator, and why an old peer that speaks only `adi/mesh/forward/0` is unaffected.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Mutex as SyncMutex, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -1438,6 +1438,7 @@ fn reason_heading(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::net::Ipv4Addr;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use adi_hive::config::{Recreate, Rollout, ServiceProxy, ServiceSpec};
