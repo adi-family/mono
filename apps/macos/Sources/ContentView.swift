@@ -12,6 +12,7 @@ import SwiftUI
 /// between the bands, one filled orange per step (`design/DESIGN.md` §2.4, §5).
 struct ContentView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,6 +40,10 @@ struct ContentView: View {
         .frame(width: 340)
         .background(ADI.bgSide.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        // The model asks for the panel — after starting the services, if they were not up — and
+        // this is the view that can open it. `openWindow` on an already-open window brings it
+        // forward, so pressing the button twice does what pressing it twice means.
+        .onReceive(model.showPanel) { openWindow(id: PanelWindow.sceneID) }
         .alert(model.notice?.title ?? "",
                isPresented: Binding(get: { model.notice != nil },
                                     set: { if !$0 { model.notice = nil } })) {

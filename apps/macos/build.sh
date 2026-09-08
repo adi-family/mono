@@ -117,6 +117,19 @@ plutil -replace CFBundleIdentifier -string "$ADI_BUNDLE_ID" "$APP/Contents/Info.
 plutil -replace CFBundleExecutable -string "$APP_NAME" "$APP/Contents/Info.plist"
 plutil -replace ADIFlavor -string "$ADI_FLAVOR" "$APP/Contents/Info.plist"
 plutil -replace ADIDomain -string "$ADI_DOMAIN" "$APP/Contents/Info.plist"
+# The panel window is a WKWebView on http://app.$ADI_DOMAIN, and App Transport Security blocks
+# plain HTTP unless the zone is excepted by name. The zone is the flavour's, so this is stamped
+# here rather than written once in Info.plist: a dev build serving .adi-dev would otherwise ship
+# an exception for .adi and show an empty window with a policy error in Console.
+plutil -replace NSAppTransportSecurity -json "{
+    \"NSAllowsLocalNetworking\": true,
+    \"NSExceptionDomains\": {
+        \"$ADI_DOMAIN\": {
+            \"NSIncludesSubdomains\": true,
+            \"NSExceptionAllowsInsecureHTTPLoads\": true
+        }
+    }
+}" "$APP/Contents/Info.plist"
 # App icon (Info.plist references it via CFBundleIconFile = ADI). Regenerate with
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"

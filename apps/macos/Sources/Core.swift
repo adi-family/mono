@@ -28,6 +28,13 @@ enum Core {
             .flatMap { $0.isEmpty ? nil : $0 } ?? "adi"
     }
 
+    /// The control panel's address on this install — `http://app.adi`, or the flavour's own zone.
+    /// One definition, because two things open it now: the window in the app, and the default
+    /// browser when somebody asks for it there.
+    static var panelURL: URL {
+        URL(string: "http://app.\(domain)/") ?? URL(string: "http://app.adi/")!
+    }
+
     private static var binaryPath: String {
         Bundle.main.resourceURL?.appendingPathComponent(binaryName).path
             ?? Bundle.main.bundlePath + "/Contents/Resources/" + binaryName

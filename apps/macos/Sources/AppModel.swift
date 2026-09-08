@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
@@ -143,11 +144,11 @@ final class AppModel: ObservableObject {
     ///
     /// It waits for the services to actually answer rather than opening straight after
     /// `enable` returns — launchd accepting a job is not the same as the front door serving,
-    /// and a browser tab that fails to load would look like ADI is broken.
+    /// and a window that fails to load would look like ADI is broken.
     func openDashboard() {
         guard !launching else { return }
         if anyRunning {
-            Self.open(domain: Core.domain)
+            showPanel.send()
             return
         }
         launching = true
@@ -163,7 +164,7 @@ final class AppModel: ObservableObject {
                 if let settled { self.report = settled }
                 self.launching = false
                 if cameUp {
-                    Self.open(domain: Core.domain)
+                    self.showPanel.send()
                 } else {
                     self.notice = Notice(
                         title: "ADI did not start",
@@ -175,10 +176,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private static func open(domain: String) {
-        guard let url = URL(string: "http://app.\(domain)/") else { return }
-        NSWorkspace.shared.open(url)
-    }
+    /// Asks for the panel window to be brought up; `ContentView` is what actually opens it.
+    ///
+    /// The window is a SwiftUI scene and `openWindow` is an environment value only a *view* can
+    /// read, so a model that opened it would have to be handed the action and keep it — across a
+    /// detached task, which is where the two-second poll and the start-up wait already live. A
+    /// signal the view subscribes to keeps that boundary where it was: the model decides *when*
+    /// the panel should appear, the scene decides how.
+    let showPanel = PassthroughSubject<Void, Never>()
 
     /// Start the stack as soon as — and only once — setup is complete.
     ///

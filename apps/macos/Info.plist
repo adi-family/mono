@@ -35,6 +35,29 @@
          shelling out to ask. Restamped per flavour by build.sh alongside ADIFlavor. -->
     <key>ADIDomain</key>
     <string>adi</string>
+    <!-- The panel window (Sources/PanelWindow.swift) loads `http://app.adi`, and App Transport
+         Security refuses plain HTTP unless it is told otherwise. There is no HTTPS to move to:
+         the front door serves a zone that resolves only on this Mac, for which no certificate
+         authority issues anything, and the traffic never leaves the loopback interface.
+         NSAllowsLocalNetworking covers the `127.0.0.1:<port>` a dashboard is reached on before it
+         has a host; the exception domain covers the zone itself. Restamped per flavour by
+         build.sh, beside ADIDomain — a dev build browses `.adi-dev`, and an exception naming
+         `adi` would leave its every page blocked. -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>adi</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
     <!-- Where the "Open an Issue" button goes. NOT restamped per flavour: a dev build's bugs
          belong in the same tracker as a release build's. The canonical value is the workspace
          Cargo.toml's `repository` — change the two together. -->

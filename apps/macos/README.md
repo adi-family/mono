@@ -174,6 +174,119 @@ runs now + at login, auto-restart via `KeepAlive`) and, on first enable, the `.a
 route (`/etc/resolver/adi` + the landing daemon — one admin-password prompt). The status
 line reads `Running` / `Starting…` / `Off` beside a green, orange or grey dot.
 
+### The control panel, in the app
+
+*Open control panel* opens a second window of ADI's own — `http://app.<domain>` in a `WKWebView`
+(`Sources/PanelWindow.swift`, `Sources/WebPanel.swift`) — rather than handing the URL to whatever
+browser the Mac opens `.adi` links with. Same page, same origin, same WebSocket; what it buys is
+that the panel is *in the app*: one icon in the Dock, one window that is where you left it, and
+not a tab lost in a window of thirty.
+
+The window wears an **ordinary title bar** — the traffic lights and the name of the page on screen,
+on a line of their own — and the shell's 48px bar (§7) sits under it, carrying the tabs and an
+arrow that hands the current page to the default browser. Tabs *in* the title bar is what a browser
+does; this is one window onto one machine, and the row reads better as a band of its own.
+
+**The title bar wears the app's surface and stays AppKit's** (`WindowChrome`). Both halves matter:
+the band is `--bg-side` rather than the system grey that leaves a seam across the top, *and*
+double-click to zoom or minimise, dragging, and the window menu all work — because they are the
+real title bar rather than an imitation of one. Measured: 38,41,44 → 16,16,16, and the strip
+hit-tests as `NSThemeFrame`.
+
+The rule underneath it, which cost four wrong turns: **colour the band, never cover it.** A view
+over the title bar claims every click in it, and `allowsHitTesting(false)` does not give them back
+(the hit is SwiftUI's hosting view, not the title bar). So:
+
+- `.windowStyle(.hiddenTitleBar)` is taken for *one* of its two effects — it makes SwiftUI want the
+  bar transparent, which is what lets the window's own background show. Setting
+  `titlebarAppearsTransparent` by hand on an ordinary window is silently reverted (measured true at
+  t+3s, false at t+6s: a working setting that looks broken).
+- Its other effect, `fullSizeContentView`, is the half that hurts, so `WindowChrome` removes it and
+  keeps it out — on `NSWindow.didUpdateNotification`, because SwiftUI re-asserts window
+  configuration long after the view is built, and both a bounded timer and `updateNSView` lose that
+  race.
+- `window.backgroundColor` holds once set. It was never the problem, though it looked like it while
+  the transparency underneath kept flipping back.
+
+The cost is the window's title, which `.hiddenTitleBar` also hides and which cannot be restored
+(`titleVisibility = .visible` is re-hidden from `makeNSView`, from `updateNSView`, and deferred a
+turn of the loop past either). The tab strip under the band names every open page anyway.
+`WindowChrome` also sets `isMovableByWindowBackground`, so the window can be dragged by its tab bar
+the way any window with a strip of tabs can.
+
+The window is dark because the whole app is (`preferredColorScheme(.dark)`, and `Tokens.swift`
+restates only the dark half of `design/tokens.css`). Following the system appearance is task
+**ADI-55**, which lists what has to move — including this band, which the app paints itself and
+which would otherwise stay black in a light window.
+
+There is **no address bar** — nothing is typed into this window, because everything it can reach is
+a click away on the page it opens on — and **no back, forward or reload button**: three glyphs
+spent on what this window almost never needs, and the web view keeps all three on its right-click
+menu for the times it does.
+
+**The first tab is the brand.** It wears the mark and the wordmark (§10's top-bar treatment at the
+tab-sized 16) instead of whatever the panel currently calls itself, because it is not one page
+among the open ones — it is the thing they were opened from, and it says so by being the only tab
+that never changes. Pressing it does what pressing a tab does: shows that tab.
+
+The page **stops drawing its own** mark while the app is the window around it, so the brand is not
+on screen twice a few pixels apart. Two halves:
+
+- The app **tells the page it is here**, with a `WKUserScript` setting `window.__adiNative` at
+  document start — not a User-Agent suffix, which every host this window opens would then see.
+- The page reads it (`adi-webapp`'s `native::in_app`) and `launcher::brand` and `launcher::floating`
+  draw nothing. Verified as an A/B on one URL: Chrome renders two triggers, the app renders none.
+
+**What that costs, deliberately:** those two were also the palette's only *pointer* triggers, so
+inside the app ⌘K is the keyboard's alone. The menu itself is untouched and the page still listens
+for the keystroke; what the app takes over is the mark, not the menu. If a click-target is wanted
+back, the cheapest honest answer is to let `launcher::floating` draw again — a corner mark
+duplicates nothing in the bar — rather than to put a second brand in the tab strip.
+
+**The first tab is the app** (`Sources/PanelTabs.swift`). It is created with the window, it cannot
+be closed, and nothing can navigate it off `app.<domain>`: a link that would opens a tab instead.
+That is enforced against *every* main-frame navigation and not just clicks — a `window.location`
+or a redirect is a navigation too, and an invariant that holds for one kind and not the others is
+not an invariant. So there is always somewhere to go back to, which is what makes it safe to let a
+dashboard take the window over.
+
+Dashboards and hive services open beside it, because the panel links to every one of them with
+`target="_blank"` (and `window.open` from the launcher) — so `createWebViewWith` is the hook, and
+what it makes is a tab rather than a window. ⌘-click opens one anywhere; ⌘1…⌘9 select; the ⨯ on a
+tab closes it and selection falls to the tab on its left. A host that is already open is brought
+forward rather than opened twice: pressing a dashboard's link again means *show me it*, not *give
+me another copy*. Each tab keeps its own web view, so its history and scroll position survive
+being switched away from.
+
+It is a viewer, not a general browser and not a second control panel. There is no search and no
+new-tab button — there would be nowhere for it to go — and **a clicked link that leaves this
+machine opens in the default browser**: an issue tracker or a docs site is not what this window is
+for. Only a *click* leaves, though: a redirect, a form post or a subframe is the page doing its
+job (`WebPanel.isLocal` decides, against the flavour's own zone plus loopback, so a dev build
+stays inside `.adi-dev`).
+
+Three things about it are load-bearing and easy to undo by accident:
+
+- **App Transport Security has to be told about the zone.** `Info.plist`'s
+  `NSAppTransportSecurity` excepts `<domain>` (plus `NSAllowsLocalNetworking` for the
+  `127.0.0.1:<port>` a dashboard is reached on before it has a host), and `build.sh` restamps
+  that exception per flavour beside `ADIDomain`. There is no HTTPS to move to: the front door
+  serves names that resolve only on this Mac, for which no CA issues anything. Without the
+  exception every load fails with a policy error and the window is simply blank.
+- **The JavaScript panels are implemented** (`WKUIDelegate`). The webapp guards destructive
+  actions with `confirm()`, and WebKit answers a delegate that does not implement it with
+  *false* — so *Delete* would silently do nothing, with no error anywhere to explain it.
+- **The web view is owned by `WebPanel`, not built by the representable.** A representable that
+  made its own would hand SwiftUI a fresh, blank page on every body rebuild, losing the history,
+  the scroll position and anything half-typed.
+- **The tab's title is observed, not sampled.** A page sets `document.title` when it likes, which
+  for a dashboard can be after the load finished, so reading it in the navigation callbacks catches
+  it only sometimes — the same tab came up *ADI — agents on your own machine* one run and
+  *landing.adi* the next. KVO on `\.title`, and the host only as the fallback before there is one.
+
+Right-click → *Inspect Element* works (macOS 13.3+): this is a window onto your own machine, and
+whoever opens it is likely the person changing what it shows.
+
 ### The two controls at the foot of the window
 
 Below a rule, on **every** step including the two setup ones, sit the two things that have to
@@ -280,8 +393,11 @@ crates/
   adi-cli/             the `adi-mono` binary — a thin argv adapter over adi-core
 
 apps/macos/Sources/
-  ADIApp.swift         @main — a single dark Window (content-sized)
+  ADIApp.swift         @main — the dark Window (content-sized) + the panel Window
   ContentView.swift    the window: header, the step the install is on, the footer
+  PanelWindow.swift    the panel's window: the 48px bar, the tab strip, the page
+  PanelTabs.swift      the tabs — and the rule that the first one is always the app
+  WebPanel.swift       one tab's WKWebView: navigation, what leaves, what opens a tab, JS panels
   StatusLine.swift     the status dot + word, and the services switch
   DashboardButton.swift  the one filled button: Open control panel
   Maintenance.swift    the footer: the update row and the report-a-problem row
