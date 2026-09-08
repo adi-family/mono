@@ -1,0 +1,57 @@
+[package]
+name = "adi-llm-gateway"
+description = "The adi LLM gateway: one loopback endpoint every model client is pointed at, which forwards each request verbatim to the provider and journals it to the shared store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# The forwarding core is a library so a test — and, later, the panel — can drive it without a
+# process; the binary is the supervised daemon around it.
+[lib]
+name = "adi_llm_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "adi-llm-gateway"
+path = "src/main.rs"
+
+[dependencies]
+adi-config = { workspace = true }
+adi-db = { workspace = true }
+adi-osext = { workspace = true, features = ["signals"] }
+
+# So the port comes from the platform's registry rather than being hand-picked here, on the one
+# path where the supervisor has not already leased one and passed it in `$PORT`.
+adi-ports-manager = { workspace = true }
+
+tokio = { workspace = true, features = [
+    "rt-multi-thread",
+    "net",
+    "macros",
+    "signal",
+    "time",
+    "io-util",
+] }
+
+# The upstream leg. `Response::chunk` is not behind the `stream` feature, so the workspace's
+# features are enough: a model answer reaches the client chunk by chunk as it arrives.
+reqwest = { workspace = true }
+# reqwest is built `rustls-no-provider` (see the workspace manifest), so nobody picks a crypto
+# provider for us and a client cannot be built until this process installs one.
+rustls = { workspace = true }
+
+# The journal is a table in the shared store; adi-db opens it with the platform's pragmas but
+# hands back a plain rusqlite connection, so the insert is written here.
+rusqlite = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true
