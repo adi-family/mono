@@ -46,6 +46,8 @@ extraction script cares about.
   macOS only. Nothing about the panel itself changed: it is the same page on the same address, and
   opening `app.adi` in a browser works as it always did.
 
+## 1.8.0 — 2026-09-07
+
 ### Added
 
 - **Who is around, in the width of a few characters.** The strip of paired machines has moved out
