@@ -82,6 +82,7 @@ pub struct Flavor {
     pub resolver_port: u16,
     pub frontdoor_addr: Ipv4Addr,
     pub supervisor_port: u16,
+    pub mesh_gateway_port: u16,
     pub auto_update: bool,
 }
 ```
@@ -100,6 +101,7 @@ struct Preset {
     resolver_port: u16,
     frontdoor_addr: Ipv4Addr,
     supervisor_port: u16,
+    mesh_gateway_port: u16,
     auto_update: bool,
 }
 ```

@@ -37,6 +37,7 @@ const DIR_ENV: &str = "ADI_DIR";
 const RESOLVER_PORT_ENV: &str = "ADI_RESOLVER_PORT";
 const FRONTDOOR_ADDR_ENV: &str = "ADI_FRONTDOOR_ADDR";
 const SUPERVISOR_PORT_ENV: &str = "ADI_SUPERVISOR_PORT";
+const MESH_GATEWAY_PORT_ENV: &str = "ADI_MESH_GATEWAY_PORT";
 const AUTO_UPDATE_ENV: &str = "ADI_AUTO_UPDATE";
 
 /// Ports for derived flavours. Above the release resolver (10053) and the `dev` one (10063),
@@ -49,6 +50,13 @@ const DERIVED_PORT_SPAN: u16 = 900;
 /// clear of the ports manager's `8000..=9999`, so no lease can ever land on one.
 const DERIVED_SUPERVISOR_BASE: u16 = 45_200;
 const DERIVED_SUPERVISOR_SPAN: u16 = 700;
+
+/// Mesh gateway ports for derived flavours. Its own band rather than a neighbour of the
+/// resolver's: both are drawn from the same hash, so overlapping bands would eventually hand one
+/// flavour the same number twice. Above the derived resolver band (`10100..=10999`), clear of the
+/// ports manager's `8000..=9999`, of ADI DNS on 15353, and of Ollama's 11434.
+const DERIVED_MESH_GATEWAY_BASE: u16 = 12_000;
+const DERIVED_MESH_GATEWAY_SPAN: u16 = 900;
 
 /// Front-door loopback aliases for derived flavours, past `release` (.53) and `dev` (.54).
 /// All of `127.0.0.0/8` is on `lo0` by default on macOS, so any of these binds with no setup.
@@ -81,6 +89,16 @@ pub struct Flavor {
     /// adi-hive simply refuses to start without a bindable address — but two supervisors on
     /// one port means the second never starts.
     pub supervisor_port: u16,
+    /// The loopback port this install's mesh gateway binds, and therefore the address its front
+    /// door hands the whole `n.adi` zone to (`docs/fleet.md` §3).
+    ///
+    /// Per-flavour because the two ends never handshake: each front door writes the number into
+    /// its own generated config and each gateway binds it at start-up, so two installs sharing
+    /// one number means whichever app launches first owns *every* install's remote access. That
+    /// is not hypothetical — with both apps on 10080, `ADI Dev` won the boot race by 300 ms and
+    /// the release front door spent a day handing `*.n.adi` to a gateway whose fleet registry
+    /// was empty, answering "node not paired" for nodes that were paired all along.
+    pub mesh_gateway_port: u16,
     /// Whether the auto-updater runs. Only `release` updates itself: a dev build pulling the
     /// release channel over its own bundle is never what anyone wanted.
     pub auto_update: bool,
@@ -150,6 +168,9 @@ impl Flavor {
             supervisor_port: get(SUPERVISOR_PORT_ENV)
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(preset.supervisor_port),
+            mesh_gateway_port: get(MESH_GATEWAY_PORT_ENV)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(preset.mesh_gateway_port),
             auto_update: get(AUTO_UPDATE_ENV)
                 .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
                 .unwrap_or(preset.auto_update),
@@ -193,6 +214,7 @@ impl Flavor {
             (RESOLVER_PORT_ENV, self.resolver_port.to_string()),
             (FRONTDOOR_ADDR_ENV, self.frontdoor_addr.to_string()),
             (SUPERVISOR_PORT_ENV, self.supervisor_port.to_string()),
+            (MESH_GATEWAY_PORT_ENV, self.mesh_gateway_port.to_string()),
             (AUTO_UPDATE_ENV, self.auto_update.to_string()),
         ]
     }
@@ -208,6 +230,7 @@ struct Preset {
     resolver_port: u16,
     frontdoor_addr: Ipv4Addr,
     supervisor_port: u16,
+    mesh_gateway_port: u16,
     auto_update: bool,
 }
 
@@ -223,6 +246,7 @@ impl Preset {
                 resolver_port: 10_053,
                 frontdoor_addr: Ipv4Addr::new(127, 0, 0, 53),
                 supervisor_port: 45_099,
+                mesh_gateway_port: crate::MESH_GATEWAY_PORT,
                 auto_update: true,
             },
             "dev" => Self {
@@ -234,6 +258,7 @@ impl Preset {
                 resolver_port: 10_063,
                 frontdoor_addr: Ipv4Addr::new(127, 0, 0, 54),
                 supervisor_port: 45_199,
+                mesh_gateway_port: 10_090,
                 auto_update: false,
             },
             other => Self::derived(other),
@@ -265,6 +290,8 @@ impl Preset {
             frontdoor_addr: Ipv4Addr::new(127, 0, 0, octet),
             supervisor_port: DERIVED_SUPERVISOR_BASE
                 + u16::try_from(hash % u64::from(DERIVED_SUPERVISOR_SPAN)).unwrap_or(0),
+            mesh_gateway_port: DERIVED_MESH_GATEWAY_BASE
+                + u16::try_from(hash % u64::from(DERIVED_MESH_GATEWAY_SPAN)).unwrap_or(0),
             auto_update: false,
         }
     }
@@ -355,6 +382,9 @@ mod tests {
         assert_ne!(release.resolver_port, dev.resolver_port);
         assert_ne!(release.frontdoor_addr, dev.frontdoor_addr);
         assert_ne!(release.supervisor_port, dev.supervisor_port);
+        // Shared, this one is silent: both gateways bind at start-up and neither front door ever
+        // notices it is talking to the other install's fleet.
+        assert_ne!(release.mesh_gateway_port, dev.mesh_gateway_port);
 
         for service in [
             "dns",
@@ -437,6 +467,19 @@ mod tests {
         assert!(
             ![45_099, 45_199].contains(&f.supervisor_port),
             "clear of both presets"
+        );
+        assert!(f.mesh_gateway_port >= DERIVED_MESH_GATEWAY_BASE);
+        assert!(
+            ![10_080, 10_090].contains(&f.mesh_gateway_port),
+            "clear of both presets"
+        );
+        assert!(
+            !(8_000..=9_999).contains(&f.mesh_gateway_port),
+            "a lease could take it"
+        );
+        assert_ne!(
+            f.mesh_gateway_port, f.resolver_port,
+            "one flavour's own two fixed ports must differ"
         );
         assert_eq!(
             flavor(&[(FLAVOR_ENV, "staging")]),

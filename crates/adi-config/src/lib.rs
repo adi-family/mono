@@ -73,7 +73,18 @@ pub const MANIFEST_EXT: &str = "toml";
 /// allocator's `8000..=9999` range (so no project can ever be handed it), clear of `15353` and
 /// the `adi daemon` band around it, and in the same fixed `10xxx` band as the resolver's
 /// `10053`.
+///
+/// Fixed *per install*, not per machine: this is the `release` flavour's number, and every
+/// flavour carries its own ([`Flavor::mesh_gateway_port`]). Read [`mesh_gateway_port`] rather
+/// than this constant unless you specifically mean the real install — a second install binding
+/// this one is exactly how remote access breaks, and it breaks silently.
 pub const MESH_GATEWAY_PORT: u16 = 10080;
+
+/// The port *this* install's mesh gateway binds — [`MESH_GATEWAY_PORT`] under `release`.
+#[must_use]
+pub fn mesh_gateway_port() -> u16 {
+    Flavor::current().mesh_gateway_port
+}
 
 /// Where the *generated* front-door config lives: module dir and file name.
 ///
@@ -89,14 +100,14 @@ pub const FRONTDOOR_MODULE: &str = "dns";
 /// The generated front-door config's file name within [`FRONTDOOR_MODULE`].
 pub const FRONTDOOR_CONFIG_FILE: &str = "hive-frontdoor.yaml";
 
-/// The mesh gateway's loopback address — [`MESH_GATEWAY_PORT`] on `127.0.0.1`.
+/// The mesh gateway's loopback address — this install's [`mesh_gateway_port`] on `127.0.0.1`.
 ///
 /// Loopback only, and deliberately: the gateway is reached through the front door, never from
 /// off-machine. Binding it anywhere else would hand every service of every paired node to the
 /// local network, with no password in front of it until the far side asks for one.
 #[must_use]
 pub fn mesh_gateway_addr() -> std::net::SocketAddr {
-    std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, MESH_GATEWAY_PORT))
+    std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, mesh_gateway_port()))
 }
 
 /// The settings store: one directory that hands out per-[module](Module) settings

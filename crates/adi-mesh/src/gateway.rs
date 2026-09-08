@@ -54,7 +54,7 @@
 //! discriminator, and why an old peer that speaks only `adi/mesh/forward/0` is unaffected.
 
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Mutex as SyncMutex, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -91,6 +91,9 @@ use crate::{activity, auth, tunnel};
 ///
 /// It remains only a *default*: [`ADDR_ENV`] overrides it here, and the front door states the
 /// real address in its own config, so the two are always configured together.
+///
+/// This is the `release` install's number. A second install binds its own — see
+/// [`default_addr`], which resolves the flavour rather than reading this.
 pub use adi_config::MESH_GATEWAY_PORT as DEFAULT_PORT;
 
 /// Environment override for the gateway's listen address, e.g. `127.0.0.1:14081`. An env var
@@ -130,10 +133,14 @@ const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 /// routes, and the reason nothing here has to know how deep the name is.
 const LOCAL_ZONE: &str = "adi";
 
-/// The gateway's default listen address.
+/// The gateway's default listen address: *this install's* gateway port on loopback.
+///
+/// Flavour-resolved rather than [`DEFAULT_PORT`] flat, and for the same reason the number is
+/// shared with `adi-core` at all — the front door writes what `adi_config::mesh_gateway_addr`
+/// returns, so binding anything else here is a `502` no log line explains.
 #[must_use]
 pub fn default_addr() -> SocketAddr {
-    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, DEFAULT_PORT))
+    adi_config::mesh_gateway_addr()
 }
 
 /// The address to listen on: [`ADDR_ENV`] when it parses, [`default_addr`] otherwise.
