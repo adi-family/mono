@@ -19,6 +19,7 @@ mod launcher;
 mod links;
 mod live;
 mod menu;
+mod native;
 mod origin;
 mod pages;
 mod pwa;

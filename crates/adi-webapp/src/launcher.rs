@@ -20,6 +20,11 @@
 //! * [`floating`] — the bare mark in a corner, for the screens with nowhere to dock one: the
 //!   setup wizard and the control panel.
 //!
+//! **Neither is drawn inside the ADI app** ([`crate::native`]). Its window wears the mark and the
+//! wordmark as the first of its tabs, so the page drawing them again would be the same brand
+//! twice, a few pixels apart. The menu itself ([`overlay`]) is untouched and `⌘K` still opens it:
+//! what the app takes over is the *mark*, not the menu.
+//!
 //! The mark is [`adi_ui::Mark`] and nothing else. It does not move, glow or open up on hover:
 //! the mark is not a mascot (`design/DESIGN.md` §10), and its hover is the same tone change
 //! every other control gets.
@@ -187,8 +192,11 @@ pub(crate) fn overlay(
 /// `place` is the modifier the stylesheet keys off — the sessions rail's head or the
 /// narrow-viewport bar. Both are drawn, and CSS shows whichever belongs to the current width;
 /// they cannot be one element, because the two live in different parents.
+///
+/// Nothing, in the ADI app: its window carries this exact line in its own bar, above the tabs
+/// ([`crate::native`]), and the trigger it draws does not scroll away with the rail.
 pub(crate) fn brand(l: Launcher, place: &'static str) -> impl IntoView {
-    view! {
+    (!crate::native::in_app()).then(|| view! {
         <button
             type="button"
             class=format!("adi-brand {place}")
@@ -202,12 +210,15 @@ pub(crate) fn brand(l: Launcher, place: &'static str) -> impl IntoView {
             <span class="adi-brand__word">"adi"</span>
             <Kbd class="adi-brand__kbd">{format!("{}K", mod_glyph())}</Kbd>
         </button>
-    }
+    })
 }
 
 /// The trigger for a screen with no column to dock one in: the mark alone, in a corner.
+///
+/// Nothing, in the ADI app, for the same reason [`brand`] is: the window's bar holds the trigger
+/// on every screen, so the corner mark would be the second one on the ones that have both.
 pub(crate) fn floating(l: Launcher) -> impl IntoView {
-    view! {
+    (!crate::native::in_app()).then(|| view! {
         <button
             type="button"
             class="fixed z-40 flex size-11 cursor-pointer items-center justify-center \
@@ -221,7 +232,7 @@ pub(crate) fn floating(l: Launcher) -> impl IntoView {
         >
             <Mark class="size-7"/>
         </button>
-    }
+    })
 }
 
 /// The menu itself: a filter, and the rows that survive it.
