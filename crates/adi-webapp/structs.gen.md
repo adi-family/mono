@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-63 structs · 10 enums · 1 type alias across 23 files.
+64 structs · 10 enums · 1 type alias across 24 files.
 
 ## Index
 
@@ -18,6 +18,7 @@
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
+- [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `SetupMode`, `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/mod.rs`](#srcpagesproject_detailmodrs) — `ProjectScope`
@@ -68,6 +69,7 @@ pub(crate) enum Icon {
     Download,
     Upgrade,
     Chart,
+    Traffic,
     Filter,
     Sliders,
 }
@@ -418,6 +420,36 @@ struct Scope {
 
 ---
 
+## `src/pages/llm.rs`
+
+### struct `LlmConsole`
+
+The page's own state: what is being asked for, what came back, and which call is open.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct LlmConsole {
+    pub(crate) window: RwSignal<String>,
+    pub(crate) provider: RwSignal<String>,
+    pub(crate) model: RwSignal<String>,
+    pub(crate) errors: RwSignal<bool>,
+    pub(crate) typed: RwSignal<String>,
+    pub(crate) search: RwSignal<String>,
+    pub(crate) reload: RwSignal<u32>,
+    pub(crate) summary: RwSignal<Option<LlmSummary>>,
+    pub(crate) calls: RwSignal<Option<Vec<LlmCallDto>>>,
+    pub(crate) matched: RwSignal<i64>,
+    pub(crate) open: RwSignal<Option<i64>>,
+    pub(crate) detail: RwSignal<Option<LlmCallDetail>>,
+    pub(crate) raw: RwSignal<bool>,
+    pub(crate) by_tokens: RwSignal<bool>,
+    pub(crate) busy: RwSignal<bool>,
+    pub(crate) error: RwSignal<Option<String>>,
+}
+```
+
+---
+
 ## `src/pages/onboarding.rs`
 
 ### enum `SetupMode`
@@ -648,6 +680,7 @@ pub(crate) enum Route {
     Knowledge,
     Facts,
     Database,
+    Llm,
     Triggers,
     Dashboards,
     Marketplace,
@@ -765,6 +798,10 @@ pub(crate) struct Tables {
     pub(crate) secrets: TableState,
     pub(crate) knowledge_bases: TableState,
     pub(crate) knowledge_notes: TableState,
+    pub(crate) llm_models: TableState,
+    pub(crate) llm_providers: TableState,
+    pub(crate) llm_clients: TableState,
+    pub(crate) llm_calls: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,

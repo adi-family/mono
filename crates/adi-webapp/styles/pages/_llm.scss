@@ -1,0 +1,254 @@
+// Page-local styles for `src/pages/llm.rs`. Shared components live in adi-css; the shapes that
+// exist only on this page live here. Tokens from design/tokens.css only.
+//
+// Colour is spent one way, as on Analytics: a 6px dot before a word or a number, and only when
+// something is wrong (DESIGN.md §3). Every number is sans and tabular. Nothing is a box — the
+// call detail is a run of labelled sections separated by hairlines, not a stack of cards (§8).
+
+@use "../../../adi-css/scss/mixins" as *;
+
+// The row under the filters: what the numbers count, and what they are filtered to.
+.adi-llm-mode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 0 4px;
+}
+
+// The stats row (§6): three numbers, 20px/500, a 12px label under each.
+.adi-llm-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  max-width: 480px;
+  padding-top: 8px;
+}
+
+.adi-llm-stat {
+  b {
+    display: block;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 1.1;
+    letter-spacing: -.01em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  span {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+}
+
+// The one line of detail under the numbers.
+.adi-llm-fine {
+  margin-top: 10px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+
+// The figures worth reading only when they are not zero, and — in the call detail — the header
+// and settings lists. `--wide` is for the detail, whose keys are header names rather than words.
+.adi-llm-kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 6px 10px;
+  margin: 16px 0 0;
+  max-width: 480px;
+  font-size: var(--fs-small);
+
+  dt {
+    color: var(--ink-3);
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  dd {
+    margin: 0;
+    color: var(--ink-2);
+    min-width: 0;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+
+  &--wide {
+    grid-template-columns: 200px minmax(0, 1fr);
+    margin-top: 0;
+    max-width: none;
+  }
+}
+
+// A 6px dot in a state's colour, before the word or number it qualifies.
+.adi-llm-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  vertical-align: 1px;
+
+  &--ok { background: var(--ok); }
+  &--warn { background: var(--warn); }
+  &--err { background: var(--err); }
+}
+
+// The window as bars, seated on one baseline so the heights are read against each other. Ink,
+// not the accent: the newest bucket is the darkest bar, and that is all the emphasis a chart of
+// one series needs. Failures are not painted here — a red bar would say the whole bucket failed.
+.adi-llm-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  padding-top: 8px;
+  max-width: 720px;
+
+  &__col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 6px;
+    height: 104px;
+    min-width: 0;
+  }
+
+  &__bar {
+    display: block;
+    border-radius: 2px 2px 0 0;
+    background: var(--ink-3);
+  }
+
+  &__col:hover &__bar { background: var(--ink-2); }
+
+  &__bar--last { background: var(--ink); }
+
+  // Only every few columns carries one; the empty ones still reserve the line so the bars stay
+  // seated on the same baseline.
+  &__tick {
+    height: 1em;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    text-align: center;
+    white-space: nowrap;
+    overflow: visible;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// ---- one call, read ---------------------------------------------------------------------------
+
+.adi-llm-detail {
+  display: flex;
+  flex-direction: column;
+}
+
+// One labelled part of the call: a hairline, a 12px grey label, then the thing itself.
+.adi-llm-sect {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+
+  &:first-child {
+    padding-top: 8px;
+    border-top: 0;
+  }
+
+  &__label {
+    @include label;
+
+    margin-bottom: 8px;
+  }
+}
+
+// One message of the conversation: who said it, then what they said.
+.adi-llm-block {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+
+  &:last-child { border-bottom: 0; }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: var(--fs-label);
+  }
+
+  // The speaker. The one thing in a block's head with the ink's full weight — it is what the eye
+  // scans a long conversation by.
+  &__role {
+    color: var(--ink);
+    font-weight: 500;
+  }
+
+  // What the block is — `text`, `tool_result`, `image`. A machine word, so it reads as a tag.
+  &__kind {
+    @include chip;
+
+    padding: 2px 8px;
+    white-space: nowrap;
+  }
+
+  &__meta {
+    color: var(--ink-3);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+}
+
+// A prompt, an answer, a tool's arguments: preformatted, wrapped, and capped in height so one
+// 200-line system prompt does not bury the six panels under it. Scrolls in place instead.
+.adi-llm-body {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--bg-raise);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: var(--code);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+
+  // Reasoning the model did not address to anyone. Quieter than what it actually said.
+  &--quiet { color: var(--ink-3); }
+}
+
+// What a pane is showing against what the journal holds, and the other small honesty notes.
+.adi-llm-note {
+  padding: 0 0 6px;
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+}
+
+// The tools a call offered the model, as tags.
+.adi-llm-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+// On a phone the key-value lists stack: 200px of key beside a header value leaves nothing for
+// the value.
+@include narrow {
+  .adi-llm-kv,
+  .adi-llm-kv--wide {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+
+    dd { margin-bottom: 8px; }
+  }
+
+  .adi-llm-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

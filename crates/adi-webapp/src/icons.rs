@@ -54,6 +54,8 @@ pub(crate) enum Icon {
     Upgrade,
     /// Analytics.
     Chart,
+    /// Traffic passing through — the model calls the gateway sees.
+    Traffic,
     /// Narrow a list to part of itself.
     Filter,
     /// Per-run settings — dials somebody has set, as against `Gear`'s administration.
@@ -89,6 +91,7 @@ impl Icon {
             Icon::Download => Lucide::Download,
             Icon::Upgrade => Lucide::ArrowUp,
             Icon::Chart => Lucide::ChartColumn,
+            Icon::Traffic => Lucide::Activity,
             Icon::Filter => Lucide::ListFilter,
             Icon::Sliders => Lucide::SlidersHorizontal,
         }
@@ -108,6 +111,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Knowledge => Icon::Book,
         Route::Facts => Icon::Pair,
         Route::Database => Icon::Database,
+        Route::Llm => Icon::Traffic,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,

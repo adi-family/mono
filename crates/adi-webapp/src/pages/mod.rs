@@ -9,6 +9,7 @@ mod facts;
 pub(crate) mod fleet;
 mod hive;
 mod knowledge;
+mod llm;
 mod marketplace;
 mod mesh;
 mod meta;
@@ -39,6 +40,10 @@ pub(crate) mod columns {
         BASE_COLS as KNOWLEDGE_BASE_COLS, NOTE_COLS as KNOWLEDGE_NOTE_COLS,
         PROJECT_BASE_COLS as PROJECT_KNOWLEDGE_BASE_COLS,
     };
+    pub(crate) use super::llm::{
+        CALL_COLS as LLM_CALL_COLS, CLIENT_COLS as LLM_CLIENT_COLS, LATEST_FIRST,
+        MODEL_COLS as LLM_MODEL_COLS, MOST_CALLS_FIRST, PROVIDER_COLS as LLM_PROVIDER_COLS,
+    };
     pub(crate) use super::mesh::{
         ALLOW_COLS as MESH_ALLOW_COLS, FORWARD_COLS as MESH_FORWARD_COLS,
         PEER_COLS as MESH_PEER_COLS,
@@ -68,6 +73,7 @@ pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use knowledge::knowledge_view;
+pub(crate) use llm::{LlmConsole, llm_view};
 pub(crate) use marketplace::marketplace_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
@@ -105,6 +111,10 @@ mod tests {
         ("knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
         ("project-knowledge-bases", c::PROJECT_KNOWLEDGE_BASE_COLS),
         ("project-knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
+        ("llm-calls", c::LLM_CALL_COLS),
+        ("llm-clients", c::LLM_CLIENT_COLS),
+        ("llm-models", c::LLM_MODEL_COLS),
+        ("llm-providers", c::LLM_PROVIDER_COLS),
         ("leases", c::LEASE_COLS),
         ("used-ports", c::USED_PORT_COLS),
         ("mesh-allow", c::MESH_ALLOW_COLS),
@@ -192,6 +202,19 @@ mod tests {
             "{:?} is not a column of {:?}",
             c::BUSIEST_FIRST.col,
             c::ANALYTICS_AGENT_COLS
+        );
+        for cols in [c::LLM_MODEL_COLS, c::LLM_PROVIDER_COLS, c::LLM_CLIENT_COLS] {
+            assert!(
+                cols.contains(&c::MOST_CALLS_FIRST.col),
+                "{:?} is not a column of {cols:?}",
+                c::MOST_CALLS_FIRST.col
+            );
+        }
+        assert!(
+            c::LLM_CALL_COLS.contains(&c::LATEST_FIRST.col),
+            "{:?} is not a column of {:?}",
+            c::LATEST_FIRST.col,
+            c::LLM_CALL_COLS
         );
     }
 }

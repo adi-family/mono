@@ -237,6 +237,7 @@ Why Lucide and not the alternatives: it is a stroke set with strict geometry (24
 | Dashboards | `layout-dashboard` |
 | Secrets | `key-round` |
 | Database | `database` |
+| LLM traffic | `activity` |
 | Mesh / fleet | `network` |
 | Memory | `brain` |
 | Settings | `settings-2` |

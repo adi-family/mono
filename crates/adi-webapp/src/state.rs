@@ -240,6 +240,12 @@ pub(crate) struct Tables {
     pub(crate) knowledge_bases: TableState,
     /// … and the notes of whichever base is open on it.
     pub(crate) knowledge_notes: TableState,
+    /// The LLM traffic page's three rollups of the gateway journal …
+    pub(crate) llm_models: TableState,
+    pub(crate) llm_providers: TableState,
+    pub(crate) llm_clients: TableState,
+    /// … and the calls themselves.
+    pub(crate) llm_calls: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -293,6 +299,14 @@ impl Tables {
             secrets: TableState::new("secrets", c::SECRET_COLS),
             knowledge_bases: TableState::new("knowledge-bases", c::KNOWLEDGE_BASE_COLS),
             knowledge_notes: TableState::new("knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
+            llm_models: TableState::sorted("llm-models", c::LLM_MODEL_COLS, c::MOST_CALLS_FIRST),
+            llm_providers: TableState::sorted(
+                "llm-providers",
+                c::LLM_PROVIDER_COLS,
+                c::MOST_CALLS_FIRST,
+            ),
+            llm_clients: TableState::sorted("llm-clients", c::LLM_CLIENT_COLS, c::MOST_CALLS_FIRST),
+            llm_calls: TableState::sorted("llm-calls", c::LLM_CALL_COLS, c::LATEST_FIRST),
             tasks: TableState::new("tasks", c::TASK_COLS),
             tasks_done: TableState::new("tasks-done", c::TASK_COLS),
             tools: TableState::new("tools", c::TOOL_COLS),

@@ -45,9 +45,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use adi_config::Config;
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::OpenFlags;
 
 pub use error::{Error, Result};
+/// The connection type [`Db::connect`] and [`Db::connect_readonly`] hand out, and that
+/// [`query_on`]/[`query_on_json`] take. Re-exported because this crate's public API is written in
+/// terms of it: without this, holding a connection open across a few queries would oblige every
+/// caller to depend on rusqlite itself just to name the type.
+pub use rusqlite::Connection;
 pub use value::{ColumnInfo, DbInfo, ExecResult, QueryResult, TableInfo};
 
 /// The subdirectory per-project databases live in, and the extension they all carry — needed here

@@ -50,13 +50,13 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    FactsConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
+    FactsConsole, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
-    hive_view, knowledge_view, live_view, load_agent_into_form, load_dir, load_store_file,
-    marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
-    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
-    reset_chat_home, secrets_view, seed_onboarding, start_onb_reconfigure, store_file_view,
-    tasks_view, tools_view, triggers_view,
+    hive_view, knowledge_view, live_view, llm_view, load_agent_into_form, load_dir,
+    load_store_file, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log,
+    poll_term, poll_trigger_log, poll_watch, ports_manager_view, project_detail_view,
+    projects_view, reset_chat_home, secrets_view, seed_onboarding, start_onb_reconfigure,
+    store_file_view, tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -826,6 +826,11 @@ fn App() -> impl IntoView {
     // the same reason as the two above: nothing here belongs on the shell's 4s poll.
     let facts = FactsConsole::new();
 
+    // The LLM traffic page's filters, results and open call. Page-local for the same reason
+    // again, and one more: the open call holds a whole prompt, which the shell has no business
+    // keeping while you are looking at another page (see `LlmConsole::close`).
+    let llm = LlmConsole::new();
+
     // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
     let secrets_form = SecretsForm::new();
 
@@ -1029,6 +1034,11 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::Secrets | Route::ProjectDetail) {
             secrets_form.clear_revealed();
         }
+        // And for the open model call: it holds a whole prompt, which is the most sensitive thing
+        // on that page and has no reason to sit in memory behind another one.
+        if !matches!(route.get(), Route::Llm) {
+            llm.close();
+        }
         // Same rule for pairing: the invite minted here, the one pasted in to be spent, and the
         // password that spending it bought are all bearer secrets, and the screen they were drawn
         // on is the only place any of them was meant to exist.
@@ -1196,6 +1206,7 @@ fn App() -> impl IntoView {
                         Route::Knowledge => knowledge_view(state, knowledge),
                         Route::Facts => facts_view(facts),
                         Route::Database => database_view(state, db_console),
+                        Route::Llm => llm_view(state, llm),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
@@ -1344,6 +1355,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Knowledge,
             Route::Facts,
             Route::Database,
+            Route::Llm,
             Route::Triggers,
             Route::Dashboards,
             Route::Marketplace,

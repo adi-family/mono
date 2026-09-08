@@ -40,6 +40,8 @@ pub(crate) enum Route {
     Facts,
     /// The shared SQLite store — browse tables and run SQL (`/database`).
     Database,
+    /// Every model API call that went through the gateway, and what was in it (`/llm`).
+    Llm,
     /// Trigger definitions (`/triggers`).
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
@@ -64,7 +66,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 17] = [
+    pub(crate) const NAV: [Route; 18] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -75,6 +77,7 @@ impl Route {
         Route::Knowledge,
         Route::Facts,
         Route::Database,
+        Route::Llm,
         Route::Triggers,
         Route::Dashboards,
         Route::Marketplace,
@@ -107,6 +110,7 @@ impl Route {
             "/knowledge" => Route::Knowledge,
             "/facts" => Route::Facts,
             "/database" => Route::Database,
+            "/llm" => Route::Llm,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
             "/marketplace" => Route::Marketplace,
@@ -135,6 +139,7 @@ impl Route {
             Route::Knowledge => "/extended/knowledge",
             Route::Facts => "/extended/facts",
             Route::Database => "/extended/database",
+            Route::Llm => "/extended/llm",
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
@@ -162,6 +167,7 @@ impl Route {
             Route::Knowledge => "Knowledge",
             Route::Facts => "Facts",
             Route::Database => "Database",
+            Route::Llm => "LLM traffic",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
@@ -191,6 +197,7 @@ impl Route {
             Route::Knowledge => "Notes, searched by meaning",
             Route::Facts => "Sentences, and the pairs still to decide",
             Route::Database => "Browse the store's tables, run SQL",
+            Route::Llm => "Every prompt and answer through the gateway — tokens, models, cost",
             Route::Triggers => "What runs when something happens",
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",

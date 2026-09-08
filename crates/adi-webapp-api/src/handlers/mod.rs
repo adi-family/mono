@@ -28,6 +28,8 @@ mod fs;
 mod guides;
 mod health;
 mod knowledge;
+/// The LLM gateway's journal — every model API call made through `llm.adi`.
+mod llm;
 mod marketplace;
 mod mesh;
 mod meta;
@@ -54,6 +56,7 @@ pub use fleet::*;
 pub use fs::*;
 pub use health::*;
 pub use knowledge::*;
+pub use llm::*;
 pub use marketplace::*;
 pub use mesh::*;
 pub use meta::*;

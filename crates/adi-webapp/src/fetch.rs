@@ -10,10 +10,11 @@ use adi_webapp_api::types::{
     FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
     IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
     KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
-    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MarketplaceDone, MarketplaceState,
-    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
-    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
-    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmCallDetail, LlmCallRef, LlmCalls,
+    LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState, MeshForwardRef, MeshListenRef,
+    MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
+    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
     RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetAutoTitle,
@@ -401,6 +402,24 @@ pub async fn db_exec(project: Option<String>, sql: String) -> Result<DbExecResul
         },
     )
     .await
+}
+
+// The LLM gateway's journal — every model API call this machine made through `llm.adi`. Reads
+// only: the record is the gateway's to write, and the panel has no endpoint that could edit it.
+
+/// The traffic over a window, from three angles, plus what the filters may offer.
+pub async fn llm_summary(query: &LlmQuery) -> Result<LlmSummary, String> {
+    post("/api/llm/summary", query).await
+}
+
+/// The calls themselves, newest first — everything but the bodies.
+pub async fn llm_calls(query: &LlmQuery) -> Result<LlmCalls, String> {
+    post("/api/llm/calls", query).await
+}
+
+/// One call, analyzed: the prompt as blocks, the answer reassembled, both header sets.
+pub async fn llm_call(id: i64) -> Result<LlmCallDetail, String> {
+    post("/api/llm/call", &LlmCallRef { id }).await
 }
 
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.

@@ -3591,6 +3591,259 @@ pub struct DbExecResult {
     pub last_insert_rowid: i64,
 }
 
+// ------------------------------------------------------------- llm gateway
+
+/// Which slice of the gateway journal to read — `POST /api/llm/summary` and `/api/llm/calls`.
+///
+/// Every field narrows; an empty body is the default view (the last day, everything in it).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LlmQuery {
+    /// `1h` · `24h` · `7d` · `30d` · `all`. Anything else reads as the default, `24h`.
+    #[serde(default)]
+    pub window: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Only calls that failed: no status, a 4xx/5xx, or a recorded transport error.
+    #[serde(default)]
+    pub errors: bool,
+    /// Free text, matched against the path, the model and the request body — i.e. the prompts.
+    #[serde(default)]
+    pub q: Option<String>,
+    /// How many calls to read. Clamped server-side; absent takes the endpoint's own default.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// One call named by id — `POST /api/llm/call`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LlmCallRef {
+    pub id: i64,
+}
+
+/// What a call spent, in tokens. Read back out of the stored response body — the gateway keeps
+/// the wire bytes, so no counter of its own can drift from what the provider actually said.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmTokens {
+    /// Fresh input tokens — what was *not* served from the prompt cache.
+    pub input: i64,
+    /// Input tokens read from the cache, billed at a fraction of `input`.
+    pub cached: i64,
+    /// Input tokens written into the cache (Anthropic's `cache_creation_input_tokens`).
+    pub cache_write: i64,
+    pub output: i64,
+}
+
+impl LlmTokens {
+    /// Add another call's counts to a running total.
+    pub fn add(&mut self, other: Self) {
+        self.input += other.input;
+        self.cached += other.cached;
+        self.cache_write += other.cache_write;
+        self.output += other.output;
+    }
+
+    /// Everything that went *in*, cache or not — the number worth reading beside `output`.
+    #[must_use]
+    pub const fn prompt(self) -> i64 {
+        self.input + self.cached + self.cache_write
+    }
+
+    /// What share of the prompt came from the cache, 0–100. `None` when nothing went in.
+    #[must_use]
+    pub fn cache_hit(self) -> Option<u32> {
+        let prompt = self.prompt();
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a percentage of two counts is in 0..=100"
+        )]
+        (prompt > 0).then(|| (self.cached * 100 / prompt) as u32)
+    }
+}
+
+/// One row of the call list: everything but the bodies, which `/api/llm/call` has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmCallDto {
+    pub id: i64,
+    /// When the gateway received it, in milliseconds since the epoch.
+    pub started_at: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
+    /// The route the gateway matched — `anthropic`, `openai`, …, or `unrouted`.
+    pub provider: String,
+    pub method: String,
+    /// The path as the client asked for it, query included.
+    pub target: String,
+    /// The upstream status, or `None` when the call never got one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub streamed: bool,
+    /// The caller's address, as the gateway saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
+    /// The caller's `user-agent` — which SDK or CLI made the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    pub request_bytes: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_bytes: Option<i64>,
+    /// A transport error, when the call never reached a status at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub tokens: LlmTokens,
+}
+
+impl LlmCallDto {
+    /// Whether this call is a failure: no status, a 4xx/5xx, or a recorded transport error.
+    #[must_use]
+    pub fn failed(&self) -> bool {
+        self.error.is_some() || self.status.is_none_or(|s| s >= 400)
+    }
+}
+
+/// Traffic rolled up by one dimension — a provider, a model, or a client. Same shape for all
+/// three so one table renders any of them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmGroupDto {
+    /// The provider name, model name or user-agent this row is about.
+    pub name: String,
+    pub calls: i64,
+    pub failed: i64,
+    pub streamed: i64,
+    /// Bytes sent up …
+    pub request_bytes: i64,
+    /// … and bytes that came back.
+    pub response_bytes: i64,
+    /// The middle call's duration, and the one 95% of calls beat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub median_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub p95_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slowest_ms: Option<i64>,
+    /// The most recent call in this group, in milliseconds since the epoch.
+    pub last_seen: i64,
+    pub tokens: LlmTokens,
+}
+
+/// `POST /api/llm/summary` — what the traffic looks like over a window, from three angles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmSummary {
+    /// The window this describes, as it was understood.
+    pub window: String,
+    /// The oldest timestamp included, or `None` for an unbounded window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<i64>,
+    /// Everything in the window as one row (`name` is `all`).
+    pub totals: LlmGroupDto,
+    pub providers: Vec<LlmGroupDto>,
+    pub models: Vec<LlmGroupDto>,
+    /// Who called — by `user-agent`, which is what tells an agent's CLI from a script.
+    pub clients: Vec<LlmGroupDto>,
+    /// Calls per hour over the window, oldest bucket first — the shape of the traffic.
+    pub buckets: Vec<LlmBucketDto>,
+    /// Every provider and model the journal has ever seen, so a filter can offer one that has
+    /// been quiet all day.
+    pub known_providers: Vec<String>,
+    pub known_models: Vec<String>,
+    /// How many calls the journal holds in total, whatever the filter.
+    pub total_rows: i64,
+    /// How many calls these numbers were computed over, and how many the window actually holds.
+    /// They differ when the window is bigger than the read limit, and the page says so rather
+    /// than presenting a sample as a total.
+    pub read: i64,
+    pub matched: i64,
+}
+
+/// One bar of the activity histogram.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmBucketDto {
+    /// The bucket's start, in milliseconds since the epoch.
+    pub at: i64,
+    /// How wide it is, in milliseconds.
+    pub span_ms: i64,
+    pub calls: i64,
+    pub failed: i64,
+    pub tokens: i64,
+}
+
+/// `POST /api/llm/calls` — the filtered call list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmCalls {
+    pub calls: Vec<LlmCallDto>,
+    /// How many calls match the filter, which may be more than were returned.
+    pub matched: i64,
+}
+
+/// One header, as a pair the page can lay out. Values arrive as the gateway stored them, which
+/// means credentials are already `<redacted>` — this API never sees the key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmHeaderDto {
+    pub name: String,
+    pub value: String,
+}
+
+/// One block of a conversation — a message, part of a message, or something the model produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmBlockDto {
+    /// `system`, `user`, `assistant`, or `tool` for a result fed back in.
+    pub role: String,
+    /// What kind of block: `text`, `thinking`, `tool_use`, `tool_result`, `image`, `other`.
+    pub kind: String,
+    /// The tool's name, for a `tool_use` or `tool_result`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The block's text, truncated for transport — `chars` is its real length.
+    pub text: String,
+    pub chars: usize,
+}
+
+/// `POST /api/llm/call` — one call, read rather than dumped: the prompt as its blocks, the
+/// answer reassembled from the stream, the parameters that were set, and both header sets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmCallDetail {
+    /// The list row, so a detail view needs no second request to render its header.
+    pub call: LlmCallDto,
+    /// Where the gateway forwarded it.
+    pub upstream: String,
+    pub request_headers: Vec<LlmHeaderDto>,
+    pub response_headers: Vec<LlmHeaderDto>,
+    /// The request's own settings — model, max tokens, temperature, stream, and whatever else
+    /// the body set that isn't the conversation itself.
+    pub params: Vec<LlmHeaderDto>,
+    /// The system prompt, block by block.
+    pub system: Vec<LlmBlockDto>,
+    /// The conversation as it was sent up.
+    pub messages: Vec<LlmBlockDto>,
+    /// The tools the request offered, by name.
+    pub tools: Vec<String>,
+    /// What came back: the answer text, the thinking that preceded it, and any tool calls.
+    pub answer: String,
+    pub thinking: String,
+    pub tool_calls: Vec<LlmBlockDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    /// For a streamed call, how many of each SSE event arrived — `message_start`, the deltas,
+    /// `message_stop`. A stream that stopped early shows it here.
+    pub events: Vec<LlmEventCountDto>,
+    /// The raw bodies, head-truncated for transport. `*_chars` is the stored length.
+    pub request_body: String,
+    pub request_chars: usize,
+    pub response_body: String,
+    pub response_chars: usize,
+}
+
+/// How many of one SSE event type a streamed response carried.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmEventCountDto {
+    pub name: String,
+    pub count: i64,
+}
+
 /// A JSON error body: `{ "ok": false, "error": "…" }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiError {

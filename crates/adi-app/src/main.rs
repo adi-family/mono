@@ -537,6 +537,8 @@ const SHARED_POSTS: &[&str] = &[
     "/api/agents/peek",
     "/api/agents/run/peek",
     "/api/agents/runs",
+    "/api/llm/calls",
+    "/api/llm/summary",
     "/api/projects/hook/log",
     "/api/projects/workspaces",
     "/api/triggers/log",
@@ -740,6 +742,12 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/db/schema") => handlers::db_schema(db, &req.body),
         ("POST", "/api/db/query") => handlers::db_query(db, &req.body),
         ("POST", "/api/db/exec") => handlers::db_exec(db, &req.body),
+
+        // The LLM gateway's journal. Reads only, on a read-only connection: the record of what
+        // was sent to a model is written by the gateway and by nothing else.
+        ("POST", "/api/llm/summary") => handlers::llm_summary(db, &req.body),
+        ("POST", "/api/llm/calls") => handlers::llm_calls(db, &req.body),
+        ("POST", "/api/llm/call") => handlers::llm_call(db, &req.body),
 
         ("GET", "/api/secrets") => handlers::secrets(secrets),
         ("POST", "/api/secrets/set") => handlers::set_secret(secrets, &req.body),
