@@ -23,9 +23,9 @@
 //! on the way out is `accept-encoding`, so the provider answers in plain text and the journal holds
 //! something a human can read.
 //!
-//! The single exception is [`macros`], which rewrites a body on its way past to spend fewer tokens
-//! on the literals a prompt repeats. It is **experimental and off**, in a fresh config and in this
-//! store's own, and it does nothing until an operator enables it *and* a request asks for it by
+//! The single exception is [`placeholders`], which rewrites a body on its way past to spend fewer
+//! tokens on the literals a prompt repeats. It is **experimental and off**, in a fresh config and
+//! in this store's own, and it does nothing until an operator enables it *and* a request asks by
 //! header. Treat it as a sharp tool rather than an optimisation: it shows the model text its author
 //! never wrote, it loses to the prompt cache on any prompt the provider is caching, and an
 //! unexpanded placeholder is a plausible-looking wrong path in an answer. Its own module
@@ -35,5 +35,5 @@
 pub mod config;
 pub mod http;
 pub mod journal;
-pub mod macros;
+pub mod placeholders;
 pub mod proxy;

@@ -8,10 +8,10 @@
 
 ## Index
 
-- [`src/config.rs`](#srcconfigrs) — `Settings`, `Macros`, `Route`
+- [`src/config.rs`](#srcconfigrs) — `Settings`, `Placeholders`, `Route`
 - [`src/http.rs`](#srchttprs) — `Request`, `Reader`
 - [`src/journal.rs`](#srcjournalrs) — `Entry`, `Message`, `Journal`
-- [`src/macros.rs`](#srcmacrosrs) — `Mode`, `Shape`, `Dict`, `Rewriter`, `Expander`, `Frames`
+- [`src/placeholders.rs`](#srcplaceholdersrs) — `Mode`, `Shape`, `Dict`, `Rewriter`, `Expander`, `Frames`
 - [`src/proxy.rs`](#srcproxyrs) — `Gateway`
 
 ---
@@ -28,18 +28,18 @@ The gateway's settings.
 pub struct Settings {
     pub routes: BTreeMap<String, String>,
     pub max_logged_body: usize,
-    pub macros: Macros,
+    pub placeholders: Placeholders,
 }
 ```
 
-### struct `Macros`
+### struct `Placeholders`
 
 Whether the gateway may rewrite a body on its way past, and what it does when a client expresses no preference.
 
 ```rust
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Macros {
+pub struct Placeholders {
     pub enabled: bool,
     pub default_mode: String,
 }
@@ -142,7 +142,7 @@ pub struct Journal {
 
 ---
 
-## `src/macros.rs`
+## `src/placeholders.rs`
 
 ### enum `Mode`
 

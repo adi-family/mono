@@ -25,7 +25,7 @@ use tracing::{info, warn};
 use crate::config::Settings;
 use crate::http::{self, Reader};
 use crate::journal::{self, Entry, Journal};
-use crate::macros::{Dict, Mode, Rewriter, Shape};
+use crate::placeholders::{Dict, Mode, Rewriter, Shape};
 
 /// How long to wait for the provider's TCP + TLS handshake.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -52,7 +52,7 @@ const HOP_BY_HOP: [&str; 10] = [
 
 /// How a client asks for placeholder substitution on one request: `full`, `tail`, or `off`. It
 /// addresses this gateway, so it stops here.
-const MACRO_HEADER: &str = "x-adi-macros";
+const PLACEHOLDER_HEADER: &str = "x-adi-placeholders";
 
 /// The shared state each connection borrows.
 #[derive(Debug, Clone)]
@@ -277,7 +277,7 @@ impl Gateway {
     /// billed — the client's original is still exactly what the client sent, and saying otherwise
     /// would make the journal a record of an exchange that did not happen.
     fn shorten(&self, request: &http::Request, entry: &mut Entry) -> (Vec<u8>, Option<Dict>) {
-        let Some((mode, shape)) = self.macro_mode(request, &entry.provider) else {
+        let Some((mode, shape)) = self.placeholder_mode(request, &entry.provider) else {
             return (request.body.clone(), None);
         };
         let dict = Dict::build(&request.body);
@@ -302,15 +302,15 @@ impl Gateway {
     /// Three things all have to agree: the operator has enabled it, the request asked for it (by
     /// header, or by the configured default), and the provider's body shape is one the substitution
     /// understands. Any of them missing means the client's bytes go up as they came in.
-    fn macro_mode(&self, request: &http::Request, provider: &str) -> Option<(Mode, Shape)> {
-        if !self.settings.macros.enabled {
+    fn placeholder_mode(&self, request: &http::Request, provider: &str) -> Option<(Mode, Shape)> {
+        if !self.settings.placeholders.enabled {
             return None;
         }
         let asked = request
             .headers
             .iter()
-            .find(|(field, _)| field.eq_ignore_ascii_case(MACRO_HEADER))
-            .map_or(self.settings.macros.default_mode.as_str(), |(_, v)| {
+            .find(|(field, _)| field.eq_ignore_ascii_case(PLACEHOLDER_HEADER))
+            .map_or(self.settings.placeholders.default_mode.as_str(), |(_, v)| {
                 v.as_str()
             });
         Some((Mode::parse(asked)?, Shape::for_provider(provider)?))
@@ -357,13 +357,13 @@ impl Gateway {
 ///
 /// `accept-encoding` is dropped on purpose: nothing here decompresses, so asking for gzip would
 /// buy loopback bandwidth we do not need and cost the journal every readable body it has.
-/// `x-adi-macros` is addressed to this gateway and means nothing to a provider.
+/// `x-adi-placeholders` is addressed to this gateway and means nothing to a provider.
 fn forward_to_upstream(field: &str) -> bool {
     !HOP_BY_HOP
         .iter()
         .any(|name| field.eq_ignore_ascii_case(name))
         && !field.eq_ignore_ascii_case("accept-encoding")
-        && !field.eq_ignore_ascii_case(MACRO_HEADER)
+        && !field.eq_ignore_ascii_case(PLACEHOLDER_HEADER)
 }
 
 /// Whether a provider header is passed back to the client. `content-length` *is* — the body is
@@ -431,7 +431,7 @@ mod tests {
         assert!(!forward_to_upstream("Host"));
         assert!(!forward_to_upstream("Content-Length"));
         assert!(!forward_to_upstream("Accept-Encoding"));
-        assert!(!forward_to_upstream("X-Adi-Macros"));
+        assert!(!forward_to_upstream("X-Adi-Placeholders"));
     }
 
     #[test]

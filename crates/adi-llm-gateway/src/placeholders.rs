@@ -24,7 +24,7 @@
 //!   and the saving comes entirely from the answer — which is never cached and is billed at
 //!   several times the input rate.
 //!
-//! Measured on a path-dense task (`projects/adi/bin/llm-macro-bench.ts`): prompt −18% to −25%,
+//! Measured on a path-dense task (`projects/adi/bin/llm-placeholder-bench.ts`): prompt −18% to −25%,
 //! answer −62% to −73% when the model writes the placeholders. Whether it does is the other open
 //! question — GLM complies once told to in as many words; Claude, inside Claude Code's own system
 //! prompt, wrote the paths out in full every time.
@@ -132,8 +132,8 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// The mode a request asked for, from the value of its `x-adi-macros` header or the configured
-    /// default. Anything unrecognised — including the empty string and `off` — means no.
+    /// The mode a request asked for, from the value of its `x-adi-placeholders` header or the
+    /// configured default. Anything unrecognised — including the empty string and `off` — means no.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {

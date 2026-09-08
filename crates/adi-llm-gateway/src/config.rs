@@ -48,8 +48,8 @@ pub struct Settings {
     pub routes: BTreeMap<String, String>,
     /// Bodies longer than this are journalled truncated, with a marker saying so.
     pub max_logged_body: usize,
-    /// Placeholder substitution (`crate::macros`) — off unless switched on here.
-    pub macros: Macros,
+    /// Placeholder substitution (`crate::placeholders`) — off unless switched on here.
+    pub placeholders: Placeholders,
 }
 
 /// Whether the gateway may rewrite a body on its way past, and what it does when a client expresses
@@ -58,16 +58,16 @@ pub struct Settings {
 /// **Experimental, and off for a reason.** The substitution changes the prompt a provider sees,
 /// which is the one thing this gateway otherwise promises never to do, and it was measured to be a
 /// losing trade on this machine: 98.6% of input tokens here are cache reads billed at a tenth, and
-/// `full` invalidates that cached prefix to save a percent of a prompt. Read `crate::macros` before
-/// switching this on — it lists what else can go wrong.
+/// `full` invalidates that cached prefix to save a percent of a prompt. Read `crate::placeholders`
+/// before switching this on — it lists what else can go wrong.
 ///
-/// Switching `enabled` on only makes the `x-adi-macros: full|tail` header work; `default_mode` is
-/// what a request with no such header gets, and an empty string means nothing. Turning it on for
-/// every request at once (`default_mode = "full"`) is the configuration most likely to surprise
-/// somebody: prefer the header, one client at a time.
+/// Switching `enabled` on only makes the `x-adi-placeholders: full|tail` header work;
+/// `default_mode` is what a request with no such header gets, and an empty string means nothing.
+/// Turning it on for every request at once (`default_mode = "full"`) is the configuration most
+/// likely to surprise somebody: prefer the header, one client at a time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Macros {
+pub struct Placeholders {
     /// Master switch. While this is false the header is ignored and every body is forwarded as sent.
     pub enabled: bool,
     /// `full`, `tail`, or empty for no rewrite unless a request asks by header.
@@ -82,7 +82,7 @@ impl Default for Settings {
                 .map(|(prefix, base)| ((*prefix).to_string(), (*base).to_string()))
                 .collect(),
             max_logged_body: DEFAULT_MAX_LOGGED_BODY,
-            macros: Macros::default(),
+            placeholders: Placeholders::default(),
         }
     }
 }
@@ -167,8 +167,8 @@ mod tests {
 
     #[test]
     fn a_fresh_install_rewrites_nothing() {
-        assert!(!settings().macros.enabled);
-        assert!(settings().macros.default_mode.is_empty());
+        assert!(!settings().placeholders.enabled);
+        assert!(settings().placeholders.default_mode.is_empty());
     }
 
     #[test]
