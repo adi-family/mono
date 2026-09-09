@@ -16,7 +16,7 @@ use adi_webapp_api::types::{
     MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
     NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
     NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
+    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
     RunRef, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
     SecretsState, SetAutoTitle,
@@ -644,6 +644,9 @@ pub async fn simulate_reply(
             // A simulated turn is a person in the model's seat, typing into a form. There is no
             // composer there and so nothing to attach.
             attachments: Vec::new(),
+            // Nor is there a running turn to overtake — a simulated conversation only ever answers
+            // between turns.
+            mode: QueueMode::Regular,
         },
     )
     .await
@@ -673,14 +676,16 @@ pub async fn review_run(
 }
 
 /// Say something into one of a harness agent's conversations: it starts the next turn, or queues
-/// behind the answer still in flight. Returns a fresh snapshot with the updated transcript
-/// (including the streaming answer and anything queued).
+/// behind the answer still in flight — at the back of the line (`mode: Regular`) or, for
+/// `harness:adi`, overtaking it (`mode: Asap`; see [`QueueMode`]). Returns a fresh snapshot with
+/// the updated transcript (including the streaming answer and anything queued).
 pub async fn reply_to_run(
     node: Option<&str>,
     name: String,
     run_id: String,
     message: String,
     attachments: Vec<String>,
+    mode: QueueMode,
 ) -> Result<AgentPeek, String> {
     post_on(
         node,
@@ -690,6 +695,7 @@ pub async fn reply_to_run(
             run_id,
             message,
             attachments,
+            mode,
         },
     )
     .await

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS queue (
     message TEXT    NOT NULL,
     images  TEXT,
     marker  TEXT,
+    mode    TEXT,
     PRIMARY KEY (agent, session, seq),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
@@ -201,6 +202,11 @@ const MIGRATIONS: &[&str] = &[
     // first row, and that is exactly what 0 says. See `SessionRecord::chain`.
     "ALTER TABLE sessions ADD COLUMN chain TEXT",
     "ALTER TABLE sessions ADD COLUMN chain_at INTEGER NOT NULL DEFAULT 0",
+    // When a queued message wants to be heard: `regular` (wait for the turn in flight to end,
+    // exactly what every message before this column existed already did) or `asap` (overtake it).
+    // NULL for every message ever queued before this existed, and read back the same as `regular`
+    // — see `QueueMode`.
+    "ALTER TABLE queue ADD COLUMN mode TEXT",
 ];
 
 // One connection per thread per database.

@@ -98,8 +98,8 @@ use runner::{
     ImageDelivery, RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of,
 };
 use store::{
-    Answer, AnsweredBy, Ask, SessionRecord, SessionRef, SessionStore, assistant_turn, now_ms,
-    user_turn,
+    Answer, AnsweredBy, Ask, QueueMode, SessionRecord, SessionRef, SessionStore, assistant_turn,
+    now_ms, user_turn,
 };
 use workspace::CONV_ENV;
 
@@ -1136,11 +1136,14 @@ impl Agents {
     }
 
     /// [`reply`](Self::reply), said by somebody the conversation has to be told about — a fleet
-    /// peer through this machine's panel, most of all.
+    /// peer through this machine's panel, most of all — and naming when it wants to be heard.
     ///
     /// The marker is recorded on the turn and rendered in front of the words for the engine; see
     /// [`crate::marker`]. A reply that also settles a pending question carries **both** that and
     /// the ask's own tag, because both are true of it.
+    ///
+    /// `mode` only ever matters if this queues at all — see [`QueueMode`] for what it does and does
+    /// not promise.
     ///
     /// # Errors
     /// As [`reply`](Self::reply).
@@ -1151,8 +1154,9 @@ impl Agents {
         message: &str,
         image_ids: &[String],
         markers: &[Marker],
+        mode: QueueMode,
     ) -> Result<Sent> {
-        self.reply_inner(name, conv_id, message, image_ids, markers)
+        self.reply_inner(name, conv_id, message, image_ids, markers, mode)
     }
 
     /// [`reply`](Self::reply), with images attached — what a message composed with a screenshot
@@ -1171,7 +1175,7 @@ impl Agents {
         message: &str,
         image_ids: &[String],
     ) -> Result<Sent> {
-        self.reply_inner(name, conv_id, message, image_ids, &[])
+        self.reply_inner(name, conv_id, message, image_ids, &[], QueueMode::Regular)
     }
 
     /// What both reply verbs are: settle a pending question if this answers one, then deliver.
@@ -1182,6 +1186,7 @@ impl Agents {
         message: &str,
         image_ids: &[String],
         markers: &[Marker],
+        mode: QueueMode,
     ) -> Result<Sent> {
         self.check_deliverable(name, conv_id)?;
         // Refused rather than recorded-and-ignored. The images would sit in the transcript looking
@@ -1224,11 +1229,11 @@ impl Agents {
                     by: AnsweredBy::Human,
                     replies: Vec::new(),
                 }));
-                let sent = self.deliver_with(name, conv_id, &markers, message, &images)?;
+                let sent = self.deliver_with(name, conv_id, &markers, message, &images, mode)?;
                 self.emit_answered(&ask, AnsweredBy::Human);
                 Ok(sent)
             }
-            None => self.deliver_with(name, conv_id, markers, message, &images),
+            None => self.deliver_with(name, conv_id, markers, message, &images, mode),
         }
     }
 
@@ -1382,6 +1387,9 @@ impl Agents {
     /// speaking, and a person's question stays open until a person answers it.
     /// `markers` is what the platform is stamping on it — never empty here, because everything that
     /// reaches this is the platform speaking and every one of those says which thing it is.
+    ///
+    /// Always [`QueueMode::Regular`]: nothing that reaches this is a person typing into a busy chat,
+    /// so there is nothing here that would ever ask to overtake it.
     pub(crate) fn deliver(
         &self,
         name: &str,
@@ -1389,7 +1397,7 @@ impl Agents {
         markers: &[Marker],
         message: &str,
     ) -> Result<Sent> {
-        self.deliver_with(name, conv_id, markers, message, &[])
+        self.deliver_with(name, conv_id, markers, message, &[], QueueMode::Regular)
     }
 
     /// [`deliver`](Self::deliver), with images attached to the message.
@@ -1397,7 +1405,8 @@ impl Agents {
     /// The pictures travel with the words wherever the words go — into the turn that starts now, or
     /// into the queue behind the answer still being written. Anything else and a screenshot pasted
     /// mid-answer arrives attached to a message that is not the one it was pasted into. The markers
-    /// travel the same road, for the same reason.
+    /// travel the same road, for the same reason — and `mode` decides only what happens if it *does*
+    /// queue: see [`QueueMode`].
     pub(crate) fn deliver_with(
         &self,
         name: &str,
@@ -1405,6 +1414,7 @@ impl Agents {
         markers: &[Marker],
         message: &str,
         images: &[store::Attachment],
+        mode: QueueMode,
     ) -> Result<Sent> {
         let agent = self
             .get(name)?
@@ -1428,25 +1438,27 @@ impl Agents {
         let _gate = turn_gate();
         let session = store.session(name, conv_id);
         if !may_start || runner.is_alive(&session) {
-            let place = store.enqueue(name, conv_id, message, images, markers)?;
+            let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
             return Ok(Sent::Queued { place });
         }
         // Idle, but with a queue no read has drained yet: join the back of the line and start its
         // head instead, so messages are always answered in the order they were typed.
         let next = if store.queue_len(name, conv_id) > 0 {
-            store.enqueue(name, conv_id, message, images, markers)?;
+            store.enqueue(name, conv_id, message, images, markers, mode)?;
             store
                 .dequeue(name, conv_id)?
                 .unwrap_or_else(|| store::QueuedMessage {
                     text: message.to_string(),
                     images: images.to_vec(),
                     markers: markers.to_vec(),
+                    mode,
                 })
         } else {
             store::QueuedMessage {
                 text: message.to_string(),
                 images: images.to_vec(),
                 markers: markers.to_vec(),
+                mode,
             }
         };
 
@@ -2205,6 +2217,7 @@ impl Agents {
                         &question.text,
                         &question.images,
                         &question.markers,
+                        QueueMode::Regular,
                     );
                 }
             }
@@ -5027,9 +5040,18 @@ mod tests {
             .store_attachment("shot.png", "image/png", b"\x89PNG")
             .expect("store the image");
 
+        // Asap so the mid-turn door below is the one that has something to take — the queueing
+        // this test cares about (a full run cap) works the same whichever mode names.
         assert_eq!(
             store
-                .reply_with("chatty", &conv, "what is wrong here?", &[image.id.clone()])
+                .reply_as(
+                    "chatty",
+                    &conv,
+                    "what is wrong here?",
+                    &[image.id.clone()],
+                    &[],
+                    QueueMode::Asap,
+                )
                 .expect("reply"),
             Sent::Queued { place: 1 },
         );
@@ -5918,7 +5940,14 @@ mod tests {
         );
 
         sessions
-            .enqueue("recon", &second, "and then diff them", &[], &[])
+            .enqueue(
+                "recon",
+                &second,
+                "and then diff them",
+                &[],
+                &[],
+                QueueMode::Regular,
+            )
             .expect("enqueue");
         assert!(
             !store.stop_run("recon", &second).expect("stop"),

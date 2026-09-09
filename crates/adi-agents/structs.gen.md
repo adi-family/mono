@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-127 structs · 34 enums · 5 type aliases across 53 files.
+127 structs · 35 enums · 5 type aliases across 53 files.
 
 ## Index
 
@@ -57,7 +57,7 @@
 - [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
-- [`src/store/queue.rs`](#srcstorequeuers) — `QueuedMessage`
+- [`src/store/queue.rs`](#srcstorequeuers) — `QueueMode`, `QueuedMessage`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
 - [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
 - [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
@@ -2736,9 +2736,23 @@ pub struct Request {
 
 ## `src/store/queue.rs`
 
+### enum `QueueMode`
+
+When a queued message should be heard.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMode {
+    #[default]
+    Regular,
+    Asap,
+}
+```
+
 ### struct `QueuedMessage`
 
-A message waiting its turn: what was typed, and whatever was attached to it.
+A message waiting its turn: what was typed, whatever was attached to it, and when it wants to be heard.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -2746,6 +2760,7 @@ pub struct QueuedMessage {
     pub text: String,
     pub images: Vec<Attachment>,
     pub markers: Vec<Marker>,
+    pub mode: QueueMode,
 }
 ```
 
@@ -2866,6 +2881,8 @@ pub struct Turn {
     pub pending: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub queued: bool,
+    #[serde(default, skip_serializing_if = "is_regular")]
+    pub mode: QueueMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<Attachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

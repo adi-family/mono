@@ -10,7 +10,8 @@ use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
     AgentRunInfo, AgentRuns, AgentStep, AgentTokenSource, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard, NodeDashboards,
+    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard,
+    NodeDashboards, QueueMode,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -1485,6 +1486,7 @@ fn queued_bubble(
             // message waiting its turn already names its sender if anything does.
             from=chat_source_label(state, watch, sourced)
             by=sender_of(&turn.markers)
+            asap=turn.mode == QueueMode::Asap
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }
@@ -1617,7 +1619,16 @@ fn reply_bar(state: State, watch: AgentsWatch, sourced: bool) -> impl IntoView {
                     let images = crate::attach::ready_ids(watch.reply_files);
                     watch.reply.set(String::new());
                     crate::attach::clear(watch.reply_files);
-                    send_reply(state, watch, with_context(watch, message), images);
+                    send_reply(state, watch, with_context(watch, message), images, QueueMode::Regular);
+                })
+                // Asap and Send are the same act with a different `mode` — see `send_reply`. Shown
+                // only while `stoppable` is (the composer's own rule), which is exactly while there
+                // is a turn in flight for it to overtake.
+                on_asap=Callback::new(move |message: String| {
+                    let images = crate::attach::ready_ids(watch.reply_files);
+                    watch.reply.set(String::new());
+                    crate::attach::clear(watch.reply_files);
+                    send_reply(state, watch, with_context(watch, message), images, QueueMode::Asap);
                 })
                 // Only while a turn is actually in flight: between turns there is nothing to cut
                 // short, and the conversation itself is not a thing you stop — you just stop
@@ -2107,7 +2118,16 @@ fn short_duration(ms: u64) -> String {
 /// Say the reply box's message into the conversation, applying the returned snapshot at once (so the
 /// message — asked or queued — and any streaming answer appear immediately) and resuming the poll.
 /// Errors go to flash.
-fn send_reply(state: State, watch: AgentsWatch, message: String, images: Vec<String>) {
+///
+/// `mode` is only ever a person's own choice while a turn is running — see [`reply_bar`]'s asap
+/// control — and defaults to [`QueueMode::Regular`] the rest of the time.
+fn send_reply(
+    state: State,
+    watch: AgentsWatch,
+    message: String,
+    images: Vec<String>,
+    mode: QueueMode,
+) {
     let Some(name) = watch.name.get_untracked() else {
         return;
     };
@@ -2116,8 +2136,15 @@ fn send_reply(state: State, watch: AgentsWatch, message: String, images: Vec<Str
     };
     let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::reply_to_run(node.as_deref(), name.clone(), run_id.clone(), message, images)
-            .await
+        match fetch::reply_to_run(
+            node.as_deref(),
+            name.clone(),
+            run_id.clone(),
+            message,
+            images,
+            mode,
+        )
+        .await
         {
             Ok(peek) => {
                 // Only apply if the view is still on this same conversation.

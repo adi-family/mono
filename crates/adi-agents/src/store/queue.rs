@@ -14,6 +14,11 @@
 //! why the pop and the transcript write share one transaction: a message that has left the queue
 //! but never reached the transcript is a message nobody will ever answer.
 //!
+//! It is also a door only [`QueueMode::Asap`] gets to use. A [`Regular`](QueueMode::Regular)
+//! message means "when the chat ends", so [`take_as_turn`] answers only from the asap messages and
+//! leaves every regular one exactly where it was — [`dequeue`], the plain head a *finished* turn
+//! reads next, is what eventually gets to them, in the same `seq` order they were typed in.
+//!
 //! # The lock is the database's now
 //!
 //! Every edit below is a read-modify-write, and the callers are concurrent by construction: an app
@@ -24,6 +29,7 @@
 //! held by the file rather than by one process's memory.
 
 use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::marker::Marker;
@@ -31,11 +37,34 @@ use crate::marker::Marker;
 use super::attachments::Attachment;
 use super::db::sql_err;
 
-/// A message waiting its turn: what was typed, and whatever was attached to it.
+/// When a queued message should be heard.
 ///
-/// A pair rather than a bare string because the images have to wait *with* the message. Queue the
-/// text alone and a screenshot pasted alongside it either arrives on the wrong turn or does not
-/// arrive at all — and the person who attached it has already watched it appear in their own
+/// `Regular` is the default and, until this existed, the only story: a message typed while a turn
+/// is running waits for it to end, and starts the next one — exactly what `Agents::advance_queue`
+/// already does between turns. `Asap` asks to overtake that line: heard at the earliest point the
+/// turn *in progress* can hear anything at all, which for `harness:adi` is the top of its next
+/// round (`crate::backends::harness::adi_loop::take_queued`) — a model call and the tool calls it
+/// asked for, not a whole answer.
+///
+/// **Not every backend has a door that early.** `harness:claude-sdk` is a vendor CLI running its
+/// own loop, and `process:*` hands a message to a spawned child once and never speaks to it
+/// again — neither can be interrupted mid-turn by anything on this side. An `Asap` message queued
+/// behind one of those is simply heard when the run ends, same as a `Regular` one would be: this
+/// is a request to overtake the queue, not a promise every engine can keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMode {
+    #[default]
+    Regular,
+    Asap,
+}
+
+/// A message waiting its turn: what was typed, whatever was attached to it, and when it wants to
+/// be heard.
+///
+/// A struct rather than a bare string because the images have to wait *with* the message. Queue
+/// the text alone and a screenshot pasted alongside it either arrives on the wrong turn or does
+/// not arrive at all — and the person who attached it has already watched it appear in their own
 /// bubble.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct QueuedMessage {
@@ -45,6 +74,8 @@ pub struct QueuedMessage {
     /// do: a message queued behind an answer is asked minutes later, and by then nothing else
     /// remembers that a peer sent it.
     pub markers: Vec<Marker>,
+    /// See [`QueueMode`].
+    pub mode: QueueMode,
 }
 
 impl QueuedMessage {
@@ -55,6 +86,7 @@ impl QueuedMessage {
             text: text.into(),
             images: Vec::new(),
             markers: Vec::new(),
+            mode: QueueMode::Regular,
         }
     }
 }
@@ -74,6 +106,7 @@ pub(super) fn enqueue(
     message: &str,
     images: &[Attachment],
     markers: &[Marker],
+    mode: QueueMode,
 ) -> Result<usize> {
     let tx = conn
         .unchecked_transaction()
@@ -86,15 +119,16 @@ pub(super) fn enqueue(
         )
         .map_err(|e| sql_err("queue a message in", e))?;
     tx.execute(
-        "INSERT INTO queue (agent, session, seq, message, images, marker)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO queue (agent, session, seq, message, images, marker, mode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             agent,
             id,
             seq,
             message,
             encode(images),
-            encode_markers(markers)
+            encode_markers(markers),
+            encode_mode(mode),
         ],
     )
     .map_err(|e| sql_err("queue a message in", e))?;
@@ -121,7 +155,7 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some(message) = take_head(&tx, agent, id)? else {
+    let Some(message) = take_head(&tx, agent, id, false)? else {
         return Ok(None);
     };
     tx.commit()
@@ -129,8 +163,10 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
     Ok(Some(message))
 }
 
-/// Take the head of the line **and record it as a question in the same breath**, returning what was
-/// taken. `None` when nothing is waiting.
+/// Take the oldest **asap** message and record it as a question in the same breath, returning what
+/// was taken. `None` when nothing asap is waiting — a queue holding nothing but regular messages
+/// is left entirely alone, because a regular message means "when the chat ends" and this is
+/// called only while it hasn't.
 ///
 /// For an engine that can hear a new message mid-answer: it is already inside a turn, so there is no
 /// launch to hang the message on and nothing else will write it down. Pop and append therefore
@@ -149,7 +185,7 @@ pub(super) fn take_as_turn(
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some(message) = take_head(&tx, agent, id)? else {
+    let Some(message) = take_head(&tx, agent, id, true)? else {
         return Ok(None);
     };
     let mut turn = super::transcript::user_turn_with(&message.text, message.images.clone());
@@ -161,18 +197,41 @@ pub(super) fn take_as_turn(
 }
 
 /// Remove the oldest message and hand it back, inside a transaction the caller owns and commits —
-/// what both ways of taking one are built from. `None` when the line is empty.
-fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
-    let head: Option<(i64, String, Option<String>, Option<String>)> = tx
-        .query_row(
-            "SELECT seq, message, images, marker FROM queue WHERE agent = ?1 AND session = ?2
-             ORDER BY seq LIMIT 1",
-            [agent, id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )
+/// what both ways of taking one are built from. `None` when the line — or, with `only_asap`, its
+/// asap messages — is empty.
+///
+/// `only_asap` is the whole difference between the two doors: [`dequeue`]'s plain head answers
+/// whatever is oldest, whichever mode it was queued in, because a turn has just ended and every
+/// message queued behind it is due; [`take_as_turn`]'s mid-turn door must not touch a regular
+/// message at all, because "regular" means it is waiting for exactly that ending.
+fn take_head(
+    tx: &Connection,
+    agent: &str,
+    id: &str,
+    only_asap: bool,
+) -> Result<Option<QueuedMessage>> {
+    let sql = if only_asap {
+        "SELECT seq, message, images, marker, mode FROM queue
+         WHERE agent = ?1 AND session = ?2 AND mode = 'asap'
+         ORDER BY seq LIMIT 1"
+    } else {
+        "SELECT seq, message, images, marker, mode FROM queue
+         WHERE agent = ?1 AND session = ?2
+         ORDER BY seq LIMIT 1"
+    };
+    let head: Option<(i64, String, Option<String>, Option<String>, Option<String>)> = tx
+        .query_row(sql, [agent, id], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        })
         .optional()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some((seq, text, images, marker)) = head else {
+    let Some((seq, text, images, marker, mode)) = head else {
         return Ok(None);
     };
     tx.execute(
@@ -184,6 +243,7 @@ fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMess
         text,
         images: decode(images.as_deref()),
         markers: decode_markers(marker.as_deref()),
+        mode: decode_mode(mode.as_deref()),
     }))
 }
 
@@ -201,7 +261,8 @@ pub(super) fn len(conn: &Connection, agent: &str, id: &str) -> usize {
 /// The messages waiting their turn, oldest first.
 pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<QueuedMessage> {
     let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT message, images, marker FROM queue WHERE agent = ?1 AND session = ?2 ORDER BY seq",
+        "SELECT message, images, marker, mode FROM queue
+         WHERE agent = ?1 AND session = ?2 ORDER BY seq",
     ) else {
         return Vec::new();
     };
@@ -210,6 +271,7 @@ pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<QueuedMessag
             text: row.get(0)?,
             images: decode(row.get::<_, Option<String>>(1)?.as_deref()),
             markers: decode_markers(row.get::<_, Option<String>>(2)?.as_deref()),
+            mode: decode_mode(row.get::<_, Option<String>>(3)?.as_deref()),
         })
     })
     .map(|rows| rows.flatten().collect())
@@ -240,6 +302,26 @@ fn encode_markers(markers: &[Marker]) -> Option<String> {
 fn decode_markers(json: Option<&str>) -> Vec<Marker> {
     json.and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default()
+}
+
+/// The mode column, as it is written — spelled out for every message this build ever queues, so
+/// `NULL` only ever means one thing: a row filed before this column existed.
+fn encode_mode(mode: QueueMode) -> &'static str {
+    match mode {
+        QueueMode::Regular => "regular",
+        QueueMode::Asap => "asap",
+    }
+}
+
+/// The mode column, as it is read. `NULL` and anything this build does not recognize both read as
+/// `Regular` — the same forgiving rule the images and marker columns keep, and the one that lets a
+/// message queued before this column existed go on meaning what it always meant: heard when the
+/// chat ends.
+fn decode_mode(value: Option<&str>) -> QueueMode {
+    match value {
+        Some("asap") => QueueMode::Asap,
+        _ => QueueMode::Regular,
+    }
 }
 
 /// Drop the message at `index` (0-based, in the order they will be asked), for something you have

@@ -626,12 +626,22 @@ pub fn Queued(
     /// machine above for the reason the `by` prop on [`Said`] gives.
     #[prop(optional_no_strip)]
     by: Option<String>,
+    /// Whether this message asked to overtake the queue (`adi_agents::store::QueueMode::Asap`)
+    /// rather than wait for the turn in flight to end. Said plainly rather than left to guesswork —
+    /// a queue that can hold both is a queue whose order a reader cannot otherwise reconstruct.
+    #[prop(optional)]
+    asap: bool,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let head = match (by, from) {
         (Some(by), _) => format!("{by} \u{b7} queued"),
         (None, Some(from)) => format!("You \u{b7} queued \u{b7} {from}"),
         (None, None) => "You \u{b7} queued".to_string(),
+    };
+    let head = if asap {
+        format!("{head} \u{b7} asap")
+    } else {
+        head
     };
     view! {
         <div class=merge(

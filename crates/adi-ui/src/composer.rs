@@ -61,6 +61,16 @@ pub fn Composer(
     /// leaves with it: a stop button standing there with nothing running is a button that lies.
     #[prop(optional, into)]
     stoppable: Signal<bool>,
+    /// Called instead of `on_send` when the asap control is pressed: send `value` now, overtaking
+    /// whatever is already waiting behind the turn in flight (an `adi_agents::store::QueueMode`
+    /// question, not this component's — the composer only ever asks for it). Without it there is
+    /// no such control, on the same rule [`on_stop`](Self) keeps.
+    ///
+    /// Shown only while [`stoppable`](Self) does, beside Stop: overtaking a queue is a thing you
+    /// can only mean while there is a turn running to overtake it, which is exactly what
+    /// `stoppable` already says.
+    #[prop(optional, into)]
+    on_asap: Option<Callback<String>>,
     /// Reactive, because what a composer asks for can change under it: the same box starts a
     /// conversation or takes a one-shot task depending on what the backend turns out to be,
     /// and that answer arrives after the box is already on screen.
@@ -133,12 +143,14 @@ pub fn Composer(
     // busy: sending now would deliver the words without the image they are about.
     let waiting = move || attach.is_some_and(|a| Attaching::uploading(&a));
 
-    let send = move || {
+    // `send` and its asap twin below both go through this: the difference between them is only
+    // which callback the text is handed to.
+    let send_via = move |cb: Callback<String>| {
         let text = value.get_untracked();
         if !has_content() || busy.get_untracked() {
             return;
         }
-        on_send.run(text);
+        cb.run(text);
         // Clearing is the caller's — see the component docs — but *emptying the element* is
         // not, because `fit` measures the element and the framework writes an emptied signal
         // back on its own clock. Measuring before that write lands would re-measure the
@@ -150,6 +162,7 @@ pub fn Composer(
         }
         fit();
     };
+    let send = move || send_via(on_send);
 
     let ready = Signal::derive(move || {
         let typed = !value.get().trim().is_empty();
@@ -259,6 +272,21 @@ pub fn Composer(
                     on:click=move |_| on_stop.run(())
                 >
                     <Icon icon=Lucide::Square size=IconSize::Md label="Stop"/>
+                </button>
+            })}
+            // Beside Stop, for the same reason it is shown only there: overtaking a queue is a
+            // thing you can only mean while there is a turn running to overtake.
+            {move || on_asap.filter(|_| stoppable.get()).map(|on_asap| view! {
+                <button
+                    class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md \
+                           text-ink-2 transition-colors duration-100 hover:bg-hover \
+                           hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                    type="button"
+                    title="Send now — overtakes what is already waiting"
+                    disabled=move || !ready.get()
+                    on:click=move |_| send_via(on_asap)
+                >
+                    <Icon icon=Lucide::Zap size=IconSize::Md label="Send asap"/>
                 </button>
             })}
             <button

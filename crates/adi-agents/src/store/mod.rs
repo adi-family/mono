@@ -54,7 +54,7 @@ pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
-pub use queue::QueuedMessage;
+pub use queue::{QueueMode, QueuedMessage};
 pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
 pub use transcript::{Turn, assistant_turn, user_turn, user_turn_with};
@@ -729,6 +729,10 @@ impl SessionStore {
 
     /// Put a message at the back of this session's queue, returning its 1-based place in line.
     ///
+    /// `mode` is when it wants to be heard — see [`QueueMode`]. The place returned is still its
+    /// place among *every* queued message, asap or not: this is what a sender is told, not what a
+    /// running turn will do with it.
+    ///
     /// # Errors
     /// Returns database errors — a message that was not written down was not queued.
     pub fn enqueue(
@@ -738,13 +742,17 @@ impl SessionStore {
         message: &str,
         images: &[Attachment],
         markers: &[crate::marker::Marker],
+        mode: QueueMode,
     ) -> Result<usize> {
         let conn = self.conn()?;
-        queue::enqueue(&conn, agent, id, message, images, markers)
+        queue::enqueue(&conn, agent, id, message, images, markers, mode)
     }
 
     /// Take the head of the queue, or `None` when nothing is waiting. The removal is committed
     /// before the message is handed back, so a message that fails to launch is not retried for ever.
+    ///
+    /// The plain head regardless of [`QueueMode`] — a turn has just ended, so whatever is oldest is
+    /// due, asap or not.
     ///
     /// # Errors
     /// Returns database errors, with the queue left as it was.
@@ -753,8 +761,10 @@ impl SessionStore {
         queue::dequeue(&conn, agent, id)
     }
 
-    /// Take the head of the queue **and record it as a question**, or `None` when nothing is
-    /// waiting — how a turn that is still running hears something said to it since it began.
+    /// Take the oldest **asap** message and record it as a question, or `None` when the queue holds
+    /// no asap message — how a turn that is still running hears something said to it since it
+    /// began. A regular message is left exactly where it is: it means "when the chat ends", and
+    /// [`dequeue`](Self::dequeue) is what eventually gets to it.
     ///
     /// The difference from [`dequeue`](Self::dequeue) is who writes the message down. A dequeued
     /// message is written down by the launch that follows it; there is no launch here, so this
@@ -1574,7 +1584,7 @@ mod tests {
         std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
         std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
         store
-            .enqueue("talker", &id, "waiting", &[], &[])
+            .enqueue("talker", &id, "waiting", &[], &[], QueueMode::Regular)
             .expect("enqueue");
         store.set_hidden("talker", &id, true).expect("hide");
         store
@@ -1624,7 +1634,7 @@ mod tests {
                 .expect("append");
         }
         store
-            .enqueue("chat", &doomed.id, "waiting", &[], &[])
+            .enqueue("chat", &doomed.id, "waiting", &[], &[], QueueMode::Regular)
             .expect("enqueue");
 
         assert!(store.delete("chat", &doomed.id).expect("delete"));
@@ -1713,19 +1723,19 @@ mod tests {
 
         assert_eq!(
             store
-                .enqueue("chat", &a.id, "one", &[], &[])
+                .enqueue("chat", &a.id, "one", &[], &[], QueueMode::Regular)
                 .expect("enqueue"),
             1
         );
         assert_eq!(
             store
-                .enqueue("chat", &a.id, "two", &[], &[])
+                .enqueue("chat", &a.id, "two", &[], &[], QueueMode::Regular)
                 .expect("enqueue"),
             2
         );
         assert_eq!(
             store
-                .enqueue("chat", &b.id, "elsewhere", &[], &[])
+                .enqueue("chat", &b.id, "elsewhere", &[], &[], QueueMode::Regular)
                 .expect("enqueue"),
             1
         );
@@ -1749,7 +1759,7 @@ mod tests {
 
         assert_eq!(
             store
-                .enqueue("chat", &a.id, "three", &[], &[])
+                .enqueue("chat", &a.id, "three", &[], &[], QueueMode::Regular)
                 .expect("enqueue"),
             2
         );
@@ -1770,7 +1780,8 @@ mod tests {
 
     /// A turn that hears something mid-answer has no launch to write the message down for it, so
     /// taking it *is* asking it: the message leaves the queue and enters the transcript together, or
-    /// neither happens and it is offered again.
+    /// neither happens and it is offered again. Only an **asap** message is there to be taken — the
+    /// test below this one is the flip side of the same door.
     #[test]
     fn a_message_taken_by_a_running_turn_is_asked_in_the_same_breath() {
         let store = scratch("take-queued");
@@ -1791,10 +1802,10 @@ mod tests {
         );
 
         store
-            .enqueue("chat", id, "also handle CRLF", &[], &[])
+            .enqueue("chat", id, "also handle CRLF", &[], &[], QueueMode::Asap)
             .expect("enqueue");
         store
-            .enqueue("chat", id, "and add a test", &[], &[])
+            .enqueue("chat", id, "and add a test", &[], &[], QueueMode::Asap)
             .expect("enqueue");
         assert_eq!(
             store
@@ -1829,6 +1840,138 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
+    /// The flip side of the test above: a regular message means "when the chat ends", so the
+    /// mid-turn door must not touch it. A queue holding nothing but regular messages answers `None`
+    /// from that door — not the oldest one anyway — and every message is still exactly where it was.
+    #[test]
+    fn a_mid_turn_take_leaves_every_regular_message_alone() {
+        let store = scratch("take-queued-regular");
+        let session = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "start on the parser")
+            .expect("create");
+        let id = &session.id;
+        store
+            .append_turn("chat", id, user_turn("start on the parser"))
+            .expect("the opening question");
+
+        store
+            .enqueue("chat", id, "also handle CRLF", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+        store
+            .enqueue("chat", id, "and add a test", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+
+        assert!(
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("take")
+                .is_none(),
+            "a queue of nothing but regular messages has no asap message to take",
+        );
+        assert_eq!(
+            texts(store.queued("chat", id)),
+            ["also handle CRLF", "and add a test"],
+            "neither message moved",
+        );
+        assert_eq!(store.turns("chat", id).len(), 1, "and neither was asked",);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The whole point of asap: it overtakes whatever regular messages are already waiting, however
+    /// long they have been there, and the regular ones keep their own relative order behind it.
+    #[test]
+    fn an_asap_message_overtakes_the_regular_ones_ahead_of_it() {
+        let store = scratch("take-queued-overtake");
+        let session = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "start on the parser")
+            .expect("create");
+        let id = &session.id;
+        store
+            .append_turn("chat", id, user_turn("start on the parser"))
+            .expect("the opening question");
+
+        store
+            .enqueue("chat", id, "first, regular", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+        store
+            .enqueue("chat", id, "second, regular", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+        store
+            .enqueue(
+                "chat",
+                id,
+                "urgent — stop and look",
+                &[],
+                &[],
+                QueueMode::Asap,
+            )
+            .expect("enqueue");
+
+        assert_eq!(
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("take")
+                .map(|m| m.text)
+                .as_deref(),
+            Some("urgent — stop and look"),
+            "asap overtakes both regulars, whatever order they were typed in",
+        );
+        assert_eq!(
+            texts(store.queued("chat", id)),
+            ["first, regular", "second, regular"],
+            "the regulars are undisturbed, and still in their own order",
+        );
+        assert!(
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("take again")
+                .is_none(),
+            "nothing left asap to take",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A row filed before `mode` existed reads back as `Regular` — the same forgiving rule the
+    /// images and marker columns keep, and for the same reason: an old queued message meant "when
+    /// the chat ends" long before there was a second thing it could mean.
+    #[test]
+    fn a_queued_row_with_no_mode_column_reads_as_regular() {
+        let store = scratch("queue-pre-mode");
+        let session = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        let id = &session.id;
+        // Written the way a pre-`mode` build wrote it: no `mode` column in the statement at all.
+        db::conn(&store.db_path())
+            .expect("conn")
+            .execute(
+                "INSERT INTO queue (agent, session, seq, message) VALUES ('chat', ?1, 0, 'old one')",
+                [id],
+            )
+            .expect("insert");
+
+        assert_eq!(
+            store.queued("chat", id),
+            vec![QueuedMessage {
+                text: "old one".to_string(),
+                mode: QueueMode::Regular,
+                ..QueuedMessage::default()
+            }],
+            "an old row with nothing in `mode` is a regular message",
+        );
+        assert!(
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("take")
+                .is_none(),
+            "and the mid-turn door still will not touch it",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
     /// The store owns a session's turns, so a reader asks it — not a runner — for the conversation:
     /// what was recorded, what is being said now, and what is still waiting. Only the first of those
     /// is durable.
@@ -1852,10 +1995,10 @@ mod tests {
             metrics: None,
         };
         store
-            .enqueue("chat", id, "and restart it", &[], &[])
+            .enqueue("chat", id, "and restart it", &[], &[], QueueMode::Regular)
             .expect("enqueue");
         store
-            .enqueue("chat", id, "then tell me", &[], &[])
+            .enqueue("chat", id, "then tell me", &[], &[], QueueMode::Regular)
             .expect("enqueue");
 
         let view = store.transcript("chat", id, Some(live.clone()), true);
@@ -1920,10 +2063,10 @@ mod tests {
             "no queues anywhere is the common answer, and it costs one query",
         );
         store
-            .enqueue("chat", &busy.id, "one", &[], &[])
+            .enqueue("chat", &busy.id, "one", &[], &[], QueueMode::Regular)
             .expect("enqueue");
         store
-            .enqueue("chat", &busy.id, "two", &[], &[])
+            .enqueue("chat", &busy.id, "two", &[], &[], QueueMode::Regular)
             .expect("enqueue");
         assert_eq!(
             store.sessions_with_queue("chat"),

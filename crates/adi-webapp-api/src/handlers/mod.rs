@@ -708,6 +708,7 @@ mod tests {
                     at: 1,
                     pending: false,
                     queued: false,
+                    mode: adi_agents::store::QueueMode::Regular,
                     images: Vec::new(),
                     steps: Vec::new(),
                     metrics: None,

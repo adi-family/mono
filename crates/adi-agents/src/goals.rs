@@ -328,7 +328,7 @@ fn close(agents: &Agents, goal_id: &str, state: GoalState, note: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{AskRequest, Goal, GoalState, Question, SetBy};
+    use crate::store::{AskRequest, Goal, GoalState, Question, QueueMode, SetBy};
     use crate::{AgentManifest, Launch, SimBlock};
     use adi_config::Config;
 
@@ -453,7 +453,14 @@ mod tests {
         let queued = quiet_conversation(&agents, "queued");
         create(&agents, "queued", &queued, "finish", SetBy::Human).expect("create");
         store
-            .enqueue("queued", &queued, "one more thing", &[], &[])
+            .enqueue(
+                "queued",
+                &queued,
+                "one more thing",
+                &[],
+                &[],
+                QueueMode::Regular,
+            )
             .expect("enqueue");
 
         let asking = quiet_conversation(&agents, "asking");

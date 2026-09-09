@@ -36,6 +36,7 @@ use crate::progress::{Step, TurnContent, TurnMetrics, close_open_calls};
 
 use super::attachments::Attachment;
 use super::db::{now_ms, sql_err};
+use super::queue::QueueMode;
 
 /// One message in a session's transcript.
 ///
@@ -58,6 +59,12 @@ pub struct Turn {
     /// Synthesized on read; it becomes a real transcript turn when its turn starts.
     #[serde(default, skip_serializing_if = "is_false")]
     pub queued: bool,
+    /// When a still-[`queued`](Self::queued) message wants to be heard — carried onto the
+    /// synthesized turn straight from the [`QueuedMessage`](super::QueuedMessage) it came from, so
+    /// a reader can say "asap" before the message is ever asked. Meaningless once `queued` is
+    /// false: a committed turn has already been heard, whatever it was queued as.
+    #[serde(default, skip_serializing_if = "is_regular")]
+    pub mode: QueueMode,
     /// The images this message carries — a user turn's attachments, in the order they were
     /// attached. References rather than bytes (see [`Attachment`]), so a transcript polled once a
     /// second stays the size of its text.
@@ -90,6 +97,13 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// The same requirement as [`is_false`], for [`Turn::mode`] — regular is nearly every turn there
+/// is, and every turn that was never queued at all.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_regular(mode: &QueueMode) -> bool {
+    *mode == QueueMode::Regular
+}
+
 /// The two roles a turn carries. Strings rather than an enum because [`Turn::role`] is one, and it
 /// crosses the wire to readers that already expect these exact words.
 pub(crate) const ROLE_USER: &str = "user";
@@ -115,6 +129,7 @@ pub fn user_turn_with(text: impl Into<String>, images: Vec<Attachment>) -> Turn 
         at: now_ms(),
         pending: false,
         queued: false,
+        mode: QueueMode::Regular,
         images,
         steps: Vec::new(),
         metrics: None,
@@ -132,6 +147,7 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         at: now_ms(),
         pending: false,
         queued: false,
+        mode: QueueMode::Regular,
         // An answer carries none: what a model sends back is text and the steps it took to write
         // it. Images travel one way, from the person to the model.
         images: Vec::new(),
@@ -284,6 +300,7 @@ pub(super) fn view(
             at: 0,
             pending: running,
             queued: false,
+            mode: QueueMode::Regular,
             images: Vec::new(),
             steps,
             metrics: content.metrics,
@@ -296,6 +313,7 @@ pub(super) fn view(
         at: 0,
         pending: false,
         queued: true,
+        mode: message.mode,
         images: message.images,
         steps: Vec::new(),
         metrics: None,

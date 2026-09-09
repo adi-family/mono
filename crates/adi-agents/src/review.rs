@@ -1087,6 +1087,7 @@ mod tests {
     use super::*;
     use crate::backend::Backend;
     use crate::progress::TurnMetrics;
+    use crate::store::QueueMode;
 
     fn agent() -> StoredAgent {
         let mut manifest = crate::agent::StoredAgentManifest {
@@ -1141,6 +1142,7 @@ mod tests {
                 at: 1_000,
                 pending: false,
                 queued: false,
+                mode: QueueMode::Regular,
                 images: Vec::new(),
                 steps: Vec::new(),
                 metrics: None,
@@ -1152,6 +1154,7 @@ mod tests {
                 at: 2_000,
                 pending: false,
                 queued: false,
+                mode: QueueMode::Regular,
                 images: Vec::new(),
                 steps: vec![
                     tool("Bash", "cargo test", ToolStatus::Error, "linker not found"),
@@ -1301,6 +1304,7 @@ mod tests {
                 at: 1_000 + i,
                 pending: false,
                 queued: false,
+                mode: QueueMode::Regular,
                 images: Vec::new(),
                 steps: vec![tool(
                     "Bash",
@@ -1358,6 +1362,7 @@ mod tests {
                 at: 1_000,
                 pending: false,
                 queued: false,
+                mode: QueueMode::Regular,
                 images: Vec::new(),
                 steps: Vec::new(),
                 metrics: None,
@@ -1369,6 +1374,7 @@ mod tests {
                 at: 2_000,
                 pending: false,
                 queued: false,
+                mode: QueueMode::Regular,
                 images: Vec::new(),
                 steps,
                 metrics: None,

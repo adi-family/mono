@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-257 structs · 10 enums across 9 files.
+257 structs · 11 enums across 9 files.
 
 ## Index
 
@@ -16,7 +16,7 @@
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
 - [`src/handlers/update.rs`](#srchandlersupdaters) — `Installing`
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `RunRef`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `RunRef`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
 
 ---
 
@@ -1534,6 +1534,22 @@ pub struct ReplyToRun {
     pub message: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
+    #[serde(default)]
+    pub mode: QueueMode,
+}
+```
+
+### enum `QueueMode`
+
+When a queued message wants to be heard — the wire twin of `adi_agents::store::QueueMode`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMode {
+    #[default]
+    Regular,
+    Asap,
 }
 ```
 
@@ -1804,6 +1820,8 @@ pub struct AgentTurn {
     pub pending: bool,
     #[serde(default)]
     pub queued: bool,
+    #[serde(default, skip_serializing_if = "is_regular")]
+    pub mode: QueueMode,
     #[serde(default)]
     pub images: Vec<AgentAttachment>,
     #[serde(default)]

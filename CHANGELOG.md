@@ -20,6 +20,17 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **A message can say it wants to be heard now.** Typed while `harness:adi` is still answering, a
+  reply used to wait for that answer to finish before it was ever asked — the only way to say
+  something new was to interrupt the whole turn with Stop. A new asap button beside Send, shown
+  only while the agent is working, sends it to overtake the queue instead: it reaches the model at
+  the very next tool-calling round, alongside whatever the turn was already doing, rather than
+  after the answer lands. An asap message queued behind a `claude-sdk` or `process:*` run is heard
+  when that run ends, the same as before — those engines have no door partway through a turn to
+  reach it any sooner. A queued message that asked to overtake says so in the chat.
+
 ### Fixed
 
 - **The LLM backends page loads.** It showed "Loading…" and never anything else: the page watches

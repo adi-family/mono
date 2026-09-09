@@ -1436,6 +1436,35 @@ pub struct ReplyToRun {
     /// [`RunAgent::attachments`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
+    /// When this should be heard, if it queues at all — see [`QueueMode`]. Defaulted so a client
+    /// that has never heard of this field still gets the behaviour it always had: regular.
+    #[serde(default)]
+    pub mode: QueueMode,
+}
+
+/// When a queued message wants to be heard — the wire twin of `adi_agents::store::QueueMode`.
+///
+/// `Regular` (the default) waits for the turn in flight to end, exactly like every message ever
+/// queued before this existed. `Asap` asks to overtake the queue and reach the model at the
+/// earliest point a *running* turn can hear anything at all — which only `harness:adi` has a door
+/// for (the top of its next tool-calling round). Every other backend — `harness:claude-sdk`'s
+/// vendor CLI, and `process:*`, which hands a message to a spawned child once and never speaks to
+/// it again — has no such door, so an `Asap` message queued behind one of those is simply heard
+/// when the run ends, same as `Regular` would be. This asks to overtake the queue; it is not a
+/// promise every engine can keep.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueMode {
+    #[default]
+    Regular,
+    Asap,
+}
+
+/// Whether to omit [`AgentTurn::mode`] on the wire — every turn that was never `Asap`, which is
+/// nearly all of them, and every turn that is not still queued at all.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_regular(mode: &QueueMode) -> bool {
+    *mode == QueueMode::Regular
 }
 
 /// One image attached to a message: enough to draw it, not the bytes themselves.
@@ -1698,6 +1727,10 @@ pub struct AgentTurn {
     /// queue, which is what `/api/agents/run/unqueue` takes.
     #[serde(default)]
     pub queued: bool,
+    /// When a still-[`queued`](Self::queued) message wants to be heard. Meaningless once `queued`
+    /// is false — an asked turn has already been heard, whatever it was queued as.
+    #[serde(default, skip_serializing_if = "is_regular")]
+    pub mode: QueueMode,
     /// The images this message carries, in the order they were attached. Only ever on a user turn —
     /// pictures travel from the person to the model, never back.
     #[serde(default)]

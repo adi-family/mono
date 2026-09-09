@@ -19,9 +19,9 @@ use crate::types::{
     AgentSimFieldKind, AgentSimResult, AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn,
     AgentStep, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
     AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
-    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, RenameRun, ReplyToRun,
-    ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetAutoTitle, SetGoal, SetRunLimit,
-    SimulateAgent, SimulateTurn, StarRun, TurnMarker, UnqueueFromRun,
+    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun,
+    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
+    SetRunLimit, SimulateAgent, SimulateTurn, StarRun, TurnMarker, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -606,6 +606,7 @@ pub fn reply_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         req.message.trim(),
         &req.attachments,
         &markers,
+        store_queue_mode(req.mode),
     ) {
         return Response::from(&e);
     }
@@ -1300,10 +1301,27 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
         at: t.at,
         pending: t.pending,
         queued: t.queued,
+        mode: queue_mode(t.mode),
         images: t.images.into_iter().map(agent_attachment).collect(),
         steps: t.steps.into_iter().map(agent_step).collect(),
         metrics: t.metrics.map(agent_metrics),
         markers: markers.iter().map(turn_marker).collect(),
+    }
+}
+
+/// Map a stored [`adi_agents::store::QueueMode`] onto its wire shape.
+fn queue_mode(mode: adi_agents::store::QueueMode) -> QueueMode {
+    match mode {
+        adi_agents::store::QueueMode::Regular => QueueMode::Regular,
+        adi_agents::store::QueueMode::Asap => QueueMode::Asap,
+    }
+}
+
+/// The inverse of [`queue_mode`] — what a request's own mode becomes on the way into the store.
+fn store_queue_mode(mode: QueueMode) -> adi_agents::store::QueueMode {
+    match mode {
+        QueueMode::Regular => adi_agents::store::QueueMode::Regular,
+        QueueMode::Asap => adi_agents::store::QueueMode::Asap,
     }
 }
 
