@@ -20,6 +20,66 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.10.0 — 2026-09-09
+
+### Added
+
+- **An agent can be given more than one way to answer a turn.** Until now an agent was welded to a
+  single model: when that model hit its usage limit the run died, and you had to notice, pick a
+  different agent and lose the thread. An **LLM backend** is now a thing in its own right — a
+  credential, a model, its dials, how that provider says "you are out", and how much history it can
+  be handed — kept under one name at *Settings → LLM backends*. An agent keeps its identity (its
+  prompt, its tools, its directory, its memory) and holds an ordered **list** of backends instead of
+  a model.
+
+  A new conversation starts on the first row. When a backend answers with a quota or a rate limit it
+  is held — centrally, keyed on the credential and model, so sixteen runs discover one limit once —
+  and the same message is replayed on the next row, with the same prompt, tools and history, under
+  one line of notice in the chat. A broken login, an error nobody recognises, or a list with nothing
+  left is a stop that asks you, not a silent fallback. Nothing is ever summarised or trimmed to fit:
+  a history the next backend cannot hold fails out loud. A held backend is found to be back by a
+  prober in the background, never by making your next turn wait.
+
+  `adi-mono llm backends|show|save|delete|settings|holds|release|probe` from the terminal, and
+  `adi-mono llm migrate` lifts the model configuration each agent already had into a backend and
+  puts it at the head of that agent's list, one for one, dry by default.
+
+- **One endpoint every model client can be pointed at.** The LLM gateway takes the traffic from
+  anything that speaks to a model — your own scripts, an agent's engine — and gives it one address,
+  one place credentials live, and one record of what went out and what came back. The panel reads
+  that record as a page: request by request, with the model, the tokens and the money beside it.
+
+  It can also compress the same literal repeated dozens of times in a prompt into a short name and
+  put the literal back before the client sees it. That last part ships **off and marked
+  experimental**: measured on this machine it loses more to a broken prompt cache than it saves, and
+  a gateway with it switched on says so at startup and warns on every request it rewrites.
+
+- **Every agent definition now says which shape it is written in**, on its first line, and the app
+  brings the store forward on the way up. `version = 3` in an agent's file is not decoration: at
+  startup adi walks each definition from the shape it claims to the one this build reads — nothing →
+  1 → 2 → 3, one step at a time — before the panel, the launcher or a trigger has read anything. A
+  step runs once, an edit in the panel is not an upgrade, and a definition written by a *newer* adi
+  than the one you are running is reported and left strictly alone rather than guessed at.
+  `adi-mono agents migrate` is the same walk asked for by hand, and shows you the plan first.
+
+### Changed
+
+- **An agent that starts on an LLM backend no longer says what it runs on.** The backend already
+  names the runtime, and the copy left on the agent was a second answer to the same question — free
+  to drift from the one every launch actually used. It is gone from those files: the runtime field
+  in the agent form is filled in from the backend at the head of the list and says so, and
+  `adi-mono agents save --backend …` on such an agent is refused with the way to change it rather
+  than quietly ignored. An agent with no backend list — one that drives a CLI, like `pty:claude` —
+  still declares its own, because there is nothing to take one from.
+
+  The migration does not guess: an agent whose stored runtime disagrees with its first backend, or
+  whose first backend no longer exists, is held back with the reason and left as it was.
+
+- **An older adi opening a newer store now says so.** It could never write to one — a definition
+  stamped above what a build knows has always been left alone — but it came up silent about it and
+  then served definitions in a shape it does not understand. It now warns once at startup, with how
+  many and how new, and the agents a migration held back are named in that same log.
+
 ## 1.9.0 — 2026-09-08
 
 ### Added
