@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adi_hive::config::{self, Hive};
+use adi_hive::demand::Demand;
 use adi_hive::proxy::{self, Router};
 use adi_hive::{runner, status, tls};
 use tokio::net::TcpListener;
@@ -84,10 +85,16 @@ async fn main() -> anyhow::Result<()> {
     let mut current = Arc::new(Router::new(&resolved.routes, resolved.mesh_gateway));
     let (route_tx, route_rx) = watch::channel(Arc::clone(&current));
 
+    // What the front door and the supervisor share about on-demand services: the front door reports
+    // the requests, the supervisor owns the processes. Its phases are published beside the config,
+    // like the status file, so the control panel can tell a service that is *starting* from one that
+    // is simply down.
+    let demand = Arc::new(Demand::new(Some(path.with_file_name(DEMAND_FILE))));
+
     let mut bound = Vec::with_capacity(resolved.binds.len());
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
-    bind_plain(&resolved, &route_rx, &mut bound, &mut tasks).await;
-    bind_tls(&path, &resolved, &route_rx, &mut bound, &mut tasks).await;
+    bind_plain(&resolved, &route_rx, &demand, &mut bound, &mut tasks).await;
+    bind_tls(&path, &resolved, &route_rx, &demand, &mut bound, &mut tasks).await;
 
     if tasks.is_empty() {
         // Name them: this is the last line before the process exits, and under a supervisor that
@@ -122,9 +129,13 @@ async fn main() -> anyhow::Result<()> {
     if runners.is_empty() {
         info!("no service runners declared");
     } else {
-        info!(count = runners.len(), "supervising service runners");
+        let on_demand = runners.iter().filter(|r| r.start.is_on_demand()).count();
+        info!(
+            count = runners.len(),
+            on_demand, "supervising service runners"
+        );
     }
-    let mut supervisor = runner::Supervisor::start(runners);
+    let mut supervisor = runner::Supervisor::start(runners, Arc::clone(&demand));
 
     info!("adi-hive ready");
 
@@ -229,6 +240,7 @@ fn addresses_already_served(path: &Path) -> Option<Vec<SocketAddr>> {
 async fn bind_plain(
     resolved: &config::Resolved,
     route_rx: &watch::Receiver<Arc<Router>>,
+    demand: &Arc<Demand>,
     bound: &mut Vec<String>,
     tasks: &mut Vec<JoinHandle<()>>,
 ) {
@@ -239,7 +251,11 @@ async fn bind_plain(
                 let local = listener.local_addr().unwrap_or(*addr);
                 info!(%local, "listening");
                 bound.push(local.to_string());
-                tasks.push(tokio::spawn(proxy::serve(listener, route_rx.clone())));
+                tasks.push(tokio::spawn(proxy::serve(
+                    listener,
+                    route_rx.clone(),
+                    Arc::clone(demand),
+                )));
             }
             Err(e) => {
                 warn!(%addr, error = %e, "could not bind (privileged port needs root, or in use?); skipping");
@@ -255,6 +271,7 @@ async fn bind_tls(
     path: &Path,
     resolved: &config::Resolved,
     route_rx: &watch::Receiver<Arc<Router>>,
+    demand: &Arc<Demand>,
     bound: &mut Vec<String>,
     tasks: &mut Vec<JoinHandle<()>>,
 ) {
@@ -297,6 +314,7 @@ async fn bind_tls(
                     listener,
                     acceptor.clone(),
                     route_rx.clone(),
+                    Arc::clone(demand),
                 )));
             }
             Err(e) => warn!(
@@ -353,6 +371,11 @@ fn warn_if_config_is_user_writable(_path: &Path) {}
 
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Where the phases of this hive's on-demand services are published, beside the config — the file
+/// the control panel reads to tell a service that is *starting* from one that is simply stopped.
+/// Written only by a hive that actually supervises one (see [`Demand`]).
+const DEMAND_FILE: &str = "demand.json";
 
 /// How often the config (and its imports) is re-read to pick up added/removed services.
 /// Polling rather than an fs-watch: the files are tiny, a few are involved, and this keeps

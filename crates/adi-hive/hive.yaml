@@ -6,9 +6,10 @@
 # This is the nakit-yok hive spec format. adi-hive reads the proxy slice —
 # `proxy.bind`, and per service its `proxy.host` + HTTP port
 # (`rollout.recreate.ports.http`) — and the run slice: `runner.script` (`run` +
-# `working_dir`), `environment.static`, and `restart`. It launches each service's
-# runner (injecting its port as `$PORT`/`PORT_<KEY>`) and supervises it, restarting
-# per `restart`. Other fields (healthcheck, depends_on, …) are accepted-but-ignored.
+# `working_dir`), `environment.static`, `restart`, and `start` (with `idle_stop` /
+# `stop_grace` for an on-demand service). It launches each service's runner (injecting
+# its port as `$PORT`/`PORT_<KEY>`) and supervises it, restarting per `restart`. Other
+# fields (healthcheck, depends_on, …) are accepted-but-ignored.
 #
 # adi-hive pairs with adi-dns: adi-dns resolves *.adi to 127.0.0.53 (the front-door
 # address below), then adi-hive fans those hostnames out to the per-service HTTP
@@ -104,6 +105,30 @@ services:
       recreate:
         ports:
           http: 8021
+
+  # A service that only runs while somebody is looking at it. `start: on-demand` keeps it out of
+  # the boot sequence entirely: the front door starts it when a request arrives for `watch.adi`
+  # (showing a holding page that reloads itself until the service answers), and stops it again once
+  # `idle_stop` passes with no request. The stop is a SIGTERM first — the process gets `stop_grace`
+  # to finish what it is doing before a SIGKILL — and a request landing inside that window cancels
+  # it. Both windows are optional: they default to 1h and 30s.
+  #
+  # The default is `start: always`, which is what every service above is: started with the hive
+  # (so it comes back after a machine restart) and never stopped for being quiet.
+  watch:
+    proxy:
+      host: watch.adi
+    rollout:
+      recreate:
+        ports:
+          http: 8030
+    start: on-demand
+    idle_stop: 30m
+    stop_grace: 10s
+    runner:
+      type: script
+      script:
+        run: bun run watch
 
   # No `proxy:` — not fronted by adi-hive, silently ignored.
   postgres:

@@ -105,6 +105,8 @@ pub(crate) fn project_detail_view(
         volumes: RwSignal::new(String::new()),
         env: RwSignal::new(String::new()),
         pull: RwSignal::new(String::new()),
+        start: RwSignal::new("always".to_string()),
+        idle_stop: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
     let workspace_form = WorkspaceForm {

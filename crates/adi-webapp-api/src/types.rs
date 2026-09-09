@@ -610,6 +610,20 @@ pub struct NewService {
     /// Restart policy (`always` | `on-failure` | `no`); omitted → adi-hive's default.
     #[serde(default)]
     pub restart: Option<String>,
+    /// Start policy (`always` | `on-demand`); omitted → adi-hive's default, `always`. An
+    /// `on-demand` service is not started with the hive: the front door starts it when a request
+    /// arrives for its host, and stops it again once [`idle_stop`](Self::idle_stop) passes
+    /// without one.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// On-demand only: how long the service may go unvisited before it is stopped (`1h`, `30m`,
+    /// `90s`, or a bare number of seconds). Omitted → adi-hive's default of one hour.
+    #[serde(default)]
+    pub idle_stop: Option<String>,
+    /// On-demand only: how long that stop waits after the `SIGTERM` before it escalates to
+    /// `SIGKILL`. Omitted → adi-hive's default of 30 seconds.
+    #[serde(default)]
+    pub stop_grace: Option<String>,
     /// When set, the service is a **Docker container** runner (`runner.docker`) rather than a
     /// script — see [`NewServiceDocker`].
     #[serde(default)]
@@ -645,6 +659,40 @@ pub struct NewServiceDocker {
     pub command: Vec<String>,
 }
 
+/// What a hive service is doing right now, as `GET /api/hive` reports it.
+///
+/// Four states rather than a running flag, because an **on-demand** service that is not running is
+/// not the same thing as one that is down: it is waiting to be visited, which is exactly what it was
+/// configured to do. Reading them as the same is how a healthy hive looks half-broken.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceState {
+    /// Its port is answering.
+    Running,
+    /// A visit started it and it has not answered yet. Only an on-demand service reports this, and
+    /// only while the hive that supervises it says so.
+    Starting,
+    /// An on-demand service, stopped because nobody has asked for it — the policy working, not a
+    /// fault. A visit brings it back.
+    IdleStopped,
+    /// Not running, and nothing is waiting to start it.
+    #[default]
+    Stopped,
+}
+
+impl ServiceState {
+    /// How the state reads in the panel — the same words the API uses.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Starting => "starting",
+            Self::IdleStopped => "idle-stopped",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
 /// One named port a service declares (`rollout.recreate.ports.<key> = <port>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicePort {
@@ -668,9 +716,20 @@ pub struct ProjectService {
     /// Restart policy (`restart`), e.g. `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
+    /// Start policy (`start`): `always` (the default) or `on-demand`.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// On-demand only: how long the service may go unvisited before it is stopped (`idle_stop`).
+    #[serde(default)]
+    pub idle_stop: Option<String>,
     /// Whether the service's primary port is currently listening.
     #[serde(default)]
     pub running: bool,
+    /// The fuller answer [`running`](Self::running) cannot give: an on-demand service that is
+    /// stopped *because nobody asked for it* reads differently from one that is simply down.
+    /// `#[serde(default)]` so a payload from a server that predates the field still deserializes.
+    #[serde(default)]
+    pub state: ServiceState,
     /// What the process holding that port costs right now; `None` when the service is down
     /// or the host could not sample it.
     #[serde(default)]
@@ -3026,11 +3085,22 @@ pub struct HiveService {
     pub run: Option<String>,
     #[serde(default)]
     pub restart: Option<String>,
+    /// Start policy (`start`): `always` (the default) or `on-demand` — a service that is started by
+    /// a visit to its host and stopped again once nobody has visited for its idle window.
+    #[serde(default)]
+    pub start: Option<String>,
+    /// On-demand only: the idle window before the stop (`idle_stop`), as written in the config.
+    #[serde(default)]
+    pub idle_stop: Option<String>,
     /// The port `running` was decided on (the `http` port, else the sole declared port).
     #[serde(default)]
     pub primary_port: Option<u16>,
     /// Whether `primary_port` is currently listening on the machine.
     pub running: bool,
+    /// Running / starting / idle-stopped / stopped — see [`ServiceState`]. `#[serde(default)]` so a
+    /// payload from a server that predates the field still deserializes.
+    #[serde(default)]
+    pub state: ServiceState,
     /// CPU and memory of the process tree behind `primary_port`; `None` while the service is
     /// down or when the host could not sample it.
     #[serde(default)]

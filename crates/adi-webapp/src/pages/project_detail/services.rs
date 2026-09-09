@@ -1,7 +1,9 @@
 //! The Services panel of the project detail page.
 
 use adi_ui::{EmptyRow, Row as TableRow};
-use adi_webapp_api::types::{NewService, NewServiceDocker, ProjectDetail, ProjectService};
+use adi_webapp_api::types::{
+    NewService, NewServiceDocker, ProjectDetail, ProjectService, ServiceState,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -14,7 +16,7 @@ use crate::ui::{
 /// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
 /// does not sort. As on the Hive page, the sort keys match on header text, not index.
 pub(crate) const SERVICE_COLS: &[&str] = &[
-    "Service", "Host", "Ports", "Command", "Restart", "Status", "CPU", "Memory", "",
+    "Service", "Host", "Ports", "Command", "Restart", "Start", "Status", "CPU", "Memory", "",
 ];
 
 use super::reload_project;
@@ -44,6 +46,11 @@ pub(crate) struct QuickServiceForm {
     pub(crate) env: RwSignal<String>,
     /// Image pull policy (`""` | `always` | `missing` | `never`).
     pub(crate) pull: RwSignal<String>,
+    /// Start policy: `"always"` (default) or `"on-demand"`.
+    pub(crate) start: RwSignal<String>,
+    /// On-demand only: the idle window before the service is stopped, as typed (`30m`); empty
+    /// takes adi-hive's default of an hour.
+    pub(crate) idle_stop: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
 }
 
@@ -121,26 +128,48 @@ fn cell(col: &str, s: &ProjectService) -> AnyView {
         "Restart" => {
             view! { <span class="adi-mono adi-muted">{dash(s.restart.clone())}</span> }.into_any()
         }
+        // `always` (the default) or `on-demand` — a service started by a visit to its host and
+        // stopped again once nobody has visited for its idle window.
+        "Start" => {
+            let idle = s.idle_stop.clone();
+            let title = if s.start.as_deref() == Some("on-demand") {
+                idle.map_or_else(
+                    || "started by a visit; stopped after an hour with no request".to_string(),
+                    |idle| format!("started by a visit; stopped after {idle} with no request"),
+                )
+            } else {
+                "started with the hive and kept alive".to_string()
+            };
+            view! {
+                <span class="adi-mono adi-muted" title=title>
+                    {s.start.clone().unwrap_or_else(|| "always".to_string())}
+                </span>
+            }
+            .into_any()
+        }
         // A 6px dot and a word (DESIGN.md §6): green while the primary port answers, grey for a
-        // runner that is down, nothing for a service with no runner to be up or down.
+        // service that is quiet — waiting to be visited, or coming up — red for one that is down,
+        // and nothing for a service with no runner to be up or down.
         "Status" => {
             if s.run.is_none() {
-                view! { <span class="adi-muted">"—"</span> }.into_any()
-            } else if s.running {
-                view! {
-                    <span class="adi-status" data-state="online" title="the primary port is listening">
-                        <span class="adi-status__led"></span>"running"
-                    </span>
-                }
-                .into_any()
-            } else {
-                view! {
-                    <span class="adi-status">
-                        <span class="adi-status__led"></span>"stopped"
-                    </span>
-                }
-                .into_any()
+                return view! { <span class="adi-muted">"—"</span> }.into_any();
             }
+            let (attr, title) = match s.state {
+                ServiceState::Running => ("online", "the primary port is listening"),
+                ServiceState::Starting => ("", "a visit started it; it has not answered yet"),
+                ServiceState::IdleStopped => (
+                    "",
+                    "an on-demand service, stopped because nobody has asked for it",
+                ),
+                ServiceState::Stopped => ("", "not running"),
+            };
+            let label = s.state.label();
+            view! {
+                <span class="adi-status" data-state=attr title=title>
+                    <span class="adi-status__led"></span>{label}
+                </span>
+            }
+            .into_any()
         }
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
@@ -167,7 +196,14 @@ fn service_key(s: &ProjectService, col: &str) -> Key {
         }
         "Command" => Key::maybe(s.run.as_deref()),
         "Restart" => Key::maybe(s.restart.as_deref()),
-        "Status" => Key::Bool(s.running),
+        "Start" => Key::maybe(s.start.as_deref()),
+        // By how *up* the service is, so ascending gathers whatever is not running first.
+        "Status" => Key::Int(match s.state {
+            ServiceState::Stopped => 0,
+            ServiceState::IdleStopped => 1,
+            ServiceState::Starting => 2,
+            ServiceState::Running => 3,
+        }),
         "CPU" => Key::Float(f64::from(cpu(s))),
         "Memory" => Key::num(mem(s)),
         // "Service", and the blank action column, which the header never lets you click.
@@ -187,9 +223,13 @@ fn mem(s: &ProjectService) -> u64 {
 
 /// The quick service create form under the Services table. A **Kind** toggle picks the runner: a
 /// `script` (a shell command) or a `docker` container (image + a container port the leased host
-/// port maps to, plus optional volumes/env/pull). Common fields — name, proxied host, and the
-/// host port (empty → ports-manager-leased) — apply to both. Posts to `/api/hive/create`, which
-/// writes the service into the project's `.adi/hive.yaml` and returns the fresh detail.
+/// port maps to, plus optional volumes/env/pull). Common fields — name, proxied host, the host port
+/// (empty → ports-manager-leased), and the **Start** policy — apply to both. Posts to
+/// `/api/hive/create`, which writes the service into the project's `.adi/hive.yaml` and returns the
+/// fresh detail.
+///
+/// The idle window only appears once the policy is on-demand: on an `always` service it would
+/// describe a stop that never happens.
 pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyView {
     let QuickServiceForm {
         name,
@@ -202,6 +242,8 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
         volumes,
         env,
         pull,
+        start,
+        idle_stop,
         busy,
     } = form;
     view! {
@@ -255,6 +297,11 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 }
                 (run_cmd, None)
             };
+            // Only an on-demand service carries a start policy into the file: `always` is what a
+            // service with no `start:` already means, and writing it would put the default in two
+            // places. The idle window is on-demand's alone for the same reason.
+            let on_demand = start.get_untracked() == "on-demand";
+            let idle = idle_stop.get().trim().to_string();
             let body = NewService {
                 project: id,
                 name: nm.clone(),
@@ -263,6 +310,9 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 port: port_v,
                 working_dir: None,
                 restart: None,
+                start: on_demand.then(|| "on-demand".to_string()),
+                idle_stop: (on_demand && !idle.is_empty()).then_some(idle),
+                stop_grace: None,
                 docker,
             };
             name.set(String::new());
@@ -273,6 +323,8 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
             container_port.set(String::new());
             volumes.set(String::new());
             env.set(String::new());
+            start.set("always".to_string());
+            idle_stop.set(String::new());
             apply_mutation(state, Some(busy), format!("Added service “{nm}”."),
                 |s: State, d: ProjectDetail| s.project_detail.set(Some(d)), fetch::create_service(body));
         }>
@@ -302,6 +354,27 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 hint="optional — routed by the front door" value=host />
             <TextField id="pservice-port" label="Host port" placeholder="auto" mono=true numeric=true
                 hint="optional — auto-leased when empty" value=port />
+            <div class="adi-field">
+                <span class="adi-field__label">"Start"</span>
+                <div class="adi-segmented" role="group" aria-label="Start policy">
+                    <button class="adi-segmented__option" type="button"
+                        title="Started with the hive and kept alive"
+                        aria-pressed=move || (start.get() != "on-demand").to_string()
+                        on:click=move |_| start.set("always".to_string())>"Always"</button>
+                    <button class="adi-segmented__option" type="button"
+                        title="Not started at boot: the front door starts it when its host is visited, and stops it again once nobody has visited for the idle window"
+                        aria-pressed=move || (start.get() == "on-demand").to_string()
+                        on:click=move |_| start.set("on-demand".to_string())>"On demand"</button>
+                </div>
+            </div>
+            {move || if start.get() == "on-demand" {
+                view! {
+                    <TextField id="pservice-idle" label="Idle stop" placeholder="1h" mono=true
+                        hint="stopped after this long with no request" value=idle_stop />
+                }.into_any()
+            } else {
+                ().into_any()
+            }}
             <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                 "Add service"
             </button>

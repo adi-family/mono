@@ -100,18 +100,60 @@ pub const PAGE: &str = concat!(
 /// it, and a shell that exists twice is one that drifts.
 #[must_use]
 pub fn shell(title: &str, label: &str, heading: &str, body: &str) -> String {
+    page(title, label, heading, body, None)
+}
+
+/// [`shell`], plus the option of a `<meta http-equiv="refresh">`. Only the holding page below asks
+/// for one: it is the single page here that describes a situation which resolves itself, so it is
+/// the single page worth reloading. Every other one would only flicker.
+fn page(title: &str, label: &str, heading: &str, body: &str, refresh: Option<u32>) -> String {
     let title = escape(title);
     let label = escape(label);
     let heading = escape(heading);
+    let refresh = refresh.map_or_else(String::new, |secs| {
+        format!("<meta http-equiv=\"refresh\" content=\"{secs}\">\n")
+    });
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <meta name=\"color-scheme\" content=\"dark\">\n\
+         <meta name=\"color-scheme\" content=\"dark\">\n{refresh}\
          <title>{title}</title>\n<style>\n{TOKENS}{css}\n</style>\n</head>\n<body>\n\
          <div class=\"brand\">{mark}adi</div>\n<main>\n\
          <p class=\"label\">{label}</p>\n<h1>{heading}</h1>\n{body}\n</main>\n</body>\n</html>\n",
         css = css!(),
         mark = mark!(),
+    )
+}
+
+/// How often the holding page reloads itself, in seconds — and what the `503` carrying it says in
+/// `Retry-After`, so a client that reads headers and a person who reads the page wait the same time.
+pub const STARTING_REFRESH_SECS: u32 = 2;
+
+/// The `503` page for an **on-demand** service that this request has just started: it is coming up,
+/// and there is nothing to do but wait a moment.
+///
+/// It reloads itself every [`STARTING_REFRESH_SECS`], so the page turns into the service as soon as
+/// the upstream answers — the visitor never has to know that what they are looking at is not it yet.
+/// Deliberately not the `502`: nothing is wrong here, and telling somebody the service is down when
+/// their own visit is what is bringing it up would send them looking for a fault that does not exist.
+///
+/// `host` comes off the wire (a `Host` header is whatever the client wrote), so it is escaped.
+#[must_use]
+pub fn starting(host: &str) -> String {
+    let host = escape(host);
+    // Lucide `power` (crates/adi-ui/icons/power.svg), at the 24px an empty state gets.
+    let body = format!(
+        r#"<svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg>
+<p class="host">{host}</p>
+<p>This service only runs while somebody is using it, so it was not running until you opened this. It is <b>starting now</b>.</p>
+<p>This page reloads itself every {STARTING_REFRESH_SECS} seconds and becomes the service as soon as it answers — nothing to do but wait a moment. A first start can take longer than the ones after it.</p>"#
+    );
+    page(
+        &format!("{host} — starting"),
+        "503 · starting",
+        "Starting this service for you",
+        &body,
+        Some(STARTING_REFRESH_SECS),
     )
 }
 
@@ -173,7 +215,7 @@ pub fn escape(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PAGE, escape, mesh_unavailable, shell};
+    use super::{PAGE, STARTING_REFRESH_SECS, escape, mesh_unavailable, shell, starting};
 
     /// The mark's path data is written into the page as literals, and the same geometry is
     /// drawn independently in `apps/macos/Sources/Trefoil.swift` and `crates/adi-ui/src/mark.rs`.
@@ -238,6 +280,7 @@ mod tests {
         for page in [
             PAGE.to_string(),
             mesh_unavailable("nosh.laptop-b.n.adi", Some("laptop-b")),
+            starting("watch.adi"),
             shell("t", "l", "h", "<p>b</p>"),
         ] {
             for banned in [
@@ -301,6 +344,43 @@ mod tests {
         );
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert_eq!(escape("a&b\"c'<d>"), "a&amp;b&quot;c&#39;&lt;d&gt;");
+    }
+
+    /// The holding page has one job beyond saying what is happening: turn itself into the service.
+    /// Without the refresh a visitor would sit on it until they thought to reload.
+    #[test]
+    fn the_starting_page_says_what_is_happening_and_reloads_itself() {
+        let page = starting("watch.adi");
+        assert!(page.starts_with("<!doctype html>"), "is a full document");
+        assert!(page.contains("watch.adi"), "names the host");
+        assert!(page.contains("503"), "carries its status");
+        assert!(page.contains("Starting"), "says what is happening");
+        assert!(
+            page.contains(&format!(
+                "<meta http-equiv=\"refresh\" content=\"{STARTING_REFRESH_SECS}\">"
+            )),
+            "reloads itself: {page}"
+        );
+        assert!(!page.contains("<script"), "no script");
+        assert!(!page.contains("http://"), "no external http refs");
+        assert!(!page.contains("https://"), "no external https refs");
+
+        // A `Host` header is whatever the client wrote; it must never reach the markup raw.
+        let hostile = starting("<script>alert(1)</script>.adi");
+        assert!(!hostile.contains("<script>alert"));
+    }
+
+    /// Only the page that describes something changing carries a refresh — the others describe a
+    /// state that a reload cannot improve.
+    #[test]
+    fn no_other_page_reloads_itself() {
+        for page in [
+            PAGE.to_string(),
+            mesh_unavailable("nosh.laptop-b.n.adi", Some("laptop-b")),
+            shell("t", "l", "h", "<p>b</p>"),
+        ] {
+            assert!(!page.contains("http-equiv=\"refresh\""), "{page}");
+        }
     }
 
     #[test]

@@ -36,6 +36,7 @@ pub trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 use crate::config::{ResolvedRoute, host_key, is_mesh_host, path_prefix};
+use crate::demand::Demand;
 
 /// Caps per-connection memory against a client that never sends the blank line.
 const MAX_HEAD: usize = 16 * 1024;
@@ -43,9 +44,23 @@ const MAX_HEAD: usize = 16 * 1024;
 /// So a silent client can't tie up a task forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a request for a just-woken on-demand service waits for its upstream before the visitor
+/// is given the holding page instead.
+///
+/// Short on purpose. Anything a person is looking at has to answer *something* quickly, and the
+/// holding page refreshes itself — so this window is not "how long a service may take to start",
+/// only "how long is worth waiting rather than saying so".
+const START_WINDOW: Duration = Duration::from_millis(1500);
+
+/// How often the start window retries the upstream.
+const START_RETRY: Duration = Duration::from_millis(50);
+
 /// One entry of the routing table, keyed by `(host, path prefix)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Route {
+    /// The service this route belongs to. Carried so a request can *name* what it landed on, which
+    /// is what an on-demand service needs before it can be started (see [`crate::demand`]).
+    service: String,
     host: String,
     /// `None` is the host's fallback: it answers whatever no prefix claimed.
     path: Option<String>,
@@ -95,6 +110,7 @@ impl Router {
             routes: routes
                 .iter()
                 .map(|r| Route {
+                    service: r.service.clone(),
                     host: host_key(&r.host),
                     path: path_prefix(r.path.as_deref()),
                     upstream: r.upstream,
@@ -133,10 +149,32 @@ impl Router {
                 .mesh_gateway
                 .map_or(Decision::MeshUnavailable, Decision::Mesh);
         }
-        let path = request_path(target);
+        self.matched(&host, request_path(target))
+            .map_or(Decision::NoRoute, |route| Decision::Service(route.upstream))
+    }
+
+    /// The name of the service a request lands on — what [`Self::route`] picked, said in the config's
+    /// own words. `None` for a mesh host and for a host nothing claims.
+    ///
+    /// It exists for on-demand services: the front door has to be able to say *which* service a
+    /// request just asked for before it can wake it. Kept beside [`Decision`] rather than folded
+    /// into it, so the mesh gateway — which reads this same table — is untouched by any of it.
+    #[must_use]
+    pub fn matched_service(&self, host: &str, target: &str) -> Option<&str> {
+        let host = host_key(host);
+        if is_mesh_host(&host) {
+            return None;
+        }
+        self.matched(&host, request_path(target))
+            .map(|route| route.service.as_str())
+    }
+
+    /// The route a `(host, path)` resolves to: the longest matching prefix on that host, else the
+    /// host's prefix-less fallback.
+    fn matched(&self, host: &str, path: &str) -> Option<&Route> {
         let mut best: Option<(&Route, usize)> = None;
         let mut fallback: Option<&Route> = None;
-        for route in self.routes.iter().filter(|r| r.host == host) {
+        for route in self.routes.iter().filter(|r| r.host == *host) {
             match &route.path {
                 None => fallback = fallback.or(Some(route)),
                 Some(prefix) => {
@@ -148,9 +186,7 @@ impl Router {
                 }
             }
         }
-        best.map(|(route, _)| route)
-            .or(fallback)
-            .map_or(Decision::NoRoute, |route| Decision::Service(route.upstream))
+        best.map(|(route, _)| route).or(fallback)
     }
 
     /// Whether this host is *carved up*: some route on it claims a path prefix, so which upstream
@@ -198,14 +234,19 @@ fn request_path(target: &str) -> &str {
 /// Accept loop for one listener; per-connection errors are logged, not returned, until the task is
 /// aborted. Each accepted connection snapshots the *current* routing table from `table`, so a
 /// hot-swap by the config reloader takes effect on the next connection.
-pub async fn serve(listener: TcpListener, table: watch::Receiver<Arc<Router>>) {
+pub async fn serve(
+    listener: TcpListener,
+    table: watch::Receiver<Arc<Router>>,
+    demand: Arc<Demand>,
+) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 // Cheap Arc clone of whatever router is current right now.
                 let router = table.borrow().clone();
+                let demand = Arc::clone(&demand);
                 tokio::spawn(async move {
-                    if let Err(e) = handle(stream, &router).await {
+                    if let Err(e) = handle(stream, &router, &demand).await {
                         debug!(%peer, error = %e, "proxy connection error");
                     }
                 });
@@ -229,12 +270,14 @@ pub async fn serve_tls(
     listener: TcpListener,
     acceptor: TlsAcceptor,
     table: watch::Receiver<Arc<Router>>,
+    demand: Arc<Demand>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
                 let router = table.borrow().clone();
                 let acceptor = acceptor.clone();
+                let demand = Arc::clone(&demand);
                 tokio::spawn(async move {
                     // Bound the handshake too: an idle client that opens a socket and says nothing
                     // would otherwise hold the task open indefinitely.
@@ -251,7 +294,7 @@ pub async fn serve_tls(
                             return;
                         }
                     };
-                    if let Err(e) = handle(tls, &router).await {
+                    if let Err(e) = handle(tls, &router, &demand).await {
                         debug!(%peer, error = %e, "proxy connection error");
                     }
                 });
@@ -264,7 +307,11 @@ pub async fn serve_tls(
     }
 }
 
-async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Result<()> {
+async fn handle<S: ClientStream>(
+    mut client: S,
+    router: &Router,
+    demand: &Demand,
+) -> anyhow::Result<()> {
     let head = read_head(&mut client).await?;
 
     let Some(host) = extract_host(&head) else {
@@ -273,11 +320,21 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
     // The target only picks the route. A missing/unparsable request line routes as `/`, which is
     // the host's fallback — the same place a pre-prefix config always sent it.
     let target = extract_target(&head);
-    let (upstream, carved) = match router.route(&host, target.as_deref().unwrap_or("/")) {
-        Decision::Service(upstream) => (upstream, router.host_is_carved(&host)),
+    let (upstream, carved, on_demand) = match router.route(&host, target.as_deref().unwrap_or("/"))
+    {
+        Decision::Service(upstream) => {
+            // Every request for an on-demand service stamps the activity that keeps it alive, and
+            // starts it when it is down. `touch` answers `false` for everything else — every
+            // `always` service, and every service at all in a hive that only routes — so this line
+            // changes nothing for a config that never asked for the policy.
+            let on_demand = router
+                .matched_service(&host, target.as_deref().unwrap_or("/"))
+                .is_some_and(|service| demand.touch(service));
+            (upstream, router.host_is_carved(&host), on_demand)
+        }
         // A mesh host is one upstream — the gateway — whatever the path, and its head travels on to
         // a node that does its own routing. Nothing here to carve, and nothing to rewrite.
-        Decision::Mesh(upstream) => (upstream, false),
+        Decision::Mesh(upstream) => (upstream, false, false),
         Decision::MeshUnavailable => {
             info!(%host, "mesh host, but no local mesh gateway is configured");
             return respond_mesh_unavailable(&mut client, &host).await;
@@ -290,9 +347,21 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
         }
     };
 
-    let mut server = match TcpStream::connect(upstream).await {
+    // A service that was just woken is not listening yet, so a single refused connection says
+    // nothing. Give it the start window before deciding, so a service that comes up quickly serves
+    // the page itself rather than handing the visitor a holding page it has to sit through.
+    let connected = if on_demand {
+        connect_within(upstream, START_WINDOW).await
+    } else {
+        TcpStream::connect(upstream).await
+    };
+    let mut server = match connected {
         Ok(s) => s,
         Err(e) => {
+            if on_demand {
+                info!(%host, %upstream, "on-demand service is still starting; holding the page");
+                return respond_starting(&mut client, &host).await;
+            }
             warn!(%host, %upstream, error = %e, "upstream connect failed");
             // A dead gateway is the same situation as an unconfigured one from the browser's side:
             // the remote node is unreachable from here. Say that, rather than the generic 502 that
@@ -582,6 +651,47 @@ fn extract_target(head: &[u8]) -> Option<String> {
     Some(target.to_string())
 }
 
+/// Connect to `upstream`, retrying until `window` runs out — what a service that is still binding
+/// its port needs, and nothing a service that is already up ever waits for (the first attempt wins).
+///
+/// The error handed back is the last one, so the caller's log line says what actually refused.
+async fn connect_within(upstream: SocketAddr, window: Duration) -> std::io::Result<TcpStream> {
+    let deadline = tokio::time::Instant::now() + window;
+    loop {
+        match TcpStream::connect(upstream).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) if tokio::time::Instant::now() + START_RETRY >= deadline => return Err(e),
+            Err(_) => tokio::time::sleep(START_RETRY).await,
+        }
+    }
+}
+
+/// Serve the holding page with a `503`: an on-demand service was started by this very request and
+/// is not answering yet.
+///
+/// `503` and not `200`, because that is what it is — the response carries no service content, and a
+/// crawler or a client that retries on its own should read it as "later", not as the page. The page
+/// itself refreshes, so a human watching it sees the service the moment it comes up.
+async fn respond_starting<S: ClientStream>(stream: &mut S, host: &str) -> anyhow::Result<()> {
+    let body = crate::notfound::starting(host);
+    let response = format!(
+        "HTTP/1.1 503 Service Unavailable\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {len}\r\n\
+         Retry-After: {retry}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+        retry = crate::notfound::STARTING_REFRESH_SECS,
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.flush().await?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
 /// Serve the animated `4XX` fallback page with a `404` — `Host` matched no configured route.
 async fn respond_not_found<S: ClientStream>(stream: &mut S) -> anyhow::Result<()> {
     let body = crate::notfound::PAGE;
@@ -668,7 +778,14 @@ mod tests {
     use super::*;
 
     fn route(host: &str, path: Option<&str>, upstream: &str) -> ResolvedRoute {
+        named_route(host, host, path, upstream)
+    }
+
+    /// A route whose service name is worth stating — every on-demand test, since the name is what
+    /// the front door wakes.
+    fn named_route(service: &str, host: &str, path: Option<&str>, upstream: &str) -> ResolvedRoute {
         ResolvedRoute {
+            service: service.to_string(),
             host: host.to_string(),
             path: path.map(str::to_string),
             upstream: upstream.parse().unwrap(),
@@ -882,7 +999,8 @@ mod tests {
     async fn a_mesh_host_with_no_gateway_is_answered_with_the_mesh_page() {
         let router = Arc::new(Router::new(&[], None));
         let (mut probe, front) = tokio::io::duplex(16 * 1024);
-        let served = tokio::spawn(async move { handle(front, &router).await });
+        let demand = Demand::default();
+        let served = tokio::spawn(async move { handle(front, &router, &demand).await });
 
         probe
             .write_all(b"GET /api/x HTTP/1.1\r\nHost: nosh.laptop-b.n.adi\r\n\r\n")
@@ -924,7 +1042,8 @@ mod tests {
             Some(addr),
         ));
         let (mut probe, front) = tokio::io::duplex(16 * 1024);
-        let served = tokio::spawn(async move { handle(front, &router).await });
+        let demand = Demand::default();
+        let served = tokio::spawn(async move { handle(front, &router, &demand).await });
 
         probe.write_all(REQUEST).await.unwrap();
         probe.shutdown().await.unwrap();
@@ -1035,6 +1154,7 @@ mod tests {
                 .routes
                 .iter()
                 .map(|r| ResolvedRoute {
+                    service: r.service.clone(),
                     host: r.host.clone(),
                     path: r.path.clone(),
                     upstream: addr,
@@ -1043,7 +1163,8 @@ mod tests {
             None,
         ));
         let (mut probe, front) = tokio::io::duplex(16 * 1024);
-        let served = tokio::spawn(async move { handle(front, &router).await });
+        let demand = Demand::default();
+        let served = tokio::spawn(async move { handle(front, &router, &demand).await });
         probe.write_all(request).await.unwrap();
         // One request and no more, so the splice's client half sees an end and the task can finish.
         probe.shutdown().await.unwrap();
@@ -1205,6 +1326,157 @@ mod tests {
             answered,
             SWITCHING.to_vec(),
             "and comes back with its `Connection: Upgrade` intact",
+        );
+    }
+
+    /// A closed loopback port, so a test can be certain nothing answers there.
+    ///
+    /// Bound and dropped rather than guessed: a hardcoded "surely free" port is exactly the guess
+    /// that collides with something live on a busy machine.
+    async fn nothing_listening() -> SocketAddr {
+        let taken = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = taken.local_addr().unwrap();
+        drop(taken);
+        addr
+    }
+
+    /// The front door's half of the on-demand policy: the request wakes the service, and while it
+    /// is coming up the visitor is told so — rather than being shown the `502` that would send them
+    /// looking for a service that is down.
+    #[tokio::test]
+    async fn a_request_for_a_stopped_on_demand_service_wakes_it_and_holds_the_page() {
+        let upstream = nothing_listening().await;
+        let router = Arc::new(Router::new(
+            &[named_route(
+                "watch",
+                "watch.adi",
+                None,
+                &upstream.to_string(),
+            )],
+            None,
+        ));
+        let demand = Arc::new(Demand::default());
+        // The supervisor's end: registering is what makes the service wakeable.
+        let mut supervised = demand.register("watch");
+
+        let (mut probe, front) = tokio::io::duplex(16 * 1024);
+        let served = {
+            let demand = Arc::clone(&demand);
+            tokio::spawn(async move { handle(front, &router, &demand).await })
+        };
+        probe
+            .write_all(b"GET / HTTP/1.1\r\nHost: watch.adi\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        probe.read_to_string(&mut response).await.unwrap();
+        served.await.unwrap().expect("handled");
+
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "got: {}",
+            &response[..response.len().min(64)]
+        );
+        assert!(response.contains("Retry-After:"), "and says when to retry");
+        assert!(response.contains("Starting this service"), "{response}");
+        // The supervisor was told, which is what actually starts the process.
+        tokio::time::timeout(Duration::from_millis(100), supervised.wait_for_activity())
+            .await
+            .expect("the request reached the supervisor");
+    }
+
+    /// Nothing changes for a service the hive does not supervise on demand: a dead upstream is
+    /// still a `502`, which is what says "this service exists and is down" rather than "wait".
+    #[tokio::test]
+    async fn a_dead_upstream_that_is_not_on_demand_is_still_a_bad_gateway() {
+        let upstream = nothing_listening().await;
+        let router = Arc::new(Router::new(
+            &[named_route("web", "web.adi", None, &upstream.to_string())],
+            None,
+        ));
+        let demand = Demand::default();
+        let (mut probe, front) = tokio::io::duplex(16 * 1024);
+        let served = tokio::spawn(async move { handle(front, &router, &demand).await });
+        probe
+            .write_all(b"GET / HTTP/1.1\r\nHost: web.adi\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        probe.read_to_string(&mut response).await.unwrap();
+        served.await.unwrap().expect("handled");
+
+        assert!(
+            response.starts_with("HTTP/1.1 502 Bad Gateway\r\n"),
+            "got: {}",
+            &response[..response.len().min(64)]
+        );
+    }
+
+    /// Once it is up it is an ordinary service: proxied byte for byte, and every request restamping
+    /// the activity that keeps it from being stopped under the visitor.
+    #[tokio::test]
+    async fn an_on_demand_service_that_is_up_is_proxied_and_stamped() {
+        const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = upstream.accept().await.unwrap();
+            let _ = read_head(&mut sock).await;
+            sock.write_all(RESPONSE).await.unwrap();
+            sock.shutdown().await.unwrap();
+        });
+
+        let router = Arc::new(Router::new(
+            &[named_route("watch", "watch.adi", None, &addr.to_string())],
+            None,
+        ));
+        let demand = Arc::new(Demand::default());
+        let mut supervised = demand.register("watch");
+        let (mut probe, front) = tokio::io::duplex(16 * 1024);
+        let served = {
+            let demand = Arc::clone(&demand);
+            tokio::spawn(async move { handle(front, &router, &demand).await })
+        };
+        probe
+            .write_all(b"GET / HTTP/1.1\r\nHost: watch.adi\r\n\r\n")
+            .await
+            .unwrap();
+        probe.shutdown().await.unwrap();
+        let mut answered = Vec::new();
+        probe.read_to_end(&mut answered).await.unwrap();
+        served.await.unwrap().expect("handled");
+
+        assert_eq!(answered, RESPONSE.to_vec(), "the upstream's own answer");
+        tokio::time::timeout(Duration::from_millis(100), supervised.wait_for_activity())
+            .await
+            .expect("a proxied request stamps the activity too");
+    }
+
+    /// The name a request lands on, which is what the front door wakes. It follows the same
+    /// longest-prefix rule the routing does — on a carved host the `/api` request belongs to the
+    /// backend, and waking the frontend for it would start the wrong process.
+    #[test]
+    fn the_matched_service_is_the_one_the_route_picked() {
+        let dashboard = Router::new(
+            &[
+                named_route("nosh/frontend", "nosh.adi", None, "127.0.0.1:8010"),
+                named_route("nosh/backend", "nosh.adi", Some("/api"), "127.0.0.1:8011"),
+            ],
+            Some("127.0.0.1:8099".parse().unwrap()),
+        );
+        assert_eq!(
+            dashboard.matched_service("nosh.adi", "/"),
+            Some("nosh/frontend")
+        );
+        assert_eq!(
+            dashboard.matched_service("NOSH.adi:8080", "/api/things"),
+            Some("nosh/backend")
+        );
+        assert_eq!(dashboard.matched_service("nothing.adi", "/"), None);
+        assert_eq!(
+            dashboard.matched_service("app.laptop-b.n.adi", "/"),
+            None,
+            "a remote node's service is not ours to start"
         );
     }
 

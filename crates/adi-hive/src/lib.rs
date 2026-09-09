@@ -16,6 +16,7 @@
 //! divergence in a different coat.
 
 pub mod config;
+pub mod demand;
 pub mod logging;
 pub mod notfound;
 pub mod proxy;

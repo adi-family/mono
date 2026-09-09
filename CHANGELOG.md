@@ -22,6 +22,29 @@ extraction script cares about.
 
 ### Added
 
+- **A service can run only while somebody is looking at it.** A heavy service — a watch list, a
+  bug-bounty hive — used to cost the same whether its page was open or closed, because the hive
+  started everything at boot and kept it alive for ever. A service may now say `start: on-demand`
+  in its hive.yaml: it is not started with the hive at all, the front door starts it when a request
+  arrives for its host, and it is stopped again once nobody has asked for it for an hour
+  (`idle_stop: 30m` to say otherwise). While it comes up, the visitor gets a page that says the
+  service is starting for them and turns into the service itself as soon as it answers — no reload,
+  no 502 that looks like a fault.
+
+  The stop is a `SIGTERM` first: the process gets 30 seconds (`stop_grace`) to finish what it is
+  doing before anything harsher, and a request landing inside that window cancels the stop and keeps
+  the service, so nobody arriving at the wrong moment is served by a process on its way out. If it
+  had already begun exiting, the visit starts a fresh one and shows the holding page.
+
+  **Nothing changes for a service that does not ask for this.** The default is `start: always`,
+  which is what every existing hive.yaml already means: started with the hive — so it comes back
+  after a machine restart — and never stopped for being quiet. No config needs editing.
+
+  *Settings → Services* shows each service's policy and, instead of a running light, what it is
+  actually doing: running, starting, idle-stopped, or stopped. An idle-stopped service is not
+  reported as down, because it is not. Start and Stop still work by hand on an on-demand service,
+  and starting one that way gives it the same full idle window a visit would.
+
 - **A message can say it wants to be heard now.** Typed while `harness:adi` is still answering, a
   reply used to wait for that answer to finish before it was ever asked — the only way to say
   something new was to interrupt the whole turn with Stop. A new asap button beside Send, shown

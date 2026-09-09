@@ -4,13 +4,14 @@
 
 > adi-family reverse proxy: routes inbound HTTP by Host header to a local upstream (nginx-style), run in the foreground under a supervisor
 
-21 structs · 2 enums across 5 files.
+24 structs · 8 enums across 6 files.
 
 ## Index
 
-- [`src/config.rs`](#srcconfigrs) — `Hive`, `ProxyBinds`, `ServiceSpec`, `ServiceProxy`, `Rollout`, `Recreate`, `Runner`, `Script`, `Docker`, `Environment`, `RestartPolicy`, `RunnerSpec`, `ResolvedRoute`, `Resolved`
+- [`src/config.rs`](#srcconfigrs) — `Hive`, `ProxyBinds`, `ServiceSpec`, `ServiceProxy`, `Rollout`, `Recreate`, `Runner`, `Script`, `Docker`, `Environment`, `RestartPolicy`, `StartPolicy`, `RunnerSpec`, `ResolvedRoute`, `Resolved`
+- [`src/demand.rs`](#srcdemandrs) — `Phase`, `Demand`, `Service`, `Handle`
 - [`src/proxy.rs`](#srcproxyrs) — `Route`, `Decision`, `Router`
-- [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`
+- [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`, `Awake`, `Drained`, `Ended`, `Woke`
 - [`src/status.rs`](#srcstatusrs) — `Status`
 - [`src/tls.rs`](#srctlsrs) — `CaMeta`, `LeafMeta`, `Tls`
 
@@ -67,6 +68,12 @@ pub struct ServiceSpec {
     pub environment: Option<Environment>,
     #[serde(default)]
     pub restart: Option<String>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub idle_stop: Option<String>,
+    #[serde(default)]
+    pub stop_grace: Option<String>,
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
 }
@@ -176,6 +183,19 @@ pub enum RestartPolicy {
 }
 ```
 
+### enum `StartPolicy`
+
+When a service is started.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartPolicy {
+    #[default]
+    Always,
+    OnDemand,
+}
+```
+
 ### struct `RunnerSpec`
 
 A service resolved to a launchable runner: command, working dir, env, and restart policy.
@@ -188,6 +208,10 @@ pub struct RunnerSpec {
     pub working_dir: PathBuf,
     pub env: Vec<(String, String)>,
     pub restart: RestartPolicy,
+    pub start: StartPolicy,
+    pub idle_stop: Duration,
+    pub stop_grace: Duration,
+    pub http_port: Option<u16>,
 }
 ```
 
@@ -198,6 +222,7 @@ One routing rule the proxy enforces: `Host: host` (optionally under `path`) → 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoute {
+    pub service: String,
     pub host: String,
     pub path: Option<String>,
     pub upstream: SocketAddr,
@@ -222,6 +247,60 @@ pub struct Resolved {
 
 ---
 
+## `src/demand.rs`
+
+### enum `Phase`
+
+What an on-demand service is doing right now.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase {
+    IdleStopped,
+    Starting,
+    Running,
+    Draining,
+}
+```
+
+### struct `Demand`
+
+The registry of on-demand services: who is registered, when each was last wanted, and what each is doing. Shared as an `Arc` between the proxy tasks and the supervisor's runner tasks.
+
+```rust
+#[derive(Debug, Default)]
+pub struct Demand {
+    services: Mutex<BTreeMap<String, Service>>,
+    state_path: Option<PathBuf>,
+}
+```
+
+### struct `Service`
+
+```rust
+#[derive(Debug)]
+struct Service {
+    activity: watch::Sender<Instant>,
+    phase: Phase,
+}
+```
+
+### struct `Handle`
+
+One service's end of the registry, held by the supervisor task that owns its process.
+
+```rust
+#[derive(Debug)]
+pub struct Handle {
+    name: String,
+    demand: Arc<Demand>,
+    activity: watch::Receiver<Instant>,
+}
+```
+
+---
+
 ## `src/proxy.rs`
 
 ### struct `Route`
@@ -231,6 +310,7 @@ One entry of the routing table, keyed by `(host, path prefix)`.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Route {
+    service: String,
     host: String,
     path: Option<String>,
     upstream: SocketAddr,
@@ -288,6 +368,57 @@ Owns the supervised runner tasks, keyed by service name.
 #[derive(Debug, Default)]
 pub struct Supervisor {
     running: BTreeMap<String, Running>,
+    demand: Arc<Demand>,
+}
+```
+
+### enum `Awake`
+
+What ended a running on-demand process.
+
+```rust
+enum Awake {
+    Shutdown,
+    Exited,
+    Idle,
+}
+```
+
+### enum `Drained`
+
+How an idle stop finished.
+
+```rust
+enum Drained {
+    Kept,
+    Stopped,
+    Restart,
+    Shutdown,
+}
+```
+
+### enum `Ended`
+
+Why the on-demand loop gave up its process, once the run/drain cycle is over.
+
+```rust
+enum Ended {
+    Shutdown,
+    Stopped,
+    Restart,
+}
+```
+
+### enum `Woke`
+
+What interrupted an idle stop's grace window.
+
+```rust
+enum Woke {
+    Exited,
+    Shutdown,
+    Request,
+    GraceOver,
 }
 ```
 
