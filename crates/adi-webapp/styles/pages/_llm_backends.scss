@@ -1,0 +1,10 @@
+// The LLM backends page (`src/pages/llm_backends.rs`): the registry, and the editor under it.
+//
+// Almost all of it is the shared form shapes from adi-css. The one thing this page needs of its
+// own is a shorter code box: `.adi-textarea` is the 300px code editor from §6, and the "anything
+// else" dials here are the exception rather than the field — a runtime that declares a control for
+// every dial it takes leaves that box empty, and 300px of empty editor would be the tallest thing
+// on the form.
+.adi-llmb {
+  &__short { min-height: 0; }
+}

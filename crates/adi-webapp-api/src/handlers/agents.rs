@@ -12,7 +12,8 @@ use adi_agents::contains_json_null;
 use crate::types::{
     AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentBackendRowDto,
     AgentCapabilities,
-    AgentChoice, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentFormSpec,
+    AgentChoice, AgentDto, AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormOption,
+    AgentFormSpec,
     AgentGoal, AgentGoals, AgentKeys, AgentNearDup, AgentPeek, AgentQuestion, AgentRef,
     AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunOutcome,
     AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentSimBlock, AgentSimField,
@@ -2025,13 +2026,18 @@ fn agent_form_spec() -> AgentFormSpec {
 
     // How one machine runs the same engine against two accounts: a settings file carries its own
     // `env`, so this agent's turns can go to a different API than the CLI's own login uses.
-    fields.push(txt_field(
+    //
+    // Wide: the value is a path (or, inline, a whole JSON object), and both run past the end of a
+    // half-width box long before the part that distinguishes two of them.
+    let mut settings = txt_field(
         "settings",
         "Settings file",
         &["harness:claude-sdk"],
         "~/.claude/settings.glm.json",
         "engine settings JSON (path or inline) — its `env` block chooses the account and models",
-    ));
+    );
+    settings.wide = true;
+    fields.push(settings);
 
     fields.push(chk_field(
         "skip_git_repo_check",
@@ -2283,6 +2289,13 @@ fn agent_form_spec() -> AgentFormSpec {
     prompt.wide = true;
     fields.push(prompt);
 
+    // Said once, at the end, rather than on each field above: the split is the interesting thing
+    // and it reads as a list. Everything unnamed stays the agent's, which is where all of this
+    // lived before backends existed.
+    for field in &mut fields {
+        field.owner = classify(&field.name);
+    }
+
     AgentFormSpec {
         backends: vec![
             agent_backend(
@@ -2464,6 +2477,59 @@ fn agent_field(name: &str, label: &str, kind: AgentFormFieldKind) -> AgentFormFi
         numeric: false,
         required: false,
         run_override: false,
+        owner: AgentFieldOwner::Agent,
+    }
+}
+
+/// The four arguments that name a login. The same list as `adi_agents::llm::CREDENTIAL_KEYS`,
+/// which the backend store refuses to accept as dials — restated rather than imported because this
+/// crate describes the *form*, and a field of the form is not a key of a manifest.
+const CREDENTIAL_FIELDS: [&str; 4] = ["settings", "provider", "base_url", "api_key_env"];
+
+/// The arguments that are dials: how hard the model runs, not what it is or who pays for it.
+///
+/// Wider than `adi_agents::llm::migrate::DIAL_KEYS`, and deliberately. That list decides what a
+/// one-time migration *moves off* an existing agent, where being conservative costs nothing and
+/// guessing wrong rewrites somebody's manifest. This one decides what the backends editor *offers*
+/// a control for, where leaving a sampling knob out means it can only be typed as raw JSON.
+///
+/// Executor policy — `permission_mode`, `sandbox`, `approval`, `output_format`, `max_turns` — is
+/// not here: it says how freely the agent may act, which is the agent's to answer, and a backend
+/// that could pin it would be configuring somebody else's identity.
+const DIAL_FIELDS: [&str; 21] = [
+    "effort",
+    "fallback_model",
+    "format",
+    "frequency_penalty",
+    "keep_alive",
+    "max_budget_usd",
+    "max_tokens",
+    "min_p",
+    "num_ctx",
+    "presence_penalty",
+    "reasoning_effort",
+    "repeat_penalty",
+    "response_format",
+    "seed",
+    "stop",
+    "temperature",
+    "think",
+    "thinking",
+    "thinking_budget",
+    "top_k",
+    "top_p",
+];
+
+/// Which object a field belongs to. `provider` is a credential and not a dial even though it also
+/// scopes half the form: it is part of what `harness:adi` logs into, so two backends naming
+/// different providers are different subscriptions and hold separately.
+fn classify(name: &str) -> AgentFieldOwner {
+    if CREDENTIAL_FIELDS.contains(&name) {
+        AgentFieldOwner::Credential
+    } else if DIAL_FIELDS.contains(&name) {
+        AgentFieldOwner::Dial
+    } else {
+        AgentFieldOwner::Agent
     }
 }
 

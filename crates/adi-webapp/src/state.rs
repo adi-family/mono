@@ -1636,9 +1636,14 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) provider: RwSignal<String>,
     pub(crate) base_url: RwSignal<String>,
     pub(crate) api_key_env: RwSignal<String>,
-    /// The dials, as a JSON object. A text buffer rather than a parsed map, because half-typed JSON
-    /// is a normal state for a form to be in and only the save has to insist it is an object.
-    pub(crate) params: RwSignal<String>,
+    /// The dials the runtime declares a control for, by name, as typed. Text rather than JSON
+    /// values because a half-typed number (`0.`) is a normal state for a form to be in; the save
+    /// converts each one by the kind its field declares.
+    pub(crate) dials: RwSignal<BTreeMap<String, String>>,
+    /// Every other dial — one whose value is not a single word or number, or whose name no runtime
+    /// declares — as a JSON object. The escape hatch, so a hand-written backend opened here and
+    /// saved again comes back with everything it arrived with.
+    pub(crate) extra_dials: RwSignal<String>,
     /// How this backend says "I am out", in the order the rules are tried — the first match decides.
     pub(crate) rules: RwSignal<Vec<LimitRuleDto>>,
     /// Whether the background prober may ask this backend whether it is back. Off leaves its holds
@@ -1663,7 +1668,8 @@ impl LlmBackendsForm {
             provider: RwSignal::new(String::new()),
             base_url: RwSignal::new(String::new()),
             api_key_env: RwSignal::new(String::new()),
-            params: RwSignal::new(String::new()),
+            dials: RwSignal::new(BTreeMap::new()),
+            extra_dials: RwSignal::new(String::new()),
             rules: RwSignal::new(Vec::new()),
             probe_on: RwSignal::new(false),
             probe_model: RwSignal::new(String::new()),
@@ -1685,7 +1691,8 @@ impl LlmBackendsForm {
         self.provider.set(String::new());
         self.base_url.set(String::new());
         self.api_key_env.set(String::new());
-        self.params.set(String::new());
+        self.dials.set(BTreeMap::new());
+        self.extra_dials.set(String::new());
         self.rules.set(Vec::new());
         self.probe_on.set(false);
         self.probe_model.set(String::new());
@@ -1695,7 +1702,13 @@ impl LlmBackendsForm {
     /// Load one backend into the editor. The computed halves of the DTO — the credential, the live
     /// hold, who uses it — are deliberately not read: they are facts about the backend, not fields
     /// of it, and a save has nothing to say about any of them.
-    pub(crate) fn edit(self, backend: &LlmBackendDto) {
+    ///
+    /// `declared` is every dial name the form schema knows a control for, whichever runtime it
+    /// belongs to. A dial in it lands in [`dials`](Self::dials) and is saved back with that field's
+    /// own type; anything else goes to [`extra_dials`](Self::extra_dials) as JSON, where it keeps
+    /// the type it arrived with. The schema, not the value, decides — so a dial is never retyped by
+    /// a round trip through this form.
+    pub(crate) fn edit(self, backend: &LlmBackendDto, declared: &BTreeSet<String>) {
         self.editing.set(backend.id.clone());
         self.id.set(backend.id.clone());
         self.label.set(backend.label.clone());
@@ -1709,7 +1722,9 @@ impl LlmBackendsForm {
         self.provider.set(backend.provider.clone());
         self.base_url.set(backend.base_url.clone());
         self.api_key_env.set(backend.api_key_env.clone());
-        self.params.set(pretty_params(&backend.params));
+        let (dials, extra) = split_dials(&backend.params, declared);
+        self.dials.set(dials);
+        self.extra_dials.set(extra);
         self.rules.set(backend.limit_rules.clone());
         self.probe_on.set(backend.probe.is_some());
         self.probe_model
@@ -1719,13 +1734,46 @@ impl LlmBackendsForm {
     }
 }
 
-/// A backend's dials as the editor shows them: an indented JSON object, or an empty buffer when
-/// there are none — so a backend with no dials opens on an empty box rather than on `{}` to delete.
-fn pretty_params(params: &BTreeMap<String, serde_json::Value>) -> String {
-    if params.is_empty() {
-        return String::new();
+/// Split a backend's dials into the ones the form has a control for and the ones it does not.
+///
+/// A dial gets a control when the schema declares its name *and* its value is a single word or
+/// number — the two things a text box can hold without losing anything. Everything else is left as
+/// JSON, indented, so it can still be read and edited; an empty remainder is an empty buffer rather
+/// than `{}`, so a backend with nothing unusual opens on an empty box rather than on braces to
+/// delete.
+fn split_dials(
+    params: &BTreeMap<String, serde_json::Value>,
+    declared: &BTreeSet<String>,
+) -> (BTreeMap<String, String>, String) {
+    let mut dials = BTreeMap::new();
+    let mut extra = serde_json::Map::new();
+    for (name, value) in params {
+        match scalar_text(value) {
+            Some(text) if declared.contains(name) => {
+                dials.insert(name.clone(), text);
+            }
+            _ => {
+                extra.insert(name.clone(), value.clone());
+            }
+        }
     }
-    serde_json::to_string_pretty(params).unwrap_or_default()
+    let extra = if extra.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string_pretty(&extra).unwrap_or_default()
+    };
+    (dials, extra)
+}
+
+/// One dial value as a form control would show it, or `None` for a value no control can hold —
+/// an object, an array, or a null.
+fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
 /// The dashboards rail's unlock form: the one node whose password is being typed, and what has
@@ -2518,5 +2566,53 @@ pub(crate) async fn load(s: State) {
         // The editor's runtime picker is built from the agent form spec, so the page needs the
         // agent listing here too — see the matching subscription above.
         took(s, "/api/agents", s.agents, fetch::agents().await);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_dials;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn params(pairs: &[(&str, serde_json::Value)]) -> BTreeMap<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), value.clone()))
+            .collect()
+    }
+
+    /// A dial with a control gets one; everything else stays JSON with the type it arrived with.
+    /// The two halves together are the whole of the backend's params — nothing is dropped by being
+    /// opened in the editor.
+    #[test]
+    fn dials_split_into_the_ones_a_control_can_hold_and_the_rest() {
+        let declared: BTreeSet<String> = ["effort", "max_tokens", "stop"]
+            .iter()
+            .map(|n| (*n).to_string())
+            .collect();
+        let (dials, extra) = split_dials(
+            &params(&[
+                ("effort", serde_json::json!("high")),
+                ("max_tokens", serde_json::json!(8192)),
+                // Declared, but a list — no text box holds one, so it keeps its JSON.
+                ("stop", serde_json::json!(["\n\nHuman:"])),
+                // A scalar nothing declares: a knob added by hand, or by a newer server.
+                ("mystery", serde_json::json!(1)),
+            ]),
+            &declared,
+        );
+        assert_eq!(dials.get("effort").map(String::as_str), Some("high"));
+        assert_eq!(dials.get("max_tokens").map(String::as_str), Some("8192"));
+        assert!(!dials.contains_key("stop") && !dials.contains_key("mystery"));
+        assert!(extra.contains("stop") && extra.contains("mystery"), "{extra}");
+    }
+
+    /// A backend with nothing unusual opens on an empty box, not on `{}` to delete.
+    #[test]
+    fn nothing_left_over_is_an_empty_box() {
+        let declared: BTreeSet<String> = ["effort"].iter().map(|n| (*n).to_string()).collect();
+        let (dials, extra) = split_dials(&params(&[("effort", serde_json::json!("low"))]), &declared);
+        assert_eq!(dials.len(), 1);
+        assert_eq!(extra, "");
     }
 }

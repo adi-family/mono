@@ -1030,6 +1030,37 @@ pub struct AgentFormField {
     /// what the agent *is* until somebody decides otherwise.
     #[serde(default)]
     pub run_override: bool,
+    /// Which object this field really belongs to — the agent, or the LLM backend answering for it.
+    /// The LLM backends editor is built from it: a runtime's login block is its `Credential`
+    /// fields, its dials are its `Dial` fields, and everything else is the agent's and is not
+    /// asked for there.
+    ///
+    /// Server-owned for the same reason as [`run_override`](Self::run_override): which arguments
+    /// name a login and which turn a dial is backend knowledge, and the split is already written
+    /// down twice on this side (`llm::backend::CREDENTIAL_KEYS`, `llm::migrate::DIAL_KEYS`).
+    #[serde(default)]
+    pub owner: AgentFieldOwner,
+}
+
+/// Whether a form field describes the agent, the login its backend uses, or a dial on that
+/// backend's model — the split `docs/llm-backends.md` draws between an agent's identity and one
+/// complete way to answer a turn.
+///
+/// The **model** is deliberately not a variant: it is a field of its own on a backend (params that
+/// name a model are refused at save time) and the picker for it is built from the runtime option's
+/// own `model_placeholder` / `model_suggestions`, not from this list.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFieldOwner {
+    /// The agent's own — its identity, its tools, and how its executor is driven. The default, so
+    /// a field nobody has classified stays where it has always been.
+    #[default]
+    Agent,
+    /// Part of the login: which subscription or key answers. Two backends naming the same one
+    /// share a hold, which is why this is never overridable per agent row.
+    Credential,
+    /// A dial: how hard the model runs. Set on the backend, and respellable per agent row.
+    Dial,
 }
 
 /// A select option for a form field.

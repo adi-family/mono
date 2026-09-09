@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-65 structs · 10 enums · 1 type alias across 24 files.
+65 structs · 10 enums · 2 type aliases across 25 files.
 
 ## Index
 
@@ -19,6 +19,7 @@
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
+- [`src/pages/llm_backends.rs`](#srcpagesllm_backendsrs) — `LoginField`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `SetupMode`, `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/mod.rs`](#srcpagesproject_detailmodrs) — `ProjectScope`
@@ -449,6 +450,18 @@ pub(crate) struct LlmConsole {
     pub(crate) busy: RwSignal<bool>,
     pub(crate) error: RwSignal<Option<String>>,
 }
+```
+
+---
+
+## `src/pages/llm_backends.rs`
+
+### type `LoginField`
+
+One login field: the schema's name for it, and the signal on this form that holds it.
+
+```rust
+type LoginField = (&'static str, fn(LlmBackendsForm) -> RwSignal<String>);
 ```
 
 ---
@@ -1366,7 +1379,8 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) provider: RwSignal<String>,
     pub(crate) base_url: RwSignal<String>,
     pub(crate) api_key_env: RwSignal<String>,
-    pub(crate) params: RwSignal<String>,
+    pub(crate) dials: RwSignal<BTreeMap<String, String>>,
+    pub(crate) extra_dials: RwSignal<String>,
     pub(crate) rules: RwSignal<Vec<LimitRuleDto>>,
     pub(crate) probe_on: RwSignal<bool>,
     pub(crate) probe_model: RwSignal<String>,

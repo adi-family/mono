@@ -37,9 +37,13 @@ pub(crate) use actions::{
 };
 // The onboarding wizard renders the same fields from the same schema, so its half of the form
 // lives here rather than as a second copy of these renderers.
+// `field_applies` is the whole of "which fields does this runtime take", and the LLM backends
+// editor asks the same question of the same schema — so it is one function, not two that agree
+// until somebody adds a filter to one of them.
 pub(crate) use form::{
     agent_argument_values, agent_environment_fields, agent_param_applies, agent_schema_fields,
-    load_agent_into_form, parsed_env_vars, parsed_path_dirs, parsed_prelude, set_agent_field_value,
+    field_applies, load_agent_into_form, parsed_env_vars, parsed_path_dirs, parsed_prelude,
+    set_agent_field_value,
 };
 use form::{agent_form_sections, clear_agent_form};
 

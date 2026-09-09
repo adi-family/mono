@@ -14,9 +14,11 @@
 //! spending a turn to find out. That is why the table is polled — the interesting changes here are
 //! made by the background prober and by other people's runs, not by this screen.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use adi_webapp_api::types::{
-    ContextWarningDto, LimitRuleDto, LlmBackendDto, LlmBackendsDto, ProbeDto, SaveLlmBackend,
-    SaveLlmSettings,
+    AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormSpec, ContextWarningDto,
+    LimitRuleDto, LlmBackendDto, LlmBackendsDto, ProbeDto, SaveLlmBackend, SaveLlmSettings,
 };
 use adi_ui::{Row as TableRow, Table};
 use leptos::prelude::*;
@@ -28,6 +30,8 @@ use crate::ui::{
     Key, TextField, apply_mutation, confirm, field_hint, flash_view, menu_item, row_actions,
     rows_or_status, sort_rows,
 };
+
+use super::agents::field_applies;
 
 /// The registry table. `Login` is the credential a hold is keyed by, so two rows reading the same
 /// there are the same subscription — moving from one to the other when it runs out buys nothing,
@@ -156,7 +160,7 @@ fn rows_view(state: State, form: LlmBackendsForm) -> AnyView {
         .map(|b| {
             let row = b.clone();
             let edit = menu_item(state, "Edit", false, move || {
-                form.edit(&row);
+                form.edit(&row, &declared_dials(spec(state).as_ref()));
                 scroll_to_editor();
             });
             let held = b.hold.is_some();
@@ -250,8 +254,10 @@ fn cell(col: &str, b: &LlmBackendDto) -> AnyView {
         "Used by" => used_by_cell(b),
         // "Backend", and anything the layout offers that this match doesn't name.
         _ => {
+            // The id under the label, not beside it: inline, the two run together into one word —
+            // `Anthropic · Opusanthropic` — because neither carries a separator of its own.
             let sub = (!b.label.is_empty()).then(|| {
-                view! { <span class="adi-mono adi-muted">{b.id.clone()}</span> }
+                view! { <span class="adi-cell__sub adi-mono">{b.id.clone()}</span> }
             });
             view! { <span>{name_of(b)}</span> {sub} }.into_any()
         }
@@ -411,14 +417,17 @@ fn warnings_view(backends: RwSignal<Option<LlmBackendsDto>>) -> AnyView {
 /// The whole-object editor: every field of one backend, on one form. Whole-object because a backend
 /// *is* a handful of fields on one page — unlike an agent, which four different forms save a piece
 /// of each, so nothing here is omit-to-keep.
+///
+/// The runtime is asked first, and everything under it is that runtime's own questions: the login
+/// it can be pointed at, the models it offers, the dials it understands. A form that showed all of
+/// them at once would be asking for a provider and an API key variable to configure a logged-in
+/// CLI, which is four fields that do nothing and one wrong answer waiting to be typed.
 fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
-    let runtimes = move || {
-        state
-            .agents
-            .get()
-            .map(|a| a.form.backends)
-            .unwrap_or_default()
-    };
+    // The schema through a memo, not read straight from the agents state: that state is polled
+    // every second and carries the live runs, so a section that subscribed to it directly would be
+    // rebuilt — mid-word, under the cursor — every time an agent somewhere started a turn. The
+    // spec itself changes only when the server is replaced.
+    let schema = Memo::new(move |_| spec(state));
     view! {
         <section class="adi-panel" id="llm-backend-editor">
             <div class="adi-panel__head">
@@ -446,71 +455,14 @@ fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
                         value=form.id />
                     <TextField id="llmb-label" label="Shown as" placeholder="Anthropic \u{b7} Opus"
                         field_class="adi-field--grow" value=form.label />
-                    <div class="adi-field">
-                        <label class="adi-field__label" for="llmb-runtime">"Runtime"</label>
-                        <select class="adi-input adi-mono" id="llmb-runtime"
-                            prop:value=move || form.runtime.get()
-                            on:change=move |ev| form.runtime.set(event_target_value(&ev))>
-                            <option value="">"\u{2014} pick a runtime \u{2014}"</option>
-                            {move || runtimes().into_iter().map(|b| {
-                                view! { <option value=b.id>{b.label}</option> }
-                            }).collect::<Vec<_>>()}
-                        </select>
-                    </div>
+                    {runtime_picker(schema, form)}
                 </div>
 
-                <div class="adi-form">
-                    <TextField id="llmb-model" label="Model" mono=true placeholder="claude-opus-5"
-                        field_class="adi-field--grow" value=form.model />
-                    <TextField id="llmb-context" label="Context (tokens)" numeric=true
-                        placeholder="200000"
-                        hint="How much history this backend can hold. Leave it empty when you do \
-                              not know — an unstated window warns about nothing."
-                        value=form.context_tokens />
-                </div>
-
-                <div class="adi-field">
-                    <span class="adi-field__label">"Login"</span>
-                    {field_hint(
-                        "Which credential answers. Two backends naming the same one share a hold, \
-                         so moving from one to the other when it runs out buys nothing. An agent \
-                         row may respell the model and the dials, never this."
-                    )}
-                    <div class="adi-form adi-form--first">
-                        <TextField id="llmb-settings" label="CLI settings file" mono=true
-                            placeholder="~/.claude/settings.json" field_class="adi-field--grow"
-                            value=form.settings />
-                        <TextField id="llmb-provider" label="Provider" mono=true placeholder="anthropic"
-                            value=form.provider />
-                        <TextField id="llmb-base-url" label="Base URL" mono=true
-                            placeholder="https://api.anthropic.com" field_class="adi-field--grow"
-                            value=form.base_url />
-                        <TextField id="llmb-key-env" label="API key variable" mono=true
-                            placeholder="ANTHROPIC_API_KEY"
-                            hint="The name of the variable holding the key \u{2014} never the key \
-                                  itself. Store that with adi-mono secrets set."
-                            value=form.api_key_env />
-                    </div>
-                </div>
-
-                <div class="adi-field">
-                    <label class="adi-field__label" for="llmb-params">"Dials"</label>
-                    {field_hint(
-                        "Everything the runtime understands that is not the model or the login, \
-                         as a JSON object. An agent row may override these per row."
-                    )}
-                    <textarea class="adi-textarea adi-mono" id="llmb-params" rows="4"
-                        placeholder="{ \"temperature\": 0.2 }"
-                        prop:value=move || form.params.get()
-                        on:input=move |ev| form.params.set(event_target_value(&ev))></textarea>
-                </div>
-
-                {rules_view(form)}
-                {probe_view(form)}
+                {move || runtime_sections(form, schema)}
 
                 <div class="adi-form">
                     <button class="adi-btn adi-btn--primary" type="submit"
-                        prop:disabled=move || form.busy.get()>
+                        prop:disabled=move || form.busy.get() || form.runtime.get().is_empty()>
                         {move || if form.editing.get().is_empty() { "Add backend" } else { "Save backend" }}
                     </button>
                     {move || (!form.editing.get().is_empty()).then(|| view! {
@@ -523,6 +475,512 @@ fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
         </section>
     }
     .into_any()
+}
+
+/// The runtime select — the first question, and the one every question after it depends on.
+fn runtime_picker(schema: Memo<Option<AgentFormSpec>>, form: LlmBackendsForm) -> AnyView {
+    view! {
+        <div class="adi-field adi-field--grow">
+            <label class="adi-field__label" for="llmb-runtime">"Runtime"</label>
+            {field_hint(
+                "What actually answers a turn. It decides the rest of this form \u{2014} a \
+                 vendor CLI signs in on its own, an API needs a key."
+            )}
+            <select class="adi-input adi-mono" id="llmb-runtime"
+                prop:value=move || form.runtime.get()
+                on:change=move |ev| form.runtime.set(event_target_value(&ev))>
+                {move || {
+                    let runtimes = schema.get().map(|s| s.backends).unwrap_or_default();
+                    let first = if runtimes.is_empty() {
+                        "\u{2014} loading runtimes \u{2014}"
+                    } else {
+                        "\u{2014} pick a runtime \u{2014}"
+                    };
+                    view! {
+                        <option value="">{first}</option>
+                        {runtimes.into_iter().map(|b| {
+                            view! { <option value=b.id>{b.label}</option> }
+                        }).collect::<Vec<_>>()}
+                    }
+                }}
+            </select>
+        </div>
+    }
+    .into_any()
+}
+
+/// Everything below the runtime: the login it takes, the model it runs, its dials, and the two
+/// blocks about running out. Nothing until a runtime is chosen, because until then there is no
+/// honest answer to what any of them should say.
+fn runtime_sections(form: LlmBackendsForm, schema: Memo<Option<AgentFormSpec>>) -> AnyView {
+    let runtime = form.runtime.get();
+    if runtime.is_empty() {
+        return view! {
+            <p class="adi-hint">
+                "Pick a runtime and the rest of the form becomes the questions it actually takes \
+                 \u{2014} the login it is pointed at, the models it offers, and the dials it \
+                 understands."
+            </p>
+        }
+        .into_any();
+    }
+    let Some(spec) = schema.get() else {
+        return view! { <p class="adi-hint">"Loading what this runtime takes\u{2026}"</p> }.into_any();
+    };
+    view! {
+        {login_view(form, &spec, &runtime)}
+        {model_view(form, &spec, &runtime)}
+        {dials_view(form, &spec, &runtime)}
+        {rules_view(form)}
+        {probe_view(form)}
+    }
+    .into_any()
+}
+
+// ------------------------------------------------------------------- login
+
+/// The login block: only the ways *this* runtime can be pointed at a credential.
+///
+/// A vendor CLI has none — it answers on whatever it is logged into — and saying so is the point of
+/// the block, because the alternative is four empty boxes that read as configuration somebody
+/// forgot to do. Anything already typed that this runtime cannot use is named rather than hidden:
+/// it is dropped on save, and a login that changes silently is a hold recorded against a
+/// subscription nobody is using.
+fn login_view(form: LlmBackendsForm, spec: &AgentFormSpec, runtime: &str) -> AnyView {
+    let provider = form.provider.get();
+    let fields = fields_for(spec, AgentFieldOwner::Credential, runtime, &provider);
+    // Which of the four this runtime cannot read — a fact about the schema, so it is settled here.
+    // *Whether* one of them is filled in is a fact about what is being typed, and is read inside
+    // the closure below: read here it would subscribe this whole section to every keystroke in a
+    // login box, and rebuild the box being typed into.
+    let unread: Vec<LoginField> = CREDENTIALS
+        .iter()
+        .filter(|(name, _)| !fields.iter().any(|f| f.name == *name))
+        .copied()
+        .collect();
+    let body = if fields.is_empty() {
+        view! {
+            <p class="adi-hint">
+                "This runtime signs in by itself \u{2014} it answers on whatever its CLI is logged \
+                 into, and there is nothing to point it at here. Every backend on it therefore \
+                 shares one hold: when the subscription behind it runs out, they all do."
+            </p>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="adi-form adi-form--first">
+                {fields.into_iter()
+                    .map(|field| credential_field(form, &field))
+                    .collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any()
+    };
+    view! {
+        <div class="adi-field">
+            <span class="adi-field__label">"Login"</span>
+            {field_hint(
+                "Which credential answers. Two backends naming the same one share a hold, so \
+                 moving from one to the other when it runs out buys nothing. An agent row may \
+                 respell the model and the dials, never this."
+            )}
+            {body}
+            {move || stale_login_view(form, &unread)}
+        </div>
+    }
+    .into_any()
+}
+
+/// The line that names login fields carrying a value this runtime will not read. Said before the
+/// click rather than discovered after it: the save drops them, and a login that changed without
+/// being mentioned is a hold recorded against the wrong subscription.
+fn stale_login_view(
+    form: LlmBackendsForm,
+    unread: &[LoginField],
+) -> AnyView {
+    let stale: Vec<&str> = unread
+        .iter()
+        .filter(|(_, signal)| !signal(form).get().trim().is_empty())
+        .map(|(name, _)| *name)
+        .collect();
+    if stale.is_empty() {
+        return ().into_any();
+    }
+    let (is_are, it_them) = if stale.len() == 1 {
+        ("is", "it")
+    } else {
+        ("are", "them")
+    };
+    // The names are the keys as the manifest spells them, so they are mono; the sentence around
+    // them is not.
+    let names: Vec<AnyView> = stale
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let separator = (i > 0).then_some(", ");
+            view! { {separator} <span class="adi-mono">{(*name).to_string()}</span> }.into_any()
+        })
+        .collect();
+    view! {
+        <p class="adi-hint">
+            {names}
+            {format!(
+                " {is_are} set from another runtime, which this one does not read \u{2014} saving \
+                 drops {it_them}."
+            )}
+        </p>
+    }
+    .into_any()
+}
+
+/// One login field: the schema's name for it, and the signal on this form that holds it.
+type LoginField = (&'static str, fn(LlmBackendsForm) -> RwSignal<String>);
+
+/// The four login fields and the signal each one is typed into. The names are the schema's, so a
+/// field named here that the schema stops declaring simply stops being offered.
+const CREDENTIALS: [LoginField; 4] = [
+    ("settings", |f| f.settings),
+    ("provider", |f| f.provider),
+    ("base_url", |f| f.base_url),
+    ("api_key_env", |f| f.api_key_env),
+];
+
+/// One login field, bound to its own signal rather than to the dials map — a credential is a field
+/// of the backend, not one of its params, and the store refuses it as a param.
+fn credential_field(form: LlmBackendsForm, field: &AgentFormField) -> AnyView {
+    let Some((_, signal)) = CREDENTIALS.iter().find(|(name, _)| *name == field.name) else {
+        // A credential the schema declares and this page has no signal for. Silent rather than
+        // broken: the field simply is not offered until somebody adds the signal.
+        return ().into_any();
+    };
+    let value = signal(form);
+    control(
+        field,
+        move || value.get(),
+        move |text| value.set(text),
+        "llmb-cred",
+    )
+}
+
+// ------------------------------------------------------------------- model
+
+/// The model this backend runs, with the chosen runtime's own suggestions as chips, and how much
+/// history it can hold.
+///
+/// The suggestions are the runtime's, not this page's: which aliases a Claude CLI takes and which
+/// model ids the adi loop takes is server knowledge, and the same list is what the agent form
+/// offers.
+fn model_view(form: LlmBackendsForm, spec: &AgentFormSpec, runtime: &str) -> AnyView {
+    let option = spec.backends.iter().find(|b| b.id == runtime);
+    let placeholder = option
+        .map(|b| b.model_placeholder.clone())
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "model alias".to_string());
+    let suggestions = option.map(|b| b.model_suggestions.clone()).unwrap_or_default();
+    view! {
+        <div class="adi-form">
+            <div class="adi-field adi-field--grow">
+                <label class="adi-field__label" for="llmb-model">"Model"</label>
+                {field_hint(
+                    "What this backend answers on. Two models on one subscription are two \
+                     backends, not one \u{2014} that is what lets a limit on one leave the other \
+                     running."
+                )}
+                {(!suggestions.is_empty()).then(|| view! {
+                    <div class="adi-toolpick">
+                        {suggestions.into_iter().map(|model| {
+                            let pressed = model.clone();
+                            let clicked = model.clone();
+                            view! {
+                                <button type="button" class="adi-toolpick__chip"
+                                    aria-pressed=move || (form.model.get() == pressed).to_string()
+                                    on:click=move |_| {
+                                        if form.model.get() == clicked {
+                                            form.model.set(String::new());
+                                        } else {
+                                            form.model.set(clicked.clone());
+                                        }
+                                    }>
+                                    {model}
+                                </button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                })}
+                <input class="adi-input adi-input--wide adi-mono" id="llmb-model" autocomplete="off"
+                    placeholder=placeholder
+                    prop:value=move || form.model.get()
+                    on:input=move |ev| form.model.set(event_target_value(&ev)) />
+            </div>
+            <TextField id="llmb-context" label="Context (tokens)" numeric=true
+                placeholder="200000"
+                hint="How much history this backend can hold. Leave it empty when you do not \
+                      know — an unstated window warns about nothing."
+                value=form.context_tokens />
+        </div>
+    }
+    .into_any()
+}
+
+// ------------------------------------------------------------------- dials
+
+/// The dials this runtime understands, as the controls it declares for them — a select of the
+/// efforts it takes, a number box for a budget — instead of a JSON object to be spelled correctly
+/// from memory.
+///
+/// Two things are deliberately still text. A dial the runtime does not declare is kept and shown
+/// rather than quietly dropped, because a hand-written backend may carry one; and anything whose
+/// value is not a single word or number stays JSON, because that is the only form it has.
+fn dials_view(form: LlmBackendsForm, spec: &AgentFormSpec, runtime: &str) -> AnyView {
+    let provider = form.provider.get();
+    let fields = fields_for(spec, AgentFieldOwner::Dial, runtime, &provider);
+    let declared: BTreeSet<String> = fields.iter().map(|f| f.name.clone()).collect();
+    let empty = fields.is_empty();
+    let waiting = empty && runtime == ADI_HARNESS && provider.trim().is_empty();
+    view! {
+        <div class="adi-field">
+            <span class="adi-field__label">"Dials"</span>
+            {field_hint(
+                "How hard the model runs. An agent row may respell any of these for itself; \
+                 what the agent decides \u{2014} its prompt, its tools, how freely it may act \
+                 \u{2014} is on the agent, not here."
+            )}
+            {(!empty).then(|| view! {
+                <div class="adi-form adi-form--first">
+                    {fields.into_iter().map(|field| dial_field(form, &field)).collect::<Vec<_>>()}
+                </div>
+            })}
+            {waiting.then(|| view! {
+                <p class="adi-hint">
+                    "Pick the provider above and its own dials appear here \u{2014} each API takes \
+                     a different set."
+                </p>
+            })}
+            {(empty && !waiting).then(|| view! {
+                <p class="adi-hint">
+                    "This runtime declares no dials of its own. Anything it does understand can \
+                     still be written below."
+                </p>
+            })}
+            {move || undeclared_view(form, &declared)}
+        </div>
+        // Its own field, not a second label inside the one above: `.adi-field` puts every direct
+        // label in grid row 1, so two of them land on top of each other.
+        <div class="adi-field">
+            <label class="adi-field__label" for="llmb-extra-dials">"Anything else"</label>
+            {field_hint(
+                "Dials with no control above, as a JSON object \u{2014} a knob this runtime has \
+                 gained, or a value that is a list rather than a word. Written onto the run \
+                 exactly as it stands. A name that also has a control above is read from that \
+                 control, unless the control is empty."
+            )}
+            <textarea class="adi-textarea adi-llmb__short adi-mono" id="llmb-extra-dials" rows="4"
+                placeholder="{ \"stop\": [\"\\n\\n\"] }"
+                prop:value=move || form.extra_dials.get()
+                on:input=move |ev| form.extra_dials.set(event_target_value(&ev))></textarea>
+        </div>
+    }
+    .into_any()
+}
+
+/// One dial, bound to its name in the dials map.
+fn dial_field(form: LlmBackendsForm, field: &AgentFormField) -> AnyView {
+    let get = field.name.clone();
+    let set = field.name.clone();
+    control(
+        field,
+        move || dial_text(form, &get),
+        move |text| set_dial(form, &set, text),
+        "llmb-dial",
+    )
+}
+
+/// The dials this backend carries that the chosen runtime does not declare — after a runtime change
+/// most often, or from a manifest written by hand. Editable, so they can be corrected or emptied,
+/// and named as odd, so nothing about the backend is invisible on the page that edits it.
+///
+/// They write on **change** rather than on every keystroke: this list is rebuilt whenever the dials
+/// map is written, and a box rebuilt under a cursor is a box you cannot type into.
+fn undeclared_view(form: LlmBackendsForm, declared: &BTreeSet<String>) -> AnyView {
+    let strays: Vec<(String, String)> = form
+        .dials
+        .get()
+        .into_iter()
+        .filter(|(name, _)| !declared.contains(name))
+        .collect();
+    if strays.is_empty() {
+        return ().into_any();
+    }
+    view! {
+        <p class="adi-hint">
+            "Set on this backend, but not something the chosen runtime declares \u{2014} kept as \
+             it is, and saved as it is."
+        </p>
+        <div class="adi-form adi-form--first">
+            {strays.into_iter().map(|(name, value)| {
+                let id = format!("llmb-stray-{name}");
+                let label = name.clone();
+                let edited = name.clone();
+                let removed = name.clone();
+                view! {
+                    <div class="adi-field">
+                        <label class="adi-field__label adi-mono" for=id.clone()>{label}</label>
+                        <input class="adi-input adi-mono" id=id autocomplete="off"
+                            prop:value=value
+                            on:change=move |ev| set_dial(form, &edited, event_target_value(&ev)) />
+                    </div>
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        title=format!("Remove the dial {removed}")
+                        on:click=move |_| set_dial(form, &removed, String::new())>
+                        "Remove"
+                    </button>
+                }
+            }).collect::<Vec<_>>()}
+        </div>
+    }
+    .into_any()
+}
+
+// ---------------------------------------------------------------- controls
+
+/// Render one schema field as the control it declares, bound to whatever holds its value here.
+///
+/// The agent form has renderers of its own for the same kinds, and they are not shared: those bind
+/// to that form's named signals and carry its layout, and a single renderer parameterised over both
+/// would be longer than the two. What *is* shared is the schema — the labels, hints, options and
+/// filters all arrive from the server — so the two forms cannot disagree about what a runtime takes.
+fn control(
+    field: &AgentFormField,
+    get: impl Fn() -> String + Send + Sync + 'static,
+    set: impl Fn(String) + Send + Sync + 'static,
+    prefix: &str,
+) -> AnyView {
+    let id = format!("{prefix}-{}", field.name.replace('_', "-"));
+    let label = field.label.clone();
+    let hint = field.hint.clone();
+    let placeholder = field.placeholder.clone();
+    let options = field.options.clone();
+    let grow = if field.wide { "adi-field adi-field--grow" } else { "adi-field" };
+    let mut class = String::from("adi-input");
+    if field.wide {
+        class.push_str(" adi-input--wide");
+    }
+    if field.mono {
+        class.push_str(" adi-mono");
+    }
+    let numeric = field.numeric || matches!(field.kind, AgentFormFieldKind::Number);
+    let hint_view = (!hint.is_empty()).then(|| field_hint(hint));
+    let label_view = view! { <label class="adi-field__label" for=id.clone()>{label}</label> };
+    match field.kind {
+        AgentFormFieldKind::Checkbox => view! {
+            <label class="adi-field adi-field--check">
+                <input type="checkbox"
+                    prop:checked=move || get() == "true"
+                    on:change=move |ev| set(if event_target_checked(&ev) {
+                        "true".to_string()
+                    } else {
+                        String::new()
+                    }) />
+                <span class="adi-field__label">{field.label.clone()}</span>
+                {hint_view}
+            </label>
+        }
+        .into_any(),
+        AgentFormFieldKind::Select => view! {
+            <div class=grow>
+                {label_view}
+                {hint_view}
+                <select class="adi-input" id=id
+                    prop:value=get
+                    on:change=move |ev| set(event_target_value(&ev))>
+                    {options.into_iter().map(|opt| {
+                        view! { <option value=opt.value>{opt.label}</option> }
+                    }).collect::<Vec<_>>()}
+                </select>
+            </div>
+        }
+        .into_any(),
+        AgentFormFieldKind::Textarea => view! {
+            <div class=grow>
+                {label_view}
+                {hint_view}
+                <textarea class="adi-textarea" id=id rows="3" placeholder=placeholder
+                    prop:value=get
+                    on:input=move |ev| set(event_target_value(&ev))></textarea>
+            </div>
+        }
+        .into_any(),
+        // Text, Number, and the two pickers the agent form draws specially — a backend's model has
+        // its own control on this page, and its tools are the agent's, so neither can reach here.
+        _ => view! {
+            <div class=grow>
+                {label_view}
+                {hint_view}
+                <input class=class id=id autocomplete="off" placeholder=placeholder
+                    inputmode=if numeric { "numeric" } else { "text" }
+                    prop:value=get
+                    on:input=move |ev| set(event_target_value(&ev)) />
+            </div>
+        }
+        .into_any(),
+    }
+}
+
+// ------------------------------------------------------------ the schema
+
+/// The `harness:adi` runtime, whose dials depend on a second choice — the provider it calls.
+/// Must match the id the API's form spec serves.
+const ADI_HARNESS: &str = "harness:adi";
+
+/// The form schema, which the API owns and this page borrows: `None` until `/api/agents` lands.
+fn spec(state: State) -> Option<AgentFormSpec> {
+    state.agents.get().map(|a| a.form)
+}
+
+/// The fields of one owner that `runtime` takes — its login fields, or its dials.
+fn fields_for(
+    spec: &AgentFormSpec,
+    owner: AgentFieldOwner,
+    runtime: &str,
+    provider: &str,
+) -> Vec<AgentFormField> {
+    spec.fields
+        .iter()
+        .filter(|f| f.owner == owner)
+        .filter(|f| field_applies(f, runtime, provider))
+        .cloned()
+        .collect()
+}
+
+/// Every dial name any runtime declares — what a loaded backend's params are split on, so a dial
+/// with a control somewhere reaches that control and everything else keeps its JSON type.
+fn declared_dials(spec: Option<&AgentFormSpec>) -> BTreeSet<String> {
+    spec.map(|spec| {
+        spec.fields
+            .iter()
+            .filter(|f| f.owner == AgentFieldOwner::Dial)
+            .map(|f| f.name.clone())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// One dial as typed, or empty when it is not set.
+fn dial_text(form: LlmBackendsForm, name: &str) -> String {
+    form.dials.get().get(name).cloned().unwrap_or_default()
+}
+
+/// Write a dial. Empty removes it: a dial set to nothing is a dial that is not set, and writing
+/// `""` into the manifest would be a value the runtime then has to interpret.
+fn set_dial(form: LlmBackendsForm, name: &str, value: String) {
+    form.dials.update(|dials| {
+        if value.trim().is_empty() {
+            dials.remove(name);
+        } else {
+            dials.insert(name.to_string(), value);
+        }
+    });
 }
 
 /// The limit rules, in the order they are tried. A backend with none classifies every error as
@@ -697,25 +1155,46 @@ fn submit(state: State, form: LlmBackendsForm) {
             .set(Some(Flash::err("Give the backend a name.".to_string())));
         return;
     }
-    let params = match parse_params(&form.params.get()) {
+    let runtime = form.runtime.get().trim().to_string();
+    let spec = spec(state);
+    let params = match dial_params(form, spec.as_ref()) {
         Ok(params) => params,
         Err(e) => {
             state.flash.set(Some(Flash::err(e)));
             return;
         }
     };
+    // Only the login fields this runtime reads are sent. The others are shown as dropped before the
+    // click (see `login_view`), and dropping them is the point: a `base_url` left over from an
+    // `harness:adi` backend would key this one's holds against a subscription it never calls.
+    let login = |name: &str, value: String| -> String {
+        let applies = spec.as_ref().is_some_and(|spec| {
+            spec.fields.iter().any(|f| {
+                f.name == name
+                    && f.owner == AgentFieldOwner::Credential
+                    && field_applies(f, &runtime, &form.provider.get())
+            })
+        });
+        if applies { value.trim().to_string() } else { String::new() }
+    };
+    let (settings, provider, base_url, api_key_env) = (
+        login("settings", form.settings.get()),
+        login("provider", form.provider.get()),
+        login("base_url", form.base_url.get()),
+        login("api_key_env", form.api_key_env.get()),
+    );
     let editing = form.editing.get();
     let renaming = !editing.is_empty() && editing != id;
     let body = SaveLlmBackend {
         id: id.clone(),
         label: form.label.get().trim().to_string(),
-        runtime: form.runtime.get().trim().to_string(),
+        runtime,
         model: form.model.get().trim().to_string(),
         context_tokens: form.context_tokens.get().trim().parse().unwrap_or(0),
-        settings: form.settings.get().trim().to_string(),
-        provider: form.provider.get().trim().to_string(),
-        base_url: form.base_url.get().trim().to_string(),
-        api_key_env: form.api_key_env.get().trim().to_string(),
+        settings,
+        provider,
+        base_url,
+        api_key_env,
         params,
         // A rule that matches nothing is a rule that was started and abandoned; dropping it here
         // keeps an empty row from silently classifying every error on this backend.
@@ -751,6 +1230,56 @@ fn submit(state: State, form: LlmBackendsForm) {
         },
         fetch::save_llm_backend(body),
     );
+}
+
+/// The dials as they go on the wire: the "anything else" box, with every typed control laid over
+/// it.
+///
+/// Each control's value is converted by the **kind its field declares** — a number box writes a
+/// number, a checkbox writes a boolean — so what the runtime receives is the type it expects rather
+/// than the string a form holds. A dial whose field the schema no longer declares is written as
+/// text, which is what it was read as.
+fn dial_params(
+    form: LlmBackendsForm,
+    spec: Option<&AgentFormSpec>,
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let mut params = parse_params(&form.extra_dials.get())?;
+    for (name, text) in form.dials.get() {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            continue;
+        }
+        let kind = spec.and_then(|spec| {
+            spec.fields
+                .iter()
+                .find(|f| f.name == name)
+                .map(|f| f.kind)
+        });
+        params.insert(name.clone(), dial_value(kind, &text).ok_or_else(|| {
+            format!("{name} takes a number, and {text} is not one.")
+        })?);
+    }
+    Ok(params)
+}
+
+/// One dial's text as the value its field's kind calls for, or `None` when the text does not hold
+/// one — a number box mid-word, which is a form still being filled in rather than a backend to
+/// save.
+///
+/// A whole number is written as an integer and not as a float. `8192.0` does decode into the
+/// runner's `u64` knobs (`arguments.rs` has a deserializer for exactly that, because this form used
+/// to send floats), but `llm/backends/*.toml` is edited by hand as well as here, and opening a file
+/// to read it should not be what rewrites `8192` in it.
+fn dial_value(kind: Option<AgentFormFieldKind>, text: &str) -> Option<serde_json::Value> {
+    match kind {
+        Some(AgentFormFieldKind::Checkbox) => Some(serde_json::Value::Bool(text == "true")),
+        Some(AgentFormFieldKind::Number) => text
+            .parse::<i64>()
+            .map(serde_json::Value::from)
+            .or_else(|_| text.parse::<f64>().map(serde_json::Value::from))
+            .ok(),
+        _ => Some(serde_json::Value::String(text.to_string())),
+    }
 }
 
 /// Read the dials box as a JSON object. An empty box is no dials; anything that is not an object is
@@ -905,7 +1434,107 @@ fn short(credential: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{SWEEP_CHOICES, parse_params, short, tokens};
+    use super::{
+        AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormSpec, SWEEP_CHOICES,
+        declared_dials, dial_value, fields_for, parse_params, short, tokens,
+    };
+
+    fn field(name: &str, owner: AgentFieldOwner, ids: &[&str], providers: &[&str]) -> AgentFormField {
+        AgentFormField {
+            name: name.to_string(),
+            label: name.to_string(),
+            kind: AgentFormFieldKind::Text,
+            placeholder: String::new(),
+            hint: String::new(),
+            options: Vec::new(),
+            backend_ids: ids.iter().map(|i| (*i).to_string()).collect(),
+            executors: Vec::new(),
+            providers: providers.iter().map(|p| (*p).to_string()).collect(),
+            mono: false,
+            wide: false,
+            numeric: false,
+            required: false,
+            run_override: false,
+            owner,
+        }
+    }
+
+    fn spec() -> AgentFormSpec {
+        AgentFormSpec {
+            backends: Vec::new(),
+            presets: Vec::new(),
+            fields: vec![
+                field("settings", AgentFieldOwner::Credential, &["harness:claude-sdk"], &[]),
+                field("base_url", AgentFieldOwner::Credential, &["harness:adi"], &[]),
+                field("effort", AgentFieldOwner::Dial, &["harness:claude-sdk"], &[]),
+                field("top_p", AgentFieldOwner::Dial, &[], &["ollama"]),
+                field("system_prompt", AgentFieldOwner::Agent, &[], &[]),
+            ],
+        }
+    }
+
+    /// The whole complaint this form was rebuilt around: a runtime that signs in through its own
+    /// CLI must not be asked for a base URL, and one that calls an API must be.
+    #[test]
+    fn a_runtime_is_only_asked_for_the_login_it_reads() {
+        let spec = spec();
+        let sdk = fields_for(&spec, AgentFieldOwner::Credential, "harness:claude-sdk", "");
+        assert_eq!(names(&sdk), ["settings"]);
+        let adi = fields_for(&spec, AgentFieldOwner::Credential, "harness:adi", "");
+        assert_eq!(names(&adi), ["base_url"]);
+        let cli = fields_for(&spec, AgentFieldOwner::Credential, "pty:codex", "");
+        assert!(cli.is_empty(), "{:?}", names(&cli));
+    }
+
+    /// The second half of it: a dial scoped to a provider appears when that provider is chosen,
+    /// and not before — which is what makes picking one worth doing.
+    #[test]
+    fn a_provider_scoped_dial_waits_for_its_provider() {
+        let spec = spec();
+        assert!(fields_for(&spec, AgentFieldOwner::Dial, "harness:adi", "").is_empty());
+        let ollama = fields_for(&spec, AgentFieldOwner::Dial, "harness:adi", "ollama");
+        assert_eq!(names(&ollama), ["top_p"]);
+    }
+
+    /// What a loaded backend's params are split on: every dial name, whichever runtime declares it,
+    /// and nothing that belongs to the agent or names a login.
+    #[test]
+    fn only_dials_are_declared_dials() {
+        let spec = spec();
+        let declared = declared_dials(Some(&spec));
+        assert!(declared.contains("effort") && declared.contains("top_p"));
+        assert!(!declared.contains("settings") && !declared.contains("system_prompt"));
+        assert!(declared_dials(None).is_empty(), "no schema declares nothing");
+    }
+
+    /// A whole number stays whole. `8192.0` decodes fine, but these files are edited by hand too,
+    /// and opening one to read it should not rewrite the numbers in it.
+    #[test]
+    fn a_whole_number_dial_is_saved_as_an_integer() {
+        let number = Some(AgentFormFieldKind::Number);
+        assert_eq!(dial_value(number, "8192"), Some(serde_json::json!(8192)));
+        assert_eq!(dial_value(number, "0.9"), Some(serde_json::json!(0.9)));
+        assert_eq!(dial_value(number, "high"), None, "a number box holding a word");
+    }
+
+    /// Everything else is text, and a checkbox is a boolean — the field's kind decides, not the
+    /// shape of what was typed, so a model called `2` is not saved as a number.
+    #[test]
+    fn a_dial_takes_the_type_its_field_declares() {
+        assert_eq!(
+            dial_value(Some(AgentFormFieldKind::Checkbox), "true"),
+            Some(serde_json::json!(true))
+        );
+        assert_eq!(
+            dial_value(Some(AgentFormFieldKind::Select), "high"),
+            Some(serde_json::json!("high"))
+        );
+        assert_eq!(dial_value(None, "2"), Some(serde_json::json!("2")));
+    }
+
+    fn names(fields: &[AgentFormField]) -> Vec<&str> {
+        fields.iter().map(|f| f.name.as_str()).collect()
+    }
 
     #[test]
     fn a_token_count_reads_the_way_people_say_one() {
