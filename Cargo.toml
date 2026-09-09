@@ -186,6 +186,30 @@ rust_2024_compatibility = "warn"
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 
+# Debug info is the largest single cost of a dev build here, and almost nothing in this tree
+# reads it: the wasm panel debugs through `console_error_panic_hook` and the wasm name section,
+# not DWARF. Measured on `cargo build -p adi-webapp --target wasm32-unknown-unknown` in a
+# scratch target dir: the debug .wasm goes from 645 MB to 53 MB — a 12x smaller artifact for
+# wasm-bindgen to read and rewrite on every rebuild — and a cold build from 627s to 554s. What
+# it does NOT change much is what the browser downloads: wasm-bindgen drops the DWARF sections
+# either way, so dist/ went 49.8 MB to 46 MB.
+#
+# When you do need a native backtrace with line numbers, ask for it per invocation:
+#   CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo build …
+# — that changes the fingerprint, so the build after it (and the one back) is a full rebuild.
+[profile.dev]
+debug = 0
+
+# A proc macro is compiled once and then *run* on every expansion, and this tree expands
+# Leptos' `view!` in nearly every component — so optimizing the macro itself is paid for once
+# and repaid on every rebuild. Measured over the same webapp build: an edit to adi-ui 23s ->
+# 15s, an edit to a webapp page 17s -> 10s.
+#
+# opt-level 1, not 3: at 3 the same loop is 18s/14s but a cold build nearly doubles (625s ->
+# 1133s), because syn and friends then have to be optimized hard themselves.
+[profile.dev.build-override]
+opt-level = 1
+
 # Faster incremental builds while keeping release builds optimized.
 [profile.release]
 lto = "thin"
