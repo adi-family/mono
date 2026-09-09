@@ -20,10 +20,10 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{Flash, State, TriggersForm, TriggersLogView};
+use crate::state::{Flash, State, TriggersForm, TriggersLogView, read_error};
 use crate::ui::{
     Key, TextField, apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime, menu_item,
-    row_actions, rows_or_placeholder, sort_rows, updated_text,
+    row_actions, rows_or_status, sort_rows, updated_text,
 };
 
 /// The Triggers page's columns; the trailing blank one holds the row's ⋯ menu.
@@ -517,10 +517,11 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
 /// Render the triggers table body: a loading/empty placeholder, or one row per trigger.
 fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
     let table = state.tables.triggers;
-    let mut triggers = match rows_or_placeholder(
+    let mut triggers = match rows_or_status(
         table,
         state.triggers.get().map(|v| v.triggers),
         "No triggers yet — define one below.",
+        read_error(state, "/api/triggers"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,

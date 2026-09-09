@@ -18,10 +18,8 @@ use crate::fetch;
 use crate::routing::{
     Route, agent_form_path, push_state, replace_state, scroll_top, spa_click, spa_nav,
 };
-use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State};
-use crate::ui::{
-    Key, flash_view, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
-};
+use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State, read_error};
+use crate::ui::{Key, flash_view, menu_item, row_actions, rows_or_status, sort_rows, updated_text};
 
 /// The Agents page's columns; the trailing blank one holds the running dot and the ⋯ menu.
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
@@ -712,10 +710,11 @@ fn agent_rows(
     route: RwSignal<Route>,
 ) -> AnyView {
     let table = state.tables.agents;
-    let mut agents = match rows_or_placeholder(
+    let mut agents = match rows_or_status(
         table,
         state.agents.get().map(|v| v.agents),
         "No agents yet — “New agent” starts one.",
+        read_error(state, "/api/agents"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,

@@ -695,6 +695,7 @@ fn App() -> impl IntoView {
         ports,
         health,
         flash,
+        read_errors: RwSignal::new(std::collections::BTreeMap::new()),
         secs_since,
         used,
         mesh,
@@ -939,6 +940,10 @@ fn App() -> impl IntoView {
     // "updated Ns ago" counts from the last time the backend said anything — which on the live
     // channel is any pushed answer, not a poll landing.
     live::on_message(move || secs_since.set(0));
+    // …and where a watched read's failure lands. Without this a read the socket cannot answer —
+    // refused, 500ing, or a payload this bundle cannot parse — left its signal at `None`, which
+    // every table renders as "Loading…" for as long as the tab is open.
+    live::on_read_result(move |path, why| state::note_read(state, path, why));
 
     // Tell the backend what this page is looking at, and re-tell it whenever the page moves — a
     // route change, a different project, another chat or log or terminal opened. Everything the

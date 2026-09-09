@@ -23,10 +23,10 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::routing::{Route, go_global};
-use crate::state::{Flash, LlmBackendsForm, State};
+use crate::state::{Flash, LlmBackendsForm, State, read_error};
 use crate::ui::{
     Key, TextField, apply_mutation, confirm, field_hint, flash_view, menu_item, row_actions,
-    rows_or_placeholder, sort_rows,
+    rows_or_status, sort_rows,
 };
 
 /// The registry table. `Login` is the credential a hold is keyed by, so two rows reading the same
@@ -125,10 +125,11 @@ fn summary(backends: RwSignal<Option<LlmBackendsDto>>) -> String {
 /// The registry's rows: a placeholder, or one per backend with its ⋯ menu.
 fn rows_view(state: State, form: LlmBackendsForm) -> AnyView {
     let table = state.tables.llm_backends;
-    let mut backends = match rows_or_placeholder(
+    let mut backends = match rows_or_status(
         table,
         state.llm_backends.get().map(|v| v.backends),
         "No backends yet — describe one below, then list it on an agent.",
+        read_error(state, "/api/llm/backends"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,

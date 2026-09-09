@@ -99,20 +99,31 @@ impl Sub {
         T: DeserializeOwned,
         F: Fn(T) + 'static,
     {
+        // Through the same mapping the fetch this replaces takes, so a subscription and its
+        // one-off equivalent can never be pointed at two different machines
+        // (`crate::fetch::routed_for`). The server keys a topic by its path, so a node's read is
+        // its own topic and two tabs watching two different sources get an answer each.
+        let path = crate::fetch::routed_for(node, &path);
+        let owns = path.clone();
         Self {
             method,
-            // Through the same mapping the fetch this replaces takes, so a subscription and its
-            // one-off equivalent can never be pointed at two different machines
-            // (`crate::fetch::routed_for`). The server keys a topic by its path, so a node's read is
-            // its own topic and two tabs watching two different sources get an answer each.
-            path: crate::fetch::routed_for(node, &path),
+            path,
             body,
-            // A payload that won't parse is dropped rather than surfaced: it means the server and
-            // this bundle disagree about a type, which a reload fixes and a flash message doesn't.
-            apply: Rc::new(move |json| {
-                if let Ok(value) = serde_json::from_str::<T>(json) {
+            // A payload that won't parse means the server and this bundle disagree about a type —
+            // usually a binary older than the page it is serving. It used to be dropped on the
+            // floor, which left the signal at `None` and the table on "Loading…" with nothing
+            // anywhere naming the disagreement. Recorded against the read instead, so the table
+            // says what happened; a reload is still the fix, and now there is something on screen
+            // telling somebody to try one.
+            apply: Rc::new(move |json| match serde_json::from_str::<T>(json) {
+                Ok(value) => {
+                    report(&owns, None);
                     apply(value);
                 }
+                Err(e) => report(
+                    &owns,
+                    Some(format!("this page could not read the answer: {e}")),
+                ),
             }),
         }
     }
@@ -151,11 +162,31 @@ thread_local! {
     /// Run whenever an answer arrives, whatever it was about. The shell uses it for the "updated
     /// Ns ago" label, which asks when the backend last said anything — not what it said.
     static HEARD: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+
+    /// Run with `(path, why)` each time a watched read fails, and with `(path, None)` when one
+    /// succeeds again. The shell files it under the endpoint so the table that wanted the read is
+    /// the thing that shows the failure — see [`crate::state::State::read_errors`].
+    static REPORT: RefCell<Option<Rc<dyn Fn(&str, Option<String>)>>> = const { RefCell::new(None) };
 }
 
 /// Register what to do each time the backend says anything at all.
 pub(crate) fn on_message(heard: impl Fn() + 'static) {
     HEARD.with(|slot| *slot.borrow_mut() = Some(Rc::new(heard)));
+}
+
+/// Register where a watched read's failure — and its recovery — is recorded.
+pub(crate) fn on_read_result(report: impl Fn(&str, Option<String>) + 'static) {
+    REPORT.with(|slot| *slot.borrow_mut() = Some(Rc::new(report)));
+}
+
+/// File the outcome of one watched read. `None` clears whatever was last recorded for it.
+///
+/// Cloned out of the thread-local before calling, so it is not borrowed while a handler runs — the
+/// handler writes signals, and a signal write can reach code that subscribes.
+fn report(path: &str, why: Option<String>) {
+    if let Some(report) = REPORT.with(|slot| slot.borrow().clone()) {
+        report(path, why);
+    }
 }
 
 /// Whether the live channel is carrying this page's updates. `false` means the shell's polling
@@ -289,8 +320,13 @@ fn deliver(text: &str) {
         heard();
     }
     // A read that failed server-side keeps the last good value on screen rather than blanking the
-    // page; the next successful answer replaces it.
-    if message.get("status").and_then(serde_json::Value::as_u64) != Some(200) {
+    // page; the next successful answer replaces it. But it is *recorded* as well as kept, because
+    // a read that has never succeeded has no last good value to keep — its signal is still `None`,
+    // which every table renders as "Loading…". Dropping the status here was half of why a page
+    // whose endpoint 400s or 500s waited for ever instead of saying so.
+    let status = message.get("status").and_then(serde_json::Value::as_u64);
+    if status != Some(200) {
+        report(path_of(key), Some(why(status, message.get("data"))));
         return;
     }
     let Some(data) = message.get("data") else {
@@ -304,6 +340,26 @@ fn deliver(text: &str) {
     }
 }
 
+/// The endpoint a topic key names: `"GET /api/llm/backends\n{}"` is `/api/llm/backends`. The same
+/// string [`Sub::new`] records under, so the two failure paths file against one key.
+fn path_of(key: &str) -> &str {
+    key.split_once('\n')
+        .map_or(key, |(head, _)| head)
+        .split_once(' ')
+        .map_or("", |(_, path)| path)
+}
+
+/// How a failed answer reads. The server sends the same `{ "error": … }` body a failed HTTP read
+/// returns, so the message an operator sees is the backend's own words wherever there are any.
+fn why(status: Option<u64>, data: Option<&serde_json::Value>) -> String {
+    data.and_then(|data| data.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(
+            || format!("the backend answered {}", status.unwrap_or_default()),
+            ToString::to_string,
+        )
+}
+
 /// Try again later, backing off — a backend that is down (or restarting after a deploy) shouldn't
 /// be met with a reconnect per frame.
 fn schedule_reconnect() {
@@ -313,4 +369,39 @@ fn schedule_reconnect() {
         live.backoff = (delay * 2).min(MAX_BACKOFF);
         live.retry = Some(Timeout::new(delay, connect));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A failure arriving on the socket has to land under the same key the one-shot fetch files
+    /// under, or the table looking it up never finds it.
+    #[test]
+    fn a_topic_key_names_the_endpoint_it_answers() {
+        assert_eq!(path_of("GET /api/llm/backends\n"), "/api/llm/backends");
+        assert_eq!(
+            path_of("POST /api/agents/peek\n{\"name\":\"adi-agent\"}"),
+            "/api/agents/peek"
+        );
+        // A node's read is its own endpoint, as it is on the fetch side: two sources answering the
+        // same question are two reads, and one failing says nothing about the other.
+        assert_eq!(
+            path_of("GET /api/node/laptop-b/api/agents\n"),
+            "/api/node/laptop-b/api/agents"
+        );
+    }
+
+    /// The backend's own words wherever it gave any — a bare status code tells an operator far
+    /// less than "the live channel cannot watch GET /api/llm/backends" does.
+    #[test]
+    fn a_failure_reads_as_what_the_backend_said() {
+        assert_eq!(
+            why(Some(400), Some(&json!({"ok": false, "error": "no such backend"}))),
+            "no such backend"
+        );
+        assert_eq!(why(Some(500), Some(&json!({}))), "the backend answered 500");
+        assert_eq!(why(None, None), "the backend answered 0");
+    }
 }

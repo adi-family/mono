@@ -731,6 +731,7 @@ pub(crate) struct State {
     pub(crate) ports: RwSignal<Option<PortsState>>,
     pub(crate) health: RwSignal<Option<Health>>,
     pub(crate) flash: RwSignal<Option<Flash>>,
+    pub(crate) read_errors: RwSignal<BTreeMap<String, String>>,
     pub(crate) secs_since: RwSignal<u32>,
     pub(crate) used: RwSignal<Option<UsedPorts>>,
     pub(crate) mesh: RwSignal<Option<MeshState>>,

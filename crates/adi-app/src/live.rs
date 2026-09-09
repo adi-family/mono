@@ -544,7 +544,10 @@ mod tests {
         let hub = Hub::default();
         let (a, _rx_a) = hub.attach();
         let (snapshots, fresh) = hub.subscribe(a, vec![watch("POST", "/api/agents/run", "")]);
-        assert!(fresh.is_empty(), "nothing is computed for a read off the list");
+        assert!(
+            fresh.is_empty(),
+            "nothing is computed for a read off the list"
+        );
         assert_eq!(snapshots.len(), 1, "but the client is told");
         assert!(snapshots[0].contains("\"status\":400"), "{}", snapshots[0]);
         assert!(snapshots[0].contains("cannot watch"), "{}", snapshots[0]);

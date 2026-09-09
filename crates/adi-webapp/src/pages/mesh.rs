@@ -6,10 +6,9 @@ use adi_webapp_api::types::{MeshForward, MeshForwardRef, MeshState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::state::{MeshForm, State};
+use crate::state::{MeshForm, State, read_error};
 use crate::ui::{
-    Key, TextField, apply_mutation, copy_row, menu_item, row_actions, rows_or_placeholder,
-    sort_rows,
+    Key, TextField, apply_mutation, copy_row, menu_item, row_actions, rows_or_status, sort_rows,
 };
 
 /// The exposed-ports table: one port per row, with its ⋯ menu. A single named column, so it
@@ -184,10 +183,11 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
 /// that stops exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
     let table = state.tables.mesh_allow;
-    let mut ports = match rows_or_placeholder(
+    let mut ports = match rows_or_status(
         table,
         state.mesh.get().map(|v| v.allow),
         "No ports exposed — add one below to let peers reach it.",
+        read_error(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -221,10 +221,11 @@ fn mesh_allow_rows(state: State) -> AnyView {
 /// Rows for the authorized-peers table: a note when the list is empty, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
     let table = state.tables.mesh_peers;
-    let mut peers = match rows_or_placeholder(
+    let mut peers = match rows_or_status(
         table,
         state.mesh.get().map(|v| v.authorized_peers),
         "No peer may use the exposed ports. Add a key to allow one.",
+        read_error(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -270,10 +271,11 @@ fn mesh_peer_rows(state: State) -> AnyView {
 /// Rows for the forwards table: a placeholder, or one row per forward with a menu to remove it.
 fn mesh_forward_rows(state: State) -> AnyView {
     let table = state.tables.mesh_forwards;
-    let mut forwards = match rows_or_placeholder(
+    let mut forwards = match rows_or_status(
         table,
         state.mesh.get().map(|v| v.forwards),
         "No forwards — add one below to reach a peer's port locally.",
+        read_error(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,

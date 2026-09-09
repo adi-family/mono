@@ -45,6 +45,18 @@ pub(crate) struct State {
     pub(crate) ports: RwSignal<Option<PortsState>>,
     pub(crate) health: RwSignal<Option<Health>>,
     pub(crate) flash: RwSignal<Option<Flash>>,
+    /// Why a read a page needs last failed, by the endpoint it names (`/api/llm/backends`).
+    ///
+    /// Every data signal above is an `Option`, and every table renders `None` as "Loading…". That
+    /// makes "not asked yet" and "asked, and it failed" the same picture — so a page whose
+    /// endpoint 404s, 500s or is refused by the live channel used to sit on its loading row for
+    /// the life of the tab. Both paths that can fail write here: [`load`]'s one-shot fetch and the
+    /// live channel's answer (`crate::live::on_read_result`). A read that succeeds clears its own
+    /// entry, so a page recovers on its own the moment the backend does.
+    ///
+    /// Keyed by endpoint rather than by page because one read feeds several tables and one page
+    /// makes several reads; the table that wanted it is the right place to say so.
+    pub(crate) read_errors: RwSignal<BTreeMap<String, String>>,
     pub(crate) secs_since: RwSignal<u32>,
     pub(crate) used: RwSignal<Option<UsedPorts>>,
     pub(crate) mesh: RwSignal<Option<MeshState>>,
@@ -352,6 +364,7 @@ impl State {
             ports: RwSignal::new(None),
             health: RwSignal::new(None),
             flash: RwSignal::new(None),
+            read_errors: RwSignal::new(BTreeMap::new()),
             secs_since: RwSignal::new(0),
             used: RwSignal::new(None),
             mesh: RwSignal::new(None),
@@ -1853,6 +1866,56 @@ fn set_if_changed<T: PartialEq + Send + Sync + 'static>(sig: RwSignal<Option<T>>
     }
 }
 
+/// File the outcome of one read against the endpoint it came from: `Some(why)` on a failure,
+/// `None` to say it is answering again. See [`State::read_errors`].
+///
+/// Written only on real change, for the same reason [`set_if_changed`] exists — the live channel
+/// reports every answer, and a failing endpoint reports the same failure every few seconds.
+pub(crate) fn note_read(s: State, path: &str, why: Option<String>) {
+    let differs = s.read_errors.with_untracked(|errors| match &why {
+        Some(why) => errors.get(path) != Some(why),
+        None => errors.contains_key(path),
+    });
+    if !differs {
+        return;
+    }
+    s.read_errors.update(|errors| match why {
+        Some(why) => {
+            errors.insert(path.to_string(), why);
+        }
+        None => {
+            errors.remove(path);
+        }
+    });
+}
+
+/// Why the read of `path` last failed, if it did — what a table shows in place of "Loading…".
+pub(crate) fn read_error(s: State, path: &str) -> Option<String> {
+    s.read_errors.with(|errors| errors.get(path).cloned())
+}
+
+/// Take one of [`load`]'s reads: the value on success, the reason on failure.
+///
+/// The `if let Ok(…)` this replaces dropped the error on the floor. A dropped error is invisible in
+/// exactly the way that matters — the signal stays `None`, which is what a table renders as
+/// "Loading…" — so an endpoint that could not answer looked identical to one that had not answered
+/// yet, for as long as the tab stayed open. Naming the endpoint here keeps the message with the
+/// table that wanted it.
+fn took<T: PartialEq + Send + Sync + 'static>(
+    s: State,
+    path: &str,
+    sig: RwSignal<Option<T>>,
+    answer: Result<T, String>,
+) {
+    match answer {
+        Ok(value) => {
+            note_read(s, path, None);
+            set_if_changed(sig, value);
+        }
+        Err(why) => note_read(s, path, Some(why)),
+    }
+}
+
 /// Ask every paired node what it is running, and fold the answer into the dashboards rail.
 ///
 /// **Deliberately not a subscription.** Every other list on the page is local state a poll can read
@@ -2323,151 +2386,137 @@ pub(crate) async fn load(s: State) {
     }
     // The explorer renders the project tree on every route, so the project list is shell
     // data rather than something an individual page opts into.
-    if let Ok(p) = fetch::projects().await {
-        set_if_changed(s.projects, p);
-    }
+    //
+    // Every read below goes through `took`, which files a failure against its endpoint instead of
+    // dropping it — see [`State::read_errors`] for why an `if let Ok(…)` here was invisible.
+    took(s, "/api/projects", s.projects, fetch::projects().await);
 
     // Page-specific data, fetched only where it's shown.
     let path = current_path();
     if path == Route::Projects.path() {
         // The list shows a per-project open-task count, so it needs the task tree too.
-        if let Ok(t) = fetch::tasks().await {
-            set_if_changed(s.tasks, t);
-        }
+        took(s, "/api/tasks", s.tasks, fetch::tasks().await);
     }
     if let Some(id) = project_id_from_path(&path) {
-        if let Ok(d) = fetch::project_detail(&id).await {
-            set_if_changed(s.project_detail, d);
-        }
-        if let Ok(t) = fetch::tasks().await {
-            set_if_changed(s.tasks, t);
-        }
-        if let Ok(t) = fetch::triggers().await {
-            set_if_changed(s.triggers, t);
-        }
-        if let Ok(a) = fetch::agents().await {
-            set_if_changed(s.agents, a);
-        }
+        took(
+            s,
+            &format!("/api/projects/{id}"),
+            s.project_detail,
+            fetch::project_detail(&id).await,
+        );
+        took(s, "/api/tasks", s.tasks, fetch::tasks().await);
+        took(s, "/api/triggers", s.triggers, fetch::triggers().await);
+        took(s, "/api/agents", s.agents, fetch::agents().await);
         // The cross-agent "All chats" index above the project's Agents panel.
-        if let Ok(c) = fetch::all_agent_runs(None).await {
-            set_if_changed(s.all_chats, c);
-        }
+        took(
+            s,
+            "/api/agents/runs/all",
+            s.all_chats,
+            fetch::all_agent_runs(None).await,
+        );
         // The project's Tools panel lists the tools filed under it (from the shared list).
-        if let Ok(t) = fetch::tools().await {
-            set_if_changed(s.tools, t);
-        }
+        took(s, "/api/tools", s.tools, fetch::tools().await);
         // The project's Secrets panel filters the shared secrets list to this project.
-        if let Ok(sec) = fetch::secrets().await {
-            set_if_changed(s.secrets, sec);
-        }
+        took(s, "/api/secrets", s.secrets, fetch::secrets().await);
         // The Workspaces panel's snapshot; polling it flips `creating` → `ready` live.
-        if let Ok(w) = fetch::workspaces(&id).await {
-            set_if_changed(s.workspaces, w);
-        }
+        took(
+            s,
+            "/api/projects/workspaces",
+            s.workspaces,
+            fetch::workspaces(&id).await,
+        );
     }
     if path == Route::Tasks.path() {
-        if let Ok(t) = fetch::tasks().await {
-            set_if_changed(s.tasks, t);
-        }
+        took(s, "/api/tasks", s.tasks, fetch::tasks().await);
     }
     if path == Route::Analytics.path() {
         // The whole page is these two listings joined: what is defined, and what it has run.
-        if let Ok(a) = fetch::agents().await {
-            set_if_changed(s.agents, a);
-        }
-        if let Ok(c) = fetch::all_agent_runs(None).await {
-            set_if_changed(s.all_chats, c);
-        }
+        took(s, "/api/agents", s.agents, fetch::agents().await);
+        took(
+            s,
+            "/api/agents/runs/all",
+            s.all_chats,
+            fetch::all_agent_runs(None).await,
+        );
     }
-    if path == Route::Meta.path()
-        && let Ok(m) = fetch::meta().await
-    {
-        set_if_changed(s.meta, m);
+    if path == Route::Meta.path() {
+        took(s, "/api/meta", s.meta, fetch::meta().await);
     }
     // The list, and an agent's editor page — which is reached by its own URL, so it is matched by
     // shape rather than against `Route::Agents.path()`.
     if path == Route::Agents.path() || crate::routing::agent_form_from_path(&path).is_some() {
-        if let Ok(a) = fetch::agents().await {
-            set_if_changed(s.agents, a);
-        }
+        took(s, "/api/agents", s.agents, fetch::agents().await);
         // The agent form's per-tool checkboxes are populated from the tools list.
-        if let Ok(t) = fetch::tools().await {
-            set_if_changed(s.tools, t);
-        }
+        took(s, "/api/tools", s.tools, fetch::tools().await);
         // The agent form's per-secret checkboxes are populated from the secrets list (metadata
         // only — values are never fetched here).
-        if let Ok(sec) = fetch::secrets().await {
-            set_if_changed(s.secrets, sec);
-        }
+        took(s, "/api/secrets", s.secrets, fetch::secrets().await);
         // …and its model list, which names backends from the registry — see the matching
         // subscription above.
-        if let Ok(b) = fetch::llm_backends().await {
-            set_if_changed(s.llm_backends, b);
-        }
+        took(
+            s,
+            "/api/llm/backends",
+            s.llm_backends,
+            fetch::llm_backends().await,
+        );
     }
-    if path == Route::Tools.path()
-        && let Ok(t) = fetch::tools().await
-    {
-        set_if_changed(s.tools, t);
+    if path == Route::Tools.path() {
+        took(s, "/api/tools", s.tools, fetch::tools().await);
     }
-    if path == Route::Secrets.path()
-        && let Ok(sec) = fetch::secrets().await
-    {
-        set_if_changed(s.secrets, sec);
+    if path == Route::Secrets.path() {
+        took(s, "/api/secrets", s.secrets, fetch::secrets().await);
     }
-    if path == Route::Database.path()
-        && let Ok(d) = fetch::db().await
-    {
-        set_if_changed(s.db, d);
+    if path == Route::Database.path() {
+        took(s, "/api/db", s.db, fetch::db().await);
     }
     if path == Route::Triggers.path() {
-        if let Ok(t) = fetch::triggers().await {
-            set_if_changed(s.triggers, t);
-        }
+        took(s, "/api/triggers", s.triggers, fetch::triggers().await);
     }
     if path == Route::Hive.path() {
-        if let Ok(h) = fetch::hive().await {
-            set_if_changed(s.hive, h);
-        }
+        took(s, "/api/hive", s.hive, fetch::hive().await);
         // The Hive table lists dashboard services too, and names their source — which needs the
         // dashboards' own listing, since a service carries only its dashboard's id.
-        if let Ok(d) = fetch::dashboards().await {
-            set_if_changed(s.dashboards, d);
-        }
+        took(
+            s,
+            "/api/dashboards",
+            s.dashboards,
+            fetch::dashboards().await,
+        );
     }
-    if path == Route::Dashboards.path()
-        && let Ok(d) = fetch::dashboards().await
-    {
-        set_if_changed(s.dashboards, d);
+    if path == Route::Dashboards.path() {
+        took(
+            s,
+            "/api/dashboards",
+            s.dashboards,
+            fetch::dashboards().await,
+        );
     }
-    if path == Route::Marketplace.path()
-        && let Ok(m) = fetch::marketplace().await
-    {
-        set_if_changed(s.marketplace, m);
+    if path == Route::Marketplace.path() {
+        took(
+            s,
+            "/api/marketplace",
+            s.marketplace,
+            fetch::marketplace().await,
+        );
     }
-    if path == Route::PortsManager.path()
-        && let Ok(u) = fetch::used().await
-    {
-        set_if_changed(s.used, u);
+    if path == Route::PortsManager.path() {
+        took(s, "/api/ports/used", s.used, fetch::used().await);
     }
-    if path == Route::Mesh.path()
-        && let Ok(m) = fetch::mesh().await
-    {
-        set_if_changed(s.mesh, m);
+    if path == Route::Mesh.path() {
+        took(s, "/api/mesh", s.mesh, fetch::mesh().await);
     }
-    if path == Route::Fleet.path()
-        && let Ok(f) = fetch::fleet().await
-    {
-        set_if_changed(s.fleet, f);
+    if path == Route::Fleet.path() {
+        took(s, "/api/fleet", s.fleet, fetch::fleet().await);
     }
     if path == Route::LlmBackends.path() {
-        if let Ok(b) = fetch::llm_backends().await {
-            set_if_changed(s.llm_backends, b);
-        }
+        took(
+            s,
+            "/api/llm/backends",
+            s.llm_backends,
+            fetch::llm_backends().await,
+        );
         // The editor's runtime picker is built from the agent form spec, so the page needs the
         // agent listing here too — see the matching subscription above.
-        if let Ok(a) = fetch::agents().await {
-            set_if_changed(s.agents, a);
-        }
+        took(s, "/api/agents", s.agents, fetch::agents().await);
     }
 }

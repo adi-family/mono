@@ -51,10 +51,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{Flash, FleetForm, State};
+use crate::state::{Flash, FleetForm, State, read_error};
 use crate::ui::{
     Key, TextField, apply_mutation, confirm, copy_row, fmt_date, menu_item, prompt, row_actions,
-    rows_or_placeholder, sort_rows, updated_text,
+    rows_or_status, sort_rows, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -264,10 +264,11 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 /// per node with its grants and the ⋯ menu that changes them.
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
-    let mut nodes = match rows_or_placeholder(
+    let mut nodes = match rows_or_status(
         table,
         state.fleet.get().map(|v| v.nodes),
         "No nodes paired yet — mint a pairing code below.",
+        read_error(state, "/api/fleet"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,

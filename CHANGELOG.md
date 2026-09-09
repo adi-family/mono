@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **The LLM backends page loads.** It showed "Loading…" and never anything else: the page watches
+  the backend registry over the live channel, and the server's list of reads that channel may watch
+  did not include it, so the answer was never sent. Reloading the page directly onto its URL painted
+  it once and then let it go stale, which is why it looked intermittent. The agent editor's model
+  list came from the same read and was empty for the same reason.
+- **A page that cannot load its data says so instead of loading for ever.** Every table read "not
+  asked yet" and "asked, and it failed" as the same thing — an empty signal — and showed "Loading…"
+  for both. A failed read now names its reason in the table it belongs to, and clears itself when
+  the read starts working again. The live channel also answers a read it will not watch, rather than
+  going silent on it.
+
 ## 1.10.0 — 2026-09-09
 
 ### Added

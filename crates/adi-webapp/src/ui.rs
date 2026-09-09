@@ -19,6 +19,9 @@ pub(crate) use adi_ui::{Sort, SortKey as Key, TableState, sort_rows};
 /// skipped the first placeholder would flash its empty line during the load, and one that skipped
 /// the second would render a bare frame saying nothing about why it is bare.
 ///
+/// A table whose read can fail wants [`rows_or_status`] instead: `Loading…` is a lie once the read
+/// has come back and come back badly, and it is a lie that never expires.
+///
 /// # Errors
 /// The placeholder view to render instead of rows.
 pub(crate) fn rows_or_placeholder<T>(
@@ -26,10 +29,31 @@ pub(crate) fn rows_or_placeholder<T>(
     loaded: Option<Vec<T>>,
     empty: &str,
 ) -> Result<Vec<T>, AnyView> {
+    rows_or_status(table, loaded, empty, None)
+}
+
+/// [`rows_or_placeholder`], plus the third thing a table body can be: a read that failed.
+///
+/// `error` is why the endpoint behind these rows last refused to answer — [`crate::state::State`]'s
+/// `read_errors`, looked up by the path. It wins over `Loading…`, because the two are told apart by
+/// nothing else: both show as an empty signal, and a page that cannot load has no later state to
+/// move to. It does **not** win over rows that did load, so a list already on screen survives a
+/// failed refresh rather than being replaced by the reason for it.
+///
+/// # Errors
+/// The placeholder view to render instead of rows.
+pub(crate) fn rows_or_status<T>(
+    table: TableState,
+    loaded: Option<Vec<T>>,
+    empty: &str,
+    error: Option<String>,
+) -> Result<Vec<T>, AnyView> {
     let Some(rows) = loaded else {
-        return Err(
-            view! { <adi_ui::EmptyRow state=table>"Loading…"</adi_ui::EmptyRow> }.into_any(),
+        let said = error.map_or_else(
+            || "Loading…".to_string(),
+            |error| format!("Couldn't load this: {error}"),
         );
+        return Err(view! { <adi_ui::EmptyRow state=table>{said}</adi_ui::EmptyRow> }.into_any());
     };
     if rows.is_empty() {
         let empty = empty.to_string();

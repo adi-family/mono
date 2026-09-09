@@ -12,9 +12,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{DbConsole, Flash, State, load};
+use crate::state::{DbConsole, Flash, State, load, read_error};
 use crate::ui::{
-    Key, menu_item, placeholder_row, row_actions, rows_or_placeholder, sort_rows, updated_text,
+    Key, menu_item, placeholder_row, row_actions, rows_or_placeholder, rows_or_status, sort_rows,
+    updated_text,
 };
 
 /// The databases table: one row per scope in the store. No action column — a row's control is the
@@ -138,10 +139,11 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
 /// The databases table: one row per scope, the open one marked. Clicking a row opens that scope.
 fn scope_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_scopes;
-    let mut databases = match rows_or_placeholder(
+    let mut databases = match rows_or_status(
         table,
         state.db.get().map(|v| v.databases),
         "No databases yet — the first write creates one. Try a `create table` below.",
+        read_error(state, "/api/db"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
