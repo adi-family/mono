@@ -94,6 +94,11 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/fleet"
             | "/api/fleet/nodes"
             | "/api/hive"
+            // The LLM backend registry, watched by the backends page and by the agent editor's
+            // model list. It changes without anybody touching the panel — the prober lifts a hold,
+            // another machine's run records one — which is the whole reason that page watches it
+            // rather than reading it once.
+            | "/api/llm/backends"
             | "/api/mesh"
             | "/api/meta"
             | "/api/ports"
@@ -211,6 +216,17 @@ impl Hub {
         for watch in wanted.into_iter().take(MAX_WATCHES) {
             let Some(every) = watchable(&watch.method, &watch.path) else {
                 debug!(method = %watch.method, path = %watch.path, "refusing to watch");
+                // Refused *out loud*, not passed over. From the page's side a topic that is never
+                // spoken to is indistinguishable from one whose first answer has not arrived yet,
+                // so a read missing from [`watchable`] leaves the table that wanted it on
+                // "Loading…" for the life of the tab with nothing anywhere saying why — which is
+                // exactly how `/api/llm/backends` shipped mute. One message per subscribe, in the
+                // shape every other failed read arrives in.
+                snapshots.push(Arc::new(message(
+                    &watch.key(),
+                    400,
+                    &refused(&watch.method, &watch.path),
+                )));
                 continue;
             };
             let key = watch.key();
@@ -318,6 +334,17 @@ async fn compute(app: &Arc<App>, key: String, watch: Watch) {
     let response = crate::answer(app, req).await;
     app.live
         .publish(&key, message(&key, response.status, &response.body));
+}
+
+/// The body a refused subscription is answered with. Built through the API's own error helper so
+/// it is byte-for-byte the `{ "error": … }` shape a failed HTTP read returns, and the client needs
+/// no second way to read a failure off this channel.
+fn refused(method: &str, path: &str) -> String {
+    crate::handlers::error(
+        400,
+        &format!("the live channel cannot watch {method} {path}"),
+    )
+    .body
 }
 
 /// Render what goes over the wire: the topic it answers, its status, and the response body
@@ -461,10 +488,74 @@ mod tests {
         }
     }
 
+    /// Every read the control panel subscribes to — `adi-webapp`'s `state::subscriptions`, which
+    /// is the only thing that ever sends a `sub` message down this channel.
+    ///
+    /// Kept here as a list because the two halves are in different crates and nothing else makes
+    /// the compiler care that they agree. The bug this was written for: the LLM backends page
+    /// subscribed to `/api/llm/backends`, [`watchable`] did not name it, and the page sat on
+    /// "Loading…" for ever — the panel's one-shot fetch is a *fallback* that runs only while the
+    /// socket is down, so a healthy live channel was the thing that broke it. Adding a page means
+    /// adding its read here and to [`watchable`] in the same commit.
+    const SUBSCRIBED_BY_THE_PANEL: &[(&str, &str)] = &[
+        ("GET", "/api/agents"),
+        ("GET", "/api/agents/runs/all"),
+        ("GET", "/api/dashboards"),
+        ("GET", "/api/db"),
+        ("GET", "/api/fleet"),
+        ("GET", "/api/health"),
+        ("GET", "/api/hive"),
+        ("GET", "/api/llm/backends"),
+        ("GET", "/api/mesh"),
+        ("GET", "/api/meta"),
+        ("GET", "/api/ports"),
+        ("GET", "/api/ports/used"),
+        ("GET", "/api/projects"),
+        // The open project's detail page, whose path carries the id.
+        ("GET", "/api/projects/acme"),
+        ("GET", "/api/secrets"),
+        ("GET", "/api/tasks"),
+        ("GET", "/api/tools"),
+        ("GET", "/api/triggers"),
+        ("POST", "/api/agents/peek"),
+        ("POST", "/api/agents/run/peek"),
+        ("POST", "/api/agents/runs"),
+        ("POST", "/api/projects/hook/log"),
+        ("POST", "/api/projects/workspaces"),
+        ("POST", "/api/projects/workspaces/terminal/peek"),
+        ("POST", "/api/triggers/log"),
+    ];
+
+    #[test]
+    fn every_read_the_panel_watches_is_watchable() {
+        for (method, path) in SUBSCRIBED_BY_THE_PANEL {
+            assert!(
+                watchable(method, path).is_some(),
+                "the control panel subscribes to {method} {path} and this channel will not watch \
+                 it — the table that wants it never gets an answer"
+            );
+        }
+    }
+
+    /// A read this channel will not watch is told so. Silence is the one answer a page cannot act
+    /// on: it looks exactly like an answer that has not arrived yet.
+    #[test]
+    fn a_refused_subscription_is_answered_rather_than_ignored() {
+        let hub = Hub::default();
+        let (a, _rx_a) = hub.attach();
+        let (snapshots, fresh) = hub.subscribe(a, vec![watch("POST", "/api/agents/run", "")]);
+        assert!(fresh.is_empty(), "nothing is computed for a read off the list");
+        assert_eq!(snapshots.len(), 1, "but the client is told");
+        assert!(snapshots[0].contains("\"status\":400"), "{}", snapshots[0]);
+        assert!(snapshots[0].contains("cannot watch"), "{}", snapshots[0]);
+        assert!(hub.lock().topics.is_empty(), "and no topic is left behind");
+    }
+
     #[test]
     fn only_reads_are_watchable() {
         assert_eq!(watchable("GET", "/api/health"), Some(IDLE));
         assert_eq!(watchable("GET", "/api/tasks"), Some(SLOW));
+        assert_eq!(watchable("GET", "/api/llm/backends"), Some(SLOW));
         assert_eq!(watchable("POST", "/api/agents/peek"), Some(FAST));
         assert_eq!(watchable("GET", "/api/projects/acme"), Some(SLOW));
         assert_eq!(watchable("GET", "/api/fleet"), Some(SLOW));
