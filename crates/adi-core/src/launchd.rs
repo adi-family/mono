@@ -698,6 +698,7 @@ mod windows {
 
     /// Install and start a long-running, auto-restarting task (the `KeepAlive` analog).
     pub fn enable(label: &str, program: &[String], log: &str, env: &[(String, String)]) {
+        ensure_log_dir(log);
         install(label, &task_xml(label, program, log, env, None));
     }
 
@@ -711,10 +712,20 @@ mod windows {
         env: &[(String, String)],
         interval_secs: u32,
     ) {
+        ensure_log_dir(log);
         install(
             label,
             &task_xml(label, program, log, env, Some(interval_secs)),
         );
+    }
+
+    /// The task action is `cmd /C ... > <log>`, and cmd's redirection fails outright when the
+    /// log's directory is missing -- the task then dies the instant it starts, with no output
+    /// anywhere to say why. Nothing else creates this directory on a fresh install.
+    fn ensure_log_dir(log: &str) {
+        if let Some(parent) = std::path::Path::new(log).parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
     }
 
     fn install(label: &str, xml: &str) {
@@ -793,6 +804,8 @@ mod windows {
         inner.push_str(&format!(" > {} 2>&1", quote_cmd(log)));
         let comspec_args = format!("/C {}", inner);
 
+        let user = user_id_element(current_user_id().as_deref());
+
         let repetition = repeat_secs.map_or(String::new(), |secs| {
             format!(
                 "\n      <Repetition>\n        <Interval>{}</Interval>\n        <StopAtDurationEnd>false</StopAtDurationEnd>\n      </Repetition>",
@@ -813,12 +826,12 @@ mod windows {
     <Description>ADI service {desc}</Description>
   </RegistrationInfo>
   <Triggers>
-    <LogonTrigger>
+    <LogonTrigger>{user}
       <Enabled>true</Enabled>{repetition}
     </LogonTrigger>
   </Triggers>
   <Principals>
-    <Principal id="Author">
+    <Principal id="Author">{user}
       <LogonType>InteractiveToken</LogonType>
       <RunLevel>LeastPrivilege</RunLevel>
     </Principal>
@@ -853,6 +866,29 @@ mod windows {
             comspec = xml_escape("cmd.exe"),
             args = xml_escape(&comspec_args),
         )
+    }
+
+    /// Who the task runs as, as Task Scheduler spells it: `DOMAIN\user`, or a bare user name
+    /// when the machine reports no domain.
+    fn current_user_id() -> Option<String> {
+        let user = std::env::var("USERNAME").ok().filter(|u| !u.is_empty())?;
+        match std::env::var("USERDOMAIN") {
+            Ok(domain) if !domain.is_empty() => Some(format!("{domain}\\{user}")),
+            _ => Some(user),
+        }
+    }
+
+    /// The `<UserId>` line shared by the trigger and the principal.
+    ///
+    /// Load-bearing, not decoration: a `<LogonTrigger>` carrying no `<UserId>` means "at logon
+    /// of *any* user", and registering that is an administrator-only act -- `schtasks /Create`
+    /// answers "ERROR: Access is denied." for an ordinary user, so on a stock Windows account
+    /// not one adi service can be registered and `adi up` brings up nothing. Naming the user
+    /// makes the byte-identical registration succeed unelevated.
+    fn user_id_element(user: Option<&str>) -> String {
+        user.map_or(String::new(), |u| {
+            format!("\n      <UserId>{}</UserId>", xml_escape(u))
+        })
     }
 
     /// Split `[program, arg, ...]` into the command and a single quoted arguments string.
@@ -938,6 +974,11 @@ mod windows {
             );
             assert!(xml.contains("<LogonTrigger>"));
             assert!(xml.contains("<RestartOnFailure>"));
+            // Both the trigger and the principal must name the user, or registering the task
+            // needs administrator rights and a normal install can start nothing.
+            if current_user_id().is_some() {
+                assert_eq!(xml.matches("<UserId>").count(), 2);
+            }
             assert!(xml.contains("family.adi.app.dns"));
             // Program, its arg, the log redirect, and the env var all ride in the cmd wrapper.
             assert!(xml.contains("adi-dns.exe"));
@@ -957,6 +998,15 @@ mod windows {
             assert!(xml.contains("<Repetition>"));
             assert!(xml.contains("<Interval>PT6H</Interval>"));
             assert!(!xml.contains("RestartOnFailure"));
+        }
+
+        #[test]
+        fn user_id_element_is_named_or_absent() {
+            assert_eq!(
+                user_id_element(Some("ADI-WIN-TEST\\adi")),
+                "\n      <UserId>ADI-WIN-TEST\\adi</UserId>"
+            );
+            assert_eq!(user_id_element(None), "");
         }
 
         #[test]
