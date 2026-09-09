@@ -182,6 +182,12 @@ pub(crate) enum AgentsCommand {
     Delete {
         name: String,
     },
+    Migrate {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 ```
 

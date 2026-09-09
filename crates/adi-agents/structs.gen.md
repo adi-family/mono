@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-123 structs · 34 enums · 5 type aliases across 52 files.
+127 structs · 34 enums · 5 type aliases across 53 files.
 
 ## Index
 
@@ -39,6 +39,7 @@
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
+- [`src/migrations.rs`](#srcmigrationsrs) — `Step`, `Pending`, `Plan`, `Applied`
 - [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
 - [`src/prelude.rs`](#srcpreluders) — `Ran`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
@@ -104,6 +105,7 @@ An agent definition with backend-specific arguments.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, bound(deserialize = "Args: Deserialize<'de> + Default"))]
 pub struct AgentManifest<Args> {
+    pub version: u32,
     pub backend: Backend,
     pub arguments: Args,
     pub tags: Vec<String>,
@@ -1893,6 +1895,63 @@ struct Memo<T> {
     entries: Mutex<HashMap<PathBuf, Entry<T>>>,
     tick: AtomicU64,
     capacity: usize,
+}
+```
+
+---
+
+## `src/migrations.rs`
+
+### struct `Step`
+
+One move between two adjacent shapes.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Step {
+    pub from: u32,
+    pub to: u32,
+    pub name: &'static str,
+    pub what: &'static str,
+}
+```
+
+### struct `Pending`
+
+What one agent needs, if anything.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Pending {
+    pub agent: String,
+    pub from: u32,
+    pub steps: Vec<String>,
+}
+```
+
+### struct `Plan`
+
+The whole store, read and sorted into what needs doing.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Plan {
+    pub pending: Vec<Pending>,
+    pub current: usize,
+    pub ahead: BTreeMap<String, u32>,
+}
+```
+
+### struct `Applied`
+
+What applying it did.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Applied {
+    pub steps: Vec<String>,
+    pub agents: usize,
+    pub notes: Vec<String>,
 }
 ```
 

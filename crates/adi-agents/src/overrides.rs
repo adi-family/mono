@@ -152,6 +152,7 @@ mod tests {
         Agent {
             name: "reviewer".to_string(),
             manifest: AgentManifest {
+                version: crate::agent::MANIFEST_VERSION,
                 backend: Backend::HarnessClaudeSdk,
                 arguments,
                 tags: Vec::new(),

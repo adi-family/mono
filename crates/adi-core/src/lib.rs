@@ -41,11 +41,16 @@ pub use adi_agents::launcher;
 /// rather than item by item: it is one coherent area (a backend, a chain, a hold, a probe) and a
 /// caller that needs any of it needs the vocabulary around it.
 pub use adi_agents::llm;
+/// Bringing stored agent definitions up to the shape this build writes. Re-exported whole for the
+/// same reason as [`llm`]: a caller that runs one step needs the plan, the result and the version
+/// constants around it.
+pub use adi_agents::migrations;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, LaunchOptions, RawAgentArguments, RunInfo, RunLimits, RunOverrides, SecretAttachment,
-    Sent, StoredAgent, StoredAgentManifest, contains_json_null, event_catalog,
+    LEGACY_VERSION, Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLimits,
+    RunOverrides, SecretAttachment, Sent, StoredAgent, StoredAgentManifest, contains_json_null,
+    event_catalog,
 };
 
 pub use adi_db::{ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo};

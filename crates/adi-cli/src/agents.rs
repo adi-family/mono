@@ -4,8 +4,9 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Launch, LaunchOptions, RunInfo,
-    RunOverrides, SecretAttachment, StoredAgent, awaits, launcher,
+    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Launch, LaunchOptions,
+    MANIFEST_VERSION, RunInfo, RunOverrides, SecretAttachment, StoredAgent, awaits, launcher,
+    llm::LlmBackends, migrations,
 };
 use clap::Subcommand;
 
@@ -301,6 +302,20 @@ pub(crate) enum AgentsCommand {
     Rm { name: String },
     /// Delete an agent definition.
     Delete { name: String },
+    /// Bring every agent definition up to the shape this binary writes, and record on each file
+    /// that it happened.
+    ///
+    /// Prints the plan and writes nothing unless `--apply` is given. Safe to run again: an agent
+    /// already stamped current is not offered a step it has had, and a definition stamped *above*
+    /// what this binary knows — one a newer ADI wrote — is reported and left untouched rather than
+    /// written back in a shape this version understands.
+    Migrate {
+        /// Actually write it. Without this the command is a description.
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// What can be done to the wakes one conversation is holding.
@@ -493,6 +508,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             // longhand at its own call site, and nothing made the odd one out visible.
             let old = stored.as_ref();
             let manifest = AgentManifest {
+                // Kept, like everything below: a save is an edit, not a migration, so an existing
+                // definition stays stamped with the shape it was written in and only a brand new
+                // one gets this binary's. The store enforces the same rule against the file on
+                // disk; stating it here keeps the manifest the CLI builds honest about itself.
+                version: old.map_or(MANIFEST_VERSION, |m| m.shape()),
                 backend: backend.into(),
                 // Same kept/stated rule as everything below, and it matters more here than most:
                 // an agent whose chain went missing does not fail, it silently falls back to the
@@ -786,8 +806,79 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 println!("No such agent: {name}.");
             }
         }
+        AgentsCommand::Migrate { apply, json } => {
+            let registry = LlmBackends::with_config(store.config().clone());
+            let plan = migrations::plan(&store).map_err(|e| e.to_string())?;
+            let applied = if apply {
+                Some(migrations::apply(&store, &registry).map_err(|e| e.to_string())?)
+            } else {
+                None
+            };
+            report_migration(&plan, applied.as_ref(), json);
+        }
     }
     Ok(())
+}
+
+/// Print a manifest-version plan — or, when `applied` is set, what carrying it out did.
+///
+/// The same lines either way, on purpose: what somebody approved is what says it happened, so
+/// there is nothing to compare between two differently-shaped outputs.
+fn report_migration(
+    plan: &migrations::Plan,
+    applied: Option<&migrations::Applied>,
+    json: bool,
+) {
+    if json {
+        print_json(&serde_json::json!({
+            "writes": MANIFEST_VERSION,
+            "plan": plan,
+            "applied": applied,
+        }));
+        return;
+    }
+    println!("This binary writes manifest version {MANIFEST_VERSION}.");
+    if !plan.ahead.is_empty() {
+        println!(
+            "\n{} definition(s) are from a NEWER adi and are left alone:",
+            plan.ahead.len()
+        );
+        for (name, version) in &plan.ahead {
+            println!("  {name:<24} claims version {version}");
+        }
+        println!("  Upgrade adi before touching these — this binary does not know their shape.");
+    }
+    if plan.pending.is_empty() {
+        println!("\nNothing to migrate: all {} agent(s) are current.", plan.current);
+        return;
+    }
+    println!(
+        "\n{} agent(s) behind, {} already current. Steps to run:",
+        plan.pending.len(),
+        plan.current
+    );
+    for step in plan.steps() {
+        println!("  {} → {}  {} — {}", step.from, step.to, step.name, step.what);
+    }
+    println!();
+    for agent in &plan.pending {
+        println!(
+            "  {:<24} v{} → v{MANIFEST_VERSION} via {}",
+            agent.agent,
+            agent.from,
+            agent.steps.join(", ")
+        );
+    }
+    match applied {
+        Some(applied) => {
+            println!();
+            for note in &applied.notes {
+                println!("  {note}");
+            }
+            println!("\nMigrated {} agent(s).", applied.agents);
+        }
+        None => println!("\nNothing written. Re-run with --apply to do it."),
+    }
 }
 
 /// Print one waiting ask: who is blocked, on what, and the numbered questions to answer in order.

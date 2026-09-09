@@ -341,6 +341,42 @@ somebody writes a rule for it, which is the safe direction.
 Re-running is safe: an agent that already lists a backend is left alone, and a configuration
 matching a backend already in the store reuses it instead of writing a second.
 
+### The version stamp
+
+`llm migrate` decides whether an agent has been converted by reading its *contents*. That works
+for this one step and does not compose: the next shape change would have to invent its own
+detector, and a hand-converted file is indistinguishable from a migrated one. So a manifest now
+records the shape it was written in, on its first line:
+
+```toml
+version = 2
+backend = "harness:adi"
+```
+
+**1** is the pre-backends shape — a file with no `version` line at all is 1, and nothing ever
+writes a `0`, which exists only as the value serde fills in for a missing field. **2** is this
+one. `crates/adi-agents/src/migrations.rs` holds the step list, and `adi-mono agents migrate`
+runs it:
+
+```sh
+adi-mono agents migrate           # who is behind, and what each would get. Writes nothing.
+adi-mono agents migrate --apply   # do it
+```
+
+Three properties it is built to hold:
+
+- **A step runs once.** The stamp decides, not the file's contents.
+- **A newer store is refused, not guessed at.** A definition stamped above this binary's
+  `MANIFEST_VERSION` is reported and never written: an old binary must not "upgrade" a file
+  written by a newer one.
+- **An edit is not an upgrade.** `Agents::save` keeps whatever version the stored file carried,
+  whatever the caller passed, so editing a legacy agent in the panel cannot mark it migrated.
+  Only a migration step moves the number, through `save_migrated`.
+
+A step is a whole-store operation that stamps each agent afterwards — 1 → 2 has to create the
+shared backends before it can point anybody at one — so an agent somebody converted by hand
+before the stamp existed is stamped without being rewritten, and says so in the report.
+
 **Order of operations.** The binaries must understand `backends` *before* the store is
 migrated. Applying this against a stack still running pre-backends code would strip the model
 and the login off every agent while nothing yet reads the list that replaced them. Build and

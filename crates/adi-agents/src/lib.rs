@@ -44,6 +44,7 @@ mod limits;
 pub mod llm;
 pub mod marker;
 mod memo;
+pub mod migrations;
 pub mod overrides;
 mod prelude;
 pub mod progress;
@@ -64,8 +65,8 @@ use std::time::Duration;
 use adi_config::{Config, ConfigFile, now_unix};
 
 pub use agent::{
-    Agent, AgentManifest, RawAgentArguments, SecretAttachment, StoredAgent, StoredAgentManifest,
-    contains_json_null,
+    Agent, AgentManifest, LEGACY_VERSION, MANIFEST_VERSION, RawAgentArguments, SecretAttachment,
+    StoredAgent, StoredAgentManifest, contains_json_null,
 };
 pub use auto_title::AutoTitleSettings;
 pub use backend::Backend;
@@ -312,6 +313,16 @@ impl Agents {
         let now = now_unix();
         manifest.created_at = file.carried_created_at(now);
         manifest.updated_at = now;
+        // A definition that already exists keeps the shape it was stamped with, whatever the caller
+        // passed: a save is an edit, not a migration. A new one is stamped current, because a
+        // manifest this binary just built is current-shaped by construction. Only
+        // [`Self::save_migrated`] moves the number, which is why the migration runner is the one
+        // thing that can claim an agent has been upgraded.
+        manifest.version = file
+            .load()
+            .map_or(agent::MANIFEST_VERSION, |existing: StoredAgentManifest| {
+                existing.shape()
+            });
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
         llm::validate_rows(&stored.backends)?;
@@ -326,6 +337,39 @@ impl Agents {
             name: name.to_string(),
             manifest,
         })
+    }
+
+    /// Write a definition **and** the shape it is now in — the one door a migration writes through.
+    ///
+    /// Ordinary [`save`](Self::save) deliberately cannot do this, so that no edit anywhere in the
+    /// panel or the CLI can mark an agent upgraded without the upgrade having happened. This takes
+    /// an already-stored manifest because a migration works on the file as it is, not on a typed
+    /// view of what it ought to be.
+    ///
+    /// # Errors
+    /// The same validation [`save`](Self::save) does, plus [`Error::Io`] on a write failure.
+    pub(crate) fn save_migrated(
+        &self,
+        name: &str,
+        mut manifest: StoredAgentManifest,
+        version: u32,
+    ) -> Result<()> {
+        validate_name(name)?;
+        let file = self.agent_file(name);
+        let now = now_unix();
+        manifest.created_at = file.carried_created_at(now);
+        manifest.updated_at = now;
+        manifest.version = version;
+        arguments::validate_builtin(&manifest)?;
+        llm::validate_rows(&manifest.backends)?;
+        file.save(&manifest)?;
+        self.emit(
+            "adi.agents.saved",
+            &AgentSaved {
+                agent: name.to_string(),
+            },
+        );
+        Ok(())
     }
 
     /// Announce that a question is settled, so whatever told a person about it can say so too.

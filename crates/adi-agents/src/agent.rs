@@ -11,6 +11,23 @@ pub type RawAgentArguments = BTreeMap<String, serde_json::Value>;
 /// The key every backend's arguments spell their system prompt under.
 const SYSTEM_PROMPT: &str = "system_prompt";
 
+/// The manifest shape this binary writes, and the highest one it knows how to read.
+///
+/// The history, so a number in a file means something to whoever reads it next:
+///
+/// * **1** — the model lived on the agent: `model`, `settings`, `provider`, `base_url`,
+///   `api_key_env` and the sampling dials under `[arguments]`, one agent welded to one model.
+/// * **2** — model configuration moved out into named LLM backends and the agent keeps an ordered
+///   `[[backends]]` list of them. Nothing under `[arguments]` reaches a model any more.
+///
+/// A definition stamped **higher** than this is not one to guess at: a newer binary wrote it, and
+/// this one refuses to migrate it rather than write a shape it does not understand.
+pub const MANIFEST_VERSION: u32 = 2;
+
+/// What a definition with no `version` line is: written before the field existed, so version 1 by
+/// construction. Nothing writes a `0` — it is only ever read.
+pub const LEGACY_VERSION: u32 = 1;
+
 pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
 pub type StoredAgent = Agent<RawAgentArguments>;
@@ -32,6 +49,18 @@ pub struct SecretAttachment {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, bound(deserialize = "Args: Deserialize<'de> + Default"))]
 pub struct AgentManifest<Args> {
+    /// Which shape this definition is written in — see [`MANIFEST_VERSION`] for what each number
+    /// means and `crate::migrations` for how a file moves between them.
+    ///
+    /// `0` is not a version: it is a file written before this field existed, which reads as
+    /// [`LEGACY_VERSION`]. Declared first so it is the first line of the file, where somebody
+    /// opening one can see what they are looking at.
+    ///
+    /// **A save never invents it.** An existing definition keeps whatever it was stamped with,
+    /// because editing an agent is not migrating it — otherwise saving a legacy agent from the
+    /// panel would mark it upgraded without changing a thing, and the migration would then skip
+    /// the one agent that still needed it.
+    pub version: u32,
     pub backend: Backend,
     pub arguments: Args,
     pub tags: Vec<String>,
@@ -147,12 +176,25 @@ impl<Args> AgentManifest<Args> {
         self.backend.executor()
     }
 
+    /// The shape this definition is written in, reading an unstamped file as [`LEGACY_VERSION`]
+    /// rather than as version zero. Every version comparison goes through this, so "no line in the
+    /// file" and "the oldest shape" are the same answer everywhere instead of in most places.
+    #[must_use]
+    pub fn shape(&self) -> u32 {
+        if self.version == 0 {
+            LEGACY_VERSION
+        } else {
+            self.version
+        }
+    }
+
     /// Build a manifest that carries this one's metadata — `backend`, `tags`, `starred`,
     /// `project`, and both timestamps — but swaps in a freshly derived `arguments` payload. The
     /// single place that field list lives, so the encode/decode paths below don't each respell it.
     /// Clones the carried fields (all cheap) and leaves `self`'s own `arguments` untouched.
     fn rewrap<T>(&self, arguments: T) -> AgentManifest<T> {
         AgentManifest {
+            version: self.version,
             backend: self.backend.clone(),
             arguments,
             tags: self.tags.clone(),

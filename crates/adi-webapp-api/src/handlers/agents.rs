@@ -1420,6 +1420,12 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
     // otherwise saving from a form that never offered them would quietly wipe an agent's toolchain.
     let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
     let manifest = AgentManifest {
+        // Omit-to-keep like the fields below, and not the form's to state at all: a save is an
+        // edit, not a migration, so an agent keeps the shape it was written in until
+        // `agents migrate` moves it. Only a brand new definition is stamped with this build's.
+        version: stored
+            .as_ref()
+            .map_or(adi_agents::MANIFEST_VERSION, |m| m.shape()),
         backend: Backend::from(req.backend.trim()),
         arguments: clean_arguments(req.arguments),
         // Tags, star, and project are omit-to-keep for the reason `bin_tools` and `path` are: the
