@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.10.1 — 2026-09-09
+
 ### Added
 
 - **A message can say it wants to be heard now.** Typed while `harness:adi` is still answering, a
