@@ -10,6 +10,7 @@ pub(crate) mod fleet;
 mod hive;
 mod knowledge;
 mod llm;
+mod llm_backends;
 mod marketplace;
 mod mesh;
 mod meta;
@@ -44,6 +45,7 @@ pub(crate) mod columns {
         CALL_COLS as LLM_CALL_COLS, CLIENT_COLS as LLM_CLIENT_COLS, LATEST_FIRST,
         MODEL_COLS as LLM_MODEL_COLS, MOST_CALLS_FIRST, PROVIDER_COLS as LLM_PROVIDER_COLS,
     };
+    pub(crate) use super::llm_backends::COLS as LLM_BACKEND_COLS;
     pub(crate) use super::mesh::{
         ALLOW_COLS as MESH_ALLOW_COLS, FORWARD_COLS as MESH_FORWARD_COLS,
         PEER_COLS as MESH_PEER_COLS,
@@ -74,6 +76,7 @@ pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use knowledge::knowledge_view;
 pub(crate) use llm::{LlmConsole, llm_view};
+pub(crate) use llm_backends::llm_backends_view;
 pub(crate) use marketplace::marketplace_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
@@ -111,6 +114,7 @@ mod tests {
         ("knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
         ("project-knowledge-bases", c::PROJECT_KNOWLEDGE_BASE_COLS),
         ("project-knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
+        ("llm-backends", c::LLM_BACKEND_COLS),
         ("llm-calls", c::LLM_CALL_COLS),
         ("llm-clients", c::LLM_CLIENT_COLS),
         ("llm-models", c::LLM_MODEL_COLS),

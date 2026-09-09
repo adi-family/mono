@@ -11,6 +11,7 @@ mod format;
 mod goals;
 mod indexer;
 mod knowledge;
+mod llm;
 mod marketplace;
 mod mesh;
 mod projects;
@@ -34,6 +35,7 @@ use crate::format::{print_bun, print_json, print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
+use crate::llm::{LlmCommand, run_llm};
 use crate::marketplace::{MarketplaceCommand, run_marketplace};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
@@ -130,6 +132,13 @@ enum Command {
     Agents {
         #[command(subcommand)]
         command: AgentsCommand,
+    },
+    /// LLM backend commands: the registry of ways to answer a turn, the shared record of which
+    /// ones are spent, and the prober that finds out they are back. An agent lists these in order
+    /// (`agents save --backend <id>`) instead of carrying model settings of its own.
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
     },
     /// Goal commands: what a conversation is for, and the two ways it ends.
     Goals {
@@ -343,6 +352,12 @@ fn main() {
         }
         Command::Agents { command } => {
             if let Err(e) = run_agents(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Llm { command } => {
+            if let Err(e) = run_llm(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -579,6 +594,27 @@ mod tests {
             } if b.as_str() == "project:acme/default" && a.as_str() == "solver"
         ));
         assert!(Cli::try_parse_from(["adi-mono", "facts"]).is_err());
+    }
+
+    /// The prober service's argv, pinned here as well as in the hive file: `llm probe --watch` is
+    /// what a supervised process runs forever, and a rename of the flag that only broke the yaml
+    /// would show up as a service that restarts rather than as a failing test.
+    #[test]
+    fn the_llm_group_is_reachable_from_the_top_level() {
+        let cli = Cli::try_parse_from(["adi-mono", "llm", "probe", "--watch"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Llm {
+                command: LlmCommand::Probe {
+                    id: None,
+                    watch: true,
+                    json: false
+                }
+            }
+        ));
+        // `--watch` sweeps the whole store, so naming one backend as well is a contradiction.
+        assert!(Cli::try_parse_from(["adi-mono", "llm", "probe", "x", "--watch"]).is_err());
+        assert!(Cli::try_parse_from(["adi-mono", "llm"]).is_err());
     }
 
     #[test]

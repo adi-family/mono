@@ -37,6 +37,10 @@ pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::awaits;
 pub use adi_agents::goals;
 pub use adi_agents::launcher;
+/// The LLM backend registry, the shared holds, and the failover that reads them. Re-exported whole
+/// rather than item by item: it is one coherent area (a backend, a chain, a hold, a probe) and a
+/// caller that needs any of it needs the vocabulary around it.
+pub use adi_agents::llm;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,

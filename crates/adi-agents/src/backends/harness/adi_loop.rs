@@ -178,6 +178,35 @@ pub(crate) fn run_turn(
     tool_loop(&wire, &args, &turns, &ctx, &images, sink)
 }
 
+/// Ask a provider one throwaway question and report whether it answered — the whole of what a
+/// [probe](crate::llm::prober) does.
+///
+/// Not a turn: no transcript, no tools, no session, nothing written anywhere. One round, a couple of
+/// tokens each way, and the answer discarded — the *fact* of an answer is the finding. That is what
+/// makes it safe to run on a schedule against a backend somebody is being billed for.
+///
+/// `arguments` is a backend's own [`arguments()`](crate::llm::LlmBackendManifest::arguments) map,
+/// which is exactly the shape a run's arguments are in, so the probe reaches the provider by the
+/// same path a turn does rather than by a second one that could drift out of agreement with it.
+///
+/// # Errors
+/// The provider's own error, verbatim — which is the point. The prober classifies that text against
+/// the backend's limit rules to tell "still out" from "back", so anything reworded here would be a
+/// limit the rules no longer recognise.
+pub(crate) fn probe(
+    arguments: &std::collections::BTreeMap<String, Value>,
+    model: &str,
+    prompt: &str,
+) -> Result<String> {
+    let args: HarnessAdiArguments = crate::agent::decode_arguments(arguments.clone())?;
+    validate(&args)?;
+    let wire = Wire::of(&args, model)?;
+    // Withheld, so a model that would rather call a tool than answer cannot turn a two-token probe
+    // into a loop. Anything it says back counts as alive.
+    let reply = wire.round(&[json!({ "role": "user", "content": prompt })], Calls::Withheld)?;
+    Ok(reply.text)
+}
+
 // ---- the loop ----------------------------------------------------------------------
 
 /// One tool call the model asked for.

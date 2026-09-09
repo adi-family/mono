@@ -22,9 +22,17 @@ const ADI_HARNESS: &str = "harness:adi";
 /// them. None of them is scoped to a backend, so they are always shown.
 const IDENTITY: [&str; 5] = ["name", "project", "tags", "starred", "unattended"];
 
-/// The fields the editor renders somewhere other than the runtime section: the identity above,
-/// the CLI command scope (under Tools), and the system prompt (its own disclosure at the foot).
-const NOT_RUNTIME: [&str; 7] = [
+/// The fields the editor renders somewhere other than the runtime section, or no longer renders at
+/// all: the identity above, the CLI command scope (under Tools), the system prompt (its own
+/// disclosure at the foot), and the four that name a model or a login.
+///
+/// Those four — `model`, `provider`, `base_url`, `api_key_env` — are a backend's, not an agent's.
+/// An agent says which backends it may answer on and in what order; the model behind each one, and
+/// the login it is reached with, are set once on the LLM backends page and shared by every agent
+/// that names it. Leaving a model box on this form would be a second way to reach a model, which is
+/// the thing the ordered list exists to replace. The schema still carries them because an agent
+/// that lists no backends falls back to its own arguments, and the CLI can still write them.
+const NOT_RUNTIME: [&str; 11] = [
     "name",
     "project",
     "tags",
@@ -32,6 +40,10 @@ const NOT_RUNTIME: [&str; 7] = [
     "unattended",
     "tools",
     "system_prompt",
+    "model",
+    "provider",
+    "base_url",
+    "api_key_env",
 ];
 
 /// The schema-driven half of the editor, as its two sections: the agent, then the runtime it
@@ -49,11 +61,13 @@ pub(crate) fn agent_form_sections(state: State, form: AgentsForm) -> AnyView {
                 {agent_schema_fields(&st.form, Some(identity.as_slice()), &[], state, form)}
             </div>
         </section>
+        {super::chain::agent_backends_section(state, form)}
         <section class="adi-agents__section">
             <h2 class="adi-agents__h2">"Runtime"</h2>
             <p class="adi-agents__intro">
-                "The backend it runs on, and what that backend takes. Pick one and the fields \
-                 it understands appear."
+                "How it is executed, and what that executor takes. The model, its dials and the \
+                 login are not here \u{2014} they belong to the backends listed above, and an agent \
+                 that lists none falls back to whatever this runtime is configured with."
             </p>
             <div class="adi-agents__grid">
                 {agent_schema_fields(&st.form, None, &NOT_RUNTIME, state, form)}
@@ -847,6 +861,11 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
         .set(argument_text(&a.arguments, "system_prompt"));
     form.starred.set(a.starred);
     form.unattended.set(a.unattended);
+    form.llm_rows.set(a.backends.clone());
+    // Neither the drag nor the unfolded row survives loading a different agent: both are positions
+    // in a list that has just been replaced, and row 2 of the old agent is not row 2 of this one.
+    form.llm_drag_from.set(None);
+    form.llm_row_open.set(None);
     form.arguments.set(a.arguments.clone());
     form.argument_values.set(
         a.arguments
@@ -882,6 +901,9 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.system_prompt.set(String::new());
     form.starred.set(false);
     form.unattended.set(false);
+    form.llm_rows.set(Vec::new());
+    form.llm_drag_from.set(None);
+    form.llm_row_open.set(None);
     form.arguments.set(BTreeMap::new());
     form.argument_values.set(BTreeMap::new());
     form.editing.set(None);

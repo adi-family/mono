@@ -13,6 +13,7 @@ mod http;
 mod live;
 mod node;
 mod origin;
+mod prober;
 mod projects;
 mod scan;
 mod transfer;
@@ -293,6 +294,10 @@ async fn main() -> anyhow::Result<()> {
     // side rather than draining the spool itself, because two drainers would race for records.
     let event_dispatcher =
         EventDispatcher::start_watched(triggers.clone(), awaits::start(agents.clone()));
+    // And the third worker on this clock: the sweep that finds out an LLM backend whose usage limit
+    // has expired is actually back. It belongs to the app rather than to the hive because it binds
+    // no port, and the hive watches a service by its port — see `crate::prober`.
+    prober::start(agents.clone());
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
@@ -519,6 +524,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/fleet/nodes",
     "/api/hive",
     "/api/knowledge",
+    "/api/llm/backends",
     "/api/meta",
     "/api/ports",
     "/api/ports/used",
@@ -748,6 +754,15 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/llm/summary") => handlers::llm_summary(db, &req.body),
         ("POST", "/api/llm/calls") => handlers::llm_calls(db, &req.body),
         ("POST", "/api/llm/call") => handlers::llm_call(db, &req.body),
+
+        // The backend registry: which models an agent may answer on, and which are spent right
+        // now. Keyed off the agent store because a backend's whole audience is the agents that
+        // list it — the registry is read and written beside them, in the same mono store.
+        ("GET", "/api/llm/backends") => handlers::llm_backends(agents),
+        ("POST", "/api/llm/backends/save") => handlers::save_llm_backend(agents, &req.body),
+        ("POST", "/api/llm/backends/delete") => handlers::delete_llm_backend(agents, &req.body),
+        ("POST", "/api/llm/holds/release") => handlers::release_llm_hold(agents, &req.body),
+        ("POST", "/api/llm/settings") => handlers::save_llm_settings(agents, &req.body),
 
         ("GET", "/api/secrets") => handlers::secrets(secrets),
         ("POST", "/api/secrets/set") => handlers::set_secret(secrets, &req.body),

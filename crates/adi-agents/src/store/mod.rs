@@ -62,6 +62,10 @@ pub use transcript::{Turn, assistant_turn, user_turn, user_turn_with};
 /// The role a question carries — what the agent layer reads to tell an unanswered turn from a
 /// settled one before it commits an answer behind it.
 pub(crate) use transcript::ROLE_USER;
+// Only the tests read it back: nothing in the crate branches on a turn being the assistant's, it
+// only ever *writes* one through `assistant_turn`.
+#[cfg(test)]
+pub(crate) use transcript::ROLE_ASSISTANT;
 
 /// How many sessions to keep per agent before [`prune_old`](SessionStore::prune_old) sweeps the
 /// oldest finished ones.
@@ -73,7 +77,7 @@ const DB_FILE: &str = "sessions.db";
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
                               hidden, runner_state, outcome, runner, starred, launched_by, \
-                              overrides, title";
+                              overrides, title, chain, chain_at";
 
 /// The sessions under one root.
 ///
@@ -236,6 +240,11 @@ impl SessionStore {
             // Set by [`set_overrides`](Self::set_overrides) immediately after, on the rare launch
             // that has any — a session is opened by far more callers than can have an opinion here.
             overrides: None,
+            // Set by [`pin_chain`](Self::pin_chain) on the first turn, once the agent's list has
+            // been resolved against the backend store. A session is opened by callers that have no
+            // chain to give it — a simulated run, a session restored by a test — and those answer on
+            // the backend named above, exactly as they did before chains existed.
+            chain: None,
             runner_state: None,
             outcome: None,
         };
@@ -401,6 +410,83 @@ impl SessionStore {
                 rusqlite::params![agent, id, json],
             )
             .map_err(|e| db::sql_err("record a session's overrides in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Fasten a resolved backend chain to a session — **once**, on its first turn.
+    ///
+    /// Returns whether this call was the one that pinned it, on the same first-writer-wins contract
+    /// as [`record_outcome`](Self::record_outcome) and for a stronger reason. The pin is the whole
+    /// mechanism that stops an agent, or a backend it names, edited mid-conversation from changing
+    /// what a live chat is talking to; a second write would be precisely the re-resolution it exists
+    /// to prevent. So the guard is in the statement rather than in a read beforehand, and a caller
+    /// that loses the race is told so instead of quietly replacing the winner's chain.
+    ///
+    /// The position is untouched: a session that has never switched sits on row 1 of the list it was
+    /// given, which is where a new conversation starts.
+    ///
+    /// # Errors
+    /// Returns serialization and database errors.
+    pub fn pin_chain(&self, agent: &str, id: &str, chain: &crate::llm::PinnedChain) -> Result<bool> {
+        let json = serde_json::to_string(chain).map_err(|e| Error::Arguments(e.to_string()))?;
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET chain = ?3
+                 WHERE agent = ?1 AND id = ?2 AND chain IS NULL",
+                rusqlite::params![agent, id, json],
+            )
+            .map_err(|e| db::sql_err("pin a session's backend chain in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Move a session onto another row of the chain it was pinned to.
+    ///
+    /// Only the position moves. The list is never rewritten, so what a conversation can still fall
+    /// through to remains what it was handed on its first turn — including the rows it has already
+    /// passed, which requirement 5 lets it re-pick when the row it is on runs out too.
+    ///
+    /// Refused, with `false`, unless the session actually has a pin: a position pointing into a chain
+    /// that is not there would read back as row 0 of nothing.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn move_chain_to(&self, agent: &str, id: &str, at: usize) -> Result<bool> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET chain_at = ?3
+                 WHERE agent = ?1 AND id = ?2 AND chain IS NOT NULL",
+                rusqlite::params![agent, id, i64::try_from(at).unwrap_or(i64::MAX)],
+            )
+            .map_err(|e| db::sql_err("move a session along its backend chain in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Re-point a session at another runtime, because the chain row answering it has changed.
+    ///
+    /// The record's backend is what [`runner_of`](crate::runner::runner_of) reads, so a failover
+    /// that moved to a row on a different engine and left this alone would start the *old* engine
+    /// on the new row's settings — a run configured two ways, which is the thing the whole chain
+    /// design exists to avoid.
+    ///
+    /// This is the one write that revises a session's backend, and it is safe only between turns:
+    /// the committed transcript is engine-agnostic and lives in this database, but the live log is
+    /// the current engine's own format, so a caller must settle the last turn before calling this
+    /// and let the new engine start the log afresh. Nothing else may use it — an agent re-pointed at
+    /// another backend must still leave its existing runs readable, which is why the record carries
+    /// a backend of its own in the first place.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn set_backend(&self, agent: &str, id: &str, backend: &crate::Backend) -> Result<bool> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET backend = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, backend.to_string()],
+            )
+            .map_err(|e| db::sql_err("re-point a session's backend in", e))?;
         Ok(changed > 0)
     }
 
@@ -1042,6 +1128,102 @@ mod tests {
                 .as_ref()
                 .and_then(|o| o.terminal_reason.as_deref()),
             Some("completed"),
+        );
+    }
+
+    /// A three-row chain, as the first turn of a conversation would have resolved it.
+    fn pinned(ids: &[&str]) -> crate::llm::PinnedChain {
+        crate::llm::PinnedChain {
+            entries: ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| crate::llm::ResolvedBackend {
+                    backend: (*id).to_string(),
+                    row: index + 1,
+                    label: (*id).to_string(),
+                    runtime: Backend::HarnessAdi,
+                    credential: format!("{id}-login"),
+                    model: format!("{id}-model"),
+                    context_tokens: 200_000,
+                    arguments: Default::default(),
+                    limit_rules: Vec::new(),
+                    probe: None,
+                    replayable: true,
+                })
+                .collect(),
+            missing: Vec::new(),
+            at: 0,
+        }
+    }
+
+    /// The chain is resolved on the first turn and fastened there. Everything downstream of that —
+    /// an agent edited mid-conversation, a backend deleted out from under a live chat — depends on
+    /// the second write being refused rather than quietly replacing the first.
+    #[test]
+    fn a_chain_is_pinned_once_and_a_later_resolution_cannot_replace_it() {
+        let store = scratch("pin-chain");
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+        assert!(
+            store.get("solver", &run.id).expect("get").chain.is_none(),
+            "a session opened without a chain answers on its own backend",
+        );
+
+        let first = pinned(&["anthropic", "codex", "glm"]);
+        assert!(
+            store.pin_chain("solver", &run.id, &first).expect("pin"),
+            "the first turn pins it",
+        );
+        assert!(
+            !store
+                .pin_chain("solver", &run.id, &pinned(&["glm"]))
+                .expect("pin again"),
+            "a second resolution is refused, not applied",
+        );
+
+        let stored = store.get("solver", &run.id).expect("get").chain.expect("pinned");
+        assert_eq!(
+            stored.entries.len(),
+            3,
+            "the chain the conversation started with is the one it keeps",
+        );
+        assert_eq!(stored.at, 0, "a session that has never switched is on row 1");
+        assert_eq!(stored.current().map(|row| row.backend.as_str()), Some("anthropic"));
+    }
+
+    /// Failover moves the position and nothing else: what a conversation can still fall through to
+    /// stays the list it was handed, including the rows it has already left.
+    #[test]
+    fn moving_along_a_chain_changes_the_row_and_not_the_list() {
+        let store = scratch("move-chain");
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+        assert!(
+            !store.move_chain_to("solver", &run.id, 1).expect("move"),
+            "a session with no chain has no row to move to",
+        );
+
+        store
+            .pin_chain("solver", &run.id, &pinned(&["anthropic", "codex", "glm"]))
+            .expect("pin");
+        assert!(store.move_chain_to("solver", &run.id, 1).expect("move"));
+
+        let stored = store.get("solver", &run.id).expect("get").chain.expect("pinned");
+        assert_eq!(stored.at, 1);
+        assert_eq!(stored.current().map(|row| row.backend.as_str()), Some("codex"));
+        assert_eq!(
+            stored.entries.len(),
+            3,
+            "the rows above and below it are all still there",
+        );
+
+        let listed = store.list("solver");
+        assert_eq!(
+            listed[0].chain.as_ref().and_then(|c| c.current()).map(|r| r.backend.as_str()),
+            Some("codex"),
+            "a listing reads the position too, not just the list",
         );
     }
 

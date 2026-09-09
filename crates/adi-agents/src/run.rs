@@ -81,6 +81,17 @@ pub struct LaunchOptions<'a> {
     /// [`crate::marker`] for why those are two different things. Empty is every launch nobody
     /// needed to attribute.
     pub markers: &'a [crate::marker::Marker],
+    /// Which of the agent's backends this run should begin on. `None` — nearly every launch — starts
+    /// on row 1, the agent's own first preference.
+    ///
+    /// It **rotates** the list rather than cutting it: starting at row 3 runs 3, then 1, then 2. A
+    /// run begun on a second choice still has everywhere else to fall. See
+    /// [`StartAt`](crate::llm::StartAt).
+    pub start_at: Option<&'a crate::llm::StartAt>,
+    /// Pin this run to one backend with nothing behind it, by id — the explicit opposite of
+    /// [`start_at`](Self::start_at). For asking a specific model a specific question, and for the
+    /// prober, which is testing one backend and must not be silently answered by another.
+    pub only: Option<&'a str>,
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent

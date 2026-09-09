@@ -10,14 +10,16 @@ use adi_webapp_api::types::{
     FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
     IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
     KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
-    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmCallDetail, LlmCallRef, LlmCalls,
-    LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState, MeshForwardRef, MeshListenRef,
+    KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmBackendRef, LlmBackendsDto,
+    LlmCallDetail, LlmCallRef, LlmCalls, LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState,
+    MeshForwardRef, MeshListenRef,
     MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
     NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
     NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
-    RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetAutoTitle,
+    RunRef, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
+    SecretsState, SetAutoTitle,
     SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent,
     SimulateTurn, StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard,
@@ -71,6 +73,34 @@ pub async fn run_update() -> Result<UpdateState, String> {
 
 pub async fn reserve(body: &LeaseRef) -> Result<ReserveResponse, String> {
     post("/api/ports/reserve", body).await
+}
+
+// LLM backends: the registry of ways to answer a turn. Like mesh below, every endpoint answers
+// with the whole fresh registry, so an edit and the view of it are one round-trip — and a save
+// that lands while a hold is being written cannot leave the page showing half of each.
+
+pub async fn llm_backends() -> Result<LlmBackendsDto, String> {
+    get("/api/llm/backends").await
+}
+
+/// By value, not by reference: the page hands this future to `apply_mutation`, which needs a
+/// `'static` one, and a borrowed body would tie it to the handler that built it.
+pub async fn save_llm_backend(body: SaveLlmBackend) -> Result<LlmBackendsDto, String> {
+    post("/api/llm/backends/save", &body).await
+}
+
+pub async fn delete_llm_backend(id: String) -> Result<LlmBackendsDto, String> {
+    post("/api/llm/backends/delete", &LlmBackendRef { id }).await
+}
+
+pub async fn save_llm_settings(body: SaveLlmSettings) -> Result<LlmBackendsDto, String> {
+    post("/api/llm/settings", &body).await
+}
+
+/// Lift a backend's hold by hand — for the operator who knows the subscription is back before the
+/// prober's next sweep, or whose backend cannot be probed at all.
+pub async fn release_llm_hold(id: String) -> Result<LlmBackendsDto, String> {
+    post("/api/llm/holds/release", &LlmBackendRef { id }).await
 }
 
 pub async fn release(body: &LeaseRef) -> Result<ReleaseResponse, String> {
@@ -449,6 +479,10 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
 /// same panel: the agent's own settings this one run replaces, `None` for a launch that changes
 /// nothing. `force` launches past a full concurrency limit — what the "Run anyway" affordance sends.
 ///
+/// `start_at` is the same panel's "start on": the backend this conversation begins on, `None` for
+/// the first one the agent lists. It rotates the agent's list rather than cutting it, so a run begun
+/// on a second choice still has the rest behind it.
+///
 /// `node` is which source the composer is pointed at (`docs/fleet.md` §13) — `None` for this
 /// machine, routed the same way every other agent-scoped call in this file is.
 pub async fn run_agent(
@@ -457,6 +491,7 @@ pub async fn run_agent(
     message: String,
     working_dir: Option<String>,
     overrides: Option<AgentRunOverrides>,
+    start_at: Option<String>,
     force: bool,
     attachments: Vec<String>,
 ) -> Result<AgentRunResult, String> {
@@ -468,6 +503,11 @@ pub async fn run_agent(
             message,
             working_dir,
             overrides,
+            start_at,
+            // Pinning a run to one backend with nothing behind it is a deliberate "ask *this*
+            // model", which the CLI and the API offer and this composer does not: a chat started
+            // from the panel should keep the rest of its chain to fall back on.
+            only: None,
             force,
             attachments,
             // The composer launches what a person typed; a pre-run is something a launcher that

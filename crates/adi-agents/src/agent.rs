@@ -76,6 +76,22 @@ pub struct AgentManifest<Args> {
     /// default made for them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    /// The ordered list of LLM backends this agent may answer on — its whole model configuration,
+    /// and the only one it has.
+    ///
+    /// **Row 1 is what a new conversation starts on**, and the rest are where it goes when a
+    /// backend runs out; there is no `default_backend` field because the default is first in the
+    /// list. Each row names a backend and may override its model and dials, never its runtime or
+    /// its credential. See [`AgentBackendEntry`] and `docs/llm-backends.md`.
+    ///
+    /// Empty means this agent has not been migrated yet and still answers on
+    /// [`backend`](Self::backend) plus whatever its [`arguments`](Self::arguments) say — the state
+    /// every agent was in before backends existed, kept working so an upgrade is not a flag day.
+    ///
+    /// Declared ahead of [`secrets`](Self::secrets) because the registry is TOML, where an
+    /// array-of-tables ends the current table and everything after it would be swallowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<crate::llm::AgentBackendEntry>,
     /// The secrets attached to this agent (its per-secret checkboxes). At launch, exactly these
     /// are decrypted and injected into the run's environment under their literal names — an
     /// explicit allowlist, so nothing is inherited from a scope just for existing. Empty = the
@@ -146,6 +162,7 @@ impl<Args> AgentManifest<Args> {
             prelude: self.prelude.clone(),
             knowledge: self.knowledge.clone(),
             memory: self.memory,
+            backends: self.backends.clone(),
             secrets: self.secrets.clone(),
             path: self.path.clone(),
             env: self.env.clone(),
@@ -228,7 +245,7 @@ fn encode_arguments<Args: Serialize>(arguments: &Args) -> Result<RawAgentArgumen
     Ok(arguments.into_iter().collect())
 }
 
-fn decode_arguments<Args: DeserializeOwned>(arguments: RawAgentArguments) -> Result<Args> {
+pub(crate) fn decode_arguments<Args: DeserializeOwned>(arguments: RawAgentArguments) -> Result<Args> {
     let arguments = serde_json::Map::from_iter(arguments);
     serde_json::from_value(serde_json::Value::Object(arguments))
         .map_err(|e| Error::Arguments(e.to_string()))

@@ -42,6 +42,10 @@ pub(crate) enum Route {
     Database,
     /// Every model API call that went through the gateway, and what was in it (`/llm`).
     Llm,
+    /// The ways an agent can answer a turn — one flat backend per login+model, and the live
+    /// record of which are spent (`/settings/llm-backends`). Set up here once, ordered per
+    /// agent on the agent form.
+    LlmBackends,
     /// Trigger definitions (`/triggers`).
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
@@ -66,7 +70,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 18] = [
+    pub(crate) const NAV: [Route; 19] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -85,6 +89,7 @@ impl Route {
         Route::PortsManager,
         Route::Mesh,
         Route::Fleet,
+        Route::LlmBackends,
     ];
 
     /// The page for a URL path; `/` and anything unknown resolve to Projects.
@@ -118,6 +123,7 @@ impl Route {
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
             "/settings/fleet" => Route::Fleet,
+            "/settings/llm-backends" => Route::LlmBackends,
             _ => Route::Projects,
         }
     }
@@ -147,6 +153,7 @@ impl Route {
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
             Route::Fleet => "/extended/settings/fleet",
+            Route::LlmBackends => "/extended/settings/llm-backends",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
         }
@@ -175,6 +182,7 @@ impl Route {
             Route::PortsManager => "Ports manager",
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
+            Route::LlmBackends => "LLM backends",
             Route::StoreFile => "File",
         }
     }
@@ -205,6 +213,7 @@ impl Route {
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",
             Route::Fleet => "Paired devices and what they may reach",
+            Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
             Route::StoreFile => "One file from the ADI store",
         }
     }

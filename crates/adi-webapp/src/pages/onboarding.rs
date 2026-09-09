@@ -746,6 +746,9 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         // checkboxes.
         knowledge: None,
         memory: None,
+        // The wizard stands the agent up on one runtime; the ordered backend list is the agent
+        // editor's, and the migration writes the first row from what is saved here.
+        backends: None,
         // Only the manual preset offers the run environment, so only it states one — `None` leaves
         // whatever the agent already has instead of clearing it on every save.
         path: manual.then(|| parsed_path_dirs(&form.agent.path.get_untracked())),

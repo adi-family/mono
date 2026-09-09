@@ -95,6 +95,9 @@ pub(crate) fn agents_panel(
                     // checkboxes.
                     knowledge: None,
                     memory: None,
+                    // The ordered backend list is the agent editor's; this panel creates an agent
+                    // and leaves what it answers on to be set there.
+                    backends: None,
                     // This form doesn't edit the run environment — `None` leaves whatever the
                     // agent already has, instead of clearing it on every save.
                     path: None,

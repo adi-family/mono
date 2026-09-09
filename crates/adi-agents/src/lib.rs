@@ -41,6 +41,7 @@ mod knowledge;
 mod launch;
 pub mod launcher;
 mod limits;
+pub mod llm;
 pub mod marker;
 mod memo;
 pub mod overrides;
@@ -77,6 +78,10 @@ pub use events::{
     AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
+pub use llm::{
+    AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
+    LlmBackend, LlmBackendManifest, LlmSettings, Probe, ResolvedBackend, ResolvedChain, Resume,
+};
 pub use marker::{Marker, Settled, Woke};
 pub use overrides::RunOverrides;
 pub use progress::{BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities};
@@ -151,10 +156,43 @@ impl Default for Agents {
 /// agent this run was started as" is restored. Borrowed for a session that overrides nothing, which
 /// is nearly all of them.
 fn as_run<'a>(agent: &'a StoredAgent, record: &SessionRecord) -> std::borrow::Cow<'a, StoredAgent> {
+    use std::borrow::Cow;
+    // Weakest to strongest, and this is the whole of the settings order: the backend's own values,
+    // then the agent row's overrides — both already folded into the pinned row — and then this
+    // run's, laid on top. A conversation opened before chains existed, or by a caller with none to
+    // give, has no pin and reads exactly as it always did.
+    let on_backend = match record.chain.as_ref().and_then(llm::PinnedChain::current) {
+        Some(row) => Cow::Owned(row.apply(agent)),
+        None => Cow::Borrowed(agent),
+    };
     match &record.overrides {
-        Some(overrides) => overrides.apply(agent),
-        None => std::borrow::Cow::Borrowed(agent),
+        Some(overrides) => Cow::Owned(overrides.apply(&on_backend).into_owned()),
+        None => on_backend,
     }
+}
+
+/// This launch's chain: the agent's ordered list, resolved against the backend store and rotated to
+/// where the launch asked to begin.
+///
+/// `None` for an agent that lists none, which is every agent not yet migrated and every one a test
+/// builds by hand. Those run on their manifest's own `backend` exactly as they did before chains
+/// existed — the one thing this must never do is invent a model for an agent that named none.
+///
+/// A list that resolves to nothing at all is a different matter and is an error: the agent *does*
+/// say what it wants to answer on, every one of those backends is gone, and falling back to a stale
+/// `backend` field would quietly answer on a model nobody chose.
+fn chain_for(
+    config: &Config,
+    agent: &StoredAgent,
+    start_at: Option<&llm::StartAt>,
+    only: Option<&str>,
+) -> Result<Option<llm::PinnedChain>> {
+    if agent.manifest.backends.is_empty() {
+        return Ok(None);
+    }
+    let catalog = llm::catalog(llm::LlmBackends::with_config(config.clone()).list()?);
+    let chain = llm::ResolvedChain::resolve(&agent.manifest.backends, &catalog, start_at, only)?;
+    Ok(Some(chain.pin()))
 }
 
 /// The agent's enabled tools, plus the knowledge CLI when it has knowledge to reach.
@@ -276,6 +314,7 @@ impl Agents {
         manifest.updated_at = now;
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
+        llm::validate_rows(&stored.backends)?;
         file.save(&stored)?;
         self.emit(
             "adi.agents.saved",
@@ -674,7 +713,7 @@ impl Agents {
         // As in [`reply_with`](Self::reply_with): an engine that cannot carry a picture says so,
         // rather than starting a conversation whose first message is missing half of itself.
         if !options.image_ids.is_empty()
-            && !crate::progress::capabilities(&self.backend_of(name)?).images
+            && !crate::progress::capabilities(&self.backend_of(name, options)?).images
         {
             return Err(images_unsupported());
         }
@@ -682,16 +721,24 @@ impl Agents {
         self.launch_run(name, message, options, &images)
     }
 
-    /// The backend an agent is currently defined to run on.
+    /// The backend a launch of `name` would really answer on — the first row of its chain, or its
+    /// manifest's own `backend` when it lists none.
+    ///
+    /// The row and not the manifest field, because for an agent with a chain that field is whatever
+    /// the migration left there and the row is what decides. Asking the wrong one refuses an image
+    /// an engine could have carried, or accepts one it cannot.
     ///
     /// # Errors
-    /// Returns [`Error::NotFound`] for an unknown agent.
-    fn backend_of(&self, name: &str) -> Result<Backend> {
-        Ok(self
+    /// Returns [`Error::NotFound`] for an unknown agent, or the chain's own resolution errors.
+    fn backend_of(&self, name: &str, options: &LaunchOptions<'_>) -> Result<Backend> {
+        let agent = self
             .get(name)?
-            .ok_or_else(|| Error::NotFound(name.to_string()))?
-            .manifest
-            .backend)
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let chain = chain_for(&self.config, &agent, options.start_at, options.only)?;
+        Ok(chain
+            .as_ref()
+            .and_then(llm::PinnedChain::current)
+            .map_or_else(|| agent.manifest.backend.clone(), |row| row.runtime.clone()))
     }
 
     /// Launch a run whatever else is running — the deliberate override of the [run cap](RunLimits),
@@ -738,18 +785,29 @@ impl Agents {
             overrides,
             owner_instructions,
             markers,
+            start_at,
+            only,
             ..
         } = *options;
         let stored = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        // Resolved before anything reads the agent, because the row decides the runtime the cap, the
+        // spec and the session record are all about. Resolved *once*: from here it is pinned to the
+        // conversation, and every later turn re-applies this same row rather than asking the store
+        // again.
+        let chain = chain_for(&self.config, &stored, start_at, only)?;
         // Everything below this line reads the agent *this run* is, not the agent as defined —
         // spec, backend, cap. Applied before the cap check for the reason it is applied before the
         // spec: an override that only reached half the launch would be a run configured two ways.
         let overrides = overrides.filter(|o| !o.is_empty());
+        let on_backend = match chain.as_ref().and_then(llm::PinnedChain::current) {
+            Some(row) => std::borrow::Cow::Owned(row.apply(&stored)),
+            None => std::borrow::Cow::Borrowed(&stored),
+        };
         let agent = match overrides {
-            Some(overrides) => overrides.apply(&stored).into_owned(),
-            None => stored,
+            Some(overrides) => overrides.apply(&on_backend).into_owned(),
+            None => on_backend.into_owned(),
         };
         // The same validation an edited agent goes through, and it has to run here: an override is
         // typed into a box like any other setting, and `--set max_turns=lots` should be refused with
@@ -793,6 +851,13 @@ impl Agents {
         // this over it.
         if let Some(overrides) = overrides {
             store.set_overrides(&agent.name, &record.id, overrides)?;
+        }
+        // Written for the same reason and at the same moment, and it is the stronger of the two: the
+        // agent and every backend it names are re-read on every turn, so without this a definition
+        // edited mid-conversation — or a backend deleted from under it — would change what a live
+        // chat is talking to, and the deletion would change it silently.
+        if let Some(chain) = &chain {
+            store.pin_chain(&agent.name, &record.id, chain)?;
         }
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         freeze_owner_instructions(&store, &agent.name, &record.id, owner_instructions);
@@ -1564,18 +1629,22 @@ impl Agents {
         let agent = self
             .get(agent_name)?
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
-        if agent.manifest.backend != Backend::HarnessAdi {
-            return Err(Error::Unsupported(format!(
-                "backend {} has no adi loop to run",
-                agent.manifest.backend
-            )));
-        }
         // This child re-reads the agent from the store, so it is also where a conversation's own
         // overrides would otherwise be lost — the model it answers on is read right here.
         let agent = match self.sessions().get(agent_name, conv_id) {
             Some(record) => as_run(&agent, &record).into_owned(),
             None => agent,
         };
+        // Asked of the agent *this conversation* is, after the pinned row and the run's overrides
+        // have landed — not of the definition. For an agent with a chain the manifest's own backend
+        // field is whatever the migration left there, and a conversation that has fallen onto an
+        // `adi` row would be refused by its own loop for not looking like one.
+        if agent.manifest.backend != Backend::HarnessAdi {
+            return Err(Error::Unsupported(format!(
+                "backend {} has no adi loop to run",
+                agent.manifest.backend
+            )));
+        }
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
     }
@@ -1812,6 +1881,10 @@ impl Agents {
                 .record_outcome(&agent.name, &run.run_id, &outcome)
                 .unwrap_or(false)
             {
+                // Hung off the same `true`, and that is the point: the one process that recorded the
+                // ending is the one that acts on it, so sixteen watchers of a spent backend produce
+                // one hold, one switch and one notice rather than sixteen.
+                self.fail_over(agent, &store, &run.run_id, &content, &outcome);
                 self.emit(
                     "adi.agents.run.finished",
                     &AgentRunFinished {
@@ -1827,6 +1900,154 @@ impl Agents {
             }
             run.outcome = Some(outcome);
         }
+    }
+
+    /// Act on a turn that ended badly: hold the backend that ran out, move this conversation to the
+    /// best row it can still reach, and put the same question again — or say why it did not.
+    ///
+    /// Called from [`note_finished`](Self::note_finished) on the `true` from `record_outcome`, so
+    /// exactly one process does this per ending however many are watching.
+    ///
+    /// # The one thing this does not do
+    ///
+    /// It never re-sends the message itself. It settles the failed turn, moves the pin, and puts the
+    /// question back on the queue — and the ordinary [`advance_queue`](Self::advance_queue) starts
+    /// it, on the next poll, milliseconds later. Everything requirement 2 asks for ("same prompt,
+    /// tools, folder, history — the user reconfigures nothing") is then true by construction rather
+    /// than by a second copy of the launch path: `start_turn` re-uses the session's own directory,
+    /// and [`as_run`] re-applies whichever row the pin now names. The run cap and the turn gate keep
+    /// applying too, which a hand-rolled re-send would have quietly escaped.
+    fn fail_over(
+        &self,
+        agent: &StoredAgent,
+        store: &SessionStore,
+        conv_id: &str,
+        content: &TurnContent,
+        outcome: &store::RunOutcome,
+    ) {
+        // A turn that ended cleanly is never classified, and that is a real restriction rather than
+        // an oversight: the text is the model's own answer, and an assistant explaining what a usage
+        // limit is would otherwise match its own backend's rule and take a working backend out of
+        // the chain. `!is_reported()` is in because it is the adi loop's error shape — a provider
+        // failure returns before any metrics are written, so the ending nobody described is exactly
+        // the ending worth reading.
+        if !outcome.is_error && outcome.is_reported() {
+            return;
+        }
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return;
+        };
+        let Some(chain) = record.chain.clone() else {
+            return;
+        };
+        let Some(current) = chain.current().cloned() else {
+            return;
+        };
+
+        // The provider's own words: the answer text is where the adi loop's `⚠ adi loop error:` line
+        // lands, and the terminal reason is what the Claude engines say instead.
+        let text = match &outcome.terminal_reason {
+            Some(reason) => format!("{reason}\n{}", content.text),
+            None => content.text.clone(),
+        };
+        let found = llm::classify(&text, &current.limit_rules, None, store::now_ms() / 1_000);
+
+        let holds = llm::Holds::with_config(&self.config);
+        // The question is asked once per row and the answer kept, because `next_available` may ask
+        // about the same row twice and a hold lookup is a database open.
+        let blocked = |row: &llm::ResolvedBackend| -> Option<String> {
+            holds
+                .blocking(&row.hold_key())
+                .ok()
+                .flatten()
+                .map(|hold| hold.describe())
+        };
+        let turns = store.turns(&agent.name, conv_id);
+        let decision = llm::decide(
+            &chain,
+            &found,
+            &llm::Failure {
+                // The question being retried is itself a turn, and it is already committed — so more
+                // than one turn means there is a conversation behind it that the next row has to be
+                // able to take.
+                has_history: turns.len() > 1,
+                history_tokens: turns
+                    .iter()
+                    .map(|turn| llm::failover::estimate_tokens(&turn.text))
+                    .sum(),
+                ask_on_switch: llm::LlmSettings::open(&self.config).ask_on_switch,
+                blocked: &blocked,
+            },
+        );
+
+        // Written before anything moves, and written whatever the decision was. The hold is the part
+        // that serves the other fifteen agents: even a switch this conversation could not make still
+        // tells everyone else not to spend a turn discovering the same limit.
+        if found.should_hold() {
+            let key = match found.scope {
+                llm::HoldScope::Login => llm::HoldKey::login(&current.credential),
+                llm::HoldScope::Model => current.hold_key(),
+            };
+            let now = store::now_ms() / 1_000;
+            let _ = holds.hold(&llm::Hold {
+                key,
+                class: found.class,
+                until: now + found.hold_for,
+                reason: found.evidence.clone(),
+                set_by: format!("{}/{conv_id}", agent.name),
+                attempts: 0,
+                created_at: now,
+                updated_at: now,
+            });
+        }
+
+        match decision {
+            llm::Decision::Nothing => {}
+            // The line the person reads *is* the failed turn's answer. Appending it settles the
+            // transcript (`settle` only ever answers a transcript ending on a question, so the next
+            // turn leaves it alone) and keeps the chat to the one short sentence requirement 2 asks
+            // for — the provider's raw error is still on the run, in its outcome and its log.
+            llm::Decision::Ask { reason } => self.say(store, &agent.name, conv_id, &reason),
+            llm::Decision::Switch { to, notice } => {
+                let Some(next) = chain.entries.get(to).cloned() else {
+                    return;
+                };
+                self.say(store, &agent.name, conv_id, &notice);
+                // Order matters here. The pin moves first, because it is what `as_run` reads; the
+                // record's backend follows, because it is what picks the runner; and only then is
+                // the question re-queued, so the poll that picks it up cannot see a session pointed
+                // half at one row and half at another.
+                if store.move_chain_to(&agent.name, conv_id, to).is_err() {
+                    return;
+                }
+                if next.runtime != record.backend {
+                    let _ = store.set_backend(&agent.name, conv_id, &next.runtime);
+                }
+                if let Some(question) = turns.last().filter(|turn| turn.role == store::ROLE_USER) {
+                    let _ = store.enqueue(
+                        &agent.name,
+                        conv_id,
+                        &question.text,
+                        &question.images,
+                        &question.markers,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Put one line into a conversation as the assistant, and let it stand as the failed turn's
+    /// answer.
+    fn say(&self, store: &SessionStore, agent: &str, conv_id: &str, text: &str) {
+        let _ = store.append_turn(
+            agent,
+            conv_id,
+            assistant_turn(&TurnContent {
+                text: text.to_string(),
+                steps: Vec::new(),
+                metrics: None,
+            }),
+        );
     }
 
     /// A read-only snapshot of one specific run of a headless agent (or the pty screen, for an
@@ -3449,6 +3670,535 @@ mod tests {
         manifest.bin_tools = tools;
         store.save(name, manifest).expect("save");
         store.get(name).expect("read back").expect("the agent")
+    }
+
+    /// Register a backend the agent rows below can name.
+    fn backend_named(
+        store: &Agents,
+        id: &str,
+        runtime: &str,
+        model: &str,
+    ) -> llm::LlmBackendManifest {
+        let manifest = llm::LlmBackendManifest {
+            runtime: runtime.into(),
+            model: model.into(),
+            context_tokens: 200_000,
+            provider: Some(format!("{id}-provider")),
+            ..llm::LlmBackendManifest::default()
+        };
+        llm::LlmBackends::with_config(store.config.clone())
+            .save(id, manifest.clone())
+            .expect("save the backend");
+        manifest
+    }
+
+    /// An agent listing backends answers on its **row**, not on whatever its manifest's own
+    /// `backend` field says. That field is a leftover of the migration for such an agent, so a
+    /// launch that read it would run the model the operator moved away from.
+    #[test]
+    fn a_chain_decides_the_runtime_and_the_model_a_launch_uses() {
+        let store = scratch("chain-launch");
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-opus-5");
+        backend_named(&store, "glm", "harness:adi", "glm-5.3");
+
+        let mut manifest = spec("process:codex");
+        manifest.backends = vec![
+            llm::AgentBackendEntry::new("anthropic"),
+            llm::AgentBackendEntry::new("glm"),
+        ];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let pinned = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("an agent that lists backends has a chain");
+        assert_eq!(pinned.entries.len(), 2);
+        assert_eq!(pinned.current().map(|row| row.backend.as_str()), Some("anthropic"));
+
+        let record = SessionRecord {
+            chain: Some(pinned.clone()),
+            ..SessionRecord::default()
+        };
+        let running = as_run(&agent, &record);
+        assert_eq!(
+            running.manifest.backend,
+            Backend::from("harness:claude-sdk"),
+            "the row's runtime replaces the manifest's own",
+        );
+        assert_eq!(
+            running.manifest.arguments["model"].as_str(),
+            Some("claude-opus-5"),
+        );
+
+        // The second row is the same agent on another model — identity untouched, model replaced.
+        let mut moved = record.clone();
+        moved.chain.as_mut().expect("pinned").move_to(1);
+        let fallen = as_run(&agent, &moved);
+        assert_eq!(fallen.manifest.backend, Backend::from("harness:adi"));
+        assert_eq!(fallen.manifest.arguments["model"].as_str(), Some("glm-5.3"));
+        assert_eq!(
+            fallen.manifest.arguments.get("system_prompt"),
+            running.manifest.arguments.get("system_prompt"),
+            "the agent is the same agent on either row",
+        );
+    }
+
+    /// The pin is the point: a conversation already running keeps the configuration it was resolved
+    /// with, whatever happens to the backend afterwards.
+    #[test]
+    fn a_backend_edited_mid_conversation_does_not_reach_a_pinned_chat() {
+        let store = scratch("chain-pinned");
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-opus-5");
+
+        let mut manifest = spec("harness:adi");
+        manifest.backends = vec![llm::AgentBackendEntry::new("anthropic")];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+        let record = SessionRecord {
+            chain: chain_for(&store.config, &agent, None, None).expect("resolve"),
+            ..SessionRecord::default()
+        };
+
+        // Somebody repoints the backend at a cheaper model while the chat is live.
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-haiku-4-5");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        assert_eq!(
+            as_run(&agent, &record).manifest.arguments["model"].as_str(),
+            Some("claude-opus-5"),
+            "the live chat is still talking to what it was resolved onto",
+        );
+        assert_eq!(
+            chain_for(&store.config, &agent, None, None)
+                .expect("resolve")
+                .and_then(|c| c.current().map(|row| row.model.clone()))
+                .as_deref(),
+            Some("claude-haiku-4-5"),
+            "while the *next* conversation gets the edit",
+        );
+    }
+
+    /// A run's own override is the strongest layer, and it lands on top of the row rather than
+    /// beside it — the order is backend, then agent row, then this run.
+    #[test]
+    fn a_launch_override_outranks_the_row_it_is_laid_over() {
+        let store = scratch("chain-override");
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-opus-5");
+
+        let mut manifest = spec("harness:adi");
+        manifest.backends = vec![llm::AgentBackendEntry::new("anthropic")];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let record = SessionRecord {
+            chain: chain_for(&store.config, &agent, None, None).expect("resolve"),
+            overrides: Some(RunOverrides {
+                arguments: [("model".to_string(), serde_json::json!("claude-sonnet-5"))]
+                    .into_iter()
+                    .collect(),
+                unattended: None,
+            }),
+            ..SessionRecord::default()
+        };
+        assert_eq!(
+            as_run(&agent, &record).manifest.arguments["model"].as_str(),
+            Some("claude-sonnet-5"),
+        );
+    }
+
+    /// Every agent that has not been migrated yet, and every one a test builds by hand. Chains must
+    /// not invent a model for an agent that named none.
+    #[test]
+    fn an_agent_listing_no_backends_has_no_chain_and_runs_as_it_always_did() {
+        let store = scratch("chain-absent");
+        store.save("solver", spec("harness:adi")).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        assert!(
+            chain_for(&store.config, &agent, None, None)
+                .expect("resolve")
+                .is_none(),
+        );
+        let running = as_run(&agent, &SessionRecord::default());
+        assert_eq!(running.manifest.backend, Backend::from("harness:adi"));
+        assert!(!running.manifest.arguments.contains_key("model"));
+    }
+
+    /// `start_at` rotates, and `only` cuts. Both are per-run, and neither is written into the agent.
+    #[test]
+    fn a_launch_may_begin_lower_down_the_list_or_be_pinned_to_one_row() {
+        let store = scratch("chain-start-at");
+        for (id, model) in [("anthropic", "claude-opus-5"), ("codex", "gpt-5"), ("glm", "glm-5.3")] {
+            backend_named(&store, id, "harness:adi", model);
+        }
+        let mut manifest = spec("harness:adi");
+        manifest.backends = ["anthropic", "codex", "glm"]
+            .into_iter()
+            .map(llm::AgentBackendEntry::new)
+            .collect();
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let start = llm::StartAt::Id("glm".into());
+        let rotated = chain_for(&store.config, &agent, Some(&start), None)
+            .expect("resolve")
+            .expect("a chain");
+        assert_eq!(
+            rotated
+                .entries
+                .iter()
+                .map(|row| row.backend.as_str())
+                .collect::<Vec<_>>(),
+            vec!["glm", "anthropic", "codex"],
+            "starting at row 3 keeps the rest behind it",
+        );
+
+        let pinned = chain_for(&store.config, &agent, None, Some("codex"))
+            .expect("resolve")
+            .expect("a chain");
+        assert_eq!(pinned.entries.len(), 1, "`only` leaves nothing to fall to");
+        assert_eq!(pinned.current().map(|row| row.backend.as_str()), Some("codex"));
+
+        assert!(
+            chain_for(&store.config, &agent, Some(&llm::StartAt::Id("kimi".into())), None).is_err(),
+            "a row this agent does not list is refused rather than silently ignored",
+        );
+    }
+
+    /// The rule every backend below recognises itself by — the shape a provider's 429 actually
+    /// arrives in through the adi loop.
+    fn quota_rule() -> llm::LimitRule {
+        llm::LimitRule {
+            pattern: "(?i)usage limit reached".into(),
+            class: llm::LimitClass::Quota,
+            scope: llm::HoldScope::Model,
+            resume: llm::Resume::FromMessage,
+            fixed: Some("4h".into()),
+        }
+    }
+
+    /// An agent on a two-row chain, with a conversation already opened, pinned and asked one
+    /// question — the state a turn fails from.
+    fn chained_chat(store: &Agents, tag: &str) -> (StoredAgent, String) {
+        let backends = llm::LlmBackends::with_config(store.config.clone());
+        for (id, model) in [("anthropic", "claude-opus-5"), ("codex", "gpt-5")] {
+            backends
+                .save(
+                    id,
+                    llm::LlmBackendManifest {
+                        runtime: "harness:adi".into(),
+                        model: model.into(),
+                        context_tokens: 200_000,
+                        provider: Some(format!("{id}-provider")),
+                        limit_rules: vec![quota_rule()],
+                        ..llm::LlmBackendManifest::default()
+                    },
+                )
+                .expect("save the backend");
+        }
+        let mut manifest = spec("harness:adi");
+        manifest.backends = ["anthropic", "codex"]
+            .into_iter()
+            .map(llm::AgentBackendEntry::new)
+            .collect();
+        store.save(tag, manifest).expect("save");
+        let agent = store.get(tag).expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create(tag, Backend::from("harness:adi"), std::env::temp_dir(), "do the thing")
+            .expect("open a conversation");
+        let chain = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("a chain");
+        sessions.pin_chain(tag, &record.id, &chain).expect("pin");
+        sessions
+            .append_turn(tag, &record.id, store::user_turn("do the thing"))
+            .expect("the question");
+        (agent, record.id)
+    }
+
+    /// What the provider says when it is spent, in the shape the adi loop's child writes it.
+    fn spent() -> TurnContent {
+        TurnContent {
+            text: "⚠ adi loop error: https://api.anthropic.com/v1/messages returned 429 Too Many \
+                   Requests: Claude usage limit reached. Your limit will reset in 2 hours."
+                .into(),
+            steps: Vec::new(),
+            metrics: None,
+        }
+    }
+
+    /// The headline of requirement 2, end to end: the limit is written down where every other agent
+    /// can see it, the conversation moves to the next row, the chat is told in one line, and the
+    /// same question is back in the queue — with nothing reconfigured by anybody.
+    #[test]
+    fn a_spent_backend_holds_moves_the_chat_and_re_asks_the_same_question() {
+        let store = scratch("failover-switch");
+        let (agent, conv) = chained_chat(&store, "solver");
+        let sessions = store.sessions();
+
+        store.fail_over(
+            &agent,
+            &sessions,
+            &conv,
+            &spent(),
+            &store::RunOutcome::default(),
+        );
+
+        let record = sessions.get("solver", &conv).expect("the session");
+        let chain = record.chain.as_ref().expect("a pinned chain");
+        assert_eq!(
+            chain.current().map(|row| row.backend.as_str()),
+            Some("codex"),
+            "the conversation is on the next row",
+        );
+
+        let notice = sessions
+            .turns("solver", &conv)
+            .into_iter()
+            .find(|turn| turn.role == store::ROLE_ASSISTANT)
+            .expect("the chat is told");
+        assert!(
+            notice.text.starts_with("switched to codex, anthropic limited until "),
+            "{}",
+            notice.text,
+        );
+
+        assert_eq!(
+            texts(sessions.queued("solver", &conv)),
+            vec!["do the thing"],
+            "the same message, waiting for the row it will actually be asked on",
+        );
+
+        // And the part that serves everybody else: the next agent to reach this backend is told
+        // without spending a turn finding out.
+        let held = llm::Holds::with_config(&store.config)
+            .blocking(&llm::HoldKey::new("anthropic-provider", "claude-opus-5"))
+            .expect("read the holds")
+            .expect("anthropic is held");
+        assert_eq!(held.class, llm::LimitClass::Quota);
+        assert!(
+            held.reason.contains("usage limit reached"),
+            "the provider's own words are kept: {}",
+            held.reason,
+        );
+        assert_eq!(held.set_by, format!("solver/{conv}"));
+    }
+
+    /// The record's backend has to move with the row, or the switch starts the old engine on the
+    /// new row's settings — a run configured two ways.
+    #[test]
+    fn a_switch_across_runtimes_re_points_the_session_at_the_new_one() {
+        let store = scratch("failover-runtime");
+        let backends = llm::LlmBackends::with_config(store.config.clone());
+        for (id, runtime) in [("anthropic", "harness:claude-sdk"), ("glm", "harness:adi")] {
+            backends
+                .save(
+                    id,
+                    llm::LlmBackendManifest {
+                        runtime: runtime.into(),
+                        model: format!("{id}-model"),
+                        provider: Some(format!("{id}-provider")),
+                        limit_rules: vec![quota_rule()],
+                        ..llm::LlmBackendManifest::default()
+                    },
+                )
+                .expect("save the backend");
+        }
+        let mut manifest = spec("harness:claude-sdk");
+        manifest.backends = ["anthropic", "glm"]
+            .into_iter()
+            .map(llm::AgentBackendEntry::new)
+            .collect();
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create(
+                "solver",
+                Backend::from("harness:claude-sdk"),
+                std::env::temp_dir(),
+                "go",
+            )
+            .expect("open");
+        let chain = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("a chain");
+        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .append_turn("solver", &record.id, store::user_turn("go"))
+            .expect("the question");
+
+        store.fail_over(
+            &agent,
+            &sessions,
+            &record.id,
+            &spent(),
+            &store::RunOutcome::default(),
+        );
+
+        let moved = sessions.get("solver", &record.id).expect("the session");
+        assert_eq!(
+            moved.backend,
+            Backend::from("harness:adi"),
+            "the runner that will drive the next turn follows the row",
+        );
+        assert_eq!(
+            runner_of(&moved).map(|r| r.kind()),
+            runner_for(&Backend::from("harness:adi")).map(|r| r.kind()),
+            "and `runner_of` therefore picks the new engine",
+        );
+    }
+
+    /// Requirement 6's first half. A dead credential is not something the next row fixes, so the
+    /// conversation stops with the provider's own words rather than burning its chain.
+    #[test]
+    fn a_broken_login_stops_the_conversation_instead_of_switching() {
+        let store = scratch("failover-auth");
+        let backends = llm::LlmBackends::with_config(store.config.clone());
+        for id in ["anthropic", "codex"] {
+            backends
+                .save(
+                    id,
+                    llm::LlmBackendManifest {
+                        runtime: "harness:adi".into(),
+                        model: format!("{id}-model"),
+                        provider: Some(format!("{id}-provider")),
+                        limit_rules: vec![llm::LimitRule {
+                            pattern: "(?i)invalid x-api-key".into(),
+                            class: llm::LimitClass::Auth,
+                            scope: llm::HoldScope::Login,
+                            resume: llm::Resume::Fixed,
+                            fixed: Some("1h".into()),
+                        }],
+                        ..llm::LlmBackendManifest::default()
+                    },
+                )
+                .expect("save the backend");
+        }
+        let mut manifest = spec("harness:adi");
+        manifest.backends = ["anthropic", "codex"]
+            .into_iter()
+            .map(llm::AgentBackendEntry::new)
+            .collect();
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::from("harness:adi"), std::env::temp_dir(), "go")
+            .expect("open");
+        let chain = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("a chain");
+        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .append_turn("solver", &record.id, store::user_turn("go"))
+            .expect("the question");
+
+        store.fail_over(
+            &agent,
+            &sessions,
+            &record.id,
+            &TurnContent {
+                text: "⚠ adi loop error: 401: invalid x-api-key".into(),
+                steps: Vec::new(),
+                metrics: None,
+            },
+            &store::RunOutcome::default(),
+        );
+
+        let after = sessions.get("solver", &record.id).expect("the session");
+        assert_eq!(
+            after.chain.as_ref().and_then(|c| c.current()).map(|r| r.backend.as_str()),
+            Some("anthropic"),
+            "it did not move",
+        );
+        assert!(
+            sessions.queued("solver", &record.id).is_empty(),
+            "and it did not re-ask",
+        );
+        let said = sessions
+            .turns("solver", &record.id)
+            .into_iter()
+            .find(|turn| turn.role == store::ROLE_ASSISTANT)
+            .expect("it said why");
+        assert!(said.text.contains("login is not working"), "{}", said.text);
+
+        // The hold is login-scoped, so every model on that credential is skipped, not just the one
+        // that happened to trip it.
+        assert!(
+            llm::Holds::with_config(&store.config)
+                .blocking(&llm::HoldKey::new("anthropic-provider", "anything-at-all"))
+                .expect("read")
+                .is_some(),
+            "an auth failure takes the whole login out",
+        );
+    }
+
+    /// The guard that keeps a working backend in the chain: a turn the engine reported as finished
+    /// is never read for limit language, however much of it the model wrote.
+    #[test]
+    fn an_answer_that_merely_talks_about_limits_is_not_a_limit() {
+        let store = scratch("failover-quiet");
+        let (agent, conv) = chained_chat(&store, "solver");
+        let sessions = store.sessions();
+
+        let mut reported = store::RunOutcome::default();
+        reported.num_turns = Some(3);
+        store.fail_over(
+            &agent,
+            &sessions,
+            &conv,
+            &TurnContent {
+                text: "When Claude usage limit reached appears, the agent should fall to the next \
+                       backend."
+                    .into(),
+                steps: Vec::new(),
+                metrics: None,
+            },
+            &reported,
+        );
+
+        let after = sessions.get("solver", &conv).expect("the session");
+        assert_eq!(
+            after.chain.as_ref().and_then(|c| c.current()).map(|r| r.backend.as_str()),
+            Some("anthropic"),
+        );
+        assert!(sessions.queued("solver", &conv).is_empty());
+    }
+
+    /// An agent with no chain is every agent not yet migrated, and nothing here may touch one.
+    #[test]
+    fn a_conversation_with_no_chain_is_left_entirely_alone() {
+        let store = scratch("failover-unchained");
+        store.save("solver", spec("harness:adi")).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::from("harness:adi"), std::env::temp_dir(), "go")
+            .expect("open");
+        sessions
+            .append_turn("solver", &record.id, store::user_turn("go"))
+            .expect("the question");
+
+        store.fail_over(
+            &agent,
+            &sessions,
+            &record.id,
+            &spent(),
+            &store::RunOutcome::default(),
+        );
+
+        assert!(sessions.queued("solver", &record.id).is_empty());
+        assert_eq!(
+            sessions.turns("solver", &record.id).len(),
+            1,
+            "the transcript is untouched — the engine's own error is the answer, as it always was",
+        );
     }
 
     /// The whole launch path for an agent that was given knowledge, in one assertion set: the

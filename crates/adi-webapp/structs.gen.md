@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-64 structs · 10 enums · 1 type alias across 24 files.
+65 structs · 10 enums · 1 type alias across 24 files.
 
 ## Index
 
@@ -29,7 +29,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -70,6 +70,7 @@ pub(crate) enum Icon {
     Upgrade,
     Chart,
     Traffic,
+    Model,
     Filter,
     Sliders,
 }
@@ -193,6 +194,8 @@ struct StoredRunSettings {
     dir: String,
     #[serde(default)]
     overrides: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    start_at: String,
 }
 ```
 
@@ -681,6 +684,7 @@ pub(crate) enum Route {
     Facts,
     Database,
     Llm,
+    LlmBackends,
     Triggers,
     Dashboards,
     Marketplace,
@@ -743,6 +747,7 @@ pub(crate) struct State {
     pub(crate) secrets: RwSignal<Option<SecretsState>>,
     pub(crate) db: RwSignal<Option<DbState>>,
     pub(crate) meta: RwSignal<Option<MetaState>>,
+    pub(crate) llm_backends: RwSignal<Option<LlmBackendsDto>>,
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
@@ -802,6 +807,7 @@ pub(crate) struct Tables {
     pub(crate) llm_providers: TableState,
     pub(crate) llm_clients: TableState,
     pub(crate) llm_calls: TableState,
+    pub(crate) llm_backends: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -1151,6 +1157,9 @@ pub(crate) struct AgentsForm {
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
     pub(crate) unattended: RwSignal<bool>,
+    pub(crate) llm_rows: RwSignal<Vec<AgentBackendRowDto>>,
+    pub(crate) llm_drag_from: RwSignal<Option<usize>>,
+    pub(crate) llm_row_open: RwSignal<Option<usize>>,
     pub(crate) arguments: RwSignal<BTreeMap<String, serde_json::Value>>,
     pub(crate) argument_values: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
@@ -1267,6 +1276,7 @@ pub(crate) struct AgentsWatch {
     pub(crate) context_prefix: RwSignal<String>,
     pub(crate) run_dir: RwSignal<String>,
     pub(crate) run_overrides: RwSignal<BTreeMap<String, String>>,
+    pub(crate) run_start_at: RwSignal<String>,
     pub(crate) run_settings_open: RwSignal<bool>,
     pub(crate) tokens: RwSignal<Option<AgentTokens>>,
     pub(crate) tokens_of: RwSignal<Option<String>>,
@@ -1335,6 +1345,32 @@ pub(crate) struct FleetForm {
     pub(crate) join_token: RwSignal<String>,
     pub(crate) joining: RwSignal<bool>,
     pub(crate) joined: RwSignal<Option<adi_webapp_api::types::FleetJoined>>,
+}
+```
+
+### struct `LlmBackendsForm`
+
+The LLM backends page's editor: one backend being written, field by field, plus the busy flag the two forms on that page share.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct LlmBackendsForm {
+    pub(crate) editing: RwSignal<String>,
+    pub(crate) id: RwSignal<String>,
+    pub(crate) label: RwSignal<String>,
+    pub(crate) runtime: RwSignal<String>,
+    pub(crate) model: RwSignal<String>,
+    pub(crate) context_tokens: RwSignal<String>,
+    pub(crate) settings: RwSignal<String>,
+    pub(crate) provider: RwSignal<String>,
+    pub(crate) base_url: RwSignal<String>,
+    pub(crate) api_key_env: RwSignal<String>,
+    pub(crate) params: RwSignal<String>,
+    pub(crate) rules: RwSignal<Vec<LimitRuleDto>>,
+    pub(crate) probe_on: RwSignal<bool>,
+    pub(crate) probe_model: RwSignal<String>,
+    pub(crate) probe_prompt: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
 }
 ```
 

@@ -30,6 +30,8 @@ mod health;
 mod knowledge;
 /// The LLM gateway's journal — every model API call made through `llm.adi`.
 mod llm;
+/// The registry of LLM backends an agent may answer on, and the shared record of which are spent.
+mod llm_backends;
 mod marketplace;
 mod mesh;
 mod meta;
@@ -57,6 +59,7 @@ pub use fs::*;
 pub use health::*;
 pub use knowledge::*;
 pub use llm::*;
+pub use llm_backends::*;
 pub use marketplace::*;
 pub use mesh::*;
 pub use meta::*;

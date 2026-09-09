@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-103 structs · 27 enums · 5 type aliases across 44 files.
+123 structs · 34 enums · 5 type aliases across 52 files.
 
 ## Index
 
@@ -29,6 +29,14 @@
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
+- [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
+- [`src/llm/chain.rs`](#srcllmchainrs) — `AgentBackendEntry`, `StartAt`, `ResolvedBackend`, `ResolvedChain`, `PinnedChain`
+- [`src/llm/classify.rs`](#srcllmclassifyrs) — `Classification`
+- [`src/llm/failover.rs`](#srcllmfailoverrs) — `Decision`, `Failure`
+- [`src/llm/holds.rs`](#srcllmholdsrs) — `HoldKey`, `Hold`, `Holds`
+- [`src/llm/migrate.rs`](#srcllmmigraters) — `Move`, `Skip`, `Plan`
+- [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
+- [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
@@ -110,6 +118,8 @@ pub struct AgentManifest<Args> {
     pub knowledge: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub backends: Vec<crate::llm::AgentBackendEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretAttachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1330,6 +1340,455 @@ pub struct RunLoad {
 
 ---
 
+## `src/llm/backend.rs`
+
+### enum `LimitClass`
+
+What a matched error means, and therefore what happens next. The classification — not the regex that produced it — is what decides whether a run reroutes silently or stops and asks, so an error nobody wrote a rule for lands in `Unknown` and is *surfaced*, never quietly routed around.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LimitClass {
+    Quota,
+    Rate,
+    Auth,
+    Transient,
+    #[default]
+    Unknown,
+}
+```
+
+### enum `HoldScope`
+
+How wide a hold spreads.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldScope {
+    #[default]
+    Model,
+    Login,
+}
+```
+
+### enum `Resume`
+
+Where the "available again at" time comes from.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Resume {
+    #[default]
+    FromMessage,
+    RetryAfter,
+    Fixed,
+}
+```
+
+### struct `LimitRule`
+
+One rule matching a backend's way of saying "I am out", and what that means.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitRule {
+    #[serde(rename = "match")]
+    pub pattern: String,
+    #[serde(default)]
+    pub class: LimitClass,
+    #[serde(default)]
+    pub scope: HoldScope,
+    #[serde(default)]
+    pub resume: Resume,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<String>,
+}
+```
+
+### struct `Probe`
+
+The cheap request that asks a held backend whether it is back.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Probe {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default = "default_probe_prompt")]
+    pub prompt: String,
+}
+```
+
+### struct `LlmBackendManifest`
+
+A backend definition, as stored. The id is the filename, so it cannot drift from what the file is called.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmBackendManifest {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    pub runtime: Backend,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub model: String,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub context_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub params: BTreeMap<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limit_rules: Vec<LimitRule>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe: Option<Probe>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `LlmBackend`
+
+A backend definition paired with its filename-derived id.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LlmBackend {
+    pub id: String,
+    pub manifest: LlmBackendManifest,
+}
+```
+
+### struct `LlmBackends`
+
+The on-disk store of backend definitions: `llm/backends/<id>.toml`.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct LlmBackends {
+    config: Config,
+}
+```
+
+---
+
+## `src/llm/chain.rs`
+
+### struct `AgentBackendEntry`
+
+One row of an agent's list: a backend, plus what this agent changes about it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct AgentBackendEntry {
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, serde_json::Value>,
+}
+```
+
+### enum `StartAt`
+
+Where a launch wants the chain to begin.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum StartAt {
+    Id(String),
+    Row(usize),
+}
+```
+
+### struct `ResolvedBackend`
+
+One row resolved into the concrete configuration a run would use.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedBackend {
+    pub backend: String,
+    pub row: usize,
+    pub label: String,
+    pub runtime: Backend,
+    pub credential: String,
+    pub model: String,
+    pub context_tokens: u64,
+    pub arguments: BTreeMap<String, serde_json::Value>,
+    pub limit_rules: Vec<LimitRule>,
+    pub probe: Option<Probe>,
+    pub replayable: bool,
+}
+```
+
+### struct `ResolvedChain`
+
+An agent's list, resolved and ready to be pinned to a session.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedChain {
+    pub entries: Vec<ResolvedBackend>,
+    pub missing: Vec<String>,
+}
+```
+
+### struct `PinnedChain`
+
+A resolved chain fastened to one conversation, and the row that conversation is on now.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct PinnedChain {
+    pub entries: Vec<ResolvedBackend>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<String>,
+    #[serde(skip)]
+    pub at: usize,
+}
+```
+
+---
+
+## `src/llm/classify.rs`
+
+### struct `Classification`
+
+What a failure turned out to be.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Classification {
+    pub class: LimitClass,
+    pub scope: HoldScope,
+    pub hold_for: u64,
+    pub evidence: String,
+    pub matched: Option<usize>,
+}
+```
+
+---
+
+## `src/llm/failover.rs`
+
+### enum `Decision`
+
+What a run should do about the turn that just failed.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    Nothing,
+    Switch {
+        to: usize,
+        notice: String,
+    },
+    Ask {
+        reason: String,
+    },
+}
+```
+
+### struct `Failure`
+
+Everything the decision needs about the turn that failed, beyond its chain.
+
+```rust
+#[derive(Clone, Copy)]
+pub struct Failure<'a> {
+    pub has_history: bool,
+    pub history_tokens: u64,
+    pub ask_on_switch: bool,
+    pub blocked: &'a dyn Fn(&ResolvedBackend) -> Option<String>,
+}
+```
+
+---
+
+## `src/llm/holds.rs`
+
+### struct `HoldKey`
+
+What a hold is recorded against: a credential, and the model it stops.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct HoldKey {
+    pub credential: String,
+    pub model: String,
+}
+```
+
+### struct `Hold`
+
+One recorded hold.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hold {
+    #[serde(flatten)]
+    pub key: HoldKey,
+    pub class: LimitClass,
+    pub until: u64,
+    pub reason: String,
+    pub set_by: String,
+    pub attempts: u32,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `Holds`
+
+The hold store.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Holds {
+    path: PathBuf,
+}
+```
+
+---
+
+## `src/llm/migrate.rs`
+
+### struct `Move`
+
+One agent's move: where its model configuration goes, and what leaves the agent to get there.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Move {
+    pub agent: String,
+    pub backend: String,
+    pub created: bool,
+    pub moved: Vec<String>,
+}
+```
+
+### struct `Skip`
+
+Why an agent is not moving.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skip {
+    pub agent: String,
+    pub why: String,
+}
+```
+
+### struct `Plan`
+
+What the migration would do, computed without writing anything.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Plan {
+    pub moves: Vec<Move>,
+    pub backends: BTreeMap<String, LlmBackendManifest>,
+    pub skipped: Vec<Skip>,
+}
+```
+
+---
+
+## `src/llm/prober.rs`
+
+### enum `Verdict`
+
+What a probe found, after the hold store has been told about it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    Back,
+    StillOut {
+        until: u64,
+        reason: String,
+    },
+    Failed {
+        error: String,
+    },
+    Unreachable {
+        reason: String,
+    },
+}
+```
+
+### struct `Checked`
+
+One hold, and what the sweep made of it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Checked {
+    pub key: HoldKey,
+    pub backend: Option<String>,
+    pub verdict: Verdict,
+}
+```
+
+### struct `Prober`
+
+The prober: a sweep over the shared hold store, run on a timer by whoever supervises it.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Prober {
+    config: Config,
+}
+```
+
+### enum `Outcome`
+
+What one probe found, before anything has been written down. Separate from `Verdict` so the judgement can be made — and tested — without a hold store, and so the caller that owns the holds is the only thing that changes them.
+
+```rust
+enum Outcome {
+    Answered,
+    Limited {
+        hold_for: u64,
+        reason: String,
+    },
+    Failed {
+        error: String,
+    },
+    Unreachable {
+        reason: String,
+    },
+}
+```
+
+---
+
+## `src/llm/settings.rs`
+
+### struct `LlmSettings`
+
+The `llm/settings.toml` shape. Unknown fields are ignored, so an older store keeps loading.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmSettings {
+    pub ask_on_switch: bool,
+    pub probe_every: u64,
+}
+```
+
+---
+
 ## `src/marker.rs`
 
 ### enum `Woke`
@@ -1719,6 +2178,8 @@ pub struct LaunchOptions<'a> {
     pub overrides: Option<&'a crate::RunOverrides>,
     pub owner_instructions: Option<&'a str>,
     pub markers: &'a [crate::marker::Marker],
+    pub start_at: Option<&'a crate::llm::StartAt>,
+    pub only: Option<&'a str>,
 }
 ```
 
@@ -2250,6 +2711,7 @@ pub struct SessionRecord {
     pub title: Option<String>,
     pub launched_by: String,
     pub overrides: Option<crate::RunOverrides>,
+    pub chain: Option<crate::llm::PinnedChain>,
     pub runner_state: Option<serde_json::Value>,
     pub outcome: Option<RunOutcome>,
 }

@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-245 structs · 10 enums across 9 files.
+257 structs · 10 enums across 9 files.
 
 ## Index
 
@@ -16,7 +16,7 @@
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
 - [`src/handlers/update.rs`](#srchandlersupdaters) — `Installing`
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `RunRef`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `RunRef`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
 
 ---
 
@@ -1255,6 +1255,19 @@ pub enum AgentFormFieldKind {
 }
 ```
 
+### struct `AgentBackendRowDto`
+
+One row of an agent's ordered backend list — the wire twin of `adi_agents::AgentBackendEntry`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBackendRowDto {
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, serde_json::Value>,
+}
+```
+
 ### struct `AgentDto`
 
 One agent definition on the wire. ADI-owned metadata remains top-level; everything interpreted by the selected backend is nested under `arguments`.
@@ -1281,6 +1294,8 @@ pub struct AgentDto {
     pub knowledge: Vec<String>,
     #[serde(default)]
     pub memory: bool,
+    #[serde(default)]
+    pub backends: Vec<AgentBackendRowDto>,
     #[serde(default)]
     pub secrets: Vec<SecretRef>,
     #[serde(default)]
@@ -1387,6 +1402,8 @@ pub struct SaveAgent {
     #[serde(default)]
     pub memory: Option<bool>,
     #[serde(default)]
+    pub backends: Option<Vec<AgentBackendRowDto>>,
+    #[serde(default)]
     pub secrets: Option<Vec<SecretRef>>,
     #[serde(default)]
     pub path: Option<Vec<String>>,
@@ -1432,6 +1449,10 @@ pub struct RunAgent {
     pub overrides: Option<AgentRunOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launched_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<String>,
 }
 ```
 
@@ -3617,6 +3638,218 @@ pub struct DbQueryResult {
 pub struct DbExecResult {
     pub changes: u64,
     pub last_insert_rowid: i64,
+}
+```
+
+### struct `LimitRuleDto`
+
+One rule saying what a provider's error means — the wire twin of `adi_agents::llm::LimitRule`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitRuleDto {
+    #[serde(rename = "match")]
+    pub pattern: String,
+    #[serde(default)]
+    pub class: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub resume: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<String>,
+}
+```
+
+### struct `ProbeDto`
+
+The tiny request the background prober sends to ask whether a held backend is back — the wire twin of `adi_agents::llm::Probe`. Absent means this backend is never probed automatically, and its hold simply expires.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub prompt: String,
+}
+```
+
+### struct `LlmBackendDto`
+
+One backend definition on the wire — a complete way to answer a turn, under a name somebody chose. Mirrors `adi_agents::llm::LlmBackendManifest`, with the live state the page shows.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmBackendDto {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    pub runtime: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub context_tokens: u64,
+    #[serde(default)]
+    pub settings: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub limit_rules: Vec<LimitRuleDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<ProbeDto>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub credential: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<HoldDto>,
+    #[serde(default)]
+    pub used_by: Vec<String>,
+    #[serde(default)]
+    pub replayable: bool,
+}
+```
+
+### struct `HoldDto`
+
+A live "this credential is spent until T" mark — the wire twin of `adi_agents::llm::Hold`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldDto {
+    pub credential: String,
+    #[serde(default)]
+    pub model: String,
+    pub class: String,
+    pub until: u64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub set_by: String,
+    #[serde(default)]
+    pub attempts: u32,
+    #[serde(default)]
+    pub describe: String,
+}
+```
+
+### struct `LlmBackendsDto`
+
+`GET /api/llm/backends` — the registry, plus everything the page needs to judge it.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmBackendsDto {
+    pub backends: Vec<LlmBackendDto>,
+    pub settings: LlmSettingsDto,
+    #[serde(default)]
+    pub context_warnings: Vec<ContextWarningDto>,
+    #[serde(default)]
+    pub dangling: Vec<DanglingRowDto>,
+}
+```
+
+### struct `ContextWarningDto`
+
+One "this row can hold less than the one before it" warning.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextWarningDto {
+    pub agent: String,
+    pub backend: String,
+    pub message: String,
+}
+```
+
+### struct `DanglingRowDto`
+
+One agent row naming a backend that is not in the registry.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DanglingRowDto {
+    pub agent: String,
+    pub backend: String,
+}
+```
+
+### struct `LlmSettingsDto`
+
+The handful of global switches — `llm/settings.toml`, mirroring `adi_agents::llm::LlmSettings`.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmSettingsDto {
+    #[serde(default)]
+    pub ask_on_switch: bool,
+    #[serde(default)]
+    pub probe_every: u64,
+}
+```
+
+### struct `SaveLlmBackend`
+
+`POST /api/llm/backends/save` — create or update one backend, keyed by `id`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SaveLlmBackend {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    pub runtime: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub context_tokens: u64,
+    #[serde(default)]
+    pub settings: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub limit_rules: Vec<LimitRuleDto>,
+    #[serde(default)]
+    pub probe: Option<ProbeDto>,
+    #[serde(default)]
+    pub rename_from: Option<String>,
+}
+```
+
+### struct `LlmBackendRef`
+
+One backend named by id — `POST /api/llm/backends/delete`, `/api/llm/holds/release`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmBackendRef {
+    pub id: String,
+}
+```
+
+### struct `SaveLlmSettings`
+
+`POST /api/llm/settings` — the global switches, both stated.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveLlmSettings {
+    #[serde(default)]
+    pub ask_on_switch: bool,
+    #[serde(default)]
+    pub probe_every: u64,
 }
 ```
 

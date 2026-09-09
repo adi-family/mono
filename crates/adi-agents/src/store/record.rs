@@ -86,6 +86,19 @@ pub struct SessionRecord {
     /// re-read on every later turn, so an override that lived only in the launch call would quietly
     /// lapse on the second message. See [`overrides`](crate::overrides).
     pub overrides: Option<crate::RunOverrides>,
+    /// The ordered list of LLM backends this conversation may answer on, resolved once on its first
+    /// turn, and the row of it answering now.
+    ///
+    /// On the record for the reason [`overrides`](Self::overrides) is, only harder: the agent and
+    /// every backend it names are re-read on each turn, so a chain resolved per turn would let an
+    /// edit made mid-conversation change what a live chat is talking to — and a backend deleted
+    /// underneath it would change it *silently*, because a chain skips a row it cannot resolve.
+    ///
+    /// Composed from two columns and never handed out apart: a position without the list it indexes
+    /// is not something a caller can do anything with. `None` on every session opened before this
+    /// existed and on any opened without a chain in hand; those answer on whatever their own
+    /// [`backend`](Self::backend) says, which is what they have always done.
+    pub chain: Option<crate::llm::PinnedChain>,
     /// The runner's own scratch space — runner-written, store-opaque, never interpreted here.
     ///
     /// A local-process runner keeps its pid in it, a pty runner its session name, and a runner whose
@@ -185,6 +198,8 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
     let state: Option<String> = row.get(8)?;
     let outcome: Option<String> = row.get(9)?;
     let runner: Option<String> = row.get(10)?;
+    let chain: Option<String> = row.get(15)?;
+    let chain_at: i64 = row.get(16)?;
     Ok(SessionRecord {
         agent: row.get(0)?,
         id: row.get(1)?,
@@ -209,6 +224,16 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         overrides: row
             .get::<_, Option<String>>(13)?
             .and_then(|t| serde_json::from_str(&t).ok()),
+        // Same rule again, and the position is put back on the list here rather than read from the
+        // blob: the blob does not carry one. A pin a newer build wrote that this one cannot parse
+        // reads as "no chain" — the session answers on its own backend, which is a worse answer than
+        // the truth but a far better one than an unlistable conversation.
+        chain: chain
+            .and_then(|t| serde_json::from_str::<crate::llm::PinnedChain>(&t).ok())
+            .map(|mut pinned| {
+                pinned.at = usize::try_from(chain_at).unwrap_or(0);
+                pinned
+            }),
         // A slot that will not parse reads as empty rather than failing the row: it belongs to a
         // runner, and a listing has no stake in what is in it.
         runner_state: state.and_then(|t| serde_json::from_str(&t).ok()),

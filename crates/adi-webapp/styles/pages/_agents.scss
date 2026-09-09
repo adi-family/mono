@@ -199,6 +199,101 @@
     }
   }
 
+  // The ordered backend list. Numbered, one row per line, dragged by the grip on the left — read
+  // top to bottom, because top to bottom is what it means.
+  &__chain {
+    display: flex;
+    flex-direction: column;
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+  }
+
+  &__chain-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    font-size: var(--fs-ui-sm);
+
+    + .adi-agents__chain-row { border-top: 1px solid var(--line); }
+
+    // The row being dragged: still there, visibly lifted off the list.
+    &.is-dragging { opacity: 0.4; }
+  }
+
+  &__chain-grip {
+    display: inline-flex;
+    color: var(--ink-3);
+    cursor: grab;
+  }
+
+  &__chain-pos {
+    min-width: 14px;
+    color: var(--ink-3);
+  }
+
+  &__chain-name { color: var(--ink); }
+
+  &__chain-meta {
+    color: var(--ink-3);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  // Held right now — the one thing on this row that is about this minute rather than the setup.
+  &__chain-held {
+    color: var(--warn);
+    white-space: nowrap;
+  }
+
+  &__chain-gone { color: var(--err); }
+
+  // A row's overrides, unfolded under it. Inset, so it reads as belonging to the row above.
+  &__chain-over {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 12px 10px 14px 34px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-hover);
+
+    .adi-input,
+    .adi-textarea { width: 100%; }
+  }
+
+  &__chain-add {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .adi-input { flex: 1; }
+  }
+
+  &__chain-empty {
+    margin: 0 0 12px;
+    font-size: var(--fs-ui-sm);
+    color: var(--ink-3);
+  }
+
+  &__chain-warn {
+    margin: 0 0 12px;
+    padding: 0;
+    list-style: none;
+    font-size: var(--fs-small);
+    color: var(--warn);
+
+    li {
+      display: flex;
+      align-items: start;
+      gap: 6px;
+      padding: 2px 0;
+    }
+  }
+
   // The system prompt's row: a disclosure between two hairlines, the editor under it when open.
   &__disclosure {
     margin: 8px 0 32px;
@@ -252,5 +347,9 @@
   @media (max-width: 720px) {
     &__grid { grid-template-columns: 1fr; }
     &__meta { white-space: normal; }
+    &__chain-over { grid-template-columns: 1fr; }
+    // Dragging is not how a chain is reordered on a touch screen; the arrows are, and they need
+    // the row not to be three lines tall to reach them.
+    &__chain-meta { display: none; }
   }
 }

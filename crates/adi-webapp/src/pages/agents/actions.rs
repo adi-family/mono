@@ -275,7 +275,7 @@ where
 /// human's "run it anyway" past a full concurrency limit. Always this machine — the Agents page has
 /// no node concept (`docs/fleet.md` §13).
 pub(crate) fn run_now(state: State, name: String, force: bool) {
-    run_now_with(state, None, name, force, None, None);
+    run_now_with(state, None, name, force, None, None, None);
 }
 
 /// [`run_now`], carrying the run settings of the composer that asked for it — a pty session started
@@ -293,6 +293,7 @@ fn run_now_with(
     force: bool,
     working_dir: Option<String>,
     overrides: Option<adi_webapp_api::types::AgentRunOverrides>,
+    start_at: Option<String>,
 ) {
     spawn_local(async move {
         // No task and no attachments: a pty session is typed into after it starts, so there is no
@@ -303,6 +304,7 @@ fn run_now_with(
             String::new(),
             working_dir,
             overrides,
+            start_at,
             force,
             Vec::new(),
         )
@@ -335,6 +337,7 @@ fn launch_agent(
     message: String,
     working_dir: Option<String>,
     overrides: Option<adi_webapp_api::types::AgentRunOverrides>,
+    start_at: Option<String>,
     force: bool,
     images: Vec<String>,
 ) {
@@ -346,6 +349,7 @@ fn launch_agent(
             message,
             working_dir,
             overrides,
+            start_at,
             force,
             images,
         )
@@ -2313,6 +2317,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
             with_context(watch, message),
             run_dir_of(watch),
             run_overrides_of(state, watch),
+            run_start_at_of(watch),
             force,
             images,
         );
@@ -2395,6 +2400,10 @@ struct StoredRunSettings {
     dir: String,
     #[serde(default)]
     overrides: std::collections::BTreeMap<String, String>,
+    /// The backend a conversation started here begins on, by id. Empty is the agent's first row,
+    /// which is what nearly every launch wants.
+    #[serde(default)]
+    start_at: String,
 }
 
 /// Load `agent`'s stored run settings into the composer — called wherever the watched agent is
@@ -2409,6 +2418,7 @@ pub(crate) fn adopt_run_settings(watch: AgentsWatch, agent: &str) {
         .unwrap_or_default();
     watch.run_dir.set(stored.dir);
     watch.run_overrides.set(stored.overrides);
+    watch.run_start_at.set(stored.start_at);
 }
 
 /// Write the composer's current settings back, under whichever agent it is pointed at. Called after
@@ -2425,10 +2435,14 @@ fn save_run_settings(watch: AgentsWatch) {
     let settings = StoredRunSettings {
         dir: watch.run_dir.get_untracked(),
         overrides: watch.run_overrides.get_untracked(),
+        start_at: watch.run_start_at.get_untracked(),
     };
     // Nothing set is nothing kept: an agent run as it is defined should leave no row behind, so the
     // next reader of this store sees only the agents somebody really configured here.
-    if settings.dir.trim().is_empty() && settings.overrides.is_empty() {
+    if settings.dir.trim().is_empty()
+        && settings.overrides.is_empty()
+        && settings.start_at.trim().is_empty()
+    {
         let _ = storage.remove_item(&key);
         return;
     }
@@ -2439,7 +2453,9 @@ fn save_run_settings(watch: AgentsWatch) {
 
 /// How many settings this launch differs by — what the gear's badge counts.
 fn run_settings_count(watch: AgentsWatch) -> usize {
-    usize::from(!watch.run_dir.get().trim().is_empty()) + watch.run_overrides.get().len()
+    usize::from(!watch.run_dir.get().trim().is_empty())
+        + usize::from(!watch.run_start_at.get().trim().is_empty())
+        + watch.run_overrides.get().len()
 }
 
 /// This launch's directory, or `None` for "as the agent is defined".
@@ -2447,6 +2463,13 @@ fn run_dir_of(watch: AgentsWatch) -> Option<String> {
     let dir = watch.run_dir.get_untracked();
     let dir = dir.trim();
     (!dir.is_empty()).then(|| dir.to_string())
+}
+
+/// The backend this launch starts on, or `None` to start on the agent's first row.
+fn run_start_at_of(watch: AgentsWatch) -> Option<String> {
+    let start_at = watch.run_start_at.get_untracked();
+    let start_at = start_at.trim();
+    (!start_at.is_empty()).then(|| start_at.to_string())
 }
 
 /// The composer's overrides as the launch endpoint takes them, or `None` when this run changes
@@ -2572,6 +2595,7 @@ fn run_settings_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
                             on:click=move |_| {
                                 watch.run_dir.set(String::new());
                                 watch.run_overrides.set(std::collections::BTreeMap::new());
+                                watch.run_start_at.set(String::new());
                                 save_run_settings(watch);
                             }>"Reset"</button>
                     })}
@@ -2596,6 +2620,7 @@ fn run_settings_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
                              conversation keeps it for every reply."
                         </p>
                     </div>
+                    {start_at_field(watch, def.as_ref())}
                     {fields.into_iter()
                         .map(|f| run_override_field(watch, f, def.as_ref(), &backends, &backend))
                         .collect::<Vec<_>>()}
@@ -2610,6 +2635,53 @@ fn run_settings_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         title="change the agent itself, for every run and every machine">"Edit agent"</a>
                 </footer>
             </section>
+        }
+        .into_any(),
+    )
+}
+
+/// The "start on" picker: which of the agent's backends this conversation begins on.
+///
+/// Rendered only when the agent lists more than one, because with a single backend there is nothing
+/// to choose and a select saying so is a control that does nothing. Offers **names**, never row
+/// numbers: a position is a fact about the agent's list that changes when somebody reorders it,
+/// where the backend a person meant to start on does not.
+///
+/// Starting third does not throw the first two away — the list rotates, so the run still has
+/// everywhere else to fall when the third one runs out.
+fn start_at_field(watch: AgentsWatch, def: Option<&AgentDto>) -> Option<AnyView> {
+    let rows: Vec<String> = def?.backends.iter().map(|r| r.backend.clone()).collect();
+    if rows.len() < 2 {
+        return None;
+    }
+    let first = rows.first().cloned().unwrap_or_default();
+    Some(
+        view! {
+            <div class="adi-chat__runset-field">
+                <label class="adi-chat__runset-label" for="adi-run-start-at">"Start on"</label>
+                <select class="adi-input" id="adi-run-start-at"
+                    prop:value=move || watch.run_start_at.get()
+                    on:change=move |ev| {
+                        watch.run_start_at.set(event_target_value(&ev));
+                        save_run_settings(watch);
+                    }>
+                    <option value="" selected=move || watch.run_start_at.get().is_empty()>
+                        {format!("as defined \u{2014} {first}")}
+                    </option>
+                    {rows.into_iter().map(|id| {
+                        let value = id.clone();
+                        let chosen = {
+                            let id = id.clone();
+                            move || watch.run_start_at.get() == id
+                        };
+                        view! { <option value=value selected=chosen>{id}</option> }
+                    }).collect::<Vec<_>>()}
+                </select>
+                <p class="adi-chat__runset-hint">
+                    "Which model answers first. The rest of the agent's list still follows behind \
+                     it, so this conversation can still move on when that one runs out."
+                </p>
+            </div>
         }
         .into_any(),
     )
@@ -5519,7 +5591,8 @@ fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
                     };
                     run_now_with(state, node.clone(), name.clone(),
                         at_run_limit(agents.as_ref(), &name),
-                        run_dir_of(watch), run_overrides_of(state, watch));
+                        run_dir_of(watch), run_overrides_of(state, watch),
+                        run_start_at_of(watch));
                 }>"New"</button>
         }
         .into_any()
@@ -5589,7 +5662,8 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                                         };
                                         run_now_with(state, node, name.clone(),
                                             at_run_limit(agents.as_ref(), &name),
-                                            run_dir_of(watch), run_overrides_of(state, watch));
+                                            run_dir_of(watch), run_overrides_of(state, watch),
+                                            run_start_at_of(watch));
                                     }>
                                     "Start session"
                                 </button>

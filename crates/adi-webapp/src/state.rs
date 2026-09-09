@@ -6,11 +6,12 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
-    AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens,
-    AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
+    AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
+    AgentTokens, AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
     DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes, FleetState, Health,
     HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
-    KnowledgeState, MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail,
+    KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto, MarketplaceState, MeshState,
+    MetaState, PortsState, ProjectDetail,
     ProjectHookLog, ProjectHookRef, ProjectsState, RunRef, SecretsState, TasksState, ToolsState,
     TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceTerm, WorkspaceTermRef,
     WorkspacesRef, WorkspacesState,
@@ -79,6 +80,9 @@ pub(crate) struct State {
     /// The Meta page's state (`/api/meta`): the well-known `adi-agent`, the default system prompt
     /// to seed a new one with, and the agent form schema.
     pub(crate) meta: RwSignal<Option<MetaState>>,
+    /// The LLM backend registry (`/api/llm/backends`) — every way to answer a turn, plus the live
+    /// holds and the two global switches, shown on the LLM backends page.
+    pub(crate) llm_backends: RwSignal<Option<LlmBackendsDto>>,
     /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
@@ -246,6 +250,8 @@ pub(crate) struct Tables {
     pub(crate) llm_clients: TableState,
     /// … and the calls themselves.
     pub(crate) llm_calls: TableState,
+    /// The LLM backends registry — the ways to answer a turn, not the traffic through them.
+    pub(crate) llm_backends: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -307,6 +313,7 @@ impl Tables {
             ),
             llm_clients: TableState::sorted("llm-clients", c::LLM_CLIENT_COLS, c::MOST_CALLS_FIRST),
             llm_calls: TableState::sorted("llm-calls", c::LLM_CALL_COLS, c::LATEST_FIRST),
+            llm_backends: TableState::new("llm-backends", c::LLM_BACKEND_COLS),
             tasks: TableState::new("tasks", c::TASK_COLS),
             tasks_done: TableState::new("tasks-done", c::TASK_COLS),
             tools: TableState::new("tools", c::TOOL_COLS),
@@ -361,6 +368,7 @@ impl State {
             secrets: RwSignal::new(None),
             db: RwSignal::new(None),
             meta: RwSignal::new(None),
+            llm_backends: RwSignal::new(None),
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
             dashboards: RwSignal::new(None),
@@ -1059,6 +1067,17 @@ pub(crate) struct AgentsForm {
     /// Whether the agent runs with nobody watching — the `Ask` tool refuses on an unattended agent,
     /// so a question can never leave the work stopped in silence.
     pub(crate) unattended: RwSignal<bool>,
+    /// The agent's ordered LLM backend list — its whole model configuration. Row 1 is what a new
+    /// conversation starts on, the rest are where it goes when one runs out. The agent itself
+    /// carries no model, provider or login: those are the backend's, named here in order.
+    pub(crate) llm_rows: RwSignal<Vec<AgentBackendRowDto>>,
+    /// Which row a drag is carrying, while one is in flight — `None` the rest of the time. On the
+    /// form rather than inside the list view because that view is rebuilt on every render, and a
+    /// signal made there would be a new one halfway through the drag.
+    pub(crate) llm_drag_from: RwSignal<Option<usize>>,
+    /// The row whose overrides are unfolded, by position, or `None` when none is. One at a time:
+    /// the overrides are the exception, and a column of open editors is a chain you cannot read.
+    pub(crate) llm_row_open: RwSignal<Option<usize>>,
     /// The complete backend argument map loaded for editing, including structured values the
     /// schema-driven form does not render directly.
     pub(crate) arguments: RwSignal<BTreeMap<String, serde_json::Value>>,
@@ -1093,6 +1112,9 @@ impl AgentsForm {
             system_prompt: RwSignal::new(String::new()),
             starred: RwSignal::new(false),
             unattended: RwSignal::new(false),
+            llm_rows: RwSignal::new(Vec::new()),
+            llm_drag_from: RwSignal::new(None),
+            llm_row_open: RwSignal::new(None),
             arguments: RwSignal::new(BTreeMap::new()),
             argument_values: RwSignal::new(BTreeMap::new()),
             editing: RwSignal::new(None),
@@ -1338,6 +1360,11 @@ pub(crate) struct AgentsWatch {
     /// and turning its model up are the same act — this machine's standing way of running that agent
     /// — and re-typing it on every reload is how it stops being used.
     pub(crate) run_overrides: RwSignal<BTreeMap<String, String>>,
+    /// Which of the agent's backends the *next* run started here begins on, by id — empty for "the
+    /// first one it lists", which is nearly every launch. It rotates rather than truncates: starting
+    /// third runs the third, then the first, then the second, so a run begun on a second choice
+    /// still has everywhere else to fall when that one runs out.
+    pub(crate) run_start_at: RwSignal<String>,
     /// Whether the composer's run-settings panel is open. Closed is the normal state: the settings
     /// are for the launch that is deliberately unlike the others, and every other launch should see
     /// a composer rather than a form.
@@ -1407,6 +1434,7 @@ impl AgentsWatch {
             context_prefix: RwSignal::new(String::new()),
             run_dir: RwSignal::new(String::new()),
             run_overrides: RwSignal::new(BTreeMap::new()),
+            run_start_at: RwSignal::new(String::new()),
             run_settings_open: RwSignal::new(false),
             tokens: RwSignal::new(None),
             tokens_of: RwSignal::new(None),
@@ -1564,6 +1592,127 @@ impl FleetForm {
         self.join_token.set(String::new());
         self.joined.set(None);
     }
+}
+
+/// The LLM backends page's editor: one backend being written, field by field, plus the busy flag
+/// the two forms on that page share.
+///
+/// There is one editor and not one per row, for the reason [`FleetUnlock`] gives below: only one
+/// backend can be edited at a time, so a login typed for `anthropic` can never be saved onto
+/// `codex` because a poll re-rendered the table underneath it. [`edit`](Self::edit) is what fills
+/// it, and it fills *every* field — a save states the whole object, so a field left over from the
+/// last backend would be silently written onto this one.
+///
+/// `Copy`, so it threads into the page view and its handlers like every other form here.
+#[derive(Clone, Copy)]
+pub(crate) struct LlmBackendsForm {
+    /// The id of the backend being edited, or empty when the form is writing a new one. It is also
+    /// what makes a save a **rename**: `editing` and [`id`](Self::id) differing says the definition
+    /// moves and every agent row naming the old id follows it.
+    pub(crate) editing: RwSignal<String>,
+    pub(crate) id: RwSignal<String>,
+    pub(crate) label: RwSignal<String>,
+    pub(crate) runtime: RwSignal<String>,
+    pub(crate) model: RwSignal<String>,
+    /// The context window in tokens, as typed. Text rather than a number so an empty field can mean
+    /// "unstated" — which is a real answer here, and the one that warns about nothing.
+    pub(crate) context_tokens: RwSignal<String>,
+    /// The login, in its four spellings — a CLI settings file, or provider + base URL + key
+    /// variable. What a backend shares with another backend, and never overridden by an agent row.
+    pub(crate) settings: RwSignal<String>,
+    pub(crate) provider: RwSignal<String>,
+    pub(crate) base_url: RwSignal<String>,
+    pub(crate) api_key_env: RwSignal<String>,
+    /// The dials, as a JSON object. A text buffer rather than a parsed map, because half-typed JSON
+    /// is a normal state for a form to be in and only the save has to insist it is an object.
+    pub(crate) params: RwSignal<String>,
+    /// How this backend says "I am out", in the order the rules are tried — the first match decides.
+    pub(crate) rules: RwSignal<Vec<LimitRuleDto>>,
+    /// Whether the background prober may ask this backend whether it is back. Off leaves its holds
+    /// to expire on their own deadline, which is the only option for a backend that cannot be
+    /// asked cheaply.
+    pub(crate) probe_on: RwSignal<bool>,
+    pub(crate) probe_model: RwSignal<String>,
+    pub(crate) probe_prompt: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl LlmBackendsForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            editing: RwSignal::new(String::new()),
+            id: RwSignal::new(String::new()),
+            label: RwSignal::new(String::new()),
+            runtime: RwSignal::new(String::new()),
+            model: RwSignal::new(String::new()),
+            context_tokens: RwSignal::new(String::new()),
+            settings: RwSignal::new(String::new()),
+            provider: RwSignal::new(String::new()),
+            base_url: RwSignal::new(String::new()),
+            api_key_env: RwSignal::new(String::new()),
+            params: RwSignal::new(String::new()),
+            rules: RwSignal::new(Vec::new()),
+            probe_on: RwSignal::new(false),
+            probe_model: RwSignal::new(String::new()),
+            probe_prompt: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// Empty the form back to "writing a new backend". Every field, including the ones the next
+    /// backend may not use — see the note on the struct.
+    pub(crate) fn clear(self) {
+        self.editing.set(String::new());
+        self.id.set(String::new());
+        self.label.set(String::new());
+        self.runtime.set(String::new());
+        self.model.set(String::new());
+        self.context_tokens.set(String::new());
+        self.settings.set(String::new());
+        self.provider.set(String::new());
+        self.base_url.set(String::new());
+        self.api_key_env.set(String::new());
+        self.params.set(String::new());
+        self.rules.set(Vec::new());
+        self.probe_on.set(false);
+        self.probe_model.set(String::new());
+        self.probe_prompt.set(String::new());
+    }
+
+    /// Load one backend into the editor. The computed halves of the DTO — the credential, the live
+    /// hold, who uses it — are deliberately not read: they are facts about the backend, not fields
+    /// of it, and a save has nothing to say about any of them.
+    pub(crate) fn edit(self, backend: &LlmBackendDto) {
+        self.editing.set(backend.id.clone());
+        self.id.set(backend.id.clone());
+        self.label.set(backend.label.clone());
+        self.runtime.set(backend.runtime.clone());
+        self.model.set(backend.model.clone());
+        self.context_tokens.set(match backend.context_tokens {
+            0 => String::new(),
+            n => n.to_string(),
+        });
+        self.settings.set(backend.settings.clone());
+        self.provider.set(backend.provider.clone());
+        self.base_url.set(backend.base_url.clone());
+        self.api_key_env.set(backend.api_key_env.clone());
+        self.params.set(pretty_params(&backend.params));
+        self.rules.set(backend.limit_rules.clone());
+        self.probe_on.set(backend.probe.is_some());
+        self.probe_model
+            .set(backend.probe.as_ref().and_then(|p| p.model.clone()).unwrap_or_default());
+        self.probe_prompt
+            .set(backend.probe.as_ref().map(|p| p.prompt.clone()).unwrap_or_default());
+    }
+}
+
+/// A backend's dials as the editor shows them: an indented JSON object, or an empty buffer when
+/// there are none — so a backend with no dials opens on an empty box rather than on `{}` to delete.
+fn pretty_params(params: &BTreeMap<String, serde_json::Value>) -> String {
+    if params.is_empty() {
+        return String::new();
+    }
+    serde_json::to_string_pretty(params).unwrap_or_default()
 }
 
 /// The dashboards rail's unlock form: the one node whose password is being typed, and what has
@@ -1992,6 +2141,12 @@ pub(crate) fn subscriptions(
         subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
             set_if_changed(s.secrets, sec);
         }));
+        // …and the LLM backend registry, which the editor's model list names: a row is a backend id,
+        // and what the row *shows* — the model behind it, its context, whether it is held right now
+        // — is only in the registry.
+        subs.push(Sub::get("/api/llm/backends", move |b: LlmBackendsDto| {
+            set_if_changed(s.llm_backends, b);
+        }));
     }
     if route == Route::Tools {
         subs.push(Sub::get("/api/tools", move |t: ToolsState| {
@@ -2050,6 +2205,20 @@ pub(crate) fn subscriptions(
     if route == Route::Fleet {
         subs.push(Sub::get("/api/fleet", move |f: FleetState| {
             set_if_changed(s.fleet, f);
+        }));
+    }
+    if route == Route::LlmBackends {
+        // Polled rather than fetched once, because the interesting half of this page is not the
+        // registry but the holds on it: a backend goes out and comes back without anyone touching
+        // the panel, and the prober's sweep is what changes it.
+        subs.push(Sub::get("/api/llm/backends", move |b: LlmBackendsDto| {
+            set_if_changed(s.llm_backends, b);
+        }));
+        // The editor's runtime picker offers exactly the runtimes the agent form offers, and that
+        // list is the API's to declare — so it comes from the agent form spec rather than a second
+        // copy here that could drift from it.
+        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+            set_if_changed(s.agents, a);
         }));
     }
 
@@ -2230,6 +2399,11 @@ pub(crate) async fn load(s: State) {
         if let Ok(sec) = fetch::secrets().await {
             set_if_changed(s.secrets, sec);
         }
+        // …and its model list, which names backends from the registry — see the matching
+        // subscription above.
+        if let Ok(b) = fetch::llm_backends().await {
+            set_if_changed(s.llm_backends, b);
+        }
     }
     if path == Route::Tools.path()
         && let Ok(t) = fetch::tools().await
@@ -2285,5 +2459,15 @@ pub(crate) async fn load(s: State) {
         && let Ok(f) = fetch::fleet().await
     {
         set_if_changed(s.fleet, f);
+    }
+    if path == Route::LlmBackends.path() {
+        if let Ok(b) = fetch::llm_backends().await {
+            set_if_changed(s.llm_backends, b);
+        }
+        // The editor's runtime picker is built from the agent form spec, so the page needs the
+        // agent listing here too — see the matching subscription above.
+        if let Ok(a) = fetch::agents().await {
+            set_if_changed(s.agents, a);
+        }
     }
 }

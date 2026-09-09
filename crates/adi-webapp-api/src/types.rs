@@ -1058,6 +1058,21 @@ pub enum AgentFormFieldKind {
     ModelPicker,
 }
 
+/// One row of an agent's ordered backend list — the wire twin of `adi_agents::AgentBackendEntry`.
+///
+/// Stated here rather than re-exported because the page cannot link `adi-agents`, which links
+/// SQLite. The JSON is identical, so the two are interchangeable on the wire.
+///
+/// `overrides` may respell the row's **model and dials only**. The login is never overridable: a
+/// different credential is a different backend, and the server refuses a row that tries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBackendRowDto {
+    /// The id of the backend this row names — a file in `llm/backends/`.
+    pub backend: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, serde_json::Value>,
+}
+
 /// One agent definition on the wire. ADI-owned metadata remains top-level; everything interpreted
 /// by the selected backend is nested under `arguments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1094,6 +1109,12 @@ pub struct AgentDto {
     /// alone writes and every other agent may read.
     #[serde(default)]
     pub memory: bool,
+    /// The ordered list of LLM backends this agent may answer on — its whole model configuration.
+    /// Row 1 is what a new conversation starts on; the rest are what it falls to, in order, when a
+    /// backend runs out. Empty means this agent has not been migrated and still answers on
+    /// [`backend`](Self::backend) plus its [`arguments`](Self::arguments).
+    #[serde(default)]
+    pub backends: Vec<AgentBackendRowDto>,
     /// The secrets attached to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; at launch exactly these are decrypted and injected into the run's environment
     /// under their literal names — an explicit allowlist, never the whole scope.
@@ -1232,6 +1253,11 @@ pub struct SaveAgent {
     /// memory away.
     #[serde(default)]
     pub memory: Option<bool>,
+    /// The agent's ordered backend list (see [`AgentDto::backends`]). **Omit to keep whatever the
+    /// agent already has**, for the same reason as `bin_tools`; send an empty list to clear it,
+    /// which drops the agent back to its legacy `backend` + `arguments`.
+    #[serde(default)]
+    pub backends: Option<Vec<AgentBackendRowDto>>,
     /// The secrets to attach to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
     /// **Omit to keep whatever the agent already has**, as for `bin_tools`; send an empty list to
@@ -1320,6 +1346,20 @@ pub struct RunAgent {
     /// here rather than leaving a person's name on the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launched_by: Option<String>,
+    /// Which of the agent's LLM backends this conversation begins on, by id — the "start at" picker
+    /// on the new-chat form. Absent (nearly every launch) starts on the agent's first row.
+    ///
+    /// It **rotates** the list rather than cutting it: starting at the third backend runs that one,
+    /// then the first, then the second, so a run begun on a second choice still has everywhere else
+    /// to fall when that one runs out. Ids only — the row numbers a hand-written manifest may also
+    /// use are not something the panel offers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<String>,
+    /// Pin this run to one backend with nothing behind it — the deliberate opposite of
+    /// [`start_at`](Self::start_at), for asking a particular model a particular question. When that
+    /// backend runs out the run stops and asks, because there is nowhere to move to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<String>,
 }
 
 /// What one launch replaces in its agent's definition — the wire form of `adi_agents::RunOverrides`.
@@ -3589,6 +3629,220 @@ pub struct DbQueryResult {
 pub struct DbExecResult {
     pub changes: u64,
     pub last_insert_rowid: i64,
+}
+
+// ------------------------------------------------------------ llm backends
+
+/// One rule saying what a provider's error means — the wire twin of `adi_agents::llm::LimitRule`.
+///
+/// `pattern` is a regular expression matched against the error text a run came back with. The
+/// first rule that matches decides; a backend with no rules classifies everything as `unknown`,
+/// which stops and asks rather than moving down the list.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LimitRuleDto {
+    /// The regular expression. Named `match` on the wire and in the TOML, as it reads there.
+    #[serde(rename = "match")]
+    pub pattern: String,
+    /// `quota` · `rate` · `auth` · `transient` · `unknown`. Only `quota` and `rate` reroute
+    /// silently; `auth` and `unknown` stop and ask.
+    #[serde(default)]
+    pub class: String,
+    /// `model` (this model is spent) or `login` (the whole subscription is), which decides how
+    /// wide the hold reaches.
+    #[serde(default)]
+    pub scope: String,
+    /// Where the wait comes from: `from_message` (read the provider's own words, falling back),
+    /// `retry_after` (the header), or `fixed` (always [`fixed`](Self::fixed)).
+    #[serde(default)]
+    pub resume: String,
+    /// The fallback wait, written as people write one — `4h`, `30m`, `90s`, or bare seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<String>,
+}
+
+/// The tiny request the background prober sends to ask whether a held backend is back — the wire
+/// twin of `adi_agents::llm::Probe`. Absent means this backend is never probed automatically, and
+/// its hold simply expires.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProbeDto {
+    /// The model to probe with, when the cheapest model on the login is not the configured one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub prompt: String,
+}
+
+/// One backend definition on the wire — a complete way to answer a turn, under a name somebody
+/// chose. Mirrors `adi_agents::llm::LlmBackendManifest`, with the live state the page shows.
+///
+/// A backend is flat: it is **never** built on another backend. Reuse happens in an agent's
+/// ordered list, where a row may respell the model and the dials but never the login.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmBackendDto {
+    /// The name it is known by, which is its filename in `llm/backends/`.
+    pub id: String,
+    /// What to call it in the interface. Blank means show the id.
+    #[serde(default)]
+    pub label: String,
+    /// Which runtime answers the turn — `pty:claude`, `harness:adi`, and the rest.
+    pub runtime: String,
+    #[serde(default)]
+    pub model: String,
+    /// How much history this backend can hold, in tokens. `0` means unstated, and warns about
+    /// nothing — see [`LlmBackendsDto::context_warnings`].
+    #[serde(default)]
+    pub context_tokens: u64,
+    /// The login, as the four ways of naming one: a CLI settings file, or a provider/base
+    /// URL/API-key variable. Two backends naming the same one share a hold.
+    #[serde(default)]
+    pub settings: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    /// The dials — everything the runtime understands that isn't the model or the login.
+    #[serde(default)]
+    pub params: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub limit_rules: Vec<LimitRuleDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<ProbeDto>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    /// What this backend's login and model key a hold under — computed, not stored. Two backends
+    /// showing the same `credential` are the same subscription.
+    #[serde(default)]
+    pub credential: String,
+    /// The live hold on this backend right now, or `None` when it is available. Shared across
+    /// every agent, so this is the same answer every run gets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold: Option<HoldDto>,
+    /// The agents whose list names this backend, in order — who a change here reaches.
+    #[serde(default)]
+    pub used_by: Vec<String>,
+    /// Whether a conversation can be replayed into this backend. False for the pty runtimes, which
+    /// keep no transcript, so a switch onto one cannot carry the history and is refused.
+    #[serde(default)]
+    pub replayable: bool,
+}
+
+/// A live "this credential is spent until T" mark — the wire twin of `adi_agents::llm::Hold`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HoldDto {
+    pub credential: String,
+    /// The model held, or blank for a login-scoped hold that shadows every model on it.
+    #[serde(default)]
+    pub model: String,
+    pub class: String,
+    /// When it lifts, in unix seconds.
+    pub until: u64,
+    /// The provider's own words, as far as they were read — why this is held.
+    #[serde(default)]
+    pub reason: String,
+    /// Which run wrote it down.
+    #[serde(default)]
+    pub set_by: String,
+    /// How many times in a row a probe has found it still spent. Each failure doubles the wait.
+    #[serde(default)]
+    pub attempts: u32,
+    /// One line for the page: `limited until 14:00 UTC`.
+    #[serde(default)]
+    pub describe: String,
+}
+
+/// `GET /api/llm/backends` — the registry, plus everything the page needs to judge it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LlmBackendsDto {
+    pub backends: Vec<LlmBackendDto>,
+    /// The global switches — `llm/settings.toml`.
+    pub settings: LlmSettingsDto,
+    /// Per agent, the rows whose context is smaller than something earlier in its list. A warning
+    /// and never a block: a shorter conversation still fits, and only the switch itself can know.
+    #[serde(default)]
+    pub context_warnings: Vec<ContextWarningDto>,
+    /// Rows naming a backend that no longer exists, as `agent → backend`. A chain skips them, so
+    /// this is the page's chance to say so before a run finds out.
+    #[serde(default)]
+    pub dangling: Vec<DanglingRowDto>,
+}
+
+/// One "this row can hold less than the one before it" warning.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextWarningDto {
+    pub agent: String,
+    pub backend: String,
+    /// One line, as the form shows it.
+    pub message: String,
+}
+
+/// One agent row naming a backend that is not in the registry.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DanglingRowDto {
+    pub agent: String,
+    pub backend: String,
+}
+
+/// The handful of global switches — `llm/settings.toml`, mirroring `adi_agents::llm::LlmSettings`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmSettingsDto {
+    /// Ask before *every* switch, even one the rules say is a plain quota limit. Off by default:
+    /// the point of the list is that a limit does not interrupt the chat.
+    #[serde(default)]
+    pub ask_on_switch: bool,
+    /// How often the background prober wakes, in seconds.
+    #[serde(default)]
+    pub probe_every: u64,
+}
+
+/// `POST /api/llm/backends/save` — create or update one backend, keyed by `id`.
+///
+/// Every field is stated: this is the whole object, and the form always sends all of it. That is
+/// deliberate — a backend is a handful of fields on one page, not a manifest edited from four
+/// places, so there is no omit-to-keep here.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SaveLlmBackend {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    pub runtime: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub context_tokens: u64,
+    #[serde(default)]
+    pub settings: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub limit_rules: Vec<LimitRuleDto>,
+    #[serde(default)]
+    pub probe: Option<ProbeDto>,
+    /// The backend's previous id when an edit renames it. Every agent row naming the old id is
+    /// re-pointed, so a rename does not silently strand a chain.
+    #[serde(default)]
+    pub rename_from: Option<String>,
+}
+
+/// One backend named by id — `POST /api/llm/backends/delete`, `/api/llm/holds/release`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LlmBackendRef {
+    pub id: String,
+}
+
+/// `POST /api/llm/settings` — the global switches, both stated.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveLlmSettings {
+    #[serde(default)]
+    pub ask_on_switch: bool,
+    #[serde(default)]
+    pub probe_every: u64,
 }
 
 // ------------------------------------------------------------- llm gateway

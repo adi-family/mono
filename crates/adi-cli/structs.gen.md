@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 23 enums across 18 files.
+5 structs · 24 enums across 19 files.
 
 ## Index
 
@@ -16,6 +16,7 @@
 - [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
+- [`src/llm.rs`](#srcllmrs) — `LlmCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/marketplace.rs`](#srcmarketplacers) — `MarketplaceCommand`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
@@ -49,6 +50,10 @@ pub(crate) enum AgentsCommand {
         name: String,
         #[arg(long)]
         backend: String,
+        #[arg(long = "llm")]
+        llm: Vec<String>,
+        #[arg(long = "no-llm", conflicts_with = "llm")]
+        no_llm: bool,
         #[arg(long)]
         system_prompt: Option<String>,
         #[arg(long = "command-scope")]
@@ -756,6 +761,87 @@ pub(crate) enum BaseCommand {
 
 ---
 
+## `src/llm.rs`
+
+### enum `LlmCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum LlmCommand {
+    Backends {
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Save {
+        id: String,
+        #[arg(long)]
+        runtime: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long = "context-tokens")]
+        context_tokens: Option<u64>,
+        #[arg(long)]
+        settings: Option<String>,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
+        #[arg(long = "api-key-env")]
+        api_key_env: Option<String>,
+        #[arg(long = "param")]
+        params: Vec<String>,
+        #[arg(long = "limit-rules")]
+        limit_rules: Option<String>,
+        #[arg(long = "probe-model")]
+        probe_model: Option<String>,
+        #[arg(long = "probe-prompt")]
+        probe_prompt: Option<String>,
+        #[arg(long = "rename-from")]
+        rename_from: Option<String>,
+    },
+    Delete {
+        id: String,
+    },
+    Settings {
+        #[arg(long = "ask-on-switch", value_name = "BOOL")]
+        ask_on_switch: Option<bool>,
+        #[arg(long = "probe-every", value_name = "SECONDS")]
+        probe_every: Option<u64>,
+        #[arg(long)]
+        json: bool,
+    },
+    Holds {
+        #[arg(long)]
+        json: bool,
+    },
+    Release {
+        id: String,
+    },
+    Migrate {
+        #[arg(long)]
+        apply: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Probe {
+        id: Option<String>,
+        #[arg(long, conflicts_with = "id")]
+        watch: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+```
+
+---
+
 ## `src/main.rs`
 
 ### struct `Cli`
@@ -820,6 +906,10 @@ enum Command {
     Agents {
         #[command(subcommand)]
         command: AgentsCommand,
+    },
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
     },
     Goals {
         #[command(subcommand)]

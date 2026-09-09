@@ -1118,6 +1118,7 @@ mod tests {
             title: None,
             launched_by: String::new(),
             overrides: None,
+            chain: None,
             runner_state: None,
             outcome: None,
         }

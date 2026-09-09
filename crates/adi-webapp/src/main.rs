@@ -52,8 +52,8 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     FactsConsole, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
-    hive_view, knowledge_view, live_view, llm_view, load_agent_into_form, load_dir,
-    load_store_file, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log,
+    hive_view, knowledge_view, live_view, llm_backends_view, llm_view, load_agent_into_form,
+    load_dir, load_store_file, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log,
     poll_term, poll_trigger_log, poll_watch, ports_manager_view, project_detail_view,
     projects_view, reset_chat_home, secrets_view, seed_onboarding, start_onb_reconfigure,
     store_file_view, tasks_view, tools_view, triggers_view,
@@ -64,7 +64,8 @@ use routing::{
 };
 use state::{
     AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, FleetForm, Form,
-    HookLogView, KnowledgeConsole, MarketplaceForm, MeshForm, MetaForm, ProjectsForm, ROOT_AGENT,
+    HookLogView, KnowledgeConsole, LlmBackendsForm, MarketplaceForm, MeshForm, MetaForm,
+    ProjectsForm, ROOT_AGENT,
     SecretsForm, SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor,
     ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
 };
@@ -710,6 +711,9 @@ fn App() -> impl IntoView {
         secrets,
         db,
         meta,
+        // Filled only on its own page — no other screen reads the backend registry, so there is
+        // nothing to keep warm between visits.
+        llm_backends: RwSignal::new(None),
         triggers,
         hive,
         dashboards,
@@ -853,6 +857,9 @@ fn App() -> impl IntoView {
     };
 
     let fleet_form = FleetForm::new();
+
+    // The LLM backends editor. One for the page, not one per row — see `LlmBackendsForm`.
+    let llm_backends_form = LlmBackendsForm::new();
 
     let managed_only = RwSignal::new(true);
 
@@ -998,6 +1005,7 @@ fn App() -> impl IntoView {
                 | Route::PortsManager
                 | Route::Mesh
                 | Route::Fleet
+                | Route::LlmBackends
         ) && opened.is_some()
             && !live::connected()
         {
@@ -1214,6 +1222,7 @@ fn App() -> impl IntoView {
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
                         Route::Fleet => fleet_view(state, fleet_form),
+                        Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
                     }}
 
                 </div>
@@ -1262,7 +1271,11 @@ fn App() -> impl IntoView {
 fn crumbs(route: Route, project: String) -> AnyView {
     let mut path: Vec<(String, Option<String>)> = Vec::new();
     match route {
-        Route::Hive | Route::PortsManager | Route::Mesh | Route::Fleet => {
+        Route::Hive
+        | Route::PortsManager
+        | Route::Mesh
+        | Route::Fleet
+        | Route::LlmBackends => {
             path.push(("Settings".to_string(), None));
         }
         Route::ProjectDetail if !project.is_empty() => {
@@ -1363,7 +1376,13 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
     ),
     (
         "Settings",
-        &[Route::Hive, Route::PortsManager, Route::Mesh, Route::Fleet],
+        &[
+            Route::Hive,
+            Route::PortsManager,
+            Route::Mesh,
+            Route::Fleet,
+            Route::LlmBackends,
+        ],
     ),
 ];
 

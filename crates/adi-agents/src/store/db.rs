@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     runner        TEXT,
     owner_instructions TEXT,
     title         TEXT,
+    chain         TEXT,
+    chain_at      INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -187,6 +189,18 @@ const MIGRATIONS: &[&str] = &[
     // every message ever queued before this existed. A turn needs no such column: it is stored as
     // one JSON blob, so its `marker` field simply reads back absent. See `crate::marker`.
     "ALTER TABLE queue ADD COLUMN marker TEXT",
+    // The ordered list of LLM backends this conversation may answer on, resolved once on its first
+    // turn, and the row of it answering now. NULL for every session opened before this existed and
+    // for any opened by a caller with no chain in hand — both of which read as "whatever its agent's
+    // own backend field says", which is what those sessions ran on.
+    //
+    // Two columns rather than one blob because the halves have different lifetimes: the list is
+    // written once and never revised, which is what stops an agent edited mid-conversation from
+    // changing a live chat, while the position moves on every failover. `NOT NULL DEFAULT 0` on the
+    // position for the same reason `starred` has one — a session that has never switched is on its
+    // first row, and that is exactly what 0 says. See `SessionRecord::chain`.
+    "ALTER TABLE sessions ADD COLUMN chain TEXT",
+    "ALTER TABLE sessions ADD COLUMN chain_at INTEGER NOT NULL DEFAULT 0",
 ];
 
 // One connection per thread per database.

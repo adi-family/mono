@@ -34,6 +34,18 @@ pub(crate) enum AgentsCommand {
         /// `harness:claude-sdk`, `harness:adi`.
         #[arg(long)]
         backend: String,
+        /// A row of this agent's LLM backend chain, in order — the ids from `adi-mono llm
+        /// backends`. Repeatable; comma-separated values are also accepted. **Row 1 is what a new
+        /// conversation starts on**, and the rest are where it goes when a backend runs out. Omit
+        /// every `--llm` to leave an existing chain alone; pass `--no-llm` to clear it.
+        ///
+        /// Per-row overrides are not offered here: a row overriding a model is a second way to
+        /// reach one, and it belongs on the backend or in the file, not in a flag.
+        #[arg(long = "llm")]
+        llm: Vec<String>,
+        /// Clear this agent's backend chain (see `--llm`).
+        #[arg(long = "no-llm", conflicts_with = "llm")]
+        no_llm: bool,
         #[arg(long)]
         system_prompt: Option<String>,
         /// CLI command groups this agent may use, stored as the manifest's command scope.
@@ -391,6 +403,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         AgentsCommand::Save {
             name,
             backend,
+            llm,
+            no_llm,
             system_prompt,
             command_scope,
             model,
@@ -480,6 +494,16 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             let old = stored.as_ref();
             let manifest = AgentManifest {
                 backend: backend.into(),
+                // Same kept/stated rule as everything below, and it matters more here than most:
+                // an agent whose chain went missing does not fail, it silently falls back to the
+                // manifest's own backend field — the one configuration the chain exists to replace.
+                backends: kept(
+                    no_llm,
+                    stated(llm, |ids| {
+                        clean_tags(ids).into_iter().map(chain_row).collect()
+                    }),
+                    old.map(|m| m.backends.clone()),
+                ),
                 arguments,
                 tags: kept(
                     no_tag,
@@ -817,6 +841,15 @@ fn kept<T: Default>(clear: bool, stated: Option<T>, stored: Option<T>) -> T {
     stated.or(stored).unwrap_or_default()
 }
 
+/// One `--llm` value as a chain row.
+///
+/// Bare ids only. A row may also carry overrides, but a flag that took them would be a second way
+/// to set a model from the command line — the thing this whole design removed — and the id alone is
+/// what the picker and the panel deal in too.
+fn chain_row(id: String) -> adi_core::llm::AgentBackendEntry {
+    adi_core::llm::AgentBackendEntry::new(id)
+}
+
 /// The same rule for a boolean, which has no empty value to mean "unmentioned" — so the pair of
 /// flags carries it: `--x` on, `--no-x` off, neither leaves it alone.
 fn flag(on: bool, off: bool, stored: bool) -> bool {
@@ -999,8 +1032,21 @@ fn print_agent(agent: &StoredAgent) {
         agent.manifest.backend,
         agent.manifest.executor()
     );
-    if let Some(model) = arguments.model {
-        println!("  model: {model}");
+    // The chain first, and the manifest's own model only when there is no chain: with one, the
+    // model comes from whichever row is answering, and printing a leftover argument beside it would
+    // show two answers to "what does this run on".
+    if agent.manifest.backends.is_empty() {
+        if let Some(model) = arguments.model {
+            println!("  model: {model}");
+        }
+    } else {
+        let rows: Vec<&str> = agent
+            .manifest
+            .backends
+            .iter()
+            .map(|row| row.backend.as_str())
+            .collect();
+        println!("  llm: {} (starts on {})", rows.join(" → "), rows[0]);
     }
     if let Some(project) = &agent.manifest.project {
         println!("  project: {project}");

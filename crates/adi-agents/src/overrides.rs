@@ -161,6 +161,7 @@ mod tests {
                 prelude: Vec::new(),
                 knowledge: Vec::new(),
                 memory: false,
+                backends: Vec::new(),
                 secrets: Vec::new(),
                 path: Vec::new(),
                 env: BTreeMap::new(),

@@ -10,7 +10,8 @@ use adi_agents::StoredAgent;
 use adi_agents::contains_json_null;
 
 use crate::types::{
-    AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentCapabilities,
+    AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentBackendRowDto,
+    AgentCapabilities,
     AgentChoice, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentFormSpec,
     AgentGoal, AgentGoals, AgentKeys, AgentNearDup, AgentPeek, AgentQuestion, AgentRef,
     AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunOutcome,
@@ -283,6 +284,22 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     // prompt once at creation — see `owner_instructions_for` and ADI-MONO-13. `None` for a local
     // launch, which is nearly every one.
     let owner_instructions = sender.and_then(|s| owner_instructions_for(store, s.nickname));
+    // Where this conversation's backend chain begins, and whether it has anywhere to fall. Both are
+    // ids, and blank reads as absent: a picker left on "as defined" sends an empty string rather
+    // than dropping the key, and that must mean row 1 and not an unresolvable backend. The chain is
+    // pinned from here on — editing the agent afterwards does not move a conversation already
+    // running.
+    let start_at = req
+        .start_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(|id| adi_agents::llm::StartAt::Id(id.to_string()));
+    let only = req
+        .only
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
     let launch = store.launch(
@@ -297,6 +314,8 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
             overrides: overrides.as_ref(),
             owner_instructions: owner_instructions.as_deref(),
             markers: &markers,
+            start_at: start_at.as_ref(),
+            only,
         },
     );
     let launch = match launch {
@@ -1471,6 +1490,16 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         memory: req
             .memory
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.memory)),
+        // The agent's ordered backend list — its whole model configuration. Omit-to-keep, for the
+        // strongest version of the reason `secrets` is: an agent whose list was silently cleared
+        // has no model at all, and would fail at its next run rather than here.
+        backends: match req.backends {
+            Some(rows) => rows.into_iter().map(backend_row).collect(),
+            None => stored
+                .as_ref()
+                .map(|m| m.backends.clone())
+                .unwrap_or_default(),
+        },
         // The secrets attached to this agent (its per-secret checkboxes). Only these are decrypted
         // and injected into the agent's runs. A blank scope is normalized to `None` (global).
         // Omit-to-keep, as above: an agent stripped of its credentials by a save that never
@@ -1666,6 +1695,14 @@ fn agent_dto(
         prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,
+        backends: m
+            .backends
+            .into_iter()
+            .map(|row| AgentBackendRowDto {
+                backend: row.backend,
+                overrides: row.overrides,
+            })
+            .collect(),
         secrets: m
             .secrets
             .into_iter()
@@ -1683,6 +1720,17 @@ fn agent_dto(
         running,
         at_run_limit,
         caps: backend_caps,
+    }
+}
+
+/// Normalize a wire backend row into its store form, trimming the id it names.
+///
+/// The overrides pass through as they stand: what may and may not be overridden is the store's
+/// call, not the wire's, and `Agents::save` refuses a row that respells the login.
+fn backend_row(row: AgentBackendRowDto) -> adi_agents::llm::AgentBackendEntry {
+    adi_agents::llm::AgentBackendEntry {
+        backend: row.backend.trim().to_string(),
+        overrides: row.overrides,
     }
 }
 
