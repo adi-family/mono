@@ -120,7 +120,7 @@ impl Supervisor {
             let task = if spec.start.is_on_demand() {
                 info!(service = %name, idle_stop = ?spec.idle_stop,
                       "registering on-demand runner (starts on the first request)");
-                let handle = self.demand.register(&name);
+                let handle = self.demand.register(&name, spec.route.clone());
                 tokio::spawn(supervise_on_demand(spec.clone(), rx, handle))
             } else {
                 info!(service = %name, "starting runner");
@@ -616,6 +616,7 @@ mod tests {
             idle_stop: crate::config::DEFAULT_IDLE_STOP,
             stop_grace: crate::config::DEFAULT_STOP_GRACE,
             http_port: None,
+            route: Some(format!("{name}.test")),
         }
     }
 

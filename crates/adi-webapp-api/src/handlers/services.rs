@@ -110,8 +110,10 @@ const ON_DEMAND: &str = "on-demand";
 /// that must be up whether or not anybody is looking at it.
 const ALWAYS: &str = "always";
 
-/// Where a hive publishes what its on-demand services are doing, beside its config (adi-hive's
-/// `DEMAND_FILE`). Only a hive that actually supervises one writes it.
+/// Where a hive publishes what its on-demand services are doing: the store's own `hive` directory,
+/// whichever config file that hive was started from (adi-hive's `shared::state_path`). Only a hive
+/// that actually supervises something on demand writes it — which on a machine with a route-only
+/// front door is the per-user supervisor, not the front door.
 const DEMAND_FILE: &str = "demand.json";
 
 /// What the hive daemon says its on-demand services are doing, keyed exactly as the hive keys them:

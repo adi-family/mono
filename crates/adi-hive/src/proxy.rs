@@ -36,7 +36,7 @@ pub trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 use crate::config::{ResolvedRoute, host_key, is_mesh_host, path_prefix};
-use crate::demand::Demand;
+use crate::demand::{Demand, Wanted};
 
 /// Caps per-connection memory against a client that never sends the blank line.
 const MAX_HEAD: usize = 16 * 1024;
@@ -65,6 +65,25 @@ struct Route {
     /// `None` is the host's fallback: it answers whatever no prefix claimed.
     path: Option<String>,
     upstream: SocketAddr,
+}
+
+/// The route a request landed on, for the caller that has to *name* it: the service, and the key
+/// the route goes by outside this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Matched<'a> {
+    /// The service, keyed as the config keys it (`<project>/<service>` for an imported one).
+    pub service: &'a str,
+    host: &'a str,
+    path: Option<&'a str>,
+}
+
+impl Matched<'_> {
+    /// How the shared wake file names this route (see [`crate::config::route_key`]) — what the
+    /// front door writes when the hive that supervises this service is a different process.
+    #[must_use]
+    pub fn route_key(&self) -> String {
+        crate::config::route_key(self.host, self.path)
+    }
 }
 
 /// Where a request goes once its `Host` (and target) have been matched. Separate from the act of
@@ -153,20 +172,24 @@ impl Router {
             .map_or(Decision::NoRoute, |route| Decision::Service(route.upstream))
     }
 
-    /// The name of the service a request lands on — what [`Self::route`] picked, said in the config's
-    /// own words. `None` for a mesh host and for a host nothing claims.
+    /// The route a request lands on — what [`Self::route`] picked, said in the config's own words.
+    /// `None` for a mesh host and for a host nothing claims.
     ///
     /// It exists for on-demand services: the front door has to be able to say *which* service a
     /// request just asked for before it can wake it. Kept beside [`Decision`] rather than folded
     /// into it, so the mesh gateway — which reads this same table — is untouched by any of it.
     #[must_use]
-    pub fn matched_service(&self, host: &str, target: &str) -> Option<&str> {
+    pub fn matched_service(&self, host: &str, target: &str) -> Option<Matched<'_>> {
         let host = host_key(host);
         if is_mesh_host(&host) {
             return None;
         }
         self.matched(&host, request_path(target))
-            .map(|route| route.service.as_str())
+            .map(|route| Matched {
+                service: route.service.as_str(),
+                host: route.host.as_str(),
+                path: route.path.as_deref(),
+            })
     }
 
     /// The route a `(host, path)` resolves to: the longest matching prefix on that host, else the
@@ -320,21 +343,22 @@ async fn handle<S: ClientStream>(
     // The target only picks the route. A missing/unparsable request line routes as `/`, which is
     // the host's fallback — the same place a pre-prefix config always sent it.
     let target = extract_target(&head);
-    let (upstream, carved, on_demand) = match router.route(&host, target.as_deref().unwrap_or("/"))
-    {
+    let (upstream, carved, wanted) = match router.route(&host, target.as_deref().unwrap_or("/")) {
         Decision::Service(upstream) => {
             // Every request for an on-demand service stamps the activity that keeps it alive, and
-            // starts it when it is down. `touch` answers `false` for everything else — every
-            // `always` service, and every service at all in a hive that only routes — so this line
-            // changes nothing for a config that never asked for the policy.
-            let on_demand = router
+            // starts it when it is down — in this process when this hive supervises the service,
+            // through the shared wake file when another hive does. `Wanted::No` for everything
+            // else, so this line changes nothing for a config that never asked for the policy.
+            let wanted = router
                 .matched_service(&host, target.as_deref().unwrap_or("/"))
-                .is_some_and(|service| demand.touch(service));
-            (upstream, router.host_is_carved(&host), on_demand)
+                .map_or(Wanted::No, |matched| {
+                    demand.wanted(matched.service, &matched.route_key())
+                });
+            (upstream, router.host_is_carved(&host), wanted)
         }
         // A mesh host is one upstream — the gateway — whatever the path, and its head travels on to
         // a node that does its own routing. Nothing here to carve, and nothing to rewrite.
-        Decision::Mesh(upstream) => (upstream, false, false),
+        Decision::Mesh(upstream) => (upstream, false, Wanted::No),
         Decision::MeshUnavailable => {
             info!(%host, "mesh host, but no local mesh gateway is configured");
             return respond_mesh_unavailable(&mut client, &host).await;
@@ -350,7 +374,7 @@ async fn handle<S: ClientStream>(
     // A service that was just woken is not listening yet, so a single refused connection says
     // nothing. Give it the start window before deciding, so a service that comes up quickly serves
     // the page itself rather than handing the visitor a holding page it has to sit through.
-    let connected = if on_demand {
+    let connected = if wanted.is_on_demand() {
         connect_within(upstream, START_WINDOW).await
     } else {
         TcpStream::connect(upstream).await
@@ -358,7 +382,14 @@ async fn handle<S: ClientStream>(
     let mut server = match connected {
         Ok(s) => s,
         Err(e) => {
-            if on_demand {
+            if wanted.is_on_demand() {
+                // A refused connection outranks whatever phase the other hive last published: the
+                // process it thinks it has is not answering, so ask for a start outright rather
+                // than wait for the next poll to notice. Nothing to ask when we are the supervisor
+                // — the touch above has already started it.
+                if let Wanted::Elsewhere(route) = &wanted {
+                    demand.wake_now(route);
+                }
                 info!(%host, %upstream, "on-demand service is still starting; holding the page");
                 return respond_starting(&mut client, &host).await;
             }
@@ -1357,7 +1388,7 @@ mod tests {
         ));
         let demand = Arc::new(Demand::default());
         // The supervisor's end: registering is what makes the service wakeable.
-        let mut supervised = demand.register("watch");
+        let mut supervised = demand.register("watch", Some("watch.adi".to_string()));
 
         let (mut probe, front) = tokio::io::duplex(16 * 1024);
         let served = {
@@ -1383,6 +1414,63 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), supervised.wait_for_activity())
             .await
             .expect("the request reached the supervisor");
+    }
+
+    /// The same thing on a **split install**, which is how every machine with a `routes_only` front
+    /// door is set up: this hive supervises nothing, so it cannot start the service itself. It must
+    /// still hold the page and leave the request where the hive that owns the process will find it
+    /// — the alternative is the `502` that made the on-demand policy look broken.
+    #[tokio::test]
+    async fn a_front_door_that_supervises_nothing_asks_the_hive_that_does() {
+        let dir = std::env::temp_dir().join(format!(
+            "adi-hive-proxy-split-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch dir");
+        let (state, wake) = (dir.join("demand.json"), dir.join("wake.json"));
+        // What the other hive published: it supervises `watch` on demand, and it is stopped.
+        std::fs::write(&state, br#"{"watch":"idle-stopped"}"#).expect("seed the state file");
+
+        let upstream = nothing_listening().await;
+        let router = Arc::new(Router::new(
+            &[named_route(
+                "watch",
+                "watch.adi",
+                None,
+                &upstream.to_string(),
+            )],
+            None,
+        ));
+        let demand = Arc::new(Demand::new(Some(state), Some(wake.clone())));
+        demand.absorb();
+
+        let (mut probe, front) = tokio::io::duplex(16 * 1024);
+        let served = {
+            let demand = Arc::clone(&demand);
+            tokio::spawn(async move { handle(front, &router, &demand).await })
+        };
+        probe
+            .write_all(b"GET / HTTP/1.1\r\nHost: watch.adi\r\n\r\n")
+            .await
+            .unwrap();
+        let mut response = String::new();
+        probe.read_to_string(&mut response).await.unwrap();
+        served.await.unwrap().expect("handled");
+
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "got: {}",
+            &response[..response.len().min(64)]
+        );
+        assert!(response.contains("Starting this service"), "{response}");
+        let asked = crate::shared::read(&wake);
+        assert!(
+            asked["watch.adi"].wake.is_some(),
+            "the request has to reach the other hive: {asked:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Nothing changes for a service the hive does not supervise on demand: a dead upstream is
@@ -1431,7 +1519,7 @@ mod tests {
             None,
         ));
         let demand = Arc::new(Demand::default());
-        let mut supervised = demand.register("watch");
+        let mut supervised = demand.register("watch", Some("watch.adi".to_string()));
         let (mut probe, front) = tokio::io::duplex(16 * 1024);
         let served = {
             let demand = Arc::clone(&demand);
@@ -1464,17 +1552,28 @@ mod tests {
             ],
             Some("127.0.0.1:8099".parse().unwrap()),
         );
+        let matched = |host, target| dashboard.matched_service(host, target);
         assert_eq!(
-            dashboard.matched_service("nosh.adi", "/"),
+            matched("nosh.adi", "/").map(|m| m.service),
             Some("nosh/frontend")
         );
         assert_eq!(
-            dashboard.matched_service("NOSH.adi:8080", "/api/things"),
+            matched("NOSH.adi:8080", "/api/things").map(|m| m.service),
             Some("nosh/backend")
         );
-        assert_eq!(dashboard.matched_service("nothing.adi", "/"), None);
+        // And the key those two go by outside this process keeps them apart: one host, two routes,
+        // so a wake for the API is not a wake for the page around it.
         assert_eq!(
-            dashboard.matched_service("app.laptop-b.n.adi", "/"),
+            matched("nosh.adi", "/").map(|m| m.route_key()),
+            Some("nosh.adi".to_string())
+        );
+        assert_eq!(
+            matched("NOSH.adi:8080", "/api/things").map(|m| m.route_key()),
+            Some("nosh.adi/api".to_string())
+        );
+        assert_eq!(matched("nothing.adi", "/").map(|m| m.service), None);
+        assert_eq!(
+            matched("app.laptop-b.n.adi", "/").map(|m| m.service),
             None,
             "a remote node's service is not ours to start"
         );

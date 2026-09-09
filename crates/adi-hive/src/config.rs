@@ -293,6 +293,16 @@ impl ServiceSpec {
             .is_some_and(|proxy| !proxy.host.trim().is_empty())
     }
 
+    /// The route this service answers on, as [`route_key`] names it, or `None` when no request can
+    /// reach it. Judged by the same blank-host rule as [`Self::has_proxy_host`]: a host that is only
+    /// technically there routes nothing, and must not become a key another process stamps.
+    fn route_key(&self) -> Option<String> {
+        self.proxy
+            .as_ref()
+            .filter(|proxy| !proxy.host.trim().is_empty())
+            .map(|proxy| route_key(&proxy.host, proxy.path.as_deref()))
+    }
+
     /// How long this service may sit unvisited before an idle stop (on-demand only).
     fn idle_stop(&self) -> Duration {
         duration_or(self.idle_stop.as_deref(), DEFAULT_IDLE_STOP)
@@ -447,6 +457,10 @@ pub struct RunnerSpec {
     /// merely winding down from one that is still serving — a request landing mid-drain keeps the
     /// service only if something is still listening here.
     pub http_port: Option<u16>,
+    /// The route a request for this service arrives on ([`route_key`]), when it has one. It travels
+    /// with the runner so the supervisor can recognise a request another process routed — see
+    /// [`crate::shared`]. `None` for a service with no `proxy.host`: nothing can arrive for it.
+    pub route: Option<String>,
 }
 
 impl Hive {
@@ -534,6 +548,7 @@ impl Hive {
             let (start, idle_stop, stop_grace) =
                 (svc.start_policy(), svc.idle_stop(), svc.stop_grace());
             let http_port = svc.http_port();
+            let route = svc.route_key();
             // An imported service resolves relative paths against its own file's directory; a service
             // declared in this hive uses the loader's `base_dir`.
             let dir = svc.base_dir.as_deref().unwrap_or(base_dir);
@@ -558,6 +573,7 @@ impl Hive {
                     idle_stop,
                     stop_grace,
                     http_port,
+                    route,
                 },
                 (None, Some(script)) => RunnerSpec {
                     name: name.clone(),
@@ -569,6 +585,7 @@ impl Hive {
                     idle_stop,
                     stop_grace,
                     http_port,
+                    route,
                 },
                 (None, None) => continue,
             };
@@ -1156,6 +1173,23 @@ pub fn path_prefix(raw: Option<&str>) -> Option<String> {
     })
 }
 
+/// The name a route goes by **between processes**: its host, plus the prefix it claims on that host
+/// when it claims one — `nosh.adi`, `nosh.adi/api`.
+///
+/// Both halves are normalised on the way in ([`host_key`], [`path_prefix`]), so a config that
+/// writes `NOSH.adi` and `api/` produces the key a request for `nosh.adi/api/things` produces. It
+/// names a *route* rather than a service because that is what a request lands on, and because a
+/// service key repeats across imported projects while a route cannot: two services on one host must
+/// claim different prefixes or one of them is unreachable. See [`crate::shared`].
+#[must_use]
+pub fn route_key(host: &str, path: Option<&str>) -> String {
+    let host = host_key(host);
+    match path_prefix(path) {
+        Some(prefix) => format!("{host}{prefix}"),
+        None => host,
+    }
+}
+
 impl Hive {
     /// Load a hive.yaml and fan in every service reachable through its `imports`, so one hive can
     /// front-door an entire machine.
@@ -1310,9 +1344,20 @@ fn default_bind() -> Vec<SocketAddr> {
 /// and reads it as a raw file within the `hive` module.
 #[must_use]
 pub fn default_config_path() -> PathBuf {
+    store_path(HIVE_CONFIG_FILE)
+}
+
+/// A file of the hive's own in the store: `$HOME/$ADI_DIR/mono/hive/<name>`.
+///
+/// The one location two hives can both name. A hive's *config* may be anywhere — this machine runs
+/// one from `dns/` and another from `dashboards/` — so anything the two have to share (see
+/// [`crate::shared`]) is resolved from the store rather than from "beside my own config", which is
+/// precisely the thing neither of them can work out for the other.
+#[must_use]
+pub fn store_path(name: &str) -> PathBuf {
     adi_config::Config::open()
         .module(HIVE_MODULE)
-        .raw_path(HIVE_CONFIG_FILE)
+        .raw_path(name)
 }
 
 #[cfg(test)]

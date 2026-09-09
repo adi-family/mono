@@ -53,6 +53,18 @@ extraction script cares about.
   What you lose by not editing anything is a first visit that waits a few seconds behind a holding
   page. What you lose by not editing a webhook receiver is the webhook.
 
+  **This works when routing and supervising are two separate processes, which on most machines they
+  are.** A front door on `:80` routes what a per-user hive actually runs: the visit lands on the one
+  that has no process to start, and the process belongs to the one that saw no visit. The two now
+  pass it between them through a pair of small files in the store — the front door leaves the
+  request, the supervisor picks it up a fraction of a second later and starts the service, and the
+  traffic the front door goes on seeing is what keeps that service from being idle-stopped while
+  somebody is still using it. There is nothing to configure, and a machine where one hive both
+  routes and supervises never writes the files at all. **Both hives have to be running this
+  version.** They share one binary, so an update covers both and each restarts itself once its
+  binary is replaced — but until one of them has, a service a visit should have woken stays asleep
+  and its host answers the `502` it always did.
+
   *Settings → Services* shows each service's policy and, instead of a running light, what it is
   actually doing: running, starting, idle-stopped, or stopped. An idle-stopped service is not
   reported as down, because it is not. Start and Stop still work by hand, and starting a service

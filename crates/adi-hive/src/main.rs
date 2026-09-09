@@ -14,7 +14,7 @@ use std::time::Duration;
 use adi_hive::config::{self, Hive};
 use adi_hive::demand::Demand;
 use adi_hive::proxy::{self, Router};
-use adi_hive::{runner, status, tls};
+use adi_hive::{demand, runner, shared, status, tls};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -86,10 +86,13 @@ async fn main() -> anyhow::Result<()> {
     let (route_tx, route_rx) = watch::channel(Arc::clone(&current));
 
     // What the front door and the supervisor share about on-demand services: the front door reports
-    // the requests, the supervisor owns the processes. Its phases are published beside the config,
-    // like the status file, so the control panel can tell a service that is *starting* from one that
-    // is simply down.
-    let demand = Arc::new(Demand::new(Some(path.with_file_name(DEMAND_FILE))));
+    // the requests, the supervisor owns the processes. Both files sit in the store rather than
+    // beside this config, because on a split install the other hive was started from a config in a
+    // different directory and could not name a path relative to ours (see `adi_hive::shared`).
+    let demand = Arc::new(Demand::new(
+        Some(shared::state_path()),
+        Some(shared::wake_path()),
+    ));
 
     let mut bound = Vec::with_capacity(resolved.binds.len());
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
@@ -136,6 +139,12 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let mut supervisor = runner::Supervisor::start(runners, Arc::clone(&demand));
+
+    // The other hive's end of the on-demand policy: requests it routed and phases it published,
+    // read a few times a second. Whichever half this hive is, the task is the same one — and on a
+    // machine where one hive both routes and supervises it finds nothing to do, because that hive's
+    // own requests never reach the disk.
+    tasks.push(tokio::spawn(demand::bridge(Arc::clone(&demand))));
 
     info!("adi-hive ready");
 
@@ -371,11 +380,6 @@ fn warn_if_config_is_user_writable(_path: &Path) {}
 
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
-
-/// Where the phases of this hive's on-demand services are published, beside the config — the file
-/// the control panel reads to tell a service that is *starting* from one that is simply stopped.
-/// Written only by a hive that actually supervises one (see [`Demand`]).
-const DEMAND_FILE: &str = "demand.json";
 
 /// How often the config (and its imports) is re-read to pick up added/removed services.
 /// Polling rather than an fs-watch: the files are tiny, a few are involved, and this keeps

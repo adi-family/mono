@@ -4,14 +4,15 @@
 
 > adi-family reverse proxy: routes inbound HTTP by Host header to a local upstream (nginx-style), run in the foreground under a supervisor
 
-24 structs · 8 enums across 6 files.
+31 structs · 9 enums across 7 files.
 
 ## Index
 
 - [`src/config.rs`](#srcconfigrs) — `Hive`, `ProxyBinds`, `ServiceSpec`, `ServiceProxy`, `Rollout`, `Recreate`, `Runner`, `Script`, `Docker`, `Environment`, `RestartPolicy`, `StartPolicy`, `RunnerSpec`, `ResolvedRoute`, `Resolved`
-- [`src/demand.rs`](#srcdemandrs) — `Phase`, `Demand`, `Service`, `Handle`
-- [`src/proxy.rs`](#srcproxyrs) — `Route`, `Decision`, `Router`
+- [`src/demand.rs`](#srcdemandrs) — `Phase`, `Wanted`, `Demand`, `Bridge`, `Service`, `Handle`
+- [`src/proxy.rs`](#srcproxyrs) — `Route`, `Matched`, `Decision`, `Router`
 - [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`, `Awake`, `Drained`, `Ended`, `Woke`
+- [`src/shared.rs`](#srcsharedrs) — `Entry`, `Wake`, `Mine`, `Reader`, `Pending`
 - [`src/status.rs`](#srcstatusrs) — `Status`
 - [`src/tls.rs`](#srctlsrs) — `CaMeta`, `LeafMeta`, `Tls`
 
@@ -212,6 +213,7 @@ pub struct RunnerSpec {
     pub idle_stop: Duration,
     pub stop_grace: Duration,
     pub http_port: Option<u16>,
+    pub route: Option<String>,
 }
 ```
 
@@ -264,6 +266,19 @@ pub enum Phase {
 }
 ```
 
+### enum `Wanted`
+
+What a routed request means for the service it landed on — the front door's whole question.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wanted {
+    No,
+    Here,
+    Elsewhere(String),
+}
+```
+
 ### struct `Demand`
 
 The registry of on-demand services: who is registered, when each was last wanted, and what each is doing. Shared as an `Arc` between the proxy tasks and the supervisor's runner tasks.
@@ -273,6 +288,21 @@ The registry of on-demand services: who is registered, when each was last wanted
 pub struct Demand {
     services: Mutex<BTreeMap<String, Service>>,
     state_path: Option<PathBuf>,
+    published: AtomicBool,
+    bridge: Option<Bridge>,
+    elsewhere: Mutex<BTreeMap<String, Phase>>,
+}
+```
+
+### struct `Bridge`
+
+The two ends of `crate::shared` this hive holds: what it asks of other hives, and what other hives are asking of it.
+
+```rust
+#[derive(Debug)]
+struct Bridge {
+    wake: shared::Wake,
+    inbox: Mutex<shared::Reader>,
 }
 ```
 
@@ -283,6 +313,7 @@ pub struct Demand {
 struct Service {
     activity: watch::Sender<Instant>,
     phase: Phase,
+    route: Option<String>,
 }
 ```
 
@@ -314,6 +345,19 @@ struct Route {
     host: String,
     path: Option<String>,
     upstream: SocketAddr,
+}
+```
+
+### struct `Matched`
+
+The route a request landed on, for the caller that has to *name* it: the service, and the key the route goes by outside this process.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Matched<'a> {
+    pub service: &'a str,
+    host: &'a str,
+    path: Option<&'a str>,
 }
 ```
 
@@ -419,6 +463,72 @@ enum Woke {
     Shutdown,
     Request,
     GraceOver,
+}
+```
+
+---
+
+## `src/shared.rs`
+
+### struct `Entry`
+
+One route's line in the wake file.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<u64>,
+    pub activity: u64,
+}
+```
+
+### struct `Wake`
+
+The writing half of the wake file, held by a hive that routes.
+
+```rust
+#[derive(Debug)]
+pub struct Wake {
+    path: PathBuf,
+    mine: Mutex<Mine>,
+}
+```
+
+### struct `Mine`
+
+What this process has asked for, and when it last said so out loud.
+
+```rust
+#[derive(Debug, Default)]
+struct Mine {
+    entries: BTreeMap<String, Entry>,
+    flushed: Option<Instant>,
+}
+```
+
+### struct `Reader`
+
+The reading half of the wake file, held by a hive that supervises.
+
+```rust
+#[derive(Debug)]
+pub struct Reader {
+    path: PathBuf,
+    acted: BTreeMap<String, u64>,
+}
+```
+
+### struct `Pending`
+
+What one route's entry is asking for, once the reader has decided what is new in it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub route: String,
+    pub start: bool,
+    pub idle_for: Duration,
 }
 ```
 
