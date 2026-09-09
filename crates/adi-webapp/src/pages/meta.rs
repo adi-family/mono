@@ -225,7 +225,8 @@ fn submit_setup(state: State, form: MetaForm) {
     }
     let body = SaveAgent {
         name,
-        backend,
+        // This form creates a chainless agent, so the runtime is its to state.
+        backend: Some(backend),
         arguments,
         tags: None,
         starred: None,

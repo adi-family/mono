@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn argv_honors_model_permission_mode_and_prompt() {
         let manifest = AgentManifest {
-            backend: "pty:claude".into(),
+            backend: Some("pty:claude".into()),
             arguments: PtyClaudeArguments {
                 model: Some("opus".into()),
                 permission_mode: Some(ClaudePermissionMode::Plan),

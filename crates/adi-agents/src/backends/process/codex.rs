@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn argv_puts_global_options_before_exec_and_never_opens_a_tui() {
         let manifest = AgentManifest {
-            backend: "process:codex".into(),
+            backend: Some("process:codex".into()),
             arguments: ProcessCodexArguments {
                 model: Some("gpt-5-codex".into()),
                 system_prompt: Some("Work carefully.".into()),

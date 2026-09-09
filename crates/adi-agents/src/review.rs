@@ -237,7 +237,7 @@ pub fn brief(evidence: &Evidence<'_>, path: &Path) -> String {
     let _ = writeln!(
         out,
         "Under review: agent `{}`, session `{}`, on `{}`.",
-        evidence.agent.name, evidence.run_id, evidence.agent.manifest.backend
+        evidence.agent.name, evidence.run_id, evidence.agent.manifest.runtime()
     );
     let _ = writeln!(
         out,
@@ -403,7 +403,7 @@ pub fn document(evidence: &Evidence<'_>, opts: Options) -> String {
 fn configuration(out: &mut String, e: &Evidence<'_>) {
     let m = &e.agent.manifest;
     let _ = writeln!(out, "## 1. The agent as configured\n");
-    let _ = writeln!(out, "- runtime: `{}`", m.backend);
+    let _ = writeln!(out, "- runtime: `{}`", m.runtime());
     let _ = writeln!(out, "- working directory: `{}`", e.record.cwd.display());
     if let Some(project) = &m.project {
         let _ = writeln!(out, "- project: `{project}`");
@@ -1090,7 +1090,7 @@ mod tests {
 
     fn agent() -> StoredAgent {
         let mut manifest = crate::agent::StoredAgentManifest {
-            backend: Backend::from("harness:adi"),
+            backend: Some(Backend::from("harness:adi")),
             ..Default::default()
         };
         manifest.arguments.insert(

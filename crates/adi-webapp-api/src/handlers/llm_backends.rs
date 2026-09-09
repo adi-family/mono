@@ -424,7 +424,7 @@ mod tests {
 
     fn agent_with_rows(store: &Agents, name: &str, rows: &[&str]) {
         let manifest: AgentManifest<std::collections::BTreeMap<String, Value>> = AgentManifest {
-            backend: adi_agents::Backend::HarnessAdi,
+            backend: Some(adi_agents::Backend::HarnessAdi),
             backends: rows.iter().map(|id| AgentBackendEntry::new(*id)).collect(),
             ..Default::default()
         };

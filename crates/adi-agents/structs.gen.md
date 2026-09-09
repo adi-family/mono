@@ -106,7 +106,8 @@ An agent definition with backend-specific arguments.
 #[serde(default, bound(deserialize = "Args: Deserialize<'de> + Default"))]
 pub struct AgentManifest<Args> {
     pub version: u32,
-    pub backend: Backend,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<Backend>,
     pub arguments: Args,
     pub tags: Vec<String>,
     pub starred: bool,
@@ -1952,6 +1953,7 @@ pub struct Applied {
     pub steps: Vec<String>,
     pub agents: usize,
     pub notes: Vec<String>,
+    pub held: BTreeMap<String, String>,
 }
 ```
 

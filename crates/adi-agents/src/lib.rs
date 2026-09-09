@@ -9,7 +9,7 @@
 //! # let store = Agents::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let store = Agents::open();
 //! let spec = AgentManifest {
-//!     backend: "pty:claude".into(),
+//!     backend: Some("pty:claude".into()),
 //!     arguments: PtyClaudeArguments {
 //!         model: Some("opus".into()),
 //!         ..Default::default()
@@ -65,7 +65,7 @@ use std::time::Duration;
 use adi_config::{Config, ConfigFile, now_unix};
 
 pub use agent::{
-    Agent, AgentManifest, LEGACY_VERSION, MANIFEST_VERSION, RawAgentArguments, SecretAttachment,
+    Agent, AgentManifest, MANIFEST_VERSION, RawAgentArguments, SecretAttachment, UNVERSIONED,
     StoredAgent, StoredAgentManifest, contains_json_null,
 };
 pub use auto_title::AutoTitleSettings;
@@ -182,6 +182,64 @@ fn as_run<'a>(agent: &'a StoredAgent, record: &SessionRecord) -> std::borrow::Co
 /// A list that resolves to nothing at all is a different matter and is an error: the agent *does*
 /// say what it wants to answer on, every one of those backends is gone, and falling back to a stale
 /// `backend` field would quietly answer on a model nobody chose.
+/// What to say to somebody whose agent cannot be run because nothing says what to run it on.
+///
+/// One sentence, one fix. Since v3 the runtime comes from the chain, so "no rows" and "rows naming
+/// backends that are gone" are the same failure with the same answer: point the agent at a backend
+/// that exists.
+fn no_runtime(name: &str) -> String {
+    format!(
+        "agent `{name}` names no LLM backend that exists, so there is no runtime to run it on — \
+         give it one with `adi-mono agents save {name} --llm <backend>` (`adi-mono llm backends` \
+         lists them)"
+    )
+}
+
+/// Whether this definition still has to be told what runtime it runs on.
+///
+/// Two ways it does not: it is an unmigrated file that carries its own (below
+/// [`RUNTIME_FROM_CHAIN`](agent::RUNTIME_FROM_CHAIN)), or it names no backend to derive one from —
+/// and an agent with no chain has no runtime, which is a thing to say at launch rather than to
+/// paper over here.
+fn needs_runtime(manifest: &StoredAgentManifest) -> bool {
+    manifest.backend.is_none() && !manifest.backends.is_empty()
+}
+
+/// Whether this definition's runtime is the chain's to say, and so must not be written into the
+/// file.
+///
+/// Both conditions matter. Below [`RUNTIME_FROM_CHAIN`](agent::RUNTIME_FROM_CHAIN) the field *is*
+/// the file's, and an unmigrated definition has to keep working exactly as it did. At v3 and above
+/// it is the head of the chain's — *when there is a chain*: an agent that lists no backends has
+/// nothing to derive a runtime from, so the `backend =` line stays what it always was, its own
+/// declaration. That is what keeps a `pty:claude` or `process:codex` agent — which drives a CLI and
+/// never asks an LLM backend anything — a legal thing to write.
+fn derives_runtime<Args>(manifest: &AgentManifest<Args>) -> bool {
+    manifest.version >= agent::RUNTIME_FROM_CHAIN && !manifest.backends.is_empty()
+}
+
+/// Give a definition the runtime of the backend at the head of its chain.
+///
+/// The head, and not the row a run ends up on: this is the agent's runtime *as a definition* — what
+/// a listing shows and what the argument schema is built from — and a new conversation starts on row
+/// 1. A run that fails over to a row on another runtime is patched again by
+/// [`ResolvedBackend::apply`](llm::ResolvedBackend::apply), which is the only place a runtime is
+/// allowed to differ from this one.
+///
+/// A row naming a backend that no longer exists leaves the runtime unset rather than skipping to
+/// row 2: the agent as written starts on a backend that is gone, and quietly answering with the
+/// next one's runtime would hide that.
+fn hydrate_runtime(
+    manifest: &mut StoredAgentManifest,
+    catalog: &BTreeMap<String, llm::LlmBackendManifest>,
+) {
+    manifest.backend = manifest
+        .backends
+        .first()
+        .and_then(|row| catalog.get(&row.backend))
+        .map(|backend| backend.runtime.clone());
+}
+
 fn chain_for(
     config: &Config,
     agent: &StoredAgent,
@@ -253,6 +311,9 @@ impl Agents {
         };
 
         let mut agents = Vec::new();
+        // Read once for the whole listing rather than per definition: hydrating 80 agents would
+        // otherwise re-read the backend registry 80 times to answer the same question.
+        let mut catalog = None;
         for entry in entries {
             let entry = entry?;
             if !entry.file_type()?.is_file() {
@@ -267,13 +328,42 @@ impl Agents {
             if validate_name(name).is_err() {
                 continue;
             }
+            let mut manifest: StoredAgentManifest = self.agent_file(name).load()?;
+            if needs_runtime(&manifest) {
+                let catalog = match catalog.as_ref() {
+                    Some(catalog) => catalog,
+                    None => catalog.insert(self.backend_catalog()?),
+                };
+                hydrate_runtime(&mut manifest, catalog);
+            }
             agents.push(Agent {
                 name: name.to_string(),
-                manifest: self.agent_file(name).load()?,
+                manifest,
             });
         }
         agents.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(agents)
+    }
+
+    /// A definition exactly as the file has it, with nothing derived filled in.
+    ///
+    /// For the migration runner, which has to know what a file *says* rather than what it means:
+    /// the 2→3 step compares the runtime the agent stored against the one its chain implies, and
+    /// [`Self::get`] would have already replaced the first with the second.
+    pub(crate) fn raw_manifest(&self, name: &str) -> Result<Option<StoredAgentManifest>> {
+        validate_name(name)?;
+        let file = self.agent_file(name);
+        if !file.exists() {
+            return Ok(None);
+        }
+        Ok(Some(file.load()?))
+    }
+
+    /// Every LLM backend in the store, by id — the lookup a definition's runtime is derived through.
+    fn backend_catalog(&self) -> Result<BTreeMap<String, llm::LlmBackendManifest>> {
+        Ok(llm::catalog(
+            llm::LlmBackends::with_config(self.config.clone()).list()?,
+        ))
     }
 
     /// # Errors
@@ -284,9 +374,16 @@ impl Agents {
         if !file.exists() {
             return Ok(None);
         }
+        let mut manifest: StoredAgentManifest = file.load()?;
+        // The runtime is not in the file from v3 on; it is the one on the backend at the head of
+        // the chain, and this is where a definition gets it. Only when it is missing *and* there is
+        // a chain to get it from, so an unmigrated definition costs nothing extra to read.
+        if needs_runtime(&manifest) {
+            hydrate_runtime(&mut manifest, &self.backend_catalog()?);
+        }
         Ok(Some(Agent {
             name: name.to_string(),
-            manifest: file.load()?,
+            manifest,
         }))
     }
 
@@ -321,8 +418,15 @@ impl Agents {
         manifest.version = file
             .load()
             .map_or(agent::MANIFEST_VERSION, |existing: StoredAgentManifest| {
-                existing.shape()
+                existing.version
             });
+        // A definition whose runtime is derived does not store it, so whatever the caller is
+        // holding — almost always the value `get` derived on the way out — is dropped rather than
+        // written back. Saving a *derived* field would put a second answer in the file, and the
+        // stale copy is the one that wins the day somebody edits the chain.
+        if derives_runtime(&manifest) {
+            manifest.backend = None;
+        }
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
         llm::validate_rows(&stored.backends)?;
@@ -360,6 +464,13 @@ impl Agents {
         manifest.created_at = file.carried_created_at(now);
         manifest.updated_at = now;
         manifest.version = version;
+        // The same rule [`save`](Self::save) follows, for the same reason, and it has to be here
+        // too: a step that only stamps re-writes a manifest it read through [`Self::get`], which
+        // fills the runtime in. Without this the stamp would put the derived value into the file it
+        // was just taken out of.
+        if derives_runtime(&manifest) {
+            manifest.backend = None;
+        }
         arguments::validate_builtin(&manifest)?;
         llm::validate_rows(&manifest.backends)?;
         file.save(&manifest)?;
@@ -589,8 +700,14 @@ impl Agents {
     /// # Errors
     /// [`Error::NotRunnable`] when nothing here runs that backend.
     fn runner_of_agent(agent: &StoredAgent) -> Result<Box<dyn Runner>> {
-        runner_for(&agent.manifest.backend)
-            .ok_or_else(|| Error::NotRunnable(agent.manifest.backend.to_string()))
+        // An empty runtime is not a runtime this build cannot run — it is nothing having said what
+        // to run at all, and telling somebody "backend `` is not runnable" would send them looking
+        // for a runner instead of at the one field that is missing.
+        if agent.manifest.runtime().is_unset() {
+            return Err(Error::Unsupported(no_runtime(&agent.name)));
+        }
+        runner_for(agent.manifest.runtime())
+            .ok_or_else(|| Error::NotRunnable(agent.manifest.runtime().to_string()))
     }
 
     /// Whether this session's work is still in flight, asked of whichever runner started it.
@@ -782,7 +899,7 @@ impl Agents {
         Ok(chain
             .as_ref()
             .and_then(llm::PinnedChain::current)
-            .map_or_else(|| agent.manifest.backend.clone(), |row| row.runtime.clone()))
+            .map_or_else(|| agent.manifest.runtime().clone(), |row| row.runtime.clone()))
     }
 
     /// Launch a run whatever else is running — the deliberate override of the [run cap](RunLimits),
@@ -873,7 +990,7 @@ impl Agents {
         let store = self.sessions();
         let record = store.create_as(
             &agent.name,
-            agent.manifest.backend.clone(),
+            agent.manifest.runtime().clone(),
             None,
             &spec.cwd,
             message,
@@ -882,7 +999,7 @@ impl Agents {
         // Only for an answerable conversation — a one-shot `process` run's task is a line the
         // caller already wrote deliberately, and a pty's launch message is not a message at all.
         // Off this thread entirely: see [`auto_title::spawn`] for why a launch never waits on it.
-        if capabilities(&agent.manifest.backend).answerable {
+        if capabilities(agent.manifest.runtime()).answerable {
             auto_title::spawn(
                 self.config.clone(),
                 agent.name.clone(),
@@ -1221,7 +1338,7 @@ impl Agents {
             Error::Unsupported(format!(
                 "backend {} isn't answerable — only a backend that continues the same thread keeps \
                  conversations you can reply to",
-                agent.manifest.backend
+                agent.manifest.runtime()
             ))
         };
         // Asked of the runner that started *this* conversation, not of the agent's backend. They
@@ -1289,7 +1406,7 @@ impl Agents {
             return Err(Error::Unsupported(format!(
                 "backend {} isn't answerable — only a backend that continues the same thread keeps \
                  conversations you can reply to",
-                agent.manifest.backend
+                agent.manifest.runtime()
             )));
         }
         let may_start = !self.at_capacity_for(&agent);
@@ -1683,10 +1800,10 @@ impl Agents {
         // have landed — not of the definition. For an agent with a chain the manifest's own backend
         // field is whatever the migration left there, and a conversation that has fallen onto an
         // `adi` row would be refused by its own loop for not looking like one.
-        if agent.manifest.backend != Backend::HarnessAdi {
+        if *agent.manifest.runtime() != Backend::HarnessAdi {
             return Err(Error::Unsupported(format!(
                 "backend {} has no adi loop to run",
-                agent.manifest.backend
+                agent.manifest.runtime()
             )));
         }
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
@@ -1836,7 +1953,7 @@ impl Agents {
     /// chat, not only the one you have open.
     #[must_use]
     pub fn runs(&self, agent: &StoredAgent) -> Vec<RunInfo> {
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
+        let Some(runner) = runner_for(agent.manifest.runtime()) else {
             return Vec::new();
         };
         if runner.as_terminal().is_some() {
@@ -2106,7 +2223,7 @@ impl Agents {
             .get(&agent.name, run_id)
             .as_ref()
             .and_then(runner_of)
-            .or_else(|| runner_for(&agent.manifest.backend))
+            .or_else(|| runner_for(agent.manifest.runtime()))
         else {
             return empty_peek();
         };
@@ -2350,7 +2467,7 @@ impl Agents {
         let store = self.sessions();
         let record = store.create_as(
             &agent.name,
-            agent.manifest.backend.clone(),
+            agent.manifest.runtime().clone(),
             Some(runner.kind()),
             &spec.cwd,
             message,
@@ -2907,7 +3024,7 @@ fn finished_at(log: &std::path::Path) -> Option<u64> {
 /// business now and no longer crosses this boundary — which is the point of the split, and costs a
 /// caller only a hint it printed for a human.
 fn launch_of(agent: &StoredAgent, runner: &dyn Runner, session: &SessionRef<'_>) -> Launch {
-    let command = agent.manifest.backend.to_string();
+    let command = agent.manifest.runtime().to_string();
     if runner.as_terminal().is_some() {
         return Launch::Pty {
             command,
@@ -3028,7 +3145,7 @@ mod tests {
 
     fn spec(backend: &str) -> AgentManifest<TestArguments> {
         AgentManifest {
-            backend: backend.into(),
+            backend: Some(backend.into()),
             ..AgentManifest::default()
         }
     }
@@ -3310,7 +3427,7 @@ mod tests {
         let mut edited = spec("harness:adi");
         edited.arguments.temperature = Some(0.2);
         let second = store.save("a", edited).expect("update");
-        assert_eq!(second.manifest.backend, Backend::from("harness:adi"));
+        assert_eq!(second.manifest.backend, Some(Backend::from("harness:adi")));
         assert_eq!(second.manifest.arguments.temperature, Some(0.2));
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
@@ -3332,7 +3449,7 @@ mod tests {
             .expect("present")
             .manifest;
         assert!(manifest.starred);
-        assert_eq!(manifest.backend, Backend::default());
+        assert!(manifest.backend.is_none(), "an agent saved with no runtime reads back with none");
         let typed = manifest
             .clone()
             .into_typed::<PartialArguments>()
@@ -3366,13 +3483,13 @@ mod tests {
         arguments.insert("max_turns".into(), serde_json::json!(20.0));
         arguments.insert("tools".into(), "tasks,projects".into());
         let manifest = AgentManifest {
-            backend: "harness:claude-sdk".into(),
+            backend: Some("harness:claude-sdk".into()),
             arguments,
             ..StoredAgentManifest::default()
         };
 
         let saved = store.save("planner", manifest).expect("save harness agent");
-        assert_eq!(saved.manifest.backend, Backend::HarnessClaudeSdk);
+        assert_eq!(saved.manifest.backend, Some(Backend::HarnessClaudeSdk));
 
         let stored = store
             .get("planner")
@@ -3397,7 +3514,7 @@ mod tests {
         let store = scratch("harness-adi-raw");
         let save = |name: &str, arguments: RawAgentArguments| {
             let manifest = AgentManifest {
-                backend: "harness:adi".into(),
+                backend: Some("harness:adi".into()),
                 arguments,
                 ..StoredAgentManifest::default()
             };
@@ -3410,7 +3527,7 @@ mod tests {
         arguments.insert("temperature".into(), serde_json::json!(0.7));
         arguments.insert("max_tokens".into(), serde_json::json!(4096.0));
         let stored = save("adi-agent", arguments);
-        assert_eq!(stored.backend, Backend::HarnessAdi);
+        assert_eq!(stored.backend, Some(Backend::HarnessAdi));
         assert!(is_runnable(&stored), "a configured adi agent is runnable");
 
         let blank = save("adi-agent-blank", RawAgentArguments::new());
@@ -3429,7 +3546,7 @@ mod tests {
 
         let store = scratch("strict-built-in");
         let manifest = AgentManifest {
-            backend: "process:codex".into(),
+            backend: Some("process:codex".into()),
             arguments: MisspelledCodexArguments { max_truns: 4 },
             ..AgentManifest::default()
         };
@@ -3482,7 +3599,7 @@ mod tests {
             Err(Error::Exists(name)) if name == "two"
         ));
         let two = store.get("two").expect("get two").expect("two exists");
-        assert_eq!(two.manifest.backend, "process:codex".into());
+        assert_eq!(two.manifest.backend, Some("process:codex".into()));
         assert_eq!(store.list().expect("list").len(), 2);
     }
 
@@ -3766,7 +3883,7 @@ mod tests {
         let running = as_run(&agent, &record);
         assert_eq!(
             running.manifest.backend,
-            Backend::from("harness:claude-sdk"),
+            Some(Backend::from("harness:claude-sdk")),
             "the row's runtime replaces the manifest's own",
         );
         assert_eq!(
@@ -3778,7 +3895,7 @@ mod tests {
         let mut moved = record.clone();
         moved.chain.as_mut().expect("pinned").move_to(1);
         let fallen = as_run(&agent, &moved);
-        assert_eq!(fallen.manifest.backend, Backend::from("harness:adi"));
+        assert_eq!(fallen.manifest.backend, Some(Backend::from("harness:adi")));
         assert_eq!(fallen.manifest.arguments["model"].as_str(), Some("glm-5.3"));
         assert_eq!(
             fallen.manifest.arguments.get("system_prompt"),
@@ -3864,7 +3981,7 @@ mod tests {
                 .is_none(),
         );
         let running = as_run(&agent, &SessionRecord::default());
-        assert_eq!(running.manifest.backend, Backend::from("harness:adi"));
+        assert_eq!(running.manifest.backend, Some(Backend::from("harness:adi")));
         assert!(!running.manifest.arguments.contains_key("model"));
     }
 

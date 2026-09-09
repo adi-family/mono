@@ -871,10 +871,10 @@ fn parse_ts(s: &str) -> Option<f64> {
 fn resolve(agents: &Agents, name: &str) -> Option<StoredAgent> {
     match agents.get(name) {
         Ok(Some(a)) => {
-            if a.manifest.backend != Backend::HarnessClaudeSdk {
+            if *a.manifest.runtime() != Backend::HarnessClaudeSdk {
                 eprintln!(
                     "agent `{name}` is `{:?}`; this lab only drives harness:claude-sdk today",
-                    a.manifest.backend
+                    a.manifest.runtime()
                 );
                 return None;
             }

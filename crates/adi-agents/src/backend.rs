@@ -36,6 +36,14 @@ impl Backend {
         }
     }
 
+    /// Whether this is the empty backend — nothing has said what to run on, as opposed to something
+    /// this build does not know how to run. Since manifests stopped storing a runtime the
+    /// difference decides which of two very different messages a launch gives back.
+    #[must_use]
+    pub fn is_unset(&self) -> bool {
+        matches!(self, Self::Other(value) if value.is_empty())
+    }
+
     /// The executor (`pty` / `process` / `harness`) — the part before the `:`. An
     /// [`Other`](Self::Other) backend with no `:` (or the empty default) has no executor: `""`.
     pub(crate) fn executor(&self) -> &str {

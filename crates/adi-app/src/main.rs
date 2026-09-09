@@ -277,6 +277,26 @@ async fn main() -> anyhow::Result<()> {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
     let agents = Agents::open();
+    // Bring every definition up to the shape this binary reads, *before* anything reads one. The
+    // panel, the launcher and the triggers below all assume the current shape, and a migration
+    // somebody has to remember to run is a migration that does not happen — so the thing that opens
+    // the store is the thing that brings it forward. A failure is logged and stepped over: a store
+    // that reads oddly is worse than one that reads oddly and cannot be opened to fix it.
+    match adi_agents::migrations::on_boot(&agents) {
+        Ok(applied) if applied.agents > 0 => {
+            info!(
+                agents = applied.agents,
+                steps = %applied.steps.join(", "),
+                "migrated agent definitions"
+            );
+            for note in &applied.notes {
+                info!(%note, "migration");
+            }
+        }
+        // The ordinary case: nothing behind, nothing to say about it.
+        Ok(_) => {}
+        Err(e) => warn!(error = %e, "migrating agent definitions failed"),
+    }
     // Opening the store loads nothing — the embedding model is built on the first call that
     // genuinely needs one (a search, an add), and then stays for the life of the process.
     let knowledge = KnowledgeStore::open();

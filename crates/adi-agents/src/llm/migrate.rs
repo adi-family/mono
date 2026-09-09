@@ -222,7 +222,7 @@ fn extract(agent: &StoredAgent) -> (LlmBackendManifest, Vec<String>) {
     (
         LlmBackendManifest {
             label: String::new(),
-            runtime: agent.manifest.backend.clone(),
+            runtime: agent.manifest.runtime().clone(),
             model,
             // Nothing on an agent ever recorded a context window, so there is none to carry. Left
             // at zero, which means *unknown* and refuses no switch — the honest answer, and one the
@@ -345,7 +345,7 @@ mod tests {
 
     fn agent(backend: Backend, arguments: &[(&str, serde_json::Value)]) -> StoredAgentManifest {
         AgentManifest {
-            backend,
+            backend: Some(backend),
             arguments: arguments
                 .iter()
                 .map(|(key, value)| ((*key).to_string(), value.clone()))
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(backend.manifest.settings.as_deref(), Some("~/.claude/settings.glm.json"));
         assert_eq!(backend.manifest.params.get("effort").and_then(|v| v.as_str()), Some("high"));
         // Copied, not moved: an agent resolving no row still has to run.
-        assert_eq!(saved.manifest.backend, Backend::HarnessClaudeSdk);
+        assert_eq!(saved.manifest.backend, Some(Backend::HarnessClaudeSdk));
     }
 
     /// Two agents set up identically are one backend, not two — this is the whole reason the plan

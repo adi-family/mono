@@ -1209,12 +1209,16 @@ pub struct SetAutoTitle {
 }
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
-/// keyed by `name`). `name` and `backend` are required; backend settings live in `arguments`.
-/// Timestamps are owned by the server.
+/// keyed by `name`). Only `name` is required; model configuration lives on the `backends` chain
+/// and engine settings in `arguments`. Timestamps are owned by the server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveAgent {
     pub name: String,
-    pub backend: String,
+    /// The `executor:what` runtime, for an agent that lists **no** `backends`. One that has a chain
+    /// takes its runtime from the backend it starts on and this is ignored — the store does not
+    /// write a field it derives. **Omit to keep whatever the agent already has.**
+    #[serde(default)]
+    pub backend: Option<String>,
     #[serde(default)]
     pub arguments: BTreeMap<String, serde_json::Value>,
     /// **Omit to keep whatever the agent already has**, exactly as for `bin_tools` below; send an

@@ -714,7 +714,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
     let manual = preset.as_ref().is_some_and(|p| p.manual);
     let body = SaveAgent {
         name: m.name.clone(),
-        backend,
+        // Onboarding creates the agent with no chain, so the preset's runtime is its to state.
+        backend: Some(backend),
         arguments,
         // Onboarding creates the agent, so it states its tags, star and secrets outright; `project`
         // stays unstated because there is nothing to keep and an unfiled agent is a global one.

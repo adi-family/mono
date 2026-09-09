@@ -272,7 +272,7 @@ mod tests {
             .save(
                 "solver",
                 StoredAgentManifest {
-                    backend: "harness:adi".into(),
+                    backend: Some("harness:adi".into()),
                     arguments,
                     ..Default::default()
                 },

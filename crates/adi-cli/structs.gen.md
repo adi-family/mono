@@ -49,7 +49,7 @@ pub(crate) enum AgentsCommand {
     Save {
         name: String,
         #[arg(long)]
-        backend: String,
+        backend: Option<String>,
         #[arg(long = "llm")]
         llm: Vec<String>,
         #[arg(long = "no-llm", conflicts_with = "llm")]

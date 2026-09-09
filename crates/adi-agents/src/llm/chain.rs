@@ -128,7 +128,7 @@ impl ResolvedBackend {
     #[must_use]
     pub fn apply(&self, agent: &StoredAgent) -> StoredAgent {
         let mut patched = agent.clone();
-        patched.manifest.backend = self.runtime.clone();
+        patched.manifest.backend = Some(self.runtime.clone());
         patched.manifest.arguments.remove(MODEL_KEY);
         for key in CREDENTIAL_KEYS {
             patched.manifest.arguments.remove(key);
@@ -661,7 +661,7 @@ mod tests {
         let agent = Agent {
             name: "adi-agent".to_string(),
             manifest: AgentManifest {
-                backend: Backend::HarnessAdi,
+                backend: Some(Backend::HarnessAdi),
                 arguments: [
                     ("system_prompt".to_string(), serde_json::json!("Be useful")),
                     ("model".to_string(), serde_json::json!("stale-model")),
@@ -673,7 +673,7 @@ mod tests {
         };
 
         let run = chain.first().apply(&agent);
-        assert_eq!(run.manifest.backend, Backend::HarnessClaudeSdk);
+        assert_eq!(run.manifest.backend, Some(Backend::HarnessClaudeSdk));
         assert_eq!(run.manifest.arguments["model"], serde_json::json!("claude-opus-5"));
         assert_eq!(run.manifest.arguments["thinking"], serde_json::json!("high"));
         assert_eq!(

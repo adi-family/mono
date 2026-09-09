@@ -80,7 +80,8 @@ pub(crate) fn agents_panel(
                 }
                 let body = SaveAgent {
                     name: nm.clone(),
-                    backend: be,
+                    // Created with no chain, so this panel states the runtime itself.
+                    backend: Some(be),
                     arguments,
                     tags: None,
                     starred: None,

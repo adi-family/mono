@@ -1378,13 +1378,14 @@ pub struct SetAutoTitle {
 
 ### struct `SaveAgent`
 
-Request body for `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`). `name` and `backend` are required; backend settings live in `arguments`. Timestamps are owned by the server.
+Request body for `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`). Only `name` is required; model configuration lives on the `backends` chain and engine settings in `arguments`. Timestamps are owned by the server.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveAgent {
     pub name: String,
-    pub backend: String,
+    #[serde(default)]
+    pub backend: Option<String>,
     #[serde(default)]
     pub arguments: BTreeMap<String, serde_json::Value>,
     #[serde(default)]

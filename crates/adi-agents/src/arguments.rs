@@ -129,7 +129,7 @@ string_enum! {
 /// backends own their argument type and are validated when they convert or call
 /// [`crate::Agents::get_typed`].
 pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()> {
-    match &manifest.backend {
+    match manifest.runtime() {
         Backend::PtyClaude => manifest.typed_arguments::<PtyClaudeArguments>().map(drop),
         Backend::ProcessClaude => manifest
             .typed_arguments::<ProcessClaudeArguments>()

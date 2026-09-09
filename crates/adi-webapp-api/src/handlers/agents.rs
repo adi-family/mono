@@ -1224,7 +1224,7 @@ fn title_of(message: &str) -> String {
 
 /// The backend's capability profile as a wire [`AgentCapabilities`].
 fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
-    let c = adi_agents::capabilities(&agent.manifest.backend);
+    let c = adi_agents::capabilities(agent.manifest.runtime());
     AgentCapabilities {
         interactive: c.interactive,
         history: c.history,
@@ -1425,8 +1425,15 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         // `agents migrate` moves it. Only a brand new definition is stamped with this build's.
         version: stored
             .as_ref()
-            .map_or(adi_agents::MANIFEST_VERSION, |m| m.shape()),
-        backend: Backend::from(req.backend.trim()),
+            .map_or(adi_agents::MANIFEST_VERSION, |m| m.version),
+        // Only ever reaches the file for an agent with no chain: one that has a chain takes its
+        // runtime from the backend it starts on, and the store drops whatever is here rather than
+        // writing a second answer to the same question. Omit-to-keep like the fields below, so a
+        // form that no longer shows a runtime picker cannot take a chainless agent's runtime away.
+        backend: match req.backend {
+            Some(backend) => Some(Backend::from(backend.trim())),
+            None => stored.as_ref().and_then(|m| m.backend.clone()),
+        },
         arguments: clean_arguments(req.arguments),
         // Tags, star, and project are omit-to-keep for the reason `bin_tools` and `path` are: the
         // meta setup and the project panel don't offer them, and a save from a form that never
@@ -1691,7 +1698,7 @@ fn agent_dto(
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
-        backend: m.backend.to_string(),
+        backend: m.runtime().to_string(),
         arguments: m.arguments,
         executor,
         tags: m.tags,
@@ -1820,8 +1827,13 @@ fn agent_form_spec() -> AgentFormSpec {
     name.required = true;
     fields.push(name);
 
-    let mut backend = agent_field("backend", "Backend", AgentFormFieldKind::Select);
-    backend.required = true;
+    // Required no longer: an agent that lists LLM backends takes its runtime from the one it
+    // starts on, and the client renders this read-only for that case. Only a chainless agent —
+    // one driving a CLI — still has to say what it runs on.
+    let mut backend = agent_field("backend", "Runtime", AgentFormFieldKind::Select);
+    backend.hint = "how a turn is actually run. An agent with LLM backends takes this from the one \
+                    it starts on; set it here only for an agent with no backends."
+        .into();
     fields.push(backend);
 
     // The project the agent is filed under (or global). The options are the registered
@@ -2580,10 +2592,13 @@ impl From<&AgentStoreError> for Response {
 }
 
 impl FromBody for SaveAgent {
-    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend";
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", … } with a non-empty name";
 
+    // The runtime is no longer part of what makes a save complete: since v3 an agent with a
+    // backend chain takes it from the head of that chain, and one without keeps whatever it has.
     fn is_complete(&self) -> bool {
-        !self.name.trim().is_empty() && !self.backend.trim().is_empty()
+        !self.name.trim().is_empty()
     }
 }
 

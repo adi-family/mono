@@ -174,9 +174,18 @@ pub struct RunInfo {
 /// writes to disk and has no business happening on a page render.
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
-    let Some(runner) = runner_for(&manifest.backend) else {
+    let Some(runner) = runner_for(manifest.runtime()) else {
         return false;
     };
+    // An agent that lists LLM backends is configured by the one it starts on: the model, the login
+    // and the provider are laid onto the manifest at launch, before the same runner is asked this
+    // same question with the arguments a run will really carry. Asking the engine about the
+    // *definition's* arguments would answer about a configuration no run uses — and answer wrongly,
+    // since those keys moved off the agent in v2. A runner that exists is the whole of what can be
+    // known here; a chain that resolves to nothing is still refused, at the launch that has it.
+    if !manifest.backends.is_empty() {
+        return true;
+    }
     runner
         .check(&RunSpec {
             cwd: PathBuf::new(),
@@ -272,7 +281,7 @@ mod tests {
 
     fn manifest(backend: &str) -> StoredAgentManifest {
         StoredAgentManifest {
-            backend: Backend::from(backend),
+            backend: Some(Backend::from(backend)),
             ..StoredAgentManifest::default()
         }
     }
@@ -299,13 +308,31 @@ mod tests {
         }
     }
 
+    /// An agent that starts on an LLM backend is configured by that backend, not by its own file:
+    /// the model, the provider and the login are laid on at launch, and the definition sitting in
+    /// the store carries none of them. So the question the UI asks about it is only whether a
+    /// runner exists — `harness:adi`, unrunnable when an agent declares it bare, is runnable the
+    /// moment a chain is there to fill it in. `Agents::run` applies the row before it checks, and
+    /// this flag has to agree with it or the panel calls a working agent broken.
+    #[test]
+    fn an_agent_with_a_chain_is_runnable_on_a_runtime_its_own_arguments_could_not_fill() {
+        let bare = manifest("harness:adi");
+        assert!(!is_runnable(&bare), "harness:adi alone says too little");
+
+        let chained = StoredAgentManifest {
+            backends: vec![crate::llm::AgentBackendEntry::new("anthropic")],
+            ..bare
+        };
+        assert!(is_runnable(&chained), "its backend says the rest");
+    }
+
     /// The same refusal [`is_runnable`] reports to the UI, asked of the verb a launch actually
     /// calls. `Agents::run` checks the spec before it appends a turn or spawns anything, so a
     /// backend that cannot run is rejected with nothing written — the two must not drift apart.
     #[test]
     fn an_unconfigured_engine_is_rejected_before_launch() {
         let manifest = manifest("harness:adi");
-        let runner = runner_for(&manifest.backend).expect("harness:adi has a runner");
+        let runner = runner_for(manifest.runtime()).expect("harness:adi has a runner");
         assert!(matches!(
             runner.check(&RunSpec {
                 cwd: PathBuf::new(),

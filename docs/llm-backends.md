@@ -349,14 +349,37 @@ detector, and a hand-converted file is indistinguishable from a migrated one. So
 records the shape it was written in, on its first line:
 
 ```toml
-version = 2
-backend = "harness:adi"
+version = 3
+[[backends]]
+backend = "anthropic"
 ```
 
-**1** is the pre-backends shape — a file with no `version` line at all is 1, and nothing ever
-writes a `0`, which exists only as the value serde fills in for a missing field. **2** is this
-one. `crates/adi-agents/src/migrations.rs` holds the step list, and `adi-mono agents migrate`
-runs it:
+The shapes, so a number in a file means something to whoever opens it next:
+
+- **1** — the model lived on the agent: `model`, `settings`, `provider` and the sampling dials
+  under `[arguments]`, one agent welded to one model.
+- **2** — model configuration moved out into named backends, and the agent keeps an ordered
+  `[[backends]]` list of them.
+- **3** — the *runtime* followed it out. `backend = "harness:adi"` is gone from the file of every
+  agent that has a chain: the runtime is the one on the backend the run is answering on, so a
+  chain that fails over from a `harness:adi` row to a `harness:claude-sdk` one changes runtime
+  with it. `Agents::get` fills the field in as it reads a definition; `save` drops it again.
+
+A file with **no `version` line** is not version 1 — it is *unstamped*, which is the absence of a
+shape rather than a claim to one. Nothing ever writes a `0`; it is the value serde fills in for a
+missing field, and the chain therefore starts below 1 and walks **nothing → 1 → 2 → 3**, one step
+at a time. `crates/adi-agents/src/migrations.rs` holds the step list.
+
+The one agent shape v3 leaves alone is the one with **no backends at all** — a `pty:claude` or
+`process:codex` agent that drives a CLI and asks no LLM backend anything. There is nothing to
+derive a runtime from, so it keeps writing its own `backend =` line, and that stays the one place
+a runtime is stated by hand (`agents save <name> --backend pty:claude`, or the panel's Runtime
+picker, which goes read-only the moment an agent lists a backend).
+
+Migrations run **on boot**: `adi-app` calls `migrations::on_boot` as it opens the store, before
+the panel, the launcher or a trigger reads an agent. The migration an operator has to remember is
+one that does not happen. `adi-mono agents migrate` is the same steps by hand, for a store the app
+has not opened yet:
 
 ```sh
 adi-mono agents migrate           # who is behind, and what each would get. Writes nothing.
@@ -377,10 +400,16 @@ A step is a whole-store operation that stamps each agent afterwards — 1 → 2 
 shared backends before it can point anybody at one — so an agent somebody converted by hand
 before the stamp existed is stamped without being rewritten, and says so in the report.
 
-**Order of operations.** The binaries must understand `backends` *before* the store is
-migrated. Applying this against a stack still running pre-backends code would strip the model
-and the login off every agent while nothing yet reads the list that replaced them. Build and
-restart first, then `--apply`.
+**A step may refuse one agent without failing.** 2 → 3 holds back an agent whose file says one
+runtime and whose first backend says another: dropping the field would silently move it to a
+different runner. Held agents are named in the report with what to do, stay at the version they
+were, and are picked up by the next run once somebody has settled it.
+
+**Order of operations.** The binaries must understand a shape *before* the store is moved into
+it. Applying 1 → 2 against a stack still running pre-backends code would strip the model and the
+login off every agent while nothing yet reads the list that replaced them; applying 2 → 3 against
+a binary that reads the runtime off the file would leave every agent unrunnable. Build and
+restart first — which, since the boot hook, is usually all there is to do.
 
 ## Out of scope for v1
 

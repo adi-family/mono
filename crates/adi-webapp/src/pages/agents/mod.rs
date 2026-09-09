@@ -201,8 +201,14 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     return;
                 }
                 let be = backend.get();
-                if be.trim().is_empty() {
-                    flash.set(Some(Flash::err("Pick a backend.".to_string())));
+                // An agent that lists LLM backends runs on the runtime of the one it starts on, so
+                // there is nothing to pick and nothing for this form to send. Only a chainless
+                // agent still has to say.
+                let chained = !form.llm_rows.get().is_empty();
+                if be.trim().is_empty() && !chained {
+                    flash.set(Some(Flash::err(
+                        "Pick an LLM backend, or a runtime to run on.".to_string(),
+                    )));
                     return;
                 }
                 let spec = agents.get().map(|st| st.form);
@@ -214,7 +220,9 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 let temp_applies = agent_param_applies(spec.as_ref(), &be, &prov, "temperature");
                 let body = SaveAgent {
                     name: nm.clone(),
-                    backend: be.clone(),
+                    // Stated only when it is this agent's to state: with a chain, the store derives
+                    // it from the head row and would drop whatever was sent anyway.
+                    backend: (!chained).then(|| be.clone()),
                     arguments: agent_argument_values(
                         spec.as_ref(),
                         &be,

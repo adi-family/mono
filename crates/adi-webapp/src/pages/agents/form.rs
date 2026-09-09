@@ -145,7 +145,11 @@ fn render_agent_field(
     }
 }
 
-/// The backend selector: its options and model placeholders are owned by the API.
+/// The runtime selector: its options and model placeholders are owned by the API.
+///
+/// Editable only for an agent with no LLM backends. With a chain the runtime is the one on the
+/// backend row 1 names — the agent does not store a second answer — so the control goes read-only
+/// and says where the value came from rather than inviting an edit the save would drop.
 fn render_backend_select(
     field: AgentFormField,
     backends: Vec<AgentBackendOption>,
@@ -157,12 +161,14 @@ fn render_backend_select(
     let first_label = if backends.is_empty() {
         "Loading backends..."
     } else {
-        "— pick a backend —"
+        "— pick a runtime —"
     };
+    let derived = move || !form.llm_rows.get().is_empty();
     view! {
         <div class="adi-field" style=field_style(&field)>
             <label class="adi-field__label" for=label_for>{label}</label>
             <select class="adi-input" id=id
+                prop:disabled=derived
                 prop:value=move || form.backend.get()
                 on:change=move |ev| form.backend.set(event_target_value(&ev))>
                 <option value="">{first_label}</option>
@@ -172,6 +178,10 @@ fn render_backend_select(
                     view! { <option value=id>{label}</option> }
                 }).collect::<Vec<_>>()}
             </select>
+            {move || derived().then(|| field_hint(
+                "Taken from the LLM backend this agent starts on, and not stored on the agent — \
+                 to change it, put a different backend at the head of the chain.",
+            ))}
         </div>
     }
     .into_any()

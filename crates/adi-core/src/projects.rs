@@ -169,7 +169,7 @@ mod tests {
 
         let agents = adi_agents::Agents::with_config(config.clone());
         let mut manifest = adi_agents::StoredAgentManifest {
-            backend: "process:claude".into(),
+            backend: Some("process:claude".into()),
             project: Some("old".into()),
             knowledge: vec!["project:old/runbook".into()],
             ..Default::default()

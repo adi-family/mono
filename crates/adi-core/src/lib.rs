@@ -48,8 +48,8 @@ pub use adi_agents::migrations;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    LEGACY_VERSION, Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLimits,
-    RunOverrides, SecretAttachment, Sent, StoredAgent, StoredAgentManifest, contains_json_null,
+    Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLimits, RunOverrides,
+    SecretAttachment, Sent, StoredAgent, StoredAgentManifest, UNVERSIONED, contains_json_null,
     event_catalog,
 };
 

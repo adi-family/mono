@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn argv_uses_print_mode_and_process_options() {
         let manifest = AgentManifest {
-            backend: "process:claude".into(),
+            backend: Some("process:claude".into()),
             arguments: ProcessClaudeArguments {
                 model: Some("sonnet".into()),
                 permission_mode: Some(ClaudePermissionMode::DontAsk),

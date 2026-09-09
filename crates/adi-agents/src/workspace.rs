@@ -169,7 +169,7 @@ pub(crate) fn block(config: &Config, agent: &StoredAgent, workdir: &Path) -> Str
          when you need one of them, rather than writing a long path to it out again on command \
          after command.",
         workdir.display(),
-        shell_note(&agent.manifest.backend),
+        shell_note(agent.manifest.runtime()),
     );
     if let Some(project) = agent
         .manifest
@@ -220,7 +220,7 @@ mod tests {
             );
         }
         StoredAgentManifest {
-            backend: "harness:claude-sdk".into(),
+            backend: Some("harness:claude-sdk".into()),
             arguments,
             project: project.map(ToString::to_string),
             ..StoredAgentManifest::default()
@@ -367,7 +367,7 @@ mod tests {
         let (config, _root) = store();
         let block_for = |backend: &str| {
             let mut manifest = manifest(None, None);
-            manifest.backend = backend.into();
+            manifest.backend = Some(backend.into());
             block(&config, &agent(manifest), Path::new("/repo/main"))
         };
 

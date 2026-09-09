@@ -352,7 +352,7 @@ mod tests {
             .save(
                 name,
                 AgentManifest::<serde_json::Value> {
-                    backend: "harness:adi".into(),
+                    backend: Some("harness:adi".into()),
                     arguments: serde_json::json!({}),
                     ..AgentManifest::default()
                 },
@@ -437,7 +437,7 @@ mod tests {
             .save(
                 "midturn",
                 AgentManifest::<serde_json::Value> {
-                    backend: "harness:adi".into(),
+                    backend: Some("harness:adi".into()),
                     arguments: serde_json::json!({}),
                     ..AgentManifest::default()
                 },

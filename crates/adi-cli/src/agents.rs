@@ -4,13 +4,13 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Launch, LaunchOptions,
-    MANIFEST_VERSION, RunInfo, RunOverrides, SecretAttachment, StoredAgent, awaits, launcher,
-    llm::LlmBackends, migrations,
+    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Backend, Launch, LaunchOptions,
+    MANIFEST_VERSION, RunInfo, RunOverrides, SecretAttachment, StoredAgent, UNVERSIONED, awaits,
+    launcher, llm::LlmBackends, migrations,
 };
 use clap::Subcommand;
 
-use crate::format::{clean, clean_required, clean_tags, parse_arguments, print_json};
+use crate::format::{clean, clean_tags, parse_arguments, print_json};
 
 // `Save` carries the whole definition's worth of flags, dwarfing the name-only variants; a
 // one-shot CLI enum, so the size gap costs nothing worth boxing over.
@@ -31,10 +31,11 @@ pub(crate) enum AgentsCommand {
     /// Create or replace an agent definition.
     Save {
         name: String,
-        /// The `executor:what` backend, e.g. `pty:claude`, `process:codex`,
-        /// `harness:claude-sdk`, `harness:adi`.
+        /// The `executor:what` runtime this agent runs on, e.g. `pty:claude`, `process:codex`.
+        /// **Only for an agent with no `--llm` chain**: one that has a chain takes its runtime from
+        /// the backend it starts on, so naming it here is refused rather than quietly ignored.
         #[arg(long)]
-        backend: String,
+        backend: Option<String>,
         /// A row of this agent's LLM backend chain, in order — the ids from `adi-mono llm
         /// backends`. Repeatable; comma-separated values are also accepted. **Row 1 is what a new
         /// conversation starts on**, and the rest are where it goes when a backend runs out. Omit
@@ -453,7 +454,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_argument,
             json,
         } => {
-            let backend = clean_required("backend", backend)?;
+            let backend = clean(backend);
             // Read first: everything below either states a field or leaves the stored one alone,
             // and both need what is already there.
             let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
@@ -507,23 +508,48 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             // actual fix: the five that were wrong were wrong *individually*, each written out
             // longhand at its own call site, and nothing made the odd one out visible.
             let old = stored.as_ref();
+            // The chain is settled before the manifest is built, because since v3 it decides
+            // whether the runtime is this caller's to state at all.
+            let backends = kept(
+                no_llm,
+                stated(llm, |ids| {
+                    clean_tags(ids).into_iter().map(chain_row).collect()
+                }),
+                old.map(|m| m.backends.clone()),
+            );
+            // Two answers to "what does this run on" is the thing v3 exists to remove, so a save
+            // that gives both is refused here rather than half-honoured by the store.
+            if backend.is_some() && !backends.is_empty() {
+                return Err(format!(
+                    "`--backend` is not this agent's to set: it starts on the LLM backend `{}`, \
+                     and runs on whatever runtime that backend names. Change the backend, or drop \
+                     the chain with `--no-llm`.",
+                    backends[0].backend
+                ));
+            }
+            // Stated wins, omitted keeps — the rule the rest of this save follows. A chainless
+            // agent has nowhere else to get a runtime from, so an edit that mentions neither keeps
+            // the one it was written with, and only an agent that never had one is refused.
+            let runtime = backend
+                .map(Backend::from)
+                .or_else(|| old.and_then(|m| m.backend.clone()));
+            if runtime.is_none() && backends.is_empty() {
+                return Err(format!(
+                    "nothing says what `{name}` runs on: give it an LLM backend with `--llm <id>` \
+                     (`adi-mono llm backends` lists them), or a runtime of its own with \
+                     `--backend <executor:what>`"
+                ));
+            }
             let manifest = AgentManifest {
                 // Kept, like everything below: a save is an edit, not a migration, so an existing
                 // definition stays stamped with the shape it was written in and only a brand new
                 // one gets this binary's. The store enforces the same rule against the file on
                 // disk; stating it here keeps the manifest the CLI builds honest about itself.
-                version: old.map_or(MANIFEST_VERSION, |m| m.shape()),
-                backend: backend.into(),
-                // Same kept/stated rule as everything below, and it matters more here than most:
-                // an agent whose chain went missing does not fail, it silently falls back to the
-                // manifest's own backend field — the one configuration the chain exists to replace.
-                backends: kept(
-                    no_llm,
-                    stated(llm, |ids| {
-                        clean_tags(ids).into_iter().map(chain_row).collect()
-                    }),
-                    old.map(|m| m.backends.clone()),
-                ),
+                version: old.map_or(MANIFEST_VERSION, |m| m.version),
+                // Only ever written for an agent with no chain; the store drops it for one that
+                // has a chain, because there the head of the chain is the answer.
+                backend: runtime,
+                backends,
                 arguments,
                 tags: kept(
                     no_tag,
@@ -862,10 +888,16 @@ fn report_migration(
     }
     println!();
     for agent in &plan.pending {
+        // `v0` would be a lie about what is in the file: there is no version line at all, which is
+        // a different thing from a file that claims to be the oldest shape.
+        let from = if agent.from == UNVERSIONED {
+            "unstamped".to_string()
+        } else {
+            format!("v{}", agent.from)
+        };
         println!(
-            "  {:<24} v{} → v{MANIFEST_VERSION} via {}",
+            "  {:<24} {from} → v{MANIFEST_VERSION} via {}",
             agent.agent,
-            agent.from,
             agent.steps.join(", ")
         );
     }
@@ -874,6 +906,15 @@ fn report_migration(
             println!();
             for note in &applied.notes {
                 println!("  {note}");
+            }
+            // A step may refuse one agent without failing the run. Printed apart from the notes,
+            // and with the reason, because these are the only ones somebody has to act on — the
+            // next run picks them up once they are settled.
+            if !applied.held.is_empty() {
+                println!("\n{} agent(s) held back:", applied.held.len());
+                for (name, why) in &applied.held {
+                    println!("  {name:<24} {why}");
+                }
             }
             println!("\nMigrated {} agent(s).", applied.agents);
         }
@@ -1120,7 +1161,7 @@ fn print_agent(agent: &StoredAgent) {
     println!(
         "{} — {} [{}]",
         agent.name,
-        agent.manifest.backend,
+        agent.manifest.runtime(),
         agent.manifest.executor()
     );
     // The chain first, and the manifest's own model only when there is no chain: with one, the

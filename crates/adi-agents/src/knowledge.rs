@@ -213,7 +213,7 @@ mod tests {
         StoredAgent {
             name: name.to_string(),
             manifest: StoredAgentManifest {
-                backend: "harness:adi".into(),
+                backend: Some("harness:adi".into()),
                 memory,
                 knowledge: knowledge.iter().map(ToString::to_string).collect(),
                 project: project.map(ToString::to_string),

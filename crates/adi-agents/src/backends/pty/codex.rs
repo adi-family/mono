@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn argv_honors_model_and_sandbox() {
         let manifest = AgentManifest {
-            backend: "pty:codex".into(),
+            backend: Some("pty:codex".into()),
             arguments: PtyCodexArguments {
                 model: Some("gpt-5-codex".into()),
                 sandbox: Some(CodexSandbox::WorkspaceWrite),

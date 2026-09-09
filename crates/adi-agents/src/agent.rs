@@ -19,14 +19,30 @@ const SYSTEM_PROMPT: &str = "system_prompt";
 ///   `api_key_env` and the sampling dials under `[arguments]`, one agent welded to one model.
 /// * **2** — model configuration moved out into named LLM backends and the agent keeps an ordered
 ///   `[[backends]]` list of them. Nothing under `[arguments]` reaches a model any more.
+/// * **3** — the *runtime* followed it out, for every agent that has a chain. `backend =
+///   "harness:adi"` is gone from those files; the runtime is the one on the LLM backend the run is
+///   answering on, so a chain that fails over from a `harness:adi` backend to a `harness:claude-sdk`
+///   one changes runtime with it. An agent that lists no backends still declares its own, because
+///   there is nothing to derive one from — that is how a `pty:claude` agent, which asks no LLM
+///   backend anything, stays a legal thing to write.
 ///
 /// A definition stamped **higher** than this is not one to guess at: a newer binary wrote it, and
 /// this one refuses to migrate it rather than write a shape it does not understand.
-pub const MANIFEST_VERSION: u32 = 2;
+pub const MANIFEST_VERSION: u32 = 3;
 
-/// What a definition with no `version` line is: written before the field existed, so version 1 by
-/// construction. Nothing writes a `0` — it is only ever read.
-pub const LEGACY_VERSION: u32 = 1;
+/// The first shape in which a chain's head, and not the file, says what an agent runs on. Below
+/// this, `backend` in the file is always the agent's runtime; from here up it is derived and never
+/// written — for the agents that list backends. See [`MANIFEST_VERSION`] for the chainless case.
+pub const RUNTIME_FROM_CHAIN: u32 = 3;
+
+/// A definition with no `version` line: written before the field existed, so its shape is not
+/// *claimed*, only inferred. Nothing ever writes a `0` — it is the value serde fills in for a
+/// missing field, and the first migration step (`0 → 1`) is what turns the inference into a
+/// statement on the file.
+///
+/// This is why the chain starts below 1 rather than at it: "unstamped" and "version 1" are
+/// different facts, and only one of them is something the store recorded.
+pub const UNVERSIONED: u32 = 0;
 
 pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
@@ -52,16 +68,34 @@ pub struct AgentManifest<Args> {
     /// Which shape this definition is written in — see [`MANIFEST_VERSION`] for what each number
     /// means and `crate::migrations` for how a file moves between them.
     ///
-    /// `0` is not a version: it is a file written before this field existed, which reads as
-    /// [`LEGACY_VERSION`]. Declared first so it is the first line of the file, where somebody
-    /// opening one can see what they are looking at.
+    /// [`UNVERSIONED`] (`0`) is a file written before this field existed — not a shape, but the
+    /// absence of one, and the first thing `crate::migrations` puts right. Declared first so it is
+    /// the first line of the file, where somebody opening one can see what they are looking at.
     ///
     /// **A save never invents it.** An existing definition keeps whatever it was stamped with,
     /// because editing an agent is not migrating it — otherwise saving a legacy agent from the
     /// panel would mark it upgraded without changing a thing, and the migration would then skip
     /// the one agent that still needed it.
     pub version: u32,
-    pub backend: Backend,
+    /// The runtime this agent runs on — **derived, not stored**, since [`RUNTIME_FROM_CHAIN`].
+    ///
+    /// A runtime is a property of *the way a turn is answered*, and since v2 that is the LLM
+    /// backend: each one names the runner it runs under. Keeping a second copy on the agent meant
+    /// two answers to one question, and the wrong one won whenever a run failed over to a backend
+    /// on a different runner. So the file no longer carries it, and [`Agents::get`](crate::Agents)
+    /// fills this in from the head of the chain as it reads a definition.
+    ///
+    /// An agent that lists *no* backends is the exception, and keeps writing this field: there is
+    /// no chain to derive from, so the file is the only thing that can say. `None` therefore means
+    /// nothing has said what it is at all — rows naming backends that are gone. A launch refuses
+    /// rather than choosing for it — see
+    /// [`Self::runtime`] for the read-side, which answers the empty [`Backend`] so display code
+    /// never has to unwrap.
+    ///
+    /// Below v3 this *is* the stored field, read from the `backend =` line and written back
+    /// untouched, so an unmigrated definition keeps working exactly as it did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<Backend>,
     pub arguments: Args,
     pub tags: Vec<String>,
     pub starred: bool,
@@ -168,24 +202,24 @@ pub struct Agent<Args> {
 }
 
 impl<Args> AgentManifest<Args> {
-    /// The executor (`pty` / `process` / `harness`) — the part before the `:` in
-    /// [`Self::backend`]; empty string if the backend has no `executor:` prefix. Drives how the
+    /// The runtime this definition runs on, or the empty [`Backend`] when nothing has said.
+    ///
+    /// Every read goes through here rather than at [`backend`](Self::backend) directly, so the
+    /// "not filled in" case is one answer in one place. The empty backend matches no runner, which
+    /// is the safe end of the guess: a launch that cannot tell what to run on refuses, instead of
+    /// picking a runtime nobody chose.
+    #[must_use]
+    pub fn runtime(&self) -> &Backend {
+        static UNKNOWN: Backend = Backend::Other(String::new());
+        self.backend.as_ref().unwrap_or(&UNKNOWN)
+    }
+
+    /// The executor (`pty` / `process` / `harness`) — the part before the `:` in the
+    /// [`runtime`](Self::runtime); empty string if it has no `executor:` prefix. Drives how the
     /// agent runs and which params apply.
     #[must_use]
     pub fn executor(&self) -> &str {
-        self.backend.executor()
-    }
-
-    /// The shape this definition is written in, reading an unstamped file as [`LEGACY_VERSION`]
-    /// rather than as version zero. Every version comparison goes through this, so "no line in the
-    /// file" and "the oldest shape" are the same answer everywhere instead of in most places.
-    #[must_use]
-    pub fn shape(&self) -> u32 {
-        if self.version == 0 {
-            LEGACY_VERSION
-        } else {
-            self.version
-        }
+        self.runtime().executor()
     }
 
     /// Build a manifest that carries this one's metadata — `backend`, `tags`, `starred`,
@@ -336,7 +370,7 @@ mod tests {
             ("weird", ""),
         ] {
             let manifest = AgentManifest::<()> {
-                backend: backend.into(),
+                backend: Some(backend.into()),
                 ..Default::default()
             };
             assert_eq!(manifest.executor(), executor);
@@ -392,7 +426,7 @@ mod tests {
     #[test]
     fn the_knowledge_fields_survive_the_arguments_round_trip() {
         let mut manifest = StoredAgentManifest {
-            backend: "harness:adi".into(),
+            backend: Some("harness:adi".into()),
             knowledge: vec!["global/runbooks".into(), "agent:reviewer/memory".into()],
             memory: true,
             ..Default::default()
@@ -417,7 +451,7 @@ mod tests {
     #[test]
     fn a_manifest_with_knowledge_and_secrets_still_encodes_as_toml() {
         let manifest = StoredAgentManifest {
-            backend: "harness:adi".into(),
+            backend: Some("harness:adi".into()),
             knowledge: vec!["global/runbooks".into()],
             memory: true,
             secrets: vec![SecretAttachment {

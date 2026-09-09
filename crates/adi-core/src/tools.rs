@@ -114,7 +114,7 @@ mod tests {
             .save(
                 "adi-agent",
                 adi_agents::StoredAgentManifest {
-                    backend: "process:claude".into(),
+                    backend: Some("process:claude".into()),
                     bin_tools: vec![uuid.to_string(), "sys-tasks".into()],
                     ..Default::default()
                 },
@@ -125,7 +125,7 @@ mod tests {
             .save(
                 "other",
                 adi_agents::StoredAgentManifest {
-                    backend: "process:claude".into(),
+                    backend: Some("process:claude".into()),
                     bin_tools: vec!["sys-tasks".into()],
                     ..Default::default()
                 },
@@ -168,7 +168,7 @@ mod tests {
             .save(
                 "solver",
                 adi_agents::StoredAgentManifest {
-                    backend: "process:claude".into(),
+                    backend: Some("process:claude".into()),
                     bin_tools: vec![a.id.clone()],
                     ..Default::default()
                 },
