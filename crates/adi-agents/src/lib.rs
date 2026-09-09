@@ -201,8 +201,15 @@ fn no_runtime(name: &str) -> String {
 /// [`RUNTIME_FROM_CHAIN`](agent::RUNTIME_FROM_CHAIN)), or it names no backend to derive one from —
 /// and an agent with no chain has no runtime, which is a thing to say at launch rather than to
 /// paper over here.
-fn needs_runtime(manifest: &StoredAgentManifest) -> bool {
-    manifest.backend.is_none() && !manifest.backends.is_empty()
+///
+/// A *blank* runtime counts as none, and that is not pedantry. Before v3 the field was a bare
+/// `Backend` with no skip: an older adi opening this store reads a v3 file, finds no `backend =`
+/// line, defaults it to the empty backend — and writes `backend = ""` the moment anything saves
+/// that agent. The file still says version 3, so no migration would offer to look at it again, and
+/// a `Some("")` that blocked hydration would leave the agent runtime-less for good. Treating it as
+/// absent heals it on the next read, and the save after that drops the line.
+fn needs_runtime<Args>(manifest: &AgentManifest<Args>) -> bool {
+    manifest.backend.as_ref().is_none_or(Backend::is_unset) && !manifest.backends.is_empty()
 }
 
 /// Whether this definition's runtime is the chain's to say, and so must not be written into the
@@ -229,8 +236,8 @@ fn derives_runtime<Args>(manifest: &AgentManifest<Args>) -> bool {
 /// A row naming a backend that no longer exists leaves the runtime unset rather than skipping to
 /// row 2: the agent as written starts on a backend that is gone, and quietly answering with the
 /// next one's runtime would hide that.
-fn hydrate_runtime(
-    manifest: &mut StoredAgentManifest,
+fn hydrate_runtime<Args>(
+    manifest: &mut AgentManifest<Args>,
     catalog: &BTreeMap<String, llm::LlmBackendManifest>,
 ) {
     manifest.backend = manifest
@@ -431,6 +438,13 @@ impl Agents {
         arguments::validate_builtin(&stored)?;
         llm::validate_rows(&stored.backends)?;
         file.save(&stored)?;
+        // Hand back what a *read* would give, not what went to disk. Everything that prints or
+        // returns this — the CLI's confirmation line, the panel's save response — asks the manifest
+        // what the agent runs on, and "nothing" one moment after a successful save reads as a
+        // failure. The file is still the file; only this copy is filled in.
+        if needs_runtime(&manifest) {
+            hydrate_runtime(&mut manifest, &self.backend_catalog()?);
+        }
         self.emit(
             "adi.agents.saved",
             &AgentSaved {
@@ -3851,6 +3865,74 @@ mod tests {
             .save(id, manifest.clone())
             .expect("save the backend");
         manifest
+    }
+
+    /// The file loses the runtime; the answer to "what did I just save" must not. Every caller of
+    /// `save` shows what came back — the CLI prints it, the panel returns it as the saved agent —
+    /// so a blank runtime one moment after a good save reads as a broken agent.
+    #[test]
+    fn a_save_hands_back_the_runtime_it_deliberately_did_not_write() {
+        let store = scratch("save-hydrates");
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-opus-5");
+
+        let mut manifest = spec("process:codex");
+        manifest.backends = vec![llm::AgentBackendEntry::new("anthropic")];
+        let saved = store.save("solver", manifest).expect("save");
+        assert_eq!(
+            saved.manifest.backend,
+            Some(Backend::HarnessClaudeSdk),
+            "the returned copy carries the head of the chain's runtime"
+        );
+        assert_eq!(
+            store.raw_manifest("solver").expect("raw").expect("present").backend,
+            None,
+            "and the file carries none"
+        );
+
+        // The other half: with no chain there is nothing to derive, so the field is the agent's own
+        // and comes back exactly as it went in.
+        let bare = store.save("driver", spec("pty:claude")).expect("save");
+        assert_eq!(bare.manifest.backend, Some(Backend::from("pty:claude")));
+        assert_eq!(
+            store.raw_manifest("driver").expect("raw").expect("present").backend,
+            Some(Backend::from("pty:claude"))
+        );
+    }
+
+    /// What an *older* adi leaves behind on a v3 file it saved: before v3 the runtime was a bare
+    /// `Backend` with no skip, so a binary that cannot read the shape writes `backend = ""` back.
+    /// The stamp still says 3, so no migration would revisit it — the read has to heal it, or the
+    /// agent has no runtime for the rest of its life.
+    #[test]
+    fn a_blank_runtime_left_by_an_older_binary_is_filled_in_from_the_chain() {
+        let store = scratch("blank-runtime");
+        backend_named(&store, "anthropic", "harness:claude-sdk", "claude-opus-5");
+
+        let mut manifest = spec("process:codex");
+        manifest.backends = vec![llm::AgentBackendEntry::new("anthropic")];
+        store.save("solver", manifest).expect("save");
+
+        // Exactly what the old serializer produces: the version untouched, the runtime empty.
+        let mut on_disk = store.raw_manifest("solver").expect("raw").expect("present");
+        assert_eq!(on_disk.version, agent::MANIFEST_VERSION);
+        on_disk.backend = Some(Backend::from(""));
+        store
+            .agent_file("solver")
+            .save(&on_disk)
+            .expect("write it back the way an old binary would");
+
+        let read = store.get("solver").expect("get").expect("present").manifest;
+        assert_eq!(
+            read.backend,
+            Some(Backend::HarnessClaudeSdk),
+            "a blank runtime is no runtime, and the chain still says what it is"
+        );
+        store.save("solver", read).expect("re-save");
+        assert_eq!(
+            store.raw_manifest("solver").expect("raw").expect("present").backend,
+            None,
+            "and saving it drops the line the old binary added"
+        );
     }
 
     /// An agent listing backends answers on its **row**, not on whatever its manifest's own

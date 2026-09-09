@@ -1954,6 +1954,7 @@ pub struct Applied {
     pub agents: usize,
     pub notes: Vec<String>,
     pub held: BTreeMap<String, String>,
+    pub ahead: BTreeMap<String, u32>,
 }
 ```
 

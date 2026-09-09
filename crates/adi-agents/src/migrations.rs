@@ -140,6 +140,11 @@ pub struct Applied {
     /// them the same step again once the reason is dealt with. A held-back agent is not a failure
     /// of the migration — it is the migration refusing to guess.
     pub held: BTreeMap<String, String>,
+    /// [`Plan::ahead`] carried through, because the caller that never asks for a plan is the one
+    /// that most needs to hear this: an old binary booting on a store a newer one has already
+    /// migrated writes nothing, and without this it would also *say* nothing, then go on to serve
+    /// definitions whose shape it does not know.
+    pub ahead: BTreeMap<String, u32>,
 }
 
 /// Read every definition and work out what it still needs.
@@ -183,7 +188,10 @@ pub fn plan(agents: &crate::Agents) -> Result<Plan> {
 /// Whatever the step itself returns, or [`Error::Io`](crate::Error::Io) writing a definition back.
 pub fn apply(agents: &crate::Agents, registry: &LlmBackends) -> Result<Applied> {
     let plan = plan(agents)?;
-    let mut applied = Applied::default();
+    let mut applied = Applied {
+        ahead: plan.ahead.clone(),
+        ..Applied::default()
+    };
     for step in plan.steps() {
         let covered: Vec<&Pending> = plan
             .pending
@@ -691,7 +699,10 @@ mod tests {
         assert!(plan.pending.is_empty(), "nothing to do to it");
         assert_eq!(plan.ahead.get("from-the-future"), Some(&(MANIFEST_VERSION + 7)));
 
-        apply(&agents, &registry).expect("apply");
+        // Carried onto the result too, because the boot path never asks for a plan: an old binary
+        // opening a store a newer one has migrated has to be able to say so from `apply` alone.
+        let applied = apply(&agents, &registry).expect("apply");
+        assert_eq!(applied.ahead.get("from-the-future"), Some(&(MANIFEST_VERSION + 7)));
         let saved = agents.get("from-the-future").expect("get").expect("present");
         assert_eq!(
             saved.manifest.version,

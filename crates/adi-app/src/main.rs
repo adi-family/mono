@@ -283,18 +283,33 @@ async fn main() -> anyhow::Result<()> {
     // the store is the thing that brings it forward. A failure is logged and stepped over: a store
     // that reads oddly is worse than one that reads oddly and cannot be opened to fix it.
     match adi_agents::migrations::on_boot(&agents) {
-        Ok(applied) if applied.agents > 0 => {
-            info!(
-                agents = applied.agents,
-                steps = %applied.steps.join(", "),
-                "migrated agent definitions"
-            );
-            for note in &applied.notes {
-                info!(%note, "migration");
+        Ok(applied) => {
+            if applied.agents > 0 {
+                info!(
+                    agents = applied.agents,
+                    steps = %applied.steps.join(", "),
+                    "migrated agent definitions"
+                );
+                for note in &applied.notes {
+                    info!(%note, "migration");
+                }
+            }
+            for (agent, why) in &applied.held {
+                warn!(%agent, %why, "migration held an agent back");
+            }
+            // The skew that runs the other way, and the only one this binary cannot fix: a store a
+            // newer adi has already migrated. Nothing was written — but this process is about to
+            // serve definitions in a shape it does not know, so the operator hears it once, loudly,
+            // rather than working it out from an agent that will not start.
+            if !applied.ahead.is_empty() {
+                warn!(
+                    agents = applied.ahead.len(),
+                    writes = adi_agents::MANIFEST_VERSION,
+                    claims = applied.ahead.values().copied().max().unwrap_or_default(),
+                    "agent definitions are from a NEWER adi and were left alone — upgrade this binary"
+                );
             }
         }
-        // The ordinary case: nothing behind, nothing to say about it.
-        Ok(_) => {}
         Err(e) => warn!(error = %e, "migrating agent definitions failed"),
     }
     // Opening the store loads nothing — the embedding model is built on the first call that
