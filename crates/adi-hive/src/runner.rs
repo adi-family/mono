@@ -2,10 +2,10 @@
 //! alive. One task per [`RunnerSpec`]: run via `sh -c` in its own process group, relaunch
 //! per [`RestartPolicy`] with exponential backoff; shutdown `SIGTERM`s then `SIGKILL`s the group.
 //!
-//! A [`StartPolicy::OnDemand`] service is supervised by a second state machine
-//! ([`supervise_on_demand`]) over the same spawn and stop primitives: it launches nothing until
-//! the front door reports a request for it, and stops it again once its idle window passes without
-//! one. See [`crate::demand`] for the state the two halves share.
+//! A [`StartPolicy::OnDemand`](crate::config::StartPolicy::OnDemand) service is supervised by a
+//! second state machine ([`supervise_on_demand`]) over the same spawn and stop primitives: it
+//! launches nothing until the front door reports a request for it, and stops it again once its
+//! idle window passes without one. See [`crate::demand`] for the state the two halves share.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

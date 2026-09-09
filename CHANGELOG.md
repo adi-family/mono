@@ -20,30 +20,47 @@ extraction script cares about.
 
 ## Unreleased
 
-### Added
+### Changed
 
-- **A service can run only while somebody is looking at it.** A heavy service — a watch list, a
-  bug-bounty hive — used to cost the same whether its page was open or closed, because the hive
-  started everything at boot and kept it alive for ever. A service may now say `start: on-demand`
-  in its hive.yaml: it is not started with the hive at all, the front door starts it when a request
-  arrives for its host, and it is stopped again once nobody has asked for it for an hour
-  (`idle_stop: 30m` to say otherwise). While it comes up, the visitor gets a page that says the
-  service is starting for them and turns into the service itself as soon as it answers — no reload,
-  no 502 that looks like a fault.
+- **Services are lazy now: one does not run until its page is visited.** A service used to cost the
+  same whether anybody was looking at it or not — the hive started everything at boot and kept it
+  alive for ever. From this release the hive starts **nothing** that has a `proxy.host` until a
+  request arrives for that host, and stops it again once an hour has passed with no request
+  (`idle_stop: 30m` in its hive.yaml to say otherwise). While it comes up, the visitor gets a page
+  that says the service is starting for them and turns into the service itself as soon as it
+  answers — no reload, no 502 that looks like a fault. The stop is a `SIGTERM` first: the process
+  gets 30 seconds (`stop_grace`) to finish what it is doing, and a request landing inside that
+  window cancels the stop and keeps the service.
 
-  The stop is a `SIGTERM` first: the process gets 30 seconds (`stop_grace`) to finish what it is
-  doing before anything harsher, and a request landing inside that window cancels the stop and keeps
-  the service, so nobody arriving at the wrong moment is served by a process on its way out. If it
-  had already begun exiting, the visit starts a fresh one and shows the holding page.
+  **This changes what your existing hive.yaml means, and it is worth ten minutes before you
+  restart.** Anything that has to be up whether or not a browser is pointed at it — a background
+  worker, a webhook receiver, a queue consumer, an endpoint something else polls, anything a cron or
+  another machine calls — must now say so:
 
-  **Nothing changes for a service that does not ask for this.** The default is `start: always`,
-  which is what every existing hive.yaml already means: started with the hive — so it comes back
-  after a machine restart — and never stopped for being quiet. No config needs editing.
+  ```yaml
+  services:
+    webhooks:
+      proxy: { host: hooks.adi }
+      start: always          # ← without this it is not running when the call arrives
+      runner: { script: { run: bun run hooks } }
+  ```
+
+  A service with **no `proxy.host`** is left alone: nothing routable means no request could ever
+  wake it, so it keeps being started with the hive exactly as before, without needing a key. That is
+  most databases, workers and sidecars, which is why the change is narrower than it sounds — it is
+  the services with a `.adi` name, the ones you reach in a browser, that are now lazy.
+
+  What you lose by not editing anything is a first visit that waits a few seconds behind a holding
+  page. What you lose by not editing a webhook receiver is the webhook.
 
   *Settings → Services* shows each service's policy and, instead of a running light, what it is
   actually doing: running, starting, idle-stopped, or stopped. An idle-stopped service is not
-  reported as down, because it is not. Start and Stop still work by hand on an on-demand service,
-  and starting one that way gives it the same full idle window a visit would.
+  reported as down, because it is not. Start and Stop still work by hand, and starting a service
+  that way gives it the same full idle window a visit would. The service form in a project now
+  offers **On demand** first, with **Always** beside it, and writes a `start:` key only when the
+  choice is not what silence already means.
+
+### Added
 
 - **A message can say it wants to be heard now.** Typed while `harness:adi` is still answering, a
   reply used to wait for that answer to finish before it was ever asked — the only way to say

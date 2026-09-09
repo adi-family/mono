@@ -610,10 +610,10 @@ pub struct NewService {
     /// Restart policy (`always` | `on-failure` | `no`); omitted → adi-hive's default.
     #[serde(default)]
     pub restart: Option<String>,
-    /// Start policy (`always` | `on-demand`); omitted → adi-hive's default, `always`. An
-    /// `on-demand` service is not started with the hive: the front door starts it when a request
-    /// arrives for its host, and stops it again once [`idle_stop`](Self::idle_stop) passes
-    /// without one.
+    /// Start policy (`always` | `on-demand`); omitted → adi-hive's default, which is `on-demand`
+    /// for a service with a [`host`](Self::host) and `always` for one without. An `on-demand`
+    /// service is not started with the hive: the front door starts it when a request arrives for
+    /// its host, and stops it again once [`idle_stop`](Self::idle_stop) passes without one.
     #[serde(default)]
     pub start: Option<String>,
     /// On-demand only: how long the service may go unvisited before it is stopped (`1h`, `30m`,
@@ -716,7 +716,8 @@ pub struct ProjectService {
     /// Restart policy (`restart`), e.g. `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
-    /// Start policy (`start`): `always` (the default) or `on-demand`.
+    /// Start policy: `on-demand` (what a service with a host means by saying nothing) or `always`.
+    /// Already settled by the server, never the file's blank.
     #[serde(default)]
     pub start: Option<String>,
     /// On-demand only: how long the service may go unvisited before it is stopped (`idle_stop`).
@@ -3085,8 +3086,9 @@ pub struct HiveService {
     pub run: Option<String>,
     #[serde(default)]
     pub restart: Option<String>,
-    /// Start policy (`start`): `always` (the default) or `on-demand` — a service that is started by
-    /// a visit to its host and stopped again once nobody has visited for its idle window.
+    /// Start policy: `on-demand` — started by a visit to its host and stopped again once nobody has
+    /// visited for its idle window, which is what a service with a host means by saying nothing —
+    /// or `always`. Already settled by the server, never the file's blank.
     #[serde(default)]
     pub start: Option<String>,
     /// On-demand only: the idle window before the stop (`idle_stop`), as written in the config.

@@ -190,8 +190,8 @@ When a service is started.
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StartPolicy {
-    #[default]
     Always,
+    #[default]
     OnDemand,
 }
 ```

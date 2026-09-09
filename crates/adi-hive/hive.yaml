@@ -11,6 +11,12 @@
 # its port as `$PORT`/`PORT_<KEY>`) and supervises it, restarting per `restart`. Other
 # fields (healthcheck, depends_on, …) are accepted-but-ignored.
 #
+# `start` defaults to `on-demand`: a service with a `proxy.host` is not launched at boot
+# at all — the front door starts it when a request arrives for that host, and stops it
+# again after `idle_stop` with no request. Say `start: always` on anything that must be
+# up whether or not somebody is looking at it. A service with no `proxy.host` has nothing
+# to arrive at, so it is `always` without having to say so.
+#
 # adi-hive pairs with adi-dns: adi-dns resolves *.adi to 127.0.0.53 (the front-door
 # address below), then adi-hive fans those hostnames out to the per-service HTTP
 # ports it keeps alive. A Host that matches no service gets an animated 4XX page.
@@ -106,15 +112,13 @@ services:
         ports:
           http: 8021
 
-  # A service that only runs while somebody is looking at it. `start: on-demand` keeps it out of
-  # the boot sequence entirely: the front door starts it when a request arrives for `watch.adi`
-  # (showing a holding page that reloads itself until the service answers), and stops it again once
-  # `idle_stop` passes with no request. The stop is a SIGTERM first — the process gets `stop_grace`
-  # to finish what it is doing before a SIGKILL — and a request landing inside that window cancels
-  # it. Both windows are optional: they default to 1h and 30s.
-  #
-  # The default is `start: always`, which is what every service above is: started with the hive
-  # (so it comes back after a machine restart) and never stopped for being quiet.
+  # The two windows an on-demand service may name. `start: on-demand` is what every service above
+  # already is by default, so saying it here changes nothing on its own; what this service adds is
+  # its own idea of how long "quiet" is. The front door starts it when a request arrives for
+  # `watch.adi` (showing a holding page that reloads itself until the service answers), and stops it
+  # again once `idle_stop` passes with no request. The stop is a SIGTERM first — the process gets
+  # `stop_grace` to finish what it is doing before a SIGKILL — and a request landing inside that
+  # window cancels it. Both windows are optional: they default to 1h and 30s.
   watch:
     proxy:
       host: watch.adi
@@ -130,7 +134,8 @@ services:
       script:
         run: bun run watch
 
-  # No `proxy:` — not fronted by adi-hive, silently ignored.
+  # No `proxy:` — not fronted by adi-hive, silently ignored. No host also means no request could
+  # ever wake it, so it is started with the hive whatever the default says.
   postgres:
     rollout:
       type: recreate

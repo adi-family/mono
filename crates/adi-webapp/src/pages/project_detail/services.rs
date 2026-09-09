@@ -46,7 +46,8 @@ pub(crate) struct QuickServiceForm {
     pub(crate) env: RwSignal<String>,
     /// Image pull policy (`""` | `always` | `missing` | `never`).
     pub(crate) pull: RwSignal<String>,
-    /// Start policy: `"always"` (default) or `"on-demand"`.
+    /// Start policy: `"on-demand"` (the default the platform applies to a service with a host) or
+    /// `"always"`.
     pub(crate) start: RwSignal<String>,
     /// On-demand only: the idle window before the service is stopped, as typed (`30m`); empty
     /// takes adi-hive's default of an hour.
@@ -128,8 +129,8 @@ fn cell(col: &str, s: &ProjectService) -> AnyView {
         "Restart" => {
             view! { <span class="adi-mono adi-muted">{dash(s.restart.clone())}</span> }.into_any()
         }
-        // `always` (the default) or `on-demand` — a service started by a visit to its host and
-        // stopped again once nobody has visited for its idle window.
+        // `on-demand` — started by a visit to its host and stopped again once nobody has visited
+        // for its idle window, which is what a service with a host takes by default — or `always`.
         "Start" => {
             let idle = s.idle_stop.clone();
             let title = if s.start.as_deref() == Some("on-demand") {
@@ -297,10 +298,13 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 }
                 (run_cmd, None)
             };
-            // Only an on-demand service carries a start policy into the file: `always` is what a
-            // service with no `start:` already means, and writing it would put the default in two
-            // places. The idle window is on-demand's alone for the same reason.
+            // The file says only what its silence would not: a service with a host is on-demand by
+            // default and one without is `always`, so the key is written only when the chosen
+            // policy is the other one — the default stays in adi-hive rather than in every
+            // hive.yaml this form touches. The idle window is on-demand's alone.
             let on_demand = start.get_untracked() == "on-demand";
+            let start_field = (on_demand != host_opt.is_some())
+                .then(|| if on_demand { "on-demand" } else { "always" }.to_string());
             let idle = idle_stop.get().trim().to_string();
             let body = NewService {
                 project: id,
@@ -310,7 +314,7 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 port: port_v,
                 working_dir: None,
                 restart: None,
-                start: on_demand.then(|| "on-demand".to_string()),
+                start: start_field,
                 idle_stop: (on_demand && !idle.is_empty()).then_some(idle),
                 stop_grace: None,
                 docker,
@@ -323,7 +327,7 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
             container_port.set(String::new());
             volumes.set(String::new());
             env.set(String::new());
-            start.set("always".to_string());
+            start.set("on-demand".to_string());
             idle_stop.set(String::new());
             apply_mutation(state, Some(busy), format!("Added service “{nm}”."),
                 |s: State, d: ProjectDetail| s.project_detail.set(Some(d)), fetch::create_service(body));
@@ -358,13 +362,13 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
                 <span class="adi-field__label">"Start"</span>
                 <div class="adi-segmented" role="group" aria-label="Start policy">
                     <button class="adi-segmented__option" type="button"
-                        title="Started with the hive and kept alive"
-                        aria-pressed=move || (start.get() != "on-demand").to_string()
-                        on:click=move |_| start.set("always".to_string())>"Always"</button>
-                    <button class="adi-segmented__option" type="button"
-                        title="Not started at boot: the front door starts it when its host is visited, and stops it again once nobody has visited for the idle window"
+                        title="The default: not started at boot — the front door starts it when its host is visited, and stops it again once nobody has visited for the idle window"
                         aria-pressed=move || (start.get() == "on-demand").to_string()
                         on:click=move |_| start.set("on-demand".to_string())>"On demand"</button>
+                    <button class="adi-segmented__option" type="button"
+                        title="Started with the hive and kept alive, whether or not anybody is looking at it — for a worker, a webhook receiver, anything not visited in a browser"
+                        aria-pressed=move || (start.get() != "on-demand").to_string()
+                        on:click=move |_| start.set("always".to_string())>"Always"</button>
                 </div>
             </div>
             {move || if start.get() == "on-demand" {

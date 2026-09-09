@@ -32,8 +32,9 @@ struct YamlService {
     runner: Option<HiveRunner>,
     #[serde(default)]
     restart: Option<String>,
-    /// `always` (the default) or `on-demand` — adi-hive's `StartPolicy`, mirrored as the raw string
-    /// so this view reports what the file says rather than a second opinion about it.
+    /// `on-demand` (the default for a service with a `proxy.host`) or `always` — adi-hive's
+    /// `StartPolicy`, mirrored as the raw string so this view reports what the file says rather
+    /// than a second opinion about it.
     #[serde(default)]
     start: Option<String>,
     #[serde(default)]
@@ -102,8 +103,12 @@ pub(crate) fn is_listening(live: &[UsedPort], port: u16) -> bool {
 }
 
 /// The value of `start:` that means "started by a visit, stopped when nobody visits" (adi-hive's
-/// `StartPolicy::OnDemand`). Everything else — including nothing at all — is `always`.
+/// `StartPolicy::OnDemand`) — and, for a service with a `proxy.host`, what saying nothing means.
 const ON_DEMAND: &str = "on-demand";
+
+/// The other policy: started with the hive and kept alive. What `start:` has to say for a service
+/// that must be up whether or not anybody is looking at it.
+const ALWAYS: &str = "always";
 
 /// Where a hive publishes what its on-demand services are doing, beside its config (adi-hive's
 /// `DEMAND_FILE`). Only a hive that actually supervises one writes it.
@@ -158,12 +163,21 @@ fn service_state(running: bool, on_demand: bool, published: Option<&str>) -> Ser
     }
 }
 
-/// Whether a `start:` value asks for the on-demand policy, read the way adi-hive reads it.
-fn is_on_demand(start: Option<&str>) -> bool {
+/// Whether a `start:` value *names* the on-demand policy, in the spellings adi-hive accepts.
+/// Anything else it does not recognise — a typo included — is `always` there, and so here.
+fn names_on_demand(start: &str) -> bool {
     matches!(
-        start.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
-        Some("on-demand" | "on_demand" | "ondemand" | "demand" | "lazy")
+        start.trim().to_ascii_lowercase().as_str(),
+        "on-demand" | "on_demand" | "ondemand" | "demand" | "lazy"
     )
+}
+
+/// Whether a service is on demand, read the way adi-hive reads it: what its `start:` says, and —
+/// when it says nothing — the default for its shape. `has_host` is whether it declares a
+/// `proxy.host`, because a service with none can never be woken by a request and is therefore
+/// `always` (adi-hive's `StartPolicy::default_for`).
+fn is_on_demand(start: Option<&str>, has_host: bool) -> bool {
+    given(start).map_or(has_host, names_on_demand)
 }
 
 /// What the process holding `port` costs, when the host sampled it.
@@ -212,14 +226,18 @@ pub(crate) fn read_hive_services(
                 .unwrap_or_default();
             let port = primary_port(&ports);
             let running = port.is_some_and(|p| is_listening(live, p));
-            let on_demand = is_on_demand(svc.start.as_deref());
+            let host = svc.proxy.map(|p| p.host);
+            let on_demand = is_on_demand(
+                svc.start.as_deref(),
+                host.as_deref().is_some_and(|h| !h.trim().is_empty()),
+            );
             ProjectService {
-                host: svc.proxy.map(|p| p.host),
+                host,
                 run: svc.runner.and_then(HiveRunner::display_command),
                 restart: svc.restart,
-                // Reported as the file spells it, but normalised so a panel never has to guess:
-                // anything that is not on-demand is the default, `always`.
-                start: Some(if on_demand { ON_DEMAND } else { "always" }.to_string()),
+                // Normalised so a panel never has to guess: a file that says nothing about `start`
+                // is reported under the policy it is actually running, not as a blank.
+                start: Some(if on_demand { ON_DEMAND } else { ALWAYS }.to_string()),
                 idle_stop: svc.idle_stop,
                 running,
                 state: service_state(running, on_demand, demand.phase(namespace, &name)),
@@ -317,7 +335,9 @@ fn collect_dashboard_services(
                 .ok()
                 .flatten();
             let running = port.is_some_and(|p| is_listening(live, p));
-            let on_demand = is_on_demand(svc.start.as_deref());
+            // `read_hive_services` already settled the policy for this service, so this reads its
+            // answer rather than defaulting a second time off a field it has since normalised.
+            let on_demand = svc.start.as_deref() == Some(ON_DEMAND);
             out.push(HiveService {
                 project: None,
                 dashboard: Some(id.clone()),
@@ -739,8 +759,8 @@ fn given(field: Option<&str>) -> Option<&str> {
 /// created, because nothing about it looks wrong afterwards.
 fn refuse_bad_start_policy(req: &NewService) -> Option<Response> {
     if let Some(policy) = given(req.start.as_deref())
-        && !is_on_demand(Some(policy))
-        && !policy.eq_ignore_ascii_case("always")
+        && !names_on_demand(policy)
+        && !policy.eq_ignore_ascii_case(ALWAYS)
     {
         return Some(error(400, "start must be `always` or `on-demand`"));
     }
@@ -762,15 +782,17 @@ fn refuse_bad_start_policy(req: &NewService) -> Option<Response> {
 
 /// The `start` / `idle_stop` / `stop_grace` keys a new service should carry, in file order.
 ///
-/// Only what was actually asked for: a service created without an opinion about starting carries
-/// no key at all and takes adi-hive's default (`always`), which is what keeps the create form from
-/// writing a policy into every hive.yaml it touches. The two windows are on-demand's alone — on an
-/// `always` service they would describe a stop that never happens.
+/// Only what was actually asked for: a service created without an opinion about starting carries no
+/// key at all and takes adi-hive's default — on-demand once it has a host, `always` without one —
+/// which is what keeps the create form from writing a policy into every hive.yaml it touches. The
+/// two windows are on-demand's alone; on an `always` service they would describe a stop that never
+/// happens.
 fn start_policy_keys(req: &NewService) -> Vec<(&'static str, String)> {
-    if !is_on_demand(req.start.as_deref()) {
-        return given(req.start.as_deref())
-            .map(|policy| vec![("start", policy.to_string())])
-            .unwrap_or_default();
+    let Some(policy) = given(req.start.as_deref()) else {
+        return Vec::new();
+    };
+    if !names_on_demand(policy) {
+        return vec![("start", policy.to_string())];
     }
     let mut keys = vec![("start", ON_DEMAND.to_string())];
     if let Some(idle) = given(req.idle_stop.as_deref()) {
@@ -1049,16 +1071,25 @@ mod tests {
 
     #[test]
     fn the_on_demand_policy_is_read_the_way_adi_hive_reads_it() {
-        assert!(is_on_demand(Some("on-demand")));
-        assert!(is_on_demand(Some(" On-Demand ")));
-        assert!(is_on_demand(Some("on_demand")));
-        assert!(!is_on_demand(Some("always")));
-        assert!(!is_on_demand(None));
-        assert!(!is_on_demand(Some("on demand")), "a typo is not the policy");
+        let routable = true;
+        assert!(is_on_demand(Some("on-demand"), routable));
+        assert!(is_on_demand(Some(" On-Demand "), routable));
+        assert!(is_on_demand(Some("on_demand"), routable));
+        assert!(!is_on_demand(Some("always"), routable));
+        assert!(
+            !is_on_demand(Some("on demand"), routable),
+            "a typo is not the policy, and does not fall through to the default either"
+        );
+
+        // Nothing said: the default, which turns on whether anything could ever wake it.
+        assert!(is_on_demand(None, true));
+        assert!(!is_on_demand(None, false), "no host, nothing to arrive at");
+        assert!(is_on_demand(Some("  "), true), "blank is not an opinion");
     }
 
-    /// What `GET /api/hive` and the project detail page report for a service that asked for the
-    /// policy — read from the file, not from a second opinion about it.
+    /// What `GET /api/hive` and the project detail page report for each of the three cases: a
+    /// service that asked for the policy, a routable one that said nothing (the default), and one
+    /// with no host, which nothing could wake and which therefore keeps starting itself.
     #[test]
     fn a_services_start_policy_is_read_out_of_its_hive_yaml() {
         let dir = std::env::temp_dir().join(format!(
@@ -1077,6 +1108,10 @@ mod tests {
                  start: on-demand\n    \
                  idle_stop: 30m\n    \
                  runner: { script: { run: 'bun run watch' } }\n  \
+               web:\n    \
+                 proxy: { host: web.adi }\n    \
+                 rollout: { recreate: { ports: { http: 8933 } } }\n    \
+                 runner: { script: { run: 'bun run web' } }\n  \
                api:\n    \
                  rollout: { recreate: { ports: { http: 8932 } } }\n    \
                  runner: { script: { run: 'bun run api' } }\n",
@@ -1091,8 +1126,14 @@ mod tests {
         assert_eq!(watch.idle_stop.as_deref(), Some("30m"));
         assert_eq!(watch.state, ServiceState::IdleStopped);
 
-        // A service that says nothing is `always`, and reads exactly as it did before the policy
-        // existed.
+        // A routable service that says nothing takes the default, and is reported as waiting rather
+        // than as down — it is not running because nobody has asked for it.
+        let web = services.iter().find(|s| s.name == "web").expect("web");
+        assert_eq!(web.start.as_deref(), Some("on-demand"));
+        assert_eq!(web.state, ServiceState::IdleStopped);
+        assert_eq!(web.idle_stop, None, "the window is the daemon's, not a key");
+
+        // No host, so no request could ever wake it: `always`, and down means down.
         let api = services.iter().find(|s| s.name == "api").expect("api");
         assert_eq!(api.start.as_deref(), Some("always"));
         assert_eq!(api.state, ServiceState::Stopped);

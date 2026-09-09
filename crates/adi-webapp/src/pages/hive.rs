@@ -361,7 +361,13 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
 fn start_cell(s: &HiveService) -> AnyView {
     let on_demand = s.start.as_deref() == Some("on-demand");
     if !on_demand {
-        return view! { <span class="adi-mono adi-muted">"always"</span> }.into_any();
+        return view! {
+            <span class="adi-mono adi-muted"
+                title="started with the hive and kept alive, whether or not anybody is looking at it">
+                "always"
+            </span>
+        }
+        .into_any();
     }
     let title = s.idle_stop.as_ref().map_or_else(
         || "started by a visit; stopped after an hour with no request".to_string(),
@@ -708,8 +714,8 @@ mod tests {
         assert_eq!(names(&services), ["up", "coming", "waiting", "down"]);
     }
 
-    /// The Start column reads the policy the file states, and every service that says nothing about
-    /// it reads as `always` — the same shape it had before the policy existed.
+    /// The Start column sorts by the policy the server settled. A row with none at all — an older
+    /// server that predates the field — sorts as empty rather than being guessed at.
     #[test]
     fn the_start_column_sorts_by_the_policy() {
         let with = |name: &str, start: Option<&str>| HiveService {

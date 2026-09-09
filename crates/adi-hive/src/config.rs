@@ -113,8 +113,8 @@ pub struct ServiceSpec {
     /// Restart policy: `always` | `on-failure` | `no`. Defaults to `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
-    /// Start policy: `always` | `on-demand`. Defaults to `always` — every hive.yaml written
-    /// before this key existed behaves exactly as it did. See [`StartPolicy`].
+    /// Start policy: `always` | `on-demand`. Saying nothing means **on-demand** for a service with
+    /// a [`proxy.host`](ServiceProxy::host), and `always` for one without. See [`StartPolicy`].
     #[serde(default)]
     pub start: Option<String>,
     /// How long an **on-demand** service may go without a request before it is stopped
@@ -278,10 +278,19 @@ impl ServiceSpec {
             .insert(HTTP_PORT_KEY.to_string(), port);
     }
 
-    /// This service's start policy, defaulting to [`StartPolicy::Always`].
+    /// This service's start policy: what `start:` says, else [`StartPolicy::default_for`] its shape.
     #[must_use]
     pub fn start_policy(&self) -> StartPolicy {
-        StartPolicy::parse(self.start.as_deref())
+        StartPolicy::parse(self.start.as_deref(), self.has_proxy_host())
+    }
+
+    /// Whether a request could ever reach this service — i.e. whether it has a `proxy.host` for the
+    /// front door to route. It is what decides the default start policy, so a blank host counts as
+    /// none: it routes nothing, and a policy must not turn on a string that is only technically there.
+    fn has_proxy_host(&self) -> bool {
+        self.proxy
+            .as_ref()
+            .is_some_and(|proxy| !proxy.host.trim().is_empty())
     }
 
     /// How long this service may sit unvisited before an idle stop (on-demand only).
@@ -329,26 +338,55 @@ impl RestartPolicy {
 
 /// When a service is started.
 ///
-/// The default is [`Self::Always`], and it has to be: it is what every hive.yaml on every machine
-/// already means by saying nothing.
+/// The default is [`Self::OnDemand`]: a machine should not be running a service nobody is looking
+/// at, and most services are looked at through a browser. `always` is the opt-in for the ones that
+/// must be up whether or not anybody is — see [`Self::default_for`], which is where the one
+/// exception lives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StartPolicy {
     /// Started when the hive starts — so it comes back after a machine restart — and kept alive
-    /// per the restart policy. Never stopped for being quiet.
-    #[default]
+    /// per the restart policy. Never stopped for being quiet. What a background worker, a webhook
+    /// receiver, or anything polled by something other than a browser has to say.
     Always,
     /// Not started at boot. The front door starts it when a request arrives for its host, and it
-    /// is stopped again once no request has arrived for its idle window. For a service heavy
-    /// enough that nobody wants it burning a core while its page is closed.
+    /// is stopped again once no request has arrived for its idle window.
+    #[default]
     OnDemand,
 }
 
 impl StartPolicy {
-    /// Read the `start:` key. Anything unrecognised is [`Self::Always`] — the safe reading, since
-    /// a typo that silently made a service on-demand would take it down an hour later.
-    fn parse(raw: Option<&str>) -> Self {
-        match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+    /// The policy a service falls under when its `start:` says nothing.
+    ///
+    /// [`Self::OnDemand`] — **unless it has no `proxy.host`**. Nothing routable means no request
+    /// could ever wake it, so on-demand for such a service would not mean "runs while somebody is
+    /// looking at it", it would mean "never runs at all". It is `always` instead, and that is a
+    /// rule stated here rather than an accident of nobody ever calling `wanted()` for it.
+    ///
+    /// A service that *has* a host is on demand, with no further exceptions: `always` on one of
+    /// those is something the file has to say.
+    #[must_use]
+    pub fn default_for(has_host: bool) -> Self {
+        if has_host {
+            Self::OnDemand
+        } else {
+            Self::Always
+        }
+    }
+
+    /// Read the `start:` key of a service, falling back to [`Self::default_for`] when it says
+    /// nothing at all.
+    ///
+    /// Anything unrecognised is [`Self::Always`] rather than the default — the safe direction for a
+    /// typo, since a service that runs when it needn't costs a core, and one that is silently never
+    /// there costs an afternoon of looking for it.
+    fn parse(raw: Option<&str>, has_host: bool) -> Self {
+        let raw = raw
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase);
+        match raw.as_deref() {
             Some("on-demand" | "on_demand" | "ondemand" | "demand" | "lazy") => Self::OnDemand,
+            None => Self::default_for(has_host),
             _ => Self::Always,
         }
     }
@@ -1957,22 +1995,68 @@ services:
         );
     }
 
-    /// The compatibility promise: a hive.yaml that says nothing about `start` means what it always
-    /// meant — started with the hive, kept alive, never stopped for being quiet.
+    /// The default: a routable service that says nothing about `start` is on demand, and takes both
+    /// windows from the daemon rather than from the file.
     #[test]
-    fn a_service_that_says_nothing_about_starting_is_started_always() {
+    fn a_routable_service_that_says_nothing_about_starting_is_on_demand() {
         let hive: Hive = serde_yaml_ng::from_str(SAMPLE).expect("hive.yaml parses");
-        for (name, svc) in &hive.services {
+        for name in ["frontend", "backend"] {
             assert_eq!(
-                svc.start_policy(),
-                StartPolicy::Always,
-                "{name} must be unaffected by a key it does not set"
+                hive.services[name].start_policy(),
+                StartPolicy::OnDemand,
+                "{name} has a host, so silence means on demand"
             );
         }
         let runners = hive.runners(Path::new("/project"));
-        assert!(runners.iter().all(|r| r.start == StartPolicy::Always));
+        assert!(runners.iter().all(|r| r.start == StartPolicy::OnDemand));
         assert!(runners.iter().all(|r| r.idle_stop == DEFAULT_IDLE_STOP));
         assert!(runners.iter().all(|r| r.stop_grace == DEFAULT_STOP_GRACE));
+    }
+
+    /// The one carve-out, and the reason it exists: with no `proxy.host` there is nothing for a
+    /// request to arrive at, so on-demand would not mean "runs while somebody is looking at it" —
+    /// it would mean "never runs at all". Such a service is `always` without having to say so.
+    #[test]
+    fn a_service_with_no_host_is_always_started_because_nothing_could_ever_wake_it() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  worker:
+    rollout: { recreate: { ports: { http: 8040 } } }
+    runner: { script: { run: 'bun run worker' } }
+  blank:
+    proxy: { host: '  ' }
+    rollout: { recreate: { ports: { http: 8041 } } }
+    runner: { script: { run: 'bun run blank' } }
+  visited:
+    proxy: { host: visited.adi }
+    rollout: { recreate: { ports: { http: 8042 } } }
+    runner: { script: { run: 'bun run visited' } }
+",
+        )
+        .expect("hive.yaml parses");
+        assert_eq!(
+            hive.services["worker"].start_policy(),
+            StartPolicy::Always,
+            "a background worker keeps starting on its own"
+        );
+        assert_eq!(
+            hive.services["blank"].start_policy(),
+            StartPolicy::Always,
+            "a host that is only whitespace routes nothing, so it is not a host"
+        );
+        assert_eq!(
+            hive.services["visited"].start_policy(),
+            StartPolicy::OnDemand,
+            "a service with a host takes the default, with no exceptions carved out"
+        );
+
+        // The carve-out is about the *default* only: a hostless service that asks for on-demand
+        // gets it, and is then started by hand from the panel rather than by a visit.
+        let asked: ServiceSpec =
+            serde_yaml_ng::from_str("start: on-demand\nrunner: { script: { run: 'x' } }\n")
+                .expect("parse");
+        assert_eq!(asked.start_policy(), StartPolicy::OnDemand);
     }
 
     #[test]
@@ -2033,19 +2117,42 @@ services:
     }
 
     #[test]
-    fn start_policy_reads_the_spellings_people_write_and_defaults_to_always() {
-        assert_eq!(StartPolicy::parse(Some("on-demand")), StartPolicy::OnDemand);
+    fn start_policy_reads_the_spellings_people_write_and_defaults_by_routability() {
+        let routable = true;
         assert_eq!(
-            StartPolicy::parse(Some(" On-Demand ")),
+            StartPolicy::parse(Some("on-demand"), routable),
             StartPolicy::OnDemand
         );
-        assert_eq!(StartPolicy::parse(Some("on_demand")), StartPolicy::OnDemand);
-        assert_eq!(StartPolicy::parse(Some("always")), StartPolicy::Always);
-        assert_eq!(StartPolicy::parse(None), StartPolicy::Always);
-        // A typo must not quietly make a service on-demand: it would be up now and gone in an hour,
-        // which is far harder to diagnose than a policy that did not take effect.
-        assert_eq!(StartPolicy::parse(Some("on demand")), StartPolicy::Always);
-        assert_eq!(StartPolicy::parse(Some("nonsense")), StartPolicy::Always);
+        assert_eq!(
+            StartPolicy::parse(Some(" On-Demand "), routable),
+            StartPolicy::OnDemand
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("on_demand"), routable),
+            StartPolicy::OnDemand
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("always"), routable),
+            StartPolicy::Always
+        );
+
+        // Nothing said: the default, which is the whole of the policy for most services.
+        assert_eq!(StartPolicy::parse(None, true), StartPolicy::OnDemand);
+        assert_eq!(StartPolicy::parse(None, false), StartPolicy::Always);
+        assert_eq!(StartPolicy::parse(Some("  "), true), StartPolicy::OnDemand);
+        assert_eq!(StartPolicy::default(), StartPolicy::OnDemand);
+
+        // A typo must not be what makes a service lazy: `always` is where an unreadable policy
+        // lands, because a service that runs when it needn't is visible and one that is never
+        // there is not.
+        assert_eq!(
+            StartPolicy::parse(Some("on demand"), true),
+            StartPolicy::Always
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("nonsense"), true),
+            StartPolicy::Always
+        );
         assert_eq!(StartPolicy::Always.as_str(), "always");
         assert_eq!(StartPolicy::OnDemand.as_str(), "on-demand");
     }
