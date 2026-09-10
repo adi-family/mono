@@ -59,10 +59,7 @@ export default defineConfig({
 				{ tag: 'meta', attrs: { name: 'theme-color', content: '#161616' } },
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
-			sidebar: [
-				{ label: 'Example', link: '/example/' },
-				{ label: 'Hive', link: '/hive/' },
-			],
+			sidebar: [{ label: 'Hive', link: '/hive/' }],
 		}),
 	],
 	vite: {
