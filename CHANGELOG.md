@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.11.0 — 2026-09-10
+
 ### Added
 
 - **The panel window has a browser's keyboard.** The app's window around the control panel answered
