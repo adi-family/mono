@@ -12,23 +12,39 @@
 //! `index.html` itself is never served from anywhere but this instance; only what it points at
 //! moves. And it only moves when there is no [`crate::DIST_ENV`] override — a developer serving
 //! their own edits out of a local `dist/` gets exactly those edits, never the CDN's cached build.
+//!
+//! The setting has three modes ([`adi_webapp_api::types::SharedAssetsMode`]): always local,
+//! always the CDN, or the CDN only for a request that doesn't look like it's on this same machine
+//! — [`crate::origin::looks_local`] decides that from the request's own `Host`, since the CDN's
+//! whole benefit (see the module docs above) is the uplink to a browser somewhere else, and there
+//! is nothing to save when there isn't one.
 
 use adi_webapp_api::handlers;
+use adi_webapp_api::types::SharedAssetsMode;
 
-/// The CDN base URL and version a shell is pointed at, once the setting is confirmed on.
+/// The CDN base URL and version a shell is pointed at, once [`SharedAssets::active`] has decided
+/// this request should ask for it.
 pub struct SharedAssets<'a> {
     base_url: String,
     version: &'a str,
 }
 
 impl<'a> SharedAssets<'a> {
-    /// The active configuration for this request, or `None` when the setting is off.
+    /// The active configuration for this request, or `None` when it should get the local copy —
+    /// either because the mode is off outright, or because `cdn-when-remote` and `host` looks
+    /// local.
     ///
     /// `version` is this build's own [`crate::VERSION`] — every instance on the same release
     /// resolves to the same prefix, and one on an older build never asks for a newer bundle.
+    /// `host` is the request's own `Host` header, exactly as `crate::origin::check` reads it.
     #[must_use]
-    pub fn active(version: &'a str) -> Option<Self> {
-        handlers::enabled().then(|| Self {
+    pub fn active(version: &'a str, host: Option<&str>) -> Option<Self> {
+        let ask_cdn = match handlers::mode() {
+            SharedAssetsMode::LocalAlways => false,
+            SharedAssetsMode::CdnWhenRemote => !crate::origin::looks_local(host),
+            SharedAssetsMode::CdnAlways => true,
+        };
+        ask_cdn.then(|| Self {
             base_url: handlers::base_url(),
             version,
         })

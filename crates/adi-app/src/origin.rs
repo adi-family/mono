@@ -85,6 +85,35 @@ const LOCAL_ZONE_SUFFIX: &str = ".adi";
 /// browser produces none of them for a page it loaded from here.
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
 
+/// The reserved fleet sub-zone a `Host` names when a browser reaches this instance through a
+/// paired node rather than directly — `app.<node>.n.adi`, however deep the service label goes
+/// (`docs/fleet.md` §2). A superset of [`LOCAL_ZONE_SUFFIX`], not a separate zone: every fleet
+/// name is also an `.adi` name.
+const FLEET_ZONE_SUFFIX: &str = ".n.adi";
+
+/// Whether `host` names *this same machine* — loopback, or this instance's own `.adi` name
+/// outside the fleet zone — as opposed to a browser that reached it some other way: through a
+/// paired fleet node's `n.adi` address, a LAN IP, or anything else `is_a_name_we_answer_to`
+/// would itself refuse.
+///
+/// Used by [`crate::shared_assets`]'s `cdn-when-remote` mode to decide whether the shared-assets
+/// CDN is worth asking at all: its whole benefit is the uplink to a browser that isn't on the
+/// machine running ADI (see that module's docs), so a request that already looks local gets
+/// nothing from it. Not a security boundary the way [`check`] is — at worst a wrong guess here
+/// costs one failed CDN round trip before the local fallback fires, never a wrong answer served
+/// to the wrong place — so, unlike `check`, an absent `Host` (a mesh peer, a bare `curl`) reads as
+/// local: probably not a browser this setting is for, and local is the fewer-surprises guess.
+#[must_use]
+pub(crate) fn looks_local(host: Option<&str>) -> bool {
+    let Some(host) = host.filter(|h| !h.trim().is_empty()) else {
+        return true;
+    };
+    let authority = normalize_authority(host);
+    let name = without_port(&authority);
+    LOOPBACK_HOSTS.contains(&name)
+        || (is_in_the_adi_zone(name) && !name.ends_with(FLEET_ZONE_SUFFIX))
+}
+
 /// Whether this `/api/*` request may be routed, or the refusal to answer instead.
 pub(crate) fn check(req: &Request) -> Result<(), Refusal> {
     // A browser's own account of where the request came from. Nothing but a browser sends it, so
@@ -584,5 +613,41 @@ mod tests {
             )),
             Ok(())
         );
+    }
+
+    #[test]
+    fn looks_local_is_true_for_loopback_and_this_instances_own_name() {
+        for host in [
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+            "localhost:8000",
+            "app.adi",
+            "api.adi",
+            "APP.ADI:443",
+        ] {
+            assert!(looks_local(Some(host)), "{host}");
+        }
+    }
+
+    #[test]
+    fn looks_local_is_false_for_a_fleet_node_or_anything_unrecognized() {
+        for host in [
+            "app.zomro-de1.n.adi",
+            "app.nosh.zomro-de1.n.adi",
+            "192.168.1.20:8000",
+            "evil.example.com",
+        ] {
+            assert!(!looks_local(Some(host)), "{host}");
+        }
+    }
+
+    #[test]
+    fn looks_local_treats_a_missing_or_blank_host_as_local() {
+        // Not a security boundary (see the doc comment) — a mesh peer or a bare `curl` is
+        // probably not the browser this setting is for, and local is the fewer-surprises guess.
+        assert!(looks_local(None));
+        assert!(looks_local(Some("")));
+        assert!(looks_local(Some("   ")));
     }
 }

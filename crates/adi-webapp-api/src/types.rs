@@ -66,27 +66,45 @@ pub struct UpdateState {
     pub installing: bool,
 }
 
+/// How the shared-assets setting decides whether a request gets the CDN or this instance's own
+/// copy of the webapp bundle — [`SharedAssetsState::mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SharedAssetsMode {
+    /// Never ask the CDN. Every request gets this instance's own embedded copy — the default: an
+    /// instance that has never touched this setting works exactly as if shared assets didn't
+    /// exist.
+    #[default]
+    LocalAlways,
+    /// Ask the CDN only for a request that doesn't look like it's on this same machine — a
+    /// paired fleet node reached over `n.adi`, say. A request from loopback or this instance's
+    /// own local name gets its own copy instead: the CDN's whole benefit is the uplink to a
+    /// browser somewhere else, and there is nothing to save when there isn't one.
+    CdnWhenRemote,
+    /// Always ask the CDN, even for a request that looks local. The original all-or-nothing
+    /// switch.
+    CdnAlways,
+}
+
 /// `GET /api/settings/shared-assets`, and the answer to `POST /api/settings/shared-assets`.
 ///
 /// The webapp bundle (wasm, its JS glue, both stylesheets, fonts) is large and this instance may
-/// be on a poor network, so `enabled` points the shell at a CDN copy instead of serving its own —
+/// be on a poor network, so `mode` can point the shell at a CDN copy instead of serving its own —
 /// see `crates/adi-app`'s `shared_assets` module for the URL scheme and the fallback that keeps
 /// the page working when the CDN doesn't answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SharedAssetsState {
-    /// Off by default: nothing about how the bundle is served changes for an instance that has
-    /// never turned this on.
-    pub enabled: bool,
-    /// The CDN base URL the shell is pointed at when `enabled` — the same for every instance
-    /// running the same version, which is the point (a browser that already loaded it for one
-    /// instance has it cached for the rest). `ADI_SHARED_ASSETS_BASE_URL` overrides it.
+    pub mode: SharedAssetsMode,
+    /// The CDN base URL the shell is pointed at whenever `mode` asks for it — the same for every
+    /// instance running the same version, which is the point (a browser that already loaded it
+    /// for one instance has it cached for the rest). `ADI_SHARED_ASSETS_BASE_URL` overrides it.
     pub base_url: String,
 }
 
-/// `POST /api/settings/shared-assets` — the whole body is the new value of [`SharedAssetsState::enabled`].
+/// `POST /api/settings/shared-assets` — the whole body is the new value of [`SharedAssetsState::mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetSharedAssets {
-    pub enabled: bool,
+    pub mode: SharedAssetsMode,
 }
 
 /// An inclusive `[start, end]` port interval — used for both the allocatable range and

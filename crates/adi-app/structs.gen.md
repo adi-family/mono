@@ -226,7 +226,7 @@ struct ProcessTable {
 
 ### struct `SharedAssets`
 
-The CDN base URL and version a shell is pointed at, once the setting is confirmed on.
+The CDN base URL and version a shell is pointed at, once `SharedAssets::active` has decided this request should ask for it.
 
 ```rust
 pub struct SharedAssets<'a> {

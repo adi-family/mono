@@ -465,7 +465,13 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
     // Inside `/api` an unknown path is a 404 from the router, not the app shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
-        return serve_asset(&mut stream, req.route_path(), app.dist.as_deref()).await;
+        return serve_asset(
+            &mut stream,
+            req.route_path(),
+            app.dist.as_deref(),
+            req.header("host"),
+        )
+        .await;
     }
 
     let response = answer(app, req).await;
@@ -1209,10 +1215,15 @@ const RENDERABLE: [&str; 6] = [
 /// directory; otherwise from the embedded copy. Either way, an unknown path falls back to
 /// the app shell (`index.html`) for client-side routing, and the placeholder if the webapp
 /// isn't built yet.
+///
+/// `host` is this request's own `Host` header, threaded through to [`serve_embedded`] for the
+/// shared-assets `cdn-when-remote` mode's decision — unused on the [`DIST_ENV`] path, which never
+/// asks the CDN at all.
 async fn serve_asset(
     stream: &mut TcpStream,
     path: &str,
     dist: Option<&Path>,
+    host: Option<&str>,
 ) -> anyhow::Result<()> {
     let rel = match path.trim_start_matches('/') {
         "" => "index.html",
@@ -1220,17 +1231,22 @@ async fn serve_asset(
     };
     match dist {
         Some(dir) => serve_from_disk(stream, dir, rel).await,
-        None => serve_embedded(stream, rel).await,
+        None => serve_embedded(stream, rel, host).await,
     }
 }
 
 /// Serve `rel` from the embedded `dist/`, falling back to the shell / placeholder.
 ///
-/// The shell (`index.html`) is the one file this rewrites: when the shared-assets setting is on
-/// (see [`shared_assets`]), every hashed bundle file it points at moves to the CDN. Everything
-/// else — including a direct request for one of those hashed files by an older, cached shell —
-/// keeps being served byte-identical to what it always was.
-async fn serve_embedded(stream: &mut TcpStream, rel: &str) -> anyhow::Result<()> {
+/// The shell (`index.html`) is the one file this rewrites: when the shared-assets setting asks
+/// for the CDN on this request (see [`shared_assets`], which `host` is for), every hashed bundle
+/// file it points at moves there. Everything else — including a direct request for one of those
+/// hashed files by an older, cached shell — keeps being served byte-identical to what it always
+/// was.
+async fn serve_embedded(
+    stream: &mut TcpStream,
+    rel: &str,
+    host: Option<&str>,
+) -> anyhow::Result<()> {
     if rel != "index.html"
         && let Some(file) = WEBAPP.get_file(rel)
     {
@@ -1239,7 +1255,7 @@ async fn serve_embedded(stream: &mut TcpStream, rel: &str) -> anyhow::Result<()>
     if let Some(index) = WEBAPP.get_file("index.html") {
         let html = "text/html; charset=utf-8";
         let bytes = index.contents();
-        return match shared_assets::SharedAssets::active(VERSION) {
+        return match shared_assets::SharedAssets::active(VERSION, host) {
             Some(shared) => {
                 let rewritten = shared_assets::rewrite(&String::from_utf8_lossy(bytes), &shared);
                 http::write_response(stream, 200, "OK", html, rewritten.as_bytes()).await

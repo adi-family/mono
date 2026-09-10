@@ -19,9 +19,9 @@ use adi_webapp_api::types::{
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
     RunRef, RunSteps, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
     SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
-    SetSecret, SetSharedAssets, SharedAssetsState, SimulateAgent, SimulateTurn, StarRun,
-    StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
-    ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
+    SetSecret, SetSharedAssets, SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn,
+    StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState,
+    ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun,
     UpdateMarketplaceApp, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
@@ -49,8 +49,8 @@ pub async fn shared_assets() -> Result<SharedAssetsState, String> {
     get("/api/settings/shared-assets").await
 }
 
-pub async fn set_shared_assets(enabled: bool) -> Result<SharedAssetsState, String> {
-    post("/api/settings/shared-assets", &SetSharedAssets { enabled }).await
+pub async fn set_shared_assets(mode: SharedAssetsMode) -> Result<SharedAssetsState, String> {
+    post("/api/settings/shared-assets", &SetSharedAssets { mode }).await
 }
 
 /// The Meta page's state: the well-known `adi-agent` (if set up), the default system prompt, and
