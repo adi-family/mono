@@ -18,10 +18,14 @@
     overflow-y: auto;
   }
 
-  // The reading width the rest of the system uses. Without it a row's name and its one action
-  // sit at opposite ends of a 27" display, with the sentence between them belonging to neither.
+  // The reading width the rest of the system uses, centred in the viewport. Without the width a
+  // row's name and its one action sit at opposite ends of a 27" display, with the sentence
+  // between them belonging to neither; without the centring the page hangs off the left edge —
+  // this screen has no explorer beside it to be pushed over by, which is the only reason the
+  // workbench's own container sits where it does.
   .adi-container {
     max-width: var(--container);
+    margin-inline: auto;
   }
 }
 
