@@ -8,8 +8,9 @@
 <!-- One stylesheet: `ui.css` carries the tokens, the reset and the utilities. Nothing
      from adi-css is loaded here — adi-ui has its own palette and its own type scale. -->
 <link data-trunk rel="tailwind-css" href="styles/ui.css" />
-<!-- Copied verbatim, not hashed: the @font-face rules in ui.css point at these by a stable
-     absolute URL, because that stylesheet is also imported from other crates. -->
+<!-- Copied verbatim, not hashed: the @font-face rules in ui.css point at these with a relative
+     `fonts/…` url, which resolves against wherever the compiled stylesheet itself ends up — the
+     dist root here, same as every other crate that imports it. -->
 <link data-trunk rel="copy-dir" href="fonts" />
 <link data-trunk rel="rust" />
 </head>

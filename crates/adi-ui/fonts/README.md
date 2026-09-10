@@ -17,8 +17,10 @@ browser downloads only the scripts a page actually uses.
 Cyrillic is not optional: transcripts are read in Russian as often as in English. No italics —
 the design specifies none, and a browser synthesises an oblique where Markdown asks for one.
 
-The URLs in `fonts.css` are absolute (`/fonts/…`) because the sheet is imported from other
-crates; every consumer copies this directory to its dist root (`rel="copy-dir"` in Trunk).
+The URLs in `fonts.css` are relative (`fonts/…`), so they resolve against wherever the sheet
+itself ends up being served from rather than a fixed root — every consumer copies this directory
+alongside it (`rel="copy-dir"` in Trunk), so it is always one level down from whatever page
+loaded the stylesheet, dist root or CDN version prefix alike.
 
 ## Licence
 

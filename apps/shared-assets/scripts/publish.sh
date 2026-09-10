@@ -19,13 +19,15 @@
 # "the whole dist/", not because anything currently reads them back from it.
 #
 # fonts/*, additionally, are mirrored **unversioned** at the bucket root (overwritten every
-# publish, deliberately). Reason: the two stylesheets' `@font-face` rules use root-absolute URLs
-# (`url("/fonts/…")`), and a CSS `url()` resolves against the *stylesheet's own* URL — so once
-# that stylesheet is fetched from `cdn.withadi.dev/monoapp/<version>/…`, `/fonts/…` resolves to
-# `cdn.withadi.dev/fonts/…`, not back under the version prefix. Those bytes are covered by the
-# stylesheet's own SRI hash (see dist/index.html's `integrity=`), so they cannot be rewritten to a
-# relative path without invalidating it — the fonts have to actually live where the CSS expects
-# them, at the domain root, however many versions have been published since.
+# publish) as a **compatibility shim for versions published before the `@font-face` urls in
+# crates/adi-ui/fonts/fonts.css became relative** (`url("fonts/…")` rather than the old
+# root-absolute `url("/fonts/…")`). A relative `url()` resolves against the *stylesheet's own*
+# URL, so a build with the fix serves its fonts from right under its own version prefix — the
+# fonts/ this script publishes a few lines above, alongside everything else in dist/ — and needs
+# nothing at the bucket root. A version published before the fix still has the old absolute paths
+# baked into its stylesheet's SRI hash (dist/index.html's `integrity=`), so those bytes cannot be
+# moved or rewritten after the fact; the root mirror is what keeps such a version's fonts loading
+# for as long as it stays live. Safe to drop once no published version predates the fix.
 #
 # Usage:
 #   ./scripts/publish.sh                 # trunk build --release, then publish
@@ -132,7 +134,7 @@ while IFS= read -r -d '' file; do
 done < <(find "$private_dist" -type f -print0)
 echo "uploaded $uploaded, already present $skipped"
 
-step "Mirroring fonts/ unversioned at the bucket root (see the header above on why)"
+step "Mirroring fonts/ unversioned at the bucket root (compat shim for pre-relative-url versions — see the header above)"
 if [ -d "$private_dist/fonts" ]; then
   while IFS= read -r -d '' file; do
     rel="${file#"$private_dist"/fonts/}"
