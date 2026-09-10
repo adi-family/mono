@@ -254,6 +254,39 @@
     font-variant-numeric: tabular-nums;
   }
 
+  // The way into the marketplace, between the viewers strip and the Apps rail. Its own band
+  // rather than a row inside the rail: the rail lists what is installed on this machine, and
+  // this is the door to what is not. Same metrics as the strip above it, so the two read as one
+  // stack of facts about the column rather than as a control dropped between them.
+  &__market {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--ink);
+    text-decoration: none;
+
+    &:hover { background: var(--bg-hover); text-decoration: none; }
+    // An icon takes the colour of the text beside it (§9); here that text is the rail's, so it
+    // sits one step back from the name.
+    svg { flex: none; color: var(--ink-2); }
+  }
+  &__market-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-ui-sm);
+  }
+  // What is on the other side of the link, in the label style the rest of this column's meta uses.
+  &__market-note {
+    margin-left: auto;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+
   // The rail's "New": the small filled button beside the icon buttons in the head.
   &__new {
     padding: 5px 10px;

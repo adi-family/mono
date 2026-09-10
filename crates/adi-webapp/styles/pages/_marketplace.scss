@@ -1,6 +1,30 @@
 // Page-local styles for `src/pages/marketplace.rs`. Shared components live in adi-css; a shape
 // that exists on one page lives here. Tokens from design/tokens.css only.
 
+// ---- the page it has of its own (`/marketplace`, the `Market` door in `src/main.rs`) ---------
+// The workbench's lid over a body that scrolls on its own, and nothing else: no explorer, no
+// store rail — the apps are the page. The listing inside it is the same one the panel draws.
+.adi-market-page {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  // The reading width the rest of the system uses. Without it a row's name and its one action
+  // sit at opposite ends of a 27" display, with the sentence between them belonging to neither.
+  .adi-container {
+    max-width: var(--container);
+  }
+}
+
 // The line under the page title: what the page does, and Sync at the right.
 .adi-market__lead {
   display: flex;

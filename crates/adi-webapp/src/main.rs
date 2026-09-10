@@ -77,13 +77,16 @@ fn main() {
     // out on a socket that is already connecting rather than waiting for one to be asked for.
     live::start();
     let path = current_path();
-    // Three doors into the one wasm bundle:
+    // Four doors into the one wasm bundle:
     //   * `/embed/dashboard-agent` — a chrome-less page (no workbench shell) hosting the global
     //     agent chat, opened from a dashboard's "edit with adi-agent" launcher.
+    //   * `/marketplace` — the apps marketplace on a page of its own (see [`Market`]).
     //   * `/extended/…` — the full control panel (the App shell + every workbench route).
     //   * anything else (notably the bare `/`) — the minimal launcher that just points at it.
     if path.starts_with("/embed/dashboard-agent") {
         mount_to_body(EmbedDashboardAgent);
+    } else if path.trim_end_matches('/') == routing::MARKET {
+        mount_to_body(Market);
     } else if path == "/extended" || path.starts_with("/extended/") {
         mount_to_body(App);
     } else {
@@ -473,6 +476,81 @@ fn root_actions(
 
     rows.extend(menu::rows(menu::Shell::Root, state, updates, can_install));
     rows
+}
+
+/// The apps marketplace on a page of its own (`/marketplace`, [`routing::MARKET`]).
+///
+/// A document of its own rather than a route inside the control panel: picking an app to install is
+/// browsing, not configuring, and the workbench frames it as the latter — an explorer of settings
+/// down the left, a file tree down the right, and a standing line saying these panels are for the
+/// careful case. Here the apps are the page, reached from the Apps rail on the chat home.
+///
+/// What it draws is still [`marketplace_view`], the panel's own listing. This change is the move
+/// and the door; the richer, apps-first page that replaces the listing is the next piece of work,
+/// and the listing is what makes this page usable in the meantime.
+#[component]
+fn Market() -> impl IntoView {
+    let state = State::fresh();
+    let form = MarketplaceForm::new();
+    // The version row and the install offer the ⌘K menu carries on every screen (see [`menu`]).
+    let updates = update::watch();
+    let can_install = pwa::installable();
+    let launcher = Launcher::new();
+
+    // The listing, from the store's cache. Asked once here so the page fills even with the live
+    // channel down; every action on it (sync, install, start, update) folds the server's own new
+    // state back in, so nothing on this page polls.
+    spawn_local(async move {
+        if let Ok(m) = fetch::marketplace().await {
+            state.marketplace.set(Some(m));
+        }
+    });
+    // …and watched, so an install made in another tab — or by an agent — shows up here without a
+    // reload. One read is the whole page, so this is the whole watch list.
+    Effect::new(move |_| {
+        live::watch(vec![live::Sub::get(
+            "/api/marketplace",
+            move |m: adi_webapp_api::types::MarketplaceState| {
+                if state.marketplace.get_untracked().as_ref() != Some(&m) {
+                    state.marketplace.set(Some(m));
+                }
+            },
+        )]);
+    });
+
+    view! {
+        <div class="adi-market-page">
+            // The same lid the workbench wears: the mark is the way home, the crumb says where
+            // this is, and the way back to the chat sits at the far end.
+            <header class="adi-titlebar">
+                <a class="adi-logo" href="/" title="Home">
+                    <Mark/>
+                    "adi"
+                </a>
+                {crumb_nav(vec![("Marketplace".to_string(), None)])}
+                <span class="adi-spacer"></span>
+                <a class="adi-btn adi-btn--link" href="/" title="Back to the simple chat view">
+                    <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
+                    "chat"
+                </a>
+            </header>
+            <main class="adi-market-page__body">
+                <div class="adi-container">
+                    <header class="adi-bar">
+                        <h1 class="adi-bar__title">"Marketplace"</h1>
+                    </header>
+                    {marketplace_view(state, form)}
+                </div>
+            </main>
+        </div>
+
+        // Outside the frame, like every other screen's: the corner mark, and the menu behind it —
+        // without which ⌘K would stop answering on the page it was used to reach.
+        {launcher::floating(launcher)}
+        {launcher::overlay(launcher, move || {
+            menu::rows(menu::Shell::Root, state, updates, can_install)
+        })}
+    }
 }
 
 /// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global

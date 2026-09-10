@@ -11,6 +11,14 @@ use crate::state::State;
 /// literals in [`Route::path`]/[`Route::from_path`].
 pub(crate) const BASE: &str = "/extended";
 
+/// The apps marketplace, on a page of its own at the root rather than under [`BASE`].
+///
+/// Browsing apps somebody else published is not a settings act, so it is its own document (see
+/// `Market` in `main`) and not a page inside the workbench shell. This is the one place its
+/// address is written; the panel's own [`Route::Marketplace`] listing still stands under
+/// `/extended` until the rich page replaces it.
+pub(crate) const MARKET: &str = "/marketplace";
+
 /// The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {

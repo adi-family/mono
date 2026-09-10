@@ -2995,6 +2995,9 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                     chat_conversation_panel(state, watch)
                 } else {
                     view! {
+                        // Above the apps and below the viewers: the same column asked the other
+                        // question — not what is installed here, but what could be.
+                        {chat_market_link()}
                         <adi_ui::Rail
                             title="Apps"
                             actions=move || {
@@ -3037,6 +3040,24 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
         </div>
     }
     .into_any()
+}
+
+/// The way into the marketplace, at the head of the Apps rail: apps that could be installed here,
+/// beside the ones that are.
+///
+/// A plain navigation, not a new tab — the marketplace is a page of this app (`routing::MARKET`),
+/// and it is somewhere you go rather than something you keep open beside the chat. It is a link
+/// and not a button so that a middle click still opens it in a tab, and it is quiet chrome: the
+/// screen's one orange is the send arrow in the composer (§8).
+fn chat_market_link() -> impl IntoView {
+    view! {
+        <a class="adi-chome__market" href=crate::routing::MARKET
+            title="Apps published for adi \u{2014} browse and install one">
+            <adi_ui::Icon icon=adi_ui::Lucide::Store/>
+            <span class="adi-chome__market-name">"Marketplace"</span>
+            <span class="adi-chome__market-note">"Get apps"</span>
+        </a>
+    }
 }
 
 /// The foot of the right column: two 12px links, under whichever panel is showing. adi runs on
