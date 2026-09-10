@@ -22,14 +22,14 @@ use std::time::Duration;
 use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachKind, AttachState, Attached, Attaching,
     Badge, BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame,
-    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Face, FaceRing,
-    Faces, Faq, Field, Flag, FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint, Icon,
-    IconSize, Input, InputWidth, Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu, MenuAt,
-    MenuHead, MenuItem, MenuLink, MenuNote, MenuTick, Modal, Note, Panel, Param, ParamKind,
+    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Dot, DotTone, Empty, Entry, Face,
+    FaceRing, Faces, Faq, Field, Flag, FlagList, FlagMark, Flash, FlashKind, Form, HelpLink, Hint,
+    Icon, IconSize, Input, InputWidth, Kbd, Lang, Lucide, Mark, MarkVariant, Markdown, Menu,
+    MenuAt, MenuHead, MenuItem, MenuLink, MenuNote, MenuTick, Modal, Note, Panel, Param, ParamKind,
     PathPicker, PathRoot, PromptText, Qna, Queued, Rail, RailCard, RailGroup, Role, Select,
     SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table, TableState, Textarea,
-    Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode, TreeState,
-    Turn, TurnBlocks, Word, dir_of, sort_rows,
+    Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolRun, ToolState, TopBar, Tree, TreeNode,
+    TreeState, Turn, TurnBlocks, Word, dir_of, sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -1171,7 +1171,7 @@ fn ChatDemo() -> impl IntoView {
             from: Some("hetzner".into()),
             by: None,
         },
-        Turn::Did(vec![
+        Turn::Did(ToolRun::loaded("did-1", vec![
             ToolCall::new("Bash")
                 .param("command", "adi-mono linear issues --state started --json")
                 .param("description", "List started issues")
@@ -1179,7 +1179,7 @@ fn ChatDemo() -> impl IntoView {
             ToolCall::new("Read")
                 .param("file_path", "/Users/ihor/adi-family/docs/fleet.md")
                 .result("…1.2 kB…"),
-        ]),
+        ])),
         Turn::Said {
             role: Role::Agent,
             body: "Three of the fourteen started issues have **no assignee**, and all three                    are on the fleet:
@@ -1194,7 +1194,7 @@ The first two                    are the same bug. I will read the pairing path 
             from: None,
             by: None,
         },
-        Turn::Did(vec![
+        Turn::Did(ToolRun::loaded("did-2", vec![
             ToolCall::new("Grep")
                 .param("pattern", "fn pair(")
                 .param("path", "crates/adi-mesh/src")
@@ -1210,7 +1210,7 @@ The first two                    are the same bug. I will read the pairing path 
                 .param("command", "cargo test -p adi-mesh --all-features")
                 .param("description", "Run the whole mesh suite")
                 .state(ToolState::Unanswered),
-        ]),
+        ])),
         // …and the other half of the rule: a message the platform stamped a *sender* on, which is
         // never "You" — this one was typed on a paired phone and arrived over the mesh.
         Turn::Said {
@@ -1220,7 +1220,7 @@ The first two                    are the same bug. I will read the pairing path 
             from: Some("hetzner".into()),
             by: Some("phone/igor".into()),
         },
-        Turn::Did(vec![
+        Turn::Did(ToolRun::loaded("did-3", vec![
             ToolCall::new("Bash")
                 .param(
                     "command",
@@ -1228,7 +1228,7 @@ The first two                    are the same bug. I will read the pairing path 
                 )
                 .param("description", "Run the pairing tests")
                 .state(ToolState::Running),
-        ]),
+        ])),
     ];
 
     let draft = RwSignal::new(String::new());
@@ -1340,15 +1340,18 @@ fn NotesDemo() -> impl IntoView {
             from: Some("hetzner".into()),
             by: None,
         },
-        Turn::Did(vec![
-            ToolCall::new("Bash")
-                .param("command", "cargo test -p adi-mesh pair")
-                .result("1 failed · pair::retries_without_backoff"),
-            ToolCall::new("Await")
-                .param("events", "adi.ci.finished")
-                .param("check", "gh run view --json conclusion | grep success")
-                .result("registered await a7f3"),
-        ]),
+        Turn::Did(ToolRun::loaded(
+            "did-4",
+            vec![
+                ToolCall::new("Bash")
+                    .param("command", "cargo test -p adi-mesh pair")
+                    .result("1 failed · pair::retries_without_backoff"),
+                ToolCall::new("Await")
+                    .param("events", "adi.ci.finished")
+                    .param("check", "gh run view --json conclusion | grep success")
+                    .result("registered await a7f3"),
+            ],
+        )),
         Turn::Said {
             role: Role::Agent,
             body: "The retry loop has no backoff — three attempts, all inside 200ms. I have \
@@ -1417,6 +1420,129 @@ fn NotesDemo() -> impl IntoView {
     // No height cap, unlike the chat above: this one is here to be *seen*, and a scroll box would
     // hide half the kinds it exists to show.
     view! { <Chat turns=adi_ui::by_position(turns) class="p-1"/> }
+}
+
+/// A transcript that does not hold its own tool calls: two folded runs, and a fetch standing in
+/// for the one the panel makes (`POST /api/agents/run/steps`).
+///
+/// It is here because this is where the *state* is visible: a run whose calls have not arrived, the
+/// line it draws while they are on their way, and the same run once they land — all three of which
+/// a page assembled from a real server shows for about 30ms.
+#[component]
+fn FoldedRunDemo() -> impl IntoView {
+    // What a server answers with when the run is opened, keyed by the run's id. In the panel this
+    // is a fetch; here it is the same map, filled by hand.
+    let fetched = RwSignal::new(std::collections::BTreeMap::<String, Vec<ToolCall>>::new());
+    let opened = RwSignal::new(std::collections::BTreeSet::<String>::new());
+    let calls_of = |id: &str| match id {
+        "folded-1" => vec![
+            ToolCall::new("Grep")
+                .param("pattern", "fn transcript")
+                .param("path", "crates/adi-agents/src")
+                .result("crates/adi-agents/src/lib.rs:1481"),
+            ToolCall::new("Read")
+                .param("file_path", "crates/adi-agents/src/store/transcript.rs")
+                .result("…529 lines…"),
+            ToolCall::new("Bash")
+                .param(
+                    "command",
+                    "sqlite3 sessions.db 'select sum(length(json)) from turns'",
+                )
+                .result("147482249"),
+        ],
+        _ => vec![
+            ToolCall::new("Edit")
+                .param("file_path", "crates/adi-ui/src/chat.rs")
+                .param("old_string", "Did(Vec<ToolCall>)")
+                .param("new_string", "Did(ToolRun)")
+                .result("ok"),
+        ],
+    };
+    let entries = Memo::new(move |_| {
+        let folded = |id: &str, count: usize, tools: &[&str], preview: &str, state: ToolState| {
+            let run = ToolRun::folded(
+                id,
+                count,
+                tools.iter().map(ToString::to_string).collect(),
+                preview,
+                state,
+            )
+            .open(opened.get().contains(id));
+            let run = match fetched.get().get(id) {
+                Some(calls) => run.with_calls(calls.clone()),
+                None => run,
+            };
+            // The key moves when the calls land, the id does not — see `adi_ui::Entry`.
+            let loaded = if run.calls.is_some() {
+                "loaded"
+            } else {
+                "folded"
+            };
+            Entry::new(id.to_string(), Turn::Did(run)).redrawn_as(loaded)
+        };
+        vec![
+            Entry::new(
+                "folded-said-0",
+                Turn::Said {
+                    role: Role::User,
+                    body: "How big does a transcript actually get?".into(),
+                    images: Vec::new(),
+                    from: None,
+                    by: None,
+                },
+            ),
+            folded(
+                "folded-1",
+                3,
+                &["Grep", "Read", "Bash"],
+                "sqlite3 sessions.db 'select sum(length(json)) from turns'",
+                ToolState::Ok,
+            ),
+            Entry::new(
+                "folded-said-1",
+                Turn::Said {
+                    role: Role::Agent,
+                    body: "141 MB across 5,423 turns here — **84% of it tool input and output**. \
+                           The longest single conversation is 3.4 MB."
+                        .into(),
+                    images: Vec::new(),
+                    from: None,
+                    by: None,
+                },
+            ),
+            folded(
+                "folded-2",
+                1,
+                &["Edit"],
+                "crates/adi-ui/src/chat.rs",
+                ToolState::Ok,
+            ),
+        ]
+    });
+    let on_toggle = Callback::new(move |(id, open): (String, bool)| {
+        opened.update(|set| {
+            if open {
+                set.insert(id.clone());
+            } else {
+                set.remove(&id);
+            }
+        });
+        if !open || fetched.get_untracked().contains_key(&id) {
+            return;
+        }
+        // The fetch, with a beat in it so the line it draws while a run is on its way is a thing
+        // you can actually see here.
+        let calls = calls_of(&id);
+        set_timeout(
+            move || {
+                fetched.update(|map| {
+                    map.insert(id, calls);
+                })
+            },
+            Duration::from_millis(400),
+        );
+    });
+    view! { <Chat turns=entries on_toggle=on_toggle class="p-1"/> }
 }
 
 /// The question card, in both of its shapes: the one-question ask a click settles outright, and
@@ -1819,6 +1945,7 @@ const CHAPTERS: &[(&str, &str)] = &[
     ("flagmark-flaglist", "FlagMark \u{00b7} FlagList"),
     ("simulator", "Simulator"),
     ("chat", "Chat"),
+    ("folded", "Chat \u{00b7} a folded run"),
     ("notes", "Chat \u{00b7} platform notes"),
     ("ask", "Ask"),
     ("apps", "Apps"),
@@ -2819,6 +2946,20 @@ fn Playground() -> impl IntoView {
                 </p>
                 <div>
                     <ChatDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="Chat · a folded run" id="folded">
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "The same receipt line, drawn from a header instead of from calls it does not \
+                     have. Nine tenths of a transcript is tool input and output behind a fold \
+                     nobody opened, so a page of one arrives as counts and previews and fetches \
+                     the calls when a run is opened — first click here, and the second run \
+                     answers. The line is identical either way, which is the property that makes \
+                     folding safe: open the loaded run below it and compare."
+                </p>
+                <div>
+                    <FoldedRunDemo/>
                 </div>
             </Panel>
 

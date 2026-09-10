@@ -6,12 +6,14 @@
 //! own log, several may be live at once, and the live view is a browsable run history plus a task
 //! composer — never a shared, overwritten slot.
 
+use std::collections::{HashMap, HashSet};
+
 use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
-    AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
-    AgentRunInfo, AgentRuns, AgentStep, AgentTokenSource, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentsState, AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard,
-    NodeDashboards, QueueMode,
+    AgentAsk, AgentAwait, AgentChatStats, AgentDto, AgentGoal, AgentNearDup, AgentPeek,
+    AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentRuns, AgentStep, AgentStepRef,
+    AgentTokenSource, AgentTokens, AgentToolStatus, AgentToolUse, AgentTurn, AgentsState,
+    AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard, NodeDashboards, QueueMode,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -514,6 +516,9 @@ fn delete_one_run(
 /// already goes to the right place.
 fn point_watch(watch: AgentsWatch, node: Option<String>, name: String, interactive: bool) {
     watch.peek.set(None);
+    // The window, the runs opened in it and the calls fetched for them all describe the
+    // conversation being left — see `AgentsWatch::reset_transcript`.
+    watch.reset_transcript();
     watch.log.set(String::new());
     watch.run_id.set(None);
     watch.runs.set(Vec::new());
@@ -533,7 +538,12 @@ fn point_watch(watch: AgentsWatch, node: Option<String>, name: String, interacti
 /// on the Agents page it sits below the list, so a click near the bottom would otherwise open it
 /// out of sight. Always this machine — the Agents page has no node concept — except when a review's
 /// reviewer turns out to be a pty agent, which opens on the reviewed conversation's own source.
-pub(crate) fn open_watch(watch: AgentsWatch, node: Option<String>, name: String, interactive: bool) {
+pub(crate) fn open_watch(
+    watch: AgentsWatch,
+    node: Option<String>,
+    name: String,
+    interactive: bool,
+) {
     point_watch(watch, node, name, interactive);
     scroll_top();
 }
@@ -543,6 +553,7 @@ pub(crate) fn open_watch(watch: AgentsWatch, node: Option<String>, name: String,
 /// the newly selected run lands.
 fn select_run(watch: AgentsWatch, run_id: String) {
     watch.peek.set(None);
+    watch.reset_transcript();
     watch.log.set(String::new());
     watch.reply.set(String::new());
     watch.run_id.set(Some(run_id));
@@ -599,6 +610,7 @@ pub(crate) fn open_conversation(
 fn close_run_view(watch: AgentsWatch) {
     watch.run_id.set(None);
     watch.peek.set(None);
+    watch.reset_transcript();
     watch.log.set(String::new());
     watch.reply.set(String::new());
 }
@@ -665,7 +677,8 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
     // while a live one still updates as it grows.
     if let Some(run_id) = watch.run_id.get_untracked() {
         spawn_local(async move {
-            if let Ok(peek) = fetch::peek_run(node.as_deref(), name.clone(), run_id).await
+            let view = crate::state::chat_view(watch.turn_limit.get_untracked());
+            if let Ok(peek) = fetch::peek_run(node.as_deref(), name.clone(), run_id, view).await
                 && watch.name.get_untracked().as_deref() == Some(name.as_str())
                 && watch.run_id.get_untracked().as_deref() == Some(peek.run_id.as_str())
                 && watch.node.get_untracked() == node
@@ -1160,41 +1173,82 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool, sourced: bool) 
             }
             turns=settled
             live=live
+            foot=move || earlier_messages(watch)
+            on_toggle=Callback::new(move |(id, open): (String, bool)| toggle_run(watch, id, open))
         />
         {move || chat_placeholder(watch)}
     }
     .into_any()
 }
 
-/// A tool call's arguments, one per parameter — **the way the model wrote them**.
+/// One tool call, as [`adi_ui`] draws it — the arguments the way the model wrote them, its state,
+/// and the anchor that lets the rail point at it.
 ///
-/// The wire hands the whole input over as one string, because that is what the engine
-/// captured. Almost always it is a JSON object, and showing it as one is the difference
-/// between reading a call and decoding it: `<parameter name="file_path">…` is what the model
-/// emitted, while `<parameter name="input">{"file_path":…}` is a transport's idea of it,
-/// wrapped in quotes and escapes the model never saw.
-///
-/// A string value is unwrapped, so a newline in an edit is a newline on screen rather than
-/// `\n`. Anything that is not an object — a bare string, a number, something that does not
-/// parse — stays one `input`, because inventing a shape for it would be a lie.
-fn tool_params(input: &str) -> Vec<(String, String)> {
-    let one = || vec![("input".to_string(), input.to_string())];
-    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(input)
-    else {
-        return one();
-    };
-    if map.is_empty() {
-        return one();
-    }
-    map.into_iter()
-        .map(|(k, v)| {
-            let text = match v {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            (k, text)
+/// `at` is the turn's own number and `step` the call's place in that turn's steps, which together
+/// are the address the whole panel agrees on: the fold sends them, the rail links by them, and an
+/// expansion asks for a range of them.
+fn tool_call(
+    at: usize,
+    step: usize,
+    name: &str,
+    input: &str,
+    status: AgentToolStatus,
+    output: &str,
+) -> adi_ui::ToolCall {
+    use adi_ui::{ToolCall, ToolState};
+    let mut call = ToolCall::new(name.to_string())
+        .state(match status {
+            AgentToolStatus::Running => ToolState::Running,
+            AgentToolStatus::Ok => ToolState::Ok,
+            AgentToolStatus::Error => ToolState::Failed,
+            AgentToolStatus::Unanswered => ToolState::Unanswered,
         })
-        .collect()
+        // A call is addressed by its place in `turn.steps`, not by its place in the run it ended
+        // up in: the run is a rendering decision that a mid-turn message can change, while the
+        // step index is what the snapshot itself agrees to.
+        .anchor(step_anchor(at, step));
+    for (key, value) in AgentStep::params_of(input) {
+        call = call.param(key, value);
+    }
+    if !output.is_empty() {
+        call = call.result(output.to_string());
+    }
+    call
+}
+
+/// What a *thinking* block is, inside a run: a call with one parameter.
+///
+/// It is not a tool and this is not pretending otherwise — it is the transcript's answer to where
+/// the model's private working goes, which is the same fold as the calls around it (§6: a run is
+/// what you skip). Sharing the shape is also what lets a run be counted and previewed without
+/// knowing which of the two each step was.
+fn thinking_call(text: &str) -> adi_ui::ToolCall {
+    adi_ui::ToolCall::new("thinking").param("text", text.to_string())
+}
+
+/// What names a folded run in the DOM — and, with its shape folded in, in the fetch cache.
+///
+/// The **address** is the turn and where the run starts, and that never changes: a link to it
+/// survives the run being opened, the page being widened, and the conversation growing.
+fn run_anchor(turn: usize, from: usize) -> String {
+    format!("adi-run-{turn}-{from}")
+}
+
+/// What the calls fetched for one run are filed under: its address, plus everything about its shape
+/// that would make the answer stale.
+///
+/// A settled run never changes, so it is fetched exactly once ever. A run still being written gains
+/// calls and answers them — so `to`, `count` and the head's status are in the key, and the moment
+/// any of them moves the reader who has it open gets the new calls with the next poll instead of
+/// watching a frozen list.
+fn run_cache_key(
+    turn: usize,
+    from: usize,
+    to: usize,
+    count: usize,
+    status: AgentToolStatus,
+) -> String {
+    format!("{}:{to}:{count}:{status:?}", run_anchor(turn, from))
 }
 
 /// One wire turn, as the transcript's own entries.
@@ -1223,8 +1277,9 @@ fn feed_turn(
     source: Option<&str>,
     at: usize,
     turn: &AgentTurn,
+    runs: &RunState<'_>,
 ) -> Vec<adi_ui::Entry> {
-    use adi_ui::{Entry, Role, ToolCall, ToolState, Turn as T};
+    use adi_ui::{Entry, Role, ToolRun, Turn as T};
 
     // The first part carries the turn's own anchor, unadorned: that is the id the rail hands out
     // for a turn the engine reported as failed, and the first bubble is where a reader sent to
@@ -1260,14 +1315,16 @@ fn feed_turn(
     }
 
     let mut out: Vec<T> = Vec::new();
-    let mut run: Vec<ToolCall> = Vec::new();
+    let mut run: Vec<adi_ui::ToolCall> = Vec::new();
+    let mut run_from = 0usize;
     for (i, step) in turn.steps.iter().enumerate() {
         match step {
             // Something said mid-turn closes the run before it: that is what makes text the
             // divider rather than one more thing in the list.
             AgentStep::Message { text } => {
                 if !run.is_empty() {
-                    out.push(T::Did(std::mem::take(&mut run)));
+                    let calls = std::mem::take(&mut run);
+                    out.push(T::Did(runs.loaded(at, run_from, calls)));
                 }
                 if !text.trim().is_empty() {
                     out.push(T::Said {
@@ -1282,7 +1339,10 @@ fn feed_turn(
             // Thinking is the agent's private work, which is exactly what folds. It joins the
             // run rather than interrupting it, so it never breaks a sequence in two.
             AgentStep::Thinking { text } => {
-                run.push(ToolCall::new("thinking").param("text", text.clone()));
+                if run.is_empty() {
+                    run_from = i;
+                }
+                run.push(thinking_call(text));
             }
             AgentStep::Tool {
                 name,
@@ -1290,29 +1350,37 @@ fn feed_turn(
                 status,
                 output,
             } => {
-                let mut call = ToolCall::new(name.clone())
-                    .state(match status {
-                        AgentToolStatus::Running => ToolState::Running,
-                        AgentToolStatus::Ok => ToolState::Ok,
-                        AgentToolStatus::Error => ToolState::Failed,
-                        AgentToolStatus::Unanswered => ToolState::Unanswered,
-                    })
-                    // A call is addressed by its place in `turn.steps`, not by its place in the
-                    // run it ended up in: the run is a rendering decision that a mid-turn message
-                    // can change, while the step index is what the snapshot itself agrees to.
-                    .anchor(step_anchor(at, i));
-                for (key, value) in tool_params(input) {
-                    call = call.param(key, value);
+                if run.is_empty() {
+                    run_from = i;
                 }
-                if !output.is_empty() {
-                    call = call.result(output.clone());
-                }
-                run.push(call);
+                run.push(tool_call(at, i, name, input, *status, output));
             }
+            // **A run the server folded**: its calls are not here, and the receipt is drawn from
+            // the header alone. Whatever has been fetched for it is filled in — which is what
+            // turns an opened run from a line into the calls behind it.
+            AgentStep::Calls {
+                from,
+                to,
+                count,
+                tools,
+                preview,
+                status,
+            } => {
+                if !run.is_empty() {
+                    let calls = std::mem::take(&mut run);
+                    out.push(T::Did(runs.loaded(at, run_from, calls)));
+                }
+                out.push(T::Did(
+                    runs.folded(at, *from, *to, *count, tools, preview, *status),
+                ));
+            }
+            // A step kind this build cannot read. Skipped rather than drawn as an empty something:
+            // it is one line of a run, and the rest of the transcript is unaffected.
+            AgentStep::Unknown => {}
         }
     }
     if !run.is_empty() {
-        out.push(T::Did(run));
+        out.push(T::Did(runs.loaded(at, run_from, run)));
     }
     // The turn's final message is not a step; it is what the turn came back with.
     if !turn.text.trim().is_empty() {
@@ -1326,8 +1394,93 @@ fn feed_turn(
     }
     out.into_iter()
         .enumerate()
-        .map(|(part, t)| Entry::new(key(part), t))
+        .map(|(part, t)| {
+            let entry = Entry::new(key(part), t);
+            // A run's content arrives *outside* the poll that keys this list — from a fetch, when
+            // a reader opens it — and a keyed list does not redraw an entry whose key it has
+            // already seen. So the key carries whether the calls are here, while the id (which
+            // every anchor and every link uses) stays exactly where it was. See `adi_ui::Entry`.
+            match &entry.turn {
+                T::Did(ToolRun { calls: None, .. }) => entry.redrawn_as("folded"),
+                T::Did(_) => entry.redrawn_as("open"),
+                _ => entry,
+            }
+        })
         .collect()
+}
+
+/// What the transcript needs to know about runs of tool calls that the turns themselves do not:
+/// which the reader has opened, and which calls have been fetched.
+///
+/// Handed to [`feed_turn`] rather than read from the signals inside it, because it is read once per
+/// turn per render and a signal read per run would be a subscription per run.
+struct RunState<'a> {
+    fetched: &'a HashMap<String, Vec<AgentStep>>,
+    open: &'a HashSet<String>,
+}
+
+impl RunState<'_> {
+    /// A run whose calls are in hand — every run, on a server that does not fold, and every run of
+    /// a transcript read whole.
+    fn loaded(&self, turn: usize, from: usize, calls: Vec<adi_ui::ToolCall>) -> adi_ui::ToolRun {
+        let id = run_anchor(turn, from);
+        let open = self.open.contains(&id);
+        adi_ui::ToolRun::loaded(id, calls).open(open)
+    }
+
+    /// A run the server sent as a header. Its calls are whatever has been fetched under the key its
+    /// shape names — `None` until a reader opens it, and again the moment it gains a call.
+    fn folded(
+        &self,
+        turn: usize,
+        from: usize,
+        to: usize,
+        count: usize,
+        tools: &[String],
+        preview: &str,
+        status: AgentToolStatus,
+    ) -> adi_ui::ToolRun {
+        use adi_ui::{ToolRun, ToolState};
+        let id = run_anchor(turn, from);
+        let run = ToolRun::folded(
+            id.clone(),
+            count,
+            tools.to_vec(),
+            preview.to_string(),
+            match status {
+                AgentToolStatus::Running => ToolState::Running,
+                AgentToolStatus::Ok => ToolState::Ok,
+                AgentToolStatus::Error => ToolState::Failed,
+                AgentToolStatus::Unanswered => ToolState::Unanswered,
+            },
+        )
+        .open(self.open.contains(&id));
+        let Some(steps) = self
+            .fetched
+            .get(&run_cache_key(turn, from, to, count, status))
+        else {
+            return run;
+        };
+        // The fetched steps are the range this header names, so a step's own index is `from`
+        // plus its place in the answer — which is what keeps every call's anchor the one the
+        // rail links to.
+        run.with_calls(
+            steps
+                .iter()
+                .enumerate()
+                .filter_map(|(offset, step)| match step {
+                    AgentStep::Tool {
+                        name,
+                        input,
+                        status,
+                        output,
+                    } => Some(tool_call(turn, from + offset, name, input, *status, output)),
+                    AgentStep::Thinking { text } => Some(thinking_call(text)),
+                    _ => None,
+                })
+                .collect(),
+        )
+    }
 }
 
 /// Split a snapshot's turns into the settled transcript and the one turn still being written.
@@ -1341,12 +1494,7 @@ fn feed_turn(
 /// Queued messages are in the snapshot but not in either list: they are drawn as the feed's lead,
 /// because they have been typed rather than said. They still consume a turn index, which is why
 /// this enumerates before it filters.
-fn feed_entries(
-    state: State,
-    watch: AgentsWatch,
-    sourced: bool,
-    live: bool,
-) -> Vec<adi_ui::Entry> {
+fn feed_entries(state: State, watch: AgentsWatch, sourced: bool, live: bool) -> Vec<adi_ui::Entry> {
     let node = watch.node.get();
     // Read here, inside the memo that calls this, rather than passed in from the pane: the source
     // selection is a signal, and a label resolved once when the pane was built would still name the
@@ -1355,19 +1503,170 @@ fn feed_entries(
     // `with` rather than `get`: a snapshot holds every turn, every step and every tool result, and
     // this runs once per subscriber per poll. Cloning the transcript to look at it is the kind of
     // cost that does not show up anywhere except the profile.
-    watch.peek.with(|peek| {
-        let Some(turns) = peek.as_ref().map(|p| p.turns.as_slice()) else {
-            return Vec::new();
-        };
-        // The still-being-written turn is the last one actually said. A finished run has one too;
-        // it simply never changes again, and a card that is rebuilt but identical costs nothing.
-        let last = turns.iter().rposition(|t| !t.queued);
-        turns
-            .iter()
-            .enumerate()
-            .filter(|(at, t)| !t.queued && (Some(*at) == last) == live)
-            .flat_map(|(at, t)| feed_turn(node.as_deref(), source.as_deref(), at, t))
-            .collect()
+    watch.steps.with(|fetched| {
+        watch.open_runs.with(|open| {
+            let runs = RunState { fetched, open };
+            watch.peek.with(|peek| {
+                let Some(turns) = peek.as_ref().map(|p| p.turns.as_slice()) else {
+                    return Vec::new();
+                };
+                // The still-being-written turn is the last one actually said. A finished run has
+                // one too; it simply never changes again, and a card that is rebuilt but identical
+                // costs nothing.
+                let last = turns.iter().rposition(|t| !t.queued);
+                turns
+                    .iter()
+                    .enumerate()
+                    .filter(|(at, t)| !t.queued && (Some(*at) == last) == live)
+                    .flat_map(|(at, t)| {
+                        feed_turn(node.as_deref(), source.as_deref(), turn_at(at, t), t, &runs)
+                    })
+                    .collect()
+            })
+        })
+    })
+}
+
+/// The foot of the transcript: how many turns are still unread, and the way to bring them.
+///
+/// At the foot because the feed is newest-first — older turns arrive *below*, away from the reader,
+/// so the page grows backwards without anything on screen moving. It is a button rather than an
+/// automatic load on scroll: reaching the end of twenty turns is not the same as asking for eighty,
+/// and a chat that fetches more every time you scroll past the bottom is one you cannot leave.
+///
+/// Nothing at all when the whole conversation is on screen, which is nearly every conversation.
+fn earlier_messages(watch: AgentsWatch) -> AnyView {
+    let more = move || {
+        watch.peek.with(|peek| {
+            let peek = peek.as_ref()?;
+            // The oldest turn on screen is how many are behind it: turns are numbered from zero.
+            let oldest = peek.turns.first().map(|t| turn_at(0, t))?;
+            (oldest > 0).then_some(oldest)
+        })
+    };
+    view! {
+        {move || more().map(|n| view! {
+            <button
+                class="adi-chat__earlier"
+                type="button"
+                on:click=move |_| {
+                    watch.turn_limit.update(|limit| *limit += crate::state::CHAT_PAGE);
+                }
+            >
+                {match n {
+                    1 => "1 earlier message".to_string(),
+                    n => format!("{n} earlier messages"),
+                }}
+            </button>
+        })}
+    }
+    .into_any()
+}
+
+/// A turn's number in the conversation: what the server said it is, or where it sits in the answer.
+///
+/// The fallback is for a server too old to send [`AgentTurn::seq`] — which is also a server that
+/// sends the whole conversation, so its positions *are* the numbers. On a page they are not: turn
+/// 83 arrives third in a window of twenty, and every anchor, link and step request built from the 3
+/// would address somebody else's turn.
+fn turn_at(position: usize, turn: &AgentTurn) -> usize {
+    if turn.seq == 0 { position } else { turn.seq }
+}
+
+/// A reader opened or closed a run of tool calls.
+///
+/// Opening does two things, and the order matters only in that both are cheap: it records the run as
+/// open (so the rebuild that brings its calls does not shut it again), and, if its calls are not
+/// already in hand, it asks the server for them. Closing records only.
+///
+/// Nothing is ever evicted from the cache: a conversation's fetched runs are dropped wholesale when
+/// the view moves to another conversation (`AgentsWatch::reset_transcript`), and within one
+/// conversation the reader has to open a run for it to be there at all.
+fn toggle_run(watch: AgentsWatch, id: String, open: bool) {
+    watch.open_runs.update(|set| {
+        if open {
+            set.insert(id.clone());
+        } else {
+            set.remove(&id);
+        }
+    });
+    if !open {
+        return;
+    }
+    let Some(block) = folded_block(watch, &id) else {
+        // Either the run's calls were never folded away, or the transcript has moved on under the
+        // click. Both are already drawn correctly by what is on screen.
+        return;
+    };
+    if watch.steps.with_untracked(|m| m.contains_key(&block.key)) {
+        return;
+    }
+    let (Some(name), Some(run_id)) = (watch.name.get_untracked(), watch.run_id.get_untracked())
+    else {
+        return;
+    };
+    let node = watch.node.get_untracked();
+    leptos::task::spawn_local(async move {
+        let got = fetch::run_steps(
+            node.as_deref(),
+            name,
+            run_id,
+            block.turn,
+            block.from,
+            block.to,
+        )
+        .await;
+        if let Ok(answer) = got {
+            watch.steps.update(|m| {
+                m.insert(block.key, answer.steps);
+            });
+        }
+        // A failed fetch is left alone deliberately: the run stays on its "fetching" line, and the
+        // next poll re-renders it. Recording an error per run would put a red line inside a fold
+        // nobody has looked at since.
+    });
+}
+
+/// One folded run in the open conversation, found by its address: what to ask the server for, and
+/// what to file the answer under.
+struct FoldedBlock {
+    turn: usize,
+    from: usize,
+    to: usize,
+    key: String,
+}
+
+/// Find the folded run with this id in the snapshot on screen.
+///
+/// Off the snapshot rather than remembered from the render, because the render is a view and the
+/// snapshot is the fact: between drawing a run and a reader clicking it, the turn may have gained
+/// calls, and the range this then asks for is the current one.
+fn folded_block(watch: AgentsWatch, id: &str) -> Option<FoldedBlock> {
+    watch.peek.with_untracked(|peek| {
+        for (position, turn) in peek.as_ref()?.turns.iter().enumerate() {
+            let at = turn_at(position, turn);
+            for step in &turn.steps {
+                let AgentStep::Calls {
+                    from,
+                    to,
+                    count,
+                    status,
+                    ..
+                } = step
+                else {
+                    continue;
+                };
+                if run_anchor(at, *from) == id {
+                    return Some(FoldedBlock {
+                        turn: at,
+                        from: *from,
+                        to: *to,
+                        key: run_cache_key(at, *from, *to, *count, *status),
+                    });
+                }
+            }
+        }
+        None
     })
 }
 
@@ -2082,8 +2381,15 @@ fn send_answer(state: State, watch: AgentsWatch, ask: String, replies: Vec<Strin
     let node = watch.node.get_untracked();
     watch.answering.set(true);
     spawn_local(async move {
-        let answered =
-            fetch::answer_run(node.as_deref(), name.clone(), run_id.clone(), ask, replies).await;
+        let answered = fetch::answer_run(
+            node.as_deref(),
+            name.clone(),
+            run_id.clone(),
+            ask,
+            replies,
+            crate::state::chat_view(watch.turn_limit.get_untracked()),
+        )
+        .await;
         // Only apply if the view is still on this same conversation.
         if watch.name.get_untracked().as_deref() != Some(name.as_str())
             || watch.run_id.get_untracked().as_deref() != Some(run_id.as_str())
@@ -2143,6 +2449,7 @@ fn send_reply(
             message,
             images,
             mode,
+            crate::state::chat_view(watch.turn_limit.get_untracked()),
         )
         .await
         {
@@ -2171,7 +2478,15 @@ fn unqueue_message(state: State, watch: AgentsWatch, index: usize) {
     };
     let node = watch.node.get_untracked();
     spawn_local(async move {
-        match fetch::unqueue_from_run(node.as_deref(), name.clone(), run_id.clone(), index).await {
+        match fetch::unqueue_from_run(
+            node.as_deref(),
+            name.clone(),
+            run_id.clone(),
+            index,
+            crate::state::chat_view(watch.turn_limit.get_untracked()),
+        )
+        .await
+        {
             Ok(peek) => {
                 if watch.name.get_untracked().as_deref() == Some(name.as_str())
                     && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
@@ -3084,144 +3399,18 @@ fn showing_analytics(watch: AgentsWatch) -> bool {
     !watch.interactive.get() && watch.run_id.get().is_some()
 }
 
-/// One tool call the rail has something to say about, and where in the feed it is.
-#[derive(Clone)]
-struct StepRef {
-    anchor: String,
-    tool: String,
-    /// The call's arguments, cut to a line — what distinguishes this failure from the next one.
-    arg: String,
-}
-
-/// What a conversation adds up to, counted once per render from the transcript the centre pane is
-/// already showing.
-#[derive(Default)]
-struct ChatStats {
-    you: usize,
-    agent: usize,
-    queued: usize,
-    tools: usize,
-    thinking: usize,
-    /// The tool calls that failed, and the ones still going — kept as references rather than counts,
-    /// because a count of failures is a number and a list of them is somewhere to go.
-    failed: Vec<StepRef>,
-    running: Vec<StepRef>,
-    /// Turns the engine reported as failed outright, as anchors into the feed.
-    errored: Vec<String>,
-    /// Turns that failed and left *nothing* behind — no step, no text — so the transcript draws
-    /// no bubble for them and there is nowhere to send a reader. Counted rather than linked,
-    /// because the alternative is a jump that lands on nothing, which is what the rail used to
-    /// offer. They are still failures and still belong in the total.
-    errored_silent: usize,
-    /// Tools blocked by permission, worst first.
-    blocked: Vec<(String, usize)>,
-    /// Every tool used: name, calls, and how many of those failed. Most-used first.
-    by_tool: Vec<(String, usize, usize)>,
-    tokens: u64,
-    cost_micro: u64,
-    /// Time the agent spent answering, summed over turns that reported it.
-    work_ms: u64,
-    /// When the conversation's first and last settled turns landed.
-    first_at: u64,
-    last_at: u64,
-}
-
-/// Add up a transcript.
+/// What a conversation adds up to, as the rail draws it.
 ///
-/// Turn indices are the enumeration order of `turns`, queued messages included — exactly what
-/// [`feed_turn`] keys and anchors each bubble by — so every anchor built here addresses an element
-/// that is actually on screen. The two must be counted the same way or the rail's links land
-/// nowhere, which is what they did while the transcript emitted no ids at all.
-/// Queued messages are counted apart from the totals: they have been typed, not asked, and folding
-/// them in would report a conversation longer than the one the agent has actually had.
-fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
-    let mut s = ChatStats::default();
-    let mut tools: Vec<(String, usize, usize)> = Vec::new();
-    let mut blocked: Vec<(String, usize)> = Vec::new();
-    let bump = |list: &mut Vec<(String, usize)>, name: &str| match list
-        .iter_mut()
-        .find(|(n, _)| n == name)
-    {
-        Some((_, n)) => *n += 1,
-        None => list.push((name.to_string(), 1)),
-    };
-
-    for (t, turn) in turns.iter().enumerate() {
-        if turn.queued {
-            s.queued += 1;
-            continue;
-        }
-        if turn.role == "user" {
-            s.you += 1;
-        } else {
-            s.agent += 1;
-        }
-        if turn.at > 0 {
-            if s.first_at == 0 {
-                s.first_at = turn.at;
-            }
-            s.last_at = turn.at;
-        }
-        if let Some(m) = &turn.metrics {
-            s.tokens += m.input_tokens.unwrap_or(0) + m.output_tokens.unwrap_or(0);
-            s.cost_micro += m.cost_micro_usd.unwrap_or(0);
-            s.work_ms += m.duration_ms.unwrap_or(0);
-            if m.is_error {
-                // Asked of `feed_turn` itself rather than re-derived here: the question is
-                // literally "does this turn draw anything", and a second opinion on it would be
-                // a link that goes dead the day the two answers drift apart.
-                if feed_turn(None, None, t, turn).is_empty() {
-                    s.errored_silent += 1;
-                } else {
-                    s.errored.push(turn_anchor(t));
-                }
-            }
-            for name in &m.permission_denials {
-                bump(&mut blocked, name);
-            }
-        }
-        for (i, step) in turn.steps.iter().enumerate() {
-            match step {
-                AgentStep::Thinking { .. } => s.thinking += 1,
-                AgentStep::Tool {
-                    name,
-                    input,
-                    status,
-                    ..
-                } => {
-                    s.tools += 1;
-                    match tools.iter_mut().find(|(n, _, _)| n == name) {
-                        Some((_, calls, _)) => *calls += 1,
-                        None => tools.push((name.clone(), 1, 0)),
-                    }
-                    if *status == AgentToolStatus::Error
-                        && let Some((_, _, bad)) = tools.iter_mut().find(|(n, _, _)| n == name)
-                    {
-                        *bad += 1;
-                    }
-                    let step_ref = || StepRef {
-                        anchor: step_anchor(t, i),
-                        tool: name.clone(),
-                        arg: truncate_task(input),
-                    };
-                    match status {
-                        AgentToolStatus::Error => s.failed.push(step_ref()),
-                        AgentToolStatus::Running => s.running.push(step_ref()),
-                        // Never answered is not a failure to link to: the call is the last line
-                        // of an interrupted run, and the rail already says the run is over.
-                        AgentToolStatus::Ok | AgentToolStatus::Unanswered => {}
-                    }
-                }
-                AgentStep::Message { .. } => {}
-            }
-        }
-    }
-
-    tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    blocked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    s.by_tool = tools;
-    s.blocked = blocked;
-    s
+/// The server counts it, over every turn there is — see [`AgentChatStats`]. The rail used to add it
+/// up from the transcript in hand, and the transcript in hand is now a page: twenty turns of a
+/// hundred would have reported a fifth of the conversation with complete confidence.
+///
+/// The fallback is the same arithmetic on what *was* sent, for a server too old to send the numbers
+/// — which is also a server that sends the whole conversation, so it comes out right there too.
+fn chat_stats(peek: &AgentPeek) -> AgentChatStats {
+    peek.stats
+        .clone()
+        .unwrap_or_else(|| AgentChatStats::of(&peek.turns))
 }
 
 /// A path cut to its last few segments — `…/mono/projects/bugbounty` — for a rail about a third the
@@ -3562,9 +3751,12 @@ fn kv(key: &'static str, value: String, hover: impl Into<String>, machine: bool)
 /// while withholding its location.
 fn chat_stats_section(state: State, watch: AgentsWatch) -> AnyView {
     let _ = state;
-    let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
     let head = view! { <div class="adi-chat__sec-head"><span>"This chat"</span></div> };
-    if turns.is_empty() {
+    let Some(s) = watch
+        .peek
+        .with(|p| p.as_ref().map(chat_stats))
+        .filter(|s| s.you + s.agent > 0)
+    else {
         return view! {
             <section class="adi-chat__sec">
                 {head}
@@ -3574,8 +3766,7 @@ fn chat_stats_section(state: State, watch: AgentsWatch) -> AnyView {
             </section>
         }
         .into_any();
-    }
-    let s = collect_stats(&turns);
+    };
 
     // The third number is what the run cost, or — for a backend that reports tokens but not
     // money — what it took. Absent for one that reports neither: a confident `$0.00` is a claim.
@@ -3630,8 +3821,9 @@ fn chat_stats_section(state: State, watch: AgentsWatch) -> AnyView {
             </div>
             <div class="adi-chat__fine">{fine.join(" \u{b7} ")}</div>
             {(!s.by_tool.is_empty()).then(|| tool_breakdown(&s.by_tool))}
-            {(!s.failed.is_empty()).then(|| jump_list("Failed", "error", s.failed.clone()))}
-            {(!s.running.is_empty()).then(|| jump_list("Running", "running", s.running.clone()))}
+            {(!s.failed.is_empty()).then(|| jump_list(watch, "Failed", "error", s.failed.clone()))}
+            {(!s.running.is_empty())
+                .then(|| jump_list(watch, "Running", "running", s.running.clone()))}
             {(!s.errored.is_empty() || s.errored_silent > 0)
                 .then(|| errored_list(s.errored.clone(), s.errored_silent))}
             {(!s.blocked.is_empty()).then(|| blocked_list(&s.blocked))}
@@ -3678,16 +3870,16 @@ fn chat_analysis_section(state: State, watch: AgentsWatch) -> AnyView {
 
 /// Which tools did the work, most-used first — the shape of the run in a few lines. Whether a
 /// conversation was a search, a refactor, or a build loop is legible here without reading any of it.
-fn tool_breakdown(by_tool: &[(String, usize, usize)]) -> AnyView {
+fn tool_breakdown(by_tool: &[AgentToolUse]) -> AnyView {
     view! {
         <div class="adi-chat__tools">
-            {by_tool.iter().map(|(name, calls, bad)| view! {
+            {by_tool.iter().map(|use_| view! {
                 <div class="adi-chat__tool">
-                    <span class="adi-chat__tool-name">{name.clone()}</span>
-                    {(*bad > 0).then(|| view! {
-                        <span class="adi-chat__tool-bad">{format!("{bad} failed")}</span>
+                    <span class="adi-chat__tool-name">{use_.tool.clone()}</span>
+                    {(use_.failed > 0).then(|| view! {
+                        <span class="adi-chat__tool-bad">{format!("{} failed", use_.failed)}</span>
                     })}
-                    <span class="adi-chat__tool-n">{*calls}</span>
+                    <span class="adi-chat__tool-n">{use_.calls}</span>
                 </div>
             }).collect_view()}
         </div>
@@ -3698,20 +3890,26 @@ fn tool_breakdown(by_tool: &[(String, usize, usize)]) -> AnyView {
 /// A band whose rows go somewhere: the failed calls, the running ones. The count is in the heading
 /// because the rows below it are the same information spelled out, and a reader who only wants the
 /// number should not have to count.
-fn jump_list(label: &'static str, status: &'static str, steps: Vec<StepRef>) -> AnyView {
+fn jump_list(
+    watch: AgentsWatch,
+    label: &'static str,
+    status: &'static str,
+    steps: Vec<AgentStepRef>,
+) -> AnyView {
     let n = steps.len();
     view! {
         <div class="adi-chat__band">
             <div class="adi-chat__band-head">{format!("{label} ({n})")}</div>
             {steps.into_iter().map(|s| {
-                let anchor = s.anchor.clone();
                 let title = format!("show this call in the transcript: {}", s.arg);
+                let arg = s.arg.clone();
+                let tool = s.tool.clone();
                 view! {
                     <button class="adi-chat__jump" data-status=status type="button" title=title
-                        on:click=move |_| jump_to(&anchor)>
+                        on:click=move |_| jump_to_step(watch, s.clone())>
                         <span class="adi-chat__jump-dot" aria-hidden="true"></span>
-                        <span class="adi-chat__jump-name">{s.tool}</span>
-                        <span class="adi-chat__jump-arg">{s.arg}</span>
+                        <span class="adi-chat__jump-name">{tool}</span>
+                        <span class="adi-chat__jump-arg">{arg}</span>
                     </button>
                 }
             }).collect_view()}
@@ -3728,18 +3926,23 @@ fn jump_list(label: &'static str, status: &'static str, steps: Vec<StepRef>) -> 
 /// transcript therefore draws nothing for. They are counted in the head and named on a line that
 /// is deliberately not a button: there is nothing to jump to, and a link that scrolls nowhere reads
 /// as the app being broken rather than as the turn being empty.
-fn errored_list(anchors: Vec<String>, silent: usize) -> AnyView {
-    let n = anchors.len() + silent;
+fn errored_list(turns: Vec<usize>, silent: usize) -> AnyView {
+    let n = turns.len() + silent;
     view! {
         <div class="adi-chat__band">
             <div class="adi-chat__band-head">{format!("Failed turns ({n})")}</div>
-            {anchors.into_iter().enumerate().map(|(i, anchor)| view! {
-                <button class="adi-chat__jump" data-status="error" type="button"
-                    title="show this turn in the transcript"
-                    on:click=move |_| jump_to(&anchor)>
-                    <span class="adi-chat__jump-dot" aria-hidden="true"></span>
-                    <span class="adi-chat__jump-name">{format!("turn {}", i + 1)}</span>
-                </button>
+            {turns.into_iter().map(|turn| {
+                let anchor = turn_anchor(turn);
+                view! {
+                    <button class="adi-chat__jump" data-status="error" type="button"
+                        title="show this turn in the transcript"
+                        on:click=move |_| { jump_to(&anchor); }>
+                        <span class="adi-chat__jump-dot" aria-hidden="true"></span>
+                        // Numbered as the conversation numbers them, from one: a reader counting
+                        // messages down the feed and a rail counting them here must agree.
+                        <span class="adi-chat__jump-name">{format!("turn {}", turn + 1)}</span>
+                    </button>
+                }
             }).collect_view()}
             {(silent > 0).then(|| view! {
                 <div class="adi-chat__jump adi-chat__jump--flat" data-status="error"
@@ -3764,17 +3967,17 @@ fn errored_list(anchors: Vec<String>, silent: usize) -> AnyView {
 /// The engine reports these as names on a turn's metrics, not as steps, so there is no call in the
 /// feed to point at — the band names them and stops there. Worth surfacing anyway, and often the
 /// answer to "why is the result wrong": an agent that was refused a write did not decide against it.
-fn blocked_list(blocked: &[(String, usize)]) -> AnyView {
-    let total: usize = blocked.iter().map(|(_, n)| n).sum();
+fn blocked_list(blocked: &[AgentToolUse]) -> AnyView {
+    let total: usize = blocked.iter().map(|b| b.calls).sum();
     view! {
         <div class="adi-chat__band">
             <div class="adi-chat__band-head">{format!("Blocked ({total})")}</div>
-            {blocked.iter().map(|(name, n)| view! {
+            {blocked.iter().map(|b| view! {
                 <div class="adi-chat__jump adi-chat__jump--flat" data-status="blocked">
                     <span class="adi-chat__jump-dot" aria-hidden="true"></span>
-                    <span class="adi-chat__jump-name">{name.clone()}</span>
-                    {(*n > 1).then(|| view! {
-                        <span class="adi-chat__tool-n">{format!("{n}\u{d7}")}</span>
+                    <span class="adi-chat__jump-name">{b.tool.clone()}</span>
+                    {(b.calls > 1).then(|| view! {
+                        <span class="adi-chat__tool-n">{format!("{}\u{d7}", b.calls)}</span>
                     })}
                 </div>
             }).collect_view()}
@@ -3971,17 +4174,94 @@ fn load_token_report(state: State, watch: AgentsWatch) {
 ///
 /// Silent when the element is gone — a run that has moved on between render and click is a race,
 /// not an error to report.
-fn jump_to(anchor: &str) {
-    let Some(el) = web_sys::window()
-        .and_then(|w| w.document())
-        .and_then(|d| d.get_element_by_id(anchor))
-    else {
-        return;
+fn jump_to(anchor: &str) -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
     };
-    if let Ok(Some(run)) = el.closest("details") {
-        let _ = run.set_attribute("open", "");
-    }
+    let Some(el) = window.document().and_then(|d| d.get_element_by_id(anchor)) else {
+        return false;
+    };
     el.scroll_into_view();
+    // Scrolling is not the same as arriving, so the answer is read back off the element rather than
+    // assumed. Every turn carries `content-visibility: auto` with an *estimated* height
+    // (`adi_ui::Chat`), and a run that has just been handed its calls is a hundred lines the
+    // browser has not laid out — so a scroll aimed before it settles lands somewhere else
+    // entirely. Measured on a 46-turn conversation: 33,000px short. The caller retries, and each
+    // retry is another scroll against a layout that has settled a little more.
+    let top = el.get_bounding_client_rect().top();
+    let height = window
+        .inner_height()
+        .ok()
+        .and_then(|h| h.as_f64())
+        .unwrap_or(0.0);
+    top >= -32.0 && top <= height
+}
+
+/// Send the reader to one tool call the rail is telling them about — however far away it is.
+///
+/// There are three reasons the element may not exist yet, and this is the one place that knows all
+/// three: the turn may be outside the window (widen it), the run holding it may be folded (open it,
+/// which fetches its calls), and the calls may still be in flight (wait). So the request is
+/// *recorded* and [`follow_jump`] finishes it whenever the transcript next changes, rather than
+/// this scrolling to wherever the page happens to be.
+///
+/// The common case still costs nothing: a call in an open run on screen is found on the first try
+/// and the request is never recorded at all.
+fn jump_to_step(watch: AgentsWatch, to: AgentStepRef) {
+    if try_jump(watch, &to) {
+        return;
+    }
+    // It is not there yet, and getting it there is three round trips: the page has to widen, the
+    // run has to be opened, and its calls have to arrive. Each attempt does whatever is still
+    // undone and reports whether the reader has arrived — so this is a short loop rather than a
+    // chain of callbacks, and it gives up rather than waiting on something that is never coming
+    // (a call in a conversation that has since been deleted).
+    let run_id = watch.run_id.get_untracked();
+    spawn_local(async move {
+        for _ in 0..TRIES {
+            gloo_timers::future::TimeoutFuture::new(EVERY).await;
+            // The reader has moved on. Scrolling their new conversation to a call from the old one
+            // is worse than not arriving at all.
+            if watch.run_id.get_untracked() != run_id {
+                return;
+            }
+            if try_jump(watch, &to) {
+                return;
+            }
+        }
+    });
+}
+
+/// How long a jump keeps trying, and how often — a little over three seconds, which covers a page
+/// widening and a run's calls arriving over a mesh link, and stops well short of a reader wondering
+/// what the panel is doing.
+const TRIES: usize = 25;
+const EVERY: u32 = 130;
+
+/// One attempt at getting the reader in front of a call: widen, open, scroll. Answers whether they
+/// are there.
+///
+/// Each step is a no-op when it is not needed, and needs the one before it to have *landed* — the
+/// run cannot be opened before the turn holding it is in the page, and the call cannot be scrolled
+/// to before the run's calls have arrived. So this is written to be run again rather than to
+/// succeed: [`follow_jump`] repeats it as each of those things happens.
+fn try_jump(watch: AgentsWatch, to: &AgentStepRef) -> bool {
+    // Behind the window: ask for the whole conversation. It is folded, so on the longest chat on
+    // this machine that is 116 KB rather than 3.4 MB — and it is what makes the rail's promise
+    // ("every exception is a link") true of a conversation longer than one page.
+    watch.peek.with_untracked(|peek| {
+        let Some(peek) = peek.as_ref() else { return };
+        let oldest = peek.turns.first().map_or(0, |t| turn_at(0, t));
+        let want = peek.total_turns.max(crate::state::CHAT_PAGE);
+        if to.turn < oldest && watch.turn_limit.get_untracked() < want {
+            watch.turn_limit.set(want);
+        }
+    });
+    // Opening the run is what fetches its calls, and its calls are what the target element is one
+    // of. Asked every time: the first attempt usually cannot find the run at all, because the turn
+    // holding it has not arrived yet.
+    toggle_run(watch, run_anchor(to.turn, to.run_from), true);
+    jump_to(&step_anchor(to.turn, to.step))
 }
 
 /// Open `which` as a drawer, or close it if it is the one already open.
@@ -6372,4 +6652,163 @@ where
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(role: &str, text: &str, steps: Vec<AgentStep>) -> AgentTurn {
+        AgentTurn {
+            role: role.to_string(),
+            text: text.to_string(),
+            seq: 7,
+            at: 1,
+            pending: false,
+            queued: false,
+            mode: QueueMode::Regular,
+            images: Vec::new(),
+            steps,
+            metrics: None,
+            markers: Vec::new(),
+        }
+    }
+
+    fn nothing() -> (HashMap<String, Vec<AgentStep>>, HashSet<String>) {
+        (HashMap::new(), HashSet::new())
+    }
+
+    /// The rail links a failed turn only when the transcript draws *something* for it, and counts
+    /// it silently when it does not. That judgement is made on the server now
+    /// ([`AgentTurn::draws_nothing`]) and acted on here, so the two have to agree — the day they
+    /// drift, the rail hands out a link that scrolls nowhere, which reads as the app being broken
+    /// rather than as the turn being empty.
+    #[test]
+    fn a_turn_that_draws_nothing_is_a_turn_the_feed_renders_nothing_for() {
+        let (fetched, open) = nothing();
+        let runs = RunState {
+            fetched: &fetched,
+            open: &open,
+        };
+        for t in [
+            turn("assistant", "", Vec::new()),
+            turn(
+                "assistant",
+                "   ",
+                vec![AgentStep::Message { text: " ".into() }],
+            ),
+            turn("assistant", "", vec![AgentStep::Unknown]),
+        ] {
+            assert!(t.draws_nothing(), "{t:?}");
+            assert!(feed_turn(None, None, 7, &t, &runs).is_empty(), "{t:?}");
+        }
+        for t in [
+            turn("assistant", "here is what I found", Vec::new()),
+            turn(
+                "assistant",
+                "",
+                vec![AgentStep::Calls {
+                    from: 0,
+                    to: 2,
+                    count: 2,
+                    tools: vec!["Bash".into()],
+                    preview: "ls".into(),
+                    status: AgentToolStatus::Ok,
+                }],
+            ),
+        ] {
+            assert!(!t.draws_nothing(), "{t:?}");
+            assert!(!feed_turn(None, None, 7, &t, &runs).is_empty(), "{t:?}");
+        }
+    }
+
+    /// A folded run draws from its header and asks for its calls by its own id; the entry around it
+    /// is redrawn when they arrive while keeping the address every link uses. Get either wrong and
+    /// the run either never opens or opens onto nothing (both happened on the way here).
+    #[test]
+    fn a_folded_run_is_addressed_by_its_own_id_and_redrawn_when_its_calls_land() {
+        let (fetched, open) = nothing();
+        let folded = turn(
+            "assistant",
+            "",
+            vec![AgentStep::Calls {
+                from: 3,
+                to: 5,
+                count: 2,
+                tools: vec!["Bash".into()],
+                preview: "cargo test".into(),
+                status: AgentToolStatus::Ok,
+            }],
+        );
+        let entries = feed_turn(
+            None,
+            None,
+            7,
+            &folded,
+            &RunState {
+                fetched: &fetched,
+                open: &open,
+            },
+        );
+        let [entry] = entries.as_slice() else {
+            panic!("one run, one entry: {entries:?}");
+        };
+        assert_eq!(
+            entry.id,
+            turn_anchor(7),
+            "the address a link to this turn uses"
+        );
+        assert!(entry.key.ends_with("#folded"), "{}", entry.key);
+        let adi_ui::Turn::Did(run) = &entry.turn else {
+            panic!("a run: {entry:?}");
+        };
+        assert_eq!(run.id, run_anchor(7, 3), "what its calls are fetched by");
+        assert_eq!((run.count, run.preview.as_str()), (2, "cargo test"));
+        assert!(run.calls.is_none(), "not here yet");
+
+        // …and once they are, under the key its shape names.
+        let mut fetched = HashMap::new();
+        fetched.insert(
+            run_cache_key(7, 3, 5, 2, AgentToolStatus::Ok),
+            vec![
+                AgentStep::Tool {
+                    name: "Bash".into(),
+                    input: r#"{"command":"cargo test"}"#.into(),
+                    status: AgentToolStatus::Ok,
+                    output: "ok".into(),
+                },
+                AgentStep::Thinking {
+                    text: "that settles it".into(),
+                },
+            ],
+        );
+        let entries = feed_turn(
+            None,
+            None,
+            7,
+            &folded,
+            &RunState {
+                fetched: &fetched,
+                open: &open,
+            },
+        );
+        let [entry] = entries.as_slice() else {
+            panic!("still one entry: {entries:?}");
+        };
+        assert_eq!(entry.id, turn_anchor(7), "the address does not move…");
+        assert!(
+            entry.key.ends_with("#open"),
+            "…and the key does, so it is drawn again"
+        );
+        let adi_ui::Turn::Did(run) = &entry.turn else {
+            panic!("a run: {entry:?}");
+        };
+        let calls = run.calls.as_ref().expect("the calls landed");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0].anchor.as_deref(),
+            Some(step_anchor(7, 3).as_str()),
+            "a call's anchor counts from where the run starts, so the rail's links still land",
+        );
+    }
 }

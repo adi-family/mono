@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-127 structs · 35 enums · 5 type aliases across 53 files.
+128 structs · 35 enums · 5 type aliases across 53 files.
 
 ## Index
 
@@ -60,7 +60,7 @@
 - [`src/store/queue.rs`](#srcstorequeuers) — `QueueMode`, `QueuedMessage`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
 - [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
-- [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
+- [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`, `TranscriptPage`
 
 ---
 
@@ -2891,6 +2891,19 @@ pub struct Turn {
     pub metrics: Option<TurnMetrics>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<Marker>,
+}
+```
+
+### struct `TranscriptPage`
+
+A page of a transcript: the turns themselves, each with its place in the whole conversation, and how long that conversation is.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TranscriptPage {
+    pub turns: Vec<(usize, Turn)>,
+    pub total: usize,
+    pub recorded: usize,
 }
 ```
 

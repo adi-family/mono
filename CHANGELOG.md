@@ -20,6 +20,29 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **A long chat opens at once, and stops re-downloading itself every second.** The control panel used
+  to fetch every turn of a conversation — every tool call and every tool result — and then fetch all
+  of it again a second later, for as long as the chat was open. On the longest conversation on this
+  machine that was **3.4 MB a second**, of which nine tenths was tool input and output sitting behind
+  folds nobody had opened. It now asks for the newest twenty turns with the runs of tool calls
+  collapsed to the same receipt line the transcript already drew — **43 KB**, and the calls behind a
+  run are fetched when you open it. Nothing looks different: the receipt says what it always said,
+  and opening it shows the calls it always showed.
+
+  The rest follows from that. **Earlier messages** at the foot of the transcript brings the previous
+  twenty — at the foot because the feed reads newest-first, so history arrives below you and nothing
+  on screen moves. The numbers in the right-hand rail still count the *whole* conversation rather
+  than the page you are looking at, and the failures it lists are still links: clicking one widens
+  the transcript, opens the run holding it and scrolls to the call, however far back it was. Sending
+  a message no longer downloads the conversation back.
+
+  Two fixes came out of the measuring. A `Write` call's preview — the one line a closed run shows —
+  was the entire file it had written, up to 12 KB to fill a line a couple of hundred pixels wide; it
+  is cut now. And every read of a chat was loading the whole transcript to look at its *last* turn
+  (deciding whether an answer needed committing), ~180ms per read on a long one; it reads one row.
+
 ## 1.12.0 — 2026-09-10
 
 ### Added

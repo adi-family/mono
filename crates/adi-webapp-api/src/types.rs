@@ -1501,11 +1501,85 @@ pub struct AgentRunOverrides {
     pub unattended: Option<bool>,
 }
 
+/// How much of a conversation a reader wants back — the transcript's **lazy read**.
+///
+/// Flattened into every request that answers with one ([`RunRef`], [`ReplyToRun`], [`AnswerRun`],
+/// [`UnqueueFromRun`]), so "which page, folded or not" is one vocabulary rather than a convention
+/// each endpoint re-invents. Every field defaults to the answer those endpoints have always given —
+/// the whole conversation, every call spelled out — so a client that says nothing gets what it
+/// always got, and an older server that has never heard of them ignores them and does the same.
+/// That is the whole compatibility story: the fold is something a reader opts into.
+///
+/// It exists because a conversation is watched **once a second** while it is open, and the answer
+/// grew without bound: 3.4 MB across 46 turns on the machine this was written on, 84% of it tool
+/// input and output the transcript keeps folded away.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptView {
+    /// How many of the newest turns to answer with. `None` is all of them.
+    /// [`AgentPeek::total_turns`] says what they are a window onto.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    /// Page backwards: answer with the `limit` turns *before* this one (exclusive), rather than the
+    /// newest. What "earlier messages" asks for, and the one read here that is cut in SQL — the
+    /// older turns are never loaded, let alone decoded.
+    ///
+    /// A page that is not the newest carries no answer-in-flight and no queued messages: those live
+    /// at the end of the conversation, and repeating them at the foot of every page a reader opened
+    /// would show the same live answer several times over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<usize>,
+    /// Whether runs of tool calls may be sent as headers ([`AgentStep::Calls`]) instead of their
+    /// contents, to be fetched per run by `POST /api/agents/run/steps` when a reader opens one.
+    ///
+    /// Opt-in because it changes the *shape* of a step, and a client too old to know the `calls`
+    /// kind would fail to read the whole transcript over it. On this machine's longest conversation
+    /// it is the difference between 3.4 MB and 39 KB, and a folded run draws exactly what a closed
+    /// one always drew.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fold: bool,
+}
+
 /// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunRef {
     pub name: String,
     pub run_id: String,
+    /// Which page of the transcript to answer with, for the endpoints that answer with one. Ignored
+    /// by the rest — `/run/stop` stops a run whatever a reader wanted to see of it.
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
+}
+
+/// `POST /api/agents/run/steps` request — the calls behind one folded run.
+///
+/// `turn` is the turn's own place in the conversation ([`AgentTurn::seq`]), and `from`/`to` are the
+/// half-open range of steps the [`AgentStep::Calls`] header named. Asking for a range is what makes
+/// this one read per run opened rather than one per call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSteps {
+    pub name: String,
+    pub run_id: String,
+    pub turn: usize,
+    #[serde(default)]
+    pub from: usize,
+    /// Exclusive. `0` (or anything past the end) means "to the end of the turn".
+    #[serde(default)]
+    pub to: usize,
+}
+
+/// `POST /api/agents/run/steps` answer — the steps of one range of one turn, spelled out.
+///
+/// It echoes what it is a range *of*, so a late answer for a run the reader has since scrolled past
+/// is filed against the right run instead of the one now in its place.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSteps {
+    pub name: String,
+    pub run_id: String,
+    pub turn: usize,
+    pub from: usize,
+    /// The steps themselves, never folded — this *is* the unfolding.
+    #[serde(default)]
+    pub steps: Vec<AgentStep>,
 }
 
 /// `POST /api/agents/run/hide` request — hide one session from the chat rail, or (`hidden: false`)
@@ -1554,6 +1628,11 @@ pub struct ReplyToRun {
     /// that has never heard of this field still gets the behaviour it always had: regular.
     #[serde(default)]
     pub mode: QueueMode,
+    /// Which page of the conversation to answer with. The reply's answer is a fresh snapshot, and a
+    /// sender that reads its chat twenty turns at a time does not want the other four hundred back
+    /// for having said something.
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 
 /// When a queued message wants to be heard — the wire twin of `adi_agents::store::QueueMode`.
@@ -1614,6 +1693,9 @@ pub struct AnswerRun {
     #[serde(default)]
     pub ask: Option<String>,
     pub replies: Vec<String>,
+    /// Which page of the conversation to answer with — see [`ReplyToRun::view`].
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 
 /// One question a run stopped to ask, on the wire.
@@ -1822,6 +1904,9 @@ pub struct UnqueueFromRun {
     pub name: String,
     pub run_id: String,
     pub index: usize,
+    /// Which page of the conversation to answer with — see [`ReplyToRun::view`].
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 
 /// One message in a harness conversation's transcript: a `user` question or an `assistant` answer.
@@ -1830,6 +1915,15 @@ pub struct AgentTurn {
     /// `"user"` or `"assistant"`.
     pub role: String,
     pub text: String,
+    /// This turn's place in the conversation, counted from zero — the number it keeps for as long
+    /// as the conversation exists, and the one every anchor, link and step request is built from.
+    ///
+    /// Carried rather than counted because a page is not the transcript: the reader of the newest
+    /// twenty of a hundred turns still has to address turn 83 as 83. `0` on every turn is what an
+    /// older server sends (it has no such field), and a client seeing that falls back to counting —
+    /// which is right there, because such a server also sends the whole conversation.
+    #[serde(default)]
+    pub seq: usize,
     /// Unix milliseconds the turn was recorded (0 for the still-streaming answer).
     #[serde(default)]
     pub at: u64,
@@ -1864,6 +1958,26 @@ pub struct AgentTurn {
     /// reader gets one shape whichever it is, and `text` is always the message itself.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<TurnMarker>,
+}
+
+impl AgentTurn {
+    /// Whether the transcript draws **nothing at all** for this turn — no bubble, no receipt, no
+    /// note — so there is nowhere to send a reader who is told about it.
+    ///
+    /// Only ever true of a turn the engine gave up on before it said or did anything. It decides
+    /// whether a failed turn is listed as a link or merely counted, and it has to agree with what
+    /// the transcript actually renders (`feed_turn`, which a test in the panel holds to this).
+    #[must_use]
+    pub fn draws_nothing(&self) -> bool {
+        self.text.trim().is_empty()
+            && self.images.is_empty()
+            && self.markers.is_empty()
+            && self.steps.iter().all(|step| match step {
+                AgentStep::Message { text } => text.trim().is_empty(),
+                AgentStep::Unknown => true,
+                _ => false,
+            })
+    }
 }
 
 /// One thing the platform stamped on a message — the wire twin of `adi_agents::Marker`, whose
@@ -1939,7 +2053,7 @@ pub enum AgentToolStatus {
 
 /// One item on an assistant turn's timeline, in the order it happened: something the agent said, a
 /// thinking block, or a tool call. The turn's *final* message is not a step — it lives in
-/// [`AgentTurn::text`]. Mirrors `adi_agents::Step`.
+/// [`AgentTurn::text`]. Mirrors `adi_agents::Step`, plus the two kinds that exist only on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentStep {
@@ -1956,6 +2070,192 @@ pub enum AgentStep {
         #[serde(default)]
         output: String,
     },
+    /// **A run of calls, as its own receipt line** — the header of steps `from..to` instead of the
+    /// steps themselves. Sent only to a reader that asked for it ([`RunRef::fold`]); the calls
+    /// arrive from `POST /api/agents/run/steps` when one is opened.
+    ///
+    /// It carries precisely what a *closed* run draws and not one field more (`adi_ui::ToolRun`):
+    /// how many calls, which tools, one line of the call worth showing, and how that call ended. So
+    /// folding costs nothing on screen — the transcript is identical until somebody opens a run,
+    /// and 84% of a transcript's bytes are tool input and output nobody has opened.
+    ///
+    /// The range is over the *unfolded* turn: `from` is the header's identity within the turn, and
+    /// `from..to` is what an expansion asks for.
+    Calls {
+        from: usize,
+        /// Exclusive.
+        to: usize,
+        /// How many steps the run holds — calls and thinking blocks alike, because both draw as a
+        /// line inside an opened run and `to - from` is the same number said less plainly.
+        count: usize,
+        /// The tools used, deduped, in first-use order. Cut to three by the reader, not here.
+        tools: Vec<String>,
+        /// The one line the closed run shows: the first argument of the call worth showing (the one
+        /// still running, else the last), whitespace flattened.
+        #[serde(default)]
+        preview: String,
+        /// That same call's status — the dot and the word on the closed line.
+        status: AgentToolStatus,
+    },
+    /// A kind this build has no variant for, so that a newer server cannot blank a transcript.
+    ///
+    /// The same tolerance [`TurnMarker::Unknown`] has, for the same reason: a step is one item in a
+    /// long list, and failing the whole read over one unknown tag would trade a line nobody can
+    /// draw for a conversation nobody can see.
+    #[serde(other)]
+    Unknown,
+}
+
+impl AgentStep {
+    /// Whether this step belongs to a *run* — the thing that folds.
+    ///
+    /// Thinking counts. It is drawn inside the receipt beside the calls (`feed_turn` gives it a line
+    /// of its own there), so a run broken in two around it would fold into two receipts where the
+    /// transcript has always shown one. A message is what breaks a run, and always has been: text is
+    /// the divider.
+    #[must_use]
+    pub const fn in_run(&self) -> bool {
+        matches!(self, Self::Tool { .. } | Self::Thinking { .. })
+    }
+
+    /// A tool call's arguments, one per parameter — **the way the model wrote them**.
+    ///
+    /// The wire hands the whole input over as one string, because that is what the engine captured.
+    /// Almost always it is a JSON object, and showing it as one is the difference between reading a
+    /// call and decoding it. A string value is unwrapped, so a newline in an edit is a newline on
+    /// screen rather than `\n`. Anything that is not an object — a bare string, a number, something
+    /// that does not parse — stays one `input`, because inventing a shape for it would be a lie.
+    ///
+    /// Here, in the crate both sides share, because the server now writes the preview line that the
+    /// client used to derive: two implementations of "the first argument" would drift, and the drift
+    /// would show as a receipt line that changes when a conversation is folded.
+    #[must_use]
+    pub fn params_of(input: &str) -> Vec<(String, String)> {
+        let one = || vec![("input".to_string(), input.to_string())];
+        let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(input)
+        else {
+            return one();
+        };
+        if map.is_empty() {
+            return one();
+        }
+        map.into_iter()
+            .map(|(k, v)| {
+                let text = match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                (k, text)
+            })
+            .collect()
+    }
+
+    /// What one call shows on a closed receipt: its first argument, whitespace flattened — the
+    /// command of a `Bash`, the path of a `Read`. Empty for a call with no arguments.
+    ///
+    /// **Cut**, and that is not cosmetic. A `Write` call's first argument is the whole file it
+    /// wrote; unclipped, one preview on a transcript's summary line was measured at 12 KB — larger
+    /// than every folded header around it put together, to fill a line the box truncates at a
+    /// couple of hundred pixels. [`PREVIEW`](Self::PREVIEW) is far past what any line shows.
+    #[must_use]
+    pub fn preview_of(input: &str) -> String {
+        let flat = Self::params_of(input)
+            .first()
+            .map(|(_, v)| v.split_whitespace().collect::<Vec<_>>().join(" "))
+            .unwrap_or_default();
+        if flat.chars().count() > Self::PREVIEW {
+            return flat.chars().take(Self::PREVIEW).collect::<String>() + "\u{2026}";
+        }
+        flat
+    }
+
+    /// How much of a call's first argument a preview line carries. Two hundred characters is
+    /// several times the widest place one is drawn, and a hard ceiling on what a fold costs.
+    pub const PREVIEW: usize = 200;
+
+    /// The preview line and status of one run of steps: the call still running if there is one, else
+    /// the last step in the run — which is exactly what a closed run has always shown.
+    fn head_of(run: &[Self]) -> (String, AgentToolStatus) {
+        let head = run
+            .iter()
+            .find(|s| {
+                matches!(
+                    s,
+                    Self::Tool {
+                        status: AgentToolStatus::Running,
+                        ..
+                    }
+                )
+            })
+            .or_else(|| run.last());
+        match head {
+            Some(Self::Tool { input, status, .. }) => (Self::preview_of(input), *status),
+            // A thinking block has no status of its own and draws as a line with its text; the run
+            // it ends is finished by definition, since nothing about it is still happening.
+            Some(Self::Thinking { text }) => (
+                text.split_whitespace().collect::<Vec<_>>().join(" "),
+                AgentToolStatus::Ok,
+            ),
+            _ => (String::new(), AgentToolStatus::Ok),
+        }
+    }
+}
+
+/// Replace every run of tool calls in a turn with its header, leaving everything said intact.
+///
+/// The runs are the same ones the transcript already draws as one receipt: a maximal stretch of
+/// calls and thinking, broken by anything the agent *said* mid-turn. So this is not a summary of the
+/// transcript — it is the transcript, with the part that was already behind a fold left on the
+/// server until somebody opens it.
+///
+/// A step kind this build cannot read is left where it is: it is not a call, and dropping it would
+/// renumber every step after it.
+#[must_use]
+pub fn fold_steps(steps: Vec<AgentStep>) -> Vec<AgentStep> {
+    let mut out: Vec<AgentStep> = Vec::new();
+    let mut run: Vec<AgentStep> = Vec::new();
+    let mut start = 0usize;
+    let close = |run: &mut Vec<AgentStep>, start: usize, at: usize, out: &mut Vec<AgentStep>| {
+        if run.is_empty() {
+            return;
+        }
+        let mut tools: Vec<String> = Vec::new();
+        for step in run.iter() {
+            let name = match step {
+                AgentStep::Tool { name, .. } => name.clone(),
+                // The name the transcript gives a thinking block inside a run, so a run that only
+                // thought reads as "1 call · thinking" rather than as a run of nothing.
+                _ => "thinking".to_string(),
+            };
+            if !tools.contains(&name) {
+                tools.push(name);
+            }
+        }
+        let (preview, status) = AgentStep::head_of(run);
+        out.push(AgentStep::Calls {
+            from: start,
+            to: at,
+            count: run.len(),
+            tools,
+            preview,
+            status,
+        });
+        run.clear();
+    };
+    let end = steps.len();
+    for (i, step) in steps.into_iter().enumerate() {
+        if step.in_run() {
+            if run.is_empty() {
+                start = i;
+            }
+            run.push(step);
+            continue;
+        }
+        close(&mut run, start, i, &mut out);
+        out.push(step);
+    }
+    close(&mut run, start, end, &mut out);
+    out
 }
 
 /// Per-turn telemetry. Cost is in micro-dollars (1e-6 USD) so the whole model stays integer-exact.
@@ -2230,6 +2530,10 @@ pub struct AgentPeek {
     /// Whether the agent's pty session is live; `output` is empty when it isn't.
     pub running: bool,
     /// The visible pane text (trailing whitespace trimmed).
+    ///
+    /// **Empty when the caller asked for folded runs** ([`TranscriptView::fold`]): that reader is
+    /// drawing a transcript, and nothing draws both that and the raw log tail — which is up to
+    /// 64 KB of engine output on an answer that repeats once a second.
     #[serde(default)]
     pub output: String,
     /// The command a human runs to follow the run: empty for an interactive pty session (viewed
@@ -2277,8 +2581,241 @@ pub struct AgentPeek {
     /// The run/conversation transcript, oldest first — for backends that produce turns (conversations,
     /// and one-shot runs synthesized as a single answered turn); empty otherwise. Includes the
     /// still-streaming answer, with its parsed tool steps, while a turn is in flight.
+    ///
+    /// **A page of it**, when the request asked for one ([`RunRef::limit`]): the newest turns, each
+    /// carrying its own [`seq`](AgentTurn::seq), with [`total_turns`](Self::total_turns) saying what
+    /// they are a window onto.
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
+    /// How many turns the conversation has in all, however few of them [`turns`](Self::turns)
+    /// carries. `0` from a server that does not page, which is also a server that sent everything —
+    /// so a reader takes `turns.len()` when this is zero and is right either way.
+    #[serde(default)]
+    pub total_turns: usize,
+    /// What the whole conversation adds up to, counted over every turn — not only the ones sent.
+    ///
+    /// It rides here rather than behind a read of its own because the numbers are what the reader
+    /// looking at a page has *lost*: a rail that counted the window would report a hundred-turn
+    /// conversation as twenty. Sent only to a reader that asked for a page or a fold, since that is
+    /// the only reader that cannot count for itself, and computing it means reading every turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<AgentChatStats>,
+}
+
+/// One tool call the analytics rail has something to say about, and where in the transcript it is.
+///
+/// Addressed by numbers rather than by a DOM id: the anchor is the client's vocabulary, and a
+/// server that minted one would be deciding how the page is built. `run_from` is the folded run that
+/// contains it — what a reader has to open before there is anything to scroll to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStepRef {
+    pub turn: usize,
+    pub step: usize,
+    /// Where the run holding this step begins — the identity of its [`AgentStep::Calls`] header.
+    #[serde(default)]
+    pub run_from: usize,
+    pub tool: String,
+    /// The call's arguments cut to a line, for a rail about a third the width of what it shows.
+    #[serde(default)]
+    pub arg: String,
+}
+
+/// One tool's share of a conversation: how many times it was called, and how many of those failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentToolUse {
+    pub tool: String,
+    pub calls: usize,
+    #[serde(default)]
+    pub failed: usize,
+}
+
+/// What a conversation adds up to — the analytics rail's whole content, counted server-side.
+///
+/// Counted over every turn there is, which is the point: the panel used to add this up from the
+/// transcript it had in hand, and the transcript it has in hand is now a page. Every list is
+/// bounded ([`MAX_REFS`](Self::MAX_REFS)) so that a conversation with four hundred failed calls
+/// cannot make the summary of a chat bigger than the chat.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChatStats {
+    /// Messages you sent, and answers the agent gave. Queued messages are counted apart: they have
+    /// been typed, not asked, and folding them in would report a longer conversation than has
+    /// happened.
+    pub you: usize,
+    pub agent: usize,
+    pub queued: usize,
+    pub tools: usize,
+    pub thinking: usize,
+    /// The calls that failed, and the ones still going — kept as references rather than counts,
+    /// because a count of failures is a number and a list of them is somewhere to go.
+    #[serde(default)]
+    pub failed: Vec<AgentStepRef>,
+    #[serde(default)]
+    pub running: Vec<AgentStepRef>,
+    /// Turns the engine reported as failed outright, by their [`seq`](AgentTurn::seq).
+    #[serde(default)]
+    pub errored: Vec<usize>,
+    /// Turns that failed and left nothing behind — no step, no text — so the transcript draws no
+    /// bubble for them and there is nowhere to send a reader. Counted rather than linked.
+    #[serde(default)]
+    pub errored_silent: usize,
+    /// Tools blocked by permission, worst first.
+    #[serde(default)]
+    pub blocked: Vec<AgentToolUse>,
+    /// Every tool used, most-used first.
+    #[serde(default)]
+    pub by_tool: Vec<AgentToolUse>,
+    pub tokens: u64,
+    pub cost_micro: u64,
+    /// Time the agent spent answering, summed over the turns that reported it.
+    pub work_ms: u64,
+    /// When the conversation's first and last settled turns landed.
+    pub first_at: u64,
+    pub last_at: u64,
+}
+
+impl AgentChatStats {
+    /// How many failed or running calls are listed before the list is simply cut. A rail that shows
+    /// forty of them is already saying "lots"; four hundred would be a second transcript.
+    pub const MAX_REFS: usize = 40;
+
+    /// Add up a transcript.
+    ///
+    /// In the shared crate because both sides count: the server does it over every turn, and a page
+    /// talking to a server too old to send the numbers falls back to counting the turns it has. One
+    /// implementation is the only way those two can agree.
+    ///
+    /// Turns are addressed by their own [`seq`](AgentTurn::seq), so every reference here survives
+    /// the conversation growing under it.
+    #[must_use]
+    pub fn of(turns: &[AgentTurn]) -> Self {
+        let mut s = Self::default();
+        s.add(turns);
+        s.finish();
+        s
+    }
+
+    /// Fold more turns into these numbers, in order.
+    ///
+    /// Split from [`of`](Self::of) because a transcript is **append-only**, and so are its counts:
+    /// what the first hundred turns add up to cannot change, so a server watching a conversation
+    /// counts each turn exactly once and adds the next one to what it already had. Without that,
+    /// the once-a-second read re-counts the whole conversation, which on a 3.4 MB one is 450ms of
+    /// decoding per second per reader.
+    ///
+    /// The lists are left unsorted until [`finish`](Self::finish) — a sort per added turn would
+    /// undo the saving it exists for.
+    pub fn add(&mut self, turns: &[AgentTurn]) {
+        let s = self;
+        let mut tools: Vec<AgentToolUse> = std::mem::take(&mut s.by_tool);
+        let mut blocked: Vec<AgentToolUse> = std::mem::take(&mut s.blocked);
+        let bump = |list: &mut Vec<AgentToolUse>, name: &str, failed: bool| match list
+            .iter_mut()
+            .find(|u| u.tool == name)
+        {
+            Some(use_) => {
+                use_.calls += 1;
+                use_.failed += usize::from(failed);
+            }
+            None => list.push(AgentToolUse {
+                tool: name.to_string(),
+                calls: 1,
+                failed: usize::from(failed),
+            }),
+        };
+
+        for (at, turn) in turns.iter().enumerate() {
+            // An older server sends no `seq`; its answer is the whole conversation, so the position
+            // is the number. Deliberately not `max(seq, at)` — a real page starts at a seq below its
+            // own position and must keep it.
+            let seq = if turn.seq == 0 { at } else { turn.seq };
+            if turn.queued {
+                s.queued += 1;
+                continue;
+            }
+            if turn.role == "user" {
+                s.you += 1;
+            } else {
+                s.agent += 1;
+            }
+            if turn.at > 0 {
+                if s.first_at == 0 {
+                    s.first_at = turn.at;
+                }
+                s.last_at = turn.at;
+            }
+            if let Some(m) = &turn.metrics {
+                s.tokens += m.input_tokens.unwrap_or(0) + m.output_tokens.unwrap_or(0);
+                s.cost_micro += m.cost_micro_usd.unwrap_or(0);
+                s.work_ms += m.duration_ms.unwrap_or(0);
+                if m.is_error {
+                    if turn.draws_nothing() {
+                        s.errored_silent += 1;
+                    } else {
+                        s.errored.push(seq);
+                    }
+                }
+                for name in &m.permission_denials {
+                    bump(&mut blocked, name, false);
+                }
+            }
+            let mut run_from = 0usize;
+            for (i, step) in turn.steps.iter().enumerate() {
+                if !step.in_run() {
+                    run_from = i + 1;
+                }
+                match step {
+                    AgentStep::Thinking { .. } => s.thinking += 1,
+                    // A folded run says how many calls it holds and nothing about any of them —
+                    // which is why the server counts before it folds, and why a client falling back
+                    // to this can only count what it was sent.
+                    AgentStep::Calls { count, .. } => s.tools += count,
+                    AgentStep::Tool {
+                        name,
+                        input,
+                        status,
+                        ..
+                    } => {
+                        s.tools += 1;
+                        bump(&mut tools, name, *status == AgentToolStatus::Error);
+                        let step_ref = || AgentStepRef {
+                            turn: seq,
+                            step: i,
+                            run_from,
+                            tool: name.clone(),
+                            arg: AgentStep::preview_of(input),
+                        };
+                        match status {
+                            AgentToolStatus::Error if s.failed.len() < Self::MAX_REFS => {
+                                s.failed.push(step_ref());
+                            }
+                            AgentToolStatus::Running if s.running.len() < Self::MAX_REFS => {
+                                s.running.push(step_ref());
+                            }
+                            // Never answered is not a failure to link to: the call is the last line
+                            // of an interrupted run, and the rail already says the run is over.
+                            _ => {}
+                        }
+                    }
+                    AgentStep::Message { .. } | AgentStep::Unknown => {}
+                }
+            }
+        }
+
+        s.by_tool = tools;
+        s.blocked = blocked;
+    }
+
+    /// Put the tool lists in the order the rail reads them: most-used first, ties by name.
+    ///
+    /// Called once, after the last [`add`](Self::add) — sorting is not something a count can be
+    /// left in the middle of, and doing it per turn is the cost this whole arrangement avoids.
+    pub fn finish(&mut self) {
+        let order = |a: &AgentToolUse, b: &AgentToolUse| {
+            b.calls.cmp(&a.calls).then_with(|| a.tool.cmp(&b.tool))
+        };
+        self.by_tool.sort_by(order);
+        self.blocked.sort_by(order);
+    }
 }
 
 // ---- conversation token analytics --------------------------------------------------
@@ -4545,6 +5082,154 @@ pub struct Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tool(name: &str, input: &str, status: AgentToolStatus) -> AgentStep {
+        AgentStep::Tool {
+            name: name.to_string(),
+            input: input.to_string(),
+            status,
+            output: "…".to_string(),
+        }
+    }
+
+    /// The fold's whole claim: a run becomes the line the transcript already drew for it. The four
+    /// fields here are what a closed `adi_ui::Did` renders, so if this is right the screen cannot
+    /// tell a folded conversation from an unfolded one.
+    #[test]
+    fn a_folded_run_carries_what_a_closed_one_shows() {
+        let folded = fold_steps(vec![
+            tool("Read", r#"{"file_path":"/tmp/a"}"#, AgentToolStatus::Ok),
+            AgentStep::Thinking {
+                text: "so the retry loop has no backoff".to_string(),
+            },
+            tool(
+                "Bash",
+                r#"{"command":"cargo  test\n  --all"}"#,
+                AgentToolStatus::Running,
+            ),
+            tool("Read", r#"{"file_path":"/tmp/b"}"#, AgentToolStatus::Ok),
+        ]);
+        let [
+            AgentStep::Calls {
+                from,
+                to,
+                count,
+                tools,
+                preview,
+                status,
+            },
+        ] = folded.as_slice()
+        else {
+            panic!("one run, folded to one header: {folded:?}");
+        };
+        assert_eq!(
+            (*from, *to, *count),
+            (0, 4, 4),
+            "thinking is in the run, and counts"
+        );
+        assert_eq!(tools, &["Read", "thinking", "Bash"]);
+        // The call still running is the head, not the last one — it is what is happening now.
+        assert_eq!(preview, "cargo test --all");
+        assert_eq!(*status, AgentToolStatus::Running);
+    }
+
+    /// Text is the divider, and always was: what the agent said mid-turn ends the run before it, so
+    /// a turn folds into the same sequence of receipts and paragraphs it drew unfolded.
+    #[test]
+    fn something_said_mid_turn_breaks_a_run_in_two() {
+        let folded = fold_steps(vec![
+            tool("Grep", "{}", AgentToolStatus::Ok),
+            AgentStep::Message {
+                text: "found it".to_string(),
+            },
+            tool("Edit", "{}", AgentToolStatus::Error),
+            tool("Bash", "{}", AgentToolStatus::Ok),
+        ]);
+        let ranges: Vec<(usize, usize, usize)> = folded
+            .iter()
+            .filter_map(|s| match s {
+                AgentStep::Calls {
+                    from, to, count, ..
+                } => Some((*from, *to, *count)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(ranges, [(0, 1, 1), (2, 4, 2)]);
+        assert!(
+            matches!(folded[1], AgentStep::Message { .. }),
+            "the words stay where they were said",
+        );
+    }
+
+    /// A `Write` call's first argument is the whole file it wrote. Unclipped, that preview crossed
+    /// the wire in place of the calls it was standing in for — 12 KB to fill a line the box
+    /// truncates at a couple of hundred pixels.
+    #[test]
+    fn a_preview_is_cut_before_it_can_be_bigger_than_what_it_replaced() {
+        let long = "x".repeat(10_000);
+        let input = serde_json::json!({ "content": long }).to_string();
+        let preview = AgentStep::preview_of(&input);
+        assert!(
+            preview.chars().count() <= AgentStep::PREVIEW + 1,
+            "{}",
+            preview.len()
+        );
+        assert!(preview.ends_with('\u{2026}'));
+    }
+
+    /// Counts are append-only, which is what lets a server watching a conversation count each turn
+    /// once instead of re-counting the lot every second. Adding in two goes must land where adding
+    /// in one does, or the incremental path quietly reports a different conversation.
+    #[test]
+    fn counting_a_transcript_in_two_halves_lands_where_counting_it_whole_does() {
+        let turn = |seq: usize, role: &str, steps: Vec<AgentStep>| AgentTurn {
+            role: role.to_string(),
+            text: "said".to_string(),
+            seq,
+            at: 1_000 + seq as u64,
+            pending: false,
+            queued: false,
+            mode: QueueMode::Regular,
+            images: Vec::new(),
+            steps,
+            metrics: None,
+            markers: Vec::new(),
+        };
+        let turns = vec![
+            turn(0, "user", Vec::new()),
+            turn(
+                1,
+                "assistant",
+                vec![
+                    tool("Bash", "{}", AgentToolStatus::Ok),
+                    tool("Edit", "{}", AgentToolStatus::Error),
+                ],
+            ),
+            turn(2, "user", Vec::new()),
+            turn(
+                3,
+                "assistant",
+                vec![tool("Bash", "{}", AgentToolStatus::Ok)],
+            ),
+        ];
+
+        let whole = AgentChatStats::of(&turns);
+        let mut halves = AgentChatStats::default();
+        halves.add(&turns[..2]);
+        halves.add(&turns[2..]);
+        halves.finish();
+
+        assert_eq!(whole, halves);
+        assert_eq!(whole.tools, 3);
+        assert_eq!(whole.by_tool[0].tool, "Bash", "most used first");
+        assert_eq!(whole.by_tool[0].calls, 2);
+        assert_eq!(
+            whole.failed.len(),
+            1,
+            "and the one that failed is somewhere to go"
+        );
+        assert_eq!((whole.failed[0].turn, whole.failed[0].step), (1, 1));
+    }
 
     /// Everything the grant field shows an operator is a family something enforces.
     ///

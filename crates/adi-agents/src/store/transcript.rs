@@ -269,6 +269,200 @@ pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<Turn> {
         .unwrap_or_default()
 }
 
+/// A page of a transcript: the turns themselves, each with its place in the whole conversation,
+/// and how long that conversation is.
+///
+/// The place travels with the turn because a page cannot be counted from where it sits: the reader
+/// of the newest twenty turns of a hundred still has to address turn 83 as 83 — its anchors, the
+/// steps it asks to be expanded, and the rail's links into it are all built from that number. It is
+/// the row's own `seq`, not an index into [`turns`](Self::turns), for the same reason
+/// [`load`] skips a row it cannot decode: counting positions would renumber the conversation
+/// around a torn row, silently, once.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TranscriptPage {
+    /// The window, oldest first, each turn paired with its place in the conversation.
+    pub turns: Vec<(usize, Turn)>,
+    /// How many turns the conversation has in all — the synthesized ones (the answer being written,
+    /// the questions still queued) included, because they are turns to a reader. What a client
+    /// subtracts from to say how many are still unread.
+    pub total: usize,
+    /// How many of those are **recorded** — rows, and so final.
+    ///
+    /// The line between what can be remembered about a conversation and what has to be looked at
+    /// again: turns below this are append-only and never change, and everything above is the answer
+    /// being written and the queue behind it. `total - recorded` is how many of the latter there
+    /// are.
+    pub recorded: usize,
+}
+
+/// The recorded turns of one page, oldest first, each with its own `seq`.
+///
+/// `before` is exclusive and `None` means "the newest": the query runs backwards from there and the
+/// result is flipped, which is how the *last* N rows are read without walking the first thousand.
+///
+/// A row that will not decode is skipped, exactly as [`load`] skips it — and its `seq` goes with it,
+/// so the turns around it keep the numbers they have always had.
+pub(super) fn load_page(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    before: Option<usize>,
+    limit: usize,
+) -> Vec<(usize, Turn)> {
+    let Ok(mut stmt) = conn.prepare_cached(
+        "SELECT seq, json FROM turns WHERE agent = ?1 AND session = ?2 AND seq < ?3
+         ORDER BY seq DESC LIMIT ?4",
+    ) else {
+        return Vec::new();
+    };
+    // `i64` is what the column is, and `usize::MAX` would overflow it. Nothing has i64::MAX turns.
+    let before = i64::try_from(before.unwrap_or(usize::MAX)).unwrap_or(i64::MAX);
+    let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+    let mut page = stmt
+        .query_map(rusqlite::params![agent, id, before, limit], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })
+        .map(|rows| {
+            rows.flatten()
+                .filter_map(|(seq, json)| {
+                    let mut turn = serde_json::from_str::<Turn>(&json).ok()?;
+                    close_open_calls(&mut turn.steps);
+                    Some((usize::try_from(seq).unwrap_or(0), turn))
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    page.reverse();
+    page
+}
+
+/// The newest recorded turn, or `None` for a conversation that has not said anything.
+///
+/// One row, by `ORDER BY seq DESC LIMIT 1`. It exists because the lazy clock that commits a
+/// finished answer ([`crate::settle`]) asks one question of a transcript — "was the last thing said
+/// a question?" — and used to load the whole of it to answer: measured at ~180ms per read on a
+/// 3.4 MB conversation, on the path a watched chat takes **once a second**.
+///
+/// A torn newest row answers `None` rather than the newest *readable* turn. That is the safer
+/// difference: what this decides is whether to append an answer, and appending one behind a turn
+/// nothing can read would be guessing at what it was.
+pub(super) fn last(conn: &Connection, agent: &str, id: &str) -> Option<Turn> {
+    let json: String = conn
+        .query_row(
+            "SELECT json FROM turns WHERE agent = ?1 AND session = ?2 ORDER BY seq DESC LIMIT 1",
+            [agent, id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    serde_json::from_str::<Turn>(&json).ok()
+}
+
+/// One recorded turn by its `seq`, healed on the way out exactly as [`load`] heals a page.
+pub(super) fn one(conn: &Connection, agent: &str, id: &str, seq: usize) -> Option<Turn> {
+    let seq = i64::try_from(seq).ok()?;
+    let json: String = conn
+        .query_row(
+            "SELECT json FROM turns WHERE agent = ?1 AND session = ?2 AND seq = ?3",
+            rusqlite::params![agent, id, seq],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    let mut turn = serde_json::from_str::<Turn>(&json).ok()?;
+    close_open_calls(&mut turn.steps);
+    Some(turn)
+}
+
+/// How many turns are recorded. The number a page is a window onto, counted in SQL rather than by
+/// loading what it counts.
+pub(super) fn count(conn: &Connection, agent: &str, id: &str) -> usize {
+    conn.query_row(
+        "SELECT COUNT(*) FROM turns WHERE agent = ?1 AND session = ?2",
+        [agent, id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| usize::try_from(n).unwrap_or(0))
+    .unwrap_or(0)
+}
+
+/// [`view`], for a page: the same splice, over a window that may not reach the end of the
+/// conversation.
+///
+/// The two synthesized kinds are appended **only to the last page** (`tail`), because that is where
+/// they are: an answer being written is behind the newest question, and a queued message is behind
+/// everything. Paging backwards for older turns must not drag them along — a reader would see the
+/// live answer twice, once in its place and once at the foot of every page they opened.
+///
+/// `recorded` is the whole conversation's turn count, not the page's: the synthesized turns are
+/// numbered from the end of the *conversation*, so the answer being written is turn N whether the
+/// reader is looking at the newest page or the first.
+pub(super) fn page_view(
+    turns: Vec<(usize, Turn)>,
+    recorded: usize,
+    tail: bool,
+    live: Option<TurnContent>,
+    running: bool,
+    queued: Vec<super::queue::QueuedMessage>,
+) -> TranscriptPage {
+    let mut page = TranscriptPage {
+        turns,
+        total: recorded,
+        recorded,
+    };
+    if !tail {
+        return page;
+    }
+    // Anchored on the last *recorded* turn, as [`view`] is — but read off the page, which on the
+    // tail always ends with it.
+    let answering = page.turns.last().map(|(_, t)| t.role.as_str()) == Some(ROLE_USER);
+    if let Some(content) = live
+        && answering
+    {
+        let mut steps = content.steps;
+        if !running {
+            close_open_calls(&mut steps);
+        }
+        page.turns.push((
+            page.total,
+            Turn {
+                role: ROLE_ASSISTANT.to_string(),
+                text: content.text,
+                at: 0,
+                pending: running,
+                queued: false,
+                mode: QueueMode::Regular,
+                images: Vec::new(),
+                steps,
+                metrics: content.metrics,
+                markers: Vec::new(),
+            },
+        ));
+        page.total += 1;
+    }
+    for message in queued {
+        page.turns.push((
+            page.total,
+            Turn {
+                role: ROLE_USER.to_string(),
+                text: message.text,
+                at: 0,
+                pending: false,
+                queued: true,
+                mode: message.mode,
+                images: message.images,
+                steps: Vec::new(),
+                metrics: None,
+                markers: message.markers,
+            },
+        ));
+        page.total += 1;
+    }
+    page
+}
+
 /// The full view: what was recorded, what is being said right now, and what is still waiting.
 ///
 /// `live` is spliced in **only behind an unanswered question**. A reader polls, so it hands in the
@@ -374,6 +568,92 @@ mod tests {
         assert_eq!(
             store.get("chat", &s.id).expect("listed").last_activity,
             turns[0].at,
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A page is a window, and every turn in it keeps the number it has in the whole conversation —
+    /// which is the difference between a reader that can address turn 83 and one that thinks it is
+    /// turn 3. The count beside it is of the conversation, not of the page.
+    #[test]
+    fn a_page_numbers_its_turns_by_where_they_are_in_the_conversation() {
+        let store = scratch("page");
+        let s = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        for i in 0..10 {
+            store
+                .append_turn("chat", &s.id, user_turn(format!("q{i}")))
+                .expect("append");
+        }
+
+        let newest = store.transcript_page("chat", &s.id, None, 3, None, false);
+        assert_eq!(newest.total, 10, "what the page is a window onto");
+        assert_eq!(newest.recorded, 10);
+        assert_eq!(
+            newest
+                .turns
+                .iter()
+                .map(|(seq, t)| (*seq, t.text.as_str()))
+                .collect::<Vec<_>>(),
+            [(7, "q7"), (8, "q8"), (9, "q9")],
+            "the newest three, oldest first, each with its own place",
+        );
+
+        let earlier = store.transcript_page("chat", &s.id, Some(7), 3, None, false);
+        assert_eq!(
+            earlier
+                .turns
+                .iter()
+                .map(|(seq, _)| *seq)
+                .collect::<Vec<_>>(),
+            [4, 5, 6],
+            "`before` is exclusive, so this is the page above the one already read",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The answer being written belongs at the end of the conversation, so it rides the newest page
+    /// and no other. A reader paging backwards through history would otherwise meet the live answer
+    /// again at the foot of every page they opened.
+    #[test]
+    fn the_answer_in_flight_rides_the_newest_page_only() {
+        let store = scratch("page-live");
+        let s = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        for i in 0..4 {
+            store
+                .append_turn("chat", &s.id, user_turn(format!("q{i}")))
+                .expect("append");
+        }
+        let live = || {
+            Some(TurnContent {
+                text: "working".to_string(),
+                steps: Vec::new(),
+                metrics: None,
+            })
+        };
+
+        let newest = store.transcript_page("chat", &s.id, None, 2, live(), true);
+        assert_eq!(newest.recorded, 4, "four rows…");
+        assert_eq!(
+            newest.total, 5,
+            "…and the answer being written is a turn to a reader"
+        );
+        let (seq, last) = newest.turns.last().expect("a turn");
+        assert!(last.pending, "spliced in behind the newest question");
+        assert_eq!(
+            *seq, 4,
+            "numbered from the end of the conversation, not of the page"
+        );
+
+        let earlier = store.transcript_page("chat", &s.id, Some(4), 2, live(), true);
+        assert!(
+            earlier.turns.iter().all(|(_, t)| !t.pending),
+            "and never onto a page that is not the newest",
         );
 
         let _ = std::fs::remove_dir_all(store.dir());

@@ -177,6 +177,103 @@ impl ToolCall {
     }
 }
 
+/// One run of tool calls, as the transcript holds it: the receipt line, and the calls behind it
+/// **if they are here**.
+///
+/// The split is the whole of lazy loading, and it is why the summary fields are stored rather than
+/// derived. A closed run only ever shows four things — how many calls, which tools, one line of the
+/// call worth showing, and how that call ended — so those four can arrive on their own, from a
+/// server that left the calls (nine tenths of a transcript) on disk. [`calls`](Self::calls) is
+/// `None` until a reader opens the run and whoever owns the data goes and gets them.
+///
+/// A caller that already holds the calls — a fixture, a finished run read whole, the simulator —
+/// builds one with [`loaded`](Self::loaded), which derives the same four fields from them. There is
+/// then no difference on screen between a run that was folded and one that never was, which is the
+/// property that makes folding safe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRun {
+    /// This run's DOM id, and what [`Chat`]'s `on_toggle` reports when it is opened. Whoever owns
+    /// the transcript decides what it means — it is the address the calls are fetched by.
+    pub id: String,
+    /// How many calls the run holds. Not `calls.len()`: the point is that it is known before they
+    /// are.
+    pub count: usize,
+    /// The tools used, deduped, in first-use order. Cut to three on the line.
+    pub tools: Vec<String>,
+    /// The one line the closed run shows — the first argument of the call worth showing.
+    pub preview: String,
+    /// That call's state: the dot and the word at the right of the closed line.
+    pub state: ToolState,
+    /// The calls themselves, once they are here. `None` draws the run as loading when opened.
+    pub calls: Option<Vec<ToolCall>>,
+    /// Whether it is open. Owned by the caller rather than left to the DOM, because a keyed list
+    /// rebuilds an entry when its calls land and a `<details>` rebuilt from data that did not
+    /// remember being open would snap shut in the reader's face.
+    pub open: bool,
+}
+
+impl ToolRun {
+    /// A run whose calls are already in hand: the summary is derived from them, so it reads exactly
+    /// as the same run would if it had been folded.
+    #[must_use]
+    pub fn loaded(id: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        let mut tools: Vec<String> = Vec::new();
+        for call in &calls {
+            if !tools.contains(&call.name) {
+                tools.push(call.name.clone());
+            }
+        }
+        let head = calls
+            .iter()
+            .find(|c| c.state == ToolState::Running)
+            .or_else(|| calls.last());
+        Self {
+            id: id.into(),
+            count: calls.len(),
+            tools,
+            preview: head.map(ToolCall::preview).unwrap_or_default(),
+            state: head.map_or(ToolState::Ok, |c| c.state),
+            calls: Some(calls),
+            open: false,
+        }
+    }
+
+    /// A run that is only its receipt line — the calls are somewhere else until somebody asks.
+    #[must_use]
+    pub fn folded(
+        id: impl Into<String>,
+        count: usize,
+        tools: Vec<String>,
+        preview: impl Into<String>,
+        state: ToolState,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            count,
+            tools,
+            preview: preview.into(),
+            state,
+            calls: None,
+            open: false,
+        }
+    }
+
+    /// Open it. What a caller sets on a run the reader has already opened, so it stays open through
+    /// the rebuild that brings its calls.
+    #[must_use]
+    pub fn open(mut self, open: bool) -> Self {
+        self.open = open;
+        self
+    }
+
+    /// Its calls, when they have arrived.
+    #[must_use]
+    pub fn with_calls(mut self, calls: Vec<ToolCall>) -> Self {
+        self.calls = Some(calls);
+        self
+    }
+}
+
 /// Something that was attached to a message: where to fetch it, what to call it, and whether it is
 /// a picture at all.
 ///
@@ -223,7 +320,7 @@ pub enum Turn {
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
     /// is exactly the unit you want to open or ignore.
-    Did(Vec<ToolCall>),
+    Did(ToolRun),
     /// Something the **platform** put into the conversation rather than either speaker — a
     /// wake, a settled question, a nudge. See [`Note`].
     Noted(Note),
@@ -279,23 +376,49 @@ pub struct Note {
 /// now describing the wrong one. Diffed by key, none of that happens — an unchanged key is
 /// not rendered again at all.
 ///
-/// The key is also the entry's **DOM id**, so whatever names an entry can also link to it.
-/// It therefore has to be unique within the transcript and valid as an id; the caller picks
-/// it, because only the caller knows what an entry *is*.
+/// The key is also the entry's **DOM id** by default, so whatever names an entry can also
+/// link to it. It therefore has to be unique within the transcript and valid as an id; the
+/// caller picks it, because only the caller knows what an entry *is*.
+///
+/// # When the key has to move and the address must not
+///
+/// A keyed list is not re-rendered for a key it has already seen — that is the whole saving,
+/// and it means an entry whose *content* changed under an unchanged key would simply never be
+/// drawn again. A folded run of tool calls does exactly that: its calls arrive, from a fetch,
+/// minutes after the entry was first built. So the key carries the fold state
+/// ([`redrawn_as`](Self::redrawn_as)) while the id stays what everything links to — the
+/// alternative being an anchor that goes dead the moment a reader opens the run it points into.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
-    /// Stable across polls, unique in the transcript, and used verbatim as the DOM id.
+    /// The list's identity for this entry: stable while the entry is unchanged, and different
+    /// the moment it must be drawn again.
     pub key: String,
+    /// Its address — the DOM id, unique in the transcript. Equal to the key unless the caller
+    /// said otherwise.
+    pub id: String,
     pub turn: Turn,
 }
 
 impl Entry {
     #[must_use]
-    pub fn new(key: impl Into<String>, turn: Turn) -> Self {
+    pub fn new(id: impl Into<String>, turn: Turn) -> Self {
+        let id = id.into();
         Self {
-            key: key.into(),
+            key: id.clone(),
+            id,
             turn,
         }
+    }
+
+    /// Draw this entry again when `variant` changes, without moving where it lives.
+    ///
+    /// For content that changes outside the poll that keys the list — a run of calls that has
+    /// been fetched, a block that has been opened. The variant is appended to the key, which
+    /// makes it a different entry to the list and the same entry to every link.
+    #[must_use]
+    pub fn redrawn_as(mut self, variant: &str) -> Self {
+        self.key = format!("{}#{variant}", self.id);
+        self
     }
 }
 
@@ -351,6 +474,21 @@ pub fn Chat(
     /// message, because it is where the messages are.
     #[prop(optional, into)]
     lead: Option<ViewFn>,
+    /// What sits at the **foot** of the transcript, below the oldest turn — where "earlier
+    /// messages" goes.
+    ///
+    /// Newest-first is what makes this the natural place for it: older turns arrive at the end of
+    /// the list, away from the reader, so a transcript can grow backwards without a single thing
+    /// on screen moving. That is the one hard problem of an infinite scroll, and this feed does
+    /// not have it.
+    #[prop(optional, into)]
+    foot: Option<ViewFn>,
+    /// Told each time a reader opens or closes a run of tool calls: `(the run's id, open)`.
+    ///
+    /// The transcript itself holds no calls it was not given — see [`ToolRun`] — so this is how a
+    /// caller that fetches them lazily hears that it is time.
+    #[prop(optional, into)]
+    on_toggle: Option<Callback<(String, bool)>>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
@@ -374,7 +512,7 @@ pub fn Chat(
                 let parts = live.get();
                 (!parts.is_empty()).then(|| view! {
                     <div class="flex shrink-0 flex-col-reverse gap-4">
-                        {parts.into_iter().map(entry).collect::<Vec<_>>()}
+                        {parts.into_iter().map(|part| entry(part, on_toggle)).collect::<Vec<_>>()}
                     </div>
                 })
             }}
@@ -387,15 +525,18 @@ pub fn Chat(
                 key=|entry: &Entry| entry.key.clone()
                 let:settled
             >
-                {entry(settled)}
+                {entry(settled, on_toggle)}
             </For>
+            {foot.map(|foot| view! {
+                <div class="flex max-w-[80ch] shrink-0 flex-col gap-4">{foot.run()}</div>
+            })}
         </div>
     }
 }
 
-/// One entry, drawn under its own key as its own DOM id.
-fn entry(entry: Entry) -> AnyView {
-    let Entry { key, turn } = entry;
+/// One entry, drawn at its own address — see [`Entry`] for why that is not always its key.
+fn entry(entry: Entry, on_toggle: Option<Callback<(String, bool)>>) -> AnyView {
+    let Entry { id, turn, .. } = entry;
     match turn {
         Turn::Said {
             role,
@@ -403,9 +544,9 @@ fn entry(entry: Entry) -> AnyView {
             images,
             from,
             by,
-        } => view! { <Said id=key role=role body=body images=images from=from by=by/> }.into_any(),
-        Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
-        Turn::Noted(note) => view! { <Noted id=key note=note/> }.into_any(),
+        } => view! { <Said id=id role=role body=body images=images from=from by=by/> }.into_any(),
+        Turn::Did(run) => view! { <Did id=id run=run on_toggle=on_toggle/> }.into_any(),
+        Turn::Noted(note) => view! { <Noted id=id note=note/> }.into_any(),
     }
 }
 
@@ -669,19 +810,17 @@ pub fn Queued(
     }
 }
 
-/// The tools a run used, for its receipt line: one name when they are all the same, the first
-/// three otherwise. A run that read, grepped and edited is "Read, Grep, Edit"; one that only ran
-/// shell is "Bash".
-fn tools_of(calls: &[ToolCall]) -> String {
-    let mut names: Vec<&str> = Vec::new();
-    for call in calls {
-        if !names.contains(&call.name.as_str()) {
-            names.push(&call.name);
-        }
-    }
-    match names.len() {
-        0..=3 => names.join(", "),
-        _ => format!("{}, …", names[..3].join(", ")),
+/// The tools a run used, for its receipt line: all of them when there are three or fewer, the
+/// first three otherwise. A run that read, grepped and edited is "Read, Grep, Edit"; one that
+/// only ran shell is "Bash".
+///
+/// The cut is here rather than where the list is built because it is a property of the line —
+/// a folded run arrives carrying every tool it used, and how many of them fit is this
+/// component's business.
+fn tools_line(tools: &[String]) -> String {
+    match tools.len() {
+        0..=3 => tools.join(", "),
+        _ => format!("{}, \u{2026}", tools[..3].join(", ")),
     }
 }
 
@@ -692,45 +831,78 @@ fn tools_of(calls: &[ToolCall]) -> String {
 /// worth reading — a single call out of context rarely explains anything.
 ///
 /// The line carries the count and the tool, and the one call worth seeing without opening:
-/// whatever is running now, or the last one that ran.
+/// whatever is running now, or the last one that ran. All four come off the [`ToolRun`]
+/// rather than off its calls, which is what lets a run be drawn before its calls exist.
+///
+/// **Open is controlled, not the DOM's.** The summary's own click is swallowed and answered by
+/// the caller, because the calls may have to be fetched before there is anything to show and
+/// because a keyed list rebuilds this element when they land.
 #[component]
-fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
-    let n = calls.len();
-    let count = if n == 1 {
+fn Did(
+    id: String,
+    run: ToolRun,
+    /// Told each time a reader opens or closes this run: `([`ToolRun::id`], open)` — the run's own
+    /// id, not this element's. Where a caller starts the fetch for a run whose calls it does not
+    /// have, and where it remembers the open state, since this element does not.
+    // `optional_no_strip`: the caller is [`entry`], which has an `Option` in hand already.
+    #[prop(optional_no_strip)]
+    on_toggle: Option<Callback<(String, bool)>>,
+) -> impl IntoView {
+    let count = if run.count == 1 {
         "1 call".to_string()
     } else {
-        format!("{n} calls")
+        format!("{} calls", run.count)
     };
-    let tools = tools_of(&calls);
-    // What the closed run shows: the live call if there is one, else the last to have run.
-    let head = calls
-        .iter()
-        .find(|c| c.state == ToolState::Running)
-        .or_else(|| calls.last())
-        .cloned();
+    let tools = tools_line(&run.tools);
     // The one word the closed run says about its head call, when there is one worth saying.
     // "running" is a claim about right now and must be true; a run that ended on a call says
     // so instead, which is the honest version of the flag it used to leave behind.
-    let note = match head.as_ref().map(|c| c.state) {
-        Some(ToolState::Running) => Some(("running", "bg-accent")),
-        Some(ToolState::Unanswered) => Some(("no result", "bg-warn")),
-        Some(ToolState::Failed) => Some(("failed", "bg-err")),
-        _ => None,
+    let note = match run.state {
+        ToolState::Running => Some(("running", "bg-accent")),
+        ToolState::Unanswered => Some(("no result", "bg-warn")),
+        ToolState::Failed => Some(("failed", "bg-err")),
+        ToolState::Ok => None,
+    };
+    let preview = (!run.preview.is_empty()).then(|| run.preview.clone());
+    let open = RwSignal::new(run.open);
+    let toggle = {
+        // The **run's** id, not this element's: `id` is where the entry lives in the document
+        // (what links point at), and `ToolRun::id` is what its calls are addressed by. They are
+        // different vocabularies, and reporting the wrong one is a run that opens on nothing.
+        let id = run.id.clone();
+        move |ev: leptos::ev::MouseEvent| {
+            // The browser's own toggle is refused so that this element's state is only ever the
+            // one the caller holds: a run that opened here and closed on the next rebuild would
+            // be a reader's click undone by a poll.
+            ev.prevent_default();
+            let now = !open.get_untracked();
+            open.set(now);
+            if let Some(cb) = on_toggle {
+                cb.run((id.clone(), now));
+            }
+        }
     };
 
     view! {
-        <details id=id class=format!("{LAZY} group rounded-lg border border-line text-ink-3")>
-            <summary class="flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-3 \
-                            py-2 text-small select-none hover:bg-hover hover:text-ink-2 \
-                            [&::-webkit-details-marker]:hidden">
+        <details
+            id=id
+            open=move || open.get()
+            class=format!("{LAZY} group rounded-lg border border-line text-ink-3")
+        >
+            <summary
+                class="flex cursor-pointer list-none items-center gap-2.5 rounded-lg px-3 \
+                       py-2 text-small select-none hover:bg-hover hover:text-ink-2 \
+                       [&::-webkit-details-marker]:hidden"
+                on:click=toggle
+            >
                 <Icon
                     icon=Lucide::ChevronRight
                     size=IconSize::Sm
                     class="transition-transform duration-100 group-open:rotate-90"
                 />
                 <span class="shrink-0 font-medium text-ink-2">{format!("{count} · {tools}")}</span>
-                {head.map(|c| view! {
-                    <span class="min-w-0 truncate font-mono text-mini">{c.preview()}</span>
+                {preview.map(|p| view! {
+                    <span class="min-w-0 truncate font-mono text-mini">{p}</span>
                 })}
                 {note.map(|(word, dot)| view! {
                     <span class="ml-auto flex shrink-0 items-center gap-1.5 text-label">
@@ -740,7 +912,20 @@ fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
                 })}
             </summary>
             <div class="flex flex-col gap-3 border-t border-line px-3 py-3">
-                {calls.into_iter().map(|c| view! { <Call call=c/> }).collect::<Vec<_>>()}
+                {match run.calls {
+                    Some(calls) => calls
+                        .into_iter()
+                        .map(|c| view! { <Call call=c/> })
+                        .collect::<Vec<_>>()
+                        .into_any(),
+                    // Said plainly rather than with a spinner: this is one small read of one run,
+                    // and a thing that is briefly absent reads better as a sentence than as motion
+                    // the reader did not ask for (§8).
+                    None => view! {
+                        <div class="text-small text-ink-3">"Fetching these calls\u{2026}"</div>
+                    }
+                        .into_any(),
+                }}
             </div>
         </details>
     }
@@ -817,20 +1002,68 @@ pub(crate) fn Invoke(
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolCall, tools_of};
+    use super::{ToolCall, ToolRun, ToolState, tools_line};
 
     #[test]
     fn a_receipt_names_its_tools() {
-        let one = vec![ToolCall::new("Bash"), ToolCall::new("Bash")];
-        assert_eq!(tools_of(&one), "Bash");
-        let mixed = vec![
-            ToolCall::new("Read"),
-            ToolCall::new("Grep"),
-            ToolCall::new("Read"),
-            ToolCall::new("Edit"),
-            ToolCall::new("Bash"),
+        let one = ToolRun::loaded("r", vec![ToolCall::new("Bash"), ToolCall::new("Bash")]);
+        assert_eq!(tools_line(&one.tools), "Bash");
+        let mixed = ToolRun::loaded(
+            "r",
+            vec![
+                ToolCall::new("Read"),
+                ToolCall::new("Grep"),
+                ToolCall::new("Read"),
+                ToolCall::new("Edit"),
+                ToolCall::new("Bash"),
+            ],
+        );
+        assert_eq!(mixed.count, 5, "every call counts, deduped or not");
+        assert_eq!(tools_line(&mixed.tools), "Read, Grep, Edit, \u{2026}");
+    }
+
+    /// A run built from its calls and the same run folded to a header have to read identically,
+    /// or folding a transcript would change what it says. These four fields are the whole of the
+    /// closed line, so these four are what a server sends in place of the calls.
+    #[test]
+    fn a_loaded_run_summarizes_itself_the_way_a_folded_one_arrives() {
+        let calls = vec![
+            ToolCall::new("Read")
+                .param("file_path", "/tmp/a")
+                .state(ToolState::Ok),
+            ToolCall::new("Bash")
+                .param("command", "cargo  build\n  --all")
+                .state(ToolState::Running),
+            ToolCall::new("Edit")
+                .param("file_path", "/tmp/b")
+                .state(ToolState::Ok),
         ];
-        assert_eq!(tools_of(&mixed), "Read, Grep, Edit, …");
+        let loaded = ToolRun::loaded("r", calls);
+        // The running call is the head, not the last one: it is what is happening now.
+        assert_eq!(loaded.preview, "cargo build --all");
+        assert_eq!(loaded.state, ToolState::Running);
+        assert_eq!(loaded.count, 3);
+        assert_eq!(loaded.tools, ["Read", "Bash", "Edit"]);
+    }
+
+    /// The key moves so a keyed list redraws the entry; the address does not, so every link into
+    /// it still lands. Getting this backwards is a dead anchor or a run that never opens.
+    #[test]
+    fn redrawing_an_entry_moves_its_key_and_not_its_address() {
+        let e = super::Entry::new(
+            "adi-run-3-0",
+            super::Turn::Did(ToolRun::folded(
+                "adi-run-3-0",
+                2,
+                vec!["Bash".to_string()],
+                "ls",
+                ToolState::Ok,
+            )),
+        );
+        assert_eq!(e.key, e.id);
+        let open = e.clone().redrawn_as("open");
+        assert_eq!(open.id, "adi-run-3-0");
+        assert_ne!(open.key, e.key);
     }
 
     #[test]

@@ -291,7 +291,8 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 |---|---|---|
 | `POST /api/agents/runs` | `agent_runs` :190 | `AgentRuns` — one agent's history, whole |
 | `GET /api/agents/runs/all[?limit=N]` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip; `?limit` pages it |
-| `POST /api/agents/run/peek` | `peek_run` :205 | one run's transcript/log snapshot |
+| `POST /api/agents/run/peek` | `peek_run` :205 | one run's transcript/log snapshot — whole, or a folded page (below) |
+| `POST /api/agents/run/steps` | `run_steps` | the calls behind one folded run |
 | `POST /api/agents/run/hide` | `hide_run` :439 | flips `hidden`, replies with fresh history |
 | `POST /api/agents/run/star` | `star_run` | flips `starred`, replies with fresh history |
 | `POST /api/agents/run/delete` | `delete_run` :419 | deletes, replies with fresh history |
@@ -336,6 +337,51 @@ free-riding kinds have to be listed identically in both places.** A session the 
 client then cut would go missing from the rail of the agent you are on, which is the one agent whose
 history arrives whole and so the only place the disagreement would ever show.
 
+### The lazy transcript (`limit` / `before` / `fold`)
+
+`peek_run` used to answer with the whole conversation — every turn, every call, every tool result —
+and it is re-answered **once a second** for as long as somebody has a chat open (Layer 4). Measured
+on this machine's store: 141 MB of turn JSON over 5,423 turns, of which **84% is tool input and
+output**; the longest single conversation is 3.4 MB across 46 turns and 1,226 calls.
+
+`TranscriptView` (flattened into `RunRef`, `ReplyToRun`, `AnswerRun`, `UnqueueFromRun`) is the opt-in
+that makes it a page:
+
+- **`limit`** — the newest N turns. Each turn carries its own `seq`, because a page cannot be
+  counted: turn 83 arrives third in a window of twenty, and every anchor, rail link and step request
+  is built from the 83. `total_turns` says what the page is a window onto.
+- **`before`** — the N turns below this one, for "earlier messages". Cut in SQL
+  (`transcript::load_page`), so older turns are never decoded. Carries no answer-in-flight and no
+  queued messages: those live at the end of the conversation.
+- **`fold`** — each run of tool calls (a maximal stretch of calls and thinking, broken by anything
+  the agent *said*) becomes one `AgentStep::Calls` header: count, tool names, the head call's
+  preview, its status. That is **exactly** what a closed receipt draws (`adi_ui::Did`), so a folded
+  transcript and an unfolded one are the same screen until somebody opens a run — at which point
+  `POST /api/agents/run/steps` fetches that one range. `fold` also drops the 64 KB log tail from
+  `output`, which no transcript reader draws.
+
+Every field defaults to the old behaviour, so the CLI, an older panel and a paired node running last
+month's binary all get what they always got — and an older *server* ignores them and answers whole,
+which the client still renders.
+
+**The numbers ride with the page** (`AgentPeek::stats`, `AgentChatStats`), because they are what a
+page loses: the analytics rail counting its twenty turns would report a hundred-turn conversation as
+twenty. They are counted **incrementally** — a transcript is append-only, so what turns 0..N add up
+to cannot change (`recorded_stats`, keyed by conversation and turn count) and each turn is counted
+once rather than once a second.
+
+Measured on the 3.4 MB conversation, end to end through the endpoint:
+
+| Request | Bytes | Time |
+|---|---|---|
+| whole, unfolded (what every other caller still gets) | 3,520,191 | ~520ms |
+| `limit: 20, fold: true` (what the chat asks) | 42,873 | ~48ms |
+| `POST /run/steps` for one opened run | 3,323 | ~14ms |
+
+Part of that speed-up is not the paging at all: `settle` — the lazy clock that commits a finished
+answer before every read — was loading the entire transcript to look at its **last** turn, ~180ms
+per read on that conversation. It reads one row now (`SessionStore::last_turn`).
+
 ## Layer 4 — transport
 
 Two paths, same shape:
@@ -350,7 +396,9 @@ Two paths, same shape:
 
 Pressing **Load more** widens `state.rail_limit`, which is read *tracked* where the subscription
 is built — so the effect re-runs, re-subscribes at the wider path, and the next page arrives at
-once rather than at the socket's next tick.
+once rather than at the socket's next tick. **Earlier messages** widens the transcript the same way
+(`watch.turn_limit`, read tracked in `chat_subscriptions`) — and because a topic is keyed by
+`method path\nbody`, a wider page is simply a different topic.
 
 Client subscriptions are declared in `state::chat_subscriptions` (`state.rs:2024`) and
 `state::subscriptions` (`state.rs:1836`) and installed via `live::watch`

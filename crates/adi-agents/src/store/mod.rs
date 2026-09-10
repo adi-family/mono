@@ -57,7 +57,7 @@ pub use questions::{
 pub use queue::{QueueMode, QueuedMessage};
 pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
-pub use transcript::{Turn, assistant_turn, user_turn, user_turn_with};
+pub use transcript::{TranscriptPage, Turn, assistant_turn, user_turn, user_turn_with};
 
 /// The role a question carries — what the agent layer reads to tell an unanswered turn from a
 /// settled one before it commits an answer behind it.
@@ -1014,6 +1014,62 @@ impl SessionStore {
         running: bool,
     ) -> Vec<Turn> {
         transcript::view(self.turns(agent, id), live, running, self.queued(agent, id))
+    }
+
+    /// How many turns are recorded, counted in SQL — the number a page is a window onto.
+    #[must_use]
+    pub fn turn_count(&self, agent: &str, id: &str) -> usize {
+        self.read(|conn| transcript::count(conn, agent, id))
+    }
+
+    /// The newest recorded turn, or `None` for a conversation with nothing in it — one row, without
+    /// reading the ones before it. See [`transcript::last`].
+    #[must_use]
+    pub fn last_turn(&self, agent: &str, id: &str) -> Option<Turn> {
+        self.read(|conn| transcript::last(conn, agent, id))
+    }
+
+    /// One recorded turn by its place in the conversation, or `None` if there is no such row.
+    ///
+    /// By `seq`, which is the number a reader was given for it — not an offset into anything, so a
+    /// caller holding a turn's number from a page it read an hour ago still names the same turn.
+    #[must_use]
+    pub fn turn(&self, agent: &str, id: &str, seq: usize) -> Option<Turn> {
+        self.read(|conn| transcript::one(conn, agent, id, seq))
+    }
+
+    /// One page of that same view: the newest `limit` turns, or the `limit` turns before `before`.
+    ///
+    /// The reason this exists rather than a caller cutting [`transcript`](Self::transcript) down: a
+    /// conversation is read once a second while it runs, and the cut has to happen *in SQL*. The
+    /// longest conversation on the machine this was written on holds 3.4 MB of turn JSON across 46
+    /// turns, nine tenths of it tool calls — loading and decoding all of it to render twenty is the
+    /// cost the page exists to not pay.
+    ///
+    /// The synthesized turns ride on the newest page only; see [`transcript::page_view`].
+    #[must_use]
+    pub fn transcript_page(
+        &self,
+        agent: &str,
+        id: &str,
+        before: Option<usize>,
+        limit: usize,
+        live: Option<TurnContent>,
+        running: bool,
+    ) -> TranscriptPage {
+        let (turns, recorded) = self.read(|conn| {
+            (
+                transcript::load_page(conn, agent, id, before, limit),
+                transcript::count(conn, agent, id),
+            )
+        });
+        let tail = before.is_none();
+        let queued = if tail {
+            self.queued(agent, id)
+        } else {
+            Vec::new()
+        };
+        transcript::page_view(turns, recorded, tail, live, running, queued)
     }
 }
 

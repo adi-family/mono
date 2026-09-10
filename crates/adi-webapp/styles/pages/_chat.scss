@@ -512,6 +512,28 @@
   line-height: 1.5;
 }
 
+// The foot of the transcript: what is behind the page on screen, and the way to bring it.
+//
+// It reads as the transcript's last line rather than as an action — a hairline above it, the
+// label's own size and colour — because that is what it is: the reader has scrolled to the end of
+// what was loaded, and this says how much end there is. Quiet chrome; the screen's one orange is
+// the composer's send (§8, §4).
+.adi-chat__earlier {
+  display: block;
+  width: 100%;
+  padding: 12px 0 24px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: var(--fs-label);
+  text-align: center;
+  cursor: pointer;
+
+  &:hover { color: var(--ink-2); }
+}
+
 // ---- the sessions head ------------------------------------------------------------------------
 // The head's icon buttons: node, filter. Quiet; ink rather than orange when one is narrowing the
 // list, with the petname beside the node button saying which machine.

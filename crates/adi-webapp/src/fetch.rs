@@ -3,7 +3,7 @@
 use adi_webapp_api::types::{
     AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted,
     AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState, AgentSimTurn,
-    AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
+    AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
     DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
@@ -17,14 +17,14 @@ use adi_webapp_api::types::{
     NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
-    RunRef, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
+    RunRef, RunSteps, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
     SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
     SetSecret, SetSharedAssets, SharedAssetsState, SimulateAgent, SimulateTurn, StarRun,
     StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
-    ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
-    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
-    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun,
+    UpdateMarketplaceApp, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
@@ -590,12 +590,42 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs), from
 /// the source that run actually lives on (`docs/fleet.md` §13) — `None` for this machine.
+///
+/// `view` is how much of the transcript to bring back ([`TranscriptView`]): the chat asks for its
+/// page, folded, and everything else asks for the whole thing exactly as it always did.
 pub async fn peek_run(
     node: Option<&str>,
     name: String,
     run_id: String,
+    view: TranscriptView,
 ) -> Result<AgentPeek, String> {
-    post_on(node, "/api/agents/run/peek", &RunRef { name, run_id }).await
+    post_on(node, "/api/agents/run/peek", &RunRef { name, run_id, view }).await
+}
+
+/// The calls behind one folded run — what a reader's click asks for.
+///
+/// One read per run opened, not per call: `from..to` is the range the run's header named. The
+/// answer is final for a settled turn, which is why the caller caches it and never asks twice.
+pub async fn run_steps(
+    node: Option<&str>,
+    name: String,
+    run_id: String,
+    turn: usize,
+    from: usize,
+    to: usize,
+) -> Result<AgentSteps, String> {
+    post_on(
+        node,
+        "/api/agents/run/steps",
+        &RunSteps {
+            name,
+            run_id,
+            turn,
+            from,
+            to,
+        },
+    )
+    .await
 }
 
 /// The itemization of one conversation's context: how its tokens split by source, and which runs of
@@ -606,7 +636,16 @@ pub async fn run_tokens(
     name: String,
     run_id: String,
 ) -> Result<AgentTokens, String> {
-    post_on(node, "/api/agents/run/tokens", &RunRef { name, run_id }).await
+    post_on(
+        node,
+        "/api/agents/run/tokens",
+        &RunRef {
+            name,
+            run_id,
+            ..RunRef::default()
+        },
+    )
+    .await
 }
 
 /// Open a run of an agent with a person in the model's seat. Always a fresh run.
@@ -616,7 +655,15 @@ pub async fn simulate_agent(name: String, message: String) -> Result<AgentSimSta
 
 /// The simulated run as the model sees it: the composed prompt, its split, its tools, its turns.
 pub async fn simulate_prompt(name: String, run_id: String) -> Result<AgentSimState, String> {
-    post("/api/agents/simulate/prompt", &RunRef { name, run_id }).await
+    post(
+        "/api/agents/simulate/prompt",
+        &RunRef {
+            name,
+            run_id,
+            ..RunRef::default()
+        },
+    )
+    .await
 }
 
 /// Close the open turn: every call in it runs, for real, in the agent's own environment. What comes
@@ -656,6 +703,8 @@ pub async fn simulate_reply(
             // Nor is there a running turn to overtake — a simulated conversation only ever answers
             // between turns.
             mode: QueueMode::Regular,
+            // The simulator draws the whole conversation it is building; there is no page of it.
+            view: TranscriptView::default(),
         },
     )
     .await
@@ -695,6 +744,7 @@ pub async fn reply_to_run(
     message: String,
     attachments: Vec<String>,
     mode: QueueMode,
+    view: TranscriptView,
 ) -> Result<AgentPeek, String> {
     post_on(
         node,
@@ -705,6 +755,7 @@ pub async fn reply_to_run(
             message,
             attachments,
             mode,
+            view,
         },
     )
     .await
@@ -719,6 +770,7 @@ pub async fn answer_run(
     run_id: String,
     ask: String,
     replies: Vec<String>,
+    view: TranscriptView,
 ) -> Result<AgentPeek, String> {
     post_on(
         node,
@@ -728,6 +780,7 @@ pub async fn answer_run(
             run_id,
             ask: Some(ask),
             replies,
+            view,
         },
     )
     .await
@@ -809,6 +862,7 @@ pub async fn unqueue_from_run(
     name: String,
     run_id: String,
     index: usize,
+    view: TranscriptView,
 ) -> Result<AgentPeek, String> {
     post_on(
         node,
@@ -817,6 +871,7 @@ pub async fn unqueue_from_run(
             name,
             run_id,
             index,
+            view,
         },
     )
     .await
@@ -829,7 +884,16 @@ pub async fn stop_run(
     name: String,
     run_id: String,
 ) -> Result<AgentRuns, String> {
-    post_on(node, "/api/agents/run/stop", &RunRef { name, run_id }).await
+    post_on(
+        node,
+        "/api/agents/run/stop",
+        &RunRef {
+            name,
+            run_id,
+            ..RunRef::default()
+        },
+    )
+    .await
 }
 
 /// Delete one run outright — for a harness agent, the whole conversation — returning the fresh run
@@ -839,7 +903,16 @@ pub async fn delete_run(
     name: String,
     run_id: String,
 ) -> Result<AgentRuns, String> {
-    post_on(node, "/api/agents/run/delete", &RunRef { name, run_id }).await
+    post_on(
+        node,
+        "/api/agents/run/delete",
+        &RunRef {
+            name,
+            run_id,
+            ..RunRef::default()
+        },
+    )
+    .await
 }
 
 /// Hide one session from the chat rail, or bring it back (`hidden: false`). Nothing is deleted and

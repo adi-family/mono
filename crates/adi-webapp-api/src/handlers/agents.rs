@@ -11,18 +11,17 @@ use adi_agents::contains_json_null;
 
 use crate::types::{
     AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentBackendRowDto,
-    AgentCapabilities,
-    AgentChoice, AgentDto, AgentFieldOwner, AgentFormField, AgentFormFieldKind, AgentFormOption,
-    AgentFormSpec,
-    AgentGoal, AgentGoals, AgentKeys, AgentNearDup, AgentPeek, AgentQuestion, AgentRef,
-    AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunOutcome,
-    AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentSimBlock, AgentSimField,
-    AgentSimFieldKind, AgentSimResult, AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn,
-    AgentStep, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
-    AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
-    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun,
-    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
-    SetRunLimit, SimulateAgent, SimulateTurn, StarRun, TurnMarker, UnqueueFromRun,
+    AgentCapabilities, AgentChatStats, AgentChoice, AgentDto, AgentFieldOwner, AgentFormField,
+    AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentGoal, AgentGoals, AgentKeys,
+    AgentNearDup, AgentPeek, AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape,
+    AgentReviewStarted, AgentRunInfo, AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset,
+    AgentSetupSecret, AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult,
+    AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn, AgentStep, AgentSteps, AgentToken,
+    AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun,
+    IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun, ReplyToRun,
+    ReviewRun, RunAgent, RunRef, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
+    SetRunLimit, SimulateAgent, SimulateTurn, StarRun, TranscriptView, TurnMarker, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -363,6 +362,19 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
 /// for an interactive backend). A run that has produced nothing answers with empty output, not 404.
 /// For a harness backend the run is an answerable conversation, so the snapshot also carries its
 /// turn-by-turn transcript (`turns`) and `answerable: true`.
+///
+/// # The lazy read
+///
+/// Three optional fields on the request ([`RunRef::limit`], `before`, `fold`) turn the whole
+/// transcript into a page of it. They exist because this endpoint is watched **once a second** for
+/// as long as somebody has a conversation open (`adi_app::live`), and the answer it was giving grew
+/// without bound: the longest conversation on the machine this was written on is 3.4 MB across 46
+/// turns, of which 84% is tool input and output that the transcript keeps folded away.
+///
+/// So: `limit` cuts the read in SQL, `fold` replaces each run of calls with the receipt line the
+/// panel already draws, and the calls themselves come from [`run_steps`] when a reader opens one.
+/// Ask for none of it and this answers exactly what it always did — which is what the CLI, an older
+/// panel, and a paired node running last month's binary all do.
 #[must_use]
 pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     let req = require!(body, RunRef);
@@ -375,15 +387,18 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     let caps = agent_caps(&agent);
     // Any backend that produces turns (conversations, or one-shot runs synthesized as one answered
     // turn) feeds the same progress view; the transcript is empty for the rest (e.g. pty).
-    let turns = store
-        .transcript(&agent, run_id)
-        .into_iter()
-        .map(agent_turn)
-        .collect();
+    let (turns, total_turns, stats) = transcript_view(store, &agent, run_id, &req.view);
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
-        output: peek.output,
+        // A reader asking for folded runs is drawing a transcript, and nothing draws both that and
+        // the raw log — so the tail (up to 64 KB of engine output, re-sent every second) is left
+        // out of the one answer that has no use for it. Every other caller gets it as before.
+        output: if req.view.fold {
+            String::new()
+        } else {
+            peek.output
+        },
         attach: peek.attach,
         interactive: peek.interactive,
         run_id: run_id.to_string(),
@@ -396,6 +411,173 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
             .map(agent_ask),
         awaits: awaits_of(store, &agent.name, run_id),
         turns,
+        total_turns,
+        stats,
+    })
+}
+
+/// The transcript a request asked for: all of it, or a page with its runs of calls folded — plus
+/// what the whole conversation adds up to, for the reader that can no longer count it.
+///
+/// The stats are computed **before the fold and over every turn**, because they are exactly the
+/// facts a page loses: a rail counting the twenty turns it was sent would report a hundred-turn
+/// conversation as twenty. That costs a full read of the conversation, and it is the one part of
+/// this that a page does not make cheaper — see the note on `AgentPeek::stats`. It is paid only for
+/// a reader that asked for a page, which is the panel's chat and nothing else.
+fn transcript_view(
+    store: &Agents,
+    agent: &StoredAgent,
+    run_id: &str,
+    req: &TranscriptView,
+) -> (Vec<AgentTurn>, usize, Option<AgentChatStats>) {
+    let fold = |mut turns: Vec<AgentTurn>| -> Vec<AgentTurn> {
+        if req.fold {
+            for turn in &mut turns {
+                turn.steps = crate::types::fold_steps(std::mem::take(&mut turn.steps));
+            }
+        }
+        turns
+    };
+    if req.limit.is_none() && req.before.is_none() && !req.fold {
+        // The answer this has always given: everything, unfolded, and no numbers beside it because
+        // a reader holding the whole conversation can count it themselves.
+        let turns: Vec<AgentTurn> = store
+            .transcript(agent, run_id)
+            .into_iter()
+            .enumerate()
+            .map(|(seq, t)| agent_turn(seq, t))
+            .collect();
+        let total = turns.len();
+        return (turns, total, None);
+    }
+    // Paging backwards is the one read here that never wants the whole conversation: the numbers
+    // came with the newest page and have not changed, so this is a cut made in SQL — the older turns
+    // are never loaded, let alone decoded.
+    if req.before.is_some() {
+        let page =
+            store.transcript_page(agent, run_id, req.before, req.limit.unwrap_or(usize::MAX));
+        let turns = page.turns.into_iter().map(|(seq, t)| agent_turn(seq, t));
+        return (fold(turns.collect()), page.total, None);
+    }
+    // The newest page: cut in SQL like the one above, with the numbers beside it counted
+    // incrementally rather than by re-reading the conversation every second — see [`chat_stats`].
+    let page = store.transcript_page(agent, run_id, None, req.limit.unwrap_or(usize::MAX));
+    let turns: Vec<AgentTurn> = page
+        .turns
+        .into_iter()
+        .map(|(seq, t)| agent_turn(seq, t))
+        .collect();
+    // Counted over the *unfolded* turns, and so before the fold: a folded run says how many calls
+    // it holds and nothing about any of them.
+    let stats = chat_stats(store, agent, run_id, page.recorded, &turns);
+    (fold(turns), page.total, Some(stats))
+}
+
+/// What the whole conversation adds up to, counted once per turn rather than once per read.
+///
+/// A transcript is append-only, and so are counts over it: what turns 0..N add up to cannot change,
+/// so this keeps that answer and folds in only what has arrived since. The page on screen supplies
+/// the rest — the answer being written and the messages still queued are turns to a reader, and
+/// they are the two that *do* change between reads, so they are added fresh every time and never
+/// remembered.
+///
+/// Why it is worth the machinery: measured on this machine's longest conversation (3.4 MB, 46
+/// turns), counting it whole is ~450ms of JSON decoding, and this endpoint is re-answered **once a
+/// second** for as long as somebody has the chat open. Incrementally it is one turn's worth of work
+/// per turn that happens, and the read beside it is a page.
+fn chat_stats(
+    store: &Agents,
+    agent: &StoredAgent,
+    run_id: &str,
+    recorded: usize,
+    page: &[AgentTurn],
+) -> AgentChatStats {
+    let mut stats = recorded_stats(store, agent, run_id, recorded);
+    // Everything in the page that is not a recorded turn: the pending answer, the queue behind it.
+    let live: Vec<AgentTurn> = page.iter().filter(|t| t.seq >= recorded).cloned().collect();
+    stats.add(&live);
+    stats.finish();
+    stats
+}
+
+/// The counts over the **recorded** turns of one conversation, remembered between reads.
+///
+/// Keyed by the conversation and how many turns had been counted. A conversation that has grown
+/// since is topped up from the turns it grew by — read by `seq` range, so a top-up decodes the new
+/// turns and nothing else. Anything unexpected (a count that went *down*, which means a session id
+/// was reused) starts the count again rather than trusting arithmetic over turns that are gone.
+fn recorded_stats(
+    store: &Agents,
+    agent: &StoredAgent,
+    run_id: &str,
+    recorded: usize,
+) -> AgentChatStats {
+    /// One entry per conversation being read. Bounded because a long-lived process reading a
+    /// hundred conversations should not keep a hundred summaries — and it is only ever a cache, so
+    /// dropping the lot costs one recount on the next read of whatever was dropped.
+    const MAX_CACHED: usize = 64;
+    type Counted = std::collections::HashMap<(String, String), (usize, AgentChatStats)>;
+    static COUNTS: std::sync::OnceLock<std::sync::Mutex<Counted>> = std::sync::OnceLock::new();
+
+    let cache = COUNTS.get_or_init(Default::default);
+    let key = (agent.name.clone(), run_id.to_string());
+    // A poisoned lock says a past reader panicked mid-count, which says nothing about the map.
+    let mut counted = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (upto, mut stats) = match counted.get(&key) {
+        Some((upto, stats)) if *upto <= recorded => (*upto, stats.clone()),
+        _ => (0, AgentChatStats::default()),
+    };
+    if upto < recorded {
+        // Exactly the turns `upto..recorded`: the newest `recorded - upto` of those below
+        // `recorded`, which is the range SQL can answer without touching the ones already counted.
+        let fresh = store.transcript_page(agent, run_id, Some(recorded), recorded - upto);
+        let fresh: Vec<AgentTurn> = fresh
+            .turns
+            .into_iter()
+            .map(|(seq, t)| agent_turn(seq, t))
+            .collect();
+        stats.add(&fresh);
+        if counted.len() >= MAX_CACHED {
+            counted.clear();
+        }
+        counted.insert(key, (recorded, stats.clone()));
+    }
+    stats
+}
+
+/// `POST /api/agents/run/steps` — the calls behind one folded run, for a reader who opened it.
+///
+/// One row of one conversation, decoded, sliced to the range the [`AgentStep::Calls`] header named.
+/// The answer being written is addressable too, as the turn one past the last recorded one; that one
+/// is re-parsed from the live log rather than read, which is why this is a request a reader makes
+/// and not something the second-by-second poll carries on its behalf.
+///
+/// A range that runs off the end is clamped rather than refused: a run that was still growing when
+/// its header was drawn is the ordinary case, not an error.
+#[must_use]
+pub fn run_steps(store: &Agents, body: &[u8]) -> Response {
+    let req = require!(body, RunSteps);
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    let all = store
+        .turn_steps(&agent, run_id, req.turn)
+        .unwrap_or_default();
+    let from = req.from.min(all.len());
+    let to = match req.to {
+        0 => all.len(),
+        to => to.clamp(from, all.len()),
+    };
+    ok_json(&AgentSteps {
+        name: agent.name.clone(),
+        run_id: run_id.to_string(),
+        turn: req.turn,
+        from,
+        steps: all[from..to].iter().cloned().map(agent_step).collect(),
     })
 }
 
@@ -583,6 +765,7 @@ pub fn review_run(store: &Agents, body: &[u8]) -> Response {
         reviewed: RunRef {
             name: agent.name,
             run_id: run_id.to_string(),
+            ..RunRef::default()
         },
     })
 }
@@ -611,7 +794,7 @@ pub fn reply_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     ) {
         return Response::from(&e);
     }
-    conversation_snapshot(store, &agent, run_id)
+    conversation_snapshot(store, &agent, run_id, &req.view)
 }
 
 /// `POST /api/agents/attachment` — store one image or file and answer with the reference a message
@@ -694,18 +877,23 @@ pub fn unqueue_run(store: &Agents, body: &[u8]) -> Response {
     if let Err(e) = store.unqueue(&agent.name, run_id, req.index) {
         return Response::from(&e);
     }
-    conversation_snapshot(store, &agent, run_id)
+    conversation_snapshot(store, &agent, run_id, &req.view)
 }
 
 /// A conversation's fresh snapshot — the answer to every write into it, so the sender sees their
 /// message (and the answer already streaming under it) without waiting for the next poll.
-fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> Response {
+///
+/// `view` is the page the writer reads its chat at ([`TranscriptView`]): a sender that watches
+/// twenty folded turns should get twenty folded turns back for having said something, not the four
+/// hundred it has spent the whole session not asking for.
+fn conversation_snapshot(
+    store: &Agents,
+    agent: &StoredAgent,
+    run_id: &str,
+    view: &TranscriptView,
+) -> Response {
     let peek = store.peek_run(agent, run_id);
-    let turns = store
-        .transcript(agent, run_id)
-        .into_iter()
-        .map(agent_turn)
-        .collect();
+    let (turns, total_turns, stats) = transcript_view(store, agent, run_id, view);
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
@@ -729,6 +917,8 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
             .map(agent_ask),
         awaits: awaits_of(store, &agent.name, run_id),
         turns,
+        total_turns,
+        stats,
     })
 }
 
@@ -749,7 +939,7 @@ pub fn answer_run(store: &Agents, body: &[u8]) -> Response {
     if let Err(e) = store.answer(&agent.name, run_id, ask.as_deref(), &req.replies) {
         return Response::from(&e);
     }
-    conversation_snapshot(store, &agent, run_id)
+    conversation_snapshot(store, &agent, run_id, &req.view)
 }
 
 /// `GET /api/agents/questions` — every unanswered question across every agent, oldest first: the
@@ -1288,7 +1478,7 @@ fn agent_ask(ask: &adi_agents::store::Ask) -> AgentAsk {
 /// A turn recorded before markers were data still carries them in its words, so those are read back
 /// out of the text here and the text handed on without them. Every reader downstream then sees one
 /// shape — `markers` beside a `text` that is only ever the message — whichever era the row is from.
-fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
+fn agent_turn(seq: usize, t: adi_agents::Turn) -> AgentTurn {
     let (markers, text) = match t.markers.is_empty() {
         true => {
             let (parsed, body) = adi_agents::marker::split(&t.text);
@@ -1299,6 +1489,7 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
     AgentTurn {
         role: t.role,
         text,
+        seq,
         at: t.at,
         pending: t.pending,
         queued: t.queued,
@@ -1684,6 +1875,8 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
         cwd: String::new(),
         caps: agent_caps(agent),
         turns: Vec::new(),
+        total_turns: 0,
+        stats: None,
     })
 }
 
@@ -2705,6 +2898,14 @@ impl FromBody for RunAgent {
 
 impl FromBody for RunRef {
     const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
+}
+
+impl FromBody for RunSteps {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"turn\": N, \"from\": N, \"to\": N } with a non-empty name and run_id";
 
     fn is_complete(&self) -> bool {
         !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
@@ -3889,7 +4090,8 @@ fn sim_state_of(
     let turns: Vec<AgentTurn> = store
         .transcript(&agent, run_id)
         .into_iter()
-        .map(agent_turn)
+        .enumerate()
+        .map(|(seq, t)| agent_turn(seq, t))
         .collect();
 
     // Tokenized section by section rather than whole, so the ranges are exact by construction: each
@@ -4081,6 +4283,10 @@ fn turn_text(turn: &AgentTurn) -> String {
                     _ => add(&format!("<result>\n{output}\n</result>")),
                 }
             }
+            // Neither can reach here: this reads a transcript straight out of the store, and both
+            // kinds exist only on the wire — one is a run this build folded on its way out, the
+            // other a kind it could not read on the way in.
+            AgentStep::Calls { .. } | AgentStep::Unknown => {}
         }
     }
     add(&turn.text);

@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-34 structs · 35 enums across 29 files.
+35 structs · 35 enums across 29 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `AttachKind`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`, `DotTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Attachment`, `AttachmentKind`, `Turn`, `Word`, `Note`, `Entry`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `ToolRun`, `Attachment`, `AttachmentKind`, `Turn`, `Word`, `Note`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faces.rs`](#srcfacesrs) — `FaceRing`, `Face`
 - [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
@@ -274,6 +274,23 @@ pub struct ToolCall {
 }
 ```
 
+### struct `ToolRun`
+
+One run of tool calls, as the transcript holds it: the receipt line, and the calls behind it **if they are here**.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRun {
+    pub id: String,
+    pub count: usize,
+    pub tools: Vec<String>,
+    pub preview: String,
+    pub state: ToolState,
+    pub calls: Option<Vec<ToolCall>>,
+    pub open: bool,
+}
+```
+
 ### struct `Attachment`
 
 Something that was attached to a message: where to fetch it, what to call it, and whether it is a picture at all.
@@ -313,7 +330,7 @@ pub enum Turn {
         from: Option<String>,
         by: Option<String>,
     },
-    Did(Vec<ToolCall>),
+    Did(ToolRun),
     Noted(Note),
 }
 ```
@@ -352,6 +369,7 @@ A turn with the identity that keeps it still.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub key: String,
+    pub id: String,
     pub turn: Turn,
 }
 ```

@@ -6,8 +6,21 @@ dist = "dist"
 
 # Watch the webapp, the shared design system AND the token file, so editing any of them
 # hot-reloads too.
+#
+# The two Rust crates the panel is *made of* are watched for the same reason their stylesheets
+# are: a component lives in `adi-ui` and the wire types live in `adi-webapp-api`, so most days
+# a change to the panel is a change to one of them. Without them here `trunk serve` sits still
+# after an edit and `devui wait` reports the previous build — which reads as "it compiled" and
+# is really "nothing happened", and the panel then serves a wasm bundle older than the source.
 [watch]
-watch = [".", "../adi-css/scss", "../adi-ui/styles", "../../design"]
+watch = [
+    ".",
+    "../adi-ui/src",
+    "../adi-ui/styles",
+    "../adi-webapp-api/src",
+    "../adi-css/scss",
+    "../../design",
+]
 ignore = ["dist"]
 
 # `trunk serve` is only for standalone UI iteration. It proxies /api to the adi-app that

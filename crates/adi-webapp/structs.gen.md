@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StoredRunSettings`, `StepRef`, `ChatStats`, `PickerOption`, `SessionRow`, `SessionRef`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `SessionRef`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -186,6 +186,30 @@ pub(crate) enum Shell {
 
 ## `src/pages/agents/actions.rs`
 
+### struct `RunState`
+
+What the transcript needs to know about runs of tool calls that the turns themselves do not: which the reader has opened, and which calls have been fetched.
+
+```rust
+struct RunState<'a> {
+    fetched: &'a HashMap<String, Vec<AgentStep>>,
+    open: &'a HashSet<String>,
+}
+```
+
+### struct `FoldedBlock`
+
+One folded run in the open conversation, found by its address: what to ask the server for, and what to file the answer under.
+
+```rust
+struct FoldedBlock {
+    turn: usize,
+    from: usize,
+    to: usize,
+    key: String,
+}
+```
+
 ### struct `StoredRunSettings`
 
 What this browser starts one agent with — the shape kept under `run_settings_key`.
@@ -199,45 +223,6 @@ struct StoredRunSettings {
     overrides: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     start_at: String,
-}
-```
-
-### struct `StepRef`
-
-One tool call the rail has something to say about, and where in the feed it is.
-
-```rust
-#[derive(Clone)]
-struct StepRef {
-    anchor: String,
-    tool: String,
-    arg: String,
-}
-```
-
-### struct `ChatStats`
-
-What a conversation adds up to, counted once per render from the transcript the centre pane is already showing.
-
-```rust
-#[derive(Default)]
-struct ChatStats {
-    you: usize,
-    agent: usize,
-    queued: usize,
-    tools: usize,
-    thinking: usize,
-    failed: Vec<StepRef>,
-    running: Vec<StepRef>,
-    errored: Vec<String>,
-    errored_silent: usize,
-    blocked: Vec<(String, usize)>,
-    by_tool: Vec<(String, usize, usize)>,
-    tokens: u64,
-    cost_micro: u64,
-    work_ms: u64,
-    first_at: u64,
-    last_at: u64,
 }
 ```
 
@@ -1324,6 +1309,9 @@ pub(crate) struct AgentsWatch {
     pub(crate) await_busy: RwSignal<bool>,
     pub(crate) input_files: RwSignal<Vec<adi_ui::Attached>>,
     pub(crate) reply_files: RwSignal<Vec<adi_ui::Attached>>,
+    pub(crate) turn_limit: RwSignal<usize>,
+    pub(crate) steps: RwSignal<HashMap<String, Vec<AgentStep>>>,
+    pub(crate) open_runs: RwSignal<HashSet<String>>,
 }
 ```
 

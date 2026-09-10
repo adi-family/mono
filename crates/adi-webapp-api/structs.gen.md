@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-262 structs · 14 enums across 10 files.
+268 structs · 14 enums across 10 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/handlers/shared_assets.rs`](#srchandlersshared_assetsrs) — `Settings`
 - [`src/handlers/update.rs`](#srchandlersupdaters) — `Installing`
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `RunRef`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `StartMarketplaceApp`, `UpdateMarketplaceApp`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
 
 ---
 
@@ -1569,15 +1569,66 @@ pub struct AgentRunOverrides {
 }
 ```
 
+### struct `TranscriptView`
+
+How much of a conversation a reader wants back — the transcript's **lazy read**.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fold: bool,
+}
+```
+
 ### struct `RunRef`
 
 Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunRef {
     pub name: String,
     pub run_id: String,
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
+}
+```
+
+### struct `RunSteps`
+
+`POST /api/agents/run/steps` request — the calls behind one folded run.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSteps {
+    pub name: String,
+    pub run_id: String,
+    pub turn: usize,
+    #[serde(default)]
+    pub from: usize,
+    #[serde(default)]
+    pub to: usize,
+}
+```
+
+### struct `AgentSteps`
+
+`POST /api/agents/run/steps` answer — the steps of one range of one turn, spelled out.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSteps {
+    pub name: String,
+    pub run_id: String,
+    pub turn: usize,
+    pub from: usize,
+    #[serde(default)]
+    pub steps: Vec<AgentStep>,
 }
 ```
 
@@ -1634,6 +1685,8 @@ pub struct ReplyToRun {
     pub attachments: Vec<String>,
     #[serde(default)]
     pub mode: QueueMode,
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 ```
 
@@ -1680,6 +1733,8 @@ pub struct AnswerRun {
     #[serde(default)]
     pub ask: Option<String>,
     pub replies: Vec<String>,
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 ```
 
@@ -1900,6 +1955,8 @@ pub struct UnqueueFromRun {
     pub name: String,
     pub run_id: String,
     pub index: usize,
+    #[serde(default, flatten)]
+    pub view: TranscriptView,
 }
 ```
 
@@ -1912,6 +1969,8 @@ One message in a harness conversation's transcript: a `user` question or an `ass
 pub struct AgentTurn {
     pub role: String,
     pub text: String,
+    #[serde(default)]
+    pub seq: usize,
     #[serde(default)]
     pub at: u64,
     #[serde(default)]
@@ -1988,7 +2047,7 @@ pub enum AgentToolStatus {
 
 ### enum `AgentStep`
 
-One item on an assistant turn's timeline, in the order it happened: something the agent said, a thinking block, or a tool call. The turn's *final* message is not a step — it lives in `AgentTurn::text`. Mirrors `adi_agents::Step`.
+One item on an assistant turn's timeline, in the order it happened: something the agent said, a thinking block, or a tool call. The turn's *final* message is not a step — it lives in `AgentTurn::text`. Mirrors `adi_agents::Step`, plus the two kinds that exist only on the wire.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2008,6 +2067,17 @@ pub enum AgentStep {
         #[serde(default)]
         output: String,
     },
+    Calls {
+        from: usize,
+        to: usize,
+        count: usize,
+        tools: Vec<String>,
+        #[serde(default)]
+        preview: String,
+        status: AgentToolStatus,
+    },
+    #[serde(other)]
+    Unknown,
 }
 ```
 
@@ -2232,6 +2302,73 @@ pub struct AgentPeek {
     pub awaits: Vec<AgentAwait>,
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
+    #[serde(default)]
+    pub total_turns: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<AgentChatStats>,
+}
+```
+
+### struct `AgentStepRef`
+
+One tool call the analytics rail has something to say about, and where in the transcript it is.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStepRef {
+    pub turn: usize,
+    pub step: usize,
+    #[serde(default)]
+    pub run_from: usize,
+    pub tool: String,
+    #[serde(default)]
+    pub arg: String,
+}
+```
+
+### struct `AgentToolUse`
+
+One tool's share of a conversation: how many times it was called, and how many of those failed.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentToolUse {
+    pub tool: String,
+    pub calls: usize,
+    #[serde(default)]
+    pub failed: usize,
+}
+```
+
+### struct `AgentChatStats`
+
+What a conversation adds up to — the analytics rail's whole content, counted server-side.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChatStats {
+    pub you: usize,
+    pub agent: usize,
+    pub queued: usize,
+    pub tools: usize,
+    pub thinking: usize,
+    #[serde(default)]
+    pub failed: Vec<AgentStepRef>,
+    #[serde(default)]
+    pub running: Vec<AgentStepRef>,
+    #[serde(default)]
+    pub errored: Vec<usize>,
+    #[serde(default)]
+    pub errored_silent: usize,
+    #[serde(default)]
+    pub blocked: Vec<AgentToolUse>,
+    #[serde(default)]
+    pub by_tool: Vec<AgentToolUse>,
+    pub tokens: u64,
+    pub cost_micro: u64,
+    pub work_ms: u64,
+    pub first_at: u64,
+    pub last_at: u64,
 }
 ```
 

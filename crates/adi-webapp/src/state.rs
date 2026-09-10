@@ -2,18 +2,19 @@
 //! structs, the backend-liveness/flash enums, and the `load` routine that fans a fetch into the
 //! signals. Every page module reads from [`State`]; the router and view helpers thread it around.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
     AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
-    AgentTokens, AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
-    DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes, FleetState, Health,
-    HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
-    KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto, MarketplaceState, MeshState,
-    MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState, RunRef,
-    SecretsState, SharedAssetsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState,
-    UsedPorts, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+    AgentStep, AgentTokens, AgentsState, AllAgentRuns, DashboardsState, DbExecResult,
+    DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes,
+    FleetState, Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
+    KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
+    MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState, ToolsState,
+    TranscriptView, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceTerm,
+    WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -1432,6 +1433,26 @@ pub(crate) struct AgentsWatch {
     pub(crate) input_files: RwSignal<Vec<adi_ui::Attached>>,
     /// Images attached to the reply being typed into the open conversation.
     pub(crate) reply_files: RwSignal<Vec<adi_ui::Attached>>,
+    /// How many of the newest turns this tab is watching — the transcript's window.
+    ///
+    /// Read **tracked** where the subscription is built, so widening it re-subscribes at the wider
+    /// page and the earlier turns arrive at once rather than at the socket's next tick. Exactly how
+    /// the sessions rail's own `state.rail_limit` works, and for the same reason.
+    ///
+    /// It starts at [`CHAT_PAGE`] and grows by it. It never shrinks while a conversation is open:
+    /// a reader who asked for more history and then sent a message should not have it taken away.
+    pub(crate) turn_limit: RwSignal<usize>,
+    /// The calls behind the runs a reader has opened, by cache key (`run_cache_key` in
+    /// `pages::agents::actions`).
+    ///
+    /// A folded run arrives as a header and nothing else; this is where what was fetched for it
+    /// lives. The key carries the run's shape — its range, its count, its head's status — so a
+    /// *settled* run is fetched exactly once ever, and one still being written is re-fetched only
+    /// when it actually gains a call or answers one.
+    pub(crate) steps: RwSignal<HashMap<String, Vec<AgentStep>>>,
+    /// The run ids the reader has opened, so a run stays open through the rebuild that brings its
+    /// calls. The `<details>` cannot hold this itself — it is destroyed and remade by that rebuild.
+    pub(crate) open_runs: RwSignal<HashSet<String>>,
 }
 
 impl AgentsWatch {
@@ -1467,7 +1488,23 @@ impl AgentsWatch {
             await_busy: RwSignal::new(false),
             input_files: RwSignal::new(Vec::new()),
             reply_files: RwSignal::new(Vec::new()),
+            turn_limit: RwSignal::new(CHAT_PAGE),
+            steps: RwSignal::new(HashMap::new()),
+            open_runs: RwSignal::new(HashSet::new()),
         }
+    }
+
+    /// Forget everything that belongs to *this* conversation's transcript, for a view about to show
+    /// another one.
+    ///
+    /// Called wherever the open conversation changes. A window widened to read one chat's history,
+    /// the calls fetched inside it, and the runs left open in it all describe that chat and nothing
+    /// else — carried over, they would show the next conversation opened at page four with somebody
+    /// else's tool calls in it.
+    pub(crate) fn reset_transcript(self) {
+        self.turn_limit.set(CHAT_PAGE);
+        self.steps.update(HashMap::clear);
+        self.open_runs.update(HashSet::clear);
     }
 
     /// Close the live view (stops the polling; `poll_watch` no-ops while `name` is `None`).
@@ -1497,6 +1534,7 @@ impl AgentsWatch {
         self.await_busy.set(false);
         self.input_files.set(Vec::new());
         self.reply_files.set(Vec::new());
+        self.reset_transcript();
         // The settings themselves are not cleared — they belong to the agent, and are restored from
         // this browser next time it is picked. Only the panel closes: a form left standing over a
         // view that has gone is a form about nothing.
@@ -2423,7 +2461,13 @@ pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
         subs.push(Sub::post_on(
             node.as_deref(),
             "/api/agents/run/peek",
-            &RunRef { name, run_id },
+            &RunRef {
+                name,
+                run_id,
+                // Tracked, so widening the window re-subscribes at the wider page and the earlier
+                // turns land at once — the same trick the sessions rail's Load more uses.
+                view: chat_view(watch.turn_limit.get()),
+            },
             move |peek: AgentPeek| {
                 if watch.log.get_untracked() != peek.output {
                     watch.log.set(peek.output.clone());
@@ -2433,6 +2477,27 @@ pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
         ));
     }
     subs
+}
+
+/// How many turns the chat asks for at a time, and how much more each "earlier messages" brings.
+///
+/// Twenty is several screens of a newest-first feed, and it is the *turn* count rather than a byte
+/// budget because that is what a reader scrolls through. What it saves is not subtle: on the longest
+/// conversation on this machine, twenty folded turns are 39 KB where the whole thing is 3.4 MB.
+pub(crate) const CHAT_PAGE: usize = 20;
+
+/// What the chat asks a conversation for: the newest `limit` turns, with runs of tool calls folded
+/// to their receipt lines.
+///
+/// One place, because three requests have to agree — the watch, and the snapshots that come back
+/// from a reply and from an unqueue. A send that answered with the whole conversation would undo
+/// the whole of this the moment somebody typed.
+pub(crate) fn chat_view(limit: usize) -> TranscriptView {
+    TranscriptView {
+        limit: Some(limit),
+        before: None,
+        fold: true,
+    }
 }
 
 /// Fetch `/api/health` + `/api/ports` together and fan the result into the signals.

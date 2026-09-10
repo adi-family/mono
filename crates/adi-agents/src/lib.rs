@@ -1495,6 +1495,74 @@ impl Agents {
         store.transcript(&agent.name, conv_id, Some(live), running)
     }
 
+    /// One page of that transcript: the newest `limit` turns, or the `limit` turns before `before`.
+    ///
+    /// Same reading, same advance of the queue — this is [`transcript`](Self::transcript) with the
+    /// cut pushed down into SQL, for the reader that draws twenty turns of a conversation holding
+    /// four hundred. See [`SessionStore::transcript_page`](store::SessionStore::transcript_page).
+    #[must_use]
+    pub fn transcript_page(
+        &self,
+        agent: &StoredAgent,
+        conv_id: &str,
+        before: Option<usize>,
+        limit: usize,
+    ) -> store::TranscriptPage {
+        self.advance_queue(agent, conv_id);
+        let store = self.sessions();
+        let Some(runner) = store.get(&agent.name, conv_id).as_ref().and_then(runner_of) else {
+            return store::TranscriptPage::default();
+        };
+        let session = store.session(&agent.name, conv_id);
+        let running = runner.is_alive(&session);
+        // Only the newest page can be showing the answer being written, so only it pays for parsing
+        // it — an older page is a read of settled rows and nothing else.
+        if before.is_some() {
+            return store.transcript_page(&agent.name, conv_id, before, limit, None, running);
+        }
+        let live = live_content(runner.as_ref(), &session, running);
+        if !running {
+            settle(&store, &agent.name, conv_id, &live);
+        }
+        store.transcript_page(&agent.name, conv_id, None, limit, Some(live), running)
+    }
+
+    /// The steps of **one** turn — what a reader asks for when they open a folded run of tool
+    /// calls, and the other half of [`transcript_page`](Self::transcript_page).
+    ///
+    /// One row, decoded, its steps handed back: a page carries each run of calls as a header, so
+    /// this is where the calls and their results actually travel. `None` for a turn that is not
+    /// there, which is the honest answer for a run whose conversation has since been deleted.
+    ///
+    /// **The answer being written is addressable here too**, as the turn one past the last recorded
+    /// one — it is the turn most likely to be opened and watched, and it is not a row, so it is
+    /// re-parsed from the live log instead of read. That is the expensive path, and it is paid only
+    /// by a reader who has that run open.
+    #[must_use]
+    pub fn turn_steps(&self, agent: &StoredAgent, conv_id: &str, turn: usize) -> Option<Vec<Step>> {
+        let store = self.sessions();
+        let recorded = store.turn_count(&agent.name, conv_id);
+        if turn < recorded {
+            return store.turn(&agent.name, conv_id, turn).map(|t| t.steps);
+        }
+        if turn > recorded {
+            return None;
+        }
+        // The pending answer, rebuilt exactly as a page rebuilds it — including the closing of calls
+        // nothing is left alive to answer, so an opened run never claims to still be working.
+        let runner = store
+            .get(&agent.name, conv_id)
+            .as_ref()
+            .and_then(runner_of)?;
+        let session = store.session(&agent.name, conv_id);
+        let running = runner.is_alive(&session);
+        let mut live = live_content(runner.as_ref(), &session, running);
+        if !running {
+            progress::close_open_calls(&mut live.steps);
+        }
+        Some(live.steps)
+    }
+
     /// Where one conversation ran — the directory pinned to it at creation and re-used by every turn
     /// since. `None` for a session that does not exist; the path may since have been deleted, which
     /// is the caller's to check.
@@ -3016,8 +3084,14 @@ fn live_content(runner: &dyn Runner, session: &SessionRef<'_>, running: bool) ->
 /// backdate to nothing and re-date it to now — moving it to the top of every listing sorted by when
 /// it last spoke, for no other reason than that it was read.
 fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
-    let turns = store.turns(agent, id);
-    let Some(question) = turns.last().filter(|turn| turn.role == store::ROLE_USER) else {
+    // The last turn, not the transcript: this asks one question of it — "was the last thing said a
+    // question?" — and it is called before every read, including the once-a-second one behind an
+    // open chat. Loading every turn to look at the final one cost ~180ms per read on a 3.4 MB
+    // conversation, which was the whole cost of watching one.
+    let Some(question) = store
+        .last_turn(agent, id)
+        .filter(|turn| turn.role == store::ROLE_USER)
+    else {
         return;
     };
     let mut turn = assistant_turn(content);

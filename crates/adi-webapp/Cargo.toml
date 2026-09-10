@@ -23,7 +23,10 @@ leptos = { version = "0.8", features = ["csr"] }
 # Browser plumbing: fetch (gloo-net), interval timers (gloo-timers), panics routed to the
 # console, spawn_local for async in event handlers, and the web APIs the theme toggle uses.
 gloo-net = { version = "0.6", features = ["json"] }
-gloo-timers = "0.3"
+# `futures` for the awaitable timer: the analytics rail's jump has to wait for a page to widen and
+# a run's calls to arrive before there is anything to scroll to, and a loop that awaits reads as
+# what it is where a chain of callbacks does not.
+gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen = "0.2"
 # Percent-encoding for the /files/<path> route (encodeURIComponent / decodeURIComponent).
 js-sys = "0.3"

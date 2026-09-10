@@ -842,6 +842,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             req.query_param("limit").and_then(|n| n.parse().ok()),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
+        // The calls behind one folded run of a transcript — what a reader asks for when they open
+        // one. Deliberately *not* watchable (`live::watchable`): it answers a click, not a poll,
+        // and a settled run's calls never change once fetched.
+        ("POST", "/api/agents/run/steps") => handlers::run_steps(agents, &req.body),
         ("POST", "/api/agents/run/reply") => {
             handlers::reply_run(agents, &req.body, fleet_sender(req))
         }
