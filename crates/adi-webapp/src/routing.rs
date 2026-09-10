@@ -19,6 +19,31 @@ pub(crate) const BASE: &str = "/extended";
 /// `/extended` until the rich page replaces it.
 pub(crate) const MARKET: &str = "/marketplace";
 
+/// Whether a URL belongs to the marketplace door — the listing itself, or one app's page under it.
+pub(crate) fn is_market_path(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == MARKET || path.starts_with(&format!("{MARKET}/"))
+}
+
+/// One app's page inside that door: `/marketplace/<marketplace>/<slug>`.
+///
+/// No escaping: both halves are one safe name (`adi_config::valid_name` — letters, digits, `.`,
+/// `-`, `_`), which is the same reason an agent's name goes into a path as it stands.
+pub(crate) fn market_app_path(marketplace: &str, slug: &str) -> String {
+    format!("{MARKET}/{marketplace}/{slug}")
+}
+
+/// The `<marketplace>/<slug>` a URL names — the key the listing addresses an entry by — or `None`
+/// when the URL is the listing itself (or something else entirely).
+pub(crate) fn market_app_from_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(MARKET)?;
+    let mut segs = rest.split('/').filter(|seg| !seg.is_empty());
+    match (segs.next(), segs.next(), segs.next()) {
+        (Some(marketplace), Some(slug), None) => Some(format!("{marketplace}/{slug}")),
+        _ => None,
+    }
+}
+
 /// The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {

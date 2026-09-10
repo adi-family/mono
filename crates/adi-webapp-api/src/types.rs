@@ -3380,6 +3380,13 @@ pub struct MarketplaceApp {
     /// store, in the order it published them.
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// The long form, in Markdown — what the app's own page reads. Absent when the publisher
+    /// wrote none, which is what the one-line description is for.
+    #[serde(default)]
+    pub readme: Option<String>,
+    /// Pictures and clips of the app in use, in published order.
+    #[serde(default)]
+    pub gallery: Vec<MarketplaceMedia>,
     /// As published. Shown, never enforced — the commit is the identity of what installs.
     #[serde(default)]
     pub version: Option<String>,
@@ -3394,6 +3401,29 @@ pub struct MarketplaceApp {
     /// ordinary, since each copy is named by whoever installed it.
     #[serde(default)]
     pub installs: Vec<MarketplaceInstall>,
+}
+
+/// One picture or clip in an app's gallery. The kind is resolved by the store — off the entry's
+/// own `kind`, else off the URL — so the page draws what it is told rather than guessing again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceMedia {
+    /// An `https://` URL, or a `data:image/…` / `data:video/…` URI carried in the manifest.
+    pub url: String,
+    pub kind: MarketplaceMediaKind,
+    /// One line under it, in the publisher's words.
+    #[serde(default)]
+    pub caption: Option<String>,
+    /// The still a clip shows before it is played.
+    #[serde(default)]
+    pub poster: Option<String>,
+}
+
+/// Whether a gallery entry is drawn as a picture or given a player.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MarketplaceMediaKind {
+    Image,
+    Video,
 }
 
 /// One installed copy of a marketplace app — a dashboard like any other, with the pin it stands

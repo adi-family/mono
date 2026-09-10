@@ -4,16 +4,16 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-15 structs · 2 enums · 1 type alias across 8 files.
+17 structs · 3 enums · 1 type alias across 8 files.
 
 ## Index
 
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
-- [`src/install.rs`](#srcinstallrs) — `InstallRecord`, `CachedApp`, `AppInstall`, `Installed`, `Started`, `Updated`
+- [`src/install.rs`](#srcinstallrs) — `InstallRecord`, `CachedApp`, `AppMedia`, `AppInstall`, `Installed`, `Started`, `Updated`
 - [`src/lib.rs`](#srclibrs) — `Marketplace`
-- [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `AppEntry`
+- [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `AppEntry`, `Media`, `MediaKind`
 - [`src/sources.rs`](#srcsourcesrs) — `Source`, `SourcesFile`
 - [`src/sync.rs`](#srcsyncrs) — `SyncResult`, `SyncStatus`
 
@@ -85,6 +85,8 @@ pub enum Error {
     BadCommit(String, String),
     #[error( "{0} carries an icon this will not draw: {1:?} — an app's icon must be an https:// url, \ or a data:image/… uri to carry it in the manifest itself and fetch nothing" )]
     BadIcon(String, String),
+    #[error( "{0} carries a gallery item this will not draw: {1:?} — a picture or clip must be an \ https:// url, or a data:image/… or data:video/… uri to carry it in the manifest itself" )]
+    BadMedia(String, String),
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),
     #[error("{0} carries no app named {1} — it carries: {2}")]
@@ -166,11 +168,27 @@ pub struct CachedApp {
     pub description: Option<String>,
     pub icon: Option<String>,
     pub keywords: Vec<String>,
+    pub readme: Option<String>,
+    pub gallery: Vec<AppMedia>,
     pub version: Option<String>,
     pub repo: String,
     pub commit: String,
     pub branch: Option<String>,
     pub installs: Vec<AppInstall>,
+}
+```
+
+### struct `AppMedia`
+
+One picture or clip of an app, as a listing hands it on: the kind resolved once here, so no reader downstream has to work it out off the URL a second time.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppMedia {
+    pub url: String,
+    pub kind: MediaKind,
+    pub caption: Option<String>,
+    pub poster: Option<String>,
 }
 ```
 
@@ -282,11 +300,45 @@ pub struct AppEntry {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gallery: Vec<Media>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub repo: String,
     pub commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+```
+
+### struct `Media`
+
+One picture or clip in an entry's gallery.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Media {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MediaKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+}
+```
+
+### enum `MediaKind`
+
+What a gallery entry is.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
 }
 ```
 

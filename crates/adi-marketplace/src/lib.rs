@@ -51,8 +51,8 @@ pub mod sync;
 
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
-pub use install::{AppInstall, CachedApp, InstallRecord, Installed, Started, Updated};
-pub use manifest::{AppEntry, MarketplaceManifest};
+pub use install::{AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated};
+pub use manifest::{AppEntry, MarketplaceManifest, Media, MediaKind};
 
 use adi_config::Config;
 

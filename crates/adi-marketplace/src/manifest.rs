@@ -19,6 +19,11 @@
 //!       "description": "Who has gone quiet, and what was last said to them.",
 //!       "icon": "https://raw.githubusercontent.com/adi-family/crm/main/icon.png",
 //!       "keywords": ["sales", "contacts", "follow-up"],
+//!       "readme": "## What it does\n\nOne list of people you have gone quiet on…",
+//!       "gallery": [
+//!         { "url": "https://…/list.png", "caption": "The list, oldest silence first" },
+//!         { "url": "https://…/tour.mp4", "poster": "https://…/tour.png" }
+//!       ],
 //!       "version": "0.1.0",
 //!       "repo": "https://github.com/adi-family/crm.git",
 //!       "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
@@ -74,6 +79,18 @@ pub struct AppEntry {
     /// have: a manifest is a file its publisher owns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keywords: Vec<String>,
+    /// The long form, in Markdown: what the app does, what it needs, what it does not do.
+    ///
+    /// Carried in the manifest rather than fetched from the repository, for the reason the icon
+    /// may be a `data:` URI: the manifest has already been fetched, so this costs no further
+    /// request and reads with the network gone. The panel renders a small subset
+    /// ([`adi_ui::Markdown`], through Leptos views rather than `innerHTML`), so a document cannot
+    /// inject markup however it is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readme: Option<String>,
+    /// Pictures and clips of the app in use, in the order they should be shown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gallery: Vec<Media>,
     /// The app's version, as its publisher wrote it. Display text: the commit is the identity of
     /// what installs, and this is the label a person recognizes it by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +105,80 @@ pub struct AppEntry {
     /// a later `git pull` in the installed copy follows, and nothing else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+
+/// One picture or clip in an entry's gallery.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Media {
+    /// Where it is: an `https://` URL, or a `data:image/…` / `data:video/…` URI.
+    pub url: String,
+    /// Which it is. Absent is ordinary — [`Media::kind`] reads it off the URL, which is right
+    /// for every file with an extension and is why publishing it is optional. Say it for a URL
+    /// that ends in nothing recognisable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<MediaKind>,
+    /// One line under it, in the publisher's words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// The still a clip shows before it is played. Ignored on a picture — and worth publishing
+    /// on a clip, since a video with no poster is a black rectangle until somebody presses play.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+}
+
+/// What a gallery entry is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
+}
+
+/// The URL endings that mean a clip. Everything else — including a URL with no extension at all
+/// — is a picture unless the entry says otherwise, because that is the commoner case by far.
+const VIDEO_EXTENSIONS: [&str; 5] = [".mp4", ".webm", ".ogv", ".mov", ".m4v"];
+
+impl Media {
+    /// Where it is, trimmed.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        self.url.trim()
+    }
+
+    /// Whether to draw a picture or a player: what the entry declared, else what the URL says.
+    #[must_use]
+    pub fn kind(&self) -> MediaKind {
+        if let Some(kind) = self.kind {
+            return kind;
+        }
+        let url = self.url().to_ascii_lowercase();
+        // Only the path decides: a query string can carry anything, and `?v=1.mp4` is not a clip.
+        let path = url.split(['?', '#']).next().unwrap_or_default();
+        if path.starts_with("data:video/") || VIDEO_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+        {
+            MediaKind::Video
+        } else {
+            MediaKind::Image
+        }
+    }
+
+    /// The still to show before a clip is played, if the entry publishes one.
+    #[must_use]
+    pub fn poster(&self) -> Option<&str> {
+        self.poster
+            .as_deref()
+            .map(str::trim)
+            .filter(|poster| !poster.is_empty())
+    }
+
+    /// The line under it, if the entry publishes one.
+    #[must_use]
+    pub fn caption(&self) -> Option<&str> {
+        self.caption
+            .as_deref()
+            .map(str::trim)
+            .filter(|caption| !caption.is_empty())
+    }
 }
 
 impl AppEntry {
@@ -114,7 +205,36 @@ impl AppEntry {
         {
             return Err(Error::BadIcon(self.slug.clone(), icon.to_string()));
         }
+        // Through the accessor, so an entry left blank in a publisher's template is not an item
+        // rather than a refusal — the rule the icon follows.
+        for media in self.gallery() {
+            // The poster is held to the same rule as the thing it stands in for: it is drawn on
+            // the same page, from the same kind of URL.
+            for url in [Some(media.url()), media.poster()].into_iter().flatten() {
+                if !valid_media(url) {
+                    return Err(Error::BadMedia(self.slug.clone(), url.to_string()));
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// The long form this entry publishes, if it publishes one.
+    #[must_use]
+    pub fn readme(&self) -> Option<&str> {
+        self.readme
+            .as_deref()
+            .map(str::trim)
+            .filter(|readme| !readme.is_empty())
+    }
+
+    /// The gallery as a page shows it: the entries whose URL is not blank, in published order.
+    #[must_use]
+    pub fn gallery(&self) -> Vec<&Media> {
+        self.gallery
+            .iter()
+            .filter(|media| !media.url().is_empty())
+            .collect()
     }
 
     /// The icon this entry publishes, if it publishes one. Trimmed, and an empty string is no
@@ -184,7 +304,18 @@ fn valid_repo(repo: &str) -> bool {
 /// and a bare path included: there is nothing here for a relative path to be relative *to*.
 fn valid_icon(icon: &str) -> bool {
     (icon.starts_with("https://") && icon.len() > "https://".len())
-        || (icon.starts_with("data:image/") && icon.len() > "data:image/".len())
+        || carried_inline(icon, "data:image/")
+}
+
+/// Whether a gallery URL is one a page will draw — [`valid_icon`]'s rule, plus `data:video/` for
+/// a clip small enough to be worth carrying in the manifest.
+fn valid_media(url: &str) -> bool {
+    valid_icon(url) || carried_inline(url, "data:video/")
+}
+
+/// Whether a URI carries the thing itself under this prefix, rather than being the bare prefix.
+fn carried_inline(url: &str, prefix: &str) -> bool {
+    url.starts_with(prefix) && url.len() > prefix.len()
 }
 
 /// Whether a pin is a full git object name — 40 hex characters, in either case.
@@ -398,6 +529,80 @@ mod tests {
         )
         .expect("parses");
         assert_eq!(blank.apps[0].icon(), None);
+    }
+
+    #[test]
+    fn an_entry_carries_a_page_of_its_own_the_listing_has_no_room_for() {
+        let parsed = parse(
+            format!(
+                // `r###`, not `r#`: the readme opens with a Markdown heading, so the literal
+                // carries `"##` — which is where an `r#"…"#` or an `r##"…"##` would have ended.
+                r###"{{"apps":[{{"slug":"crm","name":"CRM",
+                   "readme":"## What it does\n\nOne list.",
+                   "gallery":[
+                     {{"url":"https://example/list.png","caption":" The list "}},
+                     {{"url":"https://example/tour.mp4","poster":"https://example/tour.png"}},
+                     {{"url":"https://example/watch?v=x","kind":"video"}},
+                     {{"url":"https://example/still.png?v=1.mp4"}},
+                     {{"url":"   "}}
+                   ],
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"###
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        let app = &parsed.apps[0];
+        assert_eq!(app.readme(), Some("## What it does\n\nOne list."));
+
+        let gallery = app.gallery();
+        assert_eq!(gallery.len(), 4, "an item with no url is not an item");
+        assert_eq!(gallery[0].kind(), MediaKind::Image);
+        assert_eq!(gallery[0].caption(), Some("The list"));
+        assert_eq!(gallery[0].poster(), None);
+        assert_eq!(
+            gallery[1].kind(),
+            MediaKind::Video,
+            "read off the extension"
+        );
+        assert_eq!(gallery[1].poster(), Some("https://example/tour.png"));
+        assert_eq!(
+            gallery[2].kind(),
+            MediaKind::Video,
+            "a url that ends in nothing says so itself"
+        );
+        assert_eq!(
+            gallery[3].kind(),
+            MediaKind::Image,
+            "only the path decides — a query string can carry anything"
+        );
+
+        // A gallery is held to the icon's rule, and so is a poster: same page, same kind of URL.
+        for item in [
+            r#"{"url":"http://example/list.png"}"#,
+            r#"{"url":"list.png"}"#,
+            r#"{"url":"https://example/tour.mp4","poster":"http://example/tour.png"}"#,
+        ] {
+            let refused = parse(
+                format!(
+                    r#"{{"apps":[{{"slug":"crm","name":"CRM","gallery":[{item}],
+                       "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+                )
+                .as_bytes(),
+            );
+            assert!(matches!(refused, Err(Error::BadMedia(_, _))), "{item}");
+        }
+
+        // A clip small enough to carry in the manifest is carried in the manifest.
+        let inline = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM",
+                   "gallery":[{{"url":"data:video/mp4;base64,AAAA"}}],
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(inline.apps[0].gallery()[0].kind(), MediaKind::Video);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-65 structs · 10 enums · 2 type aliases across 25 files.
+65 structs · 10 enums · 3 type aliases across 26 files.
 
 ## Index
 
@@ -20,6 +20,7 @@
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
 - [`src/pages/llm_backends.rs`](#srcpagesllm_backendsrs) — `LoginField`
+- [`src/pages/marketplace.rs`](#srcpagesmarketplacers) — `OpenApp`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `SetupMode`, `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/mod.rs`](#srcpagesproject_detailmodrs) — `ProjectScope`
@@ -462,6 +463,18 @@ One login field: the schema's name for it, and the signal on this form that hold
 
 ```rust
 type LoginField = (&'static str, fn(LlmBackendsForm) -> RwSignal<String>);
+```
+
+---
+
+## `src/pages/marketplace.rs`
+
+### type `OpenApp`
+
+Where a click on an app's name goes.
+
+```rust
+type OpenApp = Option<RwSignal<String>>;
 ```
 
 ---

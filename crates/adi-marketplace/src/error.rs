@@ -50,6 +50,12 @@ pub enum Error {
          or a data:image/… uri to carry it in the manifest itself and fetch nothing"
     )]
     BadIcon(String, String),
+    /// A gallery entry names something a page will not draw.
+    #[error(
+        "{0} carries a gallery item this will not draw: {1:?} — a picture or clip must be an \
+         https:// url, or a data:image/… or data:video/… uri to carry it in the manifest itself"
+    )]
+    BadMedia(String, String),
     /// The source has never been synced, so there is no cache to install from.
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),

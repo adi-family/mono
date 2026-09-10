@@ -12,8 +12,9 @@ use adi_config::Config;
 use adi_marketplace::Marketplace;
 
 use crate::types::{
-    InstallMarketplaceApp, MarketplaceApp, MarketplaceDone, MarketplaceInstall, MarketplaceSource,
-    MarketplaceState, StartMarketplaceApp, UpdateMarketplaceApp,
+    InstallMarketplaceApp, MarketplaceApp, MarketplaceDone, MarketplaceInstall, MarketplaceMedia,
+    MarketplaceMediaKind, MarketplaceSource, MarketplaceState, StartMarketplaceApp,
+    UpdateMarketplaceApp,
 };
 
 use super::response::{Response, error, ok_json};
@@ -40,6 +41,8 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                 description: a.description,
                 icon: a.icon,
                 keywords: a.keywords,
+                readme: a.readme,
+                gallery: a.gallery.into_iter().map(media).collect(),
                 version: a.version,
                 repo: a.repo,
                 commit: a.commit,
@@ -203,6 +206,20 @@ pub fn update_marketplace_app(cfg: &Config, body: &[u8]) -> Response {
     }
 }
 
+/// One gallery entry, onto the wire type. The kind has already been decided by the store, so this
+/// is the one place the two spellings of it meet.
+fn media(m: adi_marketplace::AppMedia) -> MarketplaceMedia {
+    MarketplaceMedia {
+        url: m.url,
+        kind: match m.kind {
+            adi_marketplace::MediaKind::Video => MarketplaceMediaKind::Video,
+            adi_marketplace::MediaKind::Image => MarketplaceMediaKind::Image,
+        },
+        caption: m.caption,
+        poster: m.poster,
+    }
+}
+
 /// Map a marketplace refusal onto its HTTP shape: work that would be lost is a 409 (the page
 /// offers `force`), an unknown name is a 404, a manifest or a repository that does not belong is
 /// a 502 — it is somebody else's server that is wrong — and everything else about the ask was
@@ -219,6 +236,7 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         | E::BadRepo(_)
         | E::BadCommit { .. }
         | E::BadIcon { .. }
+        | E::BadMedia { .. }
         | E::NotAnApp { .. }
         | E::Git(_)
         | E::Fetch(_) => 502,

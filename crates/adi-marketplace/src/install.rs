@@ -35,7 +35,7 @@ use crate::Marketplace;
 use crate::cache;
 use crate::error::{Error, Result};
 use crate::git;
-use crate::manifest::AppEntry;
+use crate::manifest::{AppEntry, MediaKind};
 use crate::sources;
 use adi_config::Config;
 
@@ -104,6 +104,10 @@ pub struct CachedApp {
     pub icon: Option<String>,
     /// What the entry says it is about — trimmed and deduped, in the order it published them.
     pub keywords: Vec<String>,
+    /// The long form, in Markdown, for the app's own page.
+    pub readme: Option<String>,
+    /// Its pictures and clips, in published order, each with its kind already worked out.
+    pub gallery: Vec<AppMedia>,
     /// The entry's version, as published.
     pub version: Option<String>,
     /// The repository an install clones.
@@ -114,6 +118,16 @@ pub struct CachedApp {
     pub branch: Option<String>,
     /// Every copy of this app installed here — empty when there is none.
     pub installs: Vec<AppInstall>,
+}
+
+/// One picture or clip of an app, as a listing hands it on: the kind resolved once here, so no
+/// reader downstream has to work it out off the URL a second time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AppMedia {
+    pub url: String,
+    pub kind: MediaKind,
+    pub caption: Option<String>,
+    pub poster: Option<String>,
 }
 
 /// One installed copy of an app.
@@ -250,6 +264,17 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
             // Read through the accessors rather than off the fields: an icon left blank is no
             // icon, and the keywords a listing shows are the trimmed, deduped ones.
             let (icon, keywords) = (entry.icon().map(str::to_string), entry.keywords());
+            let readme = entry.readme().map(str::to_string);
+            let gallery: Vec<AppMedia> = entry
+                .gallery()
+                .into_iter()
+                .map(|media| AppMedia {
+                    url: media.url().to_string(),
+                    kind: media.kind(),
+                    caption: media.caption().map(str::to_string),
+                    poster: media.poster().map(str::to_string),
+                })
+                .collect();
             apps.push(CachedApp {
                 marketplace: source.name.clone(),
                 slug: entry.slug,
@@ -257,6 +282,8 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
                 description: entry.description,
                 icon,
                 keywords,
+                readme,
+                gallery,
                 version: entry.version,
                 repo: entry.repo,
                 commit: pin,

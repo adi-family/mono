@@ -188,6 +188,26 @@ fn list_apps(market: &Marketplace) {
         if !app.keywords.is_empty() {
             println!("    {}", app.keywords.join(" · "));
         }
+        // The long form and the gallery are a page's business, not a listing's — so this says
+        // they exist and where to read them, rather than printing markdown into a terminal.
+        let more = [
+            app.readme.is_some().then_some("a description".to_string()),
+            (!app.gallery.is_empty()).then(|| match app.gallery.len() {
+                1 => "1 picture or clip".to_string(),
+                n => format!("{n} pictures and clips"),
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if !more.is_empty() {
+            println!(
+                "    {} — http://app.adi/marketplace/{}/{}",
+                more.join(", "),
+                app.marketplace,
+                app.slug
+            );
+        }
         if app.installs.is_empty() {
             println!("    not installed");
             continue;

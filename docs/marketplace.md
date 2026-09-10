@@ -23,6 +23,11 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
       "description": "Who has gone quiet, and what was last said to them.",
       "icon": "https://raw.githubusercontent.com/adi-family/crm/main/icon.png",
       "keywords": ["sales", "contacts", "follow-up"],
+      "readme": "## What it is\n\nA list of the people you have gone quiet on…",
+      "gallery": [
+        { "url": "https://…/list.png", "caption": "The list, oldest silence first" },
+        { "url": "https://…/tour.mp4", "poster": "https://…/tour.png", "caption": "Two minutes on what it reads" }
+      ],
       "version": "0.1.0",
       "repo": "https://github.com/adi-family/crm.git",
       "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
@@ -40,6 +45,12 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
 | `apps[].description` | no | one line on what it is for. |
 | `apps[].icon` | no | the app's mark, drawn beside the entry. An `https://` URL, or a `data:image/…` URI to carry the image in the manifest itself. `http://`, a bare path and anything else are refused (see below). Display only. |
 | `apps[].keywords` | no | what the app is about, in the publisher's own words — a word or two each, drawn as tags. Free text: there is no taxonomy here to petition. The store trims them, drops blanks and drops a term repeated in another casing, keeping the order they were published in. |
+| `apps[].readme` | no | the long form, in **Markdown** — what the app does, what it needs, what it does not do. Shown on the app's own page (`/marketplace/<marketplace>/<slug>`). Carried in the manifest, not fetched from the repository, for the reason the icon may be a `data:` URI. Rendered through Leptos views rather than `innerHTML`, so markup in it cannot become markup on the page. |
+| `apps[].gallery` | no | pictures and clips of the app in use, in the order to show them. One at a time on the app's page, with the rest as thumbnails under it. |
+| `gallery[].url` | yes | the picture or clip: `https://`, or `data:image/…` / `data:video/…`. Same rule as the icon. |
+| `gallery[].kind` | no | `image` or `video`. Absent is ordinary — it is read off the URL (`.mp4`, `.webm`, `.ogv`, `.mov`, `.m4v`, or a `data:video/` URI, are clips; everything else is a picture). Say it when the URL ends in nothing recognisable. |
+| `gallery[].caption` | no | one line under it. |
+| `gallery[].poster` | no | the still a clip shows before it is played, held to the same URL rule. Worth publishing: a video with no poster is a black rectangle until somebody presses play. |
 | `apps[].version` | no | as published. **Display text**: the commit is the identity of what installs, and this is the label a person recognizes it by. |
 | `apps[].repo` | yes | the repository to clone. `https://`, or a `file://` path while an app is being developed. `ssh://` and `git@host:path` are refused — those reach for the operator's agent and keys, which a URL out of somebody else's manifest has no business doing. |
 | `apps[].commit` | yes | the pin: a full 40-hex object name. A branch, a tag or a short sha is refused. |
@@ -49,7 +60,7 @@ Unknown fields are ignored, so a newer manifest an older machine reads still lis
 manifest is validated **whole**: the first entry that does not belong refuses the fetch, rather
 than a listing that quietly hides part of what was published.
 
-### Why an icon is `https://` or nothing
+### Why an icon — and every gallery item — is `https://` or nothing
 
 An icon is the one field that makes the panel **fetch something from a host the operator did not
 choose** — the manifest's host chose it. So:
@@ -64,7 +75,12 @@ choose** — the manifest's host chose it. So:
   manifest, the repository and the panel are three different origins, and there is no honest
   answer to which one such a path is relative to.
 
-An entry with no icon is ordinary and draws a placeholder glyph, not a hole.
+An entry with no icon is ordinary and draws a placeholder glyph, not a hole. The gallery follows
+the same rule, with `data:video/` allowed alongside `data:image/` for a clip small enough to be
+worth carrying inline — a few seconds at a readable size is tens of kilobytes.
+
+Nothing in a gallery plays by itself: a clip is a `<video controls>` that waits to be asked, with
+`preload="metadata"`, so a page of clips costs a listing of bytes rather than the clips themselves.
 
 ### Why a commit and not a branch
 

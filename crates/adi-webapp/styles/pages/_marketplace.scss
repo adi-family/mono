@@ -164,3 +164,205 @@
   font-size: var(--fs-small);
   color: var(--ink-3);
 }
+
+// ---- one app's own page (`/marketplace/<marketplace>/<slug>`) --------------------------------
+// The order down the page is the order it is read in: what it is, what it looks like, what it
+// does in full, then the machine facts about what would be cloned. Sections are separated by
+// space and hairlines (§2.5), never by cards.
+.adi-market__app {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  // The prose and the pictures read at one width; the page itself is wider than either.
+  max-width: 900px;
+}
+
+// The way back to the listing, above everything.
+.adi-market__back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+
+  &:hover { color: var(--ink); text-decoration: none; }
+}
+
+// The head: the mark, the name and what it is for, and the one action.
+.adi-market__apphead {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+// The mark at page size. The tile inside it is the listing's, told to fill this box, so an app
+// with no icon gets the same square here as it does in the row.
+.adi-market__appmark {
+  flex: none;
+
+  .adi-market__icon {
+    width: 64px;
+    height: 64px;
+    border-radius: var(--r-lg);
+  }
+}
+
+.adi-market__appabout {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+// The page's one title (§4): 20px/600, with the published version beside it in mono.
+.adi-market__apptitle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+// The one-liner under it, in the reading width a lead gets.
+.adi-market__applead {
+  margin: 0;
+  max-width: 64ch;
+  color: var(--ink-2);
+  font-size: var(--fs-ui);
+}
+
+// --- the gallery ---------------------------------------------------------------------------
+.adi-market__gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+// The stage: one picture or clip at a time, on the raised surface so a transparent PNG and a
+// letterboxed video both sit on something rather than floating on the page.
+.adi-market__stage {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.adi-market__media {
+  width: 100%;
+  max-height: 60vh;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-raise);
+  // Whole, never cropped: a screenshot cut to fit a box is a screenshot of the wrong thing.
+  object-fit: contain;
+}
+
+.adi-market__caption {
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+}
+
+// The strip under it. Only drawn when there is more than one thing to show.
+.adi-market__thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.adi-market__thumb {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 60px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg-raise);
+  color: var(--ink-3);
+  cursor: pointer;
+
+  &:hover { border-color: var(--line-strong); }
+  // The one on the stage. A tone and a border, never the accent (§8) — selection is not a state
+  // orange is allowed to mean.
+  &.is-on {
+    border-color: var(--ink-3);
+    background: var(--bg-active);
+  }
+}
+
+.adi-market__thumbimg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+// The play glyph over a clip's thumbnail: it says "this one moves" where a still cannot.
+.adi-market__play {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--scrim);
+  color: var(--ink);
+}
+
+// --- the long form -------------------------------------------------------------------------
+// adi-ui's Markdown brings its own type; what is here is the measure it reads at and the rule
+// that separates it from the pictures above.
+.adi-market__readme {
+  max-width: 80ch;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+// --- what would be cloned --------------------------------------------------------------------
+// A key-value line rather than a table: four facts, read across, in the same mono the row uses.
+.adi-market__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-small);
+}
+
+.adi-market__fact {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+
+  .adi-mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 48ch;
+  }
+}
+
+.adi-market__factkey {
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+}
+
+// --- the copies already here ------------------------------------------------------------------
+.adi-market__copies {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.adi-market__copieshead {
+  margin: 0 0 4px;
+  font-size: var(--fs-section);
+  font-weight: 600;
+}

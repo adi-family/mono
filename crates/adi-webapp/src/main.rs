@@ -53,10 +53,10 @@ use pages::{
     FactsConsole, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
     hive_view, knowledge_view, live_view, llm_backends_view, llm_view, load_agent_into_form,
-    load_dir, load_store_file, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log,
-    poll_term, poll_trigger_log, poll_watch, ports_manager_view, project_detail_view,
-    projects_view, reset_chat_home, secrets_view, seed_onboarding, start_onb_reconfigure,
-    store_file_view, tasks_view, tools_view, triggers_view,
+    load_dir, load_store_file, market_view, marketplace_view, mesh_view, meta_view,
+    onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
+    project_detail_view, projects_view, reset_chat_home, secrets_view, seed_onboarding,
+    start_onb_reconfigure, store_file_view, tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -80,12 +80,13 @@ fn main() {
     // Four doors into the one wasm bundle:
     //   * `/embed/dashboard-agent` — a chrome-less page (no workbench shell) hosting the global
     //     agent chat, opened from a dashboard's "edit with adi-agent" launcher.
-    //   * `/marketplace` — the apps marketplace on a page of its own (see [`Market`]).
+    //   * `/marketplace`, and `/marketplace/<marketplace>/<slug>` for one app's own page
+    //     (see [`Market`]).
     //   * `/extended/…` — the full control panel (the App shell + every workbench route).
     //   * anything else (notably the bare `/`) — the minimal launcher that just points at it.
     if path.starts_with("/embed/dashboard-agent") {
         mount_to_body(EmbedDashboardAgent);
-    } else if path.trim_end_matches('/') == routing::MARKET {
+    } else if routing::is_market_path(&path) {
         mount_to_body(Market);
     } else if path == "/extended" || path.starts_with("/extended/") {
         mount_to_body(App);
@@ -485,13 +486,17 @@ fn root_actions(
 /// down the left, a file tree down the right, and a standing line saying these panels are for the
 /// careful case. Here the apps are the page, reached from the Apps rail on the chat home.
 ///
-/// What it draws is still [`marketplace_view`], the panel's own listing. This change is the move
-/// and the door; the richer, apps-first page that replaces the listing is the next piece of work,
-/// and the listing is what makes this page usable in the meantime.
+/// Two URLs, one document: `/marketplace` is the listing and `/marketplace/<marketplace>/<slug>`
+/// is one app's own page — its gallery, its long form, and what it installs from. Which of the two
+/// is showing is [`market_view`]'s business; what this owns is keeping the address bar and the
+/// back button honest about it.
 #[component]
 fn Market() -> impl IntoView {
     let state = State::fresh();
     let form = MarketplaceForm::new();
+    // Which app is open (`<marketplace>/<slug>`), empty for the listing. Seeded from the URL, so a
+    // deep link and a refresh land on the same page a click reaches.
+    let open = RwSignal::new(routing::market_app_from_path(&current_path()).unwrap_or_default());
     // The version row and the install offer the ⌘K menu carries on every screen (see [`menu`]).
     let updates = update::watch();
     let can_install = pwa::installable();
@@ -518,6 +523,16 @@ fn Market() -> impl IntoView {
         )]);
     });
 
+    // Back and forward inside the door. Both pages are one document, so nothing reloads on the
+    // way between them — which is also why the browser's own buttons need telling.
+    let on_pop = Closure::<dyn FnMut()>::new(move || {
+        open.set(routing::market_app_from_path(&current_path()).unwrap_or_default());
+    });
+    if let Some(w) = web_sys::window() {
+        let _ = w.add_event_listener_with_callback("popstate", on_pop.as_ref().unchecked_ref());
+    }
+    on_pop.forget();
+
     view! {
         <div class="adi-market-page">
             // The same lid the workbench wears: the mark is the way home, the crumb says where
@@ -527,7 +542,7 @@ fn Market() -> impl IntoView {
                     <Mark/>
                     "adi"
                 </a>
-                {crumb_nav(vec![("Marketplace".to_string(), None)])}
+                {move || market_crumbs(state, open.get())}
                 <span class="adi-spacer"></span>
                 <a class="adi-btn adi-btn--link" href="/" title="Back to the simple chat view">
                     <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
@@ -536,10 +551,14 @@ fn Market() -> impl IntoView {
             </header>
             <main class="adi-market-page__body">
                 <div class="adi-container">
-                    <header class="adi-bar">
-                        <h1 class="adi-bar__title">"Marketplace"</h1>
-                    </header>
-                    {marketplace_view(state, form)}
+                    // Only the listing wears the page title: an app's page names the app, which
+                    // would be the same words twice with this above it.
+                    {move || open.get().is_empty().then(|| view! {
+                        <header class="adi-bar">
+                            <h1 class="adi-bar__title">"Marketplace"</h1>
+                        </header>
+                    })}
+                    {market_view(state, form, open)}
                 </div>
             </main>
         </div>
@@ -551,6 +570,31 @@ fn Market() -> impl IntoView {
             menu::rows(menu::Shell::Root, state, updates, can_install)
         })}
     }
+}
+
+/// The marketplace door's crumb: `/ Marketplace` on the listing, and `/ Marketplace / <app>` on an
+/// app's page — with the first half a link back, the way every crumb in this app is.
+///
+/// The app is named by whatever the listing knows it as; before that has landed (a deep link, on a
+/// slow store) the slug stands in, since it is what the URL already says and is never wrong.
+fn market_crumbs(state: State, open: String) -> AnyView {
+    if open.is_empty() {
+        return crumb_nav(vec![("Marketplace".to_string(), None)]);
+    }
+    let name = state
+        .marketplace
+        .get()
+        .and_then(|m| {
+            m.apps
+                .iter()
+                .find(|a| format!("{}/{}", a.marketplace, a.slug) == open)
+                .map(|a| a.name.clone())
+        })
+        .unwrap_or_else(|| open.rsplit('/').next().unwrap_or_default().to_string());
+    crumb_nav(vec![
+        ("Marketplace".to_string(), Some(routing::MARKET.to_string())),
+        (name, None),
+    ])
 }
 
 /// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global

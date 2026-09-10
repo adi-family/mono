@@ -50,6 +50,16 @@ extraction script cares about.
   so does one whose icon will not load — a listing has no business looking damaged because somebody
   else's host is down.
 
+- **An app has a page of its own now, with a gallery on it.** Clicking an app's name in the
+  marketplace opens `/marketplace/<marketplace>/<slug>`: its pictures and clips, one at a time with
+  thumbnails under them, then the long form its publisher wrote, then the repository and commit an
+  install would actually clone. A manifest entry carries them as `readme` — Markdown, rendered
+  through the same view layer the rest of the app uses, so markup in it never becomes markup on the
+  page — and `gallery`, a list of `https://` (or inline `data:`) pictures and clips, each with an
+  optional caption and, for a clip, a poster. Nothing plays by itself: a clip waits to be asked, and
+  the page loads its bytes only then. An app that publishes neither still has a page; it is the
+  listing row, at reading size, with what installs spelled out under it.
+
 ### Changed
 
 - **Services are lazy now: one does not run until its page is visited.** A service used to cost the

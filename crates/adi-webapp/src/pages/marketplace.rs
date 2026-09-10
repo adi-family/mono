@@ -21,8 +21,11 @@
 //! Installed and running stay different states on purpose: the app's backend is somebody else's
 //! TypeScript, and running it is a choice somebody makes.
 
-use adi_ui::{Icon, IconSize, Lucide};
-use adi_webapp_api::types::{MarketplaceApp, MarketplaceInstall, MarketplaceSource};
+use adi_ui::{Icon, IconSize, Lucide, Markdown};
+use adi_webapp_api::types::{
+    MarketplaceApp, MarketplaceInstall, MarketplaceMedia, MarketplaceMediaKind as MediaKind,
+    MarketplaceSource,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -30,9 +33,55 @@ use crate::fetch;
 use crate::state::{Flash, MarketplaceForm, State};
 use crate::ui::{TextField, confirm, field_hint, flash_view};
 
-/// The Marketplace page: a line on what the page does with Sync beside it, then one section per
-/// source with one row per app.
+/// Where a click on an app's name goes.
+///
+/// `Some` inside the marketplace's own door ([`market_view`]), where an app's page is another URL
+/// of the same document and the click is taken over. `None` in the control panel, where it is a
+/// plain navigation out to that door — the panel has no page for one app, and pretending it does
+/// would be a second implementation of this screen.
+type OpenApp = Option<RwSignal<String>>;
+
+/// The marketplace door: the listing, or one app's own page when the URL names one.
+///
+/// Both are the same document (`main`'s `Market`), so moving between them is a signal and a
+/// history entry rather than a load — which is what makes a gallery worth having, since going
+/// back to the listing does not cost the wasm bundle a second time.
+pub(crate) fn market_view(state: State, form: MarketplaceForm, open: RwSignal<String>) -> AnyView {
+    view! {
+        {move || {
+            let key = open.get();
+            if key.is_empty() {
+                return listing(state, form, Some(open));
+            }
+            let Some(loaded) = state.marketplace.get() else {
+                return view! { <div class="adi-empty">"Loading\u{2026}"</div> }.into_any();
+            };
+            match loaded.apps.iter().find(|app| app_key(app) == key) {
+                Some(app) => app_page(state, form, app, open),
+                // A link to an app the manifest no longer lists — or a slug typed by hand. Say
+                // so, and offer the one way on rather than an empty page.
+                None => view! {
+                    <div class="adi-empty">
+                        {format!("No app called {key} in the marketplaces this machine follows.")}
+                    </div>
+                    {back_link(Some(open))}
+                }
+                .into_any(),
+            }
+        }}
+    }
+    .into_any()
+}
+
+/// The Marketplace page as the control panel draws it: the listing, and every app's name a link
+/// out to the marketplace's own door.
 pub(crate) fn marketplace_view(state: State, form: MarketplaceForm) -> AnyView {
+    listing(state, form, None)
+}
+
+/// The listing itself: a line on what the page does with Sync beside it, then one section per
+/// source with one row per app.
+fn listing(state: State, form: MarketplaceForm, open: OpenApp) -> AnyView {
     view! {
         <div class="adi-market__lead">
             <span>
@@ -44,9 +93,15 @@ pub(crate) fn marketplace_view(state: State, form: MarketplaceForm) -> AnyView {
         </div>
         {flash_view(state.flash)}
 
-        {source_panels(state, form)}
+        {source_panels(state, form, open)}
     }
     .into_any()
+}
+
+/// How an entry is addressed everywhere: `<marketplace>/<slug>`. The install API's spec, the
+/// busy-key of a row, and the app page's URL are all this one string.
+fn app_key(app: &MarketplaceApp) -> String {
+    format!("{}/{}", app.marketplace, app.slug)
 }
 
 /// The Sync button — the one control on the page that leaves the machine, which is why it is a
@@ -82,7 +137,7 @@ const SYNC_KEY: &str = "sync";
 /// One section per marketplace, in the order the sources were added. A store with no sources says
 /// how to add one rather than rendering nothing — the CLI is the door for that act, and the page
 /// names it.
-fn source_panels(state: State, form: MarketplaceForm) -> AnyView {
+fn source_panels(state: State, form: MarketplaceForm, open: OpenApp) -> AnyView {
     view! {
         {move || {
             let Some(loaded) = state.marketplace.get() else {
@@ -102,7 +157,7 @@ fn source_panels(state: State, form: MarketplaceForm) -> AnyView {
                     .filter(|app| app.marketplace == source.name)
                     .cloned()
                     .collect();
-                source_panel(state, form, source, &apps)
+                source_panel(state, form, source, &apps, open)
             }).collect::<Vec<_>>().into_any()
         }}
     }
@@ -116,6 +171,7 @@ fn source_panel(
     form: MarketplaceForm,
     source: &MarketplaceSource,
     apps: &[MarketplaceApp],
+    open: OpenApp,
 ) -> AnyView {
     let (name, url, freshness) = (
         source.name.clone(),
@@ -134,7 +190,7 @@ fn source_panel(
                 view! { <div class="adi-empty">"Nothing in this manifest yet."</div> }.into_any()
             } else {
                 apps.iter()
-                    .map(|app| app_entry(state, form, app))
+                    .map(|app| app_entry(state, form, app, open))
                     .collect::<Vec<_>>()
                     .into_any()
             }}
@@ -156,13 +212,13 @@ fn freshness_note(source: &MarketplaceSource) -> String {
 
 /// One entry: the row itself, the install form when it is open on this entry, and a line per copy
 /// already installed here.
-fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
-    let key = format!("{}/{}", app.marketplace, app.slug);
+fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp, open: OpenApp) -> AnyView {
+    let key = app_key(app);
     let (row_key, form_key) = (key.clone(), key.clone());
     let owned = app.clone();
     view! {
         <div class="adi-market__entry">
-            {app_row(form, &owned, row_key)}
+            {app_row(form, &owned, row_key, open)}
             {move || {
                 (form.installing.get() == form_key).then(|| install_form(state, form, &owned))
             }}
@@ -180,8 +236,7 @@ fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyVi
 /// The repository and the commit are on the row rather than behind a disclosure because they are
 /// the whole answer to "whose code is this, and which version of it" — the question the listing
 /// text cannot answer for you.
-fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView {
-    let busy = form.busy;
+fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String, open: OpenApp) -> AnyView {
     let (name, version, description) = (
         app.name.clone(),
         app.version.clone(),
@@ -191,16 +246,21 @@ fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView 
     let (repo, commit) = (app.repo.clone(), short_commit(&app.commit));
     // The full strings, for the `title` of the elements that show them elided.
     let (repo_title, key_title) = (repo.clone(), key.clone());
-    let again = !app.installs.is_empty();
-    let open_key = key.clone();
-    let default_name = app.name.clone();
+    let button = install_button(form, app, key.clone());
+    let (href, go) = (
+        crate::routing::market_app_path(&app.marketplace, &app.slug),
+        open_app(open, key.clone()),
+    );
 
     view! {
         <div class="adi-market__row">
             {icon}
             <div class="adi-market__about">
                 <div class="adi-market__title">
-                    <span class="adi-market__name">{name}</span>
+                    // The name is the way in to the app's own page — its gallery and its long
+                    // form. A link and not a button, so a middle click opens it in a tab; the
+                    // mark beside it is decorative and deliberately not a second tab stop.
+                    <a class="adi-market__name" href=href on:click=move |ev| go(&ev)>{name}</a>
                     {version.map(|v| view! { <span class="adi-mono adi-muted">{v}</span> })}
                 </div>
                 {description.map(|d| view! { <div class="adi-market__desc">{d}</div> })}
@@ -210,29 +270,44 @@ fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView 
                 </div>
                 <div class="adi-mono adi-muted" title=key_title>{key}</div>
             </div>
-            <div class="adi-market__actions">
-                <button class="adi-btn" type="button"
-                    prop:disabled=move || busy.get().is_some()
-                    on:click=move |_| {
-                        // Prefilled with the publisher's name, because it is the answer most
-                        // people want and the form is here to let them disagree with it.
-                        form.name.set(default_name.clone());
-                        // Starting is on by default *here* and off in the CLI, and the difference
-                        // is not an inconsistency: pressing Install on a page is the deliberate
-                        // act, and an install that leaves nothing to open reads as one that did
-                        // not happen — an unstarted app is filed under Archived on the Dashboards
-                        // page, which is the last place anybody goes looking for what they just
-                        // installed. Unticking it is one click for whoever wants it inert.
-                        form.start_now.set(true);
-                        form.installing.update(|open| {
-                            *open = if *open == open_key { String::new() }
-                                    else { open_key.clone() };
-                        });
-                    }>
-                    {if again { "Install another" } else { "Install" }}
-                </button>
-            </div>
+            <div class="adi-market__actions">{button}</div>
         </div>
+    }
+    .into_any()
+}
+
+/// What a click on a link into the marketplace should do, given where this listing is drawn.
+///
+/// Inside the door, a plain left click is taken over: the address bar moves, the open app changes,
+/// and the document stays put. Everywhere else — and for a middle click, or a ⌘-click — the
+/// browser is left to do what the `href` says, which is why these are links in the first place.
+fn open_app(open: OpenApp, key: String) -> impl Fn(&web_sys::MouseEvent) + Clone + 'static {
+    move |ev| {
+        let Some(open) = open else {
+            return;
+        };
+        if !crate::routing::spa_nav(ev) {
+            return;
+        }
+        let path = match key.split_once('/') {
+            Some((marketplace, slug)) => crate::routing::market_app_path(marketplace, slug),
+            None => crate::routing::MARKET.to_string(),
+        };
+        crate::routing::push_state(&path);
+        open.set(key.clone());
+        crate::routing::scroll_top();
+    }
+}
+
+/// The way back to the listing, at the head of an app's page. The empty key is the listing, so
+/// this is [`open_app`] pointed at nothing in particular.
+fn back_link(open: OpenApp) -> AnyView {
+    let go = open_app(open, String::new());
+    view! {
+        <a class="adi-market__back" href=crate::routing::MARKET on:click=move |ev| go(&ev)>
+            <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
+            "All apps"
+        </a>
     }
     .into_any()
 }
@@ -307,6 +382,241 @@ fn keyword_tags(app: &MarketplaceApp) -> Option<AnyView> {
         }
         .into_any(),
     )
+}
+
+/// One app's own page: what the listing row has no room for.
+///
+/// The order is the order somebody reads it in — what it is, what it looks like, what it does in
+/// full, and only then the machine facts about what would be cloned. The install form is the same
+/// one the listing opens, so there is one answer to "what will this be called" wherever it is
+/// asked, and the copies already here are listed under it for the same reason.
+fn app_page(
+    state: State,
+    form: MarketplaceForm,
+    app: &MarketplaceApp,
+    open: RwSignal<String>,
+) -> AnyView {
+    let key = app_key(app);
+    let (name, version, description) = (
+        app.name.clone(),
+        app.version.clone(),
+        app.description.clone(),
+    );
+    let (repo, commit) = (app.repo.clone(), short_commit(&app.commit));
+    // The full strings, for the `title` of the elements that show them elided.
+    let (repo_title, commit_title) = (repo.clone(), app.commit.clone());
+    let branch = app.branch.clone().filter(|b| !b.trim().is_empty());
+    let owned = app.clone();
+    let form_key = key.clone();
+
+    view! {
+        <div class="adi-market__app">
+            {back_link(Some(open))}
+            <header class="adi-market__apphead">
+                {app_icon_large(app)}
+                <div class="adi-market__appabout">
+                    <h1 class="adi-market__apptitle">
+                        {name}
+                        {version.map(|v| view! { <span class="adi-mono adi-muted">{v}</span> })}
+                    </h1>
+                    {description.map(|d| view! { <p class="adi-market__applead">{d}</p> })}
+                    {keyword_tags(app)}
+                </div>
+                <div class="adi-market__actions">
+                    {install_button(form, app, key.clone())}
+                </div>
+            </header>
+            {flash_view(state.flash)}
+            {
+                let app = owned.clone();
+                move || (form.installing.get() == form_key).then(|| install_form(state, form, &app))
+            }
+            {gallery_view(app)}
+            {readme_view(app)}
+
+            // What would actually be cloned, in mono, under everything the publisher wrote about
+            // it: the listing text is theirs, and this is the part that is checkable.
+            <section class="adi-market__facts">
+                <span class="adi-market__fact">
+                    <span class="adi-market__factkey">"Repository"</span>
+                    <span class="adi-mono adi-muted" title=repo_title>{repo}</span>
+                </span>
+                <span class="adi-market__fact">
+                    <span class="adi-market__factkey">"Commit"</span>
+                    <span class="adi-mono adi-muted" title=commit_title>{commit}</span>
+                </span>
+                {branch.map(|b| view! {
+                    <span class="adi-market__fact">
+                        <span class="adi-market__factkey">"Branch"</span>
+                        <span class="adi-mono adi-muted">{b}</span>
+                    </span>
+                })}
+                <span class="adi-market__fact">
+                    <span class="adi-market__factkey">"Address"</span>
+                    <span class="adi-mono adi-muted">{key}</span>
+                </span>
+            </section>
+
+            {(!app.installs.is_empty()).then(|| view! {
+                <section class="adi-market__copies">
+                    <h2 class="adi-market__copieshead">"Installed here"</h2>
+                    {owned.installs.iter()
+                        .map(|install| copy_row(state, form, install))
+                        .collect::<Vec<_>>()}
+                </section>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// The app's mark on its own page: the same tile as the listing's, at the size a page can afford.
+fn app_icon_large(app: &MarketplaceApp) -> AnyView {
+    view! { <div class="adi-market__appmark">{app_icon(app)}</div> }.into_any()
+}
+
+/// The gallery: one picture or clip at a time, with the rest as thumbnails under it.
+///
+/// A stage rather than a grid of squares, because these are screenshots of a working app and a
+/// screenshot shrunk to a tile says nothing. The thumbnails exist only when there is more than one
+/// thing to show — a strip under a single picture is a control that does nothing.
+///
+/// Nothing autoplays: a clip is a `<video controls>` that waits to be asked (§8 — no motion the
+/// reader did not trigger), and `preload=metadata` keeps a page of clips from pulling megabytes
+/// nobody asked for.
+fn gallery_view(app: &MarketplaceApp) -> Option<AnyView> {
+    if app.gallery.is_empty() {
+        return None;
+    }
+    let items = app.gallery.clone();
+    // Which one is on the stage. Per app page, and the page is rebuilt when the app changes, so
+    // opening a second app never opens it at somebody else's third screenshot.
+    let at = RwSignal::new(0usize);
+    let thumbs = items.clone();
+    Some(
+        view! {
+            <section class="adi-market__gallery">
+                {move || {
+                    let shown = at.get().min(items.len().saturating_sub(1));
+                    items.get(shown).map(stage_item)
+                }}
+                {(thumbs.len() > 1).then(|| view! {
+                    <div class="adi-market__thumbs">
+                        {thumbs.iter().enumerate().map(|(i, item)| {
+                            thumb(item, i, at)
+                        }).collect::<Vec<_>>()}
+                    </div>
+                })}
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// What is on the stage: the picture, or the player, and the publisher's line under it.
+fn stage_item(item: &MarketplaceMedia) -> AnyView {
+    let caption = item.caption.clone().filter(|c| !c.trim().is_empty());
+    let (url, poster) = (item.url.clone(), item.poster.clone());
+    view! {
+        <figure class="adi-market__stage">
+            {match item.kind {
+                MediaKind::Video => view! {
+                    <video class="adi-market__media" controls preload="metadata"
+                        poster=poster.unwrap_or_default() src=url/>
+                }
+                .into_any(),
+                MediaKind::Image => view! {
+                    <img class="adi-market__media" src=url alt="" loading="lazy" decoding="async"/>
+                }
+                .into_any(),
+            }}
+            {caption.map(|c| view! { <figcaption class="adi-market__caption">{c}</figcaption> })}
+        </figure>
+    }
+    .into_any()
+}
+
+/// One thumbnail: the picture itself, or a clip's poster with a play glyph over it — and for a
+/// clip with no poster, the glyph alone, which is still the honest answer.
+fn thumb(item: &MarketplaceMedia, i: usize, at: RwSignal<usize>) -> AnyView {
+    let video = item.kind == MediaKind::Video;
+    let still = if video {
+        item.poster.clone().filter(|p| !p.trim().is_empty())
+    } else {
+        Some(item.url.clone())
+    };
+    let label = if video {
+        format!("Clip {}", i + 1)
+    } else {
+        format!("Picture {}", i + 1)
+    };
+    view! {
+        <button class="adi-market__thumb" type="button"
+            class:is-on=move || at.get() == i
+            aria-label=label
+            on:click=move |_| at.set(i)>
+            {still.map(|src| view! {
+                <img class="adi-market__thumbimg" src=src alt="" loading="lazy" decoding="async"/>
+            })}
+            {video.then(|| view! {
+                <span class="adi-market__play"><Icon icon=Lucide::Play size=IconSize::Sm/></span>
+            })}
+        </button>
+    }
+    .into_any()
+}
+
+/// The long form, rendered.
+///
+/// [`adi_ui::Markdown`] renders through Leptos views rather than `innerHTML`, so a manifest from
+/// anywhere cannot inject markup into this page however it is written — which is the whole reason
+/// a publisher's prose can be shown at all.
+fn readme_view(app: &MarketplaceApp) -> Option<AnyView> {
+    let readme = app
+        .readme
+        .clone()
+        .map(|r| r.trim().to_string())
+        .filter(|r| !r.is_empty())?;
+    Some(
+        view! {
+            <section class="adi-market__readme">
+                <Markdown source=readme/>
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// The button that opens the install form — on a row, and at the head of an app's page.
+///
+/// Not the accent, on either: pressing it opens a form, and the form's own Install is the act that
+/// clones somebody else's code. That one is the screen's orange (§8).
+fn install_button(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView {
+    let busy = form.busy;
+    let again = !app.installs.is_empty();
+    let default_name = app.name.clone();
+    view! {
+        <button class="adi-btn" type="button"
+            prop:disabled=move || busy.get().is_some()
+            on:click=move |_| {
+                // Prefilled with the publisher's name, because it is the answer most people want
+                // and the form is here to let them disagree with it.
+                form.name.set(default_name.clone());
+                // Starting is on by default *here* and off in the CLI, and the difference is not
+                // an inconsistency: pressing Install on a page is the deliberate act, and an
+                // install that leaves nothing to open reads as one that did not happen — an
+                // unstarted app is filed under Archived on the Dashboards page, which is the last
+                // place anybody goes looking for what they just installed. Unticking it is one
+                // click for whoever wants it inert.
+                form.start_now.set(true);
+                form.installing.update(|open| {
+                    *open = if *open == key { String::new() } else { key.clone() };
+                });
+            }>
+            {if again { "Install another" } else { "Install" }}
+        </button>
+    }
+    .into_any()
 }
 
 /// The one question an install has to ask: what to call this copy.
