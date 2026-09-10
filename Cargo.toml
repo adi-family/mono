@@ -210,7 +210,15 @@ debug = 0
 [profile.dev.build-override]
 opt-level = 1
 
-# Faster incremental builds while keeping release builds optimized.
+# Release stays optimized, but not at any price in build time. `codegen-units = 16` (cargo's own
+# default) rather than 1 halves the long leg of scripts/build-app.sh and of CI's webapp job —
+# measured on the webapp's release wasm in a scratch target dir, 995s -> 536s — and thin LTO
+# still runs across crates afterwards.
+#
+# What it costs is size, measured on the real bundle at 1.10.1, post-wasm-opt: 9.86 -> 10.46 MiB
+# raw. Raw is not what anyone downloads, though: brotli 1.77 -> 1.83 MiB, +60 KiB on a 1.8 MiB
+# payload. If a release ever needs the last 3% back, this is the line to put to 1 — and the
+# whole release cache rebuilds when you do.
 [profile.release]
 lto = "thin"
-codegen-units = 1
+codegen-units = 16
