@@ -86,6 +86,10 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
 
   const url = new URL(request.url);
+  // Also what exempts the shared-assets CDN when that setting is on (ADI-MONO-35): the shell's
+  // wasm/js/css then load from a different origin, the browser's own HTTP cache takes them
+  // instead, and this worker never sees the request at all — nothing here needed to change for
+  // that to be correct.
   if (url.origin !== self.location.origin) return;
   // Live state, terminal streams, hook logs — never served from a cache.
   if (url.pathname === "/sw.js" || url.pathname.startsWith("/api/")) return;

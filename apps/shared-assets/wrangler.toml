@@ -1,0 +1,28 @@
+# Cloudflare **R2** config for the shared-assets bucket.
+#
+# Every asset `trunk build` produces for crates/adi-webapp (wasm, JS glue, both stylesheets,
+# fonts, snippets, icons) is published here under an immutable `webapp/<version>/` prefix, so
+# every ADI instance running the same version resolves to the exact same URL — a browser that
+# already loaded the bundle for one instance has it cached for the rest (ADI-MONO-35).
+#
+# Not a Worker or Pages project: there is no Function here, unlike apps/oauth-router. R2's own
+# custom-domain feature serves bucket objects directly over HTTPS, so this file exists only to
+# name the bucket and record the domain the scripts below attach it to — `wrangler r2 bucket` /
+# `wrangler r2 object` commands take the bucket name on the command line and don't read this.
+#
+# First-time setup on a fresh Cloudflare account:  ./scripts/setup-cf.sh
+# Publish a build:                                  ./scripts/publish.sh
+#
+# CORS and content-type/cache-control are set by the scripts, not here — see setup-cf.sh for
+# exactly what CORS rule the bucket carries and why, and publish.sh for the per-file headers.
+
+name = "adi-shared-assets"
+compatibility_date = "2025-06-01"
+
+[vars]
+# The bucket both scripts operate on. One name in one place, like PROJECT/DOMAIN in
+# apps/docs/wrangler.toml — read by the scripts as a shell variable, not by wrangler itself.
+BUCKET = "adi-shared-assets"
+# The custom domain setup-cf.sh attaches to the bucket. Every browser-facing URL this system
+# produces starts here — see crates/adi-app/src/shared_assets.rs for how a shell is pointed at it.
+DOMAIN = "cdn.withadi.dev"

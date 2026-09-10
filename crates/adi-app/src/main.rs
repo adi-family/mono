@@ -16,6 +16,7 @@ mod origin;
 mod prober;
 mod projects;
 mod scan;
+mod shared_assets;
 mod transfer;
 mod viewer;
 mod ws;
@@ -565,6 +566,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/ports/used",
     "/api/projects",
     "/api/secrets",
+    "/api/settings/shared-assets",
     "/api/tasks",
     "/api/tools",
     "/api/triggers",
@@ -656,6 +658,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/update") => handlers::update_state(),
         ("POST", "/api/update/check") => handlers::check_update(),
         ("POST", "/api/update/run") => handlers::run_update(),
+        // Shared assets (`crate::shared_assets`): whether the webapp bundle is fetched from the
+        // R2 CDN instead of served from this instance. The setting only; the rewrite it drives
+        // happens in `serve_embedded`, not here.
+        ("GET", "/api/settings/shared-assets") => handlers::shared_assets_state(),
+        ("POST", "/api/settings/shared-assets") => handlers::set_shared_assets(&req.body),
         ("GET", "/api/ports") => handlers::ports(ports),
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
         ("POST", "/api/ports/reserve") => handlers::reserve(ports, &req.body),
@@ -1214,13 +1221,27 @@ async fn serve_asset(
 }
 
 /// Serve `rel` from the embedded `dist/`, falling back to the shell / placeholder.
+///
+/// The shell (`index.html`) is the one file this rewrites: when the shared-assets setting is on
+/// (see [`shared_assets`]), every hashed bundle file it points at moves to the CDN. Everything
+/// else — including a direct request for one of those hashed files by an older, cached shell —
+/// keeps being served byte-identical to what it always was.
 async fn serve_embedded(stream: &mut TcpStream, rel: &str) -> anyhow::Result<()> {
-    if let Some(file) = WEBAPP.get_file(rel) {
+    if rel != "index.html"
+        && let Some(file) = WEBAPP.get_file(rel)
+    {
         return http::write_response(stream, 200, "OK", content_type(rel), file.contents()).await;
     }
     if let Some(index) = WEBAPP.get_file("index.html") {
         let html = "text/html; charset=utf-8";
-        return http::write_response(stream, 200, "OK", html, index.contents()).await;
+        let bytes = index.contents();
+        return match shared_assets::SharedAssets::active(VERSION) {
+            Some(shared) => {
+                let rewritten = shared_assets::rewrite(&String::from_utf8_lossy(bytes), &shared);
+                http::write_response(stream, 200, "OK", html, rewritten.as_bytes()).await
+            }
+            None => http::write_response(stream, 200, "OK", html, bytes).await,
+        };
     }
     http::write_html(stream, 200, &placeholder_html()).await
 }

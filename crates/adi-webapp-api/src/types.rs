@@ -66,6 +66,29 @@ pub struct UpdateState {
     pub installing: bool,
 }
 
+/// `GET /api/settings/shared-assets`, and the answer to `POST /api/settings/shared-assets`.
+///
+/// The webapp bundle (wasm, its JS glue, both stylesheets, fonts) is large and this instance may
+/// be on a poor network, so `enabled` points the shell at a CDN copy instead of serving its own —
+/// see `crates/adi-app`'s `shared_assets` module for the URL scheme and the fallback that keeps
+/// the page working when the CDN doesn't answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SharedAssetsState {
+    /// Off by default: nothing about how the bundle is served changes for an instance that has
+    /// never turned this on.
+    pub enabled: bool,
+    /// The CDN base URL the shell is pointed at when `enabled` — the same for every instance
+    /// running the same version, which is the point (a browser that already loaded it for one
+    /// instance has it cached for the rest). `ADI_SHARED_ASSETS_BASE_URL` overrides it.
+    pub base_url: String,
+}
+
+/// `POST /api/settings/shared-assets` — the whole body is the new value of [`SharedAssetsState::enabled`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSharedAssets {
+    pub enabled: bool,
+}
+
 /// An inclusive `[start, end]` port interval — used for both the allocatable range and
 /// each reserved band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

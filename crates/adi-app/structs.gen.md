@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-15 structs · 1 enum · 2 type aliases across 9 files.
+16 structs · 1 enum · 2 type aliases across 10 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/node.rs`](#srcnoders) — `CallError`
 - [`src/origin.rs`](#srcoriginrs) — `Refusal`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
+- [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
@@ -216,6 +217,21 @@ A single snapshot of the machine's processes, with a parent→children index so 
 struct ProcessTable {
     procs: BTreeMap<u32, Proc>,
     children: BTreeMap<u32, Vec<u32>>,
+}
+```
+
+---
+
+## `src/shared_assets.rs`
+
+### struct `SharedAssets`
+
+The CDN base URL and version a shell is pointed at, once the setting is confirmed on.
+
+```rust
+pub struct SharedAssets<'a> {
+    base_url: String,
+    version: &'a str,
 }
 ```
 
