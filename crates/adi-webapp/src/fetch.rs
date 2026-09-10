@@ -12,20 +12,19 @@ use adi_webapp_api::types::{
     KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
     KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmBackendRef, LlmBackendsDto,
     LlmCallDetail, LlmCallRef, LlmCalls, LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState,
-    MeshForwardRef, MeshListenRef,
-    MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
-    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
-    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
+    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
+    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
     RunRef, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
-    SecretsState, SetAutoTitle,
-    SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent,
-    SimulateTurn, StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef,
-    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun,
-    UpdateMarketplaceApp, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
-    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
+    SetSecret, SetSharedAssets, SharedAssetsState, SimulateAgent, SimulateTurn, StarRun,
+    StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
+    ToolRunResult, ToolScript, ToolsState, Transcript, TransferDashboard, TriggerFireResult,
+    TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
+    UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
+    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
@@ -42,6 +41,16 @@ pub async fn ports() -> Result<PortsState, String> {
 
 pub async fn used() -> Result<UsedPorts, String> {
     get("/api/ports/used").await
+}
+
+/// The shared-assets CDN setting: whether the webapp bundle is served from `cdn.withadi.dev`
+/// instead of this instance's own `dist/`, and the base URL it would use.
+pub async fn shared_assets() -> Result<SharedAssetsState, String> {
+    get("/api/settings/shared-assets").await
+}
+
+pub async fn set_shared_assets(enabled: bool) -> Result<SharedAssetsState, String> {
+    post("/api/settings/shared-assets", &SetSharedAssets { enabled }).await
 }
 
 /// The Meta page's state: the well-known `adi-agent` (if set up), the default system prompt, and

@@ -62,6 +62,8 @@ pub(crate) enum Icon {
     Filter,
     /// Per-run settings — dials somebody has set, as against `Gear`'s administration.
     Sliders,
+    /// The shared-assets CDN.
+    Cloud,
 }
 
 impl Icon {
@@ -97,6 +99,7 @@ impl Icon {
             Icon::Model => Lucide::Brain,
             Icon::Filter => Lucide::ListFilter,
             Icon::Sliders => Lucide::SlidersHorizontal,
+            Icon::Cloud => Lucide::Cloud,
         }
     }
 }
@@ -123,6 +126,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,
         Route::Fleet => Icon::Node,
+        Route::SharedAssets => Icon::Cloud,
         // Reached from the Store rail rather than the explorer, so this icon is a fallback.
         Route::StoreFile => Icon::Doc,
     }

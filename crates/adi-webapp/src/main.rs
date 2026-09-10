@@ -56,7 +56,8 @@ use pages::{
     load_dir, load_store_file, market_view, marketplace_view, mesh_view, meta_view,
     onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
     project_detail_view, projects_view, reset_chat_home, secrets_view, seed_onboarding,
-    start_onb_reconfigure, store_file_view, tasks_view, tools_view, triggers_view,
+    shared_assets_view, start_onb_reconfigure, store_file_view, tasks_view, tools_view,
+    triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -65,9 +66,9 @@ use routing::{
 use state::{
     AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, FleetForm, Form,
     HookLogView, KnowledgeConsole, LlmBackendsForm, MarketplaceForm, MeshForm, MetaForm,
-    ProjectsForm, ROOT_AGENT,
-    SecretsForm, SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor,
-    ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
+    ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status, TasksForm,
+    TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
+    refresh_fleet_dashboards,
 };
 use ui::fmt_uptime;
 
@@ -839,6 +840,8 @@ fn App() -> impl IntoView {
         llm_backends: RwSignal::new(None),
         triggers,
         hive,
+        // Filled only on its own settings page, like `llm_backends` above.
+        shared_assets: RwSignal::new(None),
         dashboards,
         marketplace,
         // The workbench shell has no dashboards rail, so nothing here ever asks the fleet what it
@@ -1133,6 +1136,7 @@ fn App() -> impl IntoView {
                 | Route::Mesh
                 | Route::Fleet
                 | Route::LlmBackends
+                | Route::SharedAssets
         ) && opened.is_some()
             && !live::connected()
         {
@@ -1350,6 +1354,7 @@ fn App() -> impl IntoView {
                         Route::Mesh => mesh_view(state, mesh_form),
                         Route::Fleet => fleet_view(state, fleet_form),
                         Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
+                        Route::SharedAssets => shared_assets_view(state),
                     }}
 
                 </div>
@@ -1402,7 +1407,8 @@ fn crumbs(route: Route, project: String) -> AnyView {
         | Route::PortsManager
         | Route::Mesh
         | Route::Fleet
-        | Route::LlmBackends => {
+        | Route::LlmBackends
+        | Route::SharedAssets => {
             path.push(("Settings".to_string(), None));
         }
         Route::ProjectDetail if !project.is_empty() => {
@@ -1509,6 +1515,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Mesh,
             Route::Fleet,
             Route::LlmBackends,
+            Route::SharedAssets,
         ],
     ),
 ];

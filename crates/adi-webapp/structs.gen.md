@@ -75,6 +75,7 @@ pub(crate) enum Icon {
     Model,
     Filter,
     Sliders,
+    Cloud,
 }
 ```
 
@@ -720,6 +721,7 @@ pub(crate) enum Route {
     PortsManager,
     Mesh,
     Fleet,
+    SharedAssets,
     StoreFile,
 }
 ```
@@ -779,6 +781,7 @@ pub(crate) struct State {
     pub(crate) llm_backends: RwSignal<Option<LlmBackendsDto>>,
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
+    pub(crate) shared_assets: RwSignal<Option<SharedAssetsState>>,
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
     pub(crate) marketplace: RwSignal<Option<MarketplaceState>>,
     pub(crate) fleet_dashboards: RwSignal<Option<FleetDashboards>>,

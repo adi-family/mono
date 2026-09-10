@@ -91,6 +91,9 @@ pub(crate) enum Route {
     Mesh,
     /// The paired remote adi nodes — `<service>.<node>.n.adi` (`/settings/fleet`).
     Fleet,
+    /// Whether the webapp bundle is served from the shared-assets CDN instead of this instance's
+    /// own `dist/` (`/settings/shared-assets`).
+    SharedAssets,
     /// One file from the ADI store, open in the full-width editor (`/files/<path>`). The path
     /// lives in `StoreBrowser::open_file`, the way a project id lives in `current_project`.
     StoreFile,
@@ -103,7 +106,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 19] = [
+    pub(crate) const NAV: [Route; 20] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -123,6 +126,7 @@ impl Route {
         Route::Mesh,
         Route::Fleet,
         Route::LlmBackends,
+        Route::SharedAssets,
     ];
 
     /// The page for a URL path; `/` and anything unknown resolve to Projects.
@@ -157,6 +161,7 @@ impl Route {
             "/settings/mesh" => Route::Mesh,
             "/settings/fleet" => Route::Fleet,
             "/settings/llm-backends" => Route::LlmBackends,
+            "/settings/shared-assets" => Route::SharedAssets,
             _ => Route::Projects,
         }
     }
@@ -187,6 +192,7 @@ impl Route {
             Route::Mesh => "/extended/settings/mesh",
             Route::Fleet => "/extended/settings/fleet",
             Route::LlmBackends => "/extended/settings/llm-backends",
+            Route::SharedAssets => "/extended/settings/shared-assets",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
         }
@@ -216,6 +222,7 @@ impl Route {
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
             Route::LlmBackends => "LLM backends",
+            Route::SharedAssets => "Shared assets",
             Route::StoreFile => "File",
         }
     }
@@ -247,6 +254,7 @@ impl Route {
             Route::Mesh => "Peers, allowed ports and forwards",
             Route::Fleet => "Paired devices and what they may reach",
             Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
+            Route::SharedAssets => "Serve the webapp bundle from a shared CDN cache",
             Route::StoreFile => "One file from the ADI store",
         }
     }
@@ -537,4 +545,38 @@ pub(crate) fn go_global(state: State, route: RwSignal<Route>, target: Route) {
 /// Navigate back to the projects list.
 pub(crate) fn go_projects(state: State, route: RwSignal<Route>) {
     go_global(state, route, Route::Projects);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every page in [`Route::NAV`] must round-trip through its own [`Route::path`] — a route
+    /// wired into `path()`/`from_path()` for one direction but not the other opens on a page (a
+    /// nav click) or never closes on one (a reload of its own URL falling back to Projects).
+    #[test]
+    fn every_nav_route_round_trips_through_its_own_path() {
+        // `Route` derives neither `Debug` nor `Display` (it isn't shown anywhere as itself, only
+        // as `title()`/`path()`), so the mismatch is reported by path rather than by
+        // `assert_eq!`, which would need one.
+        for route in Route::NAV {
+            let path = route.path();
+            assert!(
+                Route::from_path(path) == route,
+                "{path} does not resolve back to the route that names it"
+            );
+        }
+    }
+
+    /// [`Route::SharedAssets`] specifically, by its settings URL rather than the round-trip above —
+    /// pinned so a rename of the segment (`/settings/shared-assets`) is caught here rather than in
+    /// a browser.
+    #[test]
+    fn the_shared_assets_settings_path_resolves() {
+        assert!(Route::from_path("/extended/settings/shared-assets") == Route::SharedAssets);
+        assert_eq!(
+            Route::SharedAssets.path(),
+            "/extended/settings/shared-assets"
+        );
+    }
 }

@@ -11,10 +11,9 @@ use adi_webapp_api::types::{
     DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes, FleetState, Health,
     HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
     KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto, MarketplaceState, MeshState,
-    MetaState, PortsState, ProjectDetail,
-    ProjectHookLog, ProjectHookRef, ProjectsState, RunRef, SecretsState, TasksState, ToolsState,
-    TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceTerm, WorkspaceTermRef,
-    WorkspacesRef, WorkspacesState,
+    MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState, RunRef,
+    SecretsState, SharedAssetsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState,
+    UsedPorts, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -98,6 +97,10 @@ pub(crate) struct State {
     /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
+    /// The shared-assets CDN setting (`/api/settings/shared-assets`), shown on its own settings
+    /// page: whether the webapp bundle is served from the CDN instead of this instance, and the
+    /// base URL it would use.
+    pub(crate) shared_assets: RwSignal<Option<SharedAssetsState>>,
     /// The dashboards listing (`/dashboards`).
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
     /// The apps marketplace (`/marketplace`): configured sources and the cached entries. Read
@@ -384,6 +387,7 @@ impl State {
             llm_backends: RwSignal::new(None),
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
+            shared_assets: RwSignal::new(None),
             dashboards: RwSignal::new(None),
             marketplace: RwSignal::new(None),
             fleet_dashboards: RwSignal::new(None),
@@ -1727,10 +1731,20 @@ impl LlmBackendsForm {
         self.extra_dials.set(extra);
         self.rules.set(backend.limit_rules.clone());
         self.probe_on.set(backend.probe.is_some());
-        self.probe_model
-            .set(backend.probe.as_ref().and_then(|p| p.model.clone()).unwrap_or_default());
-        self.probe_prompt
-            .set(backend.probe.as_ref().map(|p| p.prompt.clone()).unwrap_or_default());
+        self.probe_model.set(
+            backend
+                .probe
+                .as_ref()
+                .and_then(|p| p.model.clone())
+                .unwrap_or_default(),
+        );
+        self.probe_prompt.set(
+            backend
+                .probe
+                .as_ref()
+                .map(|p| p.prompt.clone())
+                .unwrap_or_default(),
+        );
     }
 }
 
@@ -2318,6 +2332,14 @@ pub(crate) fn subscriptions(
             set_if_changed(s.fleet, f);
         }));
     }
+    if route == Route::SharedAssets {
+        subs.push(Sub::get(
+            "/api/settings/shared-assets",
+            move |v: SharedAssetsState| {
+                set_if_changed(s.shared_assets, v);
+            },
+        ));
+    }
     if route == Route::LlmBackends {
         // Polled rather than fetched once, because the interesting half of this page is not the
         // registry but the holds on it: a backend goes out and comes back without anyone touching
@@ -2556,6 +2578,14 @@ pub(crate) async fn load(s: State) {
     if path == Route::Fleet.path() {
         took(s, "/api/fleet", s.fleet, fetch::fleet().await);
     }
+    if path == Route::SharedAssets.path() {
+        took(
+            s,
+            "/api/settings/shared-assets",
+            s.shared_assets,
+            fetch::shared_assets().await,
+        );
+    }
     if path == Route::LlmBackends.path() {
         took(
             s,
@@ -2604,14 +2634,18 @@ mod tests {
         assert_eq!(dials.get("effort").map(String::as_str), Some("high"));
         assert_eq!(dials.get("max_tokens").map(String::as_str), Some("8192"));
         assert!(!dials.contains_key("stop") && !dials.contains_key("mystery"));
-        assert!(extra.contains("stop") && extra.contains("mystery"), "{extra}");
+        assert!(
+            extra.contains("stop") && extra.contains("mystery"),
+            "{extra}"
+        );
     }
 
     /// A backend with nothing unusual opens on an empty box, not on `{}` to delete.
     #[test]
     fn nothing_left_over_is_an_empty_box() {
         let declared: BTreeSet<String> = ["effort"].iter().map(|n| (*n).to_string()).collect();
-        let (dials, extra) = split_dials(&params(&[("effort", serde_json::json!("low"))]), &declared);
+        let (dials, extra) =
+            split_dials(&params(&[("effort", serde_json::json!("low"))]), &declared);
         assert_eq!(dials.len(), 1);
         assert_eq!(extra, "");
     }
