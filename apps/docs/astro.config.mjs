@@ -57,6 +57,20 @@ export default defineConfig({
 					},
 				},
 				{ tag: 'meta', attrs: { name: 'theme-color', content: '#161616' } },
+				{ tag: 'link', attrs: { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' } },
+				// One site-wide social card (the mark + wordmark on --bg, see public/social-card.png) —
+				// Starlight's own head has no og:image/twitter:image of its own, so the card was missing
+				// entirely and every shared link rendered an empty or broken large-image card.
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image', content: 'https://docs.withadi.dev/social-card.png' },
+				},
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{
+					tag: 'meta',
+					attrs: { name: 'twitter:image', content: 'https://docs.withadi.dev/social-card.png' },
+				},
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
 			sidebar: [{ label: 'Hive', link: '/hive/' }],
