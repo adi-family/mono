@@ -4,12 +4,8 @@ The docs site: [Astro](https://astro.build) + [Starlight](https://starlight.astr
 deployed as a Cloudflare **Pages** project, static output only (no adapter, no Function —
 `astro build` is plain HTML/CSS/JS).
 
-It's meant to live at `docs.withadi.dev/mono/`, alongside a sibling `/cloud/` section added
-later by a separate effort; that's why `astro.config.mjs` sets `base: '/mono/'` and every
-internal link in the built HTML carries that prefix even though the files themselves sit at the
-root of `dist/` (Astro doesn't nest a static build under its own `base` — whatever serves this
-project is expected to route `/mono/*` here). `public/_redirects` sends the bare domain to
-`/mono/` so it isn't a 404 in the meantime.
+It's served at the root of `docs.withadi.dev` — `astro.config.mjs` sets `base: '/'`, so the
+files in `dist/` and every internal link in the built HTML agree on the root.
 
 Content is currently placeholder-only. Migrating the repo's existing `docs/` and `guides/` into
 this collection is a separate, later task.

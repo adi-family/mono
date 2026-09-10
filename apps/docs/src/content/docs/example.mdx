@@ -24,7 +24,7 @@ flowchart TD
     A["[[Page#Section]] in markdown"] --> B["remark-wiki-link parses the syntax"]
     B --> C["pageResolver() normalizes the name"]
     C --> D{Found in permalinkMap?}
-    D -- yes --> E["hrefTemplate() builds /mono/slug/#anchor"]
+    D -- yes --> E["hrefTemplate() builds /slug/#anchor"]
     D -- no --> F["a.wiki-link-broken, href #"]
     E --> G["rendered a.wiki-link in the built HTML"]
 ```

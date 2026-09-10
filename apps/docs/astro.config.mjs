@@ -8,8 +8,8 @@ import { headingFlagsPlugin } from './heading-flags-plugin.mjs';
 import { remarkFlags } from './remark-flags.mjs';
 import { wikiLinkOptions } from './wiki-links.mjs';
 
-// Lives at docs.withadi.dev/mono/, alongside a sibling /cloud/ section added later.
-const BASE = '/mono/';
+// Served at the root of docs.withadi.dev.
+const BASE = '/';
 
 // https://astro.build/config
 export default defineConfig({
