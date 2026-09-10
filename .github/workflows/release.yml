@@ -278,8 +278,11 @@ jobs:
             -e ADI_VERSION \
             alpine:3.22 sh -euc '
               apk add --no-cache build-base curl bash git tar file >/dev/null
+              # `--default-toolchain none`, so the version rust-toolchain.toml pins is the one
+              # that gets installed on the first cargo call below. Asking for `stable` here
+              # would fetch a second toolchain the build then never uses.
               curl -fsSL https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain stable >/dev/null
+                | sh -s -- -y --profile minimal --default-toolchain none >/dev/null
               . "$HOME/.cargo/env"
               # `scripts/version.sh` shells out to git, and the checkout is owned by the
               # runner user rather than by root inside here.
