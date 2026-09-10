@@ -41,6 +41,15 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      # rehype-mermaid renders every ```mermaid fence to a static SVG at build time by driving a
+      # real headless Chromium through Playwright (see apps/docs/src/content/docs/example.mdx for
+      # why that's deliberate). `playwright` is a package.json dependency, but the browser binary
+      # itself is a separate download that `bun install` never fetches — it built locally only
+      # because that machine already had one cached. `npx`, not `bunx`, for the same reason as
+      # wrangler below: it has to run under the real node setup-node installed above.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
       - name: Build
         run: bun run build
 
