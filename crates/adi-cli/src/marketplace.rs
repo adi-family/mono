@@ -183,6 +183,11 @@ fn list_apps(market: &Marketplace) {
         if let Some(description) = &app.description {
             println!("    {description}");
         }
+        // What the publisher filed it under, on its own line — the panel draws these as tags, and
+        // a terminal that did not print them would be the door that knows less.
+        if !app.keywords.is_empty() {
+            println!("    {}", app.keywords.join(" · "));
+        }
         if app.installs.is_empty() {
             println!("    not installed");
             continue;

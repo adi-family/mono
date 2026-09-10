@@ -3371,6 +3371,15 @@ pub struct MarketplaceApp {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The entry's mark, as its publisher hosts it: an `https://` URL, or a `data:image/…` URI
+    /// carried in the manifest itself. Display only — nothing is decided by it, and an entry
+    /// without one is ordinary.
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// What the entry says it is about, in the publisher's own words. Trimmed and deduped by the
+    /// store, in the order it published them.
+    #[serde(default)]
+    pub keywords: Vec<String>,
     /// As published. Shown, never enforced — the commit is the identity of what installs.
     #[serde(default)]
     pub version: Option<String>,

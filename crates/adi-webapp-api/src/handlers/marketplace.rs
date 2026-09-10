@@ -38,6 +38,8 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                 slug: a.slug,
                 name: a.name,
                 description: a.description,
+                icon: a.icon,
+                keywords: a.keywords,
                 version: a.version,
                 repo: a.repo,
                 commit: a.commit,
@@ -216,6 +218,7 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         E::BadSlug(_)
         | E::BadRepo(_)
         | E::BadCommit { .. }
+        | E::BadIcon { .. }
         | E::NotAnApp { .. }
         | E::Git(_)
         | E::Fetch(_) => 502,

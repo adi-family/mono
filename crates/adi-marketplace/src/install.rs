@@ -100,6 +100,10 @@ pub struct CachedApp {
     pub name: String,
     /// The entry's one-liner.
     pub description: Option<String>,
+    /// The entry's mark: an `https://` URL or a `data:image/…` URI, drawn beside it.
+    pub icon: Option<String>,
+    /// What the entry says it is about — trimmed and deduped, in the order it published them.
+    pub keywords: Vec<String>,
     /// The entry's version, as published.
     pub version: Option<String>,
     /// The repository an install clones.
@@ -243,11 +247,16 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
                     outdated: record.commit.to_ascii_lowercase() != pin,
                 })
                 .collect();
+            // Read through the accessors rather than off the fields: an icon left blank is no
+            // icon, and the keywords a listing shows are the trimmed, deduped ones.
+            let (icon, keywords) = (entry.icon().map(str::to_string), entry.keywords());
             apps.push(CachedApp {
                 marketplace: source.name.clone(),
                 slug: entry.slug,
                 name: entry.name,
                 description: entry.description,
+                icon,
+                keywords,
                 version: entry.version,
                 repo: entry.repo,
                 commit: pin,

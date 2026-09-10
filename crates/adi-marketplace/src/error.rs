@@ -44,6 +44,12 @@ pub enum Error {
          never a branch or a tag, because the pin is what makes an install repeatable"
     )]
     BadCommit(String, String),
+    /// The icon an entry publishes is not one a listing will draw.
+    #[error(
+        "{0} carries an icon this will not draw: {1:?} — an app's icon must be an https:// url, \
+         or a data:image/… uri to carry it in the manifest itself and fetch nothing"
+    )]
+    BadIcon(String, String),
     /// The source has never been synced, so there is no cache to install from.
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),

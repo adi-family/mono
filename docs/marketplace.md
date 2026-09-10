@@ -21,6 +21,8 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
       "slug": "crm",
       "name": "CRM",
       "description": "Who has gone quiet, and what was last said to them.",
+      "icon": "https://raw.githubusercontent.com/adi-family/crm/main/icon.png",
+      "keywords": ["sales", "contacts", "follow-up"],
       "version": "0.1.0",
       "repo": "https://github.com/adi-family/crm.git",
       "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
@@ -36,6 +38,8 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
 | `apps[].slug` | yes | the **published** identity — the second half of `<marketplace>/<slug>`, and how an install is addressed. One safe path segment (`[A-Za-z0-9._-]`, no `/`). It is *not* the directory the app lands as. |
 | `apps[].name` | yes | the human name, offered as the default when somebody names their copy. |
 | `apps[].description` | no | one line on what it is for. |
+| `apps[].icon` | no | the app's mark, drawn beside the entry. An `https://` URL, or a `data:image/…` URI to carry the image in the manifest itself. `http://`, a bare path and anything else are refused (see below). Display only. |
+| `apps[].keywords` | no | what the app is about, in the publisher's own words — a word or two each, drawn as tags. Free text: there is no taxonomy here to petition. The store trims them, drops blanks and drops a term repeated in another casing, keeping the order they were published in. |
 | `apps[].version` | no | as published. **Display text**: the commit is the identity of what installs, and this is the label a person recognizes it by. |
 | `apps[].repo` | yes | the repository to clone. `https://`, or a `file://` path while an app is being developed. `ssh://` and `git@host:path` are refused — those reach for the operator's agent and keys, which a URL out of somebody else's manifest has no business doing. |
 | `apps[].commit` | yes | the pin: a full 40-hex object name. A branch, a tag or a short sha is refused. |
@@ -44,6 +48,23 @@ The decision and its reasoning: `business/decisions/2026-08-31-marketplaces-are-
 Unknown fields are ignored, so a newer manifest an older machine reads still lists its apps. A
 manifest is validated **whole**: the first entry that does not belong refuses the fetch, rather
 than a listing that quietly hides part of what was published.
+
+### Why an icon is `https://` or nothing
+
+An icon is the one field that makes the panel **fetch something from a host the operator did not
+choose** — the manifest's host chose it. So:
+
+- `https://` only. Plaintext is refused for the same reason the manifest itself is fetched over
+  HTTPS: a listing has no business downgrading on somebody else's say-so.
+- `data:image/…` is the alternative worth knowing about. The manifest has already been fetched,
+  so an icon carried inside it costs **no further request at all**, works from the cache with the
+  network gone, and tells the icon's host nothing about who is browsing. A small SVG or a 64px
+  PNG is a few kilobytes of base64.
+- A relative path (`icon.png`, `/assets/icon.png`) is refused rather than guessed at: the
+  manifest, the repository and the panel are three different origins, and there is no honest
+  answer to which one such a path is relative to.
+
+An entry with no icon is ordinary and draws a placeholder glyph, not a hole.
 
 ### Why a commit and not a branch
 

@@ -3302,6 +3302,10 @@ pub struct MarketplaceApp {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
     pub version: Option<String>,
     pub repo: String,
     pub commit: String,

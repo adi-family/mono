@@ -55,13 +55,45 @@
   border-bottom: 1px solid var(--line);
 }
 
-// One app per row; the about on the left and the one action on the right.
+// One app per row: its mark, what it is, and the one action — the middle takes the slack, so the
+// mark stays beside the name it belongs to however wide the page is.
 .adi-market__row {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 16px;
   padding: 10px 0;
+}
+
+// The app's mark at the head of its row. One size whether the manifest published an image or
+// not, so the column of names stays a column; `--bg-raise` under the image as well as behind the
+// glyph, so an icon that fails to load is the same quiet square as one that was never published.
+.adi-market__icon {
+  flex: none;
+  // Beside the name rather than the middle of the block: a row is four lines deep by the time it
+  // has a description, keywords and a repository, and a mark centred against all of that reads
+  // as belonging to whichever line it happens to land on.
+  align-self: flex-start;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r);
+  background: var(--bg-raise);
+  object-fit: cover;
+}
+
+// The tile for an entry with no icon: the package glyph, in the grey the row's meta is in.
+.adi-market__icon--blank {
+  display: grid;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+// What the entry is about, under its description: tags, wrapping — a publisher may file an app
+// under more words than a row is wide.
+.adi-market__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
 }
 
 // Where the app comes from: repository and pinned commit, a machine string on one line.
@@ -97,6 +129,7 @@
 }
 
 .adi-market__about {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;

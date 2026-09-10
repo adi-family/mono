@@ -38,6 +38,18 @@ extraction script cares about.
   *found* or *No matches* and deliberately no count: WebKit publishes no match count, and a number
   counted separately in JavaScript would disagree with the highlighting WebKit itself draws.
 
+- **The marketplace has a page of its own, and an app can carry a mark and what it is about.**
+  Browsing what somebody else published is not a settings act, so the marketplace has left the
+  control panel's shell for a page at `/marketplace` — reached from a **Marketplace** band above the
+  Apps rail on the chat screen, with the apps as the page rather than one panel among an explorer
+  full of them. A manifest entry may now carry an `icon` and `keywords`: the icon is drawn beside
+  the entry, and the keywords are tags under its description — and `adi-mono marketplace apps`
+  prints them, so the terminal is not the door that knows less. An icon is an `https://` URL, or a
+  `data:image/…` URI to carry the image in the manifest itself and have the listing fetch nothing at
+  all; `http://` and bare paths are refused. An entry with no icon draws a package tile instead, and
+  so does one whose icon will not load — a listing has no business looking damaged because somebody
+  else's host is down.
+
 ### Changed
 
 - **Services are lazy now: one does not run until its page is visited.** A service used to cost the

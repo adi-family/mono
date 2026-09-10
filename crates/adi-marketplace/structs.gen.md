@@ -83,6 +83,8 @@ pub enum Error {
     BadRepo(String),
     #[error( "{0} pins {1:?}, which is not a commit — a manifest pins a full 40-character commit, \ never a branch or a tag, because the pin is what makes an install repeatable" )]
     BadCommit(String, String),
+    #[error( "{0} carries an icon this will not draw: {1:?} — an app's icon must be an https:// url, \ or a data:image/… uri to carry it in the manifest itself and fetch nothing" )]
+    BadIcon(String, String),
     #[error("no cached manifest for {0} — run `adi-mono marketplace sync` first")]
     NotSynced(String),
     #[error("{0} carries no app named {1} — it carries: {2}")]
@@ -162,6 +164,8 @@ pub struct CachedApp {
     pub slug: String,
     pub name: String,
     pub description: Option<String>,
+    pub icon: Option<String>,
+    pub keywords: Vec<String>,
     pub version: Option<String>,
     pub repo: String,
     pub commit: String,
@@ -273,6 +277,10 @@ pub struct AppEntry {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     pub repo: String,

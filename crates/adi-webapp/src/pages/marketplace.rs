@@ -187,6 +187,7 @@ fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView 
         app.version.clone(),
         app.description.clone(),
     );
+    let (icon, keywords) = (app_icon(app), keyword_tags(app));
     let (repo, commit) = (app.repo.clone(), short_commit(&app.commit));
     // The full strings, for the `title` of the elements that show them elided.
     let (repo_title, key_title) = (repo.clone(), key.clone());
@@ -196,12 +197,14 @@ fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView 
 
     view! {
         <div class="adi-market__row">
+            {icon}
             <div class="adi-market__about">
                 <div class="adi-market__title">
                     <span class="adi-market__name">{name}</span>
                     {version.map(|v| view! { <span class="adi-mono adi-muted">{v}</span> })}
                 </div>
                 {description.map(|d| view! { <div class="adi-market__desc">{d}</div> })}
+                {keywords}
                 <div class="adi-mono adi-muted adi-market__origin" title=repo_title>
                     {repo}" @ "{commit}
                 </div>
@@ -232,6 +235,78 @@ fn app_row(form: MarketplaceForm, app: &MarketplaceApp, key: String) -> AnyView 
         </div>
     }
     .into_any()
+}
+
+/// The app's mark, at the head of its row: the image its manifest publishes, or a tile with the
+/// package glyph when it publishes none.
+///
+/// A tile either way, and the same size either way, so a list of apps where only some publish an
+/// icon still reads as one column of rows rather than as a ragged left edge. The image is
+/// decorative — the name is right beside it — so its `alt` is empty rather than repeating the
+/// name to a screen reader that has just read it.
+///
+/// **This is the one element on the page that fetches from a host the operator did not choose**:
+/// the manifest's publisher did. Which is why the store only accepts `https://` and
+/// `data:image/…` (`docs/marketplace.md`), and why a fetch that fails falls back to the same tile
+/// — a listing has no business looking damaged because somebody else's host is down, and the
+/// browser's broken-image glyph says nothing a reader can act on.
+fn app_icon(app: &MarketplaceApp) -> AnyView {
+    let Some(src) = app
+        .icon
+        .as_deref()
+        .map(str::trim)
+        .filter(|icon| !icon.is_empty())
+        .map(str::to_string)
+    else {
+        return blank_icon();
+    };
+    let failed = RwSignal::new(false);
+    view! {
+        {move || {
+            if failed.get() {
+                return blank_icon();
+            }
+            view! {
+                <img class="adi-market__icon" src=src.clone() alt=""
+                    loading="lazy" decoding="async"
+                    on:error=move |_| failed.set(true)/>
+            }
+            .into_any()
+        }}
+    }
+    .into_any()
+}
+
+/// The tile an entry gets when it publishes no icon — or when the one it publishes will not load.
+fn blank_icon() -> AnyView {
+    view! {
+        <div class="adi-market__icon adi-market__icon--blank" aria-hidden="true">
+            <Icon icon=Lucide::Package/>
+        </div>
+    }
+    .into_any()
+}
+
+/// What the entry says it is about, as tags under its description (§6 "Tag": sans, 12px, pill).
+///
+/// The publisher's own words and their own order — the store has already trimmed them and dropped
+/// the repeats. Nothing filters by them yet; they are here because "what kind of thing is this"
+/// is the question a listing of apps is asked first, and the description alone answers it one app
+/// at a time.
+fn keyword_tags(app: &MarketplaceApp) -> Option<AnyView> {
+    if app.keywords.is_empty() {
+        return None;
+    }
+    Some(
+        view! {
+            <div class="adi-market__tags">
+                {app.keywords.iter()
+                    .map(|word| view! { <span class="adi-chip">{word.clone()}</span> })
+                    .collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    )
 }
 
 /// The one question an install has to ask: what to call this copy.

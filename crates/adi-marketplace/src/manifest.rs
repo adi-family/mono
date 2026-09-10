@@ -17,6 +17,8 @@
 //!       "slug": "crm",
 //!       "name": "CRM",
 //!       "description": "Who has gone quiet, and what was last said to them.",
+//!       "icon": "https://raw.githubusercontent.com/adi-family/crm/main/icon.png",
+//!       "keywords": ["sales", "contacts", "follow-up"],
 //!       "version": "0.1.0",
 //!       "repo": "https://github.com/adi-family/crm.git",
 //!       "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
@@ -59,6 +61,19 @@ pub struct AppEntry {
     /// One line on what the app is for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The app's mark: an `https://` URL, or a `data:image/…` URI for a publisher who would
+    /// rather the listing fetched nothing from anywhere. Display only — it is drawn beside the
+    /// entry and nothing is decided by it. Absent is ordinary, and reads as a placeholder glyph
+    /// rather than a hole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// What the app is about, in the publisher's own words — a word or two each, drawn as tags.
+    ///
+    /// Free text on purpose. A controlled vocabulary would need somebody to keep it and somebody
+    /// to petition for a new term, which is the platform this marketplace deliberately does not
+    /// have: a manifest is a file its publisher owns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
     /// The app's version, as its publisher wrote it. Display text: the commit is the identity of
     /// what installs, and this is the label a person recognizes it by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -82,7 +97,8 @@ impl AppEntry {
     /// # Errors
     /// [`Error::BadSlug`] when the slug is not one safe path segment, [`Error::BadRepo`] for a
     /// repository URL this build will not clone, [`Error::BadCommit`] for anything but a full
-    /// 40-hex object name.
+    /// 40-hex object name, [`Error::BadIcon`] for an icon a listing would have to fetch over
+    /// plaintext.
     pub fn validate(&self) -> Result<()> {
         if !adi_config::valid_name(self.slug.trim()) || self.slug.trim() != self.slug {
             return Err(Error::BadSlug(self.slug.clone()));
@@ -93,7 +109,41 @@ impl AppEntry {
         if !valid_commit(&self.commit) {
             return Err(Error::BadCommit(self.slug.clone(), self.commit.clone()));
         }
+        if let Some(icon) = self.icon()
+            && !valid_icon(icon)
+        {
+            return Err(Error::BadIcon(self.slug.clone(), icon.to_string()));
+        }
         Ok(())
+    }
+
+    /// The icon this entry publishes, if it publishes one. Trimmed, and an empty string is no
+    /// icon rather than one that fails to load.
+    #[must_use]
+    pub fn icon(&self) -> Option<&str> {
+        self.icon
+            .as_deref()
+            .map(str::trim)
+            .filter(|icon| !icon.is_empty())
+    }
+
+    /// The keywords as a listing shows them: trimmed, blanks dropped, and no term twice however
+    /// its publisher cased it — in the order they were written, since that order is the
+    /// publisher saying which one matters most.
+    #[must_use]
+    pub fn keywords(&self) -> Vec<String> {
+        let mut seen: Vec<String> = Vec::new();
+        let mut out = Vec::new();
+        for keyword in &self.keywords {
+            let keyword = keyword.trim();
+            let folded = keyword.to_lowercase();
+            if keyword.is_empty() || seen.contains(&folded) {
+                continue;
+            }
+            seen.push(folded);
+            out.push(keyword.to_string());
+        }
+        out
     }
 
     /// The branch the pin should sit on, when the entry names one.
@@ -123,6 +173,18 @@ fn valid_repo(repo: &str) -> bool {
     let repo = repo.trim();
     (repo.starts_with("https://") && repo.len() > "https://".len())
         || (repo.starts_with("file:///") && repo.len() > "file:///".len())
+}
+
+/// Whether an icon is one a listing will draw.
+///
+/// `https://` because a page that fetched an image over plaintext would be doing on the
+/// operator's behalf the one thing the rest of this module refuses to do — and `data:image/`
+/// because the manifest has already been fetched, so an icon carried inside it costs no request
+/// at all and works from the cache with the network gone. Everything else is refused, `http://`
+/// and a bare path included: there is nothing here for a relative path to be relative *to*.
+fn valid_icon(icon: &str) -> bool {
+    (icon.starts_with("https://") && icon.len() > "https://".len())
+        || (icon.starts_with("data:image/") && icon.len() > "data:image/".len())
 }
 
 /// Whether a pin is a full git object name — 40 hex characters, in either case.
@@ -203,6 +265,8 @@ mod tests {
         assert_eq!(parsed.name, None);
         assert_eq!(parsed.apps.len(), 1);
         assert_eq!(parsed.apps[0].version, None);
+        assert_eq!(parsed.apps[0].icon(), None, "and no mark to draw beside it");
+        assert!(parsed.apps[0].keywords().is_empty());
         assert_eq!(parsed.apps[0].branch(), None, "the default branch, then");
         assert_eq!(parsed.apps[0].pin(), SHA);
         assert_eq!(parsed.app("crm").map(|a| a.name.as_str()), Some("CRM"));
@@ -270,6 +334,70 @@ mod tests {
         .expect_err("refused");
         assert!(err.to_string().contains("repo"), "{err}");
         assert!(err.to_string().contains("commit"), "{err}");
+    }
+
+    #[test]
+    fn an_entry_carries_a_mark_and_what_it_is_about() {
+        let parsed = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM",
+                   "icon":"https://example/icon.png",
+                   "keywords":["  Sales ","contacts","SALES","","follow-up"],
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(parsed.apps[0].icon(), Some("https://example/icon.png"));
+        assert_eq!(
+            parsed.apps[0].keywords(),
+            vec!["Sales", "contacts", "follow-up"],
+            "trimmed, blanks dropped, no term twice, publisher's order kept"
+        );
+
+        // An icon carried in the manifest itself, which costs the listing no request at all.
+        let inline = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM","icon":"data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert!(
+            inline.apps[0]
+                .icon()
+                .is_some_and(|i| i.starts_with("data:image/"))
+        );
+
+        // An icon a listing would have to fetch over plaintext — or one there is nothing to
+        // resolve — refuses the manifest the way a bad repo does, rather than drawing a hole.
+        for icon in [
+            "http://example/icon.png",
+            "icon.png",
+            "/assets/icon.png",
+            "javascript:alert(1)",
+            "data:image/",
+        ] {
+            let refused = parse(
+                format!(
+                    r#"{{"apps":[{{"slug":"crm","name":"CRM","icon":"{icon}",
+                       "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+                )
+                .as_bytes(),
+            );
+            assert!(matches!(refused, Err(Error::BadIcon(_, _))), "{icon}");
+        }
+        // An empty icon is no icon, not a refusal: a publisher's template left unfilled.
+        let blank = parse(
+            format!(
+                r#"{{"apps":[{{"slug":"crm","name":"CRM","icon":"   ",
+                   "repo":"https://example/crm.git","commit":"{SHA}"}}]}}"#
+            )
+            .as_bytes(),
+        )
+        .expect("parses");
+        assert_eq!(blank.apps[0].icon(), None);
     }
 
     #[test]
