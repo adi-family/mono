@@ -20,6 +20,22 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The panel window has a browser's keyboard.** The app's window around the control panel answered
+  no shortcuts at all: ⌘R did nothing, and ⌘W — the one keystroke a window full of tabs cannot do
+  without — was unbound. It now carries the habits every browser has already taught, on the keys
+  they are taught on: ⌘R to reload and ⇧⌘R to reload ignoring the cache, which is the one that
+  matters after somebody rebuilds a dashboard; ⌘W to close the tab in front and ⇧⌘T to put back the
+  last sixteen closed, each at the page it was left on rather than its front page; ⌘[ and ⌘] for
+  back and forward; ⌃⇥ and ⌃⇧⇥ along the strip, wrapping; ⌘+, ⌘− and ⌘0 for the size of a page; and
+  ⌘F to find in it, with ⌘G and ⇧⌘G stepping through the matches. ⌘1…⌘9 still pick a tab. They are
+  real menu items and not bare keystrokes, so the menu bar says what each one does and System
+  Settings can rebind any of them — and *File* names what ⌘W is about to do, **Close Tab** on a
+  dashboard and **Close Window** on the app's own tab, which is never closed. The find bar says
+  *found* or *No matches* and deliberately no count: WebKit publishes no match count, and a number
+  counted separately in JavaScript would disagree with the highlighting WebKit itself draws.
+
 ### Changed
 
 - **Services are lazy now: one does not run until its page is visited.** A service used to cost the

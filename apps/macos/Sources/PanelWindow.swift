@@ -19,6 +19,10 @@ struct PanelWindow: View {
 
     @StateObject private var tabs: PanelTabs
 
+    /// `.key` while this window has the keyboard, `.active`/`.inactive` otherwise — the one thing
+    /// the menu bar has to know that the window does not tell it by existing.
+    @Environment(\.controlActiveState) private var active
+
     init(home: URL) {
         _tabs = StateObject(wrappedValue: PanelTabs(home: home))
     }
@@ -27,13 +31,18 @@ struct PanelWindow: View {
         VStack(spacing: 0) {
             bar
             Hairline()
-            Page(panel: tabs.selected)
+            Selected(panel: tabs.selected)
         }
         .frame(minWidth: 720, minHeight: 480)
         .background(ADI.bg)
         .background(WindowChrome())
         .preferredColorScheme(.dark)
-        .navigationTitle(tabs.selected.label)
+        // What ⌘R and ⌘W act on, and when (`PanelCommands`). The window tells the menu bar it is
+        // here rather than the menu bar going looking: `controlActiveState` is `.key` exactly while
+        // this window has the keyboard, which is the question the two items need answered.
+        .onAppear { FrontPanel.shared.opened(tabs, front: active == .key) }
+        .onDisappear { FrontPanel.shared.closed() }
+        .onChange(of: active) { FrontPanel.shared.front($0 == .key) }
     }
 
     /// The tab bar: what is open, and the way out to a real browser.
@@ -52,6 +61,35 @@ struct PanelWindow: View {
         .padding(.horizontal, 12)
         .frame(height: 48)
         .background(ADI.bgSide)
+    }
+}
+
+/// The tab in front: its page, the find bar when it has one, and the name the window wears.
+///
+/// A view of its own, and that is the whole point of it. `PanelWindow` observes `PanelTabs`, which
+/// publishes when tabs are opened, closed or switched — and *not* when the tab in front changes
+/// something about itself. So `tabs.selected.finding` read from the window's own body was a value
+/// nothing had subscribed to: ⌘F set the flag and the bar never appeared (measured — with the bar
+/// "open", there was no text field anywhere in the window). The page's title had the same fault, and
+/// looked less like one: the window's name was right whenever anything *else* had forced a redraw.
+///
+/// `@ObservedObject` here is the subscription to the tab itself, which is what both need.
+private struct Selected: View {
+    @ObservedObject var panel: WebPanel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Under the strip and above the page, the way Safari's is — not floating over the
+            // page's top-right corner, which is where a browser puts it to avoid reflowing a
+            // document it does not own. This window owns its layout, and a band that pushes the
+            // page down never covers the thing being searched for.
+            if panel.finding {
+                FindBar(panel: panel)
+                Hairline()
+            }
+            Page(panel: panel)
+        }
+        .navigationTitle(panel.label)
     }
 }
 
@@ -179,6 +217,162 @@ private struct TabStyle: ButtonStyle {
         if pressed { return ADI.bgActive }
         return hovering ? ADI.bgHover : Color.clear
     }
+}
+
+/// ⌘F: find in this page.
+///
+/// Per tab (`WebPanel.finding`), so switching tabs does not carry one page's search onto another —
+/// and coming back to a tab finds the bar as it was left.
+///
+/// **There is no "3 of 17".** The public API is `WKWebView.find(_:configuration:)`, whose
+/// `WKFindResult` reports `matchFound` and nothing else; a count computed separately in JavaScript
+/// would disagree with WebKit's own highlighting on shadow DOM, on hidden text and on a word split
+/// across nodes — often enough that a wrong number is worse than no number. So the bar answers the
+/// question it can answer honestly: found, or not found.
+private struct FindBar: View {
+    @ObservedObject var panel: WebPanel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            LucideIcon(icon: .search, size: .sm, label: "Find in page")
+                .foregroundStyle(ADI.ink3)
+
+            FindField(text: $panel.query,
+                      focus: panel.findFocus,
+                      colour: missed ? ADI.err : ADI.ink,
+                      submit: { panel.find(backwards: $0) },
+                      cancel: { panel.endFind() })
+                .frame(maxWidth: 280, minHeight: 20)
+                // As it is typed, which is what every browser does and what makes a search of a
+                // long dashboard worth starting before you have finished the word.
+                .onChange(of: panel.query) { _ in panel.find() }
+
+            if missed {
+                Text("No matches")
+                    .font(ADI.TextStyle.small)
+                    .foregroundStyle(ADI.ink3)
+            }
+
+            Spacer(minLength: 0)
+
+            // ⇧↩ as well as the chevron, because a hand already on the keyboard for the query is
+            // not going to reach for the mouse to step back one match.
+            BarButton(icon: .chevronUp, label: "Previous match", enabled: searchable) {
+                panel.find(backwards: true)
+            }
+            .keyboardShortcut(.return, modifiers: .shift)
+
+            BarButton(icon: .chevronDown, label: "Next match", enabled: searchable) {
+                panel.find()
+            }
+
+            Button("Done") { panel.endFind() }
+                .buttonStyle(.adi(.quiet, .small))
+                // Esc, which is how every find bar on this machine closes.
+                .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(ADI.bgSide)
+    }
+
+    private var searchable: Bool { !panel.query.isEmpty }
+
+    /// Looked for, and not there. Not the same as "nothing has been looked for yet", which is what
+    /// an empty box is and which nothing should be red about.
+    private var missed: Bool { panel.found == false && searchable }
+}
+
+/// The box the query is typed into.
+///
+/// AppKit's `NSTextField` rather than SwiftUI's `TextField`, for one measured reason: at the moment
+/// ⌘F is pressed the window's first responder is the tab's `WKWebView`, and `@FocusState` moves
+/// focus **within SwiftUI's own focus system** — it does not take the keyboard back from an AppKit
+/// view that already holds it. Measured: with `.focused($focused)` set from `onAppear`, the first
+/// responder was still the web view a full second later, so ⌘F opened a bar that could not be typed
+/// into, and Escape had nothing to reach.
+///
+/// A text field can simply ask for the job. Its field editor is also the one place ⎋ and ↩ can be
+/// caught while the box has the keyboard, which is where they matter.
+private struct FindField: NSViewRepresentable {
+    @Binding var text: String
+    /// Bumped to mean *put the keyboard back in the box* — which is what a second ⌘F is for.
+    let focus: Int
+    /// Red while the query matches nothing; the field's own, because an `NSTextField` does not
+    /// inherit SwiftUI's `foregroundStyle`.
+    let colour: Color
+    /// Next match, or — with Shift — the previous one.
+    let submit: (Bool) -> Void
+    let cancel: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(string: text)
+        field.delegate = context.coordinator
+        // Stated rather than assumed: a text field that is not editable also does not accept first
+        // responder, and refusing the keyboard is indistinguishable from never being offered it.
+        field.isEditable = true
+        field.isSelectable = true
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.placeholderString = "Find in page"
+        field.font = Self.face
+        field.lineBreakMode = .byTruncatingTail
+        field.cell?.usesSingleLineMode = true
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        // The coordinator calls back into *this* struct, and SwiftUI makes a new one every pass —
+        // so it is handed the current one rather than keeping the one the view was made with.
+        context.coordinator.owner = self
+        if field.stringValue != text { field.stringValue = text }
+        field.textColor = NSColor(colour)
+        guard context.coordinator.taken != focus else { return }
+        context.coordinator.taken = focus
+        // A turn of the loop late, deliberately: on the pass that inserts the bar the field is not
+        // in a window yet, and a first-responder request made then is dropped on the floor.
+        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var owner: FindField
+        /// The `focus` this has already acted on. `-1`, so the first pass always takes the keyboard.
+        var taken = -1
+
+        init(_ owner: FindField) { self.owner = owner }
+
+        func controlTextDidChange(_ note: Notification) {
+            guard let field = note.object as? NSTextField else { return }
+            owner.text = field.stringValue
+        }
+
+        /// ⎋ closes the bar, ↩ steps to the next match and ⇧↩ back to the previous — through the
+        /// field editor's own dispatch, which is what sees these keys while the box has the
+        /// keyboard.
+        func control(_ control: NSControl,
+                     textView: NSTextView,
+                     doCommandBy selector: Selector) -> Bool {
+            switch selector {
+            case #selector(NSResponder.cancelOperation(_:)):
+                owner.cancel()
+            case #selector(NSResponder.insertNewline(_:)),
+                 #selector(NSResponder.insertLineBreak(_:)):
+                owner.submit(NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+            default:
+                return false
+            }
+            return true
+        }
+    }
+
+    /// `ADI.TextStyle.row` is a SwiftUI `Font`, which an `NSTextField` cannot wear — the same face
+    /// at the same size, in AppKit's currency.
+    private static let face: NSFont = ADI.hasGeist
+        ? NSFont(name: "Geist", size: 13.5) ?? .systemFont(ofSize: 13.5)
+        : .systemFont(ofSize: 13.5)
 }
 
 /// The escape hatch: this page, in the default browser.

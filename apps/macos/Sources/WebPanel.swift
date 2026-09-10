@@ -52,7 +52,7 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
         // where it was every time would be a demo of the panel rather than the panel.
         configuration.websiteDataStore = .default()
         configuration.userContentController.addUserScript(Self.nativeFlag)
-        webView = WKWebView(frame: .zero, configuration: configuration)
+        webView = PageView(frame: .zero, configuration: configuration)
         super.init()
 
         webView.navigationDelegate = self
@@ -103,6 +103,16 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
         if webView.url == nil { load(home) } else { webView.reload() }
     }
 
+    /// ⇧⌘R: reload without the cache, the way a browser's hard reload does.
+    ///
+    /// Worth its own keystroke here rather than being a browser habit copied for the sake of it. A
+    /// dashboard is a bun-served bundle that somebody may have just rebuilt, and an ordinary reload
+    /// is entitled to hand back the JavaScript it already has — which is precisely the case where
+    /// pressing ⌘R twice and seeing no change is most confusing.
+    func reloadFromOrigin() {
+        if webView.url == nil { load(home) } else { webView.reloadFromOrigin() }
+    }
+
     /// Send this tab somewhere. Used when a link asks for a host that is already open in a tab:
     /// the tab is brought forward and taken to the page the link named, rather than a second tab
     /// for the same dashboard appearing every time somebody clicks it.
@@ -115,6 +125,79 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
     /// the extension, the profile or the devtools somebody would rather use.
     func openInDefaultBrowser() {
         NSWorkspace.shared.open(webView.url ?? home)
+    }
+
+    // MARK: zoom
+
+    /// How far this page is blown up. Per tab, and not remembered across launches: a dashboard
+    /// zoomed in to read one number is not a preference, and a window that came back at 175% with
+    /// no visible reason why would be a bug report.
+    @Published private(set) var zoom: Double = 1
+
+    /// The stops ⌘+ and ⌘− walk, which are a browser's. A multiplier per press would take the same
+    /// number of presses to get somewhere useful and land on values nobody chose.
+    private static let zoomStops: [Double] = [0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
+
+    func zoomIn() { setZoom(Self.zoomStops.first { $0 > zoom + 0.001 } ?? Self.zoomStops[Self.zoomStops.count - 1]) }
+    func zoomOut() { setZoom(Self.zoomStops.last { $0 < zoom - 0.001 } ?? Self.zoomStops[0]) }
+    func resetZoom() { setZoom(1) }
+
+    /// Whether ⌘0 has anything to undo — so *Actual Size* greys out on a page that is already at it.
+    var zoomed: Bool { abs(zoom - 1) > 0.001 }
+
+    private func setZoom(_ value: Double) {
+        zoom = value
+        webView.pageZoom = value
+    }
+
+    // MARK: find in page
+
+    /// Whether the find bar is open on this tab, and what is in it. Per tab, because a search is
+    /// about the page you are looking at — switching tabs and finding the other tab's query still
+    /// in the box would be a search of the wrong document.
+    @Published private(set) var finding = false
+    @Published var query = ""
+
+    /// Whether the last search hit anything — nil before there has been one. There is deliberately
+    /// no "3 of 17": `WKFindResult` reports `matchFound` and nothing else, and a count computed
+    /// separately in JavaScript would disagree with WebKit's own highlighting often enough
+    /// (shadow DOM, `visibility: hidden`, text split across nodes) to be worse than no count.
+    @Published private(set) var found: Bool?
+
+    /// Bumped by every ⌘F, so the bar takes the keyboard again when it is already open — which is
+    /// what pressing ⌘F a second time is *for*.
+    @Published private(set) var findFocus = 0
+
+    func startFind() {
+        finding = true
+        findFocus += 1
+    }
+
+    /// Close the bar and take WebKit's highlight off the page with it. Leaving the match selected
+    /// behind a closed bar is a page that looks like something is still selected for no reason.
+    func endFind() {
+        finding = false
+        found = nil
+        webView.evaluateJavaScript("window.getSelection().removeAllRanges()", completionHandler: nil)
+    }
+
+    /// Search, from wherever the last match left off. Wrapping, because a find that stops at the
+    /// bottom of the document makes you scroll up to search the top again.
+    ///
+    /// Not trimmed: a search for a word with a space either side of it is a real search, and one
+    /// for `  ` is the user's business.
+    func find(backwards: Bool = false) {
+        guard !query.isEmpty else {
+            found = nil
+            return
+        }
+        let configuration = WKFindConfiguration()
+        configuration.backwards = backwards
+        configuration.caseSensitive = false
+        configuration.wraps = true
+        webView.find(query, configuration: configuration) { [weak self] result in
+            self?.found = result.matchFound
+        }
     }
 
     /// Tell the page it is in the app, before any of it runs.
@@ -160,6 +243,32 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
         guard let host = url.host?.lowercased() else { return url.isFileURL }
         if host == Core.domain || host.hasSuffix(".\(Core.domain)") { return true }
         return ["localhost", "127.0.0.1", "::1"].contains(host)
+    }
+}
+
+// MARK: - the one key the page does not get
+
+/// The tab's web view, with a single keystroke handed back to the window.
+///
+/// WebKit claims ⌃⇥ as a key equivalent of its own — inside a page it walks the focus ring — and a
+/// *view's* key equivalent is offered before the menu bar's, so **Show Next Tab** never saw the
+/// keystroke while a page had the keyboard. Measured, with the web view first responder: ⌃⇥ moved
+/// nothing, the very same event handed straight to the main menu switched tabs, and a ⌃-letter item
+/// on that menu fired normally — so what WebKit takes is the Tab key, not the modifier.
+///
+/// Between the window's tabs and the page's focus ring the window wins: ⌃⇥ is declined here and
+/// falls through to the menu bar, and everything else is passed on untouched. Tab on its own — which
+/// is how a form is actually walked — is not a key equivalent and never comes through here at all.
+final class PageView: WKWebView {
+    /// Tab.
+    private static let tabKey: UInt16 = 48
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if event.keyCode == Self.tabKey, mods.contains(.control), !mods.contains(.command) {
+            return false
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }
 

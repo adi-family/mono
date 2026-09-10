@@ -36,5 +36,10 @@ struct ADIApp: App {
         // click in it; `WindowChrome` takes that bit back out and keeps it out.
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentMinSize)
+        // ⌘R and ⌘W, on the menu bar (`PanelCommands`). Attached to this scene because it is the
+        // window they are for, though a menu bar belongs to the app: the items are on it whichever
+        // window is front, and it is `FrontPanel` — which knows the panel's tabs and whether the
+        // panel has the keyboard — that decides what they do and whether they can be pressed.
+        .commands { PanelCommands() }
     }
 }

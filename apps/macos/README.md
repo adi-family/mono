@@ -253,13 +253,100 @@ dashboard take the window over.
 Dashboards and hive services open beside it, because the panel links to every one of them with
 `target="_blank"` (and `window.open` from the launcher) — so `createWebViewWith` is the hook, and
 what it makes is a tab rather than a window. ⌘-click opens one anywhere; ⌘1…⌘9 select; the ⨯ on a
-tab closes it and selection falls to the tab on its left. A host that is already open is brought
+tab — or ⌘W — closes it and selection falls to the tab on its left. A host that is already open is brought
 forward rather than opened twice: pressing a dashboard's link again means *show me it*, not *give
 me another copy*. Each tab keeps its own web view, so its history and scroll position survive
 being switched away from.
 
-It is a viewer, not a general browser and not a second control panel. There is no search and no
-new-tab button — there would be nowhere for it to go — and **a clicked link that leaves this
+**The keyboard is on the menu bar** (`Sources/PanelCommands.swift`), and what is on it are the
+habits a browser already taught: ⌘R reload and ⇧⌘R reload ignoring the cache; ⌘W close the tab and
+⇧⌘T put it back; ⌘[ and ⌘] back and forward; ⌃⇥ and ⌃⇧⇥ along the tabs; ⌘+, ⌘− and ⌘0 for the size
+of the page; ⌘F to find in it, ⌘G and ⇧⌘G for the next match and the last. Menu items rather than
+bare shortcuts, because an item *says what it does* — a keystroke on no menu is one somebody has to
+be told about, and one System Settings cannot rebind. ⌘1…⌘9 stay what they were, shortcuts on the
+tab buttons themselves, which is why they appear nowhere on the menu bar. *File* names what ⌘W will
+actually do: **Close Tab** on a dashboard, **Close Window** on the app's own tab, which is never
+closed — which is what ⌘W on a browser's last tab has always meant. Every item resolves what it acts
+on at the moment it is pressed, so none of them can act on a tab that has since gone.
+
+Three of the habits were deliberately left off. ⌘← and ⌘→ are *not* bound to back and forward: they
+are start-of-line and end-of-line in the find bar's box, and a shortcut that navigates the window
+while you are editing text is a shortcut that eats your cursor. There is no ⇧⌘W (close window), no
+⌘P, and no Esc to stop a load — nobody asked for them, and each one is a keystroke spent. And there
+is **no "3 of 17"** in the find bar: the public API is `WKWebView.find(_:configuration:)`, whose
+`WKFindResult` carries `matchFound` and nothing else, and a count computed separately in JavaScript
+disagrees with WebKit's own highlighting on shadow DOM, on hidden text and on a word split across
+nodes — often enough that a wrong number is worse than none. The bar answers what it can answer
+honestly: found, or *No matches*.
+
+Measurements chose the rest of the design. On the two menu items themselves:
+
+- **Nothing was taken from anyone.** An app built of `Window` scenes rather than a `WindowGroup`
+  gets no File menu and no *Close* at all until a command asks for one, so ⌘W was an unbound
+  keystroke that did nothing.
+- **Asking conjures SwiftUI's own *Close* and *Close All*, and those close the window** — on the
+  panel, every open tab at once. Two items then hold ⌘W and AppKit gives it to one of them: from
+  `CommandGroup(after: .newItem)` it sat on ours while SwiftUI's *Close* was disabled and moved to
+  *Close* the moment the panel window made it valid, so the keystroke would close tabs until it
+  silently began closing the window. `CommandGroup(replacing: .saveItem)` takes their slot instead
+  of competing for it, and leaves exactly one ⌘W on the whole menu bar — verified by walking it.
+  The cost is *Close All* (⌥⌘W), which in an app of two windows was never worth a keystroke.
+- **`.focusedSceneValue` does not work here**, though it is the documented way to let a menu act on
+  the window holding the keyboard. With the panel key and its scene in front the value arrived at
+  the `Commands` body as nil — *Reload* stayed grey, ⌘W kept its fallback meaning — and taking the
+  web view out of the window did not change it. SwiftUI publishes a focused value for a scene whose
+  content holds *focus*, and nothing in a window that is one web view under a tab strip ever takes
+  it. So the two items read a shared `FrontPanel` instead, told by `controlActiveState` whether the
+  panel has the keyboard.
+- **The web view eats neither keystroke.** Driven through `NSApp.sendEvent` against a real bundle,
+  ⌘W closed the tab (two down to one, selection falling back to the app's own) and ⌘R reloaded the
+  page that was left.
+
+And on the rest of the set, each of which was driven the same way — a real bundle, real synthesized
+keystrokes, the whole battery green before it was written down:
+
+- **⌃⇥ is the one keystroke the web view *does* eat.** WebKit claims the Tab key as a key equivalent
+  of its own, and a view's key equivalent is offered before the menu bar's, so *Show Next Tab* never
+  saw it while a page had the keyboard. Measured, with the web view first responder: ⌃⇥ moved
+  nothing, the very same event handed straight to `NSApp.mainMenu` switched tabs, and a ⌃-letter item
+  on that menu fired normally — so what is taken is the key, not the modifier. `PageView`
+  (`Sources/WebPanel.swift`) is a `WKWebView` that declines exactly this one and passes everything
+  else through. Tab on its own, which is how a form is actually walked, is not a key equivalent and
+  never comes near it.
+- **⌘F opened a bar that was never on screen.** `PanelWindow` observes `PanelTabs`, which publishes
+  when tabs are opened, closed or switched — and not when the tab in front changes something about
+  itself. `if tabs.selected.finding` in the window's own body was therefore a read nothing had
+  subscribed to. It looked like a focus bug for two runs; what settled it was walking the window's
+  view tree and finding **no text field in it at all**. The fix is a `Selected` view holding the
+  front tab as an `@ObservedObject`. The window's *title* had the same fault and hid it better — it
+  was right whenever anything else had forced a redraw.
+- **`@FocusState` cannot take the keyboard back from AppKit.** At the moment ⌘F is pressed the first
+  responder is the tab's `WKWebView`; setting `.focused($focused)` from `onAppear` moves focus within
+  SwiftUI's own focus system and does not touch that. Measured: the responder was still the web view
+  a full second later. So the box is an `NSTextField` (`FindField`) that asks for the job itself, and
+  its field editor is also where ⎋ and ↩/⇧↩ are caught — the only place they can be caught while the
+  box has the keyboard. With it, the responder is the field editor 150 ms after ⌘F, and typed
+  keystrokes land in the query.
+- **⌘= reaches the ⌘+ item.** *Zoom In* carries ⇧⌘=, which is what ⌘+ is; AppKit matches the
+  unshifted key too, so the hand that presses ⌘= without the shift zooms anyway and no second
+  binding is needed.
+- **`CGEvent.postToPid` is no use for this.** From an unsigned bundle it delivers nothing at all —
+  not even ⌘j to a menu item wired to a counter. `NSApp.sendEvent` does reach a non-⌘ key equivalent
+  with the web view first responder (measured against a plain-`j` and a ⌃-`j` control item), so it is
+  the one to drive a test with.
+
+Two traps for whoever tests this next. SwiftUI keeps those items **lazily**: read from outside, a
+title or an enabled flag is whatever it was when somebody last looked, and `NSMenu.update()` alone
+does not always freshen it — the delegate's `menuNeedsUpdate:` does, which AppKit sends when a menu
+is opened and on the key-equivalent path. Two runs looked like the item was stuck on *Close Tab*
+when it was only the reader that was stale. And a **disabled item does not fire its key equivalent**,
+while an item is a SwiftUI view that re-renders a turn of the loop after the model it reads — so a
+⌘] sent in the same millisecond as `canGoForward` became true arrives at an item AppKit still
+believes is dead. Both showed up as the feature being broken and were the test being faster than a
+hand: ⌘] and ⇧⌘T each passed once given ~0.8 s to settle.
+
+It is a viewer, not a general browser and not a second control panel. There is no address bar and no
+new-tab button — there would be nowhere for either to go — and **a clicked link that leaves this
 machine opens in the default browser**: an issue tracker or a docs site is not what this window is
 for. Only a *click* leaves, though: a redirect, a form post or a subframe is the page doing its
 job (`WebPanel.isLocal` decides, against the flavour's own zone plus loopback, so a dev build

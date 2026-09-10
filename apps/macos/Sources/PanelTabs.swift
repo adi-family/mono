@@ -56,12 +56,54 @@ final class PanelTabs: ObservableObject {
     func close(_ tab: WebPanel) {
         guard !tab.pinned, let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tabs.remove(at: index)
+        // Where it was, not where it started: ⇧⌘T means "put back what I was looking at", and a
+        // dashboard three pages deep reopened at its front page has not been put back.
+        remember(tab.webView.url ?? tab.home)
         if selection == tab.id {
             selection = tabs[max(0, index - 1)].id
         }
     }
 
     func select(_ tab: WebPanel) { selection = tab.id }
+
+    // MARK: moving between tabs
+
+    /// ⌃⇥ and ⌃⇧⇥. They wrap, because a strip of tabs is a ring in every browser there is — and
+    /// the app's own tab is in the ring like any other, since it is the one place ⌃⇥ most often
+    /// wants to get back to.
+    func selectNext() { step(by: 1) }
+    func selectPrevious() { step(by: -1) }
+
+    private func step(by offset: Int) {
+        guard tabs.count > 1, let index = tabs.firstIndex(where: { $0.id == selection }) else { return }
+        let next = (index + offset + tabs.count) % tabs.count
+        selection = tabs[next].id
+    }
+
+    // MARK: what ⇧⌘T puts back
+
+    /// The tabs that have been closed, oldest first — URLs and not tabs, because keeping the web
+    /// views alive to make undo instant would mean a window that never gives back the memory of
+    /// anything you closed.
+    ///
+    /// Published so the menu item can grey out when there is nothing to put back.
+    @Published private(set) var closed: [URL] = []
+
+    private func remember(_ url: URL) {
+        closed.append(url)
+        // Deep enough to cover the ones closed by mistake, shallow enough that it is not a history.
+        if closed.count > 16 { closed.removeFirst() }
+    }
+
+    /// Reopen the most recently closed tab. Repeatable, back through the stack.
+    ///
+    /// It goes through `open`, so a host that has since been opened again is brought forward rather
+    /// than doubled — and the entry is spent either way, which is what keeps pressing ⇧⌘T walking
+    /// backwards instead of sticking on one tab.
+    func reopenLast() {
+        guard let url = closed.popLast() else { return }
+        open(url)
+    }
 
     /// A tab's pages can ask for another tab; this is where that request is granted.
     private func adopt(_ tab: WebPanel) {

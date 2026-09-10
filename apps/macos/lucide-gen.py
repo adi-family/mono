@@ -33,7 +33,9 @@ ICONS = [
     "bug",               # something not working
     "camera",            # scan
     "check",             # copied
+    "chevron-down",      # the next match, in the find bar
     "chevron-right",
+    "chevron-up",        # the previous match
     "circle-alert",
     "clipboard",         # paste
     "code",              # an api service
@@ -52,6 +54,7 @@ ICONS = [
     "qr-code",
     "radio",             # the relay session coming up
     "scan-line",
+    "search",            # find in page
     "settings-2",
     "share",
     "triangle-alert",
