@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.12.0 — 2026-09-10
+
 ### Added
 
 - **The marketplace has a page of its own, and an app can carry a mark and what it is about.**
