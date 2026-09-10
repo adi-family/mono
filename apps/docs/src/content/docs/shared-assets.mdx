@@ -1,0 +1,186 @@
+---
+title: Shared assets
+description: An opt-in switch that points the control panel's browser bundle at a CDN instead of the machine you're pointed at, so instances on the same version share one browser cache.
+---
+
+import Flags from '../../components/Flags.astro';
+import VersionBadge from '../../components/VersionBadge.astro';
+
+Every ADI instance serves its own control panel — the wasm bundle, its JS glue, two
+stylesheets, fonts — straight off its own disk. Shared assets is a single switch,
+off by default, that instead points a visiting browser at a CDN for those files:
+`https://cdn.withadi.dev/monoapp/<version>/…`. `index.html` itself never moves; the
+instance you're talking to always serves that. Only what it points at changes.
+
+It shipped in <VersionBadge version="1.12" />.
+
+## Preview <Flags>Preview</Flags>
+
+The code is on `main` and tested, but the R2 bucket it needs hasn't been stood up
+yet — `cdn.withadi.dev` serves nothing today. Turning the switch on right now gets
+you the fallback path, every time: the panel loads from the instance itself,
+exactly as if the switch were off. See [Publishing your own
+bucket](#publishing-your-own-bucket) if you want it working before that changes.
+
+## Why it exists
+
+Two reasons, and most people only think of the first.
+
+**The uplink.** The bundle is big, and the connection is sometimes slow — worst
+when the browser isn't on the same machine as ADI at all: a paired [[Hive#The
+n.adi reservation|fleet node]], a phone, a laptop reaching another machine over a
+poor connection. Every byte of that wasm bundle crosses the slow link today. A CDN
+edge is close to the browser instead of close to the machine running ADI.
+
+**The shared cache**, which is the one that actually shapes the design. Every
+instance on the same version resolves to the exact same URL. Run two or three ADI
+instances — a laptop and a couple of fleet nodes, say — and a browser that already
+loaded the bundle for instance A has it cached under that URL, so instance B and C
+are free: same version, same URL, same cache entry. Only the very first load,
+anywhere, costs anything.
+
+That second point is why the URL carries the version and *nothing*
+instance-specific — no hostname, no node ID, no per-install token — and why even
+the local `app.adi` panel uses the CDN when the switch is on, rather than being
+exempted as "already local." Put anything per-instance into the URL, or let one
+instance route around the CDN, and the shared cache stops working while everything
+still looks fine — there'd be no error, just no benefit.
+
+## Turning it on
+
+**Panel:** Settings → Shared assets (`/settings/shared-assets`). One switch, plus
+the CDN base URL and the version prefix this instance would ask for — check that
+`monoapp/<version>/` has actually been published before flipping it, since nothing
+stops you turning it on against a version that isn't there (you just get the
+fallback, silently).
+
+**API:** `GET /api/settings/shared-assets` returns `{ enabled, base_url }`; `POST`
+the same path with `{ "enabled": true }` to change it. Persisted to
+`~/.adi/mono/shared-assets/settings.toml`, so it survives a restart. Setting it has
+no effect on anything except how the next `index.html` this instance serves is
+rewritten — no build step, no restart required.
+
+## How the rewrite works <Flags>Expert area</Flags>
+
+`adi-app` serves a Trunk-built `index.html`. When the setting is on, it rewrites
+that shell in memory, in three places, before serving it:
+
+- The boot script's module import (a static `import … from '/foo.js'`, which can't
+  be wrapped in a `try`) becomes an async `import()` inside a `try`/`catch`.
+- Every `modulepreload`/`preload` hint naming a hashed bundle file gets repointed at
+  the CDN, so the preload actually warms the thing that gets loaded.
+- Each stylesheet `<link>` gets its `href` repointed, plus `crossorigin="anonymous"`
+  and an `onerror` handler.
+
+Three things never move: `index.html` itself, the service worker registration
+(`/sw.js` — a cross-origin service worker registration is refused by the browser
+outright), and the manifest/icon links.
+
+### Fallback is unconditional
+
+The rewritten boot script's `catch` reissues the same `import()` against the
+instance's own local paths — the exact ones it would have used with the switch
+off — on any failure. Each stylesheet's `onerror` does the same for its `href`.
+Offline, the bucket down, or a version that was simply never published: all three
+take the same path, back to the local bundle. Turning this switch on cannot leave
+someone looking at a page that fails to load; at worst it costs one failed request
+per asset before the fallback fires.
+
+### Versioning and cache-busting
+
+The prefix is the same version `scripts/version.sh` resolves and `adi-app`
+compiles in at build time (the git tag, or the workspace version if there isn't
+one), so an instance always asks for exactly the build it's running. Under that
+prefix, Trunk's own content-hashed filenames do the rest: a publish never
+overwrites a key some earlier build already uploaded, so an older instance can
+never be served a newer bundle it wasn't built to run.
+
+### Escape hatches
+
+- `ADI_WEBAPP_DIST` (the disk override for local `dist/` development) wins
+  outright — the rewrite only ever touches the embedded copy, so pointing at your
+  own build gets you exactly your own build, CDN setting or not.
+- `ADI_SHARED_ASSETS_BASE_URL` overrides the base URL, for testing against a bucket
+  that isn't `cdn.withadi.dev`.
+
+### Stylesheet integrity
+
+The stylesheet links keep their SRI `integrity` hashes from the original build, and
+gain `crossorigin="anonymous"`. That combination is what makes the browser actually
+run the integrity check on a cross-origin fetch — without it, the hash is present
+but silently unused. The browser refuses to apply a stylesheet whose bytes don't
+match, from a CDN or anywhere else.
+
+### Font URLs had to become relative <VersionBadge version="1.12" />
+
+Worth knowing if you're publishing your own bucket. `crates/adi-ui/fonts/fonts.css`
+used to reference fonts with root-absolute `url("/fonts/…")`. That's fine when the
+stylesheet is same-origin, but once it's fetched cross-origin from the CDN, a
+root-absolute URL resolves against the CDN's own domain root — not the version
+prefix the stylesheet itself lives under. A later publish could then change fonts
+out from under an already-published, supposedly-immutable version. The fix made
+the URLs relative (`url("fonts/…")`), which resolves against the stylesheet's own
+URL instead — the version prefix on the CDN, the dist root locally. `publish.sh`
+still mirrors `fonts/` unversioned at the bucket root, but only as a compatibility
+shim for builds published before this fix, whose stylesheet bytes (and SRI hash)
+are already fixed and can't be changed after the fact.
+
+## The trade-off <Flags>Enterprise interest</Flags>
+
+ADI is self-hosted and local-first. This switch is the one place a panel load
+reaches a third party. With it on, Cloudflare sees one request per asset per
+browser: an IP address, a version string, a timestamp. Nothing else — no panel
+data, no API traffic, no auth tokens. `/api/` never goes near the CDN; only the
+static bundle does.
+
+That's still a request that, with the switch off, never leaves the machine. It's
+exactly why the setting defaults off and exists as an explicit switch rather than
+default behavior: an org evaluating this should be able to decide that trade-off
+for themselves, not discover it in a network tab after the fact. If your threat
+model rules out any outbound request from the panel at all, leave it off — nothing
+else in ADI depends on it being on.
+
+## Publishing your own bucket <Flags>Expert area</Flags>
+
+`apps/shared-assets/` has everything needed to stand up the CDN on your own
+Cloudflare account instead of waiting on `cdn.withadi.dev`. Both scripts hardcode
+the bucket name (`adi-shared-assets`) and domain (`cdn.withadi.dev`) at the top of
+the file — edit those two lines in both `setup-cf.sh` and `publish.sh` to your own
+values first; there's no config file that changes them for you.
+`ADI_SHARED_ASSETS_BASE_URL` is what then points a running instance at the result.
+
+`scripts/setup-cf.sh` is idempotent — safe to re-run as a drift check. It:
+
+1. Creates the R2 bucket.
+2. Sets a CORS policy allowing `GET`/`HEAD` from any origin. This has to be
+   permissive: an ADI panel's origin is `app.adi`, a fleet node's
+   `<service>.<node>.n.adi`, or a bare loopback port during setup, and none of
+   those identities may appear anywhere in the CDN URL — that's the whole point of
+   [why it exists](#why-it-exists).
+3. Attaches a custom domain and lets Cloudflare write its own CNAME — only
+   possible if the target zone lives on the same Cloudflare account as the token.
+
+It needs a `CLOUDFLARE_API_TOKEN` (`adi-mono secrets set CLOUDFLARE_API_TOKEN`)
+scoped to Account → Workers R2 Storage → Edit, plus Zone → Zone → Read and Zone →
+DNS → Edit on the domain you're attaching.
+
+`scripts/publish.sh`, run from `apps/shared-assets/`, builds and uploads a
+release:
+
+```bash
+./scripts/publish.sh              # trunk build --release, then publish
+./scripts/publish.sh --no-build   # publish the last build already staged in
+                                   # target/webapp-dist-publish/, unbuilt
+```
+
+It uploads everything under that build except `index.html` to
+`monoapp/<version>/`, skipping any file already reachable at its published URL —
+safe to re-run, since Trunk's content-hashed filenames mean identical content
+always lands on the same key. `index.html` is deliberately never published: it's
+the one file every instance still serves itself.
+
+## See also
+
+- [[Hive]] — the panel this setting affects (`app.adi`) is itself a hive service,
+  and a fleet node reached over `n.adi` is exactly the slow-uplink case this switch
+  is meant to help.
