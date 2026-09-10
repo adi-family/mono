@@ -16,23 +16,17 @@ instance you're talking to always serves that. Only what it points at changes.
 `release.yml` publishes to it automatically on every tagged release, so turning the
 switch on is normally all there is to do. For a fork, an air-gapped build, or to
 keep the panel's asset requests off ADI's infrastructure entirely, see
-[Publishing your own bucket](#publishing-your-own-bucket) — the documented escape
-hatch.
+[Publishing your own bucket](#publishing-your-own-bucket).
 
 It shipped in <VersionBadge version="1.12" />.
 
 ## Preview <Flags>Preview</Flags>
 
-`cdn.withadi.dev` is live — the bucket exists, CORS is set, the domain resolves —
-but nothing is published under a version prefix yet: `v1.12.0` was tagged before
-CI publish landed, and no release has been tagged since. Until the next tagged
-release publishes, turning the switch on falls back to local assets every time —
-not because the CDN is unreachable, but because nothing is there at that
-version's URL.
+CDN assets must be published under the running instance's version prefix.
+Otherwise, asset requests fall back to local files — see
+[Fallback is unconditional](#fallback-is-unconditional).
 
 ## Why it exists
-
-Two reasons, and most people only think of the first.
 
 **The uplink.** The bundle is big, and the connection is sometimes slow — worst
 when the browser isn't on the same machine as ADI at all: a paired
@@ -40,12 +34,11 @@ when the browser isn't on the same machine as ADI at all: a paired
 machine over a poor connection. Every byte of that wasm bundle crosses the slow link today. A CDN
 edge is close to the browser instead of close to the machine running ADI.
 
-**The shared cache**, which is the one that actually shapes the design. Every
-instance on the same version resolves to the exact same URL. Run two or three ADI
-instances — a laptop and a couple of fleet nodes, say — and a browser that already
-loaded the bundle for instance A has it cached under that URL, so instance B and C
-are free: same version, same URL, same cache entry. Only the very first load,
-anywhere, costs anything.
+**The shared cache.** Every instance on the same version resolves to the exact
+same URL. Run two or three ADI instances — a laptop and a couple of fleet nodes,
+say — and a browser that already loaded the bundle for instance A has it cached
+under that URL, so instances B and C reuse the cached bundle: same version, same
+URL, same cache entry. Only the very first load, anywhere, costs anything.
 
 That second point is why the URL carries the version and *nothing*
 instance-specific — no hostname, no node ID, no per-install token — and why even
@@ -126,7 +119,7 @@ match, from a CDN or anywhere else.
 fetched cross-origin from the CDN, a root-absolute URL resolves against the CDN's
 own domain root — not the version
 prefix the stylesheet itself lives under. A later publish could then change fonts
-out from under an already-published, supposedly-immutable version. The fix made
+out from under an already published, supposedly immutable version. The fix made
 the URLs relative (`url("fonts/…")`), which resolves against the stylesheet's own
 URL instead — the version prefix on the CDN, the dist root locally. `publish.sh`
 still mirrors `fonts/` unversioned at the bucket root, but only as a compatibility
