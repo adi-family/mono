@@ -12,24 +12,32 @@ off by default, that instead points a visiting browser at a CDN for those files:
 `https://cdn.withadi.dev/monoapp/<version>/…`. `index.html` itself never moves; the
 instance you're talking to always serves that. Only what it points at changes.
 
+`cdn.withadi.dev` is ADI's own bucket, and the default CDN URL for every instance:
+`release.yml` publishes to it automatically on every tagged release, so turning the
+switch on is normally all there is to do. For a fork, an air-gapped build, or to
+keep the panel's asset requests off ADI's infrastructure entirely, see
+[Publishing your own bucket](#publishing-your-own-bucket) — the documented escape
+hatch.
+
 It shipped in <VersionBadge version="1.12" />.
 
 ## Preview <Flags>Preview</Flags>
 
-The code is on `main` and tested, but the R2 bucket it needs hasn't been stood up
-yet — `cdn.withadi.dev` serves nothing today. Turning the switch on right now gets
-you the fallback path, every time: the panel loads from the instance itself,
-exactly as if the switch were off. See [Publishing your own
-bucket](#publishing-your-own-bucket) if you want it working before that changes.
+`cdn.withadi.dev` is live — the bucket exists, CORS is set, the domain resolves —
+but nothing is published under a version prefix yet: `v1.12.0` was tagged before
+CI publish landed, and no release has been tagged since. Until the next tagged
+release publishes, turning the switch on falls back to local assets every time —
+not because the CDN is unreachable, but because nothing is there at that
+version's URL.
 
 ## Why it exists
 
 Two reasons, and most people only think of the first.
 
 **The uplink.** The bundle is big, and the connection is sometimes slow — worst
-when the browser isn't on the same machine as ADI at all: a paired [[Hive#The
-n.adi reservation|fleet node]], a phone, a laptop reaching another machine over a
-poor connection. Every byte of that wasm bundle crosses the slow link today. A CDN
+when the browser isn't on the same machine as ADI at all: a paired
+[[Hive#The n.adi reservation|fleet node]], a phone, a laptop reaching another
+machine over a poor connection. Every byte of that wasm bundle crosses the slow link today. A CDN
 edge is close to the browser instead of close to the machine running ADI.
 
 **The shared cache**, which is the one that actually shapes the design. Every
@@ -55,9 +63,9 @@ stops you turning it on against a version that isn't there (you just get the
 fallback, silently).
 
 **API:** `GET /api/settings/shared-assets` returns `{ enabled, base_url }`; `POST`
-the same path with `{ "enabled": true }` to change it. Persisted to
-`~/.adi/mono/shared-assets/settings.toml`, so it survives a restart. Setting it has
-no effect on anything except how the next `index.html` this instance serves is
+the same path with `{ "enabled": true }` to change it. The setting persists in
+`~/.adi/mono/shared-assets/settings.toml` across restarts. Setting it has no
+effect on anything except how the next `index.html` this instance serves is
 rewritten — no build step, no restart required.
 
 ## How the rewrite works <Flags>Expert area</Flags>
@@ -113,10 +121,10 @@ match, from a CDN or anywhere else.
 
 ### Font URLs had to become relative <VersionBadge version="1.12" />
 
-Worth knowing if you're publishing your own bucket. `crates/adi-ui/fonts/fonts.css`
-used to reference fonts with root-absolute `url("/fonts/…")`. That's fine when the
-stylesheet is same-origin, but once it's fetched cross-origin from the CDN, a
-root-absolute URL resolves against the CDN's own domain root — not the version
+`crates/adi-ui/fonts/fonts.css` used to reference fonts with root-absolute
+`url("/fonts/…")`. That's fine when the stylesheet is same-origin, but once it's
+fetched cross-origin from the CDN, a root-absolute URL resolves against the CDN's
+own domain root — not the version
 prefix the stylesheet itself lives under. A later publish could then change fonts
 out from under an already-published, supposedly-immutable version. The fix made
 the URLs relative (`url("fonts/…")`), which resolves against the stylesheet's own
@@ -135,19 +143,24 @@ static bundle does.
 
 That's still a request that, with the switch off, never leaves the machine. It's
 exactly why the setting defaults off and exists as an explicit switch rather than
-default behavior: an org evaluating this should be able to decide that trade-off
-for themselves, not discover it in a network tab after the fact. If your threat
-model rules out any outbound request from the panel at all, leave it off — nothing
-else in ADI depends on it being on.
+default behavior: an organization can decide that trade-off for itself, rather
+than discover it in a network tab after the fact. If your threat model rules out
+any outbound request from the panel at all, leave it off — nothing else in ADI
+depends on it being on.
 
 ## Publishing your own bucket <Flags>Expert area</Flags>
 
-`apps/shared-assets/` has everything needed to stand up the CDN on your own
-Cloudflare account instead of waiting on `cdn.withadi.dev`. Both scripts hardcode
-the bucket name (`adi-shared-assets`) and domain (`cdn.withadi.dev`) at the top of
-the file — edit those two lines in both `setup-cf.sh` and `publish.sh` to your own
-values first; there's no config file that changes them for you.
-`ADI_SHARED_ASSETS_BASE_URL` is what then points a running instance at the result.
+For `cdn.withadi.dev` itself, publishing isn't something anyone runs by hand:
+`release.yml`'s `webapp` job runs `publish.sh --no-build` on every push of a `v*`
+tag, gated so a `workflow_dispatch` dry run builds and uploads nothing. This
+section is for standing up a *different* bucket — your own Cloudflare account, for
+a fork, an air-gapped build, or anyone who'd rather not have their panel's asset
+requests reach ADI's infrastructure.
+
+`apps/shared-assets/` has everything needed. Both scripts source
+`scripts/config.sh` for the bucket name and domain — that's the one place to edit,
+not the scripts themselves. Set `ADI_SHARED_ASSETS_BASE_URL` to point a running
+instance at the result.
 
 `scripts/setup-cf.sh` is idempotent — safe to re-run as a drift check. It:
 
@@ -169,8 +182,8 @@ release:
 
 ```bash
 ./scripts/publish.sh              # trunk build --release, then publish
-./scripts/publish.sh --no-build   # publish the last build already staged in
-                                   # target/webapp-dist-publish/, unbuilt
+# publish target/webapp-dist-publish/ without rebuilding
+./scripts/publish.sh --no-build
 ```
 
 It uploads everything under that build except `index.html` to
