@@ -1,0 +1,53 @@
+name: Docs
+
+# Deploys apps/docs (Starlight, built with bun) to Cloudflare Pages on every push to main that
+# touches it. This exists so nobody has to deploy by hand from a laptop again: `wrangler`
+# declares `engines: node >=22`, and there is no node on the machine this used to be deployed
+# from — only bun. Under bun, `wrangler pages deploy` uploads part of the files and then exits
+# 0 having registered nothing, which looks like success and isn't. A GitHub runner has a real
+# node, so the whole problem disappears here — bun builds the site, node runs wrangler.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/docs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# A second push landing mid-deploy should wait for the first to finish rather than race it onto
+# the same Pages project.
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/docs
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      # wrangler declares `engines: node >=22` and checks it at startup; this is what `npx
+      # wrangler` below actually runs under, ahead of bun on PATH.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      # Deliberately `npx wrangler`, not `bunx wrangler`: npx resolves to the real node
+      # installed above, bunx would hand it straight back to bun and reintroduce the bug.
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 5b81c76ca545338aa9e85215c001a768
+        run: npx wrangler pages deploy dist --project-name=adi-docs --branch=main
