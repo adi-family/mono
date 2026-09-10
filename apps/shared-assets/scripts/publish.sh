@@ -34,8 +34,7 @@
 #   ./scripts/publish.sh --no-build       # publish whatever is already in the private dist dir
 set -euo pipefail
 
-BUCKET="adi-shared-assets"
-DOMAIN="cdn.withadi.dev"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config.sh"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 private_dist="$repo_root/target/webapp-dist-publish"

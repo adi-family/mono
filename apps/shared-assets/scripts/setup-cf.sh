@@ -37,8 +37,7 @@
 # not a silent no-op.
 set -euo pipefail
 
-BUCKET="adi-shared-assets"
-DOMAIN="cdn.withadi.dev"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config.sh"
 API="https://api.cloudflare.com/client/v4"
 
 cd "$(dirname "$0")/.."
