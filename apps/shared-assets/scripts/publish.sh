@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Publish the webapp bundle (crates/adi-webapp) to the shared-assets R2 bucket, under an
-# immutable `webapp/<version>/` prefix — the version comes from scripts/version.sh, the same
+# immutable `monoapp/<version>/` prefix — the version comes from scripts/version.sh, the same
 # resolver every packaging script and the compiled-in `adi-app::VERSION` use, so a build published
 # here lands under exactly the prefix a matching running instance asks for
 # (crates/adi-app/src/shared_assets.rs).
@@ -21,7 +21,7 @@
 # fonts/*, additionally, are mirrored **unversioned** at the bucket root (overwritten every
 # publish, deliberately). Reason: the two stylesheets' `@font-face` rules use root-absolute URLs
 # (`url("/fonts/…")`), and a CSS `url()` resolves against the *stylesheet's own* URL — so once
-# that stylesheet is fetched from `cdn.withadi.dev/webapp/<version>/…`, `/fonts/…` resolves to
+# that stylesheet is fetched from `cdn.withadi.dev/monoapp/<version>/…`, `/fonts/…` resolves to
 # `cdn.withadi.dev/fonts/…`, not back under the version prefix. Those bytes are covered by the
 # stylesheet's own SRI hash (see dist/index.html's `integrity=`), so they cannot be rewritten to a
 # relative path without invalidating it — the fonts have to actually live where the CSS expects
@@ -116,12 +116,12 @@ put() {
     --content-type "$(content_type_for "$file")" --cache-control "$cache_control" >/dev/null
 }
 
-step "Publishing webapp/$VERSION/ from $private_dist"
+step "Publishing monoapp/$VERSION/ from $private_dist"
 uploaded=0 skipped=0
 while IFS= read -r -d '' file; do
   rel="${file#"$private_dist"/}"
   [ "$rel" = "index.html" ] && continue
-  key="webapp/$VERSION/$rel"
+  key="monoapp/$VERSION/$rel"
   if already_published "$key"; then
     skipped=$((skipped + 1))
     continue
@@ -144,4 +144,4 @@ else
 fi
 
 echo
-echo "Published. https://$DOMAIN/webapp/$VERSION/ is what a shell built at this version now asks for."
+echo "Published. https://$DOMAIN/monoapp/$VERSION/ is what a shell built at this version now asks for."

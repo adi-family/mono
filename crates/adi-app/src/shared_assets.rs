@@ -34,11 +34,11 @@ impl<'a> SharedAssets<'a> {
         })
     }
 
-    /// `rel`'s URL under this version's prefix — `<base>/webapp/<version>/<rel>`, `rel` taken
+    /// `rel`'s URL under this version's prefix — `<base>/monoapp/<version>/<rel>`, `rel` taken
     /// either root-absolute (as it appears in `index.html`) or bare.
     fn cdn(&self, rel: &str) -> String {
         format!(
-            "{}/webapp/{}/{}",
+            "{}/monoapp/{}/{}",
             self.base_url.trim_end_matches('/'),
             self.version,
             rel.trim_start_matches('/'),
@@ -242,7 +242,7 @@ if ("serviceWorker" in navigator) {
             !out.contains("from '/"),
             "the boot script's import must no longer be root-relative"
         );
-        assert!(out.contains("https://cdn.withadi.dev/webapp/1.2.3/"));
+        assert!(out.contains("https://cdn.withadi.dev/monoapp/1.2.3/"));
         // The two stylesheet links, by content: both css files referenced in the checked-in
         // shell must have moved.
         for css in href_paths(SHELL)
@@ -250,7 +250,7 @@ if ("serviceWorker" in navigator) {
             .filter(|p| p.ends_with(".css"))
         {
             assert!(
-                out.contains(&format!("https://cdn.withadi.dev/webapp/1.2.3{css}")),
+                out.contains(&format!("https://cdn.withadi.dev/monoapp/1.2.3{css}")),
                 "{css} did not move to the CDN"
             );
         }
@@ -319,7 +319,7 @@ if ("serviceWorker" in navigator) {
         };
         assert_eq!(
             with_slash.cdn("/main.css"),
-            "https://cdn.withadi.dev/webapp/1.2.3/main.css"
+            "https://cdn.withadi.dev/monoapp/1.2.3/main.css"
         );
     }
 }

@@ -1,7 +1,7 @@
 # Cloudflare **R2** config for the shared-assets bucket.
 #
 # Every asset `trunk build` produces for crates/adi-webapp (wasm, JS glue, both stylesheets,
-# fonts, snippets, icons) is published here under an immutable `webapp/<version>/` prefix, so
+# fonts, snippets, icons) is published here under an immutable `monoapp/<version>/` prefix, so
 # every ADI instance running the same version resolves to the exact same URL — a browser that
 # already loaded the bundle for one instance has it cached for the rest (ADI-MONO-35).
 #
