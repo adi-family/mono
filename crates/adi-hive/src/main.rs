@@ -12,8 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use adi_hive::config::{self, Hive};
+use adi_hive::demand::Demand;
 use adi_hive::proxy::{self, Router};
-use adi_hive::{runner, status, tls};
+use adi_hive::{demand, runner, shared, status, tls};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -84,10 +85,19 @@ async fn main() -> anyhow::Result<()> {
     let mut current = Arc::new(Router::new(&resolved.routes, resolved.mesh_gateway));
     let (route_tx, route_rx) = watch::channel(Arc::clone(&current));
 
+    // What the front door and the supervisor share about on-demand services: the front door reports
+    // the requests, the supervisor owns the processes. Both files sit in the store rather than
+    // beside this config, because on a split install the other hive was started from a config in a
+    // different directory and could not name a path relative to ours (see `adi_hive::shared`).
+    let demand = Arc::new(Demand::new(
+        Some(shared::state_path()),
+        Some(shared::wake_path()),
+    ));
+
     let mut bound = Vec::with_capacity(resolved.binds.len());
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
-    bind_plain(&resolved, &route_rx, &mut bound, &mut tasks).await;
-    bind_tls(&path, &resolved, &route_rx, &mut bound, &mut tasks).await;
+    bind_plain(&resolved, &route_rx, &demand, &mut bound, &mut tasks).await;
+    bind_tls(&path, &resolved, &route_rx, &demand, &mut bound, &mut tasks).await;
 
     if tasks.is_empty() {
         // Name them: this is the last line before the process exits, and under a supervisor that
@@ -122,9 +132,19 @@ async fn main() -> anyhow::Result<()> {
     if runners.is_empty() {
         info!("no service runners declared");
     } else {
-        info!(count = runners.len(), "supervising service runners");
+        let on_demand = runners.iter().filter(|r| r.start.is_on_demand()).count();
+        info!(
+            count = runners.len(),
+            on_demand, "supervising service runners"
+        );
     }
-    let mut supervisor = runner::Supervisor::start(runners);
+    let mut supervisor = runner::Supervisor::start(runners, Arc::clone(&demand));
+
+    // The other hive's end of the on-demand policy: requests it routed and phases it published,
+    // read a few times a second. Whichever half this hive is, the task is the same one — and on a
+    // machine where one hive both routes and supervises it finds nothing to do, because that hive's
+    // own requests never reach the disk.
+    tasks.push(tokio::spawn(demand::bridge(Arc::clone(&demand))));
 
     info!("adi-hive ready");
 
@@ -229,6 +249,7 @@ fn addresses_already_served(path: &Path) -> Option<Vec<SocketAddr>> {
 async fn bind_plain(
     resolved: &config::Resolved,
     route_rx: &watch::Receiver<Arc<Router>>,
+    demand: &Arc<Demand>,
     bound: &mut Vec<String>,
     tasks: &mut Vec<JoinHandle<()>>,
 ) {
@@ -239,7 +260,11 @@ async fn bind_plain(
                 let local = listener.local_addr().unwrap_or(*addr);
                 info!(%local, "listening");
                 bound.push(local.to_string());
-                tasks.push(tokio::spawn(proxy::serve(listener, route_rx.clone())));
+                tasks.push(tokio::spawn(proxy::serve(
+                    listener,
+                    route_rx.clone(),
+                    Arc::clone(demand),
+                )));
             }
             Err(e) => {
                 warn!(%addr, error = %e, "could not bind (privileged port needs root, or in use?); skipping");
@@ -255,6 +280,7 @@ async fn bind_tls(
     path: &Path,
     resolved: &config::Resolved,
     route_rx: &watch::Receiver<Arc<Router>>,
+    demand: &Arc<Demand>,
     bound: &mut Vec<String>,
     tasks: &mut Vec<JoinHandle<()>>,
 ) {
@@ -297,6 +323,7 @@ async fn bind_tls(
                     listener,
                     acceptor.clone(),
                     route_rx.clone(),
+                    Arc::clone(demand),
                 )));
             }
             Err(e) => warn!(

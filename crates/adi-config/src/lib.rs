@@ -33,6 +33,7 @@
 //! # Ok::<(), adi_config::Error>(())
 //! ```
 
+mod duration;
 mod error;
 mod file;
 mod flavor;
@@ -44,6 +45,7 @@ mod module;
 
 use std::path::{Path, PathBuf};
 
+pub use duration::parse_duration;
 pub use error::{Error, Result};
 pub use file::{ConfigFile, Timestamped};
 pub use flavor::{DEFAULT_FLAVOR, FLAVOR_ENV, Flavor};

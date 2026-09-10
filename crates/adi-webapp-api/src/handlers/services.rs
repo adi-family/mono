@@ -5,8 +5,8 @@ use adi_projects::Projects;
 use serde::Deserialize;
 
 use crate::types::{
-    HiveService, HiveState, NewService, ProcessUsage, ProjectService, ServicePort, StartResult,
-    StartService, StopResult, UsedPort,
+    HiveService, HiveState, NewService, ProcessUsage, ProjectService, ServicePort, ServiceState,
+    StartResult, StartService, StopResult, UsedPort,
 };
 
 use super::projects::project_detail;
@@ -32,6 +32,13 @@ struct YamlService {
     runner: Option<HiveRunner>,
     #[serde(default)]
     restart: Option<String>,
+    /// `on-demand` (the default for a service with a `proxy.host`) or `always` — adi-hive's
+    /// `StartPolicy`, mirrored as the raw string so this view reports what the file says rather
+    /// than a second opinion about it.
+    #[serde(default)]
+    start: Option<String>,
+    #[serde(default)]
+    idle_stop: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -95,6 +102,86 @@ pub(crate) fn is_listening(live: &[UsedPort], port: u16) -> bool {
     live.iter().any(|u| u.port == port)
 }
 
+/// The value of `start:` that means "started by a visit, stopped when nobody visits" (adi-hive's
+/// `StartPolicy::OnDemand`) — and, for a service with a `proxy.host`, what saying nothing means.
+const ON_DEMAND: &str = "on-demand";
+
+/// The other policy: started with the hive and kept alive. What `start:` has to say for a service
+/// that must be up whether or not anybody is looking at it.
+const ALWAYS: &str = "always";
+
+/// Where a hive publishes what its on-demand services are doing: the store's own `hive` directory,
+/// whichever config file that hive was started from (adi-hive's `shared::state_path`). Only a hive
+/// that actually supervises something on demand writes it — which on a machine with a route-only
+/// front door is the per-user supervisor, not the front door.
+const DEMAND_FILE: &str = "demand.json";
+
+/// What the hive daemon says its on-demand services are doing, keyed exactly as the hive keys them:
+/// `<project>/<service>` for an imported service, the bare name for one declared in the front-door
+/// hive itself.
+///
+/// It exists because a port scan cannot tell *starting* from *stopped*, and those are the two
+/// states an on-demand service spends its interesting moments in. Absent (no hive here supervises
+/// anything on demand, or it is not running) the file simply isn't there, and every service falls
+/// back to what the scan alone can say.
+#[derive(Debug, Default)]
+pub(crate) struct DemandPhases(BTreeMap<String, String>);
+
+impl DemandPhases {
+    /// Read the file, or nothing at all — a missing or unreadable report is never an error here.
+    pub(crate) fn read(cfg: &adi_config::Config) -> Self {
+        let path = cfg.module("hive").raw_path(DEMAND_FILE);
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(&raw).ok())
+            .map_or_else(Self::default, Self)
+    }
+
+    /// The phase published for a service, under the key its hive uses.
+    fn phase(&self, namespace: Option<&str>, name: &str) -> Option<&str> {
+        let key = namespace.map_or_else(|| name.to_string(), |ns| format!("{ns}/{name}"));
+        self.0.get(&key).map(String::as_str)
+    }
+}
+
+/// Resolve a service's live state from the three things that can be known about it: whether its
+/// port answers, whether it is on demand, and what its hive last published.
+///
+/// The port scan outranks the report — a service that is answering is running, whoever started it
+/// and whatever anyone says. The report is only consulted for the states a scan cannot see, and a
+/// published "running" we cannot reach reads as `starting`: the hive has a process, it is just not
+/// answering yet.
+fn service_state(running: bool, on_demand: bool, published: Option<&str>) -> ServiceState {
+    if running {
+        return ServiceState::Running;
+    }
+    match published {
+        Some("starting" | "running") => ServiceState::Starting,
+        Some("idle-stopped") => ServiceState::IdleStopped,
+        // Nothing published: an on-demand service that is not up is waiting to be visited, which is
+        // the policy working rather than a service that is down.
+        _ if on_demand => ServiceState::IdleStopped,
+        _ => ServiceState::Stopped,
+    }
+}
+
+/// Whether a `start:` value *names* the on-demand policy, in the spellings adi-hive accepts.
+/// Anything else it does not recognise — a typo included — is `always` there, and so here.
+fn names_on_demand(start: &str) -> bool {
+    matches!(
+        start.trim().to_ascii_lowercase().as_str(),
+        "on-demand" | "on_demand" | "ondemand" | "demand" | "lazy"
+    )
+}
+
+/// Whether a service is on demand, read the way adi-hive reads it: what its `start:` says, and —
+/// when it says nothing — the default for its shape. `has_host` is whether it declares a
+/// `proxy.host`, because a service with none can never be woken by a request and is therefore
+/// `always` (adi-hive's `StartPolicy::default_for`).
+fn is_on_demand(start: Option<&str>, has_host: bool) -> bool {
+    given(start).map_or(has_host, names_on_demand)
+}
+
 /// What the process holding `port` costs, when the host sampled it.
 fn usage_at(live: &[UsedPort], port: Option<u16>) -> Option<ProcessUsage> {
     let port = port?;
@@ -102,10 +189,18 @@ fn usage_at(live: &[UsedPort], port: Option<u16>) -> Option<ProcessUsage> {
 }
 
 /// Read a project's `.adi/hive.yaml` into `(has_hive, services)`, tagging each service with a live
-/// running flag (its primary port is one of the `live` listeners) and that listener's CPU/memory.
-/// A missing file is `(false, [])`; a present-but-unparseable file is `(true, [])` — the project
-/// has a hive config, just not one we can summarize.
-pub(crate) fn read_hive_services(path: &Path, live: &[UsedPort]) -> (bool, Vec<ProjectService>) {
+/// running flag (its primary port is one of the `live` listeners), that listener's CPU/memory, and
+/// its start policy and state. A missing file is `(false, [])`; a present-but-unparseable file is
+/// `(true, [])` — the project has a hive config, just not one we can summarize.
+///
+/// `namespace` is how the supervising hive keys these services (a project or dashboard id, `None`
+/// for the front-door hive's own), which is what the on-demand phases in `demand` are looked up by.
+pub(crate) fn read_hive_services(
+    path: &Path,
+    live: &[UsedPort],
+    demand: &DemandPhases,
+    namespace: Option<&str>,
+) -> (bool, Vec<ProjectService>) {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return (false, Vec::new());
     };
@@ -132,14 +227,25 @@ pub(crate) fn read_hive_services(path: &Path, live: &[UsedPort]) -> (bool, Vec<P
                 })
                 .unwrap_or_default();
             let port = primary_port(&ports);
+            let running = port.is_some_and(|p| is_listening(live, p));
+            let host = svc.proxy.map(|p| p.host);
+            let on_demand = is_on_demand(
+                svc.start.as_deref(),
+                host.as_deref().is_some_and(|h| !h.trim().is_empty()),
+            );
             ProjectService {
-                name,
-                host: svc.proxy.map(|p| p.host),
+                host,
                 run: svc.runner.and_then(HiveRunner::display_command),
                 restart: svc.restart,
-                running: port.is_some_and(|p| is_listening(live, p)),
+                // Normalised so a panel never has to guess: a file that says nothing about `start`
+                // is reported under the policy it is actually running, not as a blank.
+                start: Some(if on_demand { ON_DEMAND } else { ALWAYS }.to_string()),
+                idle_stop: svc.idle_stop,
+                running,
+                state: service_state(running, on_demand, demand.phase(namespace, &name)),
                 usage: usage_at(live, port),
                 ports,
+                name,
             }
         })
         .collect();
@@ -169,16 +275,19 @@ fn primary_port(ports: &[ServicePort]) -> Option<u16> {
 #[must_use]
 pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort]) -> Response {
     let mut services = Vec::new();
+    // Read once for the whole aggregate: it is one small file, and every service in every project
+    // is looked up in it.
+    let demand = DemandPhases::read(store.config());
 
     // The global front-door hive lives in the `hive` module of the same store the projects use.
     let global = store.config().module("hive").raw_path("hive.yaml");
-    collect_hive_services(None, &global, live, &mut services);
+    collect_hive_services(None, &global, live, &demand, &mut services);
 
     match store.list() {
         Ok(projects) => {
             for project in projects {
                 if let Ok(path) = store.hive_path(&project.id) {
-                    collect_hive_services(Some(&project.id), &path, live, &mut services);
+                    collect_hive_services(Some(&project.id), &path, live, &demand, &mut services);
                 }
             }
         }
@@ -187,7 +296,7 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort
 
     // Dashboards are supervised by their own (per-user) adi-hive, but they are hive services all
     // the same — this view is meant to be the one place every service is visible.
-    collect_dashboard_services(store.config(), ports, live, &mut services);
+    collect_dashboard_services(store.config(), ports, live, &demand, &mut services);
 
     ok_json(&HiveState { services })
 }
@@ -201,6 +310,7 @@ fn collect_dashboard_services(
     cfg: &adi_config::Config,
     ports: &adi_ports_manager::Ports,
     live: &[UsedPort],
+    demand: &DemandPhases,
     out: &mut Vec<HiveService>,
 ) {
     let root = cfg.module("dashboards").dir().to_path_buf();
@@ -219,16 +329,20 @@ fn collect_dashboard_services(
         let Some(id) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let (_has_hive, parsed) = read_hive_services(&dir.join(".adi").join("hive.yaml"), live);
+        let (_has_hive, parsed) =
+            read_hive_services(&dir.join(".adi").join("hive.yaml"), live, demand, Some(&id));
         for svc in parsed {
             let port = ports
                 .get(&format!("{id}/{}", svc.name), "http")
                 .ok()
                 .flatten();
+            let running = port.is_some_and(|p| is_listening(live, p));
+            // `read_hive_services` already settled the policy for this service, so this reads its
+            // answer rather than defaulting a second time off a field it has since normalised.
+            let on_demand = svc.start.as_deref() == Some(ON_DEMAND);
             out.push(HiveService {
                 project: None,
                 dashboard: Some(id.clone()),
-                name: svc.name,
                 host: svc.host,
                 ports: port
                     .map(|p| {
@@ -240,11 +354,16 @@ fn collect_dashboard_services(
                     .unwrap_or_default(),
                 run: svc.run,
                 restart: svc.restart,
+                start: svc.start,
+                idle_stop: svc.idle_stop,
                 primary_port: port,
-                running: port.is_some_and(|p| is_listening(live, p)),
+                running,
+                // Decided on the leased port, not the YAML's — see the port above.
+                state: service_state(running, on_demand, demand.phase(Some(&id), &svc.name)),
                 // A dashboard's port comes from the registry, not its YAML, so `read_hive_services`
                 // could not have charged it — resolve the usage against the leased port here.
                 usage: usage_at(live, port),
+                name: svc.name,
             });
         }
     }
@@ -256,9 +375,10 @@ fn collect_hive_services(
     project: Option<&str>,
     path: &Path,
     live: &[UsedPort],
+    demand: &DemandPhases,
     out: &mut Vec<HiveService>,
 ) {
-    let (_has_hive, parsed) = read_hive_services(path, live);
+    let (_has_hive, parsed) = read_hive_services(path, live, demand, project);
     for svc in parsed {
         let port = primary_port(&svc.ports);
         out.push(HiveService {
@@ -269,8 +389,11 @@ fn collect_hive_services(
             ports: svc.ports,
             run: svc.run,
             restart: svc.restart,
+            start: svc.start,
+            idle_stop: svc.idle_stop,
             primary_port: port,
             running: svc.running,
+            state: svc.state,
             usage: svc.usage,
         });
     }
@@ -457,10 +580,6 @@ pub fn create_service(store: &Projects, body: &[u8], live: &[UsedPort]) -> Respo
     fn ystr(s: &str) -> Yaml {
         Yaml::String(s.to_string())
     }
-    /// A trimmed, non-empty optional field.
-    fn given(field: Option<&str>) -> Option<&str> {
-        field.map(str::trim).filter(|s| !s.is_empty())
-    }
 
     /// A YAML sequence of strings, dropping blank entries.
     fn yseq(items: &[String]) -> Yaml {
@@ -477,9 +596,13 @@ pub fn create_service(store: &Projects, body: &[u8], live: &[UsedPort]) -> Respo
     let Ok(req) = serde_json::from_slice::<NewService>(body) else {
         return error(
             400,
-            "expected JSON body { project, name, run|docker, host?, port?, working_dir?, restart? }",
+            "expected JSON body { project, name, run|docker, host?, port?, working_dir?, \
+             restart?, start?, idle_stop?, stop_grace? }",
         );
     };
+    if let Some(refusal) = refuse_bad_start_policy(&req) {
+        return refusal;
+    }
     let project = req.project.trim();
     let name = req.name.trim();
     let run = req.run.trim();
@@ -589,6 +712,9 @@ pub fn create_service(store: &Projects, body: &[u8], live: &[UsedPort]) -> Respo
     if let Some(restart) = given(req.restart.as_deref()) {
         svc.insert(ystr("restart"), ystr(restart));
     }
+    for (key, value) in start_policy_keys(&req) {
+        svc.insert(ystr(key), ystr(&value));
+    }
 
     let Yaml::Mapping(root) = &mut doc else {
         unreachable!("doc was matched to a mapping above");
@@ -621,6 +747,63 @@ pub fn create_service(store: &Projects, body: &[u8], live: &[UsedPort]) -> Respo
         return error(500, &format!("writing {}: {e}", path.display()));
     }
     project_detail(store, project, live)
+}
+
+/// A trimmed, non-empty optional field.
+fn given(field: Option<&str>) -> Option<&str> {
+    field.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Refuse a start policy that would not mean what it says, before anything reaches the file.
+///
+/// An unreadable window is refused rather than written: a service that quietly ignores the half
+/// hour somebody asked for and takes the daemon's hour instead is worse than one that was not
+/// created, because nothing about it looks wrong afterwards.
+fn refuse_bad_start_policy(req: &NewService) -> Option<Response> {
+    if let Some(policy) = given(req.start.as_deref())
+        && !names_on_demand(policy)
+        && !policy.eq_ignore_ascii_case(ALWAYS)
+    {
+        return Some(error(400, "start must be `always` or `on-demand`"));
+    }
+    for (field, value) in [
+        ("idle_stop", req.idle_stop.as_deref()),
+        ("stop_grace", req.stop_grace.as_deref()),
+    ] {
+        if let Some(raw) = given(value)
+            && adi_config::parse_duration(raw).is_none()
+        {
+            return Some(error(
+                400,
+                &format!("{field} must be a duration like `1h`, `30m`, `90s`, or seconds"),
+            ));
+        }
+    }
+    None
+}
+
+/// The `start` / `idle_stop` / `stop_grace` keys a new service should carry, in file order.
+///
+/// Only what was actually asked for: a service created without an opinion about starting carries no
+/// key at all and takes adi-hive's default — on-demand once it has a host, `always` without one —
+/// which is what keeps the create form from writing a policy into every hive.yaml it touches. The
+/// two windows are on-demand's alone; on an `always` service they would describe a stop that never
+/// happens.
+fn start_policy_keys(req: &NewService) -> Vec<(&'static str, String)> {
+    let Some(policy) = given(req.start.as_deref()) else {
+        return Vec::new();
+    };
+    if !names_on_demand(policy) {
+        return vec![("start", policy.to_string())];
+    }
+    let mut keys = vec![("start", ON_DEMAND.to_string())];
+    if let Some(idle) = given(req.idle_stop.as_deref()) {
+        keys.push(("idle_stop", idle.to_string()));
+    }
+    if let Some(grace) = given(req.stop_grace.as_deref()) {
+        keys.push(("stop_grace", grace.to_string()));
+    }
+    keys
 }
 
 /// Validate a service name: a single YAML key that is also safe as a ports-manager lease
@@ -794,6 +977,185 @@ mod tests {
             docker_container_name("proj/api", &docker(None)),
             "adi-proj-api"
         );
+    }
+
+    /// The distinction the four states exist for: "nobody has asked for it" is not "it is down",
+    /// and a port that answers outranks anything a report can say.
+    #[test]
+    fn an_on_demand_service_that_is_down_reads_as_idle_stopped_not_stopped() {
+        assert_eq!(service_state(true, true, None), ServiceState::Running);
+        assert_eq!(
+            service_state(true, true, Some("idle-stopped")),
+            ServiceState::Running,
+            "the port scan outranks a stale report"
+        );
+        assert_eq!(
+            service_state(false, true, None),
+            ServiceState::IdleStopped,
+            "an on-demand service that is down is waiting, not broken"
+        );
+        assert_eq!(service_state(false, false, None), ServiceState::Stopped);
+        assert_eq!(
+            service_state(false, true, Some("starting")),
+            ServiceState::Starting
+        );
+        assert_eq!(
+            service_state(false, true, Some("running")),
+            ServiceState::Starting,
+            "the hive has a process, but nothing is answering yet"
+        );
+    }
+
+    /// A service created without an opinion about starting must carry no `start:` at all — the
+    /// default lives in adi-hive, and writing it into every file would be a second place for it to
+    /// be changed.
+    #[test]
+    fn only_the_start_keys_that_were_asked_for_are_written() {
+        let base = NewService {
+            project: "p".to_string(),
+            name: "watch".to_string(),
+            run: "bun run watch".to_string(),
+            host: None,
+            port: None,
+            working_dir: None,
+            restart: None,
+            start: None,
+            idle_stop: None,
+            stop_grace: None,
+            docker: None,
+        };
+        assert!(start_policy_keys(&base).is_empty(), "no opinion, no key");
+
+        let demanded = NewService {
+            start: Some("on-demand".to_string()),
+            idle_stop: Some("30m".to_string()),
+            stop_grace: Some("  ".to_string()),
+            ..base.clone()
+        };
+        assert_eq!(
+            start_policy_keys(&demanded),
+            vec![
+                ("start", "on-demand".to_string()),
+                ("idle_stop", "30m".to_string()),
+            ],
+            "a blank window is not a window"
+        );
+
+        // The windows belong to on-demand; on an `always` service they describe nothing.
+        let always = NewService {
+            start: Some("always".to_string()),
+            idle_stop: Some("30m".to_string()),
+            ..base.clone()
+        };
+        assert_eq!(
+            start_policy_keys(&always),
+            vec![("start", "always".to_string())]
+        );
+
+        // And what cannot be honoured is refused rather than written and quietly defaulted.
+        assert!(refuse_bad_start_policy(&base).is_none());
+        assert!(
+            refuse_bad_start_policy(&NewService {
+                start: Some("whenever".to_string()),
+                ..base.clone()
+            })
+            .is_some()
+        );
+        assert!(
+            refuse_bad_start_policy(&NewService {
+                start: Some("on-demand".to_string()),
+                idle_stop: Some("soon".to_string()),
+                ..base
+            })
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn the_on_demand_policy_is_read_the_way_adi_hive_reads_it() {
+        let routable = true;
+        assert!(is_on_demand(Some("on-demand"), routable));
+        assert!(is_on_demand(Some(" On-Demand "), routable));
+        assert!(is_on_demand(Some("on_demand"), routable));
+        assert!(!is_on_demand(Some("always"), routable));
+        assert!(
+            !is_on_demand(Some("on demand"), routable),
+            "a typo is not the policy, and does not fall through to the default either"
+        );
+
+        // Nothing said: the default, which turns on whether anything could ever wake it.
+        assert!(is_on_demand(None, true));
+        assert!(!is_on_demand(None, false), "no host, nothing to arrive at");
+        assert!(is_on_demand(Some("  "), true), "blank is not an opinion");
+    }
+
+    /// What `GET /api/hive` and the project detail page report for each of the three cases: a
+    /// service that asked for the policy, a routable one that said nothing (the default), and one
+    /// with no host, which nothing could wake and which therefore keeps starting itself.
+    #[test]
+    fn a_services_start_policy_is_read_out_of_its_hive_yaml() {
+        let dir = std::env::temp_dir().join(format!(
+            "adi-api-hive-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hive.yaml");
+        std::fs::write(
+            &path,
+            "services:\n  \
+               watch:\n    \
+                 proxy: { host: watch.adi }\n    \
+                 rollout: { recreate: { ports: { http: 8931 } } }\n    \
+                 start: on-demand\n    \
+                 idle_stop: 30m\n    \
+                 runner: { script: { run: 'bun run watch' } }\n  \
+               web:\n    \
+                 proxy: { host: web.adi }\n    \
+                 rollout: { recreate: { ports: { http: 8933 } } }\n    \
+                 runner: { script: { run: 'bun run web' } }\n  \
+               api:\n    \
+                 rollout: { recreate: { ports: { http: 8932 } } }\n    \
+                 runner: { script: { run: 'bun run api' } }\n",
+        )
+        .unwrap();
+
+        let (has_hive, services) =
+            read_hive_services(&path, &[], &DemandPhases::default(), Some("proj"));
+        assert!(has_hive);
+        let watch = services.iter().find(|s| s.name == "watch").expect("watch");
+        assert_eq!(watch.start.as_deref(), Some("on-demand"));
+        assert_eq!(watch.idle_stop.as_deref(), Some("30m"));
+        assert_eq!(watch.state, ServiceState::IdleStopped);
+
+        // A routable service that says nothing takes the default, and is reported as waiting rather
+        // than as down — it is not running because nobody has asked for it.
+        let web = services.iter().find(|s| s.name == "web").expect("web");
+        assert_eq!(web.start.as_deref(), Some("on-demand"));
+        assert_eq!(web.state, ServiceState::IdleStopped);
+        assert_eq!(web.idle_stop, None, "the window is the daemon's, not a key");
+
+        // No host, so no request could ever wake it: `always`, and down means down.
+        let api = services.iter().find(|s| s.name == "api").expect("api");
+        assert_eq!(api.start.as_deref(), Some("always"));
+        assert_eq!(api.state, ServiceState::Stopped);
+        assert_eq!(api.idle_stop, None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The phases are keyed the way the hive keys its services, so a project's service is found
+    /// under `<project>/<service>` and a front-door one under its bare name.
+    #[test]
+    fn published_phases_are_looked_up_under_the_hives_own_key() {
+        let phases = DemandPhases(BTreeMap::from([
+            ("proj/watch".to_string(), "starting".to_string()),
+            ("frontend".to_string(), "idle-stopped".to_string()),
+        ]));
+        assert_eq!(phases.phase(Some("proj"), "watch"), Some("starting"));
+        assert_eq!(phases.phase(None, "frontend"), Some("idle-stopped"));
+        assert_eq!(phases.phase(None, "watch"), None);
+        assert_eq!(phases.phase(Some("other"), "watch"), None);
     }
 
     #[test]

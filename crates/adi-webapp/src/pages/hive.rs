@@ -4,7 +4,7 @@
 //! instance actually supervises it.
 
 use adi_ui::{EmptyRow, Row as TableRow, Table};
-use adi_webapp_api::types::{Dashboard, HiveService, Project};
+use adi_webapp_api::types::{Dashboard, HiveService, Project, ServiceState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -16,8 +16,10 @@ use crate::ui::{Sort, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell
 /// Every column the Hive table can show, in its declared order — the set the settings menu
 /// offers, and the order a user who has never rearranged it sees. Sort keys and cell builders
 /// both match on the header *text*, so a column can move or hide without either noticing.
+/// The trailing blank column holds the row's Start/Stop control and does not sort.
 pub(crate) const COLS: &[&str] = &[
-    "Source", "Service", "Host", "Ports", "Command", "Restart", "CPU", "Memory", "Status",
+    "Source", "Service", "Host", "Ports", "Command", "Restart", "Start", "CPU", "Memory", "Status",
+    "",
 ];
 
 /// Re-fetch `/api/hive` — which re-reads every project's `.adi/hive.yaml` and the global hive
@@ -45,12 +47,21 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Services"</h2>
-                <span class="adi-updated" title="Declared services, and how many are running">
-                    {move || hive.get().map_or_else(|| "\u{2014}".to_string(), |h| format!(
-                        "{} declared · {} running",
-                        h.services.len(),
-                        h.services.iter().filter(|s| s.running).count(),
-                    ))}
+                <span class="adi-updated"
+                    title="Declared services, how many are running, and how many are on-demand services waiting to be visited">
+                    {move || hive.get().map_or_else(|| "\u{2014}".to_string(), |h| {
+                        let idle = h.services.iter()
+                            .filter(|s| s.state == ServiceState::IdleStopped).count();
+                        let running = h.services.iter().filter(|s| s.running).count();
+                        // The idle count only earns its place when there is one — on a hive with no
+                        // on-demand services this line reads exactly as it always did.
+                        if idle == 0 {
+                            format!("{} declared · {running} running", h.services.len())
+                        } else {
+                            format!("{} declared · {running} running · {idle} idle-stopped",
+                                    h.services.len())
+                        }
+                    })}
                 </span>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated" title="Total CPU and memory of every running service">
@@ -170,9 +181,12 @@ fn sort_rows(rows: &mut [(HiveService, Source)], sort: Sort) {
                 .cmp(&b.primary_port.unwrap_or(0)),
             "Command" => text(a.run.as_ref()).cmp(text(b.run.as_ref())),
             "Restart" => text(a.restart.as_ref()).cmp(text(b.restart.as_ref())),
+            "Start" => text(a.start.as_ref()).cmp(text(b.start.as_ref())),
             "CPU" => cpu(a).total_cmp(&cpu(b)),
             "Memory" => mem(a).cmp(&mem(b)),
-            "Status" => a.running.cmp(&b.running),
+            // By how *up* the service is, not by the enum's declaration order: ascending puts the
+            // stopped ones first, so one click gathers whatever is not running.
+            "Status" => liveness(a).cmp(&liveness(b)),
             // "Source", and any header without a key of its own. Sorted by the displayed name
             // path, so the column orders the way it reads.
             _ => a_src.cmp(b_src),
@@ -183,6 +197,17 @@ fn sort_rows(rows: &mut [(HiveService, Source)], sort: Sort) {
             .then_with(|| a_src.cmp(b_src))
             .then_with(|| a.name.cmp(&b.name))
     });
+}
+
+/// How far up a service is, as the Status column orders it: stopped, then waiting to be visited,
+/// then coming up, then serving.
+fn liveness(s: &HiveService) -> u8 {
+    match s.state {
+        ServiceState::Stopped => 0,
+        ServiceState::IdleStopped => 1,
+        ServiceState::Starting => 2,
+        ServiceState::Running => 3,
+    }
 }
 
 /// A service's sampled CPU share, or zero when it isn't running.
@@ -224,10 +249,87 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
     sort_rows(&mut rows, state.tables.hive.sort.get());
     rows.into_iter()
         .map(|(s, src)| {
-            view! { <TableRow state=table cell=move |col| cell(col, &s, &src, state, route)/> }
+            let action = row_action(&s, state);
+            view! {
+                <TableRow state=table cell=move |col| cell(col, &s, &src, state, route)
+                    actions=action/>
+            }
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// The one control a row gets: Start or Stop, for a service this panel can actually act on.
+///
+/// A service with no runner has nothing to start, and a **dashboard's** service is supervised by
+/// its own per-user hive — `/api/hive/start` reads a project's hive.yaml or the front door's, so it
+/// would go looking for a service that is not in either. Both get nothing rather than a button that
+/// fails.
+///
+/// Starting an on-demand service by hand is deliberately allowed, and is not a special case: it
+/// starts the same process a visit would, and its idle window then runs exactly as it would have.
+fn row_action(s: &HiveService, state: State) -> AnyView {
+    if s.run.is_none() || s.dashboard.is_some() {
+        return ().into_any();
+    }
+    let (project, service) = (s.project.clone(), s.name.clone());
+    if s.running {
+        let (p, n) = (project, service);
+        return view! {
+            <button class="adi-btn adi-btn--sm" type="button" title="Stop this service"
+                on:click=move |_| act(state, p.clone(), n.clone(), false)>"Stop"</button>
+        }
+        .into_any();
+    }
+    let title = if s.state == ServiceState::IdleStopped {
+        "Start it now rather than waiting for a visit to its host"
+    } else {
+        "Run this service's command with its ports-manager port"
+    };
+    view! {
+        <button class="adi-btn adi-btn--sm" type="button" title=title
+            on:click=move |_| act(state, project.clone(), service.clone(), true)>"Start"</button>
+    }
+    .into_any()
+}
+
+/// Start or stop one service on the backend, then re-read the hive so the row's state catches up.
+fn act(state: State, project: Option<String>, service: String, start: bool) {
+    spawn_local(async move {
+        let done = if start {
+            fetch::start_service(project, service.clone())
+                .await
+                .map(|r| format!("Started {}.", r.service))
+        } else {
+            fetch::stop_service(project, service.clone())
+                .await
+                .map(|r| format!("Stopped {}.", r.service))
+        };
+        match done {
+            Ok(message) => {
+                state.flash.set(Some(Flash::ok(message)));
+                // The port takes a moment to answer, so this read may still show the old state; the
+                // Reload button and the next visit to the page both settle it.
+                reload_hive_quietly(state);
+            }
+            Err(e) => {
+                let verb = if start { "start" } else { "stop" };
+                state
+                    .flash
+                    .set(Some(Flash::err(format!("Couldn't {verb} {service}: {e}"))));
+            }
+        }
+    });
+}
+
+/// Re-read `/api/hive` without a flash of its own — the action that asked for it has already said
+/// what happened, and two notices for one click is one too many.
+fn reload_hive_quietly(state: State) {
+    spawn_local(async move {
+        if let Ok(h) = fetch::hive().await {
+            state.hive.set(Some(h));
+        }
+    });
 }
 
 /// One service's cell under `col`. Matching the header text — the same key the sort uses — is
@@ -245,26 +347,57 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
         "Restart" => {
             view! { <span class="adi-mono adi-muted">{dash(s.restart.clone())}</span> }.into_any()
         }
+        "Start" => start_cell(s),
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
-        "Status" => {
-            let (attr, label) = if s.running {
-                ("online", "running")
-            } else {
-                ("down", "stopped")
-            };
-            view! {
-                <span>
-                    <span class="adi-status" data-state=attr>
-                        <span class="adi-status__led"></span><span>{label}</span>
-                    </span>
-                </span>
-            }
-            .into_any()
-        }
+        "Status" => status_cell(s),
         // "Source", and anything the layout offers that this match doesn't name.
         _ => view! { <span>{source_cell(s, src, state, route)}</span> }.into_any(),
     }
+}
+
+/// The Start cell: which policy the service is under, and — for an on-demand one — how long it may
+/// go unvisited, which is the number somebody reading this column actually wants.
+fn start_cell(s: &HiveService) -> AnyView {
+    let on_demand = s.start.as_deref() == Some("on-demand");
+    if !on_demand {
+        return view! {
+            <span class="adi-mono adi-muted"
+                title="started with the hive and kept alive, whether or not anybody is looking at it">
+                "always"
+            </span>
+        }
+        .into_any();
+    }
+    let title = s.idle_stop.as_ref().map_or_else(
+        || "started by a visit; stopped after an hour with no request".to_string(),
+        |idle| format!("started by a visit; stopped after {idle} with no request"),
+    );
+    view! { <span class="adi-mono" title=title>"on-demand"</span> }.into_any()
+}
+
+/// The Status cell. Four states rather than a light: an on-demand service that is stopped because
+/// nobody has asked for it is doing exactly what it was told to, and the red dot a down service
+/// gets would say the opposite.
+fn status_cell(s: &HiveService) -> AnyView {
+    let (attr, title) = match s.state {
+        ServiceState::Running => ("online", "its port is answering"),
+        ServiceState::Starting => ("", "a visit started it; it has not answered yet"),
+        ServiceState::IdleStopped => (
+            "",
+            "an on-demand service, stopped because nobody has asked for it — a visit starts it",
+        ),
+        ServiceState::Stopped => ("down", "not running"),
+    };
+    let label = s.state.label();
+    view! {
+        <span>
+            <span class="adi-status" data-state=attr title=title>
+                <span class="adi-status__led"></span><span>{label}</span>
+            </span>
+        </span>
+    }
+    .into_any()
 }
 
 /// The Host cell: the front door serves every declared host over plain HTTP, so the name doubles
@@ -363,8 +496,15 @@ mod tests {
             ports: Vec::new(),
             run: None,
             restart: None,
+            start: None,
+            idle_stop: None,
             primary_port: None,
             running: usage.is_some(),
+            state: if usage.is_some() {
+                ServiceState::Running
+            } else {
+                ServiceState::Stopped
+            },
             usage: usage.map(|(cpu, memory_bytes)| ProcessUsage {
                 pid: 1,
                 cpu_percent: cpu,
@@ -546,6 +686,56 @@ mod tests {
 
         sort_rows(&mut services, desc("CPU"));
         assert_eq!(names(&services), ["busy", "idle", "stopped"]);
+    }
+
+    /// Status sorts by how far up a service is, and an idle-stopped one sits above a stopped one:
+    /// the question the column answers is "what is not running?", and "waiting to be visited" is a
+    /// different answer from "down".
+    #[test]
+    fn status_sorts_by_how_far_up_a_service_is() {
+        let state = |name: &str, state: ServiceState| HiveService {
+            state,
+            running: state == ServiceState::Running,
+            ..svc(name, Some("p"), None)
+        };
+        let mut services = rows(
+            vec![
+                state("up", ServiceState::Running),
+                state("down", ServiceState::Stopped),
+                state("waiting", ServiceState::IdleStopped),
+                state("coming", ServiceState::Starting),
+            ],
+            &[],
+        );
+        sort_rows(&mut services, asc("Status"));
+        assert_eq!(names(&services), ["down", "waiting", "coming", "up"]);
+
+        sort_rows(&mut services, desc("Status"));
+        assert_eq!(names(&services), ["up", "coming", "waiting", "down"]);
+    }
+
+    /// The Start column sorts by the policy the server settled. A row with none at all — an older
+    /// server that predates the field — sorts as empty rather than being guessed at.
+    #[test]
+    fn the_start_column_sorts_by_the_policy() {
+        let with = |name: &str, start: Option<&str>| HiveService {
+            start: start.map(str::to_string),
+            ..svc(name, Some("p"), None)
+        };
+        let mut services = rows(
+            vec![
+                with("watch", Some("on-demand")),
+                with("api", Some("always")),
+                with("legacy", None),
+            ],
+            &[],
+        );
+        sort_rows(&mut services, asc("Start"));
+        assert_eq!(
+            names(&services),
+            ["legacy", "api", "watch"],
+            "unset sorts as empty, then always, then on-demand"
+        );
     }
 
     /// Rows that tie on the sort key keep the source grouping — in both directions, since only

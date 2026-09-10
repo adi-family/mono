@@ -20,6 +20,58 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **Services are lazy now: one does not run until its page is visited.** A service used to cost the
+  same whether anybody was looking at it or not — the hive started everything at boot and kept it
+  alive for ever. From this release the hive starts **nothing** that has a `proxy.host` until a
+  request arrives for that host, and stops it again once an hour has passed with no request
+  (`idle_stop: 30m` in its hive.yaml to say otherwise). While it comes up, the visitor gets a page
+  that says the service is starting for them and turns into the service itself as soon as it
+  answers — no reload, no 502 that looks like a fault. The stop is a `SIGTERM` first: the process
+  gets 30 seconds (`stop_grace`) to finish what it is doing, and a request landing inside that
+  window cancels the stop and keeps the service.
+
+  **This changes what your existing hive.yaml means, and it is worth ten minutes before you
+  restart.** Anything that has to be up whether or not a browser is pointed at it — a background
+  worker, a webhook receiver, a queue consumer, an endpoint something else polls, anything a cron or
+  another machine calls — must now say so:
+
+  ```yaml
+  services:
+    webhooks:
+      proxy: { host: hooks.adi }
+      start: always          # ← without this it is not running when the call arrives
+      runner: { script: { run: bun run hooks } }
+  ```
+
+  A service with **no `proxy.host`** is left alone: nothing routable means no request could ever
+  wake it, so it keeps being started with the hive exactly as before, without needing a key. That is
+  most databases, workers and sidecars, which is why the change is narrower than it sounds — it is
+  the services with a `.adi` name, the ones you reach in a browser, that are now lazy.
+
+  What you lose by not editing anything is a first visit that waits a few seconds behind a holding
+  page. What you lose by not editing a webhook receiver is the webhook.
+
+  **This works when routing and supervising are two separate processes, which on most machines they
+  are.** A front door on `:80` routes what a per-user hive actually runs: the visit lands on the one
+  that has no process to start, and the process belongs to the one that saw no visit. The two now
+  pass it between them through a pair of small files in the store — the front door leaves the
+  request, the supervisor picks it up a fraction of a second later and starts the service, and the
+  traffic the front door goes on seeing is what keeps that service from being idle-stopped while
+  somebody is still using it. There is nothing to configure, and a machine where one hive both
+  routes and supervises never writes the files at all. **Both hives have to be running this
+  version.** They share one binary, so an update covers both and each restarts itself once its
+  binary is replaced — but until one of them has, a service a visit should have woken stays asleep
+  and its host answers the `502` it always did.
+
+  *Settings → Services* shows each service's policy and, instead of a running light, what it is
+  actually doing: running, starting, idle-stopped, or stopped. An idle-stopped service is not
+  reported as down, because it is not. Start and Stop still work by hand, and starting a service
+  that way gives it the same full idle window a visit would. The service form in a project now
+  offers **On demand** first, with **Always** beside it, and writes a `start:` key only when the
+  choice is not what silence already means.
+
 ## 1.10.1 — 2026-09-09
 
 ### Added

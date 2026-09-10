@@ -113,6 +113,20 @@ pub struct ServiceSpec {
     /// Restart policy: `always` | `on-failure` | `no`. Defaults to `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
+    /// Start policy: `always` | `on-demand`. Saying nothing means **on-demand** for a service with
+    /// a [`proxy.host`](ServiceProxy::host), and `always` for one without. See [`StartPolicy`].
+    #[serde(default)]
+    pub start: Option<String>,
+    /// How long an **on-demand** service may go without a request before it is stopped
+    /// (`1h`, `30m`, `90s`, or a bare number of seconds). Defaults to [`DEFAULT_IDLE_STOP`];
+    /// meaningless for an `always` service, which is never stopped for being quiet.
+    #[serde(default)]
+    pub idle_stop: Option<String>,
+    /// How long an idle stop waits after the `SIGTERM` before it escalates to `SIGKILL`, in the
+    /// same spelling as `idle_stop` above. Defaults to [`DEFAULT_STOP_GRACE`] — the window the
+    /// process has to finish what it was doing.
+    #[serde(default)]
+    pub stop_grace: Option<String>,
     /// The directory this service's runner resolves relative paths against (`working_dir`, docker
     /// bind-mount host paths). `None` for a service declared in the hive being loaded (it uses the
     /// loader's `base_dir`); set to the imported file's own directory for an imported service — so an
@@ -264,6 +278,41 @@ impl ServiceSpec {
             .insert(HTTP_PORT_KEY.to_string(), port);
     }
 
+    /// This service's start policy: what `start:` says, else [`StartPolicy::default_for`] its shape.
+    #[must_use]
+    pub fn start_policy(&self) -> StartPolicy {
+        StartPolicy::parse(self.start.as_deref(), self.has_proxy_host())
+    }
+
+    /// Whether a request could ever reach this service — i.e. whether it has a `proxy.host` for the
+    /// front door to route. It is what decides the default start policy, so a blank host counts as
+    /// none: it routes nothing, and a policy must not turn on a string that is only technically there.
+    fn has_proxy_host(&self) -> bool {
+        self.proxy
+            .as_ref()
+            .is_some_and(|proxy| !proxy.host.trim().is_empty())
+    }
+
+    /// The route this service answers on, as [`route_key`] names it, or `None` when no request can
+    /// reach it. Judged by the same blank-host rule as [`Self::has_proxy_host`]: a host that is only
+    /// technically there routes nothing, and must not become a key another process stamps.
+    fn route_key(&self) -> Option<String> {
+        self.proxy
+            .as_ref()
+            .filter(|proxy| !proxy.host.trim().is_empty())
+            .map(|proxy| route_key(&proxy.host, proxy.path.as_deref()))
+    }
+
+    /// How long this service may sit unvisited before an idle stop (on-demand only).
+    fn idle_stop(&self) -> Duration {
+        duration_or(self.idle_stop.as_deref(), DEFAULT_IDLE_STOP)
+    }
+
+    /// How long the idle stop waits between the `SIGTERM` and the `SIGKILL` (on-demand only).
+    fn stop_grace(&self) -> Duration {
+        duration_or(self.stop_grace.as_deref(), DEFAULT_STOP_GRACE)
+    }
+
     /// A service the proxy or the runner needs a port for.
     fn needs_http_port(&self) -> bool {
         self.proxy.is_some()
@@ -297,6 +346,96 @@ impl RestartPolicy {
     }
 }
 
+/// When a service is started.
+///
+/// The default is [`Self::OnDemand`]: a machine should not be running a service nobody is looking
+/// at, and most services are looked at through a browser. `always` is the opt-in for the ones that
+/// must be up whether or not anybody is — see [`Self::default_for`], which is where the one
+/// exception lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartPolicy {
+    /// Started when the hive starts — so it comes back after a machine restart — and kept alive
+    /// per the restart policy. Never stopped for being quiet. What a background worker, a webhook
+    /// receiver, or anything polled by something other than a browser has to say.
+    Always,
+    /// Not started at boot. The front door starts it when a request arrives for its host, and it
+    /// is stopped again once no request has arrived for its idle window.
+    #[default]
+    OnDemand,
+}
+
+impl StartPolicy {
+    /// The policy a service falls under when its `start:` says nothing.
+    ///
+    /// [`Self::OnDemand`] — **unless it has no `proxy.host`**. Nothing routable means no request
+    /// could ever wake it, so on-demand for such a service would not mean "runs while somebody is
+    /// looking at it", it would mean "never runs at all". It is `always` instead, and that is a
+    /// rule stated here rather than an accident of nobody ever calling `wanted()` for it.
+    ///
+    /// A service that *has* a host is on demand, with no further exceptions: `always` on one of
+    /// those is something the file has to say.
+    #[must_use]
+    pub fn default_for(has_host: bool) -> Self {
+        if has_host {
+            Self::OnDemand
+        } else {
+            Self::Always
+        }
+    }
+
+    /// Read the `start:` key of a service, falling back to [`Self::default_for`] when it says
+    /// nothing at all.
+    ///
+    /// Anything unrecognised is [`Self::Always`] rather than the default — the safe direction for a
+    /// typo, since a service that runs when it needn't costs a core, and one that is silently never
+    /// there costs an afternoon of looking for it.
+    fn parse(raw: Option<&str>, has_host: bool) -> Self {
+        let raw = raw
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_ascii_lowercase);
+        match raw.as_deref() {
+            Some("on-demand" | "on_demand" | "ondemand" | "demand" | "lazy") => Self::OnDemand,
+            None => Self::default_for(has_host),
+            _ => Self::Always,
+        }
+    }
+
+    /// Whether this is an on-demand service — the question every caller actually asks.
+    #[must_use]
+    pub fn is_on_demand(self) -> bool {
+        self == Self::OnDemand
+    }
+
+    /// How the policy is written in hive.yaml, which is also how the API and the panel name it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::OnDemand => "on-demand",
+        }
+    }
+}
+
+/// How long an on-demand service sits without a request before it is stopped, when its
+/// `idle_stop` says nothing. An hour: long enough that a page left open in a background tab, or a
+/// lunch break, does not cost a cold start; short enough that a service nobody came back to is not
+/// still running that evening.
+pub const DEFAULT_IDLE_STOP: Duration = Duration::from_hours(1);
+
+/// How long an idle stop waits between the `SIGTERM` and the `SIGKILL`, when `stop_grace` says
+/// nothing. The point of stopping with a signal at all is that the process gets to finish what it
+/// is doing — 30 seconds is a request draining, not a process being taken out.
+pub const DEFAULT_STOP_GRACE: Duration = Duration::from_secs(30);
+
+/// Read a configured duration (`1h`, `30m`, `90s`, `3600`), falling back to `default` when it is
+/// absent or unreadable. Shared with the rest of the platform through [`adi_config::parse_duration`]
+/// so `30m` in a hive.yaml means what `30m` in an LLM backend's cooldown means.
+fn duration_or(raw: Option<&str>, default: Duration) -> Duration {
+    raw.and_then(adi_config::parse_duration)
+        .map_or(default, Duration::from_secs)
+}
+
 /// A service resolved to a launchable runner: command, working dir, env, and restart policy.
 ///
 /// `PartialEq` is what makes hot reload safe: the supervisor compares a freshly-read spec against
@@ -308,6 +447,20 @@ pub struct RunnerSpec {
     pub working_dir: PathBuf,
     pub env: Vec<(String, String)>,
     pub restart: RestartPolicy,
+    /// Whether the supervisor launches this at start-up or waits for a request. See [`StartPolicy`].
+    pub start: StartPolicy,
+    /// On-demand only: the quiet window that ends in a stop.
+    pub idle_stop: Duration,
+    /// On-demand only: the `SIGTERM`→`SIGKILL` window of that stop.
+    pub stop_grace: Duration,
+    /// The service's HTTP port, when it has one. The idle stop reads it to tell a process that is
+    /// merely winding down from one that is still serving — a request landing mid-drain keeps the
+    /// service only if something is still listening here.
+    pub http_port: Option<u16>,
+    /// The route a request for this service arrives on ([`route_key`]), when it has one. It travels
+    /// with the runner so the supervisor can recognise a request another process routed — see
+    /// [`crate::shared`]. `None` for a service with no `proxy.host`: nothing can arrive for it.
+    pub route: Option<String>,
 }
 
 impl Hive {
@@ -392,6 +545,10 @@ impl Hive {
             };
             let ports = svc.ports();
             let restart = RestartPolicy::parse(svc.restart.as_deref());
+            let (start, idle_stop, stop_grace) =
+                (svc.start_policy(), svc.idle_stop(), svc.stop_grace());
+            let http_port = svc.http_port();
+            let route = svc.route_key();
             // An imported service resolves relative paths against its own file's directory; a service
             // declared in this hive uses the loader's `base_dir`.
             let dir = svc.base_dir.as_deref().unwrap_or(base_dir);
@@ -412,6 +569,11 @@ impl Hive {
                     working_dir: dir.to_path_buf(),
                     env: Vec::new(),
                     restart,
+                    start,
+                    idle_stop,
+                    stop_grace,
+                    http_port,
+                    route,
                 },
                 (None, Some(script)) => RunnerSpec {
                     name: name.clone(),
@@ -419,6 +581,11 @@ impl Hive {
                     working_dir: resolve_working_dir(dir, script.working_dir.as_deref()),
                     env: build_env(svc, ports),
                     restart,
+                    start,
+                    idle_stop,
+                    stop_grace,
+                    http_port,
+                    route,
                 },
                 (None, None) => continue,
             };
@@ -932,6 +1099,10 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// One routing rule the proxy enforces: `Host: host` (optionally under `path`) → `upstream`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoute {
+    /// The service this route belongs to, keyed as the config keys it (`<project>/<service>` for
+    /// an imported one). It travels with the route because the front door has to be able to name
+    /// the service a request just woke — see [`crate::demand`].
+    pub service: String,
     pub host: String,
     /// The path prefix this route claims on `host`, already normalised by [`path_prefix`].
     /// `None` is the host's fallback route — the shape every pre-`proxy.path` config has.
@@ -1000,6 +1171,23 @@ pub fn path_prefix(raw: Option<&str>) -> Option<String> {
     } else {
         format!("/{trimmed}")
     })
+}
+
+/// The name a route goes by **between processes**: its host, plus the prefix it claims on that host
+/// when it claims one — `nosh.adi`, `nosh.adi/api`.
+///
+/// Both halves are normalised on the way in ([`host_key`], [`path_prefix`]), so a config that
+/// writes `NOSH.adi` and `api/` produces the key a request for `nosh.adi/api/things` produces. It
+/// names a *route* rather than a service because that is what a request lands on, and because a
+/// service key repeats across imported projects while a route cannot: two services on one host must
+/// claim different prefixes or one of them is unreachable. See [`crate::shared`].
+#[must_use]
+pub fn route_key(host: &str, path: Option<&str>) -> String {
+    let host = host_key(host);
+    match path_prefix(path) {
+        Some(prefix) => format!("{host}{prefix}"),
+        None => host,
+    }
 }
 
 impl Hive {
@@ -1128,6 +1316,7 @@ impl Hive {
             }
             match svc.http_port() {
                 Some(port) => routes.push(ResolvedRoute {
+                    service: name.clone(),
                     host: proxy.host.clone(),
                     path: path_prefix(proxy.path.as_deref()),
                     upstream: SocketAddr::new(UPSTREAM_IP, port),
@@ -1155,9 +1344,20 @@ fn default_bind() -> Vec<SocketAddr> {
 /// and reads it as a raw file within the `hive` module.
 #[must_use]
 pub fn default_config_path() -> PathBuf {
+    store_path(HIVE_CONFIG_FILE)
+}
+
+/// A file of the hive's own in the store: `$HOME/$ADI_DIR/mono/hive/<name>`.
+///
+/// The one location two hives can both name. A hive's *config* may be anywhere — this machine runs
+/// one from `dns/` and another from `dashboards/` — so anything the two have to share (see
+/// [`crate::shared`]) is resolved from the store rather than from "beside my own config", which is
+/// precisely the thing neither of them can work out for the other.
+#[must_use]
+pub fn store_path(name: &str) -> PathBuf {
     adi_config::Config::open()
         .module(HIVE_MODULE)
-        .raw_path(HIVE_CONFIG_FILE)
+        .raw_path(name)
 }
 
 #[cfg(test)]
@@ -1837,6 +2037,187 @@ services:
             runners[0].working_dir,
             Path::new("/home/u/.adi/mono/projects/proj/workspaces/main"),
             "imported relative working_dir must resolve under the project, not the supervisor",
+        );
+    }
+
+    /// The default: a routable service that says nothing about `start` is on demand, and takes both
+    /// windows from the daemon rather than from the file.
+    #[test]
+    fn a_routable_service_that_says_nothing_about_starting_is_on_demand() {
+        let hive: Hive = serde_yaml_ng::from_str(SAMPLE).expect("hive.yaml parses");
+        for name in ["frontend", "backend"] {
+            assert_eq!(
+                hive.services[name].start_policy(),
+                StartPolicy::OnDemand,
+                "{name} has a host, so silence means on demand"
+            );
+        }
+        let runners = hive.runners(Path::new("/project"));
+        assert!(runners.iter().all(|r| r.start == StartPolicy::OnDemand));
+        assert!(runners.iter().all(|r| r.idle_stop == DEFAULT_IDLE_STOP));
+        assert!(runners.iter().all(|r| r.stop_grace == DEFAULT_STOP_GRACE));
+    }
+
+    /// The one carve-out, and the reason it exists: with no `proxy.host` there is nothing for a
+    /// request to arrive at, so on-demand would not mean "runs while somebody is looking at it" —
+    /// it would mean "never runs at all". Such a service is `always` without having to say so.
+    #[test]
+    fn a_service_with_no_host_is_always_started_because_nothing_could_ever_wake_it() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  worker:
+    rollout: { recreate: { ports: { http: 8040 } } }
+    runner: { script: { run: 'bun run worker' } }
+  blank:
+    proxy: { host: '  ' }
+    rollout: { recreate: { ports: { http: 8041 } } }
+    runner: { script: { run: 'bun run blank' } }
+  visited:
+    proxy: { host: visited.adi }
+    rollout: { recreate: { ports: { http: 8042 } } }
+    runner: { script: { run: 'bun run visited' } }
+",
+        )
+        .expect("hive.yaml parses");
+        assert_eq!(
+            hive.services["worker"].start_policy(),
+            StartPolicy::Always,
+            "a background worker keeps starting on its own"
+        );
+        assert_eq!(
+            hive.services["blank"].start_policy(),
+            StartPolicy::Always,
+            "a host that is only whitespace routes nothing, so it is not a host"
+        );
+        assert_eq!(
+            hive.services["visited"].start_policy(),
+            StartPolicy::OnDemand,
+            "a service with a host takes the default, with no exceptions carved out"
+        );
+
+        // The carve-out is about the *default* only: a hostless service that asks for on-demand
+        // gets it, and is then started by hand from the panel rather than by a visit.
+        let asked: ServiceSpec =
+            serde_yaml_ng::from_str("start: on-demand\nrunner: { script: { run: 'x' } }\n")
+                .expect("parse");
+        assert_eq!(asked.start_policy(), StartPolicy::OnDemand);
+    }
+
+    #[test]
+    fn an_on_demand_service_carries_its_two_windows_into_the_runner() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  watch:
+    proxy: { host: watch.adi }
+    rollout: { recreate: { ports: { http: 8033 } } }
+    start: on-demand
+    idle_stop: 30m
+    stop_grace: 10s
+    runner: { script: { run: 'bun run watch' } }
+  api:
+    rollout: { recreate: { ports: { http: 8034 } } }
+    start: on-demand
+    runner: { script: { run: 'bun run api' } }
+",
+        )
+        .expect("hive.yaml parses");
+
+        let runners = hive.runners(Path::new("/project"));
+        let watch = runners.iter().find(|r| r.name == "watch").expect("watch");
+        assert_eq!(watch.start, StartPolicy::OnDemand);
+        assert_eq!(watch.idle_stop, Duration::from_secs(30 * 60));
+        assert_eq!(watch.stop_grace, Duration::from_secs(10));
+        // The port travels with the spec: the idle stop asks it whether a draining process is
+        // still serving.
+        assert_eq!(watch.http_port, Some(8033));
+
+        // The windows are optional; an on-demand service that names neither takes the defaults.
+        let api = runners.iter().find(|r| r.name == "api").expect("api");
+        assert_eq!(api.start, StartPolicy::OnDemand);
+        assert_eq!(api.idle_stop, DEFAULT_IDLE_STOP);
+        assert_eq!(api.stop_grace, DEFAULT_STOP_GRACE);
+
+        // And it is still routed: on-demand changes when a service runs, never whether it is found.
+        let routes = hive.resolve().routes;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].service, "watch");
+        assert_eq!(routes[0].upstream.port(), 8033);
+    }
+
+    /// A route names its service, because the front door has to be able to say what a request just
+    /// woke. An imported service keeps the namespaced key the supervisor knows it by, or the two
+    /// sides would be talking about different services.
+    #[test]
+    fn a_route_carries_the_service_key_the_supervisor_uses() {
+        let child: Hive = serde_yaml_ng::from_str(
+            "services:\n  app:\n    proxy: { host: proj.adi }\n    rollout: { recreate: { ports: { http: 9125 } } }\n",
+        )
+        .expect("parse child");
+        let mut hive = Hive::default();
+        hive.merge_import(child, "proj", false, None);
+        let routes = hive.resolve().routes;
+        assert_eq!(routes[0].service, "proj/app");
+    }
+
+    #[test]
+    fn start_policy_reads_the_spellings_people_write_and_defaults_by_routability() {
+        let routable = true;
+        assert_eq!(
+            StartPolicy::parse(Some("on-demand"), routable),
+            StartPolicy::OnDemand
+        );
+        assert_eq!(
+            StartPolicy::parse(Some(" On-Demand "), routable),
+            StartPolicy::OnDemand
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("on_demand"), routable),
+            StartPolicy::OnDemand
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("always"), routable),
+            StartPolicy::Always
+        );
+
+        // Nothing said: the default, which is the whole of the policy for most services.
+        assert_eq!(StartPolicy::parse(None, true), StartPolicy::OnDemand);
+        assert_eq!(StartPolicy::parse(None, false), StartPolicy::Always);
+        assert_eq!(StartPolicy::parse(Some("  "), true), StartPolicy::OnDemand);
+        assert_eq!(StartPolicy::default(), StartPolicy::OnDemand);
+
+        // A typo must not be what makes a service lazy: `always` is where an unreadable policy
+        // lands, because a service that runs when it needn't is visible and one that is never
+        // there is not.
+        assert_eq!(
+            StartPolicy::parse(Some("on demand"), true),
+            StartPolicy::Always
+        );
+        assert_eq!(
+            StartPolicy::parse(Some("nonsense"), true),
+            StartPolicy::Always
+        );
+        assert_eq!(StartPolicy::Always.as_str(), "always");
+        assert_eq!(StartPolicy::OnDemand.as_str(), "on-demand");
+    }
+
+    /// An unreadable window falls back to the default rather than to zero — a typo in `idle_stop`
+    /// must not mean "stop this service immediately".
+    #[test]
+    fn a_window_that_cannot_be_read_falls_back_to_the_default() {
+        let svc: ServiceSpec =
+            serde_yaml_ng::from_str("start: on-demand\nidle_stop: soon\nstop_grace: ''\n")
+                .expect("parse");
+        assert_eq!(svc.idle_stop(), DEFAULT_IDLE_STOP);
+        assert_eq!(svc.stop_grace(), DEFAULT_STOP_GRACE);
+        assert_eq!(
+            duration_or(Some("90s"), DEFAULT_IDLE_STOP),
+            Duration::from_secs(90)
+        );
+        assert_eq!(
+            duration_or(Some("120"), DEFAULT_IDLE_STOP),
+            Duration::from_secs(120)
         );
     }
 

@@ -354,23 +354,10 @@ fn expand_home(value: &str) -> String {
     value.to_string()
 }
 
-/// Read `"4h"` / `"30m"` / `"90s"` / `"3600"` as seconds. `None` when it is not a duration at all,
-/// which the caller reads as "use the default" rather than as an error: a typo in a cooldown must
-/// not be the reason a limit goes unrecorded.
-#[must_use]
-pub fn parse_duration(value: &str) -> Option<u64> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let (digits, multiplier) = match value.chars().last() {
-        Some('h' | 'H') => (&value[..value.len() - 1], 3600),
-        Some('m' | 'M') => (&value[..value.len() - 1], 60),
-        Some('s' | 'S') => (&value[..value.len() - 1], 1),
-        _ => (value, 1),
-    };
-    digits.trim().parse::<u64>().ok().map(|n| n * multiplier)
-}
+/// Read `"4h"` / `"30m"` / `"90s"` / `"3600"` as seconds — the platform's one duration spelling,
+/// shared from [`adi_config`] because a hive service's idle window is written by the same person
+/// in the same units as a backend's cooldown.
+pub use adi_config::parse_duration;
 
 /// The on-disk store of backend definitions: `llm/backends/<id>.toml`.
 #[derive(Debug, Clone)]
@@ -713,16 +700,6 @@ mod tests {
             ..Default::default()
         };
         assert!(store.save("nowhere", manifest).is_err());
-    }
-
-    #[test]
-    fn durations_read_in_the_units_people_write() {
-        assert_eq!(parse_duration("4h"), Some(14_400));
-        assert_eq!(parse_duration("30m"), Some(1_800));
-        assert_eq!(parse_duration("90s"), Some(90));
-        assert_eq!(parse_duration(" 45 "), Some(45));
-        assert_eq!(parse_duration("soon"), None);
-        assert_eq!(parse_duration(""), None);
     }
 
     /// A typo in a cooldown must not be the reason a limit goes unrecorded — an unreadable `fixed`

@@ -4,13 +4,15 @@
 
 > adi-family reverse proxy: routes inbound HTTP by Host header to a local upstream (nginx-style), run in the foreground under a supervisor
 
-21 structs · 2 enums across 5 files.
+31 structs · 9 enums across 7 files.
 
 ## Index
 
-- [`src/config.rs`](#srcconfigrs) — `Hive`, `ProxyBinds`, `ServiceSpec`, `ServiceProxy`, `Rollout`, `Recreate`, `Runner`, `Script`, `Docker`, `Environment`, `RestartPolicy`, `RunnerSpec`, `ResolvedRoute`, `Resolved`
-- [`src/proxy.rs`](#srcproxyrs) — `Route`, `Decision`, `Router`
-- [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`
+- [`src/config.rs`](#srcconfigrs) — `Hive`, `ProxyBinds`, `ServiceSpec`, `ServiceProxy`, `Rollout`, `Recreate`, `Runner`, `Script`, `Docker`, `Environment`, `RestartPolicy`, `StartPolicy`, `RunnerSpec`, `ResolvedRoute`, `Resolved`
+- [`src/demand.rs`](#srcdemandrs) — `Phase`, `Wanted`, `Demand`, `Bridge`, `Service`, `Handle`
+- [`src/proxy.rs`](#srcproxyrs) — `Route`, `Matched`, `Decision`, `Router`
+- [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`, `Awake`, `Drained`, `Ended`, `Woke`
+- [`src/shared.rs`](#srcsharedrs) — `Entry`, `Wake`, `Mine`, `Reader`, `Pending`
 - [`src/status.rs`](#srcstatusrs) — `Status`
 - [`src/tls.rs`](#srctlsrs) — `CaMeta`, `LeafMeta`, `Tls`
 
@@ -67,6 +69,12 @@ pub struct ServiceSpec {
     pub environment: Option<Environment>,
     #[serde(default)]
     pub restart: Option<String>,
+    #[serde(default)]
+    pub start: Option<String>,
+    #[serde(default)]
+    pub idle_stop: Option<String>,
+    #[serde(default)]
+    pub stop_grace: Option<String>,
     #[serde(skip)]
     pub base_dir: Option<PathBuf>,
 }
@@ -176,6 +184,19 @@ pub enum RestartPolicy {
 }
 ```
 
+### enum `StartPolicy`
+
+When a service is started.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StartPolicy {
+    Always,
+    #[default]
+    OnDemand,
+}
+```
+
 ### struct `RunnerSpec`
 
 A service resolved to a launchable runner: command, working dir, env, and restart policy.
@@ -188,6 +209,11 @@ pub struct RunnerSpec {
     pub working_dir: PathBuf,
     pub env: Vec<(String, String)>,
     pub restart: RestartPolicy,
+    pub start: StartPolicy,
+    pub idle_stop: Duration,
+    pub stop_grace: Duration,
+    pub http_port: Option<u16>,
+    pub route: Option<String>,
 }
 ```
 
@@ -198,6 +224,7 @@ One routing rule the proxy enforces: `Host: host` (optionally under `path`) → 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoute {
+    pub service: String,
     pub host: String,
     pub path: Option<String>,
     pub upstream: SocketAddr,
@@ -222,6 +249,89 @@ pub struct Resolved {
 
 ---
 
+## `src/demand.rs`
+
+### enum `Phase`
+
+What an on-demand service is doing right now.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Phase {
+    IdleStopped,
+    Starting,
+    Running,
+    Draining,
+}
+```
+
+### enum `Wanted`
+
+What a routed request means for the service it landed on — the front door's whole question.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wanted {
+    No,
+    Here,
+    Elsewhere(String),
+}
+```
+
+### struct `Demand`
+
+The registry of on-demand services: who is registered, when each was last wanted, and what each is doing. Shared as an `Arc` between the proxy tasks and the supervisor's runner tasks.
+
+```rust
+#[derive(Debug, Default)]
+pub struct Demand {
+    services: Mutex<BTreeMap<String, Service>>,
+    state_path: Option<PathBuf>,
+    published: AtomicBool,
+    bridge: Option<Bridge>,
+    elsewhere: Mutex<BTreeMap<String, Phase>>,
+}
+```
+
+### struct `Bridge`
+
+The two ends of `crate::shared` this hive holds: what it asks of other hives, and what other hives are asking of it.
+
+```rust
+#[derive(Debug)]
+struct Bridge {
+    wake: shared::Wake,
+    inbox: Mutex<shared::Reader>,
+}
+```
+
+### struct `Service`
+
+```rust
+#[derive(Debug)]
+struct Service {
+    activity: watch::Sender<Instant>,
+    phase: Phase,
+    route: Option<String>,
+}
+```
+
+### struct `Handle`
+
+One service's end of the registry, held by the supervisor task that owns its process.
+
+```rust
+#[derive(Debug)]
+pub struct Handle {
+    name: String,
+    demand: Arc<Demand>,
+    activity: watch::Receiver<Instant>,
+}
+```
+
+---
+
 ## `src/proxy.rs`
 
 ### struct `Route`
@@ -231,9 +341,23 @@ One entry of the routing table, keyed by `(host, path prefix)`.
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Route {
+    service: String,
     host: String,
     path: Option<String>,
     upstream: SocketAddr,
+}
+```
+
+### struct `Matched`
+
+The route a request landed on, for the caller that has to *name* it: the service, and the key the route goes by outside this process.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Matched<'a> {
+    pub service: &'a str,
+    host: &'a str,
+    path: Option<&'a str>,
 }
 ```
 
@@ -288,6 +412,123 @@ Owns the supervised runner tasks, keyed by service name.
 #[derive(Debug, Default)]
 pub struct Supervisor {
     running: BTreeMap<String, Running>,
+    demand: Arc<Demand>,
+}
+```
+
+### enum `Awake`
+
+What ended a running on-demand process.
+
+```rust
+enum Awake {
+    Shutdown,
+    Exited,
+    Idle,
+}
+```
+
+### enum `Drained`
+
+How an idle stop finished.
+
+```rust
+enum Drained {
+    Kept,
+    Stopped,
+    Restart,
+    Shutdown,
+}
+```
+
+### enum `Ended`
+
+Why the on-demand loop gave up its process, once the run/drain cycle is over.
+
+```rust
+enum Ended {
+    Shutdown,
+    Stopped,
+    Restart,
+}
+```
+
+### enum `Woke`
+
+What interrupted an idle stop's grace window.
+
+```rust
+enum Woke {
+    Exited,
+    Shutdown,
+    Request,
+    GraceOver,
+}
+```
+
+---
+
+## `src/shared.rs`
+
+### struct `Entry`
+
+One route's line in the wake file.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<u64>,
+    pub activity: u64,
+}
+```
+
+### struct `Wake`
+
+The writing half of the wake file, held by a hive that routes.
+
+```rust
+#[derive(Debug)]
+pub struct Wake {
+    path: PathBuf,
+    mine: Mutex<Mine>,
+}
+```
+
+### struct `Mine`
+
+What this process has asked for, and when it last said so out loud.
+
+```rust
+#[derive(Debug, Default)]
+struct Mine {
+    entries: BTreeMap<String, Entry>,
+    flushed: Option<Instant>,
+}
+```
+
+### struct `Reader`
+
+The reading half of the wake file, held by a hive that supervises.
+
+```rust
+#[derive(Debug)]
+pub struct Reader {
+    path: PathBuf,
+    acted: BTreeMap<String, u64>,
+}
+```
+
+### struct `Pending`
+
+What one route's entry is asking for, once the reader has decided what is new in it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pending {
+    pub route: String,
+    pub start: bool,
+    pub idle_for: Duration,
 }
 ```
 

@@ -564,6 +564,8 @@ pub(crate) struct QuickServiceForm {
     pub(crate) volumes: RwSignal<String>,
     pub(crate) env: RwSignal<String>,
     pub(crate) pull: RwSignal<String>,
+    pub(crate) start: RwSignal<String>,
+    pub(crate) idle_stop: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
 }
 ```

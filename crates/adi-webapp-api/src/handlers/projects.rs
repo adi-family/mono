@@ -73,7 +73,14 @@ pub fn project_detail(store: &Projects, id: &str, live: &[UsedPort]) -> Response
         Err(e) => return Response::from(&e),
     };
     let (has_hive, services) = match store.hive_path(id) {
-        Ok(path) => read_hive_services(&path, live),
+        // The hive keys this project's services `<project>/<service>`, which is how their
+        // on-demand phases are found in what the daemon publishes.
+        Ok(path) => read_hive_services(
+            &path,
+            live,
+            &super::services::DemandPhases::read(store.config()),
+            Some(id),
+        ),
         Err(e) => return Response::from(&e),
     };
     let subprojects = match store.children(id) {
