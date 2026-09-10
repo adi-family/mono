@@ -11,6 +11,10 @@
 // (`src/components/toc/`, reading the flag names straight off the source file), so `kind` here
 // only has to reproduce the in-body pill. The `<slot />` fallback keeps `<Flags>` usable as
 // authored outside a heading, where no such rewrite happens.
+//
+// `remark-flags.mjs` also strips the space that used to sit between the heading text and this
+// component, since that whitespace was the bug (it leaked into the slug). The gap before the
+// badge belongs here instead, as `margin-left`, so the visible heading is unaffected.
 interface Props {
 	kind?: string;
 }
@@ -31,5 +35,6 @@ const { kind } = Astro.props;
 		color: var(--ink-2);
 		white-space: nowrap;
 		vertical-align: middle;
+		margin-left: 0.5em;
 	}
 </style>
