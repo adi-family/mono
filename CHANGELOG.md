@@ -72,6 +72,8 @@ extraction script cares about.
   offers **On demand** first, with **Always** beside it, and writes a `start:` key only when the
   choice is not what silence already means.
 
+## 1.10.1 — 2026-09-09
+
 ### Added
 
 - **A message can say it wants to be heard now.** Typed while `harness:adi` is still answering, a
@@ -82,6 +84,19 @@ extraction script cares about.
   after the answer lands. An asap message queued behind a `claude-sdk` or `process:*` run is heard
   when that run ends, the same as before — those engines have no door partway through a turn to
   reach it any sooner. A queued message that asked to overtake says so in the chat.
+
+### Changed
+
+- **The LLM backend form now asks what the runtime it is on actually takes.** Picking a runtime
+  used to change nothing: a Codex CLI backend still asked for a provider, a base URL and an API key
+  variable — four boxes that runtime never reads — while the knobs it *does* understand had to be
+  typed as raw JSON from memory. Choose a runtime now and the rest of the form is that runtime's
+  own questions: the login it can be pointed at (a vendor CLI says plainly that it signs in by
+  itself, and that every backend on it therefore shares one hold), its suggested models as one-tap
+  chips, and its dials as the controls the server declares for them — including the ones that
+  depend on the provider, which appear when you pick one. Anything the runtime does not declare is
+  still editable as JSON, and a login left over from another runtime is named on screen before the
+  save drops it.
 
 ### Fixed
 

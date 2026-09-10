@@ -32,6 +32,9 @@ windows-sys = { version = "0.61", features = [
     # the only reason this feature is on.
     "Win32_Security",
     "Win32_System_LibraryLoader",
+    # A job object with KILL_ON_JOB_CLOSE is how `--supervise` makes a service die with the
+    # process that started it, the way launchd and systemd do it on the other two platforms.
+    "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

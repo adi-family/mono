@@ -14,15 +14,30 @@
 //! It holds no logic of its own. Everything it knows comes from `adi-mono status --json` and
 //! everything it does is `adi-mono <args>`, exactly as the macOS app does through `Core.swift`.
 
+// A GUI app, not a console one. Without this rustc links the console subsystem, and Windows
+// then gives ADI.exe a console window of its own: a black rectangle titled "ADI" that sits in
+// the taskbar next to the tray icon and — the part that matters — takes the whole app down with
+// it when somebody closes it. It is also the process a scheduled task runs (`--supervise`),
+// where a console would be both visible and lethal for the same reason.
+#![windows_subsystem = "windows"]
+
 // Off Windows nothing calls into it but the tests, which is the point of compiling it there.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod cli;
+
+#[cfg_attr(not(windows), allow(dead_code))]
+mod supervise;
 
 #[cfg(windows)]
 mod tray;
 
 #[cfg(windows)]
 fn main() {
+    // The one argument this binary takes. A task action runs `ADI.exe --supervise …`; a person
+    // opening ADI runs it with none.
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new(supervise::FLAG)) {
+        std::process::exit(supervise::main());
+    }
     tray::main();
 }
 

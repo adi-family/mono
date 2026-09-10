@@ -1,3 +1,18 @@
 [toolchain]
-channel = "stable"
+# Pinned on purpose, not left on "stable". Swatinem/rust-cache builds its restore key from a
+# prefix that contains the runner's *rustc version*, so on the day GitHub's image bumps stable,
+# every cache this repo has ever saved misses at once and every CI job cold-starts — that is
+# what happened to the v1.2.0 release run, where nothing matched anywhere and the universal
+# macOS build paid for a full compile twice. A softer cache key cannot fix it, because the
+# version is in the prefix. A pin can.
+#
+# `.github/workflows/windows.yml` already treats this file as authoritative ("rustup on the
+# runner honors it on first cargo call"); release.yml's Alpine job installs rustup with
+# `--default-toolchain none` so that this line — not the container's idea of stable — chooses
+# the compiler there too.
+#
+# Bumping it is the operator's call, and it is one commit: change the version here, let CI
+# cold-start once on the new prefix, and confirm the machine's own `rustc --version` matches
+# (it is 1.92.0 today, `ded5c06cf 2025-12-08`).
+channel = "1.92.0"
 components = ["rustfmt", "clippy"]

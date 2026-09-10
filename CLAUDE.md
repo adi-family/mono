@@ -2,6 +2,53 @@
 
 please prefer working on the main unless asked to checkout. we value speed over stability now.
 
+## Build directories: which `target/` is which, and what `target/release` is load-bearing for
+
+Two build directories, on purpose. **Cargo takes one exclusive lock per build directory**, so
+everything sharing one queues: measured 2026-09-09, a one-line edit to a webapp page took
+**15m13s** end to end of which rustc was **21.06s**, with `Blocking waiting for file lock on
+build directory` printed one line above `Compiling`. Cargo's own "Finished in Xm" *includes* that
+wait, so from the inside it reads as a slow compiler rather than a queue.
+
+| directory | who builds there |
+| --- | --- |
+| `~/adi-family/target` | every `cargo` you run here, `scripts/build-app.sh`, packaging, and the `dev-api` service (`cargo run -p adi-app`) |
+| `~/.cache/adi/target-trunk` | **only** the two `trunk serve` services, `dev-ui` and `ui-playground` — `CARGO_TARGET_DIR` is set on them in `~/.adi/mono/projects/adi/.adi/hive.yaml` (*not* `~/adi-family/.adi/hive.yaml`, which does not exist, whatever `devui`'s help says) |
+
+Consequences worth knowing before they surprise you:
+
+- `cargo build -p adi-webapp --target wasm32-unknown-unknown` from the repo root builds in
+  `target/`, which shares **nothing** with dev-ui's cache — so it is a cold wasm build, and it
+  does not warm the panel's loop either. `export CARGO_TARGET_DIR=~/.cache/adi/target-trunk`
+  first if that is what you wanted.
+- The two trunk services share one dir so they reuse each other's dependency artifacts instead
+  of duplicating ~15 GB. They rebuild on disjoint edits, so they collide only on a cold start —
+  when they do, the second one prints the lock message and waits. Splitting them is one more
+  line in that hive.yaml if it ever matters.
+- rust-analyzer already runs its `cargo check` in `target/flycheck0`, which is its own build
+  directory and its own lock. To take the rest of an IDE out of the shared dir, give it
+  `CARGO_TARGET_DIR` in its own environment (`"rust-analyzer.cargo.targetDir": true` for RA;
+  the JetBrains Rust plugin has no repo-level knob, so it goes in the IDE's Cargo env).
+
+**`cargo clean --target <triple>` deletes the ENTIRE target directory.** Verified on cargo
+1.92.0 with a throwaway crate: it prints `Removing …/target` and takes the lot — `--target` is
+honoured only alongside `-p <spec>` (`cargo clean -p adi-app --target x86_64-pc-windows-gnu` is
+correctly scoped). To drop one triple's artifacts, `rm -rf target/<triple>`.
+
+That matters more than a lost cache, because **three live services run binaries out of
+`target/release`**:
+
+- `~/.local/bin/adi-mono` → `target/release/adi-mono`. Delete it and the `adi-mono` CLI is gone
+  machine-wide, which takes every agent's tools with it (`adi-knowledge` is a shim that execs
+  it). `/Applications/ADI.app/Contents/Resources/adi-mono` is the stopgap.
+- the `app.adi` LaunchAgent runs `target/release/adi-app` (see below).
+- the `llm-gateway` service runs `target/release/adi-llm-gateway`, and it is `restart: always` —
+  it is the endpoint every model client on this machine is pointed at.
+
+A running process survives its binary being unlinked, so this breaks nothing until the next
+restart. Rebuild what you removed (`cargo build --release -p adi-cli -p adi-llm-gateway`) rather
+than leaving that for whoever restarts first.
+
 ## Deploying `app.adi`: restart, don't just warn
 
 When a change needs a service restart to take effect, **land the deploy yourself** —

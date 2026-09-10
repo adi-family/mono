@@ -25,6 +25,16 @@ hood it runs a dev `adi-app` for `/api` and `trunk serve` (which proxies `/api` 
 [`Trunk.toml`](./Trunk.toml)). For the styling workflow, see
 [adi-css → Working on styles](../adi-css/README.md#working-on-styles).
 
+**The supervised copy of that loop builds somewhere else.** The `dev-ui` service on
+`dev.adi` — the one `adi-mono tools run devui …` drives — runs with
+`CARGO_TARGET_DIR=~/.cache/adi/target-trunk`, because cargo takes one exclusive lock per build
+directory and a native build in `~/adi-family/target` otherwise stops the panel's hot reload
+dead (measured: a one-line page edit, 21s of rustc, 15m13s of wall clock). It is set on the
+service in `~/.adi/mono/projects/adi/.adi/hive.yaml`. So
+`cargo build -p adi-webapp --target wasm32-unknown-unknown` run from the repo root compiles
+into `target/` and shares nothing with it — export the same `CARGO_TARGET_DIR` if you meant to
+warm dev-ui's cache. `scripts/dev.sh`, which is the unsupervised version, still uses `target/`.
+
 ## Production build
 
 [Trunk](https://trunkrs.dev) compiles this crate to wasm and writes the bundle to `dist/`,
