@@ -4,11 +4,12 @@
 
 > ADI.exe — the Windows launcher: the one thing a person opens. A tray app that brings the stack up, watches it, and opens the control panel. The counterpart of ADI.app on macOS, which holds the same binaries out of sight and does the same three things.
 
-3 structs across 1 file.
+5 structs across 2 files.
 
 ## Index
 
 - [`src/cli.rs`](#srcclirs) — `Report`, `Service`, `Setup`
+- [`src/supervise.rs`](#srcsupervisers) — `Args`, `Job`
 
 ---
 
@@ -54,5 +55,31 @@ pub struct Setup {
     #[serde(default)]
     pub dns_route: bool,
 }
+```
+
+---
+
+## `src/supervise.rs`
+
+### struct `Args`
+
+What the supervisor was asked to run.
+
+```rust
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Args {
+    pub log: Option<String>,
+    pub env: Vec<(String, String)>,
+    pub program: Vec<String>,
+}
+```
+
+### struct `Job`
+
+A Windows job object that kills what it contains when the last handle to it closes.
+
+```rust
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
 ```
 

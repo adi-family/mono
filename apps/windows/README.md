@@ -60,7 +60,19 @@ How supervision works
 
 Each service is a **Task Scheduler** task named `family.adi.app.*`, created with `schtasks`. They
 run as you (no administrator), start at logon, and restart on failure — the Windows counterpart
-of the macOS LaunchAgents. From a terminal:
+of the macOS LaunchAgents.
+
+Each task runs `ADI.exe --supervise`, which starts the service, sends its output to the log, and
+holds it in a **job object**. That is what makes a service on Windows behave like one:
+
+  * **no console window.** A task action is a command line, and a command line that needs an
+    environment and a log used to mean a `cmd /C … > log` wrapper — which put a black console
+    window on the desktop for every service. Closing one of those windows *stopped that
+    service*, which is not something a window should be able to do.
+  * **stopping stops it.** Ending the task ends the supervisor, the job closes with it, and the
+    service goes down — instead of being orphaned and left serving with a dead parent.
+
+From a terminal:
 
     adi up           Start everything (idempotent; safe to re-run).
     adi status       Each service: enabled / running / detail.

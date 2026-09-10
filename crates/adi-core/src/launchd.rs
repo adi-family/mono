@@ -788,21 +788,7 @@ mod windows {
         env: &[(String, String)],
         repeat_secs: Option<u32>,
     ) -> String {
-        let (command, arguments) = split_program(program);
-        // Env vars have no first-class slot in a task action, so thread them through a `cmd /C
-        // set VAR=.. && "prog" args` wrapper, redirecting stdout+stderr to the log (the launchd
-        // StandardOut/ErrPath analog). Everything is quoted/escaped for both `cmd` and XML.
-        let mut inner = String::new();
-        for (k, v) in env {
-            inner.push_str(&format!("set \"{}={}\" && ", cmd_escape(k), cmd_escape(v)));
-        }
-        inner.push_str(&quote_cmd(&command));
-        if !arguments.is_empty() {
-            inner.push(' ');
-            inner.push_str(&arguments);
-        }
-        inner.push_str(&format!(" > {} 2>&1", quote_cmd(log)));
-        let comspec_args = format!("/C {}", inner);
+        let (comspec, comspec_args) = action(launcher_path().as_deref(), program, log, env);
 
         let user = user_id_element(current_user_id().as_deref());
 
@@ -863,9 +849,101 @@ mod windows {
   </Actions>
 </Task>"#,
             desc = xml_escape(label),
-            comspec = xml_escape("cmd.exe"),
+            comspec = xml_escape(&comspec),
             args = xml_escape(&comspec_args),
         )
+    }
+
+    /// The command line a task runs, as `(program, arguments)`.
+    ///
+    /// **`ADI.exe --supervise` whenever the launcher is installed beside us**, which is every
+    /// packaged install. It is a GUI-subsystem binary, so the service gets no console window —
+    /// and a console window is not cosmetic on Windows: closing one kills what is attached to
+    /// it, which is how people stopped the platform by tidying their desktop. It also holds the
+    /// service in a job object, so ending the task ends the service instead of orphaning it.
+    ///
+    /// The `cmd /C set VAR=… && prog > log` wrapper is the fallback for a tree that has no
+    /// ADI.exe — a cargo checkout running `adi-mono up` — where a console is the least of it.
+    fn action(
+        launcher: Option<&str>,
+        program: &[String],
+        log: &str,
+        env: &[(String, String)],
+    ) -> (String, String) {
+        if let Some(launcher) = launcher {
+            let launcher = launcher.to_string();
+            let mut args = format!("--supervise --log {}", quote_argv(log));
+            for (k, v) in env {
+                args.push_str(&format!(" --env {}", quote_argv(&format!("{k}={v}"))));
+            }
+            args.push_str(" --");
+            for part in program {
+                args.push(' ');
+                args.push_str(&quote_argv(part));
+            }
+            return (launcher, args);
+        }
+
+        let (command, arguments) = split_program(program);
+        let mut inner = String::new();
+        for (k, v) in env {
+            inner.push_str(&format!("set \"{}={}\" && ", cmd_escape(k), cmd_escape(v)));
+        }
+        inner.push_str(&quote_cmd(&command));
+        if !arguments.is_empty() {
+            inner.push(' ');
+            inner.push_str(&arguments);
+        }
+        inner.push_str(&format!(" > {} 2>&1", quote_cmd(log)));
+        ("cmd.exe".to_string(), format!("/C {inner}"))
+    }
+
+    /// The app's own file name, which `apps/windows/build.sh` renames the launcher binary to.
+    const LAUNCHER_EXE: &str = "ADI.exe";
+
+    /// `ADI.exe` beside this executable, if it is there. The package puts every binary in one
+    /// `bin\` directory, so whichever of them is registering the task is a sibling of it.
+    fn launcher_path() -> Option<String> {
+        let path = std::env::current_exe().ok()?.parent()?.join(LAUNCHER_EXE);
+        path.is_file().then(|| path.to_string_lossy().into_owned())
+    }
+
+    /// Quote one argument the way `CommandLineToArgvW` reads it — which is how Task Scheduler
+    /// hands `<Arguments>` to the program, and how Rust's own `std::env::args` parses them back
+    /// on the other side. Not the same rules as [`quote_cmd`]: there a quote is doubled, here a
+    /// quote is backslash-escaped and the backslashes before it are themselves doubled.
+    fn quote_argv(s: &str) -> String {
+        if !s.is_empty() && !s.contains([' ', '\t', '"']) {
+            return s.to_string();
+        }
+        let mut out = String::from("\"");
+        let mut backslashes = 0;
+        for ch in s.chars() {
+            match ch {
+                '\\' => {
+                    backslashes += 1;
+                    out.push('\\');
+                }
+                '"' => {
+                    // The run of backslashes before a quote is doubled, then the quote escaped.
+                    for _ in 0..=backslashes {
+                        out.push('\\');
+                    }
+                    backslashes = 0;
+                    out.push('"');
+                }
+                _ => {
+                    backslashes = 0;
+                    out.push(ch);
+                }
+            }
+        }
+        // A trailing backslash run would escape the closing quote if left alone.
+        for _ in 0..backslashes {
+            out.push('\\');
+        }
+        out.push('"');
+        out
     }
 
     /// Who the task runs as, as Task Scheduler spells it: `DOMAIN\user`, or a bare user name
@@ -982,6 +1060,8 @@ mod windows {
             assert!(xml.contains("family.adi.app.dns"));
             // Program, its arg, the log redirect, and the env var all ride in the cmd wrapper.
             assert!(xml.contains("adi-dns.exe"));
+            // The cmd wrapper, because a test binary has no ADI.exe beside it — see
+            // `a_packaged_install_runs_the_service_under_the_launcher` for what ships.
             assert!(xml.contains("set &quot;RUST_LOG=info&quot;"));
             assert!(xml.contains("2&gt;&amp;1"));
         }
@@ -998,6 +1078,61 @@ mod windows {
             assert!(xml.contains("<Repetition>"));
             assert!(xml.contains("<Interval>PT6H</Interval>"));
             assert!(!xml.contains("RestartOnFailure"));
+        }
+
+        fn dns_program() -> Vec<String> {
+            vec![
+                r"C:\Program Files\ADI\bin\adi-dns.exe".to_string(),
+                r"C:\cfg.toml".to_string(),
+            ]
+        }
+
+        #[test]
+        fn a_packaged_install_runs_the_service_under_the_launcher() {
+            // No console window and no orphan: ADI.exe is a GUI-subsystem binary that holds the
+            // service in a job object. Everything cmd used to carry is an argument now.
+            let (command, args) = action(
+                Some(r"C:\Program Files\ADI\bin\ADI.exe"),
+                &dns_program(),
+                r"C:\Users\adi\.adi\mono\logs\adi-dns.log",
+                &[("RUST_LOG".to_string(), "info".to_string())],
+            );
+            assert_eq!(command, r"C:\Program Files\ADI\bin\ADI.exe");
+            assert_eq!(
+                args,
+                concat!(
+                    r#"--supervise --log C:\Users\adi\.adi\mono\logs\adi-dns.log "#,
+                    r#"--env RUST_LOG=info "#,
+                    r#"-- "C:\Program Files\ADI\bin\adi-dns.exe" C:\cfg.toml"#
+                )
+            );
+        }
+
+        #[test]
+        fn a_checkout_with_no_launcher_falls_back_to_the_cmd_wrapper() {
+            let (command, args) = action(
+                None,
+                &dns_program(),
+                r"C:\log.txt",
+                &[("RUST_LOG".to_string(), "info".to_string())],
+            );
+            assert_eq!(command, "cmd.exe");
+            assert!(args.starts_with(r#"/C set "RUST_LOG=info" && "#));
+            assert!(args.ends_with(r"> C:\log.txt 2>&1"));
+        }
+
+        #[test]
+        fn argv_quoting_follows_commandlinetoargvw() {
+            assert_eq!(quote_argv("plain"), "plain");
+            assert_eq!(quote_argv(r"C:\adi\bin\adi-app.exe"), r"C:\adi\bin\adi-app.exe");
+            assert_eq!(
+                quote_argv(r"C:\Program Files\ADI\bin\adi-app.exe"),
+                "\"C:\\Program Files\\ADI\\bin\\adi-app.exe\""
+            );
+            // A trailing backslash must not escape the closing quote.
+            assert_eq!(quote_argv(r"C:\Program Files\ADI\"), "\"C:\\Program Files\\ADI\\\\\"");
+            assert_eq!(quote_argv(r#"say "hi""#), r#""say \"hi\"""#);
+            assert_eq!(quote_argv(""), "\"\"");
         }
 
         #[test]
