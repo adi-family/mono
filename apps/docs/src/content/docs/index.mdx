@@ -1,8 +1,51 @@
 ---
-title: ADI Mono docs
-description: Documentation for the adi-mono project.
+title: ADI Mono
+description: AI agents that run on your own machine — what ADI is, who it's for, and where the documentation starts.
 template: splash
+hero:
+  tagline: AI agents that run on your own machine, with a real address, a supervisor watching them, and one page in your browser to see what they're doing.
+  actions:
+    - text: Start with Hive
+      link: /mono/hive/
+      variant: primary
 ---
 
-Placeholder landing page. Content migrated from the repo's `docs/` and `guides/` directories
-lands here in a later pass.
+import Flags from '../../components/Flags.astro';
+
+## What this is
+
+ADI is software you install and run on your own computer. It runs AI agents, and gives every
+project, service, or dashboard it manages a real address — `yourproject.adi` — instead of a
+terminal tab you have to keep open or a port number you have to remember. A local supervisor
+keeps it all alive: restarting a service under its restart policy, waking an on-demand one the
+moment something visits it, and stopping it again once its idle window passes. One page in your
+browser, the control panel at `app.adi`, shows what's running and lets you start, stop, and watch
+it.
+
+If you're comfortable installing software on a machine you control and running a command in a
+terminal, ADI is for you. It isn't a hosted product you sign into — there's no account behind it
+sitting on someone else's server.
+
+## For an enterprise evaluating this <Flags>Enterprise interest</Flags>
+
+The front door — the piece that answers every `*.adi` address — binds loopback addresses only,
+and mints its own certificate authority so local services get real HTTPS: one cryptographically
+constrained (RFC 5280 name constraints) to the `.adi`/`localhost`/`127.0.0.0/8` namespace, so a
+leaf it signs isn't a certificate any real browser will accept for anything outside this
+machine's own names, however its key is handled. Services meant to stay up are supervised and
+restarted under their own restart policy instead of left to quietly die, and the whole routing
+table is one API call away rather than scattered across shell history and config files. See
+[[Hive]] for the routing, HTTPS, and supervision detail behind all of this.
+
+## For the technically curious <Flags>Expert area</Flags>
+
+A service lives as a few lines of YAML in a project's `.adi/hive.yaml`, and the CLI, `adi-mono`,
+is the one command line every part of the system answers to. Under the hood there's a DNS
+resolver for the `.adi` zone, a task tree, a code index (symbol search, call graph, clone
+detection), knowledge bases with embedded semantic search, a fleet layer that joins remote
+machines over iroh, and a port manager that leases ports instead of guessing at them. The one
+piece with a real page right now is the front door and process supervisor — [[Hive]].
+
+## Where to start
+
+These docs are early — [[Hive]] is the only page written in depth so far. Start there.
