@@ -56,7 +56,12 @@ command -v wrangler >/dev/null 2>&1 || command -v bunx >/dev/null 2>&1 ||
   die "need 'wrangler' on PATH, or 'bunx' to fetch it on demand"
 wrangler() { if command -v wrangler >/dev/null 2>&1; then command wrangler "$@"; else bunx wrangler "$@"; fi; }
 
-TOKEN="$(adi-mono secrets read CLOUDFLARE_API_TOKEN 2>/dev/null || true)"
+# An already-set CLOUDFLARE_API_TOKEN wins outright — that's CI (release.yml passes the
+# repository secret this way; there's no secret store on a GitHub runner for `adi-mono` to read
+# from). Falling back to the secret store is what makes a hand-run publish from this machine work
+# without exporting anything first.
+TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+[ -n "$TOKEN" ] || TOKEN="$(adi-mono secrets read CLOUDFLARE_API_TOKEN 2>/dev/null || true)"
 [ -n "$TOKEN" ] || die "CLOUDFLARE_API_TOKEN is not set — run adi-mono secrets set CLOUDFLARE_API_TOKEN first \
 (see ./setup-cf.sh --help for the scopes it needs)"
 export CLOUDFLARE_API_TOKEN="$TOKEN"

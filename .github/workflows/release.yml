@@ -9,12 +9,15 @@ name: Release
 # attaches it to the release. `manifest_url` defaults to the *latest* release's copy, so
 # publishing here is the whole act of shipping an update to every machine.
 #
-# Required repository secrets (the macOS job is the only one that needs any):
-#   MACOS_CERT_P12         base64 of the "Developer ID Application" .p12
-#   MACOS_CERT_PASSWORD    its export password
-#   APPLE_ID               Apple ID used for notarization
-#   APPLE_APP_PASSWORD     app-specific password for that Apple ID
-#   APPLE_TEAM_ID          Developer team ID (must match adi-update's DEFAULT_TEAM_ID)
+# Required repository secrets:
+#   MACOS_CERT_P12         base64 of the "Developer ID Application" .p12         (macos job)
+#   MACOS_CERT_PASSWORD    its export password                                  (macos job)
+#   APPLE_ID               Apple ID used for notarization                       (macos job)
+#   APPLE_APP_PASSWORD     app-specific password for that Apple ID              (macos job)
+#   APPLE_TEAM_ID          Developer team ID (must match adi-update's DEFAULT_TEAM_ID) (macos job)
+#   CLOUDFLARE_API_TOKEN   already used by the Docs workflow; here it publishes the webapp
+#                          job's dist/ to the shared-assets CDN (apps/shared-assets/scripts/
+#                          publish.sh), skipped entirely on a workflow_dispatch dry run
 on:
   push:
     tags: ['v*']
@@ -30,6 +33,9 @@ env:
   # Pinned rather than "latest": a packaging tool that changes under a release build is a
   # class of surprise worth spending one line to avoid.
   TRUNK_VERSION: v0.21.14
+  # Same reasoning, and matched to apps/docs's own devDependency pin so the two Cloudflare
+  # publishers on this repo behave identically.
+  WRANGLER_VERSION: 4.129.0
 
 jobs:
   # ── the version, resolved once and reused ────────────────────────────────────────────────
@@ -121,6 +127,40 @@ jobs:
           path: crates/adi-webapp/dist
           if-no-files-found: error
           retention-days: 1
+
+      # Published here, ahead of every platform build, not from the final `publish` job below:
+      # an instance whose shared-assets setting is on and whose version was never published
+      # degrades to its own local copy (crates/adi-app/src/shared_assets.rs) — missing assets
+      # are a fallback, not a break. Assets left behind by a version whose binaries then fail
+      # to build are the opposite: inert objects under a version nobody ever ships, no worse
+      # than clutter. Between the two, failing this step fails the release outright — the gap
+      # this closes is a release silently shipping without ever publishing, so a publish that
+      # doesn't happen must stop the release rather than let it through quietly.
+      #
+      # Skipped outright on workflow_dispatch: its own input description promises "publishes
+      # nothing", and there is no tag for a dry-run version to be published under anyway.
+      - name: Node (for wrangler — see the Docs workflow for why not bun)
+        if: needs.version.outputs.publish == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wrangler
+        if: needs.version.outputs.publish == 'true'
+        run: npm install -g "wrangler@$WRANGLER_VERSION"
+
+      # Reuses the dist/ just built above instead of letting publish.sh build its own —
+      # `--no-build` publishes whatever is already staged at its private dist dir.
+      - name: Publish shared assets to the CDN
+        if: needs.version.outputs.publish == 'true'
+        env:
+          ADI_VERSION: ${{ needs.version.outputs.version }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          mkdir -p target
+          rm -rf target/webapp-dist-publish
+          cp -r crates/adi-webapp/dist target/webapp-dist-publish
+          apps/shared-assets/scripts/publish.sh --no-build
 
   # ── macOS: the notarized universal bundle, as a DMG ──────────────────────────────────────
   macos:
