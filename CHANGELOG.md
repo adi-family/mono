@@ -20,6 +20,45 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.13.0 — 2026-09-11
+
+### Added
+
+- **The control panel can fetch itself from a CDN near your browser, instead of over the link to the
+  machine running ADI.** The panel is a large wasm bundle — plus its JS glue, two stylesheets and
+  fonts — and every instance has always served that off its own disk. Where the browser is somewhere
+  else, that is the worst possible place to serve it from: a paired fleet node over `n.adi`, a phone,
+  a laptop reaching a machine on a bad connection, all of it crossing the slow link on every cold
+  load. **Settings → Shared assets** now offers three answers: *This machine, always* — the default,
+  and exactly what every release before this did; *The CDN, only when the browser isn't on this
+  machine*, which leaves loopback and this instance's own `.adi` name alone and helps only the case
+  that needs helping; and *The CDN, always*.
+
+  The URL carries the version and **nothing** about the instance — no hostname, no node id, no
+  per-install token — so every instance on the same version asks for the identical URL, and a browser
+  that loaded the bundle for one of them has it cached for the rest. Only the very first load,
+  anywhere, costs anything.
+
+  **Choosing a CDN mode cannot leave you looking at a page that will not load.** Each import and each
+  stylesheet carries a fallback to the same local path it would have used anyway, and it fires on any
+  failure at all: offline, bucket down, or a version nobody ever published. At worst it costs one
+  failed request per asset. `index.html` itself never moves — the instance you are talking to always
+  serves that — and the stylesheets keep their integrity hashes, so a byte out of place is refused.
+
+  This is also the first release that **publishes** to `cdn.withadi.dev`: the build that ships a
+  version now uploads that version's assets before it builds a single binary. Until now the setting
+  existed with nothing on the other end of it, which is the quiet way it could have been on and doing
+  nothing. If you have never touched this setting, nothing about this release changes for you — and
+  if it matters to you that a panel load never leaves the machine, that is what the default already
+  is, and nothing else in ADI depends on a CDN mode.
+
+- **There is a documentation site: [docs.withadi.dev](https://docs.withadi.dev).** It opens on what
+  ADI actually is, in plain language, with a section for someone evaluating it on security and
+  control and another for someone who wants the architecture. The first area written in depth is
+  **Hive** — the operator's guide to services and the front door, and how they work underneath —
+  joined by **Shared assets** for the setting above. It deploys itself on every change, so it tracks
+  the code rather than the last time somebody remembered to publish it.
+
 ### Changed
 
 - **A long chat opens at once, and stops re-downloading itself every second.** The control panel used
@@ -42,6 +81,24 @@ extraction script cares about.
   was the entire file it had written, up to 12 KB to fill a line a couple of hundred pixels wide; it
   is cut now. And every read of a chat was loading the whole transcript to look at its *last* turn
   (deciding whether an answer needed committing), ~180ms per read on a long one; it reads one row.
+
+### Fixed
+
+- **A Codex agent answered with its entire log, including the account it was signed in as.** An agent
+  on a `process:codex` backend had no reader of its own, so what the chat showed as its answer was
+  the whole file the run had written: a hundred-odd lines of startup logging, a banner, a replay of
+  the prompt it had just been handed, and a token trailer. Two of those startup lines carry the
+  signed-in account's id and **email address** — so a chat anyone could open was publishing them.
+  Codex now gets read the way Claude already was, off its own event stream, and its answer is the
+  answer. Belt and braces on the other half: the child is started quietly unless the agent asked for
+  logging itself, at `error` rather than silence, so a Codex that fails to start can still say why.
+
+  Two things the stream had been swallowing come back with it. A turn that **fails** now passes the
+  provider's own error through, keeping the code and status alongside it — which is what lets a rate
+  limit still be recognised as one, so an agent with more than one backend fails over to the next
+  instead of stopping. And a turn that **completes** now says so: an unreported ending was being read
+  as the kind worth classifying, which meant a clean run could be mistaken for a limit and take a
+  perfectly good backend out of the chain.
 
 ## 1.12.0 — 2026-09-10
 
