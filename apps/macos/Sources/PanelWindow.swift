@@ -110,7 +110,8 @@ private struct TabStrip: View {
                         active: tab.id == tabs.selection,
                         index: index,
                         select: { tabs.select(tab) },
-                        close: { tabs.close(tab) }
+                        close: { tabs.close(tab) },
+                        pin: { tabs.togglePin(tab) }
                     )
                 }
             }
@@ -120,10 +121,17 @@ private struct TabStrip: View {
     }
 }
 
-/// One tab: what the page calls itself, and — unless it is the app — a way to be rid of it.
+/// One tab: what the page calls itself, and — unless it is the app's, or kept — a way to be rid of
+/// it.
 ///
 /// A chosen segment is a tone change and not an outline or a colour (§6): `--bg-active` under ink,
 /// against `--ink-2` on nothing for the rest.
+///
+/// **Three gestures, and they are a browser's**, because a strip of tabs is a thing people already
+/// know how to use: click shows a tab, wheel-click closes it, right-click opens the menu of what
+/// there is no room to put on a chip. The app's own tab answers the first and nothing else — it
+/// cannot be closed, the brand is not renamed, and it is already where pinning would put a tab — so
+/// it has no menu rather than a menu of three dead items.
 private struct TabChip: View {
     @ObservedObject var panel: WebPanel
     let active: Bool
@@ -131,22 +139,52 @@ private struct TabChip: View {
     let index: Int
     let select: () -> Void
     let close: () -> Void
+    let pin: () -> Void
 
     @State private var hovering = false
+    /// Whether this tab is being renamed, and what has been typed so far.
+    @State private var renaming = false
+    @State private var draft = ""
+    /// Bumped every time the box opens rather than fixed, because *Rename…* can be chosen while the
+    /// box is already open — the menu is still on the chip when the chip is a field — and the field
+    /// takes the keyboard only when this number changes.
+    @State private var renameFocus = 0
 
     var body: some View {
+        if panel.isApp {
+            chip
+        } else {
+            chip
+                .contextMenu { menu }
+                // The wheel-click, and only where the ⨯ is: the two are the same gesture — close
+                // this, now, from under the pointer — so a tab that declines one declines the other.
+                .overlay { if closableHere { MiddleClick(action: close) } }
+        }
+    }
+
+    /// The tab as a control: a button, or the box its name is being typed into.
+    @ViewBuilder
+    private var chip: some View {
+        if renaming {
+            nameField
+        } else {
+            button
+        }
+    }
+
+    private var button: some View {
         Button(action: select) {
             label
                 // Room for the close button to sit over, so a long title is cut by the glyph
                 // rather than running under it.
-                .padding(.trailing, panel.pinned ? 0 : 18)
+                .padding(.trailing, closableHere ? 18 : 0)
                 .frame(maxWidth: 200, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .buttonStyle(TabStyle(active: active, hovering: hovering))
         .modifier(TabShortcut(index: index))
         .overlay(alignment: .trailing) {
-            if !panel.pinned {
+            if closableHere {
                 Button(action: close) {
                     LucideIcon(icon: .x, size: .sm, label: "Close \(panel.label)")
                 }
@@ -159,25 +197,163 @@ private struct TabChip: View {
         .help(panel.webView.url?.absoluteString ?? panel.home.absoluteString)
     }
 
+    /// Whether a gesture *under the pointer* may close this tab. The app's own never closes; a
+    /// pinned one is kept on purpose, and neither the ⨯ nor a wheel-click says out loud what it is
+    /// about to do — which is the whole of what pinning guards against (`PanelTabs.togglePin`).
+    private var closableHere: Bool { !panel.isApp && !panel.pinned }
+
     /// What the tab wears.
     ///
     /// The app's tab is the mark and the wordmark rather than whatever the panel currently calls
     /// itself: it is not one page among the open ones, it is the thing they were opened from, and
     /// it says so by being the only one that never changes. §10's top-bar treatment — the mark
     /// beside the wordmark at 15/600 — at the tab-sized 16.
+    ///
+    /// A kept tab wears the pin, which is what is left to say so once the ⨯ has gone: the strip is
+    /// a row of names, and a name that has quietly stopped having a close button would otherwise
+    /// read as a name that has lost one.
     @ViewBuilder
     private var label: some View {
-        if panel.pinned {
+        if panel.isApp {
             HStack(spacing: 8) {
                 ADILogo(size: 16)
                 Text("adi")
                     .font(ADI.TextStyle.wordmark)
             }
         } else {
-            Text(panel.label)
-                .font(ADI.TextStyle.row)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(spacing: 8) {
+                if panel.pinned {
+                    LucideIcon(icon: .pin, size: .sm, label: "Pinned")
+                        .foregroundStyle(ADI.ink3)
+                }
+                Text(panel.label)
+                    .font(ADI.TextStyle.row)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+    }
+
+    /// The three things a tab can be asked to do that there is no room for on the chip.
+    ///
+    /// Title case, and not the app's sentence case (§8): this is an AppKit menu, opening beside the
+    /// menu bar's own *Close Tab* and *Reopen Closed Tab*, and a menu that disagreed with the menu
+    /// bar about capitalisation would read as the odd one out rather than as the house style. Close
+    /// sits last and behind a divider, where every Mac menu keeps the item you cannot undo.
+    @ViewBuilder
+    private var menu: some View {
+        Button("Rename…") { startRename() }
+        Button(panel.pinned ? "Unpin Tab" : "Pin Tab", action: pin)
+        Divider()
+        Button("Close Tab", action: close)
+    }
+
+    // MARK: renaming
+
+    /// The name, in place: the chip becomes an input of the same size, so nothing moves and it is
+    /// plainly *this* tab being named — rather than a sheet over the window asking about a tab it
+    /// has to name in its own text.
+    private var nameField: some View {
+        InlineField(text: $draft,
+                    placeholder: panel.label,
+                    focus: renameFocus,
+                    selectsAll: true,
+                    submit: { typed, _ in commitRename(typed) },
+                    cancel: { renaming = false },
+                    ended: { commitRename($0) })
+            // The chip's own padding (`TabStyle`) and a width that does not grow with what is typed,
+            // so the tabs either side of it stay where they are while a name is being changed.
+            .frame(width: 180, height: 20)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(ADI.bgRaise, in: RoundedRectangle(cornerRadius: ADI.Radius.md))
+            .overlay(RoundedRectangle(cornerRadius: ADI.Radius.md).stroke(ADI.lineStrong, lineWidth: 1))
+    }
+
+    /// Seeded with the name the tab is wearing, so renaming a dashboard is editing what it already
+    /// says rather than typing it out from nothing — and the field selects it, so the hand that
+    /// meant to replace it can.
+    private func startRename() {
+        draft = panel.label
+        renameFocus += 1
+        renaming = true
+    }
+
+    /// Blank means *go back to what the page calls itself* (`WebPanel.rename`).
+    ///
+    /// **The name is handed in, not read back out of `draft`.** What the field editor holds is the
+    /// answer at the instant ↩ is pressed; `draft` is the same text after a round trip out through a
+    /// binding and back through SwiftUI state, which is one more thing that has to have happened
+    /// yet. The box is the source, so the box says.
+    ///
+    /// Guarded, because there are three ways out of the box — ↩, clicking away, and the field losing
+    /// the keyboard — and on some paths more than one of them arrives.
+    private func commitRename(_ typed: String) {
+        guard renaming else { return }
+        renaming = false
+        panel.rename(typed)
+    }
+}
+
+/// The wheel-click, which in every browser closes the tab under the pointer.
+///
+/// An `NSView` over the chip that claims **only** the middle button: `hitTest` answers with itself
+/// while the event being dispatched is a middle-button one and with nil otherwise, so every ordinary
+/// click falls straight through to the SwiftUI button underneath. SwiftUI has no gesture for this —
+/// its `onTapGesture` and its buttons are the left button's alone — and a view placed over a tab
+/// that took *all* the clicks would have to reimplement the tab.
+///
+/// Down and up are both required to land on the chip, which is what makes a press-and-drag-away a
+/// change of mind rather than a closed tab.
+private struct MiddleClick: NSViewRepresentable {
+    let action: () -> Void
+
+    func makeNSView(context: Context) -> Catcher {
+        let view = Catcher()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ view: Catcher, context: Context) {
+        view.action = action
+    }
+
+    final class Catcher: NSView {
+        var action: () -> Void = {}
+        /// Whether the press that is in progress started here.
+        private var pressed = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent, Self.isMiddle(event) else { return nil }
+            return super.hitTest(point)
+        }
+
+        /// So a wheel-click closes a tab in a window that was not already the key one, which is
+        /// what it does in a browser.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func otherMouseDown(with event: NSEvent) {
+            pressed = event.buttonNumber == Self.middleButton
+        }
+
+        override func otherMouseUp(with event: NSEvent) {
+            defer { pressed = false }
+            guard pressed, event.buttonNumber == Self.middleButton,
+                  bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+            action()
+        }
+
+        /// Left is 0, right is 1, the wheel is 2. Every other button an eight-button mouse has is
+        /// 3 and up, and none of them means "close this".
+        private static let middleButton = 2
+
+        private static func isMiddle(_ event: NSEvent) -> Bool {
+            switch event.type {
+            case .otherMouseDown, .otherMouseUp, .otherMouseDragged:
+                return event.buttonNumber == middleButton
+            default:
+                return false
+            }
         }
     }
 }
@@ -237,11 +413,12 @@ private struct FindBar: View {
             LucideIcon(icon: .search, size: .sm, label: "Find in page")
                 .foregroundStyle(ADI.ink3)
 
-            FindField(text: $panel.query,
-                      focus: panel.findFocus,
-                      colour: missed ? ADI.err : ADI.ink,
-                      submit: { panel.find(backwards: $0) },
-                      cancel: { panel.endFind() })
+            InlineField(text: $panel.query,
+                        placeholder: "Find in page",
+                        focus: panel.findFocus,
+                        colour: missed ? ADI.err : ADI.ink,
+                        submit: { _, backwards in panel.find(backwards: backwards) },
+                        cancel: { panel.endFind() })
                 .frame(maxWidth: 280, minHeight: 20)
                 // As it is typed, which is what every browser does and what makes a search of a
                 // long dashboard worth starting before you have finished the word.
@@ -283,7 +460,7 @@ private struct FindBar: View {
     private var missed: Bool { panel.found == false && searchable }
 }
 
-/// The box the query is typed into.
+/// The box a word is typed into inside this window: the find bar's query, and a tab's new name.
 ///
 /// AppKit's `NSTextField` rather than SwiftUI's `TextField`, for one measured reason: at the moment
 /// ⌘F is pressed the window's first responder is the tab's `WKWebView`, and `@FocusState` moves
@@ -294,16 +471,28 @@ private struct FindBar: View {
 ///
 /// A text field can simply ask for the job. Its field editor is also the one place ⎋ and ↩ can be
 /// caught while the box has the keyboard, which is where they matter.
-private struct FindField: NSViewRepresentable {
+private struct InlineField: NSViewRepresentable {
     @Binding var text: String
+    let placeholder: String
     /// Bumped to mean *put the keyboard back in the box* — which is what a second ⌘F is for.
     let focus: Int
     /// Red while the query matches nothing; the field's own, because an `NSTextField` does not
     /// inherit SwiftUI's `foregroundStyle`.
-    let colour: Color
-    /// Next match, or — with Shift — the previous one.
-    let submit: (Bool) -> Void
+    var colour: Color = ADI.ink
+    /// Whether taking the keyboard also selects what is in the box. A rename wants it — the name is
+    /// there to be typed over — and a find does not, where the cursor belongs after the word.
+    var selectsAll = false
+    /// ↩: what the box holds, and whether Shift was down — which for the find bar means the previous
+    /// match and for a box with one answer means nothing at all.
+    ///
+    /// The text is handed over rather than read back out of `text` afterwards, because the binding
+    /// is a round trip through SwiftUI state and the answer is wanted as it stands *now*.
+    let submit: (String, Bool) -> Void
     let cancel: () -> Void
+    /// Finished without ↩ or ⎋: the keyboard went elsewhere, or the next click landed outside the
+    /// box. Nil where that is not an ending — the find bar stays open while you click about the page
+    /// it is searching, which is most of what a find bar is for.
+    var ended: ((String) -> Void)?
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(string: text)
@@ -315,10 +504,11 @@ private struct FindField: NSViewRepresentable {
         field.isBordered = false
         field.drawsBackground = false
         field.focusRingType = .none
-        field.placeholderString = "Find in page"
+        field.placeholderString = placeholder
         field.font = Self.face
         field.lineBreakMode = .byTruncatingTail
         field.cell?.usesSingleLineMode = true
+        if ended != nil { context.coordinator.watchClicksOutside(field) }
         return field
     }
 
@@ -328,43 +518,99 @@ private struct FindField: NSViewRepresentable {
         context.coordinator.owner = self
         if field.stringValue != text { field.stringValue = text }
         field.textColor = NSColor(colour)
+        field.placeholderString = placeholder
         guard context.coordinator.taken != focus else { return }
         context.coordinator.taken = focus
+        let selectEverything = selectsAll
         // A turn of the loop late, deliberately: on the pass that inserts the bar the field is not
         // in a window yet, and a first-responder request made then is dropped on the floor.
-        DispatchQueue.main.async { field.window?.makeFirstResponder(field) }
+        DispatchQueue.main.async {
+            field.window?.makeFirstResponder(field)
+            // After the field editor exists, which it does not until the line above has run: the
+            // selection belongs to the editor, not to the field.
+            if selectEverything { field.currentEditor()?.selectAll(nil) }
+        }
+    }
+
+    static func dismantleNSView(_ field: NSTextField, coordinator: Coordinator) {
+        coordinator.stopWatching()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
-        var owner: FindField
+        var owner: InlineField
         /// The `focus` this has already acted on. `-1`, so the first pass always takes the keyboard.
         var taken = -1
+        /// Whether this box has already had its answer. Three things can end one — ↩, ⎋ and the
+        /// keyboard leaving — and on several paths more than one of them arrives: ⎋ takes the field
+        /// off the screen, which is itself the end of an edit, and a box that committed on the way
+        /// out would make Escape mean *save*.
+        private var answered = false
+        private var watcher: Any?
 
-        init(_ owner: FindField) { self.owner = owner }
+        init(_ owner: InlineField) { self.owner = owner }
 
         func controlTextDidChange(_ note: Notification) {
             guard let field = note.object as? NSTextField else { return }
             owner.text = field.stringValue
         }
 
-        /// ⎋ closes the bar, ↩ steps to the next match and ⇧↩ back to the previous — through the
-        /// field editor's own dispatch, which is what sees these keys while the box has the
-        /// keyboard.
+        /// ⎋ closes the box, ↩ submits it and ⇧↩ submits it backwards — through the field editor's
+        /// own dispatch, which is what sees these keys while the box has the keyboard.
         func control(_ control: NSControl,
                      textView: NSTextView,
                      doCommandBy selector: Selector) -> Bool {
             switch selector {
             case #selector(NSResponder.cancelOperation(_:)):
+                answered = true
                 owner.cancel()
             case #selector(NSResponder.insertNewline(_:)),
                  #selector(NSResponder.insertLineBreak(_:)):
-                owner.submit(NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
+                // The field editor's text, not the field's: the field is only brought up to date
+                // when editing ends, so on ↩ it is still holding what the box said a keystroke ago.
+                owner.submit(textView.string, NSApp.currentEvent?.modifierFlags.contains(.shift) == true)
             default:
                 return false
             }
             return true
+        }
+
+        /// The keyboard left the box — for another field, or for the web view.
+        func controlTextDidEndEditing(_ note: Notification) {
+            finish((note.object as? NSTextField)?.stringValue ?? "")
+        }
+
+        /// A click that is not in the box ends the edit, and that needs an event monitor: SwiftUI's
+        /// buttons and AppKit's web view do not take first responder when they are clicked, so a
+        /// click on the tab beside this one is not a *change of keyboard focus* and
+        /// `controlTextDidEndEditing` never comes. Without this the box stays open on a tab nobody
+        /// is looking at any more.
+        func watchClicksOutside(_ field: NSTextField) {
+            watcher = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self, weak field] event in
+                guard let self, let field, event.window === field.window else { return event }
+                let point = field.convert(event.locationInWindow, from: nil)
+                // Handed back untouched either way: this is a bystander, not a click handler.
+                guard !field.bounds.contains(point) else { return event }
+                let typed = field.currentEditor()?.string ?? field.stringValue
+                // After this click has been delivered. Taking the box off the screen inside the
+                // dispatch of the click that ended it is how the click itself gets lost.
+                DispatchQueue.main.async { self.finish(typed) }
+                return event
+            }
+        }
+
+        func stopWatching() {
+            if let watcher { NSEvent.removeMonitor(watcher) }
+            watcher = nil
+        }
+
+        private func finish(_ typed: String) {
+            guard !answered else { return }
+            answered = true
+            owner.ended?(typed)
         }
     }
 

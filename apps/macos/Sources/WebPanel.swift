@@ -20,10 +20,27 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
     /// Where this tab opens: the panel for the first one, a dashboard's host for the rest.
     let home: URL
 
-    /// Whether this tab is the app itself. A pinned tab cannot be closed, and cannot be navigated
+    /// Whether this tab is the app itself. The app's tab cannot be closed, and cannot be navigated
     /// off its own host — a link that would take it somewhere else opens a tab instead, which is
     /// what makes "the first tab is always the control panel" true rather than merely usual.
-    let pinned: Bool
+    ///
+    /// Not the same thing as `pinned` below, though both keep a tab where it is: this one is a fact
+    /// about the window and is decided when the tab is made; that one is something the operator did.
+    let isApp: Bool
+
+    /// Whether the operator asked to keep this tab (`PanelTabs.togglePin`).
+    ///
+    /// A pinned tab sits at the front of the strip, so it keeps the same ⌘-number as tabs open and
+    /// close around it, and it stops answering the two gestures that close a tab *under the pointer*
+    /// — the ⨯ on the chip, which it no longer draws, and the wheel-click. ⌘W and the tab menu's own
+    /// *Close Tab* still close it: both name what they are about to do, which is exactly what the
+    /// other two cannot.
+    @Published var pinned = false
+
+    /// What the operator called this tab, if they called it anything (the tab's own menu, through
+    /// `rename`). It beats the page's own title in `label` — a dashboard that titles every one of
+    /// its pages "Grafana" is the case this exists for.
+    @Published private(set) var name: String?
 
     /// The page's own title, for the tab to wear. Empty until the page says.
     @Published private(set) var title = ""
@@ -42,9 +59,9 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
     /// Held for as long as the tab is: dropping these stops the observations.
     private var observations: [NSKeyValueObservation] = []
 
-    init(home: URL, pinned: Bool = false) {
+    init(home: URL, isApp: Bool = false) {
         self.home = home
-        self.pinned = pinned
+        self.isApp = isApp
 
         let configuration = WKWebViewConfiguration()
         // The default, persistent data store. The panel keeps view state in `localStorage` and
@@ -219,10 +236,19 @@ final class WebPanel: NSObject, ObservableObject, Identifiable {
         forMainFrameOnly: false
     )
 
-    /// What this tab says it is: the page's own title, or the host it is on until there is one.
+    /// What this tab says it is: the name it was given, else the page's own title, else the host it
+    /// is on until there is one.
     var label: String {
+        if let name { return name }
         if !title.isEmpty { return title }
         return webView.url?.host ?? home.host ?? "…"
+    }
+
+    /// Call this tab something. Blank puts it back to whatever the page calls itself — which is the
+    /// only undo a rename needs, and is what an emptied box means rather than a tab with no name.
+    func rename(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        name = trimmed.isEmpty ? nil : trimmed
     }
 
     /// Read the page's own state back into the bar.
@@ -295,7 +321,7 @@ extension WebPanel: WKNavigationDelegate {
 
         // Two ways a navigation on this machine becomes a tab instead.
         //
-        // Anything that would carry the *pinned* tab off the panel's own host — not clicks only:
+        // Anything that would carry the *app's* tab off the panel's own host — not clicks only:
         // a `window.location`, a meta refresh and a redirect are navigations too, and an invariant
         // that holds for one kind of navigation and not the others is not an invariant. It is what
         // makes "the first tab is the control panel" a fact rather than a habit.
@@ -304,7 +330,7 @@ extension WebPanel: WKNavigationDelegate {
         let mainFrame = navigationAction.targetFrame?.isMainFrame ?? true
         let commandClick = navigationAction.navigationType == .linkActivated
             && navigationAction.modifierFlags.contains(.command)
-        if mainFrame, leavesPinnedHost(url) || commandClick, let openInNewTab {
+        if mainFrame, leavesAppHost(url) || commandClick, let openInNewTab {
             openInNewTab(url)
             decisionHandler(.cancel)
             return
@@ -313,9 +339,9 @@ extension WebPanel: WKNavigationDelegate {
         decisionHandler(.allow)
     }
 
-    /// Whether this navigation would carry the pinned tab off the host it is pinned to.
-    private func leavesPinnedHost(_ url: URL) -> Bool {
-        pinned && url.host != home.host
+    /// Whether this navigation would carry the app's own tab off the host it opens on.
+    private func leavesAppHost(_ url: URL) -> Bool {
+        isApp && url.host != home.host
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {

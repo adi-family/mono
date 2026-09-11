@@ -253,10 +253,51 @@ dashboard take the window over.
 Dashboards and hive services open beside it, because the panel links to every one of them with
 `target="_blank"` (and `window.open` from the launcher) — so `createWebViewWith` is the hook, and
 what it makes is a tab rather than a window. ⌘-click opens one anywhere; ⌘1…⌘9 select; the ⨯ on a
-tab — or ⌘W — closes it and selection falls to the tab on its left. A host that is already open is brought
-forward rather than opened twice: pressing a dashboard's link again means *show me it*, not *give
-me another copy*. Each tab keeps its own web view, so its history and scroll position survive
-being switched away from.
+tab — a **wheel-click** on it, or ⌘W — closes it and selection falls to the tab on its left. A host
+that is already open is brought forward rather than opened twice: pressing a dashboard's link again
+means *show me it*, not *give me another copy*. Each tab keeps its own web view, so its history and
+scroll position survive being switched away from.
+
+**Right-click a tab for the three things there is no room for on a chip**: *Rename…*, *Pin Tab* (or
+*Unpin Tab*) and, behind a divider, *Close Tab*. The app's own tab has no menu at all — it cannot be
+closed, the brand is not renamed, and it is already where pinning would put a tab — so it offers
+nothing rather than three dead items. The menu is title case rather than the app's sentence case
+(§8): it opens beside the menu bar's own *Close Tab*, and a menu that disagreed with the menu bar
+about capitalisation would read as the odd one out rather than as the house style.
+
+**Pinning keeps a tab.** A pinned one moves up behind the app's and stays there, which is most of
+what it is for: the strip is numbered by position, so a tab kept on purpose is one whose ⌘-number
+stops moving every time a dashboard opens and closes beside it. It wears a pin where its ⨯ was and
+declines the two gestures that close a tab *under the pointer* — the ⨯ and the wheel-click — while
+⌘W and its own menu still close it, because both of those say what they are about to do. Unpinning
+leaves it at the head of the ordinary tabs rather than throwing it back where it came from.
+
+**Renaming happens in the chip.** *Rename…* turns the tab into a box holding the name it is already
+wearing, selected, so the usual gesture is to type over it: ↩ keeps it, ⎋ leaves the tab as it was,
+and clicking anywhere else keeps what was typed — a box left open on a tab nobody is looking at is
+worse than either answer. Emptying it puts the page's own title back, which is the only undo a
+rename needs. The name is the window's and is written nowhere, and ⇧⌘T brings a closed tab back
+with its name and its pin as well as its address.
+
+Two things about the wheel-click are load-bearing. **SwiftUI has no middle button** — its buttons
+and tap gestures are the left one's alone — so the chip carries a transparent `NSView` that claims
+*only* middle-button events: its `hitTest` answers with itself while the event under dispatch is a
+middle click and with nil otherwise, so every ordinary click falls straight through to the SwiftUI
+button underneath. Measured both ways round on a real bundle: with a button-2 event in dispatch the
+window's hit test returned the catcher, and a synthesized left click on the same pixels still
+selected the tab. And the press has to both start and end on the chip, so a wheel-press dragged off
+it is a change of mind rather than a closed tab.
+
+Driving any of this from a probe has two traps of its own. A synthesized `.otherMouseDown` built
+with `NSEvent.mouseEvent(with:)` carries **button 0**, and one built from a `CGEvent` carries button
+2 but **no window** — so neither on its own reaches a view, and `CGEvent.post` needs an Accessibility
+grant the bundle will not have. What works is posting the CGEvent-derived event through the app's
+own queue, which is what makes `NSApp.currentEvent` right for the hit test, and then handing the
+down/up pair to the view that hit test names. A posted `.rightMouseDown` opens no context menu at
+all; `NSView.menu(for:)` returns the real one, and `NSMenu.performActionForItem(at:)` chooses from
+it — `popUpContextMenu` only blocks on a tracking loop that synthesized keystrokes do not drive.
+And for pictures: `screencapture` and `CGWindowListCreateImage` both want Screen Recording, while a
+view drawing itself with `cacheDisplay(in:to:)` wants nothing and does capture the web view's pixels.
 
 **The keyboard is on the menu bar** (`Sources/PanelCommands.swift`), and what is on it are the
 habits a browser already taught: ⌘R reload and ⇧⌘R reload ignoring the cache; ⌘W close the tab and
@@ -483,7 +524,7 @@ apps/macos/Sources/
   ADIApp.swift         @main — the dark Window (content-sized) + the panel Window
   ContentView.swift    the window: header, the step the install is on, the footer
   PanelWindow.swift    the panel's window: the 48px bar, the tab strip, the page
-  PanelTabs.swift      the tabs — and the rule that the first one is always the app
+  PanelTabs.swift      the tabs — the rule that the first one is always the app, and pinning
   WebPanel.swift       one tab's WKWebView: navigation, what leaves, what opens a tab, JS panels
   StatusLine.swift     the status dot + word, and the services switch
   DashboardButton.swift  the one filled button: Open control panel

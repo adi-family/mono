@@ -49,6 +49,7 @@ ICONS = [
     "link",              # pair
     "monitor",           # a node
     "network",           # the fleet / the mesh
+    "pin",               # a tab the operator kept
     "plus",
     "power",
     "qr-code",

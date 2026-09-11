@@ -82,13 +82,13 @@ final class FrontPanel: ObservableObject {
     /// Whether ⌘W has a tab to close, as opposed to a window. False on the app's own tab, which is
     /// never closed — and that is not "closing is unavailable", it is what turns ⌘W back into
     /// *close this window*, which is what ⌘W on a browser's last tab has always done.
-    var closesTab: Bool { tab.map { !$0.pinned } ?? false }
+    var closesTab: Bool { tab.map { !$0.isApp } ?? false }
 
     /// The tab, or — on the app's own tab, and from the setup window, which has no tabs — the
     /// window. Never nothing: ⌘W that sometimes does nothing at all is worse than ⌘W that always
     /// closes the nearest thing.
     func close() {
-        if let tab, !tab.pinned, let tabs {
+        if let tab, !tab.isApp, let tabs {
             tabs.close(tab)
         } else {
             NSApp.keyWindow?.performClose(nil)
