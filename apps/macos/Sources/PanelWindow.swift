@@ -187,10 +187,21 @@ private struct TabChip: View {
             if closableHere {
                 Button(action: close) {
                     LucideIcon(icon: .x, size: .sm, label: "Close \(panel.label)")
+                        // A stroked `Shape` is hit **on its stroke**, so without a shape of its own
+                        // this button's target was the two ~0.9pt diagonals of the ⨯ itself and
+                        // every other pixel of the glyph fell through to the tab underneath —
+                        // selecting a tab that was not chosen, and doing nothing at all on the one
+                        // that was. Measured on a real bundle: 4 of the 49 points in the glyph's
+                        // 14pt box closed the tab, and all four lay on a diagonal.
+                        //
+                        // 4pt of slop on every side, which keeps the glyph exactly where it was
+                        // (4 + 4 = the 8 it stood off the chip's edge) and makes the target 22.
+                        .padding(4)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(hovering || active ? ADI.ink2 : ADI.ink3)
-                .padding(.trailing, 8)
+                .padding(.trailing, 4)
             }
         }
         .onHover { hovering = $0 }

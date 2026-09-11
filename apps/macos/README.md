@@ -288,7 +288,18 @@ window's hit test returned the catcher, and a synthesized left click on the same
 selected the tab. And the press has to both start and end on the chip, so a wheel-press dragged off
 it is a change of mind rather than a closed tab.
 
-Driving any of this from a probe has two traps of its own. A synthesized `.otherMouseDown` built
+**The ⨯ needs a shape of its own, and it is not the glyph.** A `LucideIcon` is a stroked `Shape`,
+and SwiftUI hit-tests a stroked shape **on its stroke** — so a close button whose whole label was
+the icon had a target of two ~0.9pt diagonals, and every other pixel of it fell through to the tab
+underneath: on an unchosen tab that selected it, and on the tab already in front it did nothing at
+all, which is what "I can't close the current tab" turned out to mean. Measured on a real bundle,
+clicking a grid across the glyph's 14pt box: **4 of 49 points closed the tab, and all four lay on a
+diagonal.** The fix is `.padding(4)` then `.contentShape(Rectangle())` inside the button, which
+makes the target 22pt and — because the 4 comes back off the button's own trailing padding — leaves
+the glyph on exactly the pixels it was on before. The same grid after: the middle of the glyph's top
+edge, a point the old build never once closed, closed 11 times in 12.
+
+Driving any of this from a probe has traps of its own. A synthesized `.otherMouseDown` built
 with `NSEvent.mouseEvent(with:)` carries **button 0**, and one built from a `CGEvent` carries button
 2 but **no window** — so neither on its own reaches a view, and `CGEvent.post` needs an Accessibility
 grant the bundle will not have. What works is posting the CGEvent-derived event through the app's
@@ -298,6 +309,14 @@ all; `NSView.menu(for:)` returns the real one, and `NSMenu.performActionForItem(
 it — `popUpContextMenu` only blocks on a tracking loop that synthesized keystrokes do not drive.
 And for pictures: `screencapture` and `CGWindowListCreateImage` both want Screen Recording, while a
 view drawing itself with `cacheDisplay(in:to:)` wants nothing and does capture the web view's pixels.
+
+A **left** click is no easier. Posted as a `.leftMouseDown` and a `.leftMouseUp` in the same turn of
+the loop, the up is lost and the button fires on the *next* pair instead — which reads as a control
+that works one trial late. Post the up a beat later, and then expect it to land about three times in
+four: measure a point by repeating it rather than by trying it once, and take a click that lands on
+an *unrelated* control as the check that the run is worth reading at all. A run whose window came up
+`key=false` lands nothing whatsoever, so log that too — otherwise a probe that was never in front
+reports every target as dead.
 
 **The keyboard is on the menu bar** (`Sources/PanelCommands.swift`), and what is on it are the
 habits a browser already taught: ⌘R reload and ⇧⌘R reload ignoring the cache; ⌘W close the tab and
