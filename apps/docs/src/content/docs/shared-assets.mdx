@@ -1,24 +1,24 @@
 ---
 title: Shared assets
-description: An opt-in switch that points the control panel's browser bundle at a CDN instead of the machine you're pointed at, so instances on the same version share one browser cache.
+description: An opt-in setting that points the control panel's browser bundle at a CDN instead of the machine you're pointed at, so instances on the same version share one browser cache.
 ---
 
 import Flags from '../../components/Flags.astro';
 import VersionBadge from '../../components/VersionBadge.astro';
 
 Every ADI instance serves its own control panel — the wasm bundle, its JS glue, two
-stylesheets, fonts — straight off its own disk. Shared assets is a single switch,
-off by default, that instead points a visiting browser at a CDN for those files:
+stylesheets, fonts — straight off its own disk. Shared assets is one setting, off by
+default, that instead points a visiting browser at a CDN for those files:
 `https://cdn.withadi.dev/monoapp/<version>/…`. `index.html` itself never moves; the
 instance you're talking to always serves that. Only what it points at changes.
 
 `cdn.withadi.dev` is ADI's own bucket, and the default CDN URL for every instance:
-`release.yml` publishes to it automatically on every tagged release, so turning the
-switch on is normally all there is to do. For a fork, an air-gapped build, or to
+`release.yml` publishes to it automatically on every tagged release, so choosing a
+CDN mode is normally all there is to do. For a fork, an air-gapped build, or to
 keep the panel's asset requests off ADI's infrastructure entirely, see
 [Publishing your own bucket](#publishing-your-own-bucket).
 
-It shipped in <VersionBadge version="1.12" />.
+It shipped in <VersionBadge version="1.13" />.
 
 ## Preview <Flags>Preview</Flags>
 
@@ -42,29 +42,44 @@ URL, same cache entry. Only the very first load, anywhere, costs anything.
 
 That second point is why the URL carries the version and *nothing*
 instance-specific — no hostname, no node ID, no per-install token — and why even
-the local `app.adi` panel uses the CDN when the switch is on, rather than being
+the local `app.adi` panel uses the CDN under `cdn-always`, rather than being
 exempted as "already local." Put anything per-instance into the URL, or let one
 instance route around the CDN, and the shared cache stops working while everything
 still looks fine — there'd be no error, just no benefit.
 
 ## Turning it on
 
-**Panel:** Settings → Shared assets (`/settings/shared-assets`). One switch, plus
-the CDN base URL and the version prefix this instance would ask for — check that
-`monoapp/<version>/` has actually been published before flipping it, since nothing
-stops you turning it on against a version that isn't there (you just get the
-fallback, silently).
+There are three modes, and the default is the first:
 
-**API:** `GET /api/settings/shared-assets` returns `{ enabled, base_url }`; `POST`
-the same path with `{ "enabled": true }` to change it. The setting persists in
-`~/.adi/mono/shared-assets/settings.toml` across restarts. Setting it has no
-effect on anything except how the next `index.html` this instance serves is
-rewritten — no build step, no restart required.
+| Mode | What it does |
+| --- | --- |
+| `local-always` | Never ask the CDN. Every request gets this instance's own copy — an instance that has never touched this setting behaves exactly as if shared assets didn't exist. |
+| `cdn-when-remote` | Ask the CDN only for a request that doesn't look like it's on this machine — a paired fleet node reached over `n.adi`, say. Loopback and this instance's own local name get the local copy, since the CDN's whole benefit is the uplink to a browser somewhere else. |
+| `cdn-always` | Ask the CDN for every request, local or not. The original all-or-nothing switch. |
+
+`cdn-when-remote` decides from the request's own `Host`, which is a guess and not a
+security boundary: a wrong guess costs one failed CDN round trip before the
+unconditional [local fallback](#fallback-is-unconditional) fires, never a wrong
+answer served to the wrong place.
+
+**Panel:** Settings → Shared assets (`/settings/shared-assets`). The mode picker,
+what the selected mode buys and costs, plus the CDN base URL and the version prefix
+this instance would ask for — check that `monoapp/<version>/` has actually been
+published before choosing a CDN mode, since nothing stops you pointing at a version
+that isn't there (you just get the fallback, silently).
+
+**API:** `GET /api/settings/shared-assets` returns `{ mode, base_url }`; `POST` the
+same path with `{ "mode": "cdn-always" }` to change it. The setting persists in
+`~/.adi/mono/shared-assets/settings.toml` across restarts, and a store written
+before the three modes existed still reads correctly — `enabled = true` migrates to
+`cdn-always`, the only mode that boolean could have meant. Setting it has no effect
+on anything except how the next `index.html` this instance serves is rewritten — no
+build step, no restart required.
 
 ## How the rewrite works <Flags>Expert area</Flags>
 
-`adi-app` serves a Trunk-built `index.html`. When the setting is on, it rewrites
-that shell in memory, in three places, before serving it:
+`adi-app` serves a Trunk-built `index.html`. When the mode asks for the CDN on this
+request, it rewrites that shell in memory, in three places, before serving it:
 
 - The boot script's module import (a static `import … from '/foo.js'`, which can't
   be wrapped in a `try`) becomes an async `import()` inside a `try`/`catch`.
@@ -80,10 +95,10 @@ outright), and the manifest/icon links.
 ### Fallback is unconditional
 
 The rewritten boot script's `catch` reissues the same `import()` against the
-instance's own local paths — the exact ones it would have used with the switch
-off — on any failure. Each stylesheet's `onerror` does the same for its `href`.
-Offline, the bucket down, or a version that was simply never published: all three
-take the same path, back to the local bundle. Turning this switch on cannot leave
+instance's own local paths — the exact ones it would have used under
+`local-always` — on any failure. Each stylesheet's `onerror` does the same for its
+`href`. Offline, the bucket down, or a version that was simply never published: all
+three take the same path, back to the local bundle. Choosing a CDN mode cannot leave
 someone looking at a page that fails to load; at worst it costs one failed request
 per asset before the fallback fires.
 
@@ -112,7 +127,7 @@ run the integrity check on a cross-origin fetch — without it, the hash is pres
 but silently unused. The browser refuses to apply a stylesheet whose bytes don't
 match, from a CDN or anywhere else.
 
-### Font URLs had to become relative <VersionBadge version="1.12" />
+### Font URLs had to become relative <VersionBadge version="1.13" />
 
 `crates/adi-ui/fonts/fonts.css` used to reference fonts with root-absolute
 `url("/fonts/…")`. That's fine when the stylesheet is same-origin, but once it's
@@ -128,18 +143,18 @@ are already fixed and can't be changed after the fact.
 
 ## The trade-off <Flags>Enterprise interest</Flags>
 
-ADI is self-hosted and local-first. This switch is the one place a panel load
-reaches a third party. With it on, Cloudflare sees one request per asset per
-browser: an IP address, a version string, a timestamp. Nothing else — no panel
+ADI is self-hosted and local-first. This setting is the one place a panel load
+reaches a third party. Under either CDN mode, Cloudflare sees one request per asset
+per browser: an IP address, a version string, a timestamp. Nothing else — no panel
 data, no API traffic, no auth tokens. `/api/` never goes near the CDN; only the
 static bundle does.
 
-That's still a request that, with the switch off, never leaves the machine. It's
-exactly why the setting defaults off and exists as an explicit switch rather than
+That's still a request that, under `local-always`, never leaves the machine. It's
+exactly why that is the default and the CDN is something you choose rather than
 default behavior: an organization can decide that trade-off for itself, rather
 than discover it in a network tab after the fact. If your threat model rules out
-any outbound request from the panel at all, leave it off — nothing else in ADI
-depends on it being on.
+any outbound request from the panel at all, leave it on `local-always` — nothing
+else in ADI depends on a CDN mode.
 
 ## Publishing your own bucket <Flags>Expert area</Flags>
 
@@ -188,5 +203,5 @@ the one file every instance still serves itself.
 ## See also
 
 - [[Hive]] — the panel this setting affects (`app.adi`) is itself a hive service,
-  and a fleet node reached over `n.adi` is exactly the slow-uplink case this switch
-  is meant to help.
+  and a fleet node reached over `n.adi` is exactly the slow-uplink case this setting
+  is meant to help — and what `cdn-when-remote` singles out.
