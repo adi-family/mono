@@ -20,6 +20,36 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.13.2 — 2026-09-12
+
+### Added
+
+- **The tab strip answers the two gestures a browser has already taught.** In the macOS app's panel
+  window, a wheel-click on a tab closes it, and a right-click opens the menu of what there is no room
+  for on a chip: **Rename…**, **Pin Tab**, and, behind a divider, **Close Tab**. The app's own tab
+  has no menu — it cannot be closed, the brand is not renamed, and it is already where pinning would
+  put a tab.
+
+  **Pinning** moves a tab up behind the app's and keeps it there, so its ⌘-number stops moving as
+  dashboards open and close beside it. A pinned tab wears a pin where its ⨯ was and declines the two
+  gestures that close a tab under the pointer; ⌘W and its own menu still close it, because both say
+  what they are about to do.
+
+  **Renaming** happens in the chip, which becomes a box holding the name it is wearing: ↩ keeps it,
+  ⎋ leaves the tab alone, clicking away keeps what was typed, and an emptied box puts the page's own
+  title back. ⇧⌘T now brings a closed tab back with its name and its pin as well as its address.
+
+### Fixed
+
+- **The ⨯ on a tab could not be clicked.** It was hittable only *on* its two thin diagonals — about
+  0.9pt of stroke — and every other pixel of the glyph fell through to the tab underneath. On a tab
+  that was not chosen, that selected it, which looks like a ⨯ doing the wrong thing; on the tab
+  already in front it did nothing at all, which is how it was reported: "I can't close the current
+  tab". The close button now has a target of its own, 22pt across the whole glyph and its slop, and
+  the glyph sits on exactly the pixels it did before — the strip is unchanged to look at, and the
+  target still stops short of where a long title truncates. ⌘W and a chip's own **Close Tab** were
+  never affected.
+
 ## 1.13.1 — 2026-09-11
 
 ### Fixed
