@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.13.1 — 2026-09-11
+
 ### Fixed
 
 - **Settings → Shared assets said "Loading…" and never stopped.** The setting the last release added
