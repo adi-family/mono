@@ -99,12 +99,20 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             // another machine's run records one — which is the whole reason that page watches it
             // rather than reading it once.
             | "/api/llm/backends"
+            // The apps listing, watched by the marketplace door so an install made in another
+            // tab — or by an agent — appears without a reload.
+            | "/api/marketplace"
             | "/api/mesh"
             | "/api/meta"
             | "/api/ports"
             | "/api/ports/used"
             | "/api/projects"
             | "/api/secrets"
+            // The shared-assets mode. A settings page is watched like any other read because the
+            // panel's fallback fetch runs only while the socket is *down*: a read missing from
+            // this list leaves its page on "Loading…" for the life of the tab, which is how both
+            // this one and `/api/llm/backends` above shipped mute.
+            | "/api/settings/shared-assets"
             | "/api/tasks"
             | "/api/tools"
             | "/api/triggers" => Some(SLOW),
@@ -488,51 +496,102 @@ mod tests {
         }
     }
 
-    /// Every read the control panel subscribes to — `adi-webapp`'s `state::subscriptions`, which
-    /// is the only thing that ever sends a `sub` message down this channel.
+    /// The panel's source tree, which [`subscribed_by_the_panel`] reads its subscriptions out of.
+    /// A sibling crate in this workspace; absent only if `adi-app` is built on its own, which is
+    /// why the test below skips rather than fails when it isn't there.
+    const PANEL_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../adi-webapp/src");
+
+    /// How few subscriptions mean the scan below found nothing rather than nothing being there.
+    /// Without a floor, a rename of `Sub::get` would turn the one test guarding this boundary into
+    /// a test of an empty list, passing for ever.
+    const FEWEST_PLAUSIBLE_SUBS: usize = 15;
+
+    /// Every read the control panel subscribes to, read out of `adi-webapp`'s own source — the
+    /// `live::Sub::{get,post,get_on,post_on}` calls, which are the only thing that ever sends a
+    /// `sub` message down this channel.
     ///
-    /// Kept here as a list because the two halves are in different crates and nothing else makes
-    /// the compiler care that they agree. The bug this was written for: the LLM backends page
-    /// subscribed to `/api/llm/backends`, [`watchable`] did not name it, and the page sat on
-    /// "Loading…" for ever — the panel's one-shot fetch is a *fallback* that runs only while the
-    /// socket is down, so a healthy live channel was the thing that broke it. Adding a page means
-    /// adding its read here and to [`watchable`] in the same commit.
-    const SUBSCRIBED_BY_THE_PANEL: &[(&str, &str)] = &[
-        ("GET", "/api/agents"),
-        ("GET", "/api/agents/runs/all"),
-        ("GET", "/api/dashboards"),
-        ("GET", "/api/db"),
-        ("GET", "/api/fleet"),
-        ("GET", "/api/health"),
-        ("GET", "/api/hive"),
-        ("GET", "/api/llm/backends"),
-        ("GET", "/api/mesh"),
-        ("GET", "/api/meta"),
-        ("GET", "/api/ports"),
-        ("GET", "/api/ports/used"),
-        ("GET", "/api/projects"),
-        // The open project's detail page, whose path carries the id.
-        ("GET", "/api/projects/acme"),
-        ("GET", "/api/secrets"),
-        ("GET", "/api/tasks"),
-        ("GET", "/api/tools"),
-        ("GET", "/api/triggers"),
-        ("POST", "/api/agents/peek"),
-        ("POST", "/api/agents/run/peek"),
-        ("POST", "/api/agents/runs"),
-        ("POST", "/api/projects/hook/log"),
-        ("POST", "/api/projects/workspaces"),
-        ("POST", "/api/projects/workspaces/terminal/peek"),
-        ("POST", "/api/triggers/log"),
-    ];
+    /// Scanned rather than listed, because the two halves live in different crates and nothing
+    /// makes the compiler care that they agree. This *was* a hand-kept list, and it drifted twice:
+    /// the LLM backends page subscribed to `/api/llm/backends` and the shared-assets settings page
+    /// to `/api/settings/shared-assets`, [`watchable`] named neither, and each sat on "Loading…"
+    /// for ever — the panel's one-shot fetch is a *fallback* that runs only while the socket is
+    /// down, so a healthy live channel was the thing that broke them. A list that has to be
+    /// updated by whoever adds a page is a list that says nothing when they don't.
+    ///
+    /// Only string literals are read; the one subscription built with `format!`
+    /// (`/api/projects/{id}`) has its placeholders filled with a sample segment, since
+    /// [`watchable`] matches those by prefix anyway.
+    fn subscribed_by_the_panel() -> Vec<(String, String)> {
+        fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs")
+                    && let Ok(source) = std::fs::read_to_string(&path)
+                {
+                    scan(&source, out);
+                }
+            }
+        }
+
+        // `Sub::get(` and friends, then the first `"/api/…"` literal after it. The call may wrap,
+        // so the search runs over the rest of the file and stops at the first literal — every
+        // subscription in the panel names its path as its first argument.
+        fn scan(source: &str, out: &mut Vec<(String, String)>) {
+            for (call, method) in [
+                ("Sub::get(", "GET"),
+                ("Sub::get_on(", "GET"),
+                ("Sub::post(", "POST"),
+                ("Sub::post_on(", "POST"),
+            ] {
+                for (at, _) in source.match_indices(call) {
+                    let rest = &source[at + call.len()..];
+                    let Some(open) = rest.find("\"/api/") else {
+                        continue;
+                    };
+                    let literal = &rest[open + 1..];
+                    let Some(end) = literal.find('"') else {
+                        continue;
+                    };
+                    // `{id}` and the like: any segment stands in, so the prefix arm matches.
+                    let path = literal[..end]
+                        .split('/')
+                        .map(|seg| if seg.starts_with('{') { "sample" } else { seg })
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    out.push((method.to_string(), path));
+                }
+            }
+        }
+
+        let mut found = Vec::new();
+        walk(std::path::Path::new(PANEL_SRC), &mut found);
+        found.sort();
+        found.dedup();
+        found
+    }
 
     #[test]
     fn every_read_the_panel_watches_is_watchable() {
-        for (method, path) in SUBSCRIBED_BY_THE_PANEL {
+        if !std::path::Path::new(PANEL_SRC).is_dir() {
+            return; // built without its sibling crate; there is nothing to compare against
+        }
+        let subs = subscribed_by_the_panel();
+        assert!(
+            subs.len() >= FEWEST_PLAUSIBLE_SUBS,
+            "only found {} subscriptions in {PANEL_SRC} — the scan has stopped matching how the \
+             panel writes them, and is no longer guarding anything",
+            subs.len()
+        );
+        for (method, path) in &subs {
             assert!(
                 watchable(method, path).is_some(),
                 "the control panel subscribes to {method} {path} and this channel will not watch \
-                 it — the table that wants it never gets an answer"
+                 it — the page that wants it never gets an answer, and sits on \"Loading…\""
             );
         }
     }

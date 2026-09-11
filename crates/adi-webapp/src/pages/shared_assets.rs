@@ -8,8 +8,11 @@ use adi_webapp_api::types::SharedAssetsMode;
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::state::State;
+use crate::state::{State, read_error};
 use crate::ui::apply_mutation;
+
+/// The read this page is: the setting it shows, and the key a failure to load it is filed under.
+const ENDPOINT: &str = "/api/settings/shared-assets";
 
 /// The Shared assets settings page: the mode picker, and what each mode buys and costs, plus the
 /// base URL and version prefix this instance would ask the CDN for — so an operator can tell at a
@@ -28,7 +31,16 @@ pub(crate) fn shared_assets_view(state: State) -> AnyView {
                 <h2 class="adi-panel__title">"Shared assets"</h2>
             </div>
             {move || match shared.get() {
-                None => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
+                // Why, wherever there is a why. A read that failed and a read that has not
+                // answered yet are the same empty signal, so a page that only ever says
+                // "Loading…" is telling an operator nothing about a setting that will never
+                // arrive — which is exactly how this one read while the live channel was
+                // refusing to watch it.
+                None => view! {
+                    <div class="adi-empty">{move || read_error(state, ENDPOINT)
+                        .map_or_else(|| "Loading\u{2026}".to_string(),
+                            |why| format!("Couldn't load this: {why}"))}</div>
+                }.into_any(),
                 Some(s) => view! {
                     <div class="adi-panel__body">
                         <div class="adi-field">

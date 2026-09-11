@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **Settings → Shared assets said "Loading…" and never stopped.** The setting the last release added
+  was unreachable from the panel it shipped in: the live channel keeps a list of the reads it is
+  willing to watch, `/api/settings/shared-assets` was never added to it, and so the page's one
+  request was refused every time. Opening the URL directly happened to work — the panel asks for
+  everything once at startup — but clicking through to the page from anywhere else left it on
+  "Loading…" for as long as the tab stayed open. The apps marketplace was quietly missing from that
+  same list, which is why an install made in another tab didn't appear in one already open.
+
+  A page that can't load its read now says what went wrong instead of loading for ever, and the list
+  is checked against the panel's own source at test time, so the next page to be left off it fails a
+  build rather than reaching somebody's screen.
+
 ## 1.13.0 — 2026-09-11
 
 ### Added
