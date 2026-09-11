@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-128 structs · 35 enums · 5 type aliases across 53 files.
+129 structs · 35 enums · 5 type aliases across 54 files.
 
 ## Index
 
@@ -16,6 +16,7 @@
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
+- [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
@@ -417,7 +418,7 @@ pub struct ProcessCodexArguments {
     pub skip_git_repo_check: bool,
     #[serde(default, deserialize_with = "boolish")]
     pub web_search: bool,
-    #[serde(default, deserialize_with = "boolish")]
+    #[serde(default, deserialize_with = "boolish", skip_serializing)]
     pub json_events: bool,
 }
 ```
@@ -743,6 +744,21 @@ Where a turn writes its events. The child's stdout in production; a buffer in te
 
 ```rust
 pub(crate) type Sink<'a> = &'a mut dyn Write;
+```
+
+---
+
+## `src/backends/codex_stream.rs`
+
+### struct `Failure`
+
+How a turn ended badly: what to show, and the engine's own name for it.
+
+```rust
+struct Failure {
+    message: String,
+    reason: String,
+}
 ```
 
 ---

@@ -1,5 +1,6 @@
 pub(crate) mod adi_events;
 pub(crate) mod claude_stream;
+pub(crate) mod codex_stream;
 pub(crate) mod detached;
 pub(crate) mod harness;
 // A `Bash` command that outlives the turn that started it, and the wake that reports it.
@@ -18,6 +19,25 @@ pub(crate) fn push_option(argv: &mut Vec<String>, flag: &str, value: Option<&str
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
         argv.extend([flag.into(), value.into()]);
     }
+}
+
+/// Quiet the Codex CLI's `tracing` output, for any run that opens it.
+///
+/// Codex defaults to `INFO` on stderr, and at `INFO` it narrates itself: every HTTP request, the
+/// models cache, the shell snapshot, and two `codex_otel` events per phase that carry the logged-in
+/// account's **id and email address**. A one-line answer arrived behind a hundred and twenty lines
+/// of it — in a pty pane, on screen; headless, merged into the run's log, where it used to be
+/// handed to the reader as the agent's answer (see [`codex_stream`], which is the other half of
+/// this fix). None of it is ADI's to show, and all of it is `RUST_LOG` away.
+///
+/// `error` rather than `off`, because a Codex that fails to start should still be able to say so.
+/// An agent that sets `RUST_LOG` itself is left alone: asking for the wall is a legitimate thing to
+/// want while debugging one of these runs, and this is a default, not a policy.
+pub(crate) fn quiet_codex_env(env: &mut Vec<(String, String)>) {
+    if env.iter().any(|(name, _)| name == "RUST_LOG") {
+        return;
+    }
+    env.push(("RUST_LOG".to_string(), "error".to_string()));
 }
 
 /// Push one run's tool surface onto a Claude CLI command line — the same two flags, in the same

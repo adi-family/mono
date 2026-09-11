@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::arguments::{PtyClaudeArguments, PtyCodexArguments};
 use crate::backend::Backend;
-use crate::backends::pty;
+use crate::backends::{pty, quiet_codex_env};
 use crate::error::{Error, Result};
 use crate::runner::detached::decode;
 use crate::runner::prompt::{
@@ -121,6 +121,11 @@ impl Runner for PtyRunner {
         // Secrets and the agent's declared vars first, under their literal names; `PATH` last, so
         // nothing injected can shadow the agent's own `.bin` and tool directories.
         let mut env = spec.env.clone();
+        // Codex narrates itself to stderr at `INFO`, which in a terminal is a hundred-odd lines
+        // scrolling over the TUI it is trying to draw.
+        if matches!(self.backend, Backend::PtyCodex) {
+            quiet_codex_env(&mut env);
+        }
         env.push(("PATH".to_string(), spec.path.clone()));
         adi_pty::launch(&name, &argv, &spec.cwd, &env).map_err(|e| Error::Launch(e.to_string()))?;
 

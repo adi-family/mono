@@ -41,9 +41,11 @@ pub(crate) fn argv(
     if config.skip_git_repo_check {
         argv.push("--skip-git-repo-check".into());
     }
-    if config.json_events {
-        argv.push("--json".into());
-    }
+    // Always, because this is the format ADI reads — `crate::backends::codex_stream` is the only
+    // thing that ever looks at the log, and it understands nothing else. Without it Codex writes a
+    // banner, a replay of the whole prompt it was handed and a token trailer to stderr, all of
+    // which shares the run's log file with the answer and used to be shown as the answer.
+    argv.push("--json".into());
     argv.push(run_prompt(config, message));
     argv
 }
@@ -76,7 +78,6 @@ mod tests {
                 approval: Some(CodexApproval::Never),
                 reasoning_effort: Some(CodexReasoningEffort::High),
                 skip_git_repo_check: true,
-                json_events: true,
                 ..ProcessCodexArguments::default()
             },
             ..AgentManifest::default()
@@ -103,5 +104,13 @@ mod tests {
                 "Work carefully.\n\nfix the tests",
             ]
         );
+    }
+
+    /// Not a knob. `--json` is the only shape `codex_stream` can read, and an `exec` without it
+    /// writes its chrome — banner, prompt replay, token trailer — into the same log as the answer.
+    #[test]
+    fn argv_always_asks_for_the_event_stream() {
+        let argv = argv(&ProcessCodexArguments::default(), "go", None);
+        assert!(argv.contains(&"--json".to_string()), "{argv:?}");
     }
 }

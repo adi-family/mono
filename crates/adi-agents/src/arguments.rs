@@ -252,7 +252,13 @@ pub struct ProcessCodexArguments {
     pub skip_git_repo_check: bool,
     #[serde(default, deserialize_with = "boolish")]
     pub web_search: bool,
-    #[serde(default, deserialize_with = "boolish")]
+    /// **Accepted and ignored**, and no longer offered on the agent form.
+    ///
+    /// `codex exec --json` is now unconditional: it is the only shape `crate::backends::codex_stream`
+    /// can read, and turning it off meant the reader was handed the CLI's raw log — banner, prompt
+    /// replay, tracing wall and all — as the agent's answer. Kept as a field, and only as a field,
+    /// so a manifest written while it was a choice still loads under `deny_unknown_fields`.
+    #[serde(default, deserialize_with = "boolish", skip_serializing)]
     pub json_events: bool,
 }
 

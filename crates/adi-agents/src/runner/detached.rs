@@ -28,7 +28,9 @@ use crate::arguments::{
 use crate::backend::Backend;
 use crate::backends::detached::Spawned;
 use crate::backends::harness::claude_sdk::Continuation;
-use crate::backends::{adi_events, claude_stream, detached, harness, process};
+use crate::backends::{
+    adi_events, claude_stream, codex_stream, detached, harness, process, quiet_codex_env,
+};
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, MAX_WHOLE_PARSE_BYTES, TurnContent};
 use crate::runner::prompt::{
@@ -160,7 +162,9 @@ impl DetachedRunner {
         }
     }
 
-    /// The child's environment: the spec's, plus the adi loop's prompt channel.
+    /// The child's environment: the spec's, plus the adi loop's prompt channel — and, for Codex,
+    /// the switch that stops it narrating itself into the run's log
+    /// ([`quiet_codex_env`](crate::backends::quiet_codex_env)).
     ///
     /// The turn child prefers what is exported here over the prompt in its stored manifest, so the
     /// tool help composed at this layer is what the loop actually runs under.
@@ -171,6 +175,9 @@ impl DetachedRunner {
         {
             env.push((SYSTEM_PROMPT_ENV.to_string(), prompt));
         }
+        if matches!(self.backend, Backend::ProcessCodex) {
+            quiet_codex_env(&mut env);
+        }
         env
     }
 
@@ -180,17 +187,8 @@ impl DetachedRunner {
     fn parse(&self, log: &[u8]) -> TurnContent {
         match self.backend {
             Backend::ProcessClaude | Backend::HarnessClaudeSdk => claude_stream::parse(log),
+            Backend::ProcessCodex => codex_stream::parse(log),
             Backend::HarnessAdi => adi_events::parse(log),
-            // UNIMPLEMENTED: `process:codex`. Codex emits a structured stream under `--json` and
-            // nothing here reads it, so a Codex run's log arrives as plain text: the answer is
-            // whole, the turn has no tool steps and no metrics. What it wants is a
-            // `codex_stream::parse` beside `claude_stream::parse` and an arm above; the rest of
-            // the runner is complete for that backend.
-            //
-            // Note what this does *not* line up with: `emits` below already claims `tool_call` and
-            // `metrics` for `ProcessCodex`, so `crate::progress::capabilities` advertises steps a
-            // reader will never be shown. The claim is about the engine, the gap is here — fixing
-            // it is writing the parser, not lowering the flags.
             _ => TurnContent {
                 text: progress::text_of(log),
                 steps: Vec::new(),

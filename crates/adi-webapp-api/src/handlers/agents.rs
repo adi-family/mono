@@ -2043,9 +2043,10 @@ fn agent_form_spec() -> AgentFormSpec {
     // starts on, and the client renders this read-only for that case. Only a chainless agent —
     // one driving a CLI — still has to say what it runs on.
     let mut backend = agent_field("backend", "Runtime", AgentFormFieldKind::Select);
-    backend.hint = "how a turn is actually run. An agent with LLM backends takes this from the one \
+    backend.hint =
+        "how a turn is actually run. An agent with LLM backends takes this from the one \
                     it starts on; set it here only for an agent with no backends."
-        .into();
+            .into();
     fields.push(backend);
 
     // The project the agent is filed under (or global). The options are the registered
@@ -2238,7 +2239,9 @@ fn agent_form_spec() -> AgentFormSpec {
         &["process:codex"],
     ));
     fields.push(chk_field("web_search", "Web search", CODEX_BACKENDS));
-    fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
+    // No `json_events` field: `codex exec --json` is unconditional now, because it is the only
+    // shape ADI can read a Codex run's log in. Offering it as a choice offered "show me the raw
+    // CLI log as the answer", which is the bug it used to cause.
 
     // ---- pty/process shared (a vendor CLI runs either way) ----
     let mut add_dir = field_executors(
