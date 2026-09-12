@@ -49,6 +49,16 @@ const AGENT_PREFIX: &str = "agent:";
 pub(crate) const CHATS_PER_AGENT: usize = 6;
 pub(crate) const CHATS_DRAWN: usize = 80;
 
+/// How many conversations may be pulled in on top of [`CHATS_DRAWN`] purely for being the one that
+/// started something drawn.
+///
+/// These are not part of what the page chose to show — they are what the picture needs to say who
+/// started what, and they arrive from outside the newest-first window (see [`pick`]). Left
+/// unbounded a long chain of them is a second graph nobody asked for; at forty, the busiest agent
+/// on this operator's machine gets every distinct conversation that launched work back, and the
+/// count in the head still tells the truth about what was drawn.
+const LAUNCHERS_DRAWN: usize = 40;
+
 /// The tallest a block of one conversation's childless children may get before it wraps into a
 /// block of columns.
 ///
@@ -447,6 +457,15 @@ fn focus_on(g: &mut Graph, id: &str) {
 /// without the second, eighty agents' sixes do. The third is what keeps the picture joined up: a
 /// card naming an agent with nothing of its own on the canvas would hang from nothing, and the one
 /// thing this page is about is what set what off.
+///
+/// **The third cut asks for the conversation that was open, not the newest one.** An agent's newest
+/// six are what it has been doing lately; the work it launched a week ago came out of a
+/// conversation that is not among them. Rescuing only agents with no card at all left the busiest
+/// agent on the machine — the one that launches most of the work — attached to nothing it could
+/// name, because it always has six cards of its own: fifty conversations hung off a bare
+/// `adi-agent` pill while the conversation that really started them, `Work BUGBOUNTY-809`, sat
+/// undrawn in the same listing. So a launcher is pulled in per *conversation* that needs one, not
+/// per agent, and the one pulled in is the launcher's latest that had already begun.
 fn pick(chats: &AllAgentRuns) -> Vec<(&AgentRuns, &AgentRunInfo)> {
     let mut picked: Vec<(&AgentRuns, &AgentRunInfo)> = chats
         .agents
@@ -461,28 +480,48 @@ fn pick(chats: &AllAgentRuns) -> Vec<(&AgentRuns, &AgentRunInfo)> {
     picked.sort_by_key(|(_, r)| std::cmp::Reverse(recency(r)));
     picked.truncate(CHATS_DRAWN);
 
-    // Walks what it is adding to, so an agent pulled in for having started something is itself
-    // asked who started it. It terminates because every pass adds an agent that had no card, and
-    // there are finitely many agents.
-    let mut drawn: Vec<&str> = picked.iter().map(|(e, _)| e.name.as_str()).collect();
+    // Walks what it is adding to, so a conversation pulled in for having started something is
+    // itself asked who started it. Every pass adds a conversation that began no later than the one
+    // being asked about and is not on the canvas yet, so the walk works backwards through a finite
+    // listing and stops; [`LAUNCHERS_DRAWN`] bounds what it may cost on the way.
     let mut at = 0;
+    let mut rescued = 0;
     while at < picked.len() {
         let (_, run) = picked[at];
         at += 1;
         let Some(name) = run.launched_by.strip_prefix(AGENT_PREFIX) else {
             continue;
         };
-        if drawn.contains(&name) {
+        // Already answerable: one of that agent's drawn conversations was open when this began, so
+        // `started_by` has something true to point at and nothing need be pulled in.
+        if picked
+            .iter()
+            .any(|(e, r)| e.name == name && r.started_at <= run.started_at)
+        {
+            continue;
+        }
+        if rescued >= LAUNCHERS_DRAWN {
             continue;
         }
         let Some(entry) = chats.agents.iter().find(|a| a.name == name) else {
             continue;
         };
-        let Some(newest) = entry.runs.iter().max_by_key(|r| recency(r)) else {
+        // The one that had begun — the same question `started_by` asks, put to the whole listing
+        // rather than to the handful already on the canvas. Where the agent had nothing open, there
+        // is nothing to name and the card keeps its agent pill.
+        let Some(parent) = entry
+            .runs
+            .iter()
+            .filter(|r| r.started_at <= run.started_at)
+            .max_by_key(|r| r.started_at)
+        else {
             continue;
         };
-        drawn.push(entry.name.as_str());
-        picked.push((entry, newest));
+        if picked.iter().any(|(_, r)| r.run_id == parent.run_id) {
+            continue;
+        }
+        rescued += 1;
+        picked.push((entry, parent));
     }
     picked
 }
@@ -1318,9 +1357,54 @@ mod tests {
         let joined_any: std::collections::HashSet<usize> =
             g.edges.iter().flat_map(|e| [e.from, e.to]).collect();
         assert_eq!(
-            (0..g.nodes.len()).filter(|i| !joined_any.contains(i)).count(),
+            (0..g.nodes.len())
+                .filter(|i| !joined_any.contains(i))
+                .count(),
             0
         );
+    }
+
+    /// The busiest agent on the machine: it has plenty of cards of its own, none of them old enough
+    /// to be the one that launched the work, and the conversation that was is still in the listing.
+    ///
+    /// This is the shape of `adi-agent` on the operator's machine — six recent conversations, and
+    /// fifty workers launched a week earlier out of a seventh nobody drew. Rescuing only agents with
+    /// *no* card left all fifty on a bare pill while the answer sat one listing away.
+    #[test]
+    fn the_conversation_that_was_open_is_pulled_in_even_when_its_agent_has_cards() {
+        let mut old = run("bugbounty-809", LAUNCHED_BY_HUMAN);
+        (old.started_at, old.last_activity) = (100, 100);
+        let recent: Vec<AgentRunInfo> = (0..CHATS_PER_AGENT)
+            .map(|j| {
+                let mut r = run(&format!("recent{j}"), LAUNCHED_BY_HUMAN);
+                (r.started_at, r.last_activity) = (9000 + j as u64, 9000 + j as u64);
+                r
+            })
+            .collect();
+        let mut launcher_runs = vec![old];
+        launcher_runs.extend(recent);
+
+        let mut worker = run("w", "agent:one");
+        (worker.started_at, worker.last_activity) = (200, 200);
+        let all = AllAgentRuns {
+            total: 8,
+            agents: vec![runs("one", launcher_runs), runs("two", vec![worker])],
+        };
+        let g = build(&[agent("one"), agent("two")], &all, None);
+
+        // The conversation that was open, named — not the agent, and not one of the six later ones.
+        assert!(
+            joined(&g, "chat:one/bugbounty-809", "chat:two/w"),
+            "the conversation that was open was not pulled in"
+        );
+        assert!(
+            !g.nodes.iter().any(|n| n.id == "origin:agent:one"),
+            "an agent pill stood in for a conversation the listing could name"
+        );
+        // The six later ones are still nobody's parent: being drawn does not make them a cause.
+        for j in 0..CHATS_PER_AGENT {
+            assert!(!joined(&g, &format!("chat:one/recent{j}"), "chat:two/w"));
+        }
     }
 
     /// The three words a run can carry for who asked, and the absence that is none of them.
