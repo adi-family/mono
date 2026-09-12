@@ -69,6 +69,17 @@ extraction script cares about.
   recorded still answer to *Unrecorded* rather than to you: most of a machine's history predates the
   record, and putting it under a person's name would be a different lie.
 
+- **A conversation stopped and waiting on you could vanish from the chat rail with no way back —
+  stuck for good.** A run a subagent launched for itself dropped out under the default "Only started
+  by me" filter, and one belonging to an agent you had not starred dropped out under ★, even while it
+  sat there asking a question only a person could answer. Hiding a chat could strand one the same
+  way.
+
+  All three now step aside for a run that is waiting on you: it stays in the rail's "Waiting on you"
+  band regardless of the filter, the ★, or whether it was hidden, and shows there once rather than
+  also in the Hidden list — the question is what needs seeing, not who started the conversation or
+  where it was filed.
+
 ## 1.13.3 — 2026-09-12
 
 ### Added

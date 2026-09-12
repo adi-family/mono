@@ -465,14 +465,22 @@ chat_rail                               the whole left rail
 │   └─ session_bands                    also what the ⌘1…⌘9 hotkeys read
 │       ├─ source_rows  × selected source  the merge (`docs/fleet.md` §13) — one machine's own
 │       │   │                              agents plus one call per selected node, concatenated
-│       │   ├─ ★ filter, per source        each source's own starred agents, never another's
-│       │   ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
+│       │   ├─ ★ filter, per source        each source's own starred agents, never another's —
+│       │   │                              a run with pending_question is kept regardless
+│       │   ├─ per agent: pty ⇒ one synthetic row (when: now); else
+│       │   │             runs.filter(pending_question.is_some() || !hidden)
 │       │   └─ paged                       the *watched* agent's own list, on its own source only
+│       ├─ "Mine" filter                launched_by == human — a run with pending_question is
+│       │                                kept regardless of who launched it
 │       ├─ sort by last_touch desc      last_touch = max(last_activity, started_at)
-│       ├─ partition ×4                 five bands: asking, running, awaiting, starred, the rest
+│       ├─ partition ×4                 five bands: asking, running, awaiting, starred, the rest —
+│       │                               every filter above carries a pending_question escape hatch,
+│       │                               so an asking run always reaches this partition to be found
 │       └─ For(keyed "node:agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
-└─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same way
+└─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same
+                                         way, excluding a run with pending_question — it is already
+                                         shown in the asking band above and must not draw twice
 ```
 
 `chat_session_row` maps a row to `adi_ui::SessionItem` (`crates/adi-ui/src/session.rs`) inside a
@@ -559,18 +567,37 @@ Work down this list when one is missing:
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
    session is live or that agent is on screen (`actions.rs:4214`, in `source_rows`).
 3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:4983`,
-   `chat_hidden_sessions`).
+   `chat_hidden_sessions`) — **unless** the run holds a `pending_question`, which stays in the
+   asking band ("Waiting on you") instead of the Hidden one: hiding is "out of my
+   sight", but a question addressed to a person outranks that, because it is transient and leaves on
+   its own the moment it's answered, whereas a hidden run holding one would be stuck for good.
 4. **★ is on** and its agent is not starred on *its own source* (`source_rows`, `actions.rs`) — off
    by default, so this only applies once someone has switched it on this page load. Note this is the
    head's *agent* filter, which is a different mark from a conversation's own star, and — since
    multi-select — a fact about one source's agent list that a same-named agent on another source
-   does not inherit.
-5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
+   does not inherit. A run with a pending question is the one exception: it is kept whatever this
+   filter says about the agent it belongs to.
+5. **"Mine" is on** (the default) and the run's `launched_by` isn't `human` — the common case for a
+   run a subagent launched for itself, which is otherwise the majority of what a busy fleet accrues.
+   A pending question is the exception here too: a subagent-launched run stopping to ask a person is
+   exactly the run an operator has to be able to see and answer, filter or no filter.
+6. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
    A live session is never swept, and neither is a **starred** one.
-6. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
-7. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
+7. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
+8. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
    (`all_agent_runs` iterates `store.list()`), so an agent with rows but no manifest is invisible to
    the UI even though `run_load` still counts it (`SessionStore::agents()`).
+
+### `pending_question` is the one narrowing every filter yields to
+
+A run waiting on a person — `AgentRunInfo::pending_question` (`crates/adi-webapp-api/src/types.rs`)
+— is always in the rail, regardless of `SessionFilter` (Mine or Starred), the ★ agent filter, or
+`hidden`, and it appears exactly once: in the "Waiting on you" band, never duplicated into the Hidden
+band. The server side already held it through the page cut (`newest`, `handlers/agents.rs`) alongside
+a running or awaiting session; `source_rows`, the "Mine" retain, and `chat_hidden_sessions` in
+`actions.rs` are what carry that same exemption through the client's own narrowings, since a
+subagent-launched, unstarred or hidden run can ask a question exactly as well as one a person started
+by hand — and a question nobody can see to answer is a run stuck for good.
 
 ## Hot spots for a refactor
 

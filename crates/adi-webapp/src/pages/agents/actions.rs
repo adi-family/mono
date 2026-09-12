@@ -4935,6 +4935,11 @@ fn hotkey_glyph() -> &'static str {
 /// and what keeps the ★ filter's "always keep the one on screen" escape hatch from also opening every
 /// other source's same-named agent.
 ///
+/// A run with [`AgentRunInfo::pending_question`] survives both the ★ filter and `hidden` here,
+/// whatever this source's other narrowing is doing — a question addressed to a person is stuck for
+/// good the moment nothing shows it to them, so it is never one of the rows a filter is allowed to
+/// drop.
+///
 /// Returns the rows and whether this source's own listing already carried the watched agent — the
 /// caller's cue that the "conversation not in any index yet" fallback does not apply to this source.
 #[allow(clippy::too_many_arguments)]
@@ -4983,12 +4988,17 @@ fn source_rows(
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
     for ar in all.iter().flat_map(|a| a.agents.iter()) {
-        if keep.as_ref().is_some_and(|k| !k.contains(ar.name.as_str())) {
-            continue;
-        }
+        // The ★ filter is a fact about the *agent*, so it would otherwise skip this agent's whole
+        // listing — but a run asking a person a question has to survive it regardless, or the rail
+        // can strand a question nobody unstarred agent can ever answer. So the exclusion is carried
+        // per-run below instead of `continue`d here.
+        let excluded = keep.as_ref().is_some_and(|k| !k.contains(ar.name.as_str()));
         let is_watched = is_here && ar.name == watched;
         listed_watched |= is_watched;
         if ar.interactive {
+            if excluded {
+                continue;
+            }
             let running = live.contains(ar.name.as_str());
             if running || is_watched {
                 rows.push(SessionRow {
@@ -5013,15 +5023,21 @@ fn source_rows(
         } else {
             ar.runs.clone()
         };
-        rows.extend(runs.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
-            node: node.map(str::to_string),
-            agent: ar.name.clone(),
-            when: last_touch(&r),
-            running: r.running,
-            starred: r.starred,
-            run: Some(r),
-            hotkey: None,
-        }));
+        // A pending question outranks both the ★ filter and `hidden`: it is a question addressed
+        // to a person, transient by nature, and stuck for good if nobody can see it to answer it.
+        rows.extend(
+            runs.into_iter()
+                .filter(|r| r.pending_question.is_some() || (!excluded && !r.hidden))
+                .map(|r| SessionRow {
+                    node: node.map(str::to_string),
+                    agent: ar.name.clone(),
+                    when: last_touch(&r),
+                    running: r.running,
+                    starred: r.starred,
+                    run: Some(r),
+                    hotkey: None,
+                }),
+        );
     }
     (rows, listed_watched)
 }
@@ -5107,15 +5123,19 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
             });
         } else {
             let own = paged(watch.runs.get(), state);
-            rows.extend(own.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
-                node: watched_node.clone(),
-                agent: watched.clone(),
-                when: last_touch(&r),
-                running: r.running,
-                starred: r.starred,
-                run: Some(r),
-                hotkey: None,
-            }));
+            rows.extend(
+                own.into_iter()
+                    .filter(|r| r.pending_question.is_some() || !r.hidden)
+                    .map(|r| SessionRow {
+                        node: watched_node.clone(),
+                        agent: watched.clone(),
+                        when: last_touch(&r),
+                        running: r.running,
+                        starred: r.starred,
+                        run: Some(r),
+                        hotkey: None,
+                    }),
+            );
         }
     }
     // "Started by me": applied here rather than inside `source_rows`, because it asks about the
@@ -5124,12 +5144,15 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     // A row with no run record is a pty agent's live terminal — nobody wrote down who opened it, and
     // it is a thing a person opens and sits in front of, so it stays. The conversation on screen
     // stays whoever started it. Everything else has to say `human`: an unattributed session is one
-    // nobody recorded, not one a person is owed.
+    // nobody recorded, not one a person is owed. A pending question is the fourth exemption: a
+    // subagent-launched run that stops to ask a person is exactly the "mine" case in every way that
+    // matters — someone has to see it — and the filter isn't the one asking who launched it.
     if filter == SessionFilter::Mine {
         rows.retain(|row| match &row.run {
             None => true,
             Some(r) => {
-                launched_by_human(r)
+                r.pending_question.is_some()
+                    || launched_by_human(r)
                     || (row.node == watched_node
                         && row.agent == watched
                         && !open.is_empty()
@@ -5823,7 +5846,12 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 let name = ar.name;
                 ar.runs
                     .into_iter()
-                    .filter(|r| r.hidden)
+                    // A pending question already rides the asking band above regardless of `hidden`
+                    // (`session_bands`) — kept out of this one too, or it would draw twice. Hiding a
+                    // conversation is "out of my sight"; a question addressed to a person outranks
+                    // that, but only for as long as it is unanswered, so it belongs in the live band
+                    // and not filed away here.
+                    .filter(|r| r.hidden && r.pending_question.is_none())
                     .map(move |r| (node.clone(), name.clone(), r))
             })
             .collect()
