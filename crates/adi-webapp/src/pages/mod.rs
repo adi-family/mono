@@ -77,7 +77,7 @@ pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use knowledge::knowledge_view;
-pub(crate) use live_graph::live_graph_view;
+pub(crate) use live_graph::{GraphView, live_graph_view};
 pub(crate) use llm::{LlmConsole, llm_view};
 pub(crate) use llm_backends::llm_backends_view;
 pub(crate) use marketplace::{market_view, marketplace_view};

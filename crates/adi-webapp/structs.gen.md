@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-66 structs · 10 enums · 4 type aliases across 27 files.
+74 structs · 14 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -18,7 +18,10 @@
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
-- [`src/pages/live_graph.rs`](#srcpageslive_graphrs) — `Viewport`, `Resize`
+- [`src/pages/live_graph/mod.rs`](#srcpageslive_graphmodrs) — `GraphView`, `Resize`
+- [`src/pages/live_graph/model.rs`](#srcpageslive_graphmodelrs) — `Kind`, `Origin`, `Mark`, `Action`, `Node`, `Edge`, `Options`, `Graph`, `Builder`
+- [`src/pages/live_graph/paint.rs`](#srcpageslive_graphpaintrs) — `Palette`, `Style`
+- [`src/pages/live_graph/view.rs`](#srcpageslive_graphviewrs) — `Viewport`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
 - [`src/pages/llm_backends.rs`](#srcpagesllm_backendsrs) — `LoginField`
 - [`src/pages/marketplace.rs`](#srcpagesmarketplacers) — `OpenApp`
@@ -413,18 +416,21 @@ struct Scope {
 
 ---
 
-## `src/pages/live_graph.rs`
+## `src/pages/live_graph/mod.rs`
 
-### struct `Viewport`
+### struct `GraphView`
 
-Where the world sits on screen: how far in, and how far the stage has been dragged from the middle.
+The page's own state: the view, what is drawn, and what the pointer is on.
 
 ```rust
-#[derive(Clone, Copy, PartialEq)]
-struct Viewport {
-    scale: f64,
-    pan_x: f64,
-    pan_y: f64,
+#[derive(Clone, Copy)]
+pub(crate) struct GraphView {
+    view: RwSignal<Viewport>,
+    chats: RwSignal<bool>,
+    tools: RwSignal<bool>,
+    idle: RwSignal<bool>,
+    hover: RwSignal<Option<usize>>,
+    fitted: RwSignal<bool>,
 }
 ```
 
@@ -434,6 +440,203 @@ The observer watching the stage for a size change, and the closure it calls — 
 
 ```rust
 type Resize = StoredValue<Option<(ResizeObserver, Closure<dyn FnMut()>)>, LocalStorage>;
+```
+
+---
+
+## `src/pages/live_graph/model.rs`
+
+### enum `Kind`
+
+What a node stands for. The kind decides its shape, its width and its tone — nothing else about a node says which of these it is, because a word on every box would be the same word on most of them.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Kind {
+    Origin,
+    Agent,
+    Chat,
+    Tool,
+}
+```
+
+### enum `Origin`
+
+Where work came from when it came from outside the graph.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Origin {
+    Human,
+    Automation,
+    Unknown,
+}
+```
+
+### enum `Mark`
+
+The one signal a node carries beside its name: a 6px dot, in the colour of what it is saying.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Mark {
+    None,
+    Running,
+    Waiting,
+    Failed,
+}
+```
+
+### enum `Action`
+
+What clicking a node does. A node with nothing to open is not a dead link: it simply does not take the pointer (see `crate::pages::live_graph`'s hit test).
+
+```rust
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) enum Action {
+    None,
+    Agent(String),
+    Chat {
+        agent: String,
+        run_id: String,
+        interactive: bool,
+    },
+}
+```
+
+### struct `Node`
+
+One box on the canvas, already placed. `x`/`y` are its centre, in world units.
+
+```rust
+#[derive(Clone, PartialEq, Debug)]
+pub(crate) struct Node {
+    pub(crate) id: String,
+    pub(crate) label: String,
+    pub(crate) meta: String,
+    pub(crate) kind: Kind,
+    pub(crate) mark: Mark,
+    pub(crate) action: Action,
+    pub(crate) layer: usize,
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+}
+```
+
+### struct `Edge`
+
+A directed edge, by node index: `from` asked for, ran, or may run `to`.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Edge {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+}
+```
+
+### struct `Options`
+
+What to draw. Every one of these is a toggle on the page, and each only ever *adds* to the picture — nothing here hides something another option would have shown.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Options {
+    pub(crate) chats: bool,
+    pub(crate) tools: bool,
+    pub(crate) idle: bool,
+}
+```
+
+### struct `Graph`
+
+The laid-out graph, plus what had to be left out to lay it out.
+
+```rust
+#[derive(Clone, Default, PartialEq, Debug)]
+pub(crate) struct Graph {
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) edges: Vec<Edge>,
+    pub(crate) shown_chats: usize,
+    pub(crate) total_chats: usize,
+    pub(crate) agents: usize,
+    pub(crate) extent: (f64, f64, f64, f64),
+}
+```
+
+### struct `Builder`
+
+Nodes and edges under construction, with the index that keeps a node from being made twice.
+
+```rust
+#[derive(Default)]
+struct Builder {
+    graph: Graph,
+    by_id: HashMap<String, usize>,
+}
+```
+
+---
+
+## `src/pages/live_graph/paint.rs`
+
+### struct `Palette`
+
+The tokens this module draws with, read once per paint.
+
+```rust
+struct Palette {
+    line: String,
+    line_strong: String,
+    ink: String,
+    ink_2: String,
+    ink_3: String,
+    raise: String,
+    active: String,
+    hover: String,
+    accent: String,
+    warn: String,
+    err: String,
+    code: String,
+    sans: String,
+    mono: String,
+    fs_ui_sm: f64,
+    fs_small: f64,
+    fs_label: f64,
+}
+```
+
+### struct `Style`
+
+How one kind of node is drawn: its fill, its border, its text, and how round it is.
+
+```rust
+struct Style<'a> {
+    fill: &'a str,
+    border: &'a str,
+    text: &'a str,
+    size: f64,
+    weight: &'a str,
+    family: &'a str,
+    radius: f64,
+}
+```
+
+---
+
+## `src/pages/live_graph/view.rs`
+
+### struct `Viewport`
+
+Where the world sits on screen: how far in, and how far the stage has been dragged from the middle.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Viewport {
+    pub(crate) scale: f64,
+    pub(crate) pan_x: f64,
+    pub(crate) pan_y: f64,
+}
 ```
 
 ---

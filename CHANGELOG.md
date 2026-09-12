@@ -20,6 +20,29 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **A live graph of what set what off.** New page in the panel, and a door to it in the chat home's
+  right rail under Marketplace: one canvas holding you, the conversations you opened, the agents
+  that ran them, the conversations *those* agents started, and on down the chain. Left to right is
+  causation, not time — a box further right was set off by the one before it.
+
+  Scroll to zoom, drag to pan, click a box to open the conversation or the agent it stands for.
+  Pointing at one puts what it is in the bar: whose conversation it is, who asked for it, and where
+  it got to. A running conversation wears the orange dot, one waiting on an answer an amber one,
+  one that ended badly a red one.
+
+  Three switches decide what is drawn: **Chats** off collapses the picture onto the agents alone
+  (an edge then means "this one set that one going"), **Tools** adds what each agent may run, and
+  **Idle agents** brings in the definitions nothing has ever launched. The newest six conversations
+  per agent are drawn and the bar says how many there are in all — a machine with a thousand of
+  them is a graph you can read rather than a wall of boxes.
+
+  It costs no new endpoint: the picture is the two listings the panel already carries, read as a
+  graph instead of as a table. One thing the store cannot tell it, and it does not pretend
+  otherwise — a run records which *agent* asked for it, never which of that agent's conversations
+  did, so the chain runs through the agent.
+
 ## 1.13.2 — 2026-09-12
 
 ### Added

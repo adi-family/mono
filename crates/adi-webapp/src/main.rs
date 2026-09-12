@@ -50,7 +50,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    FactsConsole, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
+    FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
+    agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
     hive_view, knowledge_view, live_graph_view, live_view, llm_backends_view, llm_view,
     load_agent_into_form, load_dir, load_store_file, market_view, marketplace_view, mesh_view,
@@ -961,6 +962,11 @@ fn App() -> impl IntoView {
     // keeping while you are looking at another page (see `LlmConsole::close`).
     let llm = LlmConsole::new();
 
+    // The Live graph's view: where the canvas is pointed and what is drawn on it. Kept here and
+    // not in the page so that leaving it and coming back does not throw away where somebody had
+    // panned to — the graph itself is derived from the two listings and costs nothing to rebuild.
+    let graph = GraphView::new();
+
     // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
     let secrets_form = SecretsForm::new();
 
@@ -1353,7 +1359,7 @@ fn App() -> impl IntoView {
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
-                        Route::LiveGraph => live_graph_view(),
+                        Route::LiveGraph => live_graph_view(state, graph, agents_form, agents_watch, route),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),

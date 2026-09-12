@@ -86,8 +86,8 @@ pub(crate) enum Route {
     /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
     /// from the cache and installed as git clones pinned to a commit, inert.
     Marketplace,
-    /// The live graph (`/extended/live-graph`) — a canvas to pan and zoom, with nothing drawn on
-    /// it yet.
+    /// The live graph (`/extended/live-graph`) — every agent and conversation on this machine, and
+    /// what set each one off, on one canvas.
     LiveGraph,
     Hive,
     PortsManager,
@@ -256,7 +256,7 @@ impl Route {
             Route::Triggers => "What runs when something happens",
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
-            Route::LiveGraph => "A canvas to pan and zoom \u{2014} nothing on it yet",
+            Route::LiveGraph => "Who started what: agents, chats and the flow between them",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",

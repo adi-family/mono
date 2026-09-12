@@ -2,9 +2,11 @@
 // that exists on one page lives here. Tokens from design/tokens.css only.
 
 // ---- the live graph (`/extended/live-graph`) -------------------------------------------------
-// The page is the canvas, so it is laid out like the store file editor: the content pane runs
+// The page is one canvas, so it is laid out like the store file editor: the content pane runs
 // flush (`.adi-main--flush`), a bar of chrome sits on top, and the stage takes everything under
-// it. The stage does not scroll — the wheel is the zoom and the drag is the pan.
+// it. The stage does not scroll — the wheel is the zoom and the drag is the pan. Everything
+// inside the stage is painted by `src/pages/live_graph/paint.rs`, which reads the same tokens
+// this file does, off the canvas element.
 .adi-graph {
   &__head {
     flex: none;
@@ -17,11 +19,51 @@
     border-bottom: 1px solid var(--line);
   }
 
-  // What the surface answers to, said once where the surface is — with nothing drawn yet, a
-  // canvas that responds to nothing and a canvas nobody has dragged look the same.
-  &__hint {
+  // The line beside the title: what the whole picture is, or — while the pointer is on a box —
+  // what that one box is. It changes on every hover, so it gives up its width rather than pushing
+  // the controls at the other end of the bar around.
+  &__note {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     font-size: var(--fs-small);
     color: var(--ink-3);
+  }
+
+  // What to draw. Independent switches, not one choice of several, so they are checkboxes and not
+  // a segmented control (§6) — each only ever adds to the picture.
+  &__toggles {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  &__toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover { color: var(--ink-2); }
+  }
+
+  // Over the canvas rather than in place of it: the grid is still the page, and this is one line
+  // saying why nothing is drawn on it.
+  &__empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    text-align: center;
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+    // The canvas underneath still takes the wheel and the drag: an empty graph is still a canvas.
+    pointer-events: none;
   }
 
   &__zoom {
@@ -32,6 +74,7 @@
   }
 
   &__stage {
+    position: relative;
     flex: 1;
     min-height: 0;
     overflow: hidden;
@@ -41,6 +84,10 @@
     // pinch on a touchscreen and the canvas gets half of it.
     touch-action: none;
 
+    // A box that goes somewhere says so before it is clicked. Panning wins, and it wins by being
+    // written second: the two selectors have the same specificity, and once the drag has started,
+    // what is under the pointer is no longer what the pointer is doing.
+    &--link { cursor: pointer; }
     &--panning { cursor: grabbing; }
   }
 

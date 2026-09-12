@@ -2281,7 +2281,9 @@ pub(crate) fn subscriptions(
             set_if_changed(s.meta, m);
         }));
     }
-    if route == Route::Analytics {
+    // Both pages are the same two listings read differently: analytics adds them up, the graph
+    // draws what set what off.
+    if matches!(route, Route::Analytics | Route::LiveGraph) {
         // The whole page is these two listings joined: what is defined, and what it has run.
         subs.push(Sub::get("/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
@@ -2564,7 +2566,7 @@ pub(crate) async fn load(s: State) {
     if path == Route::Tasks.path() {
         took(s, "/api/tasks", s.tasks, fetch::tasks().await);
     }
-    if path == Route::Analytics.path() {
+    if path == Route::Analytics.path() || path == Route::LiveGraph.path() {
         // The whole page is these two listings joined: what is defined, and what it has run.
         took(s, "/api/agents", s.agents, fetch::agents().await);
         took(

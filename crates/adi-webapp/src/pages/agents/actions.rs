@@ -3393,18 +3393,14 @@ fn chat_market_link() -> impl IntoView {
     )
 }
 
-/// The way into the live graph.
-///
-/// The note says what is actually there rather than what the page is for: the canvas is empty
-/// until the graph is drawn on it, and a row promising a picture of this machine would be the
-/// second disappointment somebody has had from a nav item today.
+/// The way into the live graph: this machine's agents and conversations, and what set each off.
 fn chat_graph_link() -> impl IntoView {
     chat_door(
         adi_ui::Lucide::Waypoints,
         "Live graph",
-        "Nothing on it yet",
+        "What ran what",
         Route::LiveGraph.path(),
-        "The live graph \u{2014} a canvas to pan and zoom",
+        "Every agent and conversation on this machine, and what started it",
     )
 }
 

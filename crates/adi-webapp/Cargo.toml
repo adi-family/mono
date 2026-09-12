@@ -56,6 +56,7 @@ web-sys = { version = "0.3", features = [
     # width without the window moving at all.
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",
+    "TextMetrics",       # …measuring a label, because a box is cut to fit rather than to a count
     "WheelEvent",
     "PointerEvent",
     "ResizeObserver",
