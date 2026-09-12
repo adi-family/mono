@@ -32,9 +32,24 @@ extraction script cares about.
   agent's newest six conversations, and an agent that spawns work all day has drawn conversations
   newer than nearly everything it launched.
 
-  The rule only looks back now. Where the agent had nothing open, the card hangs off a pill bearing
-  the agent's name — which is all the store actually records: that agent set the work off, and which
-  of its conversations did is not written down anywhere.
+  The rule only looks back now, and it asks the whole listing rather than the handful of cards
+  already on the canvas: the conversation that was open when the work began is drawn even if it is
+  far too old to have been picked, which is usually the one you were looking for. The page had the
+  answer and was not showing it — on this machine the work hung off a bare agent pill while
+  `Work BUGBOUNTY-809`, the conversation that really started it, sat undrawn in the same listing.
+
+  Where the agent genuinely had nothing open — because the conversation is no longer in the store at
+  all — the card still hangs off a pill bearing the agent's name, which is all the record supports:
+  that agent set the work off, and which of its conversations did is written down nowhere.
+
+- **An agent stood on the canvas as though it had started itself.** That pill was drawn as a root,
+  level with *You*, which is the one thing on the picture that cannot be true: an agent cannot have
+  launched anything unless something launched it first.
+
+  It now answers to whatever that agent's own conversations answer to — usually you — so the chain
+  reads *You → adi-agent → the work* instead of beginning in mid-air. Conversations with no launcher
+  recorded still answer to *Unrecorded* rather than to you: most of a machine's history predates the
+  record, and putting it under a person's name would be a different lie.
 
 ## 1.13.3 — 2026-09-12
 
