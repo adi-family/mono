@@ -189,10 +189,14 @@ impl KnowledgeStore {
     /// Open the store backed by a caller-supplied [`Config`] — for tests or alternate installs.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
+        // Resolved against *this* config, not the ambient one `EmbedderSlot::default` would
+        // reach for — a store opened on a scratch root must resolve `embeddings/settings.toml`
+        // under that same root, not the real machine's.
+        let embedder_config = config.clone();
         Self {
             bases: BaseRegistry::new(config, KNOWLEDGE_MODULE),
             providers: Arc::new(Providers::builtin()),
-            embedder: EmbedderSlot::default(),
+            embedder: EmbedderSlot::lazily(move || embed::default_embedder(&embedder_config)),
             reader: Reader::admin(),
         }
     }
@@ -638,7 +642,12 @@ impl KnowledgeStore {
     /// Search `bases` by meaning, best first.
     ///
     /// The query is embedded once and put to every base, so searching a project's knowledge and
-    /// another agent's memory together costs one embed, not two.
+    /// another agent's memory together costs one embed, not two. The current embedder's own
+    /// [model name](Embedder::model_name) travels down into
+    /// [`Backend::search_vectors`] as the one thing a vector is ranked against — a row from any
+    /// other model does not rank, which is what keeps a mid-sweep [`reembed`](Self::reembed)
+    /// failure (or an assignment that now names a different backend) from surfacing an old
+    /// model's vector as though it were current.
     ///
     /// # Errors
     /// [`Error::Denied`] for a base this reader may not read, [`Error::NoSuchBase`],
@@ -657,8 +666,9 @@ impl KnowledgeStore {
         if vector.is_empty() {
             return Err(Error::Embed("the embedder returned no vector".into()));
         }
+        let model = embedder.model_name();
         self.gather(bases, limit, |backend| {
-            backend.search_vectors(&vector, limit)
+            backend.search_vectors(&vector, model, limit)
         })
     }
 

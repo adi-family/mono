@@ -9,7 +9,9 @@
 //! `~/.adi/mono`, and nothing else in the platform reads it.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use adi_indexer::embed::{Embedder, NoEmbedder};
 use adi_indexer::{Indexer, Symbol, SymbolNode};
 use clap::Subcommand;
 
@@ -516,7 +518,28 @@ fn open(path: Option<&Path>) -> Result<Indexer, String> {
         None => std::env::current_dir().map_err(|e| format!("no current directory: {e}"))?,
     };
 
-    block_on(Indexer::open(&project)).map_err(|e| format!("could not open the index: {e}"))
+    block_on(Indexer::open_with_embedder(&project, resolve_embedder()))
+        .map_err(|e| format!("could not open the index: {e}"))
+}
+
+/// The indexer's embedder, resolved through the embedding-backend registry.
+///
+/// `adi-embeddings` depends on `adi-indexer` for the `Embedder` trait, so `adi-indexer` itself
+/// cannot reach the registry without a cycle — this is where that resolution happens instead,
+/// for the one production caller of the indexing entry point.
+///
+/// A backend this build cannot construct (the assignment names `candle` and this binary has no
+/// `candle` feature) degrades to [`NoEmbedder`], exactly what `Indexer::open` built by hand
+/// before this crate resolved through the registry: indexing and FTS search still work, semantic
+/// search reports there is nothing to search.
+fn resolve_embedder() -> Arc<dyn Embedder> {
+    match adi_embeddings::resolve(&adi_config::Config::open(), adi_embeddings::CONSUMER_INDEXER) {
+        Ok(embedder) => embedder,
+        Err(e) => {
+            eprintln!("embedding backend registry: {e} — indexing without semantic search");
+            Arc::new(NoEmbedder)
+        }
+    }
 }
 
 /// Every entry point here does one bounded piece of work and then exits, so each builds its own

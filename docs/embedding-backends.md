@@ -3,14 +3,47 @@
 One trait, many ways to make a vector. Read this before touching `crates/adi-embeddings` or
 any of the three crates that embed text today (`adi-indexer`, `adi-knowledge`, `adi-facts`).
 
-Status: **phase A built 2026-09-12** — the spec, the registry crate, and the four runtimes
-(`docs/embedding-backends-survey.md` is the research this reconciles to). **Phase B is not
-built**: `adi-indexer`, `adi-knowledge` and `adi-facts` do not yet resolve their embedder
-through this registry, and there is no CLI, API or panel surface for it. Until phase B lands,
-the `candle` cargo feature and the `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED` environment variables
-remain the *live* configuration for those three crates exactly as they are today — the registry
-seeds itself correctly in the meantime, but nothing consumes what it seeds yet. See "Out of
-scope for this phase" at the bottom.
+Status: **phase A built 2026-09-12, phase B built 2026-09-13.** Phase A is the spec, the registry
+crate, and the four runtimes (`docs/embedding-backends-survey.md` is the research this reconciles
+to). Phase B is the two things it deferred: the three consumers actually resolving through the
+registry, and the two staleness holes the survey flagged (Surprises #1 and #2) that made a
+consumer resolving *differently* from one process to the next dangerous.
+
+**What phase B changed:**
+
+- `adi-knowledge`'s `KnowledgeStore::with_config` and `adi-facts`'s `FactStore::with_config` now
+  build their `EmbedderSlot` by calling `adi_embeddings::resolve(&config, CONSUMER_*)` instead of
+  a hardcoded `CandleEmbedder`/`OllamaEmbedder::new()`. Laziness and the cached failure are
+  unchanged — resolution still does not load a model until something calls `.get()`.
+- `adi-indexer` itself was **not** touched: it cannot depend on the registry without a cycle
+  (`adi-embeddings` depends on it). Instead its one production caller, `adi-cli`'s `indexer`
+  command group, now resolves `CONSUMER_INDEXER` and calls `Indexer::open_with_embedder` instead
+  of the feature-gated `Indexer::open`, falling back to `NoEmbedder` if the resolved backend
+  cannot be built (a `candle` assignment in a build without the `candle` feature) — the same
+  degradation `Indexer::open` gave by hand before.
+- `adi-knowledge`'s own `candle` cargo feature now also turns on `adi-embeddings/candle`
+  (`adi-knowledge/Cargo.toml`) — without that, a normal full-featured build would have the
+  registry report `candle` as unavailable even though `adi-indexer/candle` is compiled in,
+  because `adi-embeddings` is taken with `default-features = false` everywhere it is a
+  dependency.
+- **Surprise #2 (adi-knowledge search ranked wrong-model vectors as current):** `Backend::search_vectors`
+  now takes the searching embedder's `model` and every implementation (SQLite, in-memory) filters
+  on it — a row made by another model does not rank, full stop, closing the gap between the
+  crate's own docs and what `search` actually did.
+- **Surprise #1 (a model swap did not force re-indexing):** `index_project` now also forces the
+  full-rebuild path (`rebuild = true`, the same one `PIPELINE_VERSION` forces) when the stored
+  `embedding_model` differs from the handed-in embedder's — chosen over failing outright because
+  the existing rebuild machinery already does exactly the right thing (every file reprocessed,
+  `cache.get` already keyed on model) and an operator gets a working index back with no manual
+  step. `adi-facts`'s own near/search paths were checked too: `vector_of` already re-embeds on a
+  cached-vector model mismatch per node, so it was never exposed to this hole.
+- `adi-embeddings`'s own tests remain on the `hash` runtime throughout — no test here loads a
+  real candle model or talks to a live ollama.
+
+**Not yet built (phase C):** a CLI (`adi-mono embed backends|show|save|delete`), an API
+(`/api/embeddings/backends`), a panel tab, and a one-time migration command that seeds a store
+explicitly. See "Out of scope for this phase" at the bottom — everything phase A deferred to
+phase B is now built; what remains is the operator surface.
 
 ## The problem
 
@@ -286,11 +319,12 @@ quota/rate/auth/transient taxonomy (an embedding call either works or it doesn't
 "ask the human" step to gate) · `ask_on_switch` (there is no live conversation to protect from a
 switch happening under it).
 
-**Deferred to phase B, deliberately, not declined:** `adi-indexer`, `adi-knowledge` and
-`adi-facts` resolving their embedder through this registry instead of their own hardcoded
-construction · a CLI (`adi-mono embed backends|show|save|delete`) · an API
-(`/api/embeddings/backends`) · a panel tab · a one-time migration command that seeds a store
-explicitly rather than waiting for the first `resolve` call to do it lazily.
+**Deferred to phase C, deliberately, not declined:** a CLI
+(`adi-mono embed backends|show|save|delete`) · an API (`/api/embeddings/backends`) · a panel tab
+· a one-time migration command that seeds a store explicitly rather than waiting for the first
+`resolve` call to do it lazily. (`adi-indexer`, `adi-knowledge` and `adi-facts` resolving their
+embedder through this registry — phase B's share of this list — is built; see the status line at
+the top.)
 
 **Declined outright:** cross-model failover (the entire point of the narrower rule above) ·
 inheritance between backends (declined for the same reason the LLM design declined it —

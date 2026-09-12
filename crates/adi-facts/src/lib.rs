@@ -251,13 +251,17 @@ impl FactStore {
     /// Open the store backed by a caller-supplied [`Config`] — for tests or alternate installs.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
+        // Resolved against *this* config, not the ambient one `Config::open` would reach for —
+        // a store opened on a scratch root must resolve `embeddings/settings.toml` under that
+        // same root, not the real machine's.
+        let embed_config = config.clone();
         Self {
             bases: BaseRegistry::new(config, FACTS_MODULE),
             reader: Reader::admin(),
             // The slot is kept for its injection point rather than for laziness: building an
             // ollama client loads no weights and opens no socket, so unlike a candle embedder
             // there is nothing here to defer.
-            embedder: EmbedderSlot::lazily(default_embedder),
+            embedder: EmbedderSlot::lazily(move || default_embedder(&embed_config)),
             judge: Arc::new(OllamaJudge::new()),
             top_k: env_usize("ADI_FACTS_TOP_K").unwrap_or(DEFAULT_TOP_K),
             max_pending: env_usize("ADI_FACTS_MAX_PENDING").unwrap_or(DEFAULT_MAX_PENDING),
@@ -1017,20 +1021,17 @@ impl Provenance {
     }
 }
 
-/// `nomic-embed-text` on the local ollama — see [`embed`] for why it is that and nothing else.
+/// The embedder `facts` resolves through `adi-embeddings` — the registry that seeds itself to
+/// `nomic-embed-text` over the local ollama, reproducing exactly what this crate used to build
+/// by hand from `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED`. See [`embed`] for why it is that model and
+/// nothing else, and `docs/embedding-backends.md` for the registry.
 ///
 /// # Errors
-/// Never, today: building the client cannot fail, and reaching the host is deferred to the first
-/// text. The `Result` is [`EmbedderSlot::lazily`]'s signature, which exists for the embedder that
-/// has to be *loaded* rather than dialled — `adi-knowledge`'s candle one, which fails on a
-/// machine with no model and no network. Collapsing it here would mean this crate could never be
-/// pointed at such an embedder.
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "the shared EmbedderSlot's builder signature; see the doc above"
-)]
-fn default_embedder() -> adi_knowledge::Result<Arc<dyn Embedder>> {
-    Ok(Arc::new(OllamaEmbedder::new()))
+/// [`adi_knowledge::Error::Embed`] when the assigned backend (and every one of its fallbacks)
+/// cannot be built.
+fn default_embedder(config: &Config) -> adi_knowledge::Result<Arc<dyn Embedder>> {
+    adi_embeddings::resolve(config, adi_embeddings::CONSUMER_FACTS)
+        .map_err(|e| adi_knowledge::Error::Embed(e.to_string()))
 }
 
 fn embed_one(embedder: &dyn Embedder, text: &str) -> Result<Vec<f32>> {

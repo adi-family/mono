@@ -45,6 +45,11 @@ struct FileProcessResult {
 /// * 3 — references are stored unresolved as well as resolved, so the graph can be rebuilt
 ///   without reparsing. An index built by 2 has no `pending_refs` rows, and resolving from them
 ///   would empty its graph rather than restore it.
+///
+/// A swapped embedding model forces the same full pass independently of this number — see
+/// `index_project`'s own `model_changed` check — because the model is a property of the *run*,
+/// not of the pipeline's shape, and the same "an unchanged file is never reprocessed" rule that
+/// this constant exists to override would otherwise apply to it too.
 pub const PIPELINE_VERSION: u32 = 3;
 
 pub async fn index_project(
@@ -58,12 +63,31 @@ pub async fn index_project(
 ) -> Result<IndexProgress> {
     info!("Starting project indexing: {}", project_path.display());
 
-    let stored_version = storage.get_status().map_or(0, |s| s.pipeline_version);
-    let rebuild = stored_version != PIPELINE_VERSION;
-    if rebuild {
+    let stored_status = storage.get_status().ok();
+    let stored_version = stored_status.as_ref().map_or(0, |s| s.pipeline_version);
+    // An unchanged file never reaches `process_file`'s cache lookup — the file-hash check just
+    // below short-circuits first — so a model swap with no file touched would otherwise leave
+    // every untouched file's vectors from the *old* model sitting in the ANN index forever,
+    // silently mixed with whatever this run does re-embed. Forcing the same full `rebuild` a
+    // `PIPELINE_VERSION` bump forces is the existing machinery for exactly this: every file is
+    // reprocessed, and `cache.get` (already keyed on the embedder's model) recomputes each one's
+    // vectors fresh rather than serving what the old model made.
+    let model_changed = stored_version == PIPELINE_VERSION
+        && stored_status
+            .as_ref()
+            .is_some_and(|s| s.embedding_model != embedder.model_name());
+    let rebuild = stored_version != PIPELINE_VERSION || model_changed;
+    if stored_version != PIPELINE_VERSION {
         info!(
             "Index was built by pipeline {stored_version}, this is {PIPELINE_VERSION} — \
              reindexing every file once"
+        );
+    } else if model_changed {
+        info!(
+            old_model = stored_status.as_ref().map_or("?", |s| s.embedding_model.as_str()),
+            new_model = embedder.model_name(),
+            "embedding backend changed — reindexing every file so the old model's vectors are \
+             not silently mixed with the new one"
         );
     }
 

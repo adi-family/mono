@@ -20,30 +20,22 @@
 
 use std::sync::{Arc, OnceLock};
 
+use adi_config::Config;
+
 use crate::error::{Error, Result};
 
 pub use adi_indexer::embed::{EmbedError, Embedder};
 
-/// The embedder this build uses when nothing else is injected.
-///
-/// With the `candle` feature that is jina-embeddings-v2-base-code, exactly as the indexer runs
-/// it. Without it, [`HashEmbedder`] — which is honest about being a word-overlap stand-in, and
-/// is better than a store that cannot search at all.
+/// The embedder `knowledge` resolves through `adi-embeddings` — the registry that seeds itself
+/// to jina-embeddings-v2-base-code on candle (or [`HashEmbedder`] without the feature),
+/// reproducing exactly what this crate used to build by hand. See `docs/embedding-backends.md`.
 ///
 /// # Errors
-/// [`Error::Embed`] when the model cannot be loaded (no network on a first run, a corrupt
-/// cache, no memory for the weights).
-pub fn default_embedder() -> Result<Arc<dyn Embedder>> {
-    // Two cfg'd `let`s rather than two cfg'd blocks: an attribute applies to a *statement*, and a
-    // cfg'd block in tail position is not one. Same shape the indexer's `Indexer::open` uses.
-    #[cfg(feature = "candle")]
-    let embedder: Arc<dyn Embedder> = Arc::new(
-        adi_indexer::embed::CandleEmbedder::new()
-            .map_err(|e| Error::Embed(format!("loading the embedding model: {e}")))?,
-    );
-    #[cfg(not(feature = "candle"))]
-    let embedder: Arc<dyn Embedder> = Arc::new(HashEmbedder);
-    Ok(embedder)
+/// [`Error::Embed`] when the assigned backend (and every one of its fallbacks) cannot be built —
+/// no network on a first candle download, a corrupt cache, no memory for the weights.
+pub fn default_embedder(config: &Config) -> Result<Arc<dyn Embedder>> {
+    adi_embeddings::resolve(config, adi_embeddings::CONSUMER_KNOWLEDGE)
+        .map_err(|e| Error::Embed(e.to_string()))
 }
 
 /// The embedder a store uses: whatever was injected, else a lazily built default.
@@ -63,9 +55,10 @@ pub struct EmbedderSlot {
 }
 
 impl Default for EmbedderSlot {
-    /// A slot that will load [`default_embedder`] when something first needs a vector.
+    /// A slot that will resolve [`default_embedder`] against the standard config (`~/.adi/mono`,
+    /// honoring `$ADI_DIR`) when something first needs a vector.
     fn default() -> Self {
-        Self::lazily(default_embedder)
+        Self::lazily(|| default_embedder(&Config::open()))
     }
 }
 
@@ -87,7 +80,10 @@ impl EmbedderSlot {
     pub fn injected(embedder: Arc<dyn Embedder>) -> Self {
         Self {
             injected: Some(embedder),
-            build: Arc::new(default_embedder),
+            // Never called — `get` returns the injected embedder before touching `build` — but
+            // the field needs some value, and one that says why it is unreachable beats faking a
+            // `Config` just to satisfy `default_embedder`'s signature.
+            build: Arc::new(|| Err(Error::Embed("unreachable: an injected slot never builds".into()))),
             lazy: Arc::default(),
         }
     }

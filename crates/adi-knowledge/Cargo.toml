@@ -14,7 +14,12 @@ repository.workspace = true
 # still adds/edits/lists/full-text-searches notes and reports every one of them as unembedded —
 # the same degradation `indexer search` makes, for the same reason (~200MB of candle + tokenizers
 # is not something every binary that merely *reads* a note should carry).
-candle = ["adi-indexer/candle"]
+#
+# Also turns on `adi-embeddings/candle`: this crate now resolves its embedder through that
+# registry rather than building `CandleEmbedder` directly, and `adi-embeddings`' own `candle`
+# feature is off by default (see its Cargo.toml) — without this, a binary built with this
+# feature on would still have the registry report `candle` as unavailable.
+candle = ["adi-indexer/candle", "adi-embeddings/candle"]
 default = ["candle"]
 
 [dependencies]

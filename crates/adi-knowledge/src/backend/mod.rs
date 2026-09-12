@@ -68,8 +68,13 @@ pub trait Backend: std::fmt::Debug + Send + Sync {
     /// left claiming vectors it doesn't have.
     fn set_vectors(&self, id: &str, state: &EmbeddingState, vectors: &[Vec<f32>]) -> Result<()>;
 
-    /// The closest chunks to `query`, best first, at most `limit` of them.
-    fn search_vectors(&self, query: &[f32], limit: usize) -> Result<Vec<ChunkHit>>;
+    /// The closest chunks to `query`, best first, at most `limit` of them — among vectors made
+    /// by `model` only. A row made by any other model does not rank: the crate's own promise
+    /// ("a vector whose model no longer matches is treated as absent", [`crate::embed`]) has to
+    /// hold at query time, not only for whatever [`reembed`](crate::KnowledgeStore::reembed)
+    /// already got to. Width alone is not enough to tell two models apart — two real models in
+    /// this tree share a width — so this filters on the name, never the vector's length.
+    fn search_vectors(&self, query: &[f32], model: &str, limit: usize) -> Result<Vec<ChunkHit>>;
 
     /// Full-text search over titles, bodies, and tags, best first.
     fn search_text(&self, query: &str, limit: usize) -> Result<Vec<ChunkHit>>;

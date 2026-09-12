@@ -135,13 +135,14 @@ impl Backend for MemoryBackend {
         Ok(())
     }
 
-    fn search_vectors(&self, query: &[f32], limit: usize) -> Result<Vec<ChunkHit>> {
+    fn search_vectors(&self, query: &[f32], model: &str, limit: usize) -> Result<Vec<ChunkHit>> {
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
         let notes = self.notes()?;
         let hits = notes
             .values()
+            .filter(|e| e.note.embedding.model.as_deref() == Some(model))
             .flat_map(|e| {
                 e.vectors.iter().enumerate().map(|(ix, v)| ChunkHit {
                     id: e.note.id.clone(),
@@ -255,7 +256,7 @@ mod tests {
             .expect("vectors");
         assert_eq!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "m", 5)
                 .expect("search")
                 .len(),
             1
@@ -273,7 +274,7 @@ mod tests {
         backend.put(&kept).expect("re-put with state");
         assert_eq!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "m", 5)
                 .expect("search")
                 .len(),
             1
@@ -283,7 +284,7 @@ mod tests {
         backend.put(&note("a", "A", "second")).expect("re-put");
         assert!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "m", 5)
                 .expect("search")
                 .is_empty(),
             "a rewrite must take the old vectors with it"
@@ -294,6 +295,40 @@ mod tests {
                 .expect("get")
                 .expect("present")
                 .is_embedded()
+        );
+    }
+
+    /// The same contract as the SQLite backend's: a vector made by another model does not rank,
+    /// however close it sits by raw cosine distance.
+    #[test]
+    fn a_vector_from_another_model_does_not_rank() {
+        let backend = MemoryBackend::default();
+        backend.put(&note("a", "A", "")).expect("put");
+        backend
+            .set_vectors(
+                "a",
+                &EmbeddingState {
+                    model: Some("old-model".into()),
+                    hash: Some("h".into()),
+                    chunks: 1,
+                    dimensions: 2,
+                },
+                &[vec![1.0, 0.0]],
+            )
+            .expect("vectors");
+
+        assert!(
+            backend
+                .search_vectors(&[1.0, 0.0], "new-model", 5)
+                .expect("search")
+                .is_empty()
+        );
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0], "old-model", 5)
+                .expect("search")
+                .len(),
+            1
         );
     }
 

@@ -249,13 +249,20 @@ impl Backend for SqliteBackend {
         Ok(())
     }
 
-    fn search_vectors(&self, query: &[f32], limit: usize) -> Result<Vec<ChunkHit>> {
+    fn search_vectors(&self, query: &[f32], model: &str, limit: usize) -> Result<Vec<ChunkHit>> {
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
         let conn = self.conn()?;
-        let mut stmt = conn.prepare("select note_id, chunk, vector from vectors")?;
-        let rows = stmt.query_map([], |row| {
+        // Joined against `notes` rather than filtered after the fact: a row's model lives on the
+        // note, not the vector, and a scan that read every vector before checking it would pay
+        // for exactly the rows this filter exists to skip.
+        let mut stmt = conn.prepare(
+            "select v.note_id, v.chunk, v.vector from vectors v \
+             join notes n on n.id = v.note_id \
+             where n.embed_model = ?1",
+        )?;
+        let rows = stmt.query_map(params![model], |row| {
             let id: String = row.get(0)?;
             let chunk: i64 = row.get(1)?;
             let blob: Vec<u8> = row.get(2)?;
@@ -465,7 +472,7 @@ mod tests {
             .expect("vectors");
         assert_eq!(
             backend
-                .search_vectors(&[1.0, 0.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0, 0.0], "jina", 5)
                 .expect("search")
                 .len(),
             1
@@ -477,7 +484,7 @@ mod tests {
 
         assert!(
             backend
-                .search_vectors(&[1.0, 0.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0, 0.0], "jina", 5)
                 .expect("search")
                 .is_empty(),
             "the old vector outlived the text it described"
@@ -509,7 +516,7 @@ mod tests {
 
         assert_eq!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "jina", 5)
                 .expect("search")
                 .len(),
             1
@@ -548,11 +555,48 @@ mod tests {
             .set_vectors("far", &state("h"), &[vec![0.2, 1.0]])
             .expect("vectors");
 
-        let hits = backend.search_vectors(&[1.0, 0.0], 10).expect("search");
+        let hits = backend.search_vectors(&[1.0, 0.0], "m", 10).expect("search");
         assert_eq!(hits.len(), 2, "one row per note, not per chunk");
         assert_eq!(hits[0].id, "near");
         assert_eq!(hits[0].chunk, 1, "reported at its best chunk");
         assert!(hits[0].score > hits[1].score);
+    }
+
+    /// The promise `adi_knowledge::embed`'s module docs make: a vector whose model no longer
+    /// matches the one searching does not rank, even though it is the closest thing in the
+    /// table by raw cosine distance.
+    #[test]
+    fn a_vector_from_another_model_does_not_rank() {
+        let (_dir, backend) = backend();
+        backend.put(&note("a", "A", "", &[])).expect("put");
+        backend
+            .set_vectors(
+                "a",
+                &EmbeddingState {
+                    model: Some("old-model".into()),
+                    hash: Some("h".into()),
+                    chunks: 1,
+                    dimensions: 2,
+                },
+                &[vec![1.0, 0.0]],
+            )
+            .expect("vectors");
+
+        assert!(
+            backend
+                .search_vectors(&[1.0, 0.0], "new-model", 5)
+                .expect("search")
+                .is_empty(),
+            "a vector made by another model must not rank"
+        );
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0], "old-model", 5)
+                .expect("search")
+                .len(),
+            1,
+            "the same model still finds it"
+        );
     }
 
     #[test]
@@ -611,7 +655,7 @@ mod tests {
         assert_eq!(backend.count().expect("count"), 0);
         assert!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "m", 5)
                 .expect("search")
                 .is_empty()
         );
@@ -644,7 +688,7 @@ mod tests {
         assert!(backend.search_text("a", 5).expect("search").is_empty());
         assert!(
             backend
-                .search_vectors(&[1.0, 0.0], 5)
+                .search_vectors(&[1.0, 0.0], "m", 5)
                 .expect("search")
                 .is_empty()
         );

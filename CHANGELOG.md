@@ -22,6 +22,24 @@ extraction script cares about.
 
 ### Fixed
 
+- **Knowledge search could rank a note as current when its vectors were made by a different
+  embedding model than the one doing the searching.** Two of the models in this tree happen to
+  produce vectors of the same width, which is exactly the case a length check cannot catch — a
+  search now checks the model by name, not just the width, so a stale vector is treated as
+  absent, as the crate's own documentation always said it would be.
+
+- **Swapping the embedding model the code index uses left every untouched file's old vectors
+  mixed permanently into search results.** Re-indexing only re-embeds a file whose *content*
+  changed, so a model swap with nothing else edited silently combined two different vector
+  spaces in the same search. A model change is now detected and forces the same full re-index a
+  format upgrade already does, so search never mixes vectors from two different models again.
+
+- **The knowledge base, fact base, and code indexer now share one place to configure which
+  embedding model each uses**, instead of each reading its own hardcoded default or environment
+  variable. Existing installs keep exactly the model they already had — this only changes where
+  the choice comes from, not what it resolves to, until an operator edits it (the tool to do that
+  is still to come).
+
 - **The live graph hung work on a conversation that had not started it.** One card could wear
   dozens of children it never had — on a real machine, forty-five of them — and the fan of edges
   leaving it was most of what the page drew.

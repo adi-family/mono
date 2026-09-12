@@ -23,9 +23,12 @@
 //!   (dispatched directly to [`adi_indexer::embed::CandleEmbedder`] from [`backend`]), and
 //!   [`runtimes::ollama`], [`runtimes::openai`], [`runtimes::hash`].
 //!
-//! **Phase B is not built.** `adi-indexer`, `adi-knowledge` and `adi-facts` do not yet call
-//! [`resolve`] — they keep building their embedders exactly as they do today. This crate exists,
-//! seeds itself correctly, and is ready to be resolved through; nothing yet does.
+//! **Phase B is built.** `adi-knowledge` and `adi-facts` call [`resolve`] from
+//! `KnowledgeStore::with_config`/`FactStore::with_config`; `adi-indexer` cannot call it itself
+//! (this crate depends on `adi-indexer`, so the reverse edge would be a cycle) and instead has
+//! its one production caller, `adi-cli`'s `indexer` command group, resolve on its behalf and
+//! hand the result to `Indexer::open_with_embedder`. What phase C still owes is the operator
+//! surface: a CLI, an API, and a panel tab. See `docs/embedding-backends.md`.
 
 pub mod backend;
 pub mod runtimes;

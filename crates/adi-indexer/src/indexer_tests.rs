@@ -120,6 +120,12 @@ mod tests {
         }
 
         fn run(&self, config: &Config) -> IndexProgress {
+            self.run_with_embedder(config, self.embedder.clone())
+        }
+
+        /// A run with a specific embedder, for the tests where the point is what happens when
+        /// the one the fixture started with is not the one this run gets.
+        fn run_with_embedder(&self, config: &Config, embedder: Arc<dyn Embedder>) -> IndexProgress {
             let index: Arc<dyn VectorIndex> = self.index.clone();
 
             tokio::runtime::Builder::new_current_thread()
@@ -129,7 +135,7 @@ mod tests {
                     self.project.path(),
                     config,
                     self.storage.clone(),
-                    self.embedder.clone(),
+                    embedder,
                     self.parser.clone(),
                     index,
                     self.cache.clone(),
@@ -268,6 +274,51 @@ mod tests {
         assert_eq!(before.indexed_files, after.indexed_files);
         assert_eq!(before.indexed_symbols, after.indexed_symbols);
         assert_eq!(embedded, fixture.index.count());
+    }
+
+    /// A model swap must not leave an untouched file's vectors from the *old* model sitting in
+    /// the index forever, silently mixed in with whatever a later run does re-embed —
+    /// `docs/embedding-backends-survey.md`'s Surprise #1.
+    #[test]
+    fn a_model_swap_reembeds_a_file_even_when_nothing_else_about_it_changed() {
+        #[derive(Debug)]
+        struct SecondEmbedder;
+        impl Embedder for SecondEmbedder {
+            fn embed(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+                Ok(texts.iter().map(|_| vec![0.9; 4]).collect())
+            }
+            fn dimensions(&self) -> u32 {
+                4
+            }
+            fn model_name(&self) -> &'static str {
+                "second"
+            }
+        }
+
+        let fixture = Fixture::new();
+        fixture.write("src/keep.rs", "pub fn kept_alive() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+
+        let before = fixture.symbol("kept_alive").expect("indexed");
+        assert_eq!(
+            fixture.index.get_vector(before.id.0).unwrap().unwrap(),
+            vec![0.5; 4],
+            "the stub's own vector"
+        );
+
+        fixture.run_with_embedder(&config, Arc::new(SecondEmbedder));
+
+        assert_eq!(
+            fixture.storage.get_status().unwrap().embedding_model,
+            "second"
+        );
+        let after = fixture.symbol("kept_alive").expect("still indexed");
+        assert_eq!(
+            fixture.index.get_vector(after.id.0).unwrap().unwrap(),
+            vec![0.9; 4],
+            "an untouched file must still be re-embedded when the model changes"
+        );
     }
 
     /// Reprocessing a file gives its symbols new ids, and every edge pointing into it dies with
