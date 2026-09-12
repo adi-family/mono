@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.13.3 — 2026-09-12
+
 ### Added
 
 - **A live graph of what set what off.** New page in the panel, and a door to it in the chat home's
