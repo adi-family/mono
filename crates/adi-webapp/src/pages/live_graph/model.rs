@@ -11,9 +11,14 @@
 //! **What the store cannot tell us, and what that means for the picture.** A run records which
 //! *agent* asked for it (`launched_by: agent:<name>`), never which of that agent's conversations
 //! did. Every edge is therefore an agent-level fact drawn between two conversations: it leaves the
-//! conversation of that agent nearest in time to the one it points at (see [`started_by`]), and
+//! conversation of that agent that was already open when the work began (see [`started_by`]), and
 //! what it asserts is that *that agent* set this off — nothing about which of its chats did. The
 //! hover line says it in those words, "started by adi-agent", and never names a chat.
+//!
+//! Where the agent had no conversation open yet, the picture says so rather than reaching for the
+//! nearest one afterwards: the card hangs off a pill bearing the agent's name. That is the ordinary
+//! case for an agent that spawns work all day, not a rare one, and guessing through it is what put
+//! forty-five children under a single card on the operator's machine.
 //!
 //! **Every card has at most one parent**, which is what makes the picture a tree rather than a
 //! web — and a tree is laid out as one: a subtree owns a band of rows that nothing else may stand
@@ -327,12 +332,15 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&st
     for &(to, run) in &cards {
         let from = match run.launched_by.strip_prefix(AGENT_PREFIX) {
             // An agent asked for this one. Which of its conversations is not in the record, so the
-            // edge leaves whichever of them this one started nearest to.
+            // edge leaves whichever of them was already open when this began — and where none of
+            // them was, the agent itself rather than a conversation picked out of the ones that
+            // came later.
             Some(name) => started_by(
                 by_agent.get(name).map_or(&[][..], Vec::as_slice),
                 &starts,
                 to,
-            ),
+            )
+            .or_else(|| Some(b.agent_origin(name))),
             None => Some(b.origin(&run.launched_by)),
         };
         if let Some(from) = from {
@@ -479,24 +487,27 @@ fn pick(chats: &AllAgentRuns) -> Vec<(&AgentRuns, &AgentRunInfo)> {
     picked
 }
 
-/// Which of an agent's cards an edge into `to` leaves.
+/// Which of an agent's cards an edge into `to` leaves, if any of them can be the one.
 ///
 /// The store names the agent that asked and not the conversation, so this is a choice the picture
 /// has to make and the record cannot: the conversation of that agent that had already begun and
-/// began *last* — the one most likely to have been the one talking — and, where every one of them
-/// began after this, the one that began soonest. Nearest in time, with what was already open
-/// preferred. What the edge means is unchanged by which end it is drawn from: that agent set this
-/// off.
+/// began *last* — the one most likely to have been the one talking.
+///
+/// **A conversation that began after this one cannot have started it**, so where none of them had
+/// begun yet the answer is nobody, and [`build`] hangs the card off the agent itself instead. The
+/// rule used to reach forwards in that case and take whichever began soonest afterwards. That is
+/// the common case rather than a corner: [`pick`] keeps an agent's newest [`CHATS_PER_AGENT`], and
+/// an agent that spawns work all day has drawn conversations newer than nearly everything it
+/// launched — so on this operator's machine one card collected forty-five children it never had,
+/// and the fan of edges leaving it was most of what the page drew.
 fn started_by(candidates: &[usize], starts: &HashMap<usize, u64>, to: usize) -> Option<usize> {
     let child = starts.get(&to).copied().unwrap_or_default();
     candidates
         .iter()
         .copied()
         .filter(|&i| i != to)
-        .min_by_key(|i| {
-            let s = starts.get(i).copied().unwrap_or_default();
-            if s <= child { (0, child - s) } else { (1, s - child) }
-        })
+        .filter(|i| starts.get(i).copied().unwrap_or_default() <= child)
+        .max_by_key(|i| starts.get(i).copied().unwrap_or_default())
 }
 
 /// One agent's scope, for the hover line of its conversations: the project it is filed under, or
@@ -617,6 +628,28 @@ impl Builder {
             label: origin.label().to_string(),
             agent: String::new(),
             meta: origin.meta().to_string(),
+            kind: Kind::Origin,
+            mark: Mark::None,
+            chat: None,
+            role: Role::Plain,
+            layer: 0,
+            x: 0.0,
+            y: 0.0,
+        })
+    }
+
+    /// The pill an agent's work hangs from when none of its drawn conversations can be the one that
+    /// asked for it (see [`started_by`]).
+    ///
+    /// It says what the record says and stops there: *this agent* set the work off. Naming one of
+    /// its conversations instead would be a guess the store cannot support, and drawn as an edge a
+    /// guess is indistinguishable from a fact.
+    fn agent_origin(&mut self, name: &str) -> usize {
+        self.node(Node {
+            id: format!("origin:agent:{name}"),
+            label: name.to_string(),
+            agent: String::new(),
+            meta: format!("{name} started this work; which of its conversations is not recorded"),
             kind: Kind::Origin,
             mark: Mark::None,
             chat: None,
@@ -1241,6 +1274,53 @@ mod tests {
         assert!(joined(&g, "chat:one/mid", "chat:two/child"));
         assert!(!joined(&g, "chat:one/early", "chat:two/child"));
         assert!(!joined(&g, "chat:one/late", "chat:two/child"));
+    }
+
+    /// The shape of a busy machine, and the one that used to break the picture: an agent whose
+    /// drawn conversations are all *newer* than the work it launched.
+    ///
+    /// [`pick`] keeps the newest [`CHATS_PER_AGENT`], so this is what an agent that spawns work all
+    /// day looks like — not a corner. Reaching forwards for the nearest conversation put every one
+    /// of those launches under a single card, which is forty-five children it never had and a cause
+    /// that began after its effect. The work hangs off the agent instead, and the card it used to
+    /// hang from keeps only what it really started.
+    #[test]
+    fn work_an_agent_launched_before_any_of_its_drawn_chats_hangs_off_the_agent() {
+        let mut spawner = run("recent", LAUNCHED_BY_HUMAN);
+        (spawner.started_at, spawner.last_activity) = (900, 900);
+        // Fewer than `CHATS_PER_AGENT`, so the cap plays no part in what this test is asking.
+        let workers: Vec<AgentRunInfo> = (0..5)
+            .map(|j| {
+                let mut w = run(&format!("w{j}"), "agent:one");
+                (w.started_at, w.last_activity) = (10 + j, 10 + j);
+                w
+            })
+            .collect();
+        let all = AllAgentRuns {
+            total: 6,
+            agents: vec![runs("one", vec![spawner]), runs("two", workers)],
+        };
+        let g = build(&[agent("one"), agent("two")], &all, None);
+
+        // Not one of them is pinned on the conversation that began nine hundred ticks later.
+        for j in 0..5 {
+            assert!(
+                !joined(&g, "chat:one/recent", &format!("chat:two/w{j}")),
+                "w{j} hangs off a conversation that began after it"
+            );
+            assert!(
+                joined(&g, "origin:agent:one", &format!("chat:two/w{j}")),
+                "w{j} is not on the agent's own pill"
+            );
+        }
+        assert_eq!(node(&g, "origin:agent:one").label, "one");
+        // …and nothing floats: every card still has the one parent the layout needs.
+        let joined_any: std::collections::HashSet<usize> =
+            g.edges.iter().flat_map(|e| [e.from, e.to]).collect();
+        assert_eq!(
+            (0..g.nodes.len()).filter(|i| !joined_any.contains(i)).count(),
+            0
+        );
     }
 
     /// The three words a run can carry for who asked, and the absence that is none of them.

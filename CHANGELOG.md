@@ -20,6 +20,22 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **The live graph hung work on a conversation that had not started it.** One card could wear
+  dozens of children it never had — on a real machine, forty-five of them — and the fan of edges
+  leaving it was most of what the page drew.
+
+  An edge left the launching agent's conversation nearest in time, and where none of them had begun
+  yet it reached *forwards* and took whichever began soonest afterwards: a cause that started after
+  its effect. That is the ordinary case rather than a corner, because the graph keeps only an
+  agent's newest six conversations, and an agent that spawns work all day has drawn conversations
+  newer than nearly everything it launched.
+
+  The rule only looks back now. Where the agent had nothing open, the card hangs off a pill bearing
+  the agent's name — which is all the store actually records: that agent set the work off, and which
+  of its conversations did is not written down anywhere.
+
 ## 1.13.3 — 2026-09-12
 
 ### Added
