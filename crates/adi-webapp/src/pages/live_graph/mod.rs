@@ -1,16 +1,17 @@
 //! The Live graph page (`/extended/live-graph`): what set what off on this machine, on one canvas.
 //!
-//! The picture is a chain — you, the conversation you opened, the agent that ran it, the
-//! conversations that agent started, the agents *those* belong to, and on. [`model`] builds it from
-//! the two listings the panel already carries, so the page costs no endpoint of its own; [`paint`]
-//! puts it on the canvas; [`view`] is the one value that says how far in the canvas is.
+//! The picture is a chain of conversations — you, the one you opened, the ones it started, and on.
+//! Every card is a conversation with its agent written under the title, so an agent is never a step
+//! of its own. [`model`] builds it from the two listings the panel already carries, so the page
+//! costs no endpoint of its own; [`paint`] puts it on the canvas; [`view`] is the one value that
+//! says how far in the canvas is.
 //!
 //! Nothing here is a timeline. Left to right is *causation*, not time: a column further right was
-//! set off by the one before it, and two boxes in the same column have nothing in common but their
+//! set off by the one before it, and two cards in the same column have nothing in common but their
 //! distance from where the work came from.
 //!
-//! The graph is rebuilt only when the data or the toggles change (it is a [`Memo`]); panning,
-//! zooming and hovering repaint from the same laid-out nodes.
+//! The graph is rebuilt only when the data changes (it is a [`Memo`]); panning, zooming and
+//! hovering repaint from the same laid-out nodes.
 
 mod model;
 mod paint;
@@ -24,8 +25,8 @@ use wasm_bindgen::prelude::Closure;
 use web_sys::ResizeObserver;
 
 use crate::routing::{Route, go_global};
-use crate::state::{AgentsForm, AgentsWatch, State, read_error};
-use model::{Action, Graph, Options};
+use crate::state::{AgentsWatch, State, read_error};
+use model::{Action, Graph};
 use view::Viewport;
 
 /// How much zoom one pixel of wheel travel buys, as a rate — the factor is `exp(-delta * this)`, so
@@ -42,7 +43,7 @@ const LINE_PX: f64 = 16.0;
 /// this, a press that opens a conversation; above it, a pan that happened to start on a box.
 const CLICK_SLOP: f64 = 4.0;
 
-/// The page's own state: the view, what is drawn, and what the pointer is on.
+/// The page's own state: the view, and what the pointer is on.
 ///
 /// Held by the shell rather than made in [`live_graph_view`], like every other page's view state —
 /// that function re-runs on a route change, and signals made inside it would put the view back at
@@ -50,37 +51,21 @@ const CLICK_SLOP: f64 = 4.0;
 #[derive(Clone, Copy)]
 pub(crate) struct GraphView {
     view: RwSignal<Viewport>,
-    chats: RwSignal<bool>,
-    tools: RwSignal<bool>,
-    idle: RwSignal<bool>,
     /// The node under the pointer, as an index into the current graph.
     hover: RwSignal<Option<usize>>,
-    /// Whether the view has been fitted to the graph now on screen. Set when a fit happens and
-    /// cleared whenever the toggles change what is drawn: a new picture deserves a look at all of
-    /// it, but data arriving — a conversation starting, a run ending — must never yank the view
-    /// out from under somebody who has panned somewhere.
+    /// Whether the view has been fitted to the graph now on screen. Set when a fit happens, and
+    /// cleared only by **Fit**: data arriving — a conversation starting, a run ending — must never
+    /// yank the view out from under somebody who has panned somewhere.
     fitted: RwSignal<bool>,
 }
 
 impl GraphView {
     pub(crate) fn new() -> Self {
-        let o = Options::default();
         Self {
             view: RwSignal::new(Viewport::HOME),
-            chats: RwSignal::new(o.chats),
-            tools: RwSignal::new(o.tools),
-            idle: RwSignal::new(o.idle),
             hover: RwSignal::new(None),
             fitted: RwSignal::new(false),
         }
-    }
-
-    /// Draw something else. Every toggle goes through here, because every one of them changes the
-    /// shape of the graph enough that the view is worth refitting.
-    fn toggle(self, which: RwSignal<bool>, on: bool) {
-        which.set(on);
-        self.hover.set(None);
-        self.fitted.set(false);
     }
 }
 
@@ -92,7 +77,6 @@ impl GraphView {
 pub(crate) fn live_graph_view(
     state: State,
     gv: GraphView,
-    form: AgentsForm,
     watch: AgentsWatch,
     route: RwSignal<Route>,
 ) -> AnyView {
@@ -106,14 +90,9 @@ pub(crate) fn live_graph_view(
     let dragged = RwSignal::new(false);
     let watcher: Resize = StoredValue::new_local(None);
 
-    // The graph itself. A memo, so it is rebuilt when the listings or the toggles change and not
-    // once per frame — every pan and every hover paints the same laid-out nodes.
+    // The graph itself. A memo, so it is rebuilt when the listings change and not once per frame —
+    // every pan and every hover paints the same laid-out nodes.
     let graph = Memo::new(move |_| {
-        let options = Options {
-            chats: gv.chats.get(),
-            tools: gv.tools.get(),
-            idle: gv.idle.get(),
-        };
         state.agents.with(|agents| {
             state.all_chats.with(|chats| {
                 let none = AllAgentRuns {
@@ -123,14 +102,13 @@ pub(crate) fn live_graph_view(
                 model::build(
                     agents.as_ref().map_or(&[][..], |a| a.agents.as_slice()),
                     chats.as_ref().unwrap_or(&none),
-                    options,
                 )
             })
         })
     });
 
-    // Fit the first graph that arrives, and any graph the toggles ask for. Kept apart from the
-    // paint effect below because this one *writes* the view the other one reads.
+    // Fit the first graph that arrives, and any graph **Fit** asks for. Kept apart from the paint
+    // effect below because this one *writes* the view the other one reads.
     Effect::new(move |_| {
         if gv.fitted.get() {
             return;
@@ -196,18 +174,6 @@ pub(crate) fn live_graph_view(
     let open = move |i: usize| {
         let action = graph.with_untracked(|gr| gr.nodes.get(i).map(|n| n.action.clone()));
         match action {
-            Some(Action::Agent(name)) => {
-                let defined = state.agents.with_untracked(|a| {
-                    a.as_ref()
-                        .and_then(|s| s.agents.iter().find(|x| x.name == name).cloned())
-                });
-                // An agent the history names but that no longer exists has no definition to open,
-                // and the Agents list is where you would go to see that it is gone.
-                match defined.as_ref() {
-                    Some(dto) => super::agents::open_agent_editor(state, route, form, Some(dto)),
-                    None => go_global(state, route, Route::Agents),
-                }
-            }
             Some(Action::Chat {
                 agent,
                 run_id,
@@ -236,14 +202,6 @@ pub(crate) fn live_graph_view(
                     hovered.unwrap_or_else(|| graph.with(Graph::summary))
                 }}</span>
                 <span class="adi-spacer"></span>
-                <span class="adi-graph__toggles">
-                    {toggle("Chats", gv.chats, move |on| gv.toggle(gv.chats, on),
-                        "Draw each agent's newest conversations, not only the agents")}
-                    {toggle("Tools", gv.tools, move |on| gv.toggle(gv.tools, on),
-                        "Draw the tools each agent may run, in a column of their own")}
-                    {toggle("Idle agents", gv.idle, move |on| gv.toggle(gv.idle, on),
-                        "Keep agents that have never run — they connect to nothing")}
-                </span>
                 <span class="adi-graph__zoom adi-tabnums">
                     {move || format!("{:.0}%", gv.view.get().scale * 100.0)}
                 </span>
@@ -260,7 +218,7 @@ pub(crate) fn live_graph_view(
                 class:adi-graph__stage--panning=move || panning.get()
                 class:adi-graph__stage--link=actionable>
                 <canvas class="adi-graph__canvas" node_ref=canvas
-                    aria-label="Every agent on this machine and what set it off"
+                    aria-label="Every conversation on this machine and what set it off"
 
                     on:wheel=move |ev: web_sys::WheelEvent| {
                         // The wheel *is* the zoom here, so neither the pane's scroll nor the
@@ -338,23 +296,6 @@ pub(crate) fn live_graph_view(
         </section>
     }
     .into_any()
-}
-
-/// One of the head's switches: what to draw, and the sentence saying what turning it on does.
-fn toggle(
-    label: &'static str,
-    on: RwSignal<bool>,
-    set: impl Fn(bool) + 'static,
-    title: &'static str,
-) -> impl IntoView {
-    view! {
-        <label class="adi-graph__toggle" title=title>
-            <input type="checkbox" class="adi-check"
-                prop:checked=move || on.get()
-                on:change=move |ev| set(event_target_checked(&ev)) />
-            <span>{label}</span>
-        </label>
-    }
 }
 
 /// What to say over a canvas with nothing on it. A read that failed and a read that has not

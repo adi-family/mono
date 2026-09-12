@@ -1359,7 +1359,7 @@ fn App() -> impl IntoView {
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
-                        Route::LiveGraph => live_graph_view(state, graph, agents_form, agents_watch, route),
+                        Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),

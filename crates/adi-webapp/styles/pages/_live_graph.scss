@@ -31,26 +31,6 @@
     color: var(--ink-3);
   }
 
-  // What to draw. Independent switches, not one choice of several, so they are checkboxes and not
-  // a segmented control (§6) — each only ever adds to the picture.
-  &__toggles {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-
-  &__toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--fs-label);
-    color: var(--ink-3);
-    white-space: nowrap;
-    cursor: pointer;
-
-    &:hover { color: var(--ink-2); }
-  }
-
   // Over the canvas rather than in place of it: the grid is still the page, and this is one line
   // saying why nothing is drawn on it.
   &__empty {

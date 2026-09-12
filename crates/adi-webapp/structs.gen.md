@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-74 structs · 14 enums · 4 type aliases across 30 files.
+73 structs · 14 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -19,7 +19,7 @@
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/live_graph/mod.rs`](#srcpageslive_graphmodrs) — `GraphView`, `Resize`
-- [`src/pages/live_graph/model.rs`](#srcpageslive_graphmodelrs) — `Kind`, `Origin`, `Mark`, `Action`, `Node`, `Edge`, `Options`, `Graph`, `Builder`
+- [`src/pages/live_graph/model.rs`](#srcpageslive_graphmodelrs) — `Kind`, `Origin`, `Mark`, `Action`, `Node`, `Edge`, `Graph`, `Builder`
 - [`src/pages/live_graph/paint.rs`](#srcpageslive_graphpaintrs) — `Palette`, `Style`
 - [`src/pages/live_graph/view.rs`](#srcpageslive_graphviewrs) — `Viewport`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
@@ -420,15 +420,12 @@ struct Scope {
 
 ### struct `GraphView`
 
-The page's own state: the view, what is drawn, and what the pointer is on.
+The page's own state: the view, and what the pointer is on.
 
 ```rust
 #[derive(Clone, Copy)]
 pub(crate) struct GraphView {
     view: RwSignal<Viewport>,
-    chats: RwSignal<bool>,
-    tools: RwSignal<bool>,
-    idle: RwSignal<bool>,
     hover: RwSignal<Option<usize>>,
     fitted: RwSignal<bool>,
 }
@@ -448,15 +445,13 @@ type Resize = StoredValue<Option<(ResizeObserver, Closure<dyn FnMut()>)>, LocalS
 
 ### enum `Kind`
 
-What a node stands for. The kind decides its shape, its width and its tone — nothing else about a node says which of these it is, because a word on every box would be the same word on most of them.
+What a node stands for. The kind decides its shape, its size and its tone — nothing else about a node says which of these it is, because a word on every card would be the same word on nearly all of them.
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Kind {
     Origin,
-    Agent,
     Chat,
-    Tool,
 }
 ```
 
@@ -495,7 +490,6 @@ What clicking a node does. A node with nothing to open is not a dead link: it si
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) enum Action {
     None,
-    Agent(String),
     Chat {
         agent: String,
         run_id: String,
@@ -506,13 +500,14 @@ pub(crate) enum Action {
 
 ### struct `Node`
 
-One box on the canvas, already placed. `x`/`y` are its centre, in world units.
+One card on the canvas, already placed. `x`/`y` are its centre, in world units.
 
 ```rust
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Node {
     pub(crate) id: String,
     pub(crate) label: String,
+    pub(crate) agent: String,
     pub(crate) meta: String,
     pub(crate) kind: Kind,
     pub(crate) mark: Mark,
@@ -525,26 +520,13 @@ pub(crate) struct Node {
 
 ### struct `Edge`
 
-A directed edge, by node index: `from` asked for, ran, or may run `to`.
+A directed edge, by node index: `from` asked for, or may have asked for, `to`.
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Edge {
     pub(crate) from: usize,
     pub(crate) to: usize,
-}
-```
-
-### struct `Options`
-
-What to draw. Every one of these is a toggle on the page, and each only ever *adds* to the picture — nothing here hides something another option would have shown.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Options {
-    pub(crate) chats: bool,
-    pub(crate) tools: bool,
-    pub(crate) idle: bool,
 }
 ```
 
@@ -573,7 +555,6 @@ Nodes and edges under construction, with the index that keeps a node from being 
 struct Builder {
     graph: Graph,
     by_id: HashMap<String, usize>,
-    covered: HashSet<(usize, usize)>,
 }
 ```
 
@@ -598,9 +579,7 @@ struct Palette {
     accent: String,
     warn: String,
     err: String,
-    code: String,
     sans: String,
-    mono: String,
     fs_ui_sm: f64,
     fs_small: f64,
     fs_label: f64,
@@ -609,7 +588,7 @@ struct Palette {
 
 ### struct `Style`
 
-How one kind of node is drawn: its fill, its border, its text, and how round it is.
+How one kind of node is drawn: its fill, its border, its text, and how round it is. Everything on this canvas is set in sans — a conversation's title is what somebody typed and the line under it is an agent's name, and §3 keeps mono for strings a machine produced.
 
 ```rust
 struct Style<'a> {
@@ -618,7 +597,6 @@ struct Style<'a> {
     text: &'a str,
     size: f64,
     weight: &'a str,
-    family: &'a str,
     radius: f64,
 }
 ```

@@ -14,7 +14,7 @@ use leptos::prelude::window;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-use super::model::{Graph, Kind, Mark, NODE_H};
+use super::model::{Graph, Kind, Mark};
 use super::view::Viewport;
 
 /// World units between the closest grid lines at 100%, and the narrowest that spacing may get on
@@ -43,9 +43,14 @@ const ARROW_SCALE: f64 = 0.2;
 /// status dot.
 const MARK_R: f64 = 3.0;
 
-/// Space inside a box, and the width an arrowhead takes back from its target.
+/// Space inside a card, and the width an arrowhead takes back from its target.
 const PAD: f64 = 12.0;
 const ARROW: f64 = 8.0;
+
+/// Where the two lines of a conversation's card sit, as offsets from its middle — what it is
+/// called, and under it whose it is. A pill has one line and puts it on the middle instead.
+const TITLE_DY: f64 = -9.0;
+const AGENT_DY: f64 = 9.0;
 
 /// The tokens this module draws with, read once per paint.
 ///
@@ -65,9 +70,7 @@ struct Palette {
     accent: String,
     warn: String,
     err: String,
-    code: String,
     sans: String,
-    mono: String,
     fs_ui_sm: f64,
     fs_small: f64,
     fs_label: f64,
@@ -95,9 +98,7 @@ impl Palette {
             accent: get("--accent")?,
             warn: get("--warn")?,
             err: get("--err")?,
-            code: get("--code")?,
             sans: get("--sans")?,
-            mono: get("--mono")?,
             fs_ui_sm: px("--fs-ui-sm")?,
             fs_small: px("--fs-small")?,
             fs_label: px("--fs-label")?,
@@ -115,64 +116,40 @@ impl Palette {
     }
 }
 
-/// How one kind of node is drawn: its fill, its border, its text, and how round it is.
+/// How one kind of node is drawn: its fill, its border, its text, and how round it is. Everything
+/// on this canvas is set in sans — a conversation's title is what somebody typed and the line under
+/// it is an agent's name, and §3 keeps mono for strings a machine produced.
 struct Style<'a> {
     fill: &'a str,
     border: &'a str,
     text: &'a str,
     size: f64,
     weight: &'a str,
-    /// The family the label is set in — sans for everything a person named, mono for the one kind
-    /// of node whose label is a string out of a config file (§3).
-    family: &'a str,
     radius: f64,
 }
 
 impl Palette {
     fn style(&self, kind: Kind, hovered: bool) -> Style<'_> {
-        let border = if hovered { &self.ink_3 } else { &self.line_strong };
         match kind {
-            // The spine of the picture: the strongest box and the only one in primary ink.
-            Kind::Agent => Style {
+            // The spine of the picture: the brightest surface, the strongest hairline and the only
+            // primary ink on the canvas.
+            Kind::Chat => Style {
                 fill: if hovered { &self.active } else { &self.raise },
-                border,
+                border: if hovered { &self.ink_3 } else { &self.line_strong },
                 text: &self.ink,
                 size: self.fs_ui_sm,
                 weight: "500",
-                family: &self.sans,
                 radius: 6.0,
             },
-            Kind::Chat => Style {
+            // Where work came from: a pill, because it is not a conversation — it is the thing the
+            // first one answered to.
+            Kind::Origin => Style {
                 fill: if hovered { &self.active } else { &self.hover },
                 border: if hovered { &self.ink_3 } else { &self.line },
-                text: &self.ink_2,
-                size: self.fs_small,
-                weight: "400",
-                family: &self.sans,
-                radius: 6.0,
-            },
-            // Where work came from, and the tools it may reach: pills, because neither is a step
-            // in the flow — one is before it and the other is past the end of it.
-            Kind::Origin => Style {
-                fill: if hovered { &self.active } else { &self.raise },
-                border,
                 text: &self.ink_2,
                 size: self.fs_small,
                 weight: "500",
-                family: &self.sans,
-                radius: NODE_H / 2.0,
-            },
-            // A tool's label is its id as the agent's definition spells it — a string out of a
-            // config file, which is the one thing mono is for. Kept at the smallest step so it
-            // stays quiet despite the brighter ink mono carries.
-            Kind::Tool => Style {
-                fill: if hovered { &self.active } else { &self.hover },
-                border: if hovered { &self.ink_3 } else { &self.line },
-                text: &self.code,
-                size: self.fs_label,
-                weight: "400",
-                family: &self.mono,
-                radius: NODE_H / 2.0,
+                radius: Kind::Origin.height() / 2.0,
             },
         }
     }
@@ -345,7 +322,7 @@ fn nodes(
     for (i, n) in g.nodes.iter().enumerate() {
         // A graph is mostly off screen at any useful zoom; a node that cannot be seen is not
         // measured, cut to fit, or drawn.
-        let (w2, h2) = (n.w() / 2.0, NODE_H / 2.0);
+        let (w2, h2) = (n.w() / 2.0, n.h() / 2.0);
         if n.x + w2 < visible.0 || n.x - w2 > visible.2 || n.y + h2 < visible.1 || n.y - h2 > visible.3
         {
             continue;
@@ -354,23 +331,39 @@ fn nodes(
         ctx.set_fill_style_str(s.fill);
         ctx.set_stroke_style_str(s.border);
         ctx.begin_path();
-        let _ = ctx.round_rect_with_f64(n.x - w2, n.y - h2, n.w(), NODE_H, s.radius);
+        let _ = ctx.round_rect_with_f64(n.x - w2, n.y - h2, n.w(), n.h(), s.radius);
         ctx.fill();
         ctx.stroke();
 
+        // A card carries two lines and a pill one, so the first line rides up by half the gap
+        // between them rather than sitting on the middle of the box.
+        let two = !n.agent.is_empty();
+        let title_y = if two { n.y + TITLE_DY } else { n.y + 0.5 };
         let mut left = n.x - w2 + PAD;
         if let Some(colour) = ink.mark(n.mark) {
             ctx.set_fill_style_str(colour);
             ctx.begin_path();
-            let _ = ctx.arc(left + MARK_R, n.y, MARK_R, 0.0, std::f64::consts::TAU);
+            let _ = ctx.arc(left + MARK_R, title_y, MARK_R, 0.0, std::f64::consts::TAU);
             ctx.fill();
             left += MARK_R * 2.0 + 6.0;
         }
         if labels {
-            ctx.set_font(&format!("{} {}px {}", s.weight, s.size, s.family));
+            ctx.set_font(&format!("{} {}px {}", s.weight, s.size, ink.sans));
             ctx.set_fill_style_str(s.text);
-            let room = n.x + w2 - PAD - left;
-            let _ = ctx.fill_text(&cut(ctx, &n.label, room), left, n.y + 0.5);
+            let _ = ctx.fill_text(&cut(ctx, &n.label, n.x + w2 - PAD - left), left, title_y);
+            if two {
+                // Whose conversation this is, in the type the sessions rail gives an agent's name
+                // (§6): one step down, dimmer, and always from the edge — the dot belongs to the
+                // title above it, not to this line.
+                ctx.set_font(&format!("500 {}px {}", ink.fs_label, ink.sans));
+                ctx.set_fill_style_str(&ink.ink_2);
+                let from = n.x - w2 + PAD;
+                let _ = ctx.fill_text(
+                    &cut(ctx, &n.agent, n.x + w2 - PAD - from),
+                    from,
+                    n.y + AGENT_DY,
+                );
+            }
         }
     }
 }

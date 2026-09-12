@@ -23,28 +23,26 @@ extraction script cares about.
 ### Added
 
 - **A live graph of what set what off.** New page in the panel, and a door to it in the chat home's
-  right rail under Marketplace: one canvas holding you, the conversations you opened, the agents
-  that ran them, the conversations *those* agents started, and on down the chain. Left to right is
-  causation, not time — a box further right was set off by the one before it.
+  right rail under Marketplace: one canvas holding you, the conversations you opened, the ones
+  those set off, and on down the chain. Left to right is causation, not time — a card further right
+  was set off by the one before it.
 
-  Scroll to zoom, drag to pan, click a box to open the conversation or the agent it stands for.
-  Pointing at one puts what it is in the bar: whose conversation it is, who asked for it, and where
-  it got to. A running conversation wears the orange dot, one waiting on an answer an amber one,
-  one that ended badly a red one.
-
-  Three switches decide what is drawn: **Chats** off collapses the picture onto the agents alone
-  (an edge then means "this one set that one going"), **Tools** adds what each agent may run, and
-  **Idle agents** brings in the definitions nothing has ever launched.
+  One card per conversation, with the agent it belongs to written under its title, so an agent is
+  never a step of its own. Scroll to zoom, drag to pan, click a card to open the conversation.
+  Pointing at one puts the rest in the bar: whose it is, where that agent is filed, who asked for
+  it, and where it got to. A running conversation wears the orange dot, one waiting on an answer an
+  amber one, one that ended badly a red one.
 
   A machine with a thousand conversations is still a graph you can read: at most six of each
   agent's are drawn and at most eighty in all, newest first, and the bar says how many there are
-  altogether. The caps take boxes away and never edges — a conversation that is not drawn still
-  puts its flow on the canvas, so nothing is left floating unattached.
+  altogether. Whoever started one of those is drawn as well, however long ago their own conversation
+  was, so nothing on the canvas hangs from nothing.
 
   It costs no new endpoint: the picture is the two listings the panel already carries, read as a
   graph instead of as a table. One thing the store cannot tell it, and it does not pretend
   otherwise — a run records which *agent* asked for it, never which of that agent's conversations
-  did, so the chain runs through the agent.
+  did. So an edge says that *that agent* set this off, and it leaves whichever of its conversations
+  this one started nearest to.
 
 ## 1.13.2 — 2026-09-12
 
