@@ -338,6 +338,29 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&st
     b.graph.shown_chats = cards.len();
     b.graph.agents = by_agent.len();
 
+    // What each agent's own conversations answer to, for the pill that stands in for one of them:
+    // the launcher its conversations carry most often, counting only the ones that name something
+    // other than an agent. Ties go to the earlier word so the picture is the same twice running.
+    //
+    // It is a tally rather than a lookup because the pill is not any one conversation, so there is
+    // no one launcher to read: on this machine forty-seven of adi-agent's fifty were started by the
+    // person, which is what makes "you started this, whichever chat it was" a safe thing to draw.
+    let answers_to: HashMap<&str, &str> = chats
+        .agents
+        .iter()
+        .map(|e| {
+            let mut tally: HashMap<&str, usize> = HashMap::new();
+            for r in e.runs.iter().filter(|r| !r.launched_by.starts_with(AGENT_PREFIX)) {
+                *tally.entry(r.launched_by.as_str()).or_default() += 1;
+            }
+            let best = tally
+                .into_iter()
+                .max_by_key(|&(word, n)| (n, std::cmp::Reverse(word)))
+                .map_or("", |(word, _)| word);
+            (e.name.as_str(), best)
+        })
+        .collect();
+
     let starts: HashMap<usize, u64> = cards.iter().map(|&(i, r)| (i, r.started_at)).collect();
     for &(to, run) in &cards {
         let from = match run.launched_by.strip_prefix(AGENT_PREFIX) {
@@ -350,7 +373,15 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&st
                 &starts,
                 to,
             )
-            .or_else(|| Some(b.agent_origin(name))),
+            .or_else(|| {
+                // An agent is not where work comes from. The pill stands in for a conversation of
+                // its own, so it answers to whatever that agent's conversations answer to — drawn
+                // as a root it would say the agent started itself.
+                let pill = b.agent_origin(name);
+                let source = b.origin(answers_to.get(name).copied().unwrap_or(""));
+                b.edge(source, pill);
+                Some(pill)
+            }),
             None => Some(b.origin(&run.launched_by)),
         };
         if let Some(from) = from {
@@ -1405,6 +1436,31 @@ mod tests {
         for j in 0..CHATS_PER_AGENT {
             assert!(!joined(&g, &format!("chat:one/recent{j}"), "chat:two/w"));
         }
+    }
+
+    /// An agent is not a source of work, so the pill standing in for one of its conversations is
+    /// not a root: it answers to whatever that agent's own conversations answer to.
+    ///
+    /// Drawn as a root it read as "adi-agent started itself", which is the one thing on the canvas
+    /// that cannot be true — an agent cannot have launched anything unless something launched it.
+    #[test]
+    fn the_pill_for_an_agent_answers_to_whatever_that_agent_answers_to() {
+        let mut late = run("late", LAUNCHED_BY_HUMAN);
+        (late.started_at, late.last_activity) = (900, 900);
+        let mut worker = run("w", "agent:one");
+        (worker.started_at, worker.last_activity) = (10, 10);
+        let all = AllAgentRuns {
+            total: 2,
+            agents: vec![runs("one", vec![late]), runs("two", vec![worker])],
+        };
+        let g = build(&[agent("one"), agent("two")], &all, None);
+
+        // The pill is there, and the person is above it — not nothing.
+        assert!(joined(&g, "origin:agent:one", "chat:two/w"));
+        assert!(
+            joined(&g, "origin:human", "origin:agent:one"),
+            "the agent pill is drawn as a root, which says it started itself"
+        );
     }
 
     /// The three words a run can carry for who asked, and the absence that is none of them.
