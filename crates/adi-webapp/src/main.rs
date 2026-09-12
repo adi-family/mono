@@ -1534,6 +1534,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Mesh,
             Route::Fleet,
             Route::LlmBackends,
+            Route::EmbeddingBackends,
             Route::SharedAssets,
         ],
     ),
