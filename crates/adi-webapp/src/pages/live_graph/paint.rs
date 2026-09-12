@@ -14,7 +14,7 @@ use leptos::prelude::window;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-use super::model::{Graph, Kind, Mark};
+use super::model::{Graph, Kind, Mark, Role};
 use super::view::Viewport;
 
 /// World units between the closest grid lines at 100%, and the narrowest that spacing may get on
@@ -67,6 +67,8 @@ struct Palette {
     raise: String,
     active: String,
     hover: String,
+    side: String,
+    focus: String,
     accent: String,
     warn: String,
     err: String,
@@ -95,6 +97,8 @@ impl Palette {
             raise: get("--bg-raise")?,
             active: get("--bg-active")?,
             hover: get("--bg-hover")?,
+            side: get("--bg-side")?,
+            focus: get("--focus")?,
             accent: get("--accent")?,
             warn: get("--warn")?,
             err: get("--err")?,
@@ -116,42 +120,71 @@ impl Palette {
     }
 }
 
-/// How one kind of node is drawn: its fill, its border, its text, and how round it is. Everything
-/// on this canvas is set in sans — a conversation's title is what somebody typed and the line under
-/// it is an agent's name, and §3 keeps mono for strings a machine produced.
+/// How one node is drawn: its fill, its border, its text, and how round it is. Everything on this
+/// canvas is set in sans — a conversation's title is what somebody typed and the line under it is
+/// an agent's name, and §3 keeps mono for strings a machine produced.
 struct Style<'a> {
     fill: &'a str,
     border: &'a str,
+    /// How thick that border is **on the glass**, whatever the zoom. One pixel is a hairline; the
+    /// card the picture is rooted at gets two, which is the whole of how a selected thing looks
+    /// selected here (§8: no shadows, and orange is spoken for).
+    edge: f64,
     text: &'a str,
     size: f64,
     weight: &'a str,
     radius: f64,
+    /// The second line — whose conversation this is — in the tone of the card it is on.
+    under: &'a str,
 }
 
 impl Palette {
-    fn style(&self, kind: Kind, hovered: bool) -> Style<'_> {
-        match kind {
+    fn style(&self, kind: Kind, role: Role, hovered: bool) -> Style<'_> {
+        let mut s = match kind {
             // The spine of the picture: the brightest surface, the strongest hairline and the only
             // primary ink on the canvas.
             Kind::Chat => Style {
                 fill: if hovered { &self.active } else { &self.raise },
                 border: if hovered { &self.ink_3 } else { &self.line_strong },
+                edge: 1.0,
                 text: &self.ink,
                 size: self.fs_ui_sm,
                 weight: "500",
                 radius: 6.0,
+                under: &self.ink_2,
             },
             // Where work came from: a pill, because it is not a conversation — it is the thing the
             // first one answered to.
             Kind::Origin => Style {
                 fill: if hovered { &self.active } else { &self.hover },
                 border: if hovered { &self.ink_3 } else { &self.line },
+                edge: 1.0,
                 text: &self.ink_2,
                 size: self.fs_small,
                 weight: "500",
                 radius: Kind::Origin.height() / 2.0,
+                under: &self.ink_2,
             },
+        };
+        match role {
+            Role::Plain => {}
+            // What the picture is rooted at, and so the one card on the canvas that is *selected*:
+            // the ring a focused control wears everywhere else in the app, at two pixels.
+            Role::Focus => {
+                s.border = &self.focus;
+                s.edge = 2.0;
+            }
+            // The step above, drawn for one reason: to be clicked on the way back up. It sinks to
+            // the surface the chrome is on, a shade below the canvas itself, and its text drops to
+            // meta — it is not part of what this picture is about.
+            Role::Ancestor => {
+                s.fill = if hovered { &self.hover } else { &self.side };
+                s.border = &self.line;
+                s.text = &self.ink_3;
+                s.under = &self.ink_3;
+            }
         }
+        s
     }
 }
 
@@ -318,7 +351,6 @@ fn nodes(
     let labels = v.scale >= LABEL_SCALE;
     ctx.set_text_baseline("middle");
     ctx.set_text_align("left");
-    ctx.set_line_width(1.0 / v.scale);
     for (i, n) in g.nodes.iter().enumerate() {
         // A graph is mostly off screen at any useful zoom; a node that cannot be seen is not
         // measured, cut to fit, or drawn.
@@ -327,9 +359,10 @@ fn nodes(
         {
             continue;
         }
-        let s = ink.style(n.kind, hover == Some(i));
+        let s = ink.style(n.kind, n.role, hover == Some(i));
         ctx.set_fill_style_str(s.fill);
         ctx.set_stroke_style_str(s.border);
+        ctx.set_line_width(s.edge / v.scale);
         ctx.begin_path();
         let _ = ctx.round_rect_with_f64(n.x - w2, n.y - h2, n.w(), n.h(), s.radius);
         ctx.fill();
@@ -356,7 +389,7 @@ fn nodes(
                 // (§6): one step down, dimmer, and always from the edge — the dot belongs to the
                 // title above it, not to this line.
                 ctx.set_font(&format!("500 {}px {}", ink.fs_label, ink.sans));
-                ctx.set_fill_style_str(&ink.ink_2);
+                ctx.set_fill_style_str(s.under);
                 let from = n.x - w2 + PAD;
                 let _ = ctx.fill_text(
                     &cut(ctx, &n.agent, n.x + w2 - PAD - from),

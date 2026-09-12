@@ -7,11 +7,17 @@
 //! says how far in the canvas is.
 //!
 //! Nothing here is a timeline. Left to right is *causation*, not time: a column further right was
-//! set off by the one before it, and two cards in the same column have nothing in common but their
-//! distance from where the work came from.
+//! set off by the one before it, and a subtree owns a band of rows that nothing else stands in, so
+//! what a conversation started is read by looking down from it.
 //!
-//! The graph is rebuilt only when the data changes (it is a [`Memo`]); panning, zooming and
-//! hovering repaint from the same laid-out nodes.
+//! **A click roots the picture.** Clicking a card redraws the graph from that card — everything it
+//! set off and nothing it did not — with the one step above it drawn quietly, to be clicked on the
+//! way back up. It never opens the conversation: on a canvas where a drag is a pan and a wheel is a
+//! zoom, a click that navigates away from the page is a trapdoor. **Open chat** in the head is what
+//! opens it, once the picture is rooted at one.
+//!
+//! The graph is rebuilt only when the data or the focus changes (it is a [`Memo`]); panning,
+//! zooming and hovering repaint from the same laid-out nodes.
 
 mod model;
 mod paint;
@@ -26,7 +32,7 @@ use web_sys::ResizeObserver;
 
 use crate::routing::{Route, go_global};
 use crate::state::{AgentsWatch, State, read_error};
-use model::{Action, Graph};
+use model::{Chat, Graph, Role};
 use view::Viewport;
 
 /// How much zoom one pixel of wheel travel buys, as a rate — the factor is `exp(-delta * this)`, so
@@ -40,10 +46,10 @@ const ZOOM_PER_PX: f64 = 0.0015;
 const LINE_PX: f64 = 16.0;
 
 /// How far the pointer may travel between going down and coming up and still be a click. Below
-/// this, a press that opens a conversation; above it, a pan that happened to start on a box.
+/// this, a press that roots the picture at a card; above it, a pan that happened to start on one.
 const CLICK_SLOP: f64 = 4.0;
 
-/// The page's own state: the view, and what the pointer is on.
+/// The page's own state: the view, what the pointer is on, and what the picture is rooted at.
 ///
 /// Held by the shell rather than made in [`live_graph_view`], like every other page's view state —
 /// that function re-runs on a route change, and signals made inside it would put the view back at
@@ -53,9 +59,14 @@ pub(crate) struct GraphView {
     view: RwSignal<Viewport>,
     /// The node under the pointer, as an index into the current graph.
     hover: RwSignal<Option<usize>>,
+    /// What the picture is rooted at, by node **id** rather than by index: the listing is re-read
+    /// every few seconds and a conversation starting anywhere renumbers the nodes, so an index
+    /// held across a refresh would quietly come to mean a different card.
+    focus: RwSignal<Option<String>>,
     /// Whether the view has been fitted to the graph now on screen. Set when a fit happens, and
-    /// cleared only by **Fit**: data arriving — a conversation starting, a run ending — must never
-    /// yank the view out from under somebody who has panned somewhere.
+    /// cleared by **Fit** and by rooting the picture somewhere else: data arriving — a
+    /// conversation starting, a run ending — must never yank the view out from under somebody who
+    /// has panned somewhere, but a graph somebody asked to change should be on screen when it does.
     fitted: RwSignal<bool>,
 }
 
@@ -64,8 +75,17 @@ impl GraphView {
         Self {
             view: RwSignal::new(Viewport::HOME),
             hover: RwSignal::new(None),
+            focus: RwSignal::new(None),
             fitted: RwSignal::new(false),
         }
+    }
+
+    /// Root the picture somewhere else, and put what that is on screen. The hover goes with it:
+    /// the indices it is in terms of are about to mean different cards.
+    fn root_at(self, id: Option<String>) {
+        self.focus.set(id);
+        self.hover.set(None);
+        self.fitted.set(false);
     }
 }
 
@@ -93,6 +113,7 @@ pub(crate) fn live_graph_view(
     // The graph itself. A memo, so it is rebuilt when the listings change and not once per frame —
     // every pan and every hover paints the same laid-out nodes.
     let graph = Memo::new(move |_| {
+        let focus = gv.focus.get();
         state.agents.with(|agents| {
             state.all_chats.with(|chats| {
                 let none = AllAgentRuns {
@@ -102,6 +123,7 @@ pub(crate) fn live_graph_view(
                 model::build(
                     agents.as_ref().map_or(&[][..], |a| a.agents.as_slice()),
                     chats.as_ref().unwrap_or(&none),
+                    focus.as_deref(),
                 )
             })
         })
@@ -164,28 +186,36 @@ pub(crate) fn live_graph_view(
         graph.with_untracked(|gr| gr.at(wx, wy))
     };
 
-    // Whether what the pointer is on goes anywhere, which is the only thing the cursor promises.
-    let actionable = move || {
-        gv.hover.get().is_some_and(|i| {
-            graph.with(|gr| gr.nodes.get(i).is_some_and(|n| n.action != Action::None))
-        })
+    // Every card takes a click, so the cursor promises one wherever there is a card.
+    let actionable = move || gv.hover.get().is_some();
+
+    // A click roots the picture at what was clicked — and a second click on what it is already
+    // rooted at lets the rest of the machine back in, which is the other half of the gesture.
+    let click = move |i: usize| {
+        let picked = graph.with_untracked(|gr| {
+            gr.nodes
+                .get(i)
+                .map(|n| (n.id.clone(), n.role == Role::Focus))
+        });
+        if let Some((id, already)) = picked {
+            gv.root_at((!already).then_some(id));
+        }
     };
 
-    let open = move |i: usize| {
-        let action = graph.with_untracked(|gr| gr.nodes.get(i).map(|n| n.action.clone()));
-        match action {
-            Some(Action::Chat {
-                agent,
-                run_id,
-                interactive,
-            }) => {
-                // The Agents page is where a conversation opened from a listing lands, so opening
-                // one from here means the same thing it means there.
-                go_global(state, route, Route::Agents);
-                super::agents::open_conversation(watch, agent, run_id, interactive);
-            }
-            Some(Action::None) | None => {}
-        }
+    // What **Open chat** opens: the conversation the picture is rooted at, when it is rooted at
+    // one. An origin is not a conversation, so there is nothing to open while the root is one.
+    let rooted_chat = move || {
+        graph.with(|gr| {
+            gr.focus
+                .and_then(|i| gr.nodes.get(i))
+                .and_then(|n| n.chat.clone())
+        })
+    };
+    let open = move |chat: Chat| {
+        // The Agents page is where a conversation opened from a listing lands, so opening one from
+        // here means the same thing it means there.
+        go_global(state, route, Route::Agents);
+        super::agents::open_conversation(watch, chat.agent, chat.run_id, chat.interactive);
     };
 
     view! {
@@ -205,6 +235,18 @@ pub(crate) fn live_graph_view(
                 <span class="adi-graph__zoom adi-tabnums">
                     {move || format!("{:.0}%", gv.view.get().scale * 100.0)}
                 </span>
+                // The two controls the rooting needs, and only while it is rooted: the way into
+                // the conversation the picture is about, and the way back out to the machine.
+                {move || rooted_chat().map(|chat| view! {
+                    <button class="adi-btn adi-btn--sm" type="button"
+                        title="Open this conversation on the Agents page"
+                        on:click=move |_| open(chat.clone())>"Open chat"</button>
+                })}
+                {move || gv.focus.get().is_some().then(|| view! {
+                    <button class="adi-btn adi-btn--sm adi-btn--quiet" type="button"
+                        title="Draw every conversation on this machine again"
+                        on:click=move |_| gv.root_at(None)>"Show all"</button>
+                })}
                 <button class="adi-btn adi-btn--sm" type="button"
                     title="Put the whole graph on screen"
                     on:click=move |_| gv.fitted.set(false)>"Fit"</button>
@@ -214,11 +256,13 @@ pub(crate) fn live_graph_view(
                 // The gestures, where somebody would hover to ask what this is. Not a line in the
                 // head: the head's one line is already saying what is on the canvas, and that is
                 // the more useful of the two once you are looking at it.
-                title="Scroll to zoom, drag to pan \u{2014} click a box to open it"
+                title="Scroll to zoom, drag to pan \u{2014} click a box to draw the graph from it"
                 class:adi-graph__stage--panning=move || panning.get()
                 class:adi-graph__stage--link=actionable>
                 <canvas class="adi-graph__canvas" node_ref=canvas
-                    aria-label="Every conversation on this machine and what set it off"
+                    // Not "every conversation on this machine": once a click has rooted the
+                    // picture somewhere, it is drawing one conversation's consequences.
+                    aria-label="Conversations on this machine and what set each one off"
 
                     on:wheel=move |ev: web_sys::WheelEvent| {
                         // The wheel *is* the zoom here, so neither the pane's scroll nor the
@@ -283,7 +327,7 @@ pub(crate) fn live_graph_view(
                         }
                         let (x, y) = pointer(&ev);
                         if let Some(i) = under(x, y) {
-                            open(i);
+                            click(i);
                         }
                     }
 

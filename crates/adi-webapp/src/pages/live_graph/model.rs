@@ -15,8 +15,13 @@
 //! what it asserts is that *that agent* set this off — nothing about which of its chats did. The
 //! hover line says it in those words, "started by adi-agent", and never names a chat.
 //!
+//! **Every card has at most one parent**, which is what makes the picture a tree rather than a
+//! web — and a tree is laid out as one: a subtree owns a band of rows that nothing else may stand
+//! in, so what a conversation started is read by looking down from it rather than by following a
+//! line into a column shared with fifty strangers. See [`place`].
+//!
 //! Everything here is pure: the listings in, a laid-out [`Graph`] out. The page re-runs it when the
-//! data changes and draws whatever comes back — panning and zooming never touch it.
+//! data or the focus changes and draws whatever comes back — panning and zooming never touch it.
 
 use std::collections::HashMap;
 
@@ -39,17 +44,27 @@ const AGENT_PREFIX: &str = "agent:";
 pub(crate) const CHATS_PER_AGENT: usize = 6;
 pub(crate) const CHATS_DRAWN: usize = 80;
 
-/// The tallest a column may get before it wraps into a block of columns.
+/// The tallest a block of one conversation's childless children may get before it wraps into a
+/// block of columns.
 ///
-/// A layer is one step away from where work came from, and on a real machine one step can hold
-/// three hundred things. Stacked, that is a line; wrapped, it is a block whose shape a screen can
-/// hold. Tall rather than square on purpose: a stage is wider than it is tall, and every column
-/// this saves is width the fit does not have to shrink away.
-const MAX_ROWS: usize = 20;
+/// On a real machine one conversation — or one origin — can be the start of three hundred things.
+/// Stacked, that is a line; wrapped, it is a block whose shape a screen can hold.
+///
+/// Twelve is measured, not chosen: a block is as tall as this and as wide as it has to be, so this
+/// number alone decides the shape of the whole picture, and the fitted scale is what it costs. On
+/// the machine the fixture at the bottom of this file models, 1160×690 of stage fits the graph at
+/// 25% with a block of 16, **39% with 12**, 38% with 10 and 26% with 6 — either side of it the
+/// picture is a smear on one axis. Labels go out below 34% (`paint::LABEL_SCALE`), so the window
+/// is narrow and this sits in the middle of it.
+const MAX_ROWS: usize = 12;
+
+/// The air between one subtree and the next, in rows. Half a row, which is enough for two bands to
+/// read as two without paying a whole card's height at every branch.
+const SIBLING_GAP: f64 = 0.5;
 
 /// Node geometry, in world units. A conversation is a card of two lines — what it is called, and
 /// whose it is — so it is taller than the pill that stands for where work came from; those are the
-/// only two shapes on the canvas, and they are never in the same column.
+/// only two shapes on the canvas.
 pub(crate) const CHAT_H: f64 = 46.0;
 pub(crate) const ORIGIN_H: f64 = 34.0;
 pub(crate) const CHAT_W: f64 = 250.0;
@@ -61,11 +76,6 @@ pub(crate) const ORIGIN_W: f64 = 150.0;
 /// be shrunk by to fit on a screen.
 pub(crate) const COL_GAP: f64 = 70.0;
 pub(crate) const ROW_PITCH: f64 = 60.0;
-
-/// How many relaxation passes the layering makes before it stops. Agents can start each other's
-/// conversations, so the graph is not always acyclic and "until nothing changes" is not always a
-/// thing that happens.
-const MAX_PASSES: usize = 64;
 
 /// What a node stands for. The kind decides its shape, its size and its tone — nothing else about a
 /// node says which of these it is, because a word on every card would be the same word on nearly
@@ -143,17 +153,27 @@ pub(crate) enum Mark {
     Failed,
 }
 
-/// What clicking a node does. A node with nothing to open is not a dead link: it simply does not
-/// take the pointer (see [`crate::pages::live_graph`]'s hit test).
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Action {
-    None,
-    /// Open this conversation on the Agents page.
-    Chat {
-        agent: String,
-        run_id: String,
-        interactive: bool,
-    },
+/// The conversation a card stands for — what **Open chat** opens while the picture is rooted at it.
+/// An origin is not a conversation and carries none.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Chat {
+    pub(crate) agent: String,
+    pub(crate) run_id: String,
+    pub(crate) interactive: bool,
+}
+
+/// How a node stands in the picture as it is drawn *now* — a fact about where the focus is, not
+/// about the machine. Everything is [`Role::Plain`] until somebody clicks a card.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) enum Role {
+    #[default]
+    Plain,
+    /// What the picture is rooted at: the card that was clicked, and the only one drawn with
+    /// everything it started and nothing it did not.
+    Focus,
+    /// The one step above the focus, drawn quietly and for one reason — so there is something to
+    /// click to go back up.
+    Ancestor,
 }
 
 /// One card on the canvas, already placed. `x`/`y` are its centre, in world units.
@@ -168,7 +188,8 @@ pub(crate) struct Node {
     pub(crate) meta: String,
     pub(crate) kind: Kind,
     pub(crate) mark: Mark,
-    pub(crate) action: Action,
+    pub(crate) chat: Option<Chat>,
+    pub(crate) role: Role,
     pub(crate) layer: usize,
     pub(crate) x: f64,
     pub(crate) y: f64,
@@ -204,9 +225,18 @@ pub(crate) struct Graph {
     /// Conversations drawn, and conversations there are. Equal when nothing was cut.
     pub(crate) shown_chats: usize,
     pub(crate) total_chats: usize,
+    /// Whether the machine's own picture is a sample — whether [`pick`] left anything out before
+    /// a focus narrowed it further. What is under one conversation can only be counted out of
+    /// what was drawn, and the line has to say so when that is less than everything.
+    pub(crate) sampled: bool,
     /// How many agents the drawn cards are between them — the spread of the picture, which a count
     /// of conversations alone does not say.
     pub(crate) agents: usize,
+    /// The node the picture is rooted at, when somebody has clicked one. `None` is the whole
+    /// machine.
+    pub(crate) focus: Option<usize>,
+    /// …and how many conversations hang off it, however deep. Only meaningful with a focus.
+    pub(crate) under: usize,
     /// The bounding box of every node, centre to centre plus half a card: what **Fit** fits.
     pub(crate) extent: (f64, f64, f64, f64),
 }
@@ -222,8 +252,20 @@ impl Graph {
         self.nodes.iter().rposition(|n| n.hit(x, y))
     }
 
-    /// The line under the title: how much of the machine this picture is.
+    /// The line under the title: how much of the machine this picture is — or, once it is rooted
+    /// at one conversation, what that one set off.
     pub(crate) fn summary(&self) -> String {
+        if let Some(root) = self.focus.and_then(|i| self.nodes.get(i)) {
+            if self.under == 0 {
+                return format!("{} \u{b7} started nothing", root.label);
+            }
+            let under = plural(self.under, "conversation", "conversations");
+            // "drawn under it" rather than "under it" whenever the machine's own picture is a
+            // sample: this is a count of cards on the canvas, and saying it flat would claim the
+            // page had looked at conversations it never drew.
+            let how = if self.sampled { "drawn under it" } else { "under it" };
+            return format!("{} \u{b7} {under} {how}", root.label);
+        }
         let agents = plural(self.agents, "agent", "agents");
         let chats = plural(self.total_chats, "conversation", "conversations");
         if self.total_chats == 0 {
@@ -240,8 +282,11 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// Build and lay out the graph.
-pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns) -> Graph {
+/// Build and lay out the graph, rooted at `focus` — the id of a node — or at the whole machine.
+///
+/// A focus that names nothing on the canvas (the conversation aged out of the newest few, the
+/// listing has not arrived yet) draws the whole machine rather than an empty stage.
+pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&str>) -> Graph {
     let mut b = Builder::default();
     let defined: HashMap<&str, &AgentDto> = agents.iter().map(|a| (a.name.as_str(), a)).collect();
 
@@ -262,11 +307,12 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns) -> Graph {
             meta: chat_meta(&entry.name, defined.get(entry.name.as_str()).copied(), run),
             kind: Kind::Chat,
             mark: mark_of(run),
-            action: Action::Chat {
+            chat: Some(Chat {
                 agent: entry.name.clone(),
                 run_id: run.run_id.clone(),
                 interactive: entry.interactive,
-            },
+            }),
+            role: Role::Plain,
             layer: 0,
             x: 0.0,
             y: 0.0,
@@ -295,8 +341,95 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns) -> Graph {
     }
 
     let mut g = b.graph;
+    g.sampled = g.shown_chats < g.total_chats;
+    if let Some(id) = focus {
+        focus_on(&mut g, id);
+    }
     place(&mut g);
     g
+}
+
+/// Cut the graph down to what hangs off the node called `id`, plus the one node above it.
+///
+/// The one above is the whole of how you get back out: it is drawn quietly, it takes a click like
+/// any other card, and clicking it roots the picture there. Its *other* children are not drawn —
+/// this is a picture of one conversation's consequences, and the siblings of the thing you asked
+/// about are not among them.
+fn focus_on(g: &mut Graph, id: &str) {
+    let Some(root) = g.nodes.iter().position(|n| n.id == id) else {
+        return;
+    };
+    let n = g.nodes.len();
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut parent: Vec<Option<usize>> = vec![None; n];
+    for e in &g.edges {
+        kids[e.from].push(e.to);
+        if parent[e.to].is_none() {
+            parent[e.to] = Some(e.from);
+        }
+    }
+
+    // Everything below the root, breadth first. `keep` doubles as the visited set, which is what
+    // stops two agents that start each other's work from being walked round for ever.
+    let mut keep = vec![false; n];
+    keep[root] = true;
+    let mut queue = vec![root];
+    let mut at = 0;
+    while at < queue.len() {
+        let i = queue[at];
+        at += 1;
+        for &k in &kids[i] {
+            if !std::mem::replace(&mut keep[k], true) {
+                queue.push(k);
+            }
+        }
+    }
+    // …and the step above, unless the root is in a cycle and its parent is already below it.
+    let up = parent[root].filter(|&p| !keep[p]);
+    if let Some(p) = up {
+        keep[p] = true;
+    }
+
+    let mut index = vec![usize::MAX; n];
+    let kept = std::mem::take(&mut g.nodes);
+    for (i, node) in kept.into_iter().enumerate() {
+        if keep[i] {
+            index[i] = g.nodes.len();
+            g.nodes.push(node);
+        }
+    }
+    // An edge survives only with both ends: the ones leaving the step above into its other
+    // children fall away here, along with whatever used to point at it.
+    let edges = std::mem::take(&mut g.edges);
+    g.edges = edges
+        .into_iter()
+        .filter(|e| keep[e.from] && keep[e.to])
+        .map(|e| Edge {
+            from: index[e.from],
+            to: index[e.to],
+        })
+        .collect();
+
+    // Both of these carry what a click does, because on this canvas that is the one thing a card
+    // cannot say for itself: the root's click is the gesture's own undo, and the step above is
+    // only there to be clicked.
+    let at = &mut g.nodes[index[root]];
+    at.meta = format!("{} \u{b7} click again for the whole machine", at.meta);
+    at.role = Role::Focus;
+    if let Some(p) = up {
+        let step = &mut g.nodes[index[p]];
+        step.meta = format!("Go up \u{b7} {}", step.meta);
+        step.role = Role::Ancestor;
+    }
+    g.focus = Some(index[root]);
+    // What the head counts: the conversations this one set off, at any depth. Neither the root
+    // itself nor the step above it is under anything.
+    g.under = queue.len() - 1;
+    g.shown_chats = g
+        .nodes
+        .iter()
+        .filter(|node| node.kind == Kind::Chat && node.role != Role::Ancestor)
+        .count();
 }
 
 /// Which conversations get a card: the newest few of each agent's, the newest of those across the
@@ -471,7 +604,8 @@ impl Builder {
                     meta: format!("Started work here, and called itself {other}"),
                     kind: Kind::Origin,
                     mark: Mark::None,
-                    action: Action::None,
+                    chat: None,
+                    role: Role::Plain,
                     layer: 0,
                     x: 0.0,
                     y: 0.0,
@@ -485,7 +619,8 @@ impl Builder {
             meta: origin.meta().to_string(),
             kind: Kind::Origin,
             mark: Mark::None,
-            action: Action::None,
+            chat: None,
+            role: Role::Plain,
             layer: 0,
             x: 0.0,
             y: 0.0,
@@ -507,143 +642,170 @@ impl Builder {
     }
 }
 
-/// How many steps each node is from where work came from — its band, and the x order of the whole
-/// picture.
+/// The tree the picture is drawn as: who hangs from each node, and which nodes hang from nothing.
 ///
-/// A breadth-first distance, not a longest path. A conversation reached both by a person and by a
-/// chain six deep sits one step after the person, which keeps the picture as wide as the machine's
-/// deepest *new* path rather than as wide as its busiest agent's history. An edge that then runs
-/// backwards is drawn as one.
-fn layers(g: &Graph) -> Vec<usize> {
+/// Every card is given exactly one edge in (see [`build`]), so this is already a forest — except
+/// that two agents can start each other's work, which makes a ring with no way into it. A ring is
+/// broken at its lowest-numbered member, which becomes a root of its own; the edge is still drawn,
+/// and [`paint`](super::paint) draws one that runs backwards as a curve that goes back.
+fn tree(g: &Graph) -> (Vec<Vec<usize>>, Vec<usize>) {
     let n = g.nodes.len();
-    // Roots: everything nothing points at. On a machine with a cycle of agents starting each
-    // other's work there may be none at all, so the first node stands in as one.
-    let mut incoming = vec![0usize; n];
+    let mut parent: Vec<Option<usize>> = vec![None; n];
     for e in &g.edges {
-        incoming[e.to] += 1;
-    }
-    let mut layer = vec![usize::MAX; n];
-    let mut queue: Vec<usize> = (0..n).filter(|&i| incoming[i] == 0).collect();
-    if queue.is_empty() {
-        queue.push(0);
-    }
-    for &i in &queue {
-        layer[i] = 0;
-    }
-    let out: Vec<Vec<usize>> = {
-        let mut o = vec![Vec::new(); n];
-        for e in &g.edges {
-            o[e.from].push(e.to);
+        if e.from != e.to && parent[e.to].is_none() {
+            parent[e.to] = Some(e.from);
         }
-        o
-    };
-    let mut head = 0;
-    let mut passes = 0;
-    while head < queue.len() && passes < n * MAX_PASSES {
-        let i = queue[head];
-        head += 1;
-        for &j in &out[i] {
-            passes += 1;
-            if layer[j] == usize::MAX {
-                layer[j] = layer[i] + 1;
-                queue.push(j);
+    }
+
+    // Walk every chain of parents once, marking what has been settled. A node found still on the
+    // current chain closes a ring, and the ring is cut there. Each node is visited once, so this
+    // is linear however tangled the machine is.
+    let (unseen, walking, settled) = (0_u8, 1_u8, 2_u8);
+    let mut state = vec![unseen; n];
+    for i in 0..n {
+        if state[i] != unseen {
+            continue;
+        }
+        let mut chain: Vec<usize> = Vec::new();
+        let mut step = Some(i);
+        while let Some(c) = step {
+            if state[c] == walking {
+                let from = chain.iter().position(|&p| p == c).unwrap_or(0);
+                let lowest = chain[from..].iter().copied().min().unwrap_or(c);
+                parent[lowest] = None;
+                break;
             }
+            if state[c] == settled {
+                break;
+            }
+            state[c] = walking;
+            chain.push(c);
+            step = parent[c];
+        }
+        for &p in &chain {
+            state[p] = settled;
         }
     }
-    // Anything still unreached is in a cycle with no way in. It is not nothing, so it starts its
-    // own chain rather than being dropped.
-    for l in &mut layer {
-        if *l == usize::MAX {
-            *l = 0;
+
+    // Children in the order their cards were made, which is the order [`pick`] chose them in:
+    // newest first, the same order the sessions rail is in. Deterministic, so a machine that has
+    // not changed draws the same picture twice.
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for (i, p) in parent.iter().enumerate() {
+        if let Some(p) = *p {
+            kids[p].push(i);
         }
     }
-    layer
+    let roots = (0..n).filter(|&i| parent[i].is_none()).collect();
+    (kids, roots)
 }
 
-/// Put every node somewhere: a column per step away from where work came from (see [`layers`]), and
-/// a row within it.
-// Row and column indices become coordinates. A graph with more nodes than an `f64` can count
-// exactly would need a display the size of a country.
+/// Place `i`'s subtree with its top row at `top`, and answer how many rows it took.
+///
+/// **The band is the whole point of this page.** A subtree owns a contiguous run of rows and
+/// nothing from anywhere else may stand in it, so a conversation's children are the cards level
+/// with it and immediately under it — never a card in the same column that belongs to somebody
+/// four branches away.
+///
+/// Children come in two sorts, and they are treated differently on purpose. One that started
+/// nothing is a leaf, and leaves are stacked into one block, wrapped into more than one column
+/// past [`MAX_ROWS`] of them — on this operator's machine one origin is where fifty conversations
+/// came from, and fifty stacked is a line no screen holds. One that started something gets a band
+/// of its own under that block, as tall as everything below it. The parent comes to rest level
+/// with the middle of its own band.
+// Row indices become coordinates. A graph with more rows than an `f64` counts exactly would need a
+// display the size of a country.
+#[allow(clippy::cast_precision_loss)]
+fn arrange(i: usize, top: f64, kids: &[Vec<usize>], row: &mut [f64], col: &mut [usize]) -> f64 {
+    if kids[i].is_empty() {
+        row[i] = top;
+        return 1.0;
+    }
+    let (leaves, branches): (Vec<usize>, Vec<usize>) =
+        kids[i].iter().copied().partition(|&k| kids[k].is_empty());
+
+    let mut used = 0.0;
+    if !leaves.is_empty() {
+        let columns = leaves.len().div_ceil(MAX_ROWS).max(1);
+        // Split evenly rather than filling the first column to the brim: two columns of nine read
+        // as a block, one of eighteen and one of one reads as a mistake.
+        let per = leaves.len().div_ceil(columns).max(1);
+        for (at, &k) in leaves.iter().enumerate() {
+            col[k] = at / per;
+            row[k] = top + (at % per) as f64;
+        }
+        used = per as f64;
+    }
+    for &k in &branches {
+        if used > 0.0 {
+            used += SIBLING_GAP;
+        }
+        col[k] = 0;
+        used += arrange(k, top + used, kids, row, col);
+    }
+    row[i] = top + (used - 1.0) / 2.0;
+    used
+}
+
+/// Put every node somewhere: a column per step away from where the work came from, and a band of
+/// rows per subtree (see [`arrange`]).
+// As above: row and column indices become coordinates.
 #[allow(clippy::cast_precision_loss)]
 fn place(g: &mut Graph) {
     let n = g.nodes.len();
     if n == 0 {
         return;
     }
-    let layer = layers(g);
-    for (i, node) in g.nodes.iter_mut().enumerate() {
-        node.layer = layer[i];
+    let (kids, roots) = tree(g);
+
+    let mut row = vec![0.0; n];
+    let mut col = vec![0usize; n];
+    let mut top = 0.0;
+    for &r in &roots {
+        col[r] = 0;
+        top += arrange(r, top, &kids, &mut row, &mut col) + SIBLING_GAP;
     }
 
-    // Order within a band by where the things pointing at it ended up, so an edge travels as
-    // little vertical distance as it can. Bands are done left to right, which is the order that
-    // makes "where its parents are" a question with an answer.
-    //
-    // A band that would be taller than [`MAX_ROWS`] wraps into a block of columns instead of a
-    // single line. Measured on the real machine: three hundred conversations one step from where
-    // the work came from is a column fifteen thousand units tall, which fits on a screen at 6% and
-    // reads as a vertical smudge. Wrapped, the same three hundred are a block the shape of a page.
-    let bands = layer.iter().copied().max().unwrap_or(0) + 1;
-    let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
-    for e in &g.edges {
-        into[e.to].push(e.from);
+    // How far from the root each node is. Every node is reachable now that the rings are cut, so
+    // this needs nothing of the recursion above — only the order.
+    let mut depth = vec![0usize; n];
+    let mut queue = roots;
+    let mut at = 0;
+    while at < queue.len() {
+        let i = queue[at];
+        at += 1;
+        for &k in &kids[i] {
+            depth[k] = depth[i] + 1;
+            queue.push(k);
+        }
     }
-    let mut placed = vec![f64::NAN; n];
+
     // Where each band starts, and how wide its columns are: as wide as the widest kind of node
-    // standing in it. A band of origins is narrower than a band of conversations, and charging the
-    // whole picture for the widest card anywhere in it would be paid for in the fit.
-    let mut spent = 0.0;
+    // standing in it, and as many columns across as the widest block of leaves in it needs. A band
+    // of origins is narrower than a band of conversations, and charging the whole picture for the
+    // widest card anywhere in it would be paid for in the fit.
+    let bands = depth.iter().copied().max().unwrap_or(0) + 1;
     let mut band_left = vec![0.0; bands];
     let mut band_pitch = vec![0.0; bands];
+    let mut spent = 0.0;
     for band in 0..bands {
-        let members: Vec<usize> = (0..n).filter(|&i| layer[i] == band).collect();
+        let members: Vec<usize> = (0..n).filter(|&i| depth[i] == band).collect();
         let pitch = members
             .iter()
             .map(|&i| g.nodes[i].w())
             .fold(0.0_f64, f64::max)
             + COL_GAP;
+        let columns = members.iter().map(|&i| col[i] + 1).max().unwrap_or(1);
         band_left[band] = spent;
         band_pitch[band] = pitch;
-        spent += members.len().div_ceil(MAX_ROWS).max(1) as f64 * pitch;
+        spent += columns as f64 * pitch;
     }
 
-    for band in 0..bands {
-        let mut rows: Vec<usize> = (0..n).filter(|&i| layer[i] == band).collect();
-        rows.sort_by(|&a, &b| {
-            let key = |i: usize| -> f64 {
-                let ys: Vec<f64> = into[i]
-                    .iter()
-                    .map(|&p| placed[p])
-                    .filter(|y| y.is_finite())
-                    .collect();
-                if ys.is_empty() {
-                    f64::MAX
-                } else {
-                    ys.iter().sum::<f64>() / ys.len() as f64
-                }
-            };
-            key(a)
-                .partial_cmp(&key(b))
-                .unwrap_or(std::cmp::Ordering::Equal)
-                // A stable tie-break, so the same machine draws the same picture twice.
-                .then_with(|| g.nodes[a].id.cmp(&g.nodes[b].id))
-        });
-        let count = rows.len();
-        let columns = count.div_ceil(MAX_ROWS).max(1);
-        // Split evenly rather than filling the first column to the brim: two columns of nine read
-        // as a block, one of eighteen and one of one reads as a mistake.
-        let per_column = count.div_ceil(columns).max(1);
-        for (at, &i) in rows.iter().enumerate() {
-            // Down a column, then on to the next: nodes that belong together are ordered together,
-            // and that order is vertical.
-            let (column, row) = (at / per_column, at % per_column);
-            let rows_here = per_column.min(count - column * per_column);
-            let y = (row as f64 - (rows_here as f64 - 1.0) / 2.0) * ROW_PITCH;
-            placed[i] = y;
-            g.nodes[i].y = y;
-            // The centre of its column, which is where a card of any width is hung from.
-            g.nodes[i].x = band_pitch[band].mul_add(column as f64 + 0.5, band_left[band]);
-        }
+    for (i, node) in g.nodes.iter_mut().enumerate() {
+        node.layer = depth[i];
+        // The centre of its column, which is where a card of any width is hung from.
+        node.x = band_pitch[depth[i]].mul_add(col[i] as f64 + 0.5, band_left[depth[i]]);
+        node.y = row[i] * ROW_PITCH;
     }
 
     let raw = extent_of(g);
@@ -744,12 +906,55 @@ mod tests {
         }
     }
 
+    /// Whoever is drawn in `id`'s column, top to bottom.
+    fn column_of<'a>(g: &'a Graph, id: &str) -> Vec<&'a Node> {
+        let at = node(g, id);
+        let mut down: Vec<&Node> = g
+            .nodes
+            .iter()
+            .filter(|n| (n.x - at.x).abs() < 1.0)
+            .collect();
+        down.sort_by(|a, b| a.y.total_cmp(&b.y));
+        down
+    }
+
+    /// The property this page turns on, checked over a whole graph: down any one column, a
+    /// parent's children are an unbroken run. A parent that shows up twice in that order has had
+    /// somebody else's children drawn through the middle of its own, which is exactly the picture
+    /// this layout exists to stop.
+    fn children_stay_together(g: &Graph) -> String {
+        let parent = |i: usize| g.edges.iter().find(|e| e.to == i).map(|e| e.from);
+        // Keyed on the bits of the x, not on a rounded one: every card in a column is given the
+        // same x by the same arithmetic, so they are equal to the last bit.
+        let mut columns: HashMap<u64, Vec<usize>> = HashMap::new();
+        for (i, n) in g.nodes.iter().enumerate() {
+            columns.entry(n.x.to_bits()).or_default().push(i);
+        }
+        let mut broken: Vec<String> = Vec::new();
+        for down in columns.values_mut() {
+            down.sort_by(|&a, &b| g.nodes[a].y.total_cmp(&g.nodes[b].y));
+            let mut runs: Vec<Option<usize>> = Vec::new();
+            for &i in down.iter() {
+                if runs.last() != Some(&parent(i)) {
+                    runs.push(parent(i));
+                }
+            }
+            for (at, p) in runs.iter().enumerate() {
+                if runs[..at].contains(p) {
+                    let whose = p.map_or("(nothing)", |i| g.nodes[i].id.as_str());
+                    broken.push(format!("the children of {whose} are drawn in two runs"));
+                }
+            }
+        }
+        broken.join("; ")
+    }
+
     /// The chain reads left to right, one card per step: you, the conversation you opened, the one
     /// it started, and on. The agent is not a step of its own — it is written on the card.
     #[test]
     fn the_spawn_chain_is_one_card_per_conversation() {
         let (agents, all) = chain();
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         for (id, layer) in [
             ("origin:human", 0),
             ("chat:one/r1", 1),
@@ -770,11 +975,155 @@ mod tests {
     #[test]
     fn the_hover_line_says_whose_chat_it_is_and_who_asked() {
         let (agents, all) = chain();
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         assert_eq!(
             node(&g, "chat:two/r2").meta,
             "Chat of two · global · started by one · finished"
         );
+    }
+
+    /// Two branches, which is the shape a chain cannot show: a person opens two conversations, and
+    /// each of those starts two more. Everything in the second row belongs to `hub` or to `mid`,
+    /// and the whole of this page is being able to tell which.
+    fn family() -> (Vec<AgentDto>, AllAgentRuns) {
+        let at = |id: &str, launched_by: &str, t: u64| {
+            let mut r = run(id, launched_by);
+            (r.started_at, r.last_activity) = (t, t);
+            r
+        };
+        let agents = vec![agent("hub"), agent("mid"), agent("kid")];
+        let all = AllAgentRuns {
+            total: 6,
+            agents: vec![
+                runs("hub", vec![at("h", LAUNCHED_BY_HUMAN, 10)]),
+                runs("mid", vec![at("m", LAUNCHED_BY_HUMAN, 15)]),
+                runs(
+                    "kid",
+                    vec![
+                        at("k1", "agent:hub", 20),
+                        at("j1", "agent:mid", 25),
+                        at("k2", "agent:hub", 30),
+                        at("j2", "agent:mid", 35),
+                    ],
+                ),
+            ],
+        };
+        (agents, all)
+    }
+
+    /// What the user asked this page for. A conversation's children are stacked against it, one
+    /// unbroken run down the column, and the two that `mid` started never come between the two
+    /// that `hub` did. The parent comes to rest level with the middle of its own.
+    #[test]
+    fn a_conversations_children_are_stacked_against_it_and_nobody_elses_come_between() {
+        let (agents, all) = family();
+        let g = build(&agents, &all, None);
+        assert_eq!(children_stay_together(&g), "");
+        let down: Vec<&str> = column_of(&g, "chat:kid/k1")
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(
+            down,
+            ["chat:kid/j2", "chat:kid/j1", "chat:kid/k2", "chat:kid/k1"],
+            "the second row is interleaved"
+        );
+        let middle = |a: &str, b: &str| node(&g, a).y.midpoint(node(&g, b).y);
+        for (parent, kids) in [
+            ("chat:mid/m", ("chat:kid/j2", "chat:kid/j1")),
+            ("chat:hub/h", ("chat:kid/k2", "chat:kid/k1")),
+        ] {
+            let (y, want) = (node(&g, parent).y, middle(kids.0, kids.1));
+            assert!((y - want).abs() < 1e-9, "{parent} sits at {y}, not {want}");
+        }
+    }
+
+    /// Clicking a card draws the graph from it: that conversation, everything it set off however
+    /// deep, and the one step above it to click on the way back — and nothing else on the machine.
+    #[test]
+    fn a_click_draws_the_graph_from_the_card_that_was_clicked() {
+        let (agents, all) = chain();
+        let g = build(&agents, &all, Some("chat:two/r2"));
+        let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["chat:one/r1", "chat:three/r3", "chat:two/r2"]);
+        assert_eq!(node(&g, "chat:two/r2").role, Role::Focus);
+        assert_eq!(node(&g, "chat:one/r1").role, Role::Ancestor);
+        assert_eq!(node(&g, "chat:three/r3").role, Role::Plain);
+        assert!(joined(&g, "chat:one/r1", "chat:two/r2"), "no way back up");
+        assert!(joined(&g, "chat:two/r2", "chat:three/r3"));
+        assert_eq!(g.summary(), "do r2 · 1 conversation under it");
+        assert!(!g.sampled, "nothing was left out of this machine's picture");
+    }
+
+    /// The step above is drawn for one reason — to be clicked — so what *else* it started is not
+    /// drawn. This is a picture of one conversation's consequences, and its siblings are not
+    /// among them.
+    #[test]
+    fn the_step_above_the_focus_brings_none_of_its_other_children() {
+        let (agents, all) = family();
+        let g = build(&agents, &all, Some("chat:kid/k2"));
+        let mut ids: Vec<&str> = g.nodes.iter().map(|n| n.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["chat:hub/h", "chat:kid/k2"]);
+        assert!(
+            node(&g, "chat:hub/h").meta.starts_with("Go up \u{b7} "),
+            "the step above does not say it is the way back"
+        );
+        assert!(
+            node(&g, "chat:kid/k2")
+                .meta
+                .ends_with("click again for the whole machine"),
+            "the root does not say what a second click does"
+        );
+        assert_eq!(g.summary(), "do k2 · started nothing");
+    }
+
+    /// A focus can name a conversation that is no longer drawn — it aged out of the newest few
+    /// while the page was open, or the listing has not arrived yet. The whole machine is a better
+    /// answer than an empty stage.
+    #[test]
+    fn a_focus_on_something_that_is_not_there_draws_the_whole_machine() {
+        let (agents, all) = chain();
+        let g = build(&agents, &all, Some("chat:nobody/gone"));
+        assert_eq!(g.nodes.len(), 4);
+        assert_eq!(g.focus, None);
+        assert_eq!(g.summary(), "3 agents · 3 conversations");
+    }
+
+    /// An origin takes a click like any other card: "everything a person started" is a question
+    /// worth asking on a machine where most of the history is automation's.
+    #[test]
+    fn an_origin_can_be_what_the_picture_is_rooted_at() {
+        let (agents, all) = family();
+        let g = build(&agents, &all, Some("origin:human"));
+        assert_eq!(node(&g, "origin:human").role, Role::Focus);
+        assert_eq!(g.under, 6, "everything below it, however deep");
+        assert!(
+            g.nodes.iter().all(|n| n.role != Role::Ancestor),
+            "nothing is above where the work came from"
+        );
+    }
+
+    /// A count of what is under one conversation is a count of cards, and the page draws only the
+    /// newest few. Where anything was left out, the line says "drawn under it" — it must not claim
+    /// to have looked at conversations it never put on the canvas.
+    #[test]
+    fn what_is_under_one_conversation_is_counted_as_what_was_drawn() {
+        let rs: Vec<AgentRunInfo> = (0..CHATS_PER_AGENT + 3)
+            .map(|i| {
+                let mut r = run(&format!("r{i}"), LAUNCHED_BY_HUMAN);
+                (r.started_at, r.last_activity) = (i as u64, i as u64);
+                r
+            })
+            .collect();
+        let all = AllAgentRuns {
+            total: rs.len(),
+            agents: vec![runs("one", rs)],
+        };
+        let g = build(&[agent("one")], &all, Some("origin:human"));
+        assert!(g.sampled);
+        assert_eq!(g.summary(), "You · 6 conversations drawn under it");
     }
 
     /// The picture is centred on the origin, so an untouched view opens on the middle of the graph
@@ -783,7 +1132,7 @@ mod tests {
     #[test]
     fn the_graph_is_centred_on_the_world_origin() {
         let (agents, all) = chain();
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         let (x0, y0, x1, y1) = g.extent;
         assert!(x0.midpoint(x1).abs() < 1e-9, "x is centred on {}", x0.midpoint(x1));
         assert!(y0.midpoint(y1).abs() < 1e-9, "y is centred on {}", y0.midpoint(y1));
@@ -795,7 +1144,7 @@ mod tests {
     fn an_agent_that_never_ran_is_not_on_the_canvas() {
         let (mut agents, all) = chain();
         agents.push(agent("idle"));
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         assert!(g.nodes.iter().all(|n| n.agent != "idle"));
         assert_eq!(g.agents, 3, "the count is of the agents that are drawn");
     }
@@ -808,7 +1157,7 @@ mod tests {
             total: 1,
             agents: vec![runs("gone", vec![run("r1", LAUNCHED_BY_HUMAN)])],
         };
-        let g = build(&[], &all);
+        let g = build(&[], &all, None);
         let card = node(&g, "chat:gone/r1");
         assert_eq!(card.agent, "gone");
         assert_eq!(card.meta, "Chat of gone · no longer defined · started by you · finished");
@@ -831,7 +1180,7 @@ mod tests {
             total: rs.len(),
             agents: vec![runs("one", rs)],
         };
-        let g = build(&[agent("one")], &all);
+        let g = build(&[agent("one")], &all, None);
         assert_eq!(g.shown_chats, CHATS_PER_AGENT);
         assert_eq!(g.total_chats, CHATS_PER_AGENT + 4);
         assert!(
@@ -862,7 +1211,7 @@ mod tests {
                 runs("child-agent", vec![child]),
             ],
         };
-        let g = build(&[agent("starter"), agent("child-agent")], &all);
+        let g = build(&[agent("starter"), agent("child-agent")], &all, None);
         assert!(joined(&g, "chat:starter/old", "chat:child-agent/new"));
         assert!(joined(&g, "origin:human", "chat:starter/old"));
     }
@@ -888,7 +1237,7 @@ mod tests {
                 runs("two", vec![child]),
             ],
         };
-        let g = build(&[agent("one"), agent("two")], &all);
+        let g = build(&[agent("one"), agent("two")], &all, None);
         assert!(joined(&g, "chat:one/mid", "chat:two/child"));
         assert!(!joined(&g, "chat:one/early", "chat:two/child"));
         assert!(!joined(&g, "chat:one/late", "chat:two/child"));
@@ -908,7 +1257,7 @@ mod tests {
                 ],
             )],
         };
-        let g = build(&[agent("one")], &all);
+        let g = build(&[agent("one")], &all, None);
         assert!(joined(&g, "origin:human", "chat:one/r1"));
         assert!(joined(&g, "origin:automation", "chat:one/r2"));
         assert!(joined(&g, "origin:unknown", "chat:one/r3"));
@@ -926,7 +1275,7 @@ mod tests {
                 runs("two", vec![run("r2", "agent:one")]),
             ],
         };
-        let g = build(&[agent("one"), agent("two")], &all);
+        let g = build(&[agent("one"), agent("two")], &all, None);
         assert!(!g.is_empty());
         assert!(g.nodes.iter().all(|n| n.x.is_finite() && n.y.is_finite()));
     }
@@ -951,7 +1300,7 @@ mod tests {
     #[test]
     fn a_node_is_hit_inside_its_own_card() {
         let (agents, all) = chain();
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         let n = node(&g, "chat:one/r1").clone();
         assert!(n.hit(n.x, n.y));
         assert!(n.hit(n.x + n.w() / 2.0 - 1.0, n.y + CHAT_H / 2.0 - 1.0));
@@ -970,6 +1319,7 @@ mod tests {
                 agents: Vec::new(),
                 total: 0,
             },
+            None,
         );
         assert!(g.is_empty());
         assert_eq!(g.summary(), "0 conversations");
@@ -1008,7 +1358,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let g = build(&agents, &all);
+        let g = build(&agents, &all, None);
         assert_eq!(g.total_chats, 4000);
         // The global cap, and above it only the conversations pulled in for having started one —
         // at most one per agent on the canvas, and on this fixture exactly one.
@@ -1036,12 +1386,17 @@ mod tests {
         let aspect = (x1 - x0) / (y1 - y0);
         assert!((0.2..6.0).contains(&aspect), "the graph is {aspect:.1}:1");
         // …and small enough that fitting it leaves the labels legible. On the 1160×690 stage this
-        // operator's display gives the page, against 6% before the caps and the wrap.
+        // operator's display gives the page: 6% before the caps, 23% with a tidy tree wrapped at
+        // 20 rows, 39% at the 12 [`MAX_ROWS`] settled on.
         assert!(
             super::super::view::Viewport::fit(g.extent, 1160.0, 690.0).scale
                 > super::super::paint::LABEL_SCALE,
             "fitting it would put the labels out"
         );
+
+        // …and it is still a tree at that size: nobody's children are drawn through the middle of
+        // anybody else's, which is the one thing a hundred cards could quietly take away.
+        assert_eq!(children_stay_together(&g), "");
 
         // And a card left unconnected would be a box saying nothing: every conversation was started
         // by somebody, and whoever it was is on the canvas.
@@ -1064,7 +1419,7 @@ mod tests {
         }))
         .expect("an AgentsState");
         let (_, all) = chain();
-        let g = build(&state.agents, &all);
+        let g = build(&state.agents, &all, None);
         assert!(g.nodes.iter().any(|n| n.id == "chat:one/r1"));
     }
 }

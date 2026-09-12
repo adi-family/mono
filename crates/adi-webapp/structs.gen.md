@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-73 structs · 14 enums · 4 type aliases across 30 files.
+74 structs · 14 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -19,7 +19,7 @@
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/live_graph/mod.rs`](#srcpageslive_graphmodrs) — `GraphView`, `Resize`
-- [`src/pages/live_graph/model.rs`](#srcpageslive_graphmodelrs) — `Kind`, `Origin`, `Mark`, `Action`, `Node`, `Edge`, `Graph`, `Builder`
+- [`src/pages/live_graph/model.rs`](#srcpageslive_graphmodelrs) — `Kind`, `Origin`, `Mark`, `Chat`, `Role`, `Node`, `Edge`, `Graph`, `Builder`
 - [`src/pages/live_graph/paint.rs`](#srcpageslive_graphpaintrs) — `Palette`, `Style`
 - [`src/pages/live_graph/view.rs`](#srcpageslive_graphviewrs) — `Viewport`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
@@ -420,13 +420,14 @@ struct Scope {
 
 ### struct `GraphView`
 
-The page's own state: the view, and what the pointer is on.
+The page's own state: the view, what the pointer is on, and what the picture is rooted at.
 
 ```rust
 #[derive(Clone, Copy)]
 pub(crate) struct GraphView {
     view: RwSignal<Viewport>,
     hover: RwSignal<Option<usize>>,
+    focus: RwSignal<Option<String>>,
     fitted: RwSignal<bool>,
 }
 ```
@@ -482,19 +483,30 @@ pub(crate) enum Mark {
 }
 ```
 
-### enum `Action`
+### struct `Chat`
 
-What clicking a node does. A node with nothing to open is not a dead link: it simply does not take the pointer (see `crate::pages::live_graph`'s hit test).
+The conversation a card stands for — what **Open chat** opens while the picture is rooted at it. An origin is not a conversation and carries none.
 
 ```rust
-#[derive(Clone, PartialEq, Debug)]
-pub(crate) enum Action {
-    None,
-    Chat {
-        agent: String,
-        run_id: String,
-        interactive: bool,
-    },
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Chat {
+    pub(crate) agent: String,
+    pub(crate) run_id: String,
+    pub(crate) interactive: bool,
+}
+```
+
+### enum `Role`
+
+How a node stands in the picture as it is drawn *now* — a fact about where the focus is, not about the machine. Everything is `Role::Plain` until somebody clicks a card.
+
+```rust
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) enum Role {
+    #[default]
+    Plain,
+    Focus,
+    Ancestor,
 }
 ```
 
@@ -511,7 +523,8 @@ pub(crate) struct Node {
     pub(crate) meta: String,
     pub(crate) kind: Kind,
     pub(crate) mark: Mark,
-    pub(crate) action: Action,
+    pub(crate) chat: Option<Chat>,
+    pub(crate) role: Role,
     pub(crate) layer: usize,
     pub(crate) x: f64,
     pub(crate) y: f64,
@@ -541,7 +554,10 @@ pub(crate) struct Graph {
     pub(crate) edges: Vec<Edge>,
     pub(crate) shown_chats: usize,
     pub(crate) total_chats: usize,
+    pub(crate) sampled: bool,
     pub(crate) agents: usize,
+    pub(crate) focus: Option<usize>,
+    pub(crate) under: usize,
     pub(crate) extent: (f64, f64, f64, f64),
 }
 ```
@@ -576,6 +592,8 @@ struct Palette {
     raise: String,
     active: String,
     hover: String,
+    side: String,
+    focus: String,
     accent: String,
     warn: String,
     err: String,
@@ -588,16 +606,18 @@ struct Palette {
 
 ### struct `Style`
 
-How one kind of node is drawn: its fill, its border, its text, and how round it is. Everything on this canvas is set in sans — a conversation's title is what somebody typed and the line under it is an agent's name, and §3 keeps mono for strings a machine produced.
+How one node is drawn: its fill, its border, its text, and how round it is. Everything on this canvas is set in sans — a conversation's title is what somebody typed and the line under it is an agent's name, and §3 keeps mono for strings a machine produced.
 
 ```rust
 struct Style<'a> {
     fill: &'a str,
     border: &'a str,
+    edge: f64,
     text: &'a str,
     size: f64,
     weight: &'a str,
     radius: f64,
+    under: &'a str,
 }
 ```
 
