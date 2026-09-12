@@ -16,7 +16,7 @@
 //! when the data or the toggles change and draws whatever comes back — panning and zooming never
 //! touch it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use adi_webapp_api::types::{AgentDto, AgentRunInfo, AgentRuns, AllAgentRuns, LAUNCHED_BY_HUMAN};
 
@@ -26,13 +26,27 @@ use adi_webapp_api::types::{AgentDto, AgentRunInfo, AgentRuns, AllAgentRuns, LAU
 const AUTOMATION: &str = "automation";
 const AGENT_PREFIX: &str = "agent:";
 
-/// How many of an agent's conversations the graph draws, newest first.
+/// How many of an agent's conversations the graph draws, newest first, and how many it draws in
+/// all.
 ///
-/// The listing carries up to fifty per agent and a busy machine has eighty agents: every one of
-/// them on the canvas is four thousand boxes, which is not a picture of anything. Six is enough to
-/// show that an agent is busy and which way its work flows; the count of what was cut is on the
-/// page, because a graph that quietly shows a tenth of the machine is worse than a smaller one.
+/// Both caps are load-bearing, and the second one was learnt the hard way. The listing carries up
+/// to fifty conversations per agent, and this operator's machine has eighty agents and 1212 of
+/// them: six each is still 328 boxes, and 328 boxes is a column fifteen thousand units tall that
+/// fits on a screen at 6% — a grey smear, not a graph. Eighty in all is a picture: what has
+/// happened lately, spread across the machine rather than taken from whichever agent talks most.
+///
+/// Nothing is lost by the caps except boxes. Every conversation that is not drawn still puts its
+/// edge on the canvas (see [`build`]), and the count of them is on the page.
 pub(crate) const CHATS_PER_AGENT: usize = 6;
+pub(crate) const CHATS_DRAWN: usize = 80;
+
+/// The tallest a column may get before it wraps into a block of columns.
+///
+/// A layer is one step away from where work came from, and on a real machine one step can hold
+/// three hundred things. Stacked, that is a line; wrapped, it is a block whose shape a screen can
+/// hold. Tall rather than square on purpose: a stage is wider than it is tall, and every column
+/// this saves is width the fit does not have to shrink away.
+const MAX_ROWS: usize = 24;
 
 /// Node geometry, in world units. One height for every node: a row of boxes that disagree about
 /// their height reads as a chart of something, and nothing here is a quantity.
@@ -42,10 +56,11 @@ pub(crate) const CHAT_W: f64 = 250.0;
 pub(crate) const TOOL_W: f64 = 160.0;
 pub(crate) const ORIGIN_W: f64 = 150.0;
 
-/// Distance between the centres of two columns, and of two rows. The column pitch leaves 70 units
-/// between the widest node and the next column — room for an edge to curve through rather than
-/// past.
-pub(crate) const COL_PITCH: f64 = 320.0;
+/// Room between one column and the next, and the distance between two rows. A column is as wide as
+/// the widest kind of node standing in it plus this gap — enough for an edge to curve through
+/// rather than past, and no wider, because every unit of width is a unit the whole picture has to
+/// be shrunk by to fit on a screen.
+pub(crate) const COL_GAP: f64 = 70.0;
 pub(crate) const ROW_PITCH: f64 = 48.0;
 
 /// How many relaxation passes the layering makes before it stops. Agents can start each other's
@@ -301,68 +316,108 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, o: Options) -> Gr
 
     for entry in &chats.agents {
         b.graph.total_chats += entry.runs.len();
-        let mut runs: Vec<&AgentRunInfo> = entry.runs.iter().collect();
-        // Newest first, by the moment the conversation last *said* something — the same order the
-        // sessions rail is in, so the six drawn here are the six anybody would name.
-        runs.sort_by_key(|r| std::cmp::Reverse(r.last_activity.max(r.started_at)));
-        let cut = if o.chats { CHATS_PER_AGENT } else { 0 };
+    }
 
-        for (i, run) in runs.iter().enumerate() {
+    let drawn = if o.chats { pick(chats) } else { Vec::new() };
+
+    for (entry, run) in &drawn {
+        let agent = b.agent_of(&entry.name);
+        let from = b.launcher(&run.launched_by);
+        let chat = b.node(Node {
+            id: format!("chat:{}/{}", entry.name, run.run_id),
+            label: title_of(run),
+            meta: chat_meta(&entry.name, run),
+            kind: Kind::Chat,
+            mark: mark_of(run),
+            action: Action::Chat {
+                agent: entry.name.clone(),
+                run_id: run.run_id.clone(),
+                interactive: entry.interactive,
+            },
+            layer: 0,
+            x: 0.0,
+            y: 0.0,
+        });
+        b.graph.shown_chats += 1;
+        b.edge(from, chat);
+        b.edge(chat, agent);
+        b.covered.insert((from, agent));
+    }
+
+    // Every conversation that is *not* drawn still says the one thing this page is about: that
+    // whoever started it caused work in that agent. Without this the cap would cut the graph into
+    // disconnected boxes — most of an eighty-agent machine would float unattached, which is a
+    // picture of nothing. Skipped where a drawn conversation already joins the same pair, so the
+    // detour and the shortcut are never both on screen.
+    for entry in &chats.agents {
+        for run in &entry.runs {
+            if drawn
+                .iter()
+                .any(|(e, r)| e.name == entry.name && r.run_id == run.run_id)
+            {
+                continue;
+            }
             let agent = b.agent_of(&entry.name);
             let from = b.launcher(&run.launched_by);
-            if i < cut {
-                let chat = b.node(Node {
-                    id: format!("chat:{}/{}", entry.name, run.run_id),
-                    label: title_of(run),
-                    meta: chat_meta(&entry.name, run),
-                    kind: Kind::Chat,
-                    mark: mark_of(run),
-                    action: Action::Chat {
-                        agent: entry.name.clone(),
-                        run_id: run.run_id.clone(),
-                        interactive: entry.interactive,
-                    },
-                    layer: 0,
-                    x: 0.0,
-                    y: 0.0,
-                });
-                b.graph.shown_chats += 1;
-                b.edge(from, chat);
-                b.edge(chat, agent);
-            } else if !o.chats {
-                // Collapsed: the conversation itself is not drawn, so its two edges become the one
-                // thing it says — that whoever started it caused work in this agent.
+            if !b.covered.contains(&(from, agent)) {
                 b.edge(from, agent);
             }
         }
     }
 
     if o.tools {
-        for agent in agents {
-            let Some(from) = b.find(&agent_id(&agent.name)) else {
-                continue;
-            };
-            for tool in &agent.bin_tools {
-                let to = b.node(Node {
-                    id: format!("tool:{tool}"),
-                    label: tool.clone(),
-                    meta: format!("Tool · on the PATH of the agents it is joined to · {tool}"),
-                    kind: Kind::Tool,
-                    mark: Mark::None,
-                    action: Action::None,
-                    layer: 0,
-                    x: 0.0,
-                    y: 0.0,
-                });
-                b.edge(from, to);
-            }
-        }
+        attach_tools(&mut b, agents);
     }
 
     let mut g = b.graph;
     g.agents = g.nodes.iter().filter(|n| n.kind == Kind::Agent).count();
     place(&mut g, o.tools);
     g
+}
+
+/// Which conversations get a box of their own: the newest few of each agent's, and then the newest
+/// of those across the whole machine.
+///
+/// Both cuts matter. Without the first, one agent's history fills the canvas; without the second,
+/// eighty agents' sixes do. What is left is what has happened lately, spread across the machine.
+fn pick(chats: &AllAgentRuns) -> Vec<(&AgentRuns, &AgentRunInfo)> {
+    let mut picked: Vec<(&AgentRuns, &AgentRunInfo)> = chats
+        .agents
+        .iter()
+        .flat_map(|entry| {
+            let mut runs: Vec<&AgentRunInfo> = entry.runs.iter().collect();
+            runs.sort_by_key(|r| std::cmp::Reverse(recency(r)));
+            runs.truncate(CHATS_PER_AGENT);
+            runs.into_iter().map(move |r| (entry, r))
+        })
+        .collect();
+    picked.sort_by_key(|(_, r)| std::cmp::Reverse(recency(r)));
+    picked.truncate(CHATS_DRAWN);
+    picked
+}
+
+/// Hang each agent's tools off it. One node per tool however many agents name it — a tool shared by
+/// nine agents is one thing on nine PATHs, and nine copies of it would say the opposite.
+fn attach_tools(b: &mut Builder, agents: &[AgentDto]) {
+    for agent in agents {
+        let Some(from) = b.find(&agent_id(&agent.name)) else {
+            continue;
+        };
+        for tool in &agent.bin_tools {
+            let to = b.node(Node {
+                id: format!("tool:{tool}"),
+                label: tool.clone(),
+                meta: format!("Tool · on the PATH of the agents it is joined to · {tool}"),
+                kind: Kind::Tool,
+                mark: Mark::None,
+                action: Action::None,
+                layer: 0,
+                x: 0.0,
+                y: 0.0,
+            });
+            b.edge(from, to);
+        }
+    }
 }
 
 /// One agent's scope, for its hover line: the project it is filed under, or that it is global.
@@ -427,11 +482,20 @@ fn agent_id(name: &str) -> String {
     format!("agent:{name}")
 }
 
+/// When a conversation last said something — what "newest" means here, and the same order the
+/// sessions rail is in. `started_at` stands in for a conversation that has said nothing yet.
+fn recency(r: &AgentRunInfo) -> u64 {
+    r.last_activity.max(r.started_at)
+}
+
 /// Nodes and edges under construction, with the index that keeps a node from being made twice.
 #[derive(Default)]
 struct Builder {
     graph: Graph,
     by_id: HashMap<String, usize>,
+    /// The `(launcher, agent)` pairs a drawn conversation already joins, so the same pair is not
+    /// also joined by a bare edge standing for the ones that were cut.
+    covered: HashSet<(usize, usize)>,
 }
 
 impl Builder {
@@ -526,21 +590,15 @@ impl Builder {
     }
 }
 
-/// Put every node somewhere: a column per step away from where work came from, and a row within it.
+/// How many steps each node is from where work came from — its band, and the x order of the whole
+/// picture.
 ///
-/// The column is a breadth-first distance, not a longest path. An agent reached both by a person on
-/// its first conversation and by a chain six deep sits one step after the person — which keeps the
-/// picture as wide as the machine's deepest *new* path rather than as wide as its busiest agent's
-/// history. An edge that then runs backwards is drawn as one.
-// Row and column indices become coordinates. A graph with more nodes than an `f64` can count
-// exactly would need a display the size of a country.
-#[allow(clippy::cast_precision_loss)]
-fn place(g: &mut Graph, tools_last: bool) {
+/// A breadth-first distance, not a longest path. An agent reached both by a person on its first
+/// conversation and by a chain six deep sits one step after the person, which keeps the picture as
+/// wide as the machine's deepest *new* path rather than as wide as its busiest agent's history. An
+/// edge that then runs backwards is drawn as one.
+fn layers(g: &Graph, tools_last: bool) -> Vec<usize> {
     let n = g.nodes.len();
-    if n == 0 {
-        return;
-    }
-
     // Roots: everything nothing points at. On a machine with a cycle of agents starting each
     // other's work there may be none at all, so the first node stands in as one.
     let mut incoming = vec![0usize; n];
@@ -582,7 +640,6 @@ fn place(g: &mut Graph, tools_last: bool) {
             *l = 0;
         }
     }
-
     // Tools are the end of every road: one column past everything, so they read as what these
     // agents may run rather than as another step in the flow.
     if tools_last {
@@ -593,21 +650,58 @@ fn place(g: &mut Graph, tools_last: bool) {
             }
         }
     }
+    layer
+}
+
+/// Put every node somewhere: a column per step away from where work came from (see [`layers`]), and
+/// a row within it.
+// Row and column indices become coordinates. A graph with more nodes than an `f64` can count
+// exactly would need a display the size of a country.
+#[allow(clippy::cast_precision_loss)]
+fn place(g: &mut Graph, tools_last: bool) {
+    let n = g.nodes.len();
+    if n == 0 {
+        return;
+    }
+    let layer = layers(g, tools_last);
     for (i, node) in g.nodes.iter_mut().enumerate() {
         node.layer = layer[i];
     }
 
-    // Order within a column by where the things pointing at it ended up, so an edge travels as
-    // little vertical distance as it can. Columns are done left to right, which is the order that
+    // Order within a band by where the things pointing at it ended up, so an edge travels as
+    // little vertical distance as it can. Bands are done left to right, which is the order that
     // makes "where its parents are" a question with an answer.
-    let columns = layer.iter().copied().max().unwrap_or(0) + 1;
+    //
+    // A band that would be taller than [`MAX_ROWS`] wraps into a block of columns instead of a
+    // single line. Measured on the real machine: three hundred conversations one step from where
+    // the work came from is a column fifteen thousand units tall, which fits on a screen at 6% and
+    // reads as a vertical smudge. Wrapped, the same three hundred are a block the shape of a page.
+    let bands = layer.iter().copied().max().unwrap_or(0) + 1;
     let mut into: Vec<Vec<usize>> = vec![Vec::new(); n];
     for e in &g.edges {
         into[e.to].push(e.from);
     }
     let mut placed = vec![f64::NAN; n];
-    for col in 0..columns {
-        let mut rows: Vec<usize> = (0..n).filter(|&i| layer[i] == col).collect();
+    // Where each band starts, and how wide its columns are: as wide as the widest kind of node
+    // standing in it. A band of agents is narrower than a band of conversations, and charging the
+    // whole picture for the widest box anywhere in it would be paid for in the fit.
+    let mut spent = 0.0;
+    let mut band_left = vec![0.0; bands];
+    let mut band_pitch = vec![0.0; bands];
+    for band in 0..bands {
+        let members: Vec<usize> = (0..n).filter(|&i| layer[i] == band).collect();
+        let pitch = members
+            .iter()
+            .map(|&i| g.nodes[i].w())
+            .fold(0.0_f64, f64::max)
+            + COL_GAP;
+        band_left[band] = spent;
+        band_pitch[band] = pitch;
+        spent += members.len().div_ceil(MAX_ROWS).max(1) as f64 * pitch;
+    }
+
+    for band in 0..bands {
+        let mut rows: Vec<usize> = (0..n).filter(|&i| layer[i] == band).collect();
         rows.sort_by(|&a, &b| {
             let key = |i: usize| -> f64 {
                 let ys: Vec<f64> = into[i]
@@ -628,15 +722,38 @@ fn place(g: &mut Graph, tools_last: bool) {
                 .then_with(|| g.nodes[a].id.cmp(&g.nodes[b].id))
         });
         let count = rows.len();
-        for (row, &i) in rows.iter().enumerate() {
-            let y = (row as f64 - (count as f64 - 1.0) / 2.0) * ROW_PITCH;
+        let columns = count.div_ceil(MAX_ROWS).max(1);
+        // Split evenly rather than filling the first column to the brim: two columns of nine read
+        // as a block, one of eighteen and one of one reads as a mistake.
+        let per_column = count.div_ceil(columns).max(1);
+        for (at, &i) in rows.iter().enumerate() {
+            // Down a column, then on to the next: nodes that belong together are ordered together,
+            // and that order is vertical.
+            let (column, row) = (at / per_column, at % per_column);
+            let rows_here = per_column.min(count - column * per_column);
+            let y = (row as f64 - (rows_here as f64 - 1.0) / 2.0) * ROW_PITCH;
             placed[i] = y;
             g.nodes[i].y = y;
-            g.nodes[i].x = (col as f64 - (columns as f64 - 1.0) / 2.0) * COL_PITCH;
+            // The centre of its column, which is where a box of any width is hung from.
+            g.nodes[i].x = band_pitch[band].mul_add(column as f64 + 0.5, band_left[band]);
         }
     }
 
-    g.extent = g.nodes.iter().fold(
+    let raw = extent_of(g);
+    // Bring the whole picture onto the world origin, which is where an untouched view is pointed.
+    // The *extent* is what is centred, not the node centres: columns are not all the same width,
+    // and it is the edges of the outermost boxes that decide whether the picture looks centred.
+    let (dx, dy) = (-raw.0.midpoint(raw.2), -raw.1.midpoint(raw.3));
+    for node in &mut g.nodes {
+        node.x += dx;
+        node.y += dy;
+    }
+    g.extent = extent_of(g);
+}
+
+/// The box every node fits inside, `(x0, y0, x1, y1)`.
+fn extent_of(g: &Graph) -> (f64, f64, f64, f64) {
+    g.nodes.iter().fold(
         (f64::MAX, f64::MAX, f64::MIN, f64::MIN),
         |(x0, y0, x1, y1), n| {
             (
@@ -646,7 +763,7 @@ fn place(g: &mut Graph, tools_last: bool) {
                 y1.max(n.y + NODE_H / 2.0),
             )
         },
-    );
+    )
 }
 
 #[cfg(test)]
@@ -742,17 +859,16 @@ mod tests {
         assert!(joined(&g, "agent:one", "chat:two/r2"));
     }
 
-    /// Every column is centred on the origin, so an untouched view opens on the middle of the
-    /// graph rather than on its top-left corner.
+    /// The picture is centred on the origin, so an untouched view opens on the middle of the graph
+    /// rather than on its top-left corner. Its *extent*, not its node centres: the columns are not
+    /// all the same width, and it is the outermost edges that decide what looks centred.
     #[test]
-    fn the_columns_are_centred_on_the_world_origin() {
+    fn the_graph_is_centred_on_the_world_origin() {
         let (agents, all) = chain();
         let g = build(&agents, &all, Options::default());
-        let xs: Vec<f64> = g.nodes.iter().map(|n| n.x).collect();
-        let mid = (xs.iter().copied().fold(f64::MIN, f64::max)
-            + xs.iter().copied().fold(f64::MAX, f64::min))
-            / 2.0;
-        assert!(mid.abs() < 1e-9, "the columns are centred on {mid}");
+        let (x0, y0, x1, y1) = g.extent;
+        assert!(x0.midpoint(x1).abs() < 1e-9, "x is centred on {}", x0.midpoint(x1));
+        assert!(y0.midpoint(y1).abs() < 1e-9, "y is centred on {}", y0.midpoint(y1));
     }
 
     /// With conversations off, the picture is the agents and what they set off in each other — the
@@ -950,9 +1066,11 @@ mod tests {
     }
 
     /// The shape of a real machine, not of a fixture: 80 agents, 50 conversations each, most of
-    /// them started by one busy agent. Measured off this operator's own store on 2026-09-12, and
-    /// here because every number that matters — how many boxes, how wide the picture, how long the
-    /// layout takes — is decided by this case and by no smaller one.
+    /// them unattributed and a fifth started by one busy agent. Measured off this operator's own
+    /// store on 2026-09-12 — 80 agents, 1212 runs, `launched_by` 888 empty / 226 `agent:adi-agent`
+    /// / 89 human — and here because every number that matters is decided by this case and by no
+    /// smaller one. The first version of this page was only ever seen against a store with one
+    /// agent and five chats, and it shipped as a graph that fitted on screen at 6%.
     #[test]
     fn a_machine_with_eighty_agents_and_a_thousand_conversations_stays_a_picture() {
         let agents: Vec<AgentDto> = (0..80).map(|i| agent(&format!("a{i}"))).collect();
@@ -964,16 +1082,14 @@ mod tests {
                         .map(|j| {
                             let mut r = run(
                                 &format!("r{i}-{j}"),
-                                // As the real store reads: most history unattributed, a busy agent
-                                // behind a fifth of it, a person behind a few.
                                 match j % 5 {
                                     0 => "agent:a0",
                                     1 => LAUNCHED_BY_HUMAN,
                                     _ => "",
                                 },
                             );
-                            r.started_at = j as u64;
-                            r.last_activity = j as u64;
+                            r.started_at = (i * 50 + j) as u64;
+                            r.last_activity = r.started_at;
                             r
                         })
                         .collect();
@@ -983,12 +1099,64 @@ mod tests {
         };
         let g = build(&agents, &all, Options::default());
         assert_eq!(g.total_chats, 4000);
-        assert_eq!(g.shown_chats, 80 * CHATS_PER_AGENT);
-        // Boxes, not a wall of them: the cap is what keeps this under a thousand.
-        assert!(g.nodes.len() < 1000, "{} nodes", g.nodes.len());
-        // And it is a graph rather than a heap — every box has a finite place in it.
+        assert_eq!(g.shown_chats, CHATS_DRAWN, "the global cap did not hold");
+        assert!(g.nodes.len() < 200, "{} nodes", g.nodes.len());
         assert!(g.nodes.iter().all(|n| n.x.is_finite() && n.y.is_finite()));
-        assert_eq!(g.summary(), "80 agents · 480 of 4000 conversations");
+        assert_eq!(g.summary(), "80 agents · 80 of 4000 conversations");
+
+        // The shape of it, which is the whole point of the wrap: a picture a screen can hold, not
+        // a line. Anything past about 6:1 either way is a smear on one axis at every zoom.
+        let (x0, y0, x1, y1) = g.extent;
+        let aspect = (x1 - x0) / (y1 - y0);
+        assert!((0.2..6.0).contains(&aspect), "the graph is {aspect:.1}:1");
+        // …and small enough that fitting it leaves the labels legible. 38% on the 1160×690 stage
+        // this operator's display gives the page, against 6% before the caps and the wrap.
+        assert!(
+            super::super::view::Viewport::fit(g.extent, 1160.0, 690.0).scale
+                > super::super::paint::LABEL_SCALE,
+            "fitting it would put the labels out"
+        );
+
+        // And an agent left unconnected would be a box saying nothing: every one of these ran
+        // something, so every one of them is joined to whatever asked for it.
+        let joined: std::collections::HashSet<usize> =
+            g.edges.iter().flat_map(|e| [e.from, e.to]).collect();
+        let loose = g
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| n.kind == Kind::Agent && !joined.contains(i))
+            .count();
+        assert_eq!(loose, 0, "{loose} agents float unattached");
+    }
+
+    /// The caps take boxes away, never edges: a conversation that is not drawn still says that its
+    /// launcher set work off in its agent, which is the one thing this page is about.
+    #[test]
+    fn a_conversation_that_is_not_drawn_still_puts_its_flow_on_the_canvas() {
+        let mut rs: Vec<AgentRunInfo> = (0..CHATS_PER_AGENT + 3)
+            .map(|i| {
+                let mut r = run(&format!("r{i}"), "agent:starter");
+                r.started_at = i as u64;
+                r.last_activity = i as u64;
+                r
+            })
+            .collect();
+        // …and one older conversation from a different launcher, well past the cut.
+        rs.push(run("old", LAUNCHED_BY_HUMAN));
+        let all = AllAgentRuns {
+            total: rs.len(),
+            agents: vec![runs("one", rs)],
+        };
+        let g = build(&[agent("one")], &all, Options::default());
+        assert!(
+            g.nodes.iter().all(|n| n.id != "chat:one/old"),
+            "the oldest conversation was drawn"
+        );
+        assert!(
+            joined(&g, "origin:human", "agent:one"),
+            "a cut conversation took its flow with it"
+        );
     }
 
     /// `AgentsState` is what the page actually holds, so the shape this module is given is the

@@ -30,7 +30,11 @@ const MAJOR: f64 = 5.0;
 
 /// Below this scale a label is a smear rather than a word, so the boxes are drawn without one and
 /// the shape of the graph is what is left. Zooming in is what brings the names back.
-const LABEL_SCALE: f64 = 0.34;
+///
+/// `pub(super)` because it is also the bar a laid-out graph is held to: [`model`](super::model)
+/// asserts that fitting a real machine's graph lands above it, which is the difference between an
+/// overview and a pattern of grey boxes.
+pub(super) const LABEL_SCALE: f64 = 0.34;
 
 /// …and below this one an arrowhead is a dot on every edge, which reads as noise.
 const ARROW_SCALE: f64 = 0.2;

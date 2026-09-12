@@ -34,9 +34,12 @@ extraction script cares about.
 
   Three switches decide what is drawn: **Chats** off collapses the picture onto the agents alone
   (an edge then means "this one set that one going"), **Tools** adds what each agent may run, and
-  **Idle agents** brings in the definitions nothing has ever launched. The newest six conversations
-  per agent are drawn and the bar says how many there are in all — a machine with a thousand of
-  them is a graph you can read rather than a wall of boxes.
+  **Idle agents** brings in the definitions nothing has ever launched.
+
+  A machine with a thousand conversations is still a graph you can read: at most six of each
+  agent's are drawn and at most eighty in all, newest first, and the bar says how many there are
+  altogether. The caps take boxes away and never edges — a conversation that is not drawn still
+  puts its flow on the canvas, so nothing is left floating unattached.
 
   It costs no new endpoint: the picture is the two listings the panel already carries, read as a
   graph instead of as a table. One thing the store cannot tell it, and it does not pretend

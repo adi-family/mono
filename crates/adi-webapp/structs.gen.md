@@ -573,6 +573,7 @@ Nodes and edges under construction, with the index that keeps a node from being 
 struct Builder {
     graph: Graph,
     by_id: HashMap<String, usize>,
+    covered: HashSet<(usize, usize)>,
 }
 ```
 
