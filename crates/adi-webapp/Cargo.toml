@@ -50,6 +50,15 @@ web-sys = { version = "0.3", features = [
     "HtmlTextAreaElement", # scrollHeight/value: the chat composers grow with the message typed
     "CssStyleDeclaration", # …by writing that measured height back as an inline style
     "UrlSearchParams",   # parse the OAuth token returned in the redirect URL fragment
+    # The live graph's canvas (see `pages::live_graph`): the surface, the 2D context it is drawn
+    # through, the wheel that zooms it and the pointer drags that pan it — and a `ResizeObserver`
+    # rather than a window `resize`, because the explorer and the store rail change the pane's
+    # width without the window moving at all.
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "WheelEvent",
+    "PointerEvent",
+    "ResizeObserver",
     # Dictation (see `voice`): open the microphone, record a clip, and hand its bytes to
     # /api/voice/transcribe. `SpeechRecognition` is absent from this list on purpose — web-sys
     # has it only behind `web_sys_unstable_apis`, and `voice` reaches it through Reflect instead.

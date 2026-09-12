@@ -33,6 +33,8 @@ pub(crate) enum Icon {
     Node,
     /// The marketplace.
     Box,
+    /// The live graph — nodes and the links between them, as against `Mesh`'s machines.
+    Graph,
     /// Workspaces.
     Layers,
     File,
@@ -83,6 +85,7 @@ impl Icon {
             Icon::Mesh => Lucide::Network,
             Icon::Node => Lucide::Monitor,
             Icon::Box => Lucide::Store,
+            Icon::Graph => Lucide::Waypoints,
             Icon::Layers => Lucide::Layers,
             Icon::File => Lucide::File,
             Icon::Doc => Lucide::FileText,
@@ -122,6 +125,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,
+        Route::LiveGraph => Icon::Graph,
         Route::Hive => Icon::Server,
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,

@@ -86,6 +86,9 @@ pub(crate) enum Route {
     /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
     /// from the cache and installed as git clones pinned to a commit, inert.
     Marketplace,
+    /// The live graph (`/extended/live-graph`) — a canvas to pan and zoom, with nothing drawn on
+    /// it yet.
+    LiveGraph,
     Hive,
     PortsManager,
     Mesh,
@@ -106,7 +109,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 20] = [
+    pub(crate) const NAV: [Route; 21] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -121,6 +124,7 @@ impl Route {
         Route::Triggers,
         Route::Dashboards,
         Route::Marketplace,
+        Route::LiveGraph,
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
@@ -156,6 +160,7 @@ impl Route {
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
             "/marketplace" => Route::Marketplace,
+            "/live-graph" => Route::LiveGraph,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -187,6 +192,7 @@ impl Route {
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
+            Route::LiveGraph => "/extended/live-graph",
             Route::Hive => "/extended/settings/hive",
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
@@ -217,6 +223,7 @@ impl Route {
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
+            Route::LiveGraph => "Live graph",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports manager",
             Route::Mesh => "Mesh",
@@ -249,6 +256,7 @@ impl Route {
             Route::Triggers => "What runs when something happens",
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
+            Route::LiveGraph => "A canvas to pan and zoom \u{2014} nothing on it yet",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",

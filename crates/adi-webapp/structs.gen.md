@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-65 structs · 10 enums · 3 type aliases across 26 files.
+66 structs · 10 enums · 4 type aliases across 27 files.
 
 ## Index
 
@@ -18,6 +18,7 @@
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
+- [`src/pages/live_graph.rs`](#srcpageslive_graphrs) — `Viewport`, `Resize`
 - [`src/pages/llm.rs`](#srcpagesllmrs) — `LlmConsole`
 - [`src/pages/llm_backends.rs`](#srcpagesllm_backendsrs) — `LoginField`
 - [`src/pages/marketplace.rs`](#srcpagesmarketplacers) — `OpenApp`
@@ -59,6 +60,7 @@ pub(crate) enum Icon {
     Mesh,
     Node,
     Box,
+    Graph,
     Layers,
     File,
     Doc,
@@ -411,6 +413,31 @@ struct Scope {
 
 ---
 
+## `src/pages/live_graph.rs`
+
+### struct `Viewport`
+
+Where the world sits on screen: how far in, and how far the stage has been dragged from the middle.
+
+```rust
+#[derive(Clone, Copy, PartialEq)]
+struct Viewport {
+    scale: f64,
+    pan_x: f64,
+    pan_y: f64,
+}
+```
+
+### type `Resize`
+
+The observer watching the stage for a size change, and the closure it calls — held together because the one must be disconnected before the other is dropped.
+
+```rust
+type Resize = StoredValue<Option<(ResizeObserver, Closure<dyn FnMut()>)>, LocalStorage>;
+```
+
+---
+
 ## `src/pages/llm.rs`
 
 ### struct `LlmConsole`
@@ -702,6 +729,7 @@ pub(crate) enum Route {
     Triggers,
     Dashboards,
     Marketplace,
+    LiveGraph,
     Hive,
     PortsManager,
     Mesh,

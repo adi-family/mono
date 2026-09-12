@@ -52,12 +52,12 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     FactsConsole, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
-    hive_view, knowledge_view, live_view, llm_backends_view, llm_view, load_agent_into_form,
-    load_dir, load_store_file, market_view, marketplace_view, mesh_view, meta_view,
-    onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
-    project_detail_view, projects_view, reset_chat_home, secrets_view, seed_onboarding,
-    shared_assets_view, start_onb_reconfigure, store_file_view, tasks_view, tools_view,
-    triggers_view,
+    hive_view, knowledge_view, live_graph_view, live_view, llm_backends_view, llm_view,
+    load_agent_into_form, load_dir, load_store_file, market_view, marketplace_view, mesh_view,
+    meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
+    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
+    seed_onboarding, shared_assets_view, start_onb_reconfigure, store_file_view, tasks_view,
+    tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -1310,18 +1310,22 @@ fn App() -> impl IntoView {
             </aside>
 
             <main class="adi-main"
-                class:adi-main--flush=move || matches!(route.get(), Route::StoreFile)>
+                class:adi-main--flush=move || {
+                    matches!(route.get(), Route::StoreFile | Route::LiveGraph)
+                }>
                 <div class="adi-container">
                     {move || agent_advice(advice_hidden, route.get())}
 
                     {move || match route.get() {
                         // These pages render their own headings — no generic page title.
-                        // StoreFile is a full-bleed editor: its head carries the file path.
-                        // The agent editor's head names the agent and links back to the list;
-                        // the agents list's carries its counts and its one action.
+                        // StoreFile is a full-bleed editor: its head carries the file path, and
+                        // LiveGraph is the same shape — a bar over a canvas that takes the rest
+                        // of the pane. The agent editor's head names the agent and links back to
+                        // the list; the agents list's carries its counts and its one action.
                         Route::PortsManager
                         | Route::ProjectDetail
                         | Route::StoreFile
+                        | Route::LiveGraph
                         | Route::Agents
                         | Route::AgentDetail => None,
                         other => Some(view! {
@@ -1349,6 +1353,7 @@ fn App() -> impl IntoView {
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
+                        Route::LiveGraph => live_graph_view(),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
@@ -1456,10 +1461,10 @@ fn crumb_nav(path: Vec<(String, Option<String>)>) -> AnyView {
 /// about to do it the long way. Dismissible, and the dismissal sticks (see [`ui::hide_advice`]) —
 /// a recommendation that cannot be turned off is a nag.
 ///
-/// Absent on the full-bleed editor, whose container gives its whole height to one child and has
-/// no room for a line above it.
+/// Absent on the full-bleed pages — the editor and the live graph — whose container gives its
+/// whole height to one child and has no room for a line above it.
 fn agent_advice(hidden: RwSignal<bool>, route: Route) -> Option<AnyView> {
-    if hidden.get() || matches!(route, Route::StoreFile) {
+    if hidden.get() || matches!(route, Route::StoreFile | Route::LiveGraph) {
         return None;
     }
     Some(
@@ -1505,6 +1510,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Triggers,
             Route::Dashboards,
             Route::Marketplace,
+            Route::LiveGraph,
         ],
     ),
     (
