@@ -43,6 +43,31 @@ impl Viewport {
         )
     }
 
+    /// [`fit`](Self::fit), but never taken out past the point where the cards stop saying anything.
+    ///
+    /// A machine with a thousand conversations does not go on a screen whole *and* readable. Fitting
+    /// this operator's takes the scale to 26%, under [`LABEL_SCALE`](super::paint::LABEL_SCALE), and
+    /// every label is dropped: a picture of the shape of the work with none of its words, which is
+    /// not a thing anybody can read an answer off. Measured on that machine, no wrap setting and no
+    /// card cap gets it back — at 40 cards, half of what there is, it is still only 38%.
+    ///
+    /// So the view opens at the readable floor with the left edge of the picture on screen, which is
+    /// where the roots are and where the story starts, and the rest is a drag away. **Fit** still
+    /// does what it says and takes the whole graph, labels or no labels.
+    pub(crate) fn fit_readable(extent: (f64, f64, f64, f64), w: f64, h: f64, floor: f64) -> Self {
+        let fitted = Self::fit(extent, w, h);
+        if !floor.is_finite() || fitted.scale >= floor {
+            return fitted;
+        }
+        let (x0, y0, _, y1) = extent;
+        Self {
+            scale: floor,
+            // The left edge of the picture set just inside the stage, rather than its middle.
+            pan_x: w.mul_add(FIT_MARGIN - 0.5, -(x0 * floor)),
+            pan_y: -y0.midpoint(y1) * floor,
+        }
+    }
+
     /// The inverse: what sits under a point on screen.
     pub(crate) fn world(self, w: f64, h: f64, x: f64, y: f64) -> (f64, f64) {
         (
@@ -157,6 +182,29 @@ mod tests {
         assert!(x0 >= 0.0 && y0 >= 0.0 && x1 <= w && y1 <= h, "{x0},{y0} {x1},{y1}");
         assert!(((x0 + x1) / 2.0 - w / 2.0).abs() < 1e-6);
         assert!(((y0 + y1) / 2.0 - h / 2.0).abs() < 1e-6);
+    }
+
+    /// A graph too big to be read whole opens at the readable floor showing where it starts, rather
+    /// than at a scale that drops every label and leaves a field of blank boxes.
+    #[test]
+    fn a_fit_nobody_asked_for_stops_where_the_labels_would_go() {
+        let (w, h) = (1160.0, 690.0);
+        let floor = 0.34;
+        let big = (-2000.0, -1300.0, 2000.0, 1300.0);
+        assert!(Viewport::fit(big, w, h).scale < floor, "fixture is not big enough to matter");
+
+        let v = Viewport::fit_readable(big, w, h, floor);
+        assert!((v.scale - floor).abs() < 1e-9, "opened at {}", v.scale);
+        // The left edge of the picture sits just inside the stage — the roots are there.
+        let (left, _) = v.screen(w, h, big.0, 0.0);
+        assert!((left - w * FIT_MARGIN).abs() < 1e-6, "left edge lands at {left}");
+        // …and the middle row is still the middle of the stage, so it opens on the picture.
+        let (_, mid) = v.screen(w, h, 0.0, big.1.midpoint(big.3));
+        assert!((mid - h / 2.0).abs() < 1e-6, "vertical middle lands at {mid}");
+
+        // A graph that already fits is not touched at all: this only ever pulls a view back in.
+        let small = (-100.0, -50.0, 100.0, 50.0);
+        assert_eq!(Viewport::fit_readable(small, w, h, floor), Viewport::fit(small, w, h));
     }
 
     /// Fit is not magnification: a small graph is shown at its own size, not blown up to fill a

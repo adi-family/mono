@@ -68,6 +68,12 @@ pub(crate) struct GraphView {
     /// conversation starting, a run ending — must never yank the view out from under somebody who
     /// has panned somewhere, but a graph somebody asked to change should be on screen when it does.
     fitted: RwSignal<bool>,
+    /// Whether the next fit should take the *whole* graph even if that puts the labels out.
+    ///
+    /// Only **Fit** asks for that, and asking for it is the point of the button. A fit nobody asked
+    /// for — the first graph, or one rooted somewhere else — stops at the readable floor instead,
+    /// because a screen of blank boxes answers nothing (see [`Viewport::fit_readable`]).
+    whole: RwSignal<bool>,
 }
 
 impl GraphView {
@@ -77,6 +83,7 @@ impl GraphView {
             hover: RwSignal::new(None),
             focus: RwSignal::new(None),
             fitted: RwSignal::new(false),
+            whole: RwSignal::new(false),
         }
     }
 
@@ -86,6 +93,7 @@ impl GraphView {
         self.focus.set(id);
         self.hover.set(None);
         self.fitted.set(false);
+        self.whole.set(false);
     }
 }
 
@@ -139,7 +147,12 @@ pub(crate) fn live_graph_view(
         let extent = graph.with(|gr| (!gr.is_empty()).then_some(gr.extent));
         let Some(extent) = extent else { return };
         let rect = c.get_bounding_client_rect();
-        gv.view.set(Viewport::fit(extent, rect.width(), rect.height()));
+        let (w, h) = (rect.width(), rect.height());
+        gv.view.set(if gv.whole.get_untracked() {
+            Viewport::fit(extent, w, h)
+        } else {
+            Viewport::fit_readable(extent, w, h, paint::LABEL_SCALE)
+        });
         gv.fitted.set(true);
     });
 
@@ -249,7 +262,7 @@ pub(crate) fn live_graph_view(
                 })}
                 <button class="adi-btn adi-btn--sm" type="button"
                     title="Put the whole graph on screen"
-                    on:click=move |_| gv.fitted.set(false)>"Fit"</button>
+                    on:click=move |_| { gv.whole.set(true); gv.fitted.set(false); }>"Fit"</button>
             </header>
 
             <div class="adi-graph__stage"

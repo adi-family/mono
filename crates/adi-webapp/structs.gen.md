@@ -429,6 +429,7 @@ pub(crate) struct GraphView {
     hover: RwSignal<Option<usize>>,
     focus: RwSignal<Option<String>>,
     fitted: RwSignal<bool>,
+    whole: RwSignal<bool>,
 }
 ```
 
