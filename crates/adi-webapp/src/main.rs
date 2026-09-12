@@ -52,7 +52,8 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
     agents_view,
-    analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
+    analytics_view, chat_home_view, dashboards_view, database_view, embedding_backends_view,
+    facts_view, fleet_view,
     hive_view, knowledge_view, live_graph_view, live_view, llm_backends_view, llm_view,
     load_agent_into_form, load_dir, load_store_file, market_view, marketplace_view, mesh_view,
     meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
@@ -65,10 +66,10 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, FleetForm, Form,
-    HookLogView, KnowledgeConsole, LlmBackendsForm, MarketplaceForm, MeshForm, MetaForm,
-    ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status, TasksForm,
-    TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
+    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, EmbeddingsConsole, FilesState, Flash,
+    FleetForm, Form, HookLogView, KnowledgeConsole, LlmBackendsForm, MarketplaceForm, MeshForm,
+    MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status,
+    TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
     refresh_fleet_dashboards,
 };
 use ui::fmt_uptime;
@@ -993,6 +994,10 @@ fn App() -> impl IntoView {
     // The LLM backends editor. One for the page, not one per row — see `LlmBackendsForm`.
     let llm_backends_form = LlmBackendsForm::new();
 
+    // The Embedding backends page's own console — page-local, like `knowledge` above, since
+    // nothing on it rides the shell's 4s poll.
+    let embeddings_console = EmbeddingsConsole::new();
+
     let managed_only = RwSignal::new(true);
 
     // What the Global Analytics chart's bars measure: false counts runs, true adds up what they
@@ -1365,6 +1370,7 @@ fn App() -> impl IntoView {
                         Route::Mesh => mesh_view(state, mesh_form),
                         Route::Fleet => fleet_view(state, fleet_form),
                         Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
+                        Route::EmbeddingBackends => embedding_backends_view(state, embeddings_console),
                         Route::SharedAssets => shared_assets_view(state),
                     }}
 
@@ -1419,6 +1425,7 @@ fn crumbs(route: Route, project: String) -> AnyView {
         | Route::Mesh
         | Route::Fleet
         | Route::LlmBackends
+        | Route::EmbeddingBackends
         | Route::SharedAssets => {
             path.push(("Settings".to_string(), None));
         }

@@ -60,6 +60,9 @@ pub(crate) enum Icon {
     Traffic,
     /// A model backend — a way to answer a turn, as against `Traffic`'s record of turns answered.
     Model,
+    /// The embedding backend registry — turning text into a vector, as against `Model`'s
+    /// answering a turn.
+    Vector,
     /// Narrow a list to part of itself.
     Filter,
     /// Per-run settings — dials somebody has set, as against `Gear`'s administration.
@@ -100,6 +103,7 @@ impl Icon {
             Icon::Chart => Lucide::ChartColumn,
             Icon::Traffic => Lucide::Activity,
             Icon::Model => Lucide::Brain,
+            Icon::Vector => Lucide::ScanLine,
             Icon::Filter => Lucide::ListFilter,
             Icon::Sliders => Lucide::SlidersHorizontal,
             Icon::Cloud => Lucide::Cloud,
@@ -122,6 +126,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Database => Icon::Database,
         Route::Llm => Icon::Traffic,
         Route::LlmBackends => Icon::Model,
+        Route::EmbeddingBackends => Icon::Vector,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,

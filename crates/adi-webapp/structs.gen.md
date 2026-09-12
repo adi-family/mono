@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-74 structs · 14 enums · 4 type aliases across 30 files.
+75 structs · 14 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -35,7 +35,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -78,6 +78,7 @@ pub(crate) enum Icon {
     Chart,
     Traffic,
     Model,
+    Vector,
     Filter,
     Sliders,
     Cloud,
@@ -929,6 +930,7 @@ pub(crate) enum Route {
     Database,
     Llm,
     LlmBackends,
+    EmbeddingBackends,
     Triggers,
     Dashboards,
     Marketplace,
@@ -1056,6 +1058,7 @@ pub(crate) struct Tables {
     pub(crate) llm_clients: TableState,
     pub(crate) llm_calls: TableState,
     pub(crate) llm_backends: TableState,
+    pub(crate) embedding_backends: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -1622,6 +1625,28 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) probe_on: RwSignal<bool>,
     pub(crate) probe_model: RwSignal<String>,
     pub(crate) probe_prompt: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+}
+```
+
+### struct `EmbeddingsConsole`
+
+Everything the Embeddings page holds that isn't on the server: the registry snapshot and the whole-object editor. Page-local, like `KnowledgeConsole`: nothing on this page is watched over the live channel (`adi-app/src/live.rs`'s own note on `/api/embeddings/backends` says why — no prober, no hold, nothing outside the panel moves it), so it is fetched once when the page opens rather than polled into the shell state every four seconds.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddingsConsole {
+    pub(crate) backends: RwSignal<Option<EmbeddingBackendsDto>>,
+    pub(crate) error: RwSignal<Option<String>>,
+    pub(crate) editing: RwSignal<String>,
+    pub(crate) id: RwSignal<String>,
+    pub(crate) label: RwSignal<String>,
+    pub(crate) runtime: RwSignal<String>,
+    pub(crate) model: RwSignal<String>,
+    pub(crate) dimensions: RwSignal<String>,
+    pub(crate) base_url: RwSignal<String>,
+    pub(crate) api_key_env: RwSignal<String>,
+    pub(crate) fallbacks: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
 }
 ```

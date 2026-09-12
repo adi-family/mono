@@ -1,11 +1,14 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
+use std::collections::BTreeMap;
+
 use adi_webapp_api::types::{
     AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted,
     AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState, AgentSimTurn,
     AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
-    DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
+    DbSchema, DbScope, DbState, DbTablesState, DirListing, EmbeddingBackendRef,
+    EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
     FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
     IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
@@ -17,7 +20,8 @@ use adi_webapp_api::types::{
     NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
-    RunRef, RunSteps, RunTool, SaveAgent, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
+    RunRef, RunSteps, RunTool, SaveAgent, SaveEmbeddingBackend, SaveEmbeddingSettings,
+    SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
     SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
     SetSecret, SetSharedAssets, SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn,
     StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState,
@@ -114,6 +118,30 @@ pub async fn release_llm_hold(id: String) -> Result<LlmBackendsDto, String> {
 
 pub async fn release(body: &LeaseRef) -> Result<ReleaseResponse, String> {
     post("/api/ports/release", body).await
+}
+
+// Embedding backends: the registry `indexer`/`knowledge`/`facts` resolve through. Like LLM
+// backends above, every endpoint answers with the whole fresh registry, so an edit and the view of
+// it are one round trip.
+
+pub async fn embedding_backends() -> Result<EmbeddingBackendsDto, String> {
+    get("/api/embeddings/backends").await
+}
+
+pub async fn save_embedding_backend(
+    body: SaveEmbeddingBackend,
+) -> Result<EmbeddingBackendsDto, String> {
+    post("/api/embeddings/backends/save", &body).await
+}
+
+pub async fn delete_embedding_backend(id: String) -> Result<EmbeddingBackendsDto, String> {
+    post("/api/embeddings/backends/delete", &EmbeddingBackendRef { id }).await
+}
+
+pub async fn save_embedding_settings(
+    assignments: BTreeMap<String, String>,
+) -> Result<EmbeddingBackendsDto, String> {
+    post("/api/embeddings/settings", &SaveEmbeddingSettings { assignments }).await
 }
 
 // Mesh: every endpoint returns the fresh MeshState so the page updates in one round-trip.

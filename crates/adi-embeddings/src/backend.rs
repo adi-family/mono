@@ -64,6 +64,52 @@ impl std::fmt::Display for Runtime {
     }
 }
 
+/// The `candle` runtime's fixed model and width — `jinaai/jina-embeddings-v2-base-code` at 768
+/// dimensions. A literal, not imported from `adi_indexer::embed::{CANDLE_MODEL_ID,
+/// CANDLE_DIMENSIONS}`: it must be nameable in a build without the `candle` feature too, the same
+/// property [`crate::seed`] needs its own copy of this pair for. [`EmbeddingBackends::validate`]
+/// cross-checks a saved manifest against the *real* constants whenever the feature is on, and a
+/// test below cross-checks this literal against them the same way, so the two cannot silently
+/// drift without something noticing.
+pub const CANDLE_FIXED_MODEL: (&str, u32) = ("jinaai/jina-embeddings-v2-base-code", 768);
+
+impl Runtime {
+    /// Whether *this binary* can build this runtime — cheap and local, no network call and no
+    /// model load, unlike [`EmbeddingBackends::resolve`]. Only `candle` can answer `false`: it
+    /// exists only behind this crate's own `candle` cargo feature (see
+    /// [`EmbeddingBackends::build`]); the other three never depend on a feature.
+    ///
+    /// What the operator surface uses to show a backend as unavailable rather than let it look
+    /// like every other row and fail silently the first time something tries to embed with it.
+    #[must_use]
+    pub fn available(self) -> bool {
+        match self {
+            Self::Candle => cfg!(feature = "candle"),
+            Self::Ollama | Self::OpenAi | Self::Hash => true,
+        }
+    }
+
+    /// The model and width this runtime always produces, when that is knowable without a network
+    /// call or a model actually loaded — `Some` for `candle` and `hash`, neither of which ever
+    /// takes either from configuration (see "the principle" in `docs/embedding-backends.md`);
+    /// `None` for `ollama`/`openai`, which take both from the manifest because neither runtime has
+    /// one fixed answer.
+    ///
+    /// What the operator surface uses to leave `candle`/`hash` with no model/dimensions fields to
+    /// fill in at all, rather than ask for values there is only one honest answer to.
+    #[must_use]
+    pub fn fixed_model(self) -> Option<(&'static str, u32)> {
+        match self {
+            Self::Candle => Some(CANDLE_FIXED_MODEL),
+            Self::Hash => Some((
+                crate::runtimes::hash::MODEL_NAME,
+                crate::runtimes::hash::HASH_DIMENSIONS,
+            )),
+            Self::Ollama | Self::OpenAi => None,
+        }
+    }
+}
+
 /// A backend definition, as stored. The id is the filename, so it cannot drift from what the
 /// file is called.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -634,6 +680,39 @@ mod tests {
     fn resolving_an_unknown_id_is_not_found() {
         let store = scratch("resolve-missing");
         assert!(store.resolve("nowhere").is_err());
+    }
+
+    /// `ollama`/`openai`/`hash` never depend on a cargo feature, so they always answer available.
+    /// `candle` mirrors whichever way this crate itself was built — see `build_candle`'s own gate.
+    #[test]
+    fn only_candle_can_ever_be_unavailable() {
+        assert!(Runtime::Ollama.available());
+        assert!(Runtime::OpenAi.available());
+        assert!(Runtime::Hash.available());
+        assert_eq!(Runtime::Candle.available(), cfg!(feature = "candle"));
+    }
+
+    #[test]
+    fn only_ollama_and_openai_take_their_model_from_configuration() {
+        assert_eq!(Runtime::Candle.fixed_model(), Some(CANDLE_FIXED_MODEL));
+        assert_eq!(
+            Runtime::Hash.fixed_model(),
+            Some((crate::runtimes::hash::MODEL_NAME, crate::runtimes::hash::HASH_DIMENSIONS))
+        );
+        assert_eq!(Runtime::Ollama.fixed_model(), None);
+        assert_eq!(Runtime::OpenAi.fixed_model(), None);
+    }
+
+    /// `CANDLE_FIXED_MODEL` is a literal so it is nameable without the `candle` feature, but where
+    /// the feature *is* on, it must say exactly what the real embedder does — this is the test that
+    /// would catch the two drifting apart.
+    #[cfg(feature = "candle")]
+    #[test]
+    fn the_candle_literal_matches_the_real_embedders_constants() {
+        assert_eq!(
+            CANDLE_FIXED_MODEL,
+            (adi_indexer::embed::CANDLE_MODEL_ID, adi_indexer::embed::CANDLE_DIMENSIONS)
+        );
     }
 
     /// A stale fallback — edited out of alignment since the primary named it — is dropped at

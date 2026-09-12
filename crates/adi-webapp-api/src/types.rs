@@ -4602,6 +4602,111 @@ pub struct SaveLlmSettings {
     pub probe_every: u64,
 }
 
+// ------------------------------------------------------------ embedding backends
+
+/// One embedding backend definition on the wire — a complete way to turn text into a vector, under
+/// a name somebody chose. Mirrors `adi_embeddings::EmbeddingBackendManifest`, with the one piece of
+/// live state the page needs: whether this binary can actually build it.
+///
+/// Flat, like [`LlmBackendDto`]: never built on another backend. The only reuse is a fallback list,
+/// and only between backends declaring the same model and width — see `docs/embedding-backends.md`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingBackendDto {
+    /// The name it is known by, which is its filename in `embeddings/backends/`.
+    pub id: String,
+    /// What to call it in the interface. Blank means show the id.
+    #[serde(default)]
+    pub label: String,
+    /// `candle` · `ollama` · `openai` · `hash`.
+    pub runtime: String,
+    /// Every stored vector is recorded against this name — two backends naming different models
+    /// are never interchangeable, whatever their width.
+    pub model: String,
+    pub dimensions: u32,
+    /// The `ollama` host or `openai` endpoint base. Unused by `candle` and `hash`.
+    #[serde(default)]
+    pub base_url: String,
+    /// The environment variable an `openai` backend's key is read from — a name, never the key
+    /// itself. This surface never displays or accepts a raw key value.
+    #[serde(default)]
+    pub api_key_env: String,
+    /// Other backend ids tried in order if this one fails — only ever backends declaring the same
+    /// model and width, refused otherwise by the registry itself.
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    /// Whether this binary can actually build this runtime — false only for `candle` in a build
+    /// without the `candle` cargo feature. Computed, not stored: the manifest on disk says nothing
+    /// about which binary is reading it.
+    #[serde(default)]
+    pub available: bool,
+    /// Which consumers (`indexer`, `knowledge`, `facts`) are currently assigned to this backend.
+    #[serde(default)]
+    pub used_by: Vec<String>,
+}
+
+/// `GET /api/embeddings/backends` — the registry, plus the assignment each consumer resolves
+/// through.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EmbeddingBackendsDto {
+    pub backends: Vec<EmbeddingBackendDto>,
+    /// One row per known consumer, in a fixed order — not a `BTreeMap`, so the page can show
+    /// `indexer`/`knowledge`/`facts` in the order an operator thinks of them rather than
+    /// alphabetically.
+    pub assignments: Vec<ConsumerAssignmentDto>,
+}
+
+/// One consumer's assignment, as the page shows it — what `adi_embeddings::resolve` would answer
+/// right now, without actually building the embedder to find out (a `candle` build is a model
+/// load; this page must not pay that cost just to be looked at).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsumerAssignmentDto {
+    pub consumer: String,
+    /// The backend id this consumer is assigned to, or blank when unassigned.
+    #[serde(default)]
+    pub backend: String,
+    /// Whether `backend` names a backend that is both here and available in this binary. False
+    /// for an unassigned consumer, a backend that has since been deleted, or a `candle` backend in
+    /// a build without the `candle` feature — the three ways this consumer would fail to resolve.
+    #[serde(default)]
+    pub resolvable: bool,
+}
+
+/// `POST /api/embeddings/backends/save` — create or update one backend, keyed by `id`. Every field
+/// is stated, the same whole-object convention [`SaveLlmBackend`] uses: a backend is a handful of
+/// fields on one page, not a manifest edited from several places.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SaveEmbeddingBackend {
+    pub id: String,
+    #[serde(default)]
+    pub label: String,
+    pub runtime: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub dimensions: u32,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub api_key_env: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+/// One backend named by id — `POST /api/embeddings/backends/delete`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbeddingBackendRef {
+    pub id: String,
+}
+
+/// `POST /api/embeddings/settings` — the consumer → backend assignments, all stated at once: a
+/// short, fixed set of consumers rather than a growing collection worth patching one row at a time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveEmbeddingSettings {
+    pub assignments: BTreeMap<String, String>,
+}
+
 // ------------------------------------------------------------- llm gateway
 
 /// Which slice of the gateway journal to read — `POST /api/llm/summary` and `/api/llm/calls`.

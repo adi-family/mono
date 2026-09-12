@@ -41,6 +41,11 @@ pub use adi_agents::launcher;
 /// rather than item by item: it is one coherent area (a backend, a chain, a hold, a probe) and a
 /// caller that needs any of it needs the vocabulary around it.
 pub use adi_agents::llm;
+/// The embedding backend registry — a named, configurable set of ways to turn text into a vector,
+/// parallel to [`llm`] but narrower (no holds, no prober: see `docs/embedding-backends.md`).
+/// Re-exported whole under a clean name for the same reason `llm` is: a caller reaching for one
+/// part of it (`EmbeddingBackends`, `Runtime`, a `CONSUMER_*` name) needs the vocabulary around it.
+pub use adi_embeddings as embeddings;
 /// Bringing stored agent definitions up to the shape this build writes. Re-exported whole for the
 /// same reason as [`llm`]: a caller that runs one step needs the plan, the result and the version
 /// constants around it.

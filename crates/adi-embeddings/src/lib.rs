@@ -42,7 +42,9 @@ use std::sync::Arc;
 use adi_config::Config;
 use adi_indexer::embed::Embedder;
 
-pub use backend::{EmbeddingBackend, EmbeddingBackendManifest, EmbeddingBackends, Runtime};
+pub use backend::{
+    CANDLE_FIXED_MODEL, EmbeddingBackend, EmbeddingBackendManifest, EmbeddingBackends, Runtime,
+};
 pub use error::{Error, Result};
 pub use runtimes::hash::HashEmbedder;
 pub use runtimes::ollama::OllamaEmbedder;
@@ -78,6 +80,20 @@ pub fn resolve(config: &Config, consumer: &str) -> Result<Arc<dyn Embedder>> {
         .get(consumer)
         .ok_or_else(|| Error::Unassigned(consumer.to_string()))?;
     backends.resolve(id)
+}
+
+/// Materialize the backends and assignments that reproduce today's hardcoded behaviour, if this
+/// store has never been seeded — the explicit form of what [`resolve`] otherwise does lazily on its
+/// first call. For an operator (`adi-mono embeddings seed`) who wants a fresh store's effective
+/// defaults to show up before anything has actually embedded through it, without [`resolve`]'s
+/// cost of going on to *build* one — a `candle` build is a model load, and this must stay cheap
+/// enough to run from a page load.
+///
+/// # Errors
+/// Whatever [`EmbeddingBackends::save`] or [`EmbeddingSettings::save`]/[`EmbeddingSettings::load`]
+/// return — a store that cannot be written to is the one failure this cannot paper over.
+pub fn ensure_seeded(config: &Config) -> Result<EmbeddingSettings> {
+    seed::seed_if_needed(&EmbeddingBackends::with_config(config.clone()))
 }
 
 #[cfg(test)]
@@ -126,5 +142,17 @@ mod tests {
         let config = scratch("unassigned");
         let err = resolve(&config, "no-such-consumer").expect_err("refused");
         assert!(err.to_string().contains("no-such-consumer"), "{err}");
+    }
+
+    /// The explicit seed materializes the same defaults `resolve` would lazily produce, without
+    /// building anything — so it never touches candle's model download, unlike the test above.
+    #[test]
+    fn seeding_explicitly_does_the_same_thing_resolve_would_do_lazily() {
+        let config = scratch("explicit-seed");
+        let settings = ensure_seeded(&config).expect("seed");
+        for consumer in [CONSUMER_INDEXER, CONSUMER_KNOWLEDGE, CONSUMER_FACTS] {
+            assert!(settings.assignments.contains_key(consumer));
+        }
+        assert!(!EmbeddingBackends::with_config(config).list().expect("list").is_empty());
     }
 }

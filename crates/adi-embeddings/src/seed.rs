@@ -45,17 +45,18 @@ pub(crate) fn seed_if_needed(backends: &EmbeddingBackends) -> Result<EmbeddingSe
         return EmbeddingSettings::load(&module);
     }
 
-    // A literal, not `adi_indexer::embed::CANDLE_MODEL_ID`/`CANDLE_DIMENSIONS`: seeding must
-    // write the same manifest whether or not this binary was built with the `candle` feature, so
-    // the backend is there — reported unavailable, not missing — the day the feature is turned
-    // back on. See `docs/embedding-backends.md`'s "Seeding".
+    // `CANDLE_FIXED_MODEL`, not `adi_indexer::embed::CANDLE_MODEL_ID`/`CANDLE_DIMENSIONS`: seeding
+    // must write the same manifest whether or not this binary was built with the `candle`
+    // feature, so the backend is there — reported unavailable, not missing — the day the feature
+    // is turned back on. See `docs/embedding-backends.md`'s "Seeding".
+    let (candle_model, candle_dimensions) = crate::backend::CANDLE_FIXED_MODEL;
     backends.save(
         CANDLE_ID,
         EmbeddingBackendManifest {
             label: "Local code embeddings (candle)".into(),
             runtime: Runtime::Candle,
-            model: "jinaai/jina-embeddings-v2-base-code".into(),
-            dimensions: 768,
+            model: candle_model.to_string(),
+            dimensions: candle_dimensions,
             ..Default::default()
         },
     )?;

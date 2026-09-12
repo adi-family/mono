@@ -19,6 +19,13 @@ adi-db = { workspace = true }
 # embedding stack into every binary that links adi-core — including adi-app, which never embeds
 # anything. `adi-mono` turns the feature back on for itself (see adi-cli's Cargo.toml).
 adi-knowledge = { path = "../adi-knowledge", default-features = false }
+
+# The embedding backend registry — indexer/knowledge/facts's shared assignment, not another store
+# of its own. `default-features = false` for the same reason adi-knowledge above is: this facade
+# only needs the registry types, and `adi-mono` (adi-cli's own direct dependency) is what turns the
+# `candle` feature back on for the one binary that needs it to build that runtime.
+adi-embeddings = { path = "../adi-embeddings", default-features = false }
+
 adi-events = { workspace = true }
 adi-tasks = { workspace = true }
 adi-tools = { workspace = true }

@@ -22,6 +22,8 @@ macro_rules! require {
 mod agents;
 mod dashboards;
 mod db;
+/// The registry of embedding backends the indexer, knowledge and facts stores resolve through.
+mod embedding_backends;
 mod files;
 mod fleet;
 mod fs;
@@ -54,6 +56,7 @@ mod workspaces;
 pub use agents::*;
 pub use dashboards::*;
 pub use db::*;
+pub use embedding_backends::*;
 pub use files::*;
 pub use fleet::*;
 pub use fs::*;

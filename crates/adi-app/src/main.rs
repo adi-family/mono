@@ -564,6 +564,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/db",
     "/api/fleet",
     "/api/fleet/nodes",
+    "/api/embeddings/backends",
     "/api/hive",
     "/api/knowledge",
     "/api/llm/backends",
@@ -811,6 +812,23 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/llm/backends/delete") => handlers::delete_llm_backend(agents, &req.body),
         ("POST", "/api/llm/holds/release") => handlers::release_llm_hold(agents, &req.body),
         ("POST", "/api/llm/settings") => handlers::save_llm_settings(agents, &req.body),
+
+        // The embedding backend registry: which runtime the indexer/knowledge/facts stores turn
+        // text into a vector with. Keyed off the agent store's config for the same reason the LLM
+        // registry above is — there is no store of its own to open, only a shared config root.
+        // Listed in `SHARED_GETS` (concurrent pollers share one read), but deliberately absent from
+        // `live.rs`'s `watchable`: unlike the LLM registry, nothing outside the panel moves this —
+        // no prober, no hold. See that file's own note on this route.
+        ("GET", "/api/embeddings/backends") => handlers::embedding_backends(agents),
+        ("POST", "/api/embeddings/backends/save") => {
+            handlers::save_embedding_backend(agents, &req.body)
+        }
+        ("POST", "/api/embeddings/backends/delete") => {
+            handlers::delete_embedding_backend(agents, &req.body)
+        }
+        ("POST", "/api/embeddings/settings") => {
+            handlers::save_embedding_settings(agents, &req.body)
+        }
 
         ("GET", "/api/secrets") => handlers::secrets(secrets),
         ("POST", "/api/secrets/set") => handlers::set_secret(secrets, &req.body),

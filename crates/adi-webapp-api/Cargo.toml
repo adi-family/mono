@@ -30,6 +30,10 @@ server = [
     # The knowledge base. Native-only (it compiles SQLite in and, with its default features, the
     # embedding model), which is exactly why it sits behind this feature and never reaches wasm.
     "dep:adi-knowledge",
+    # The embedding backend registry — indexer/knowledge/facts's shared config, not another store.
+    # Native-only for the same reason adi-knowledge is: its default `candle` feature carries the
+    # model stack.
+    "dep:adi-embeddings",
     "dep:adi-triggers",
     # The auto-update engine, for the version pill's `/api/update` surface: what is installed,
     # what is published, and the marker that says an install is in flight. Native-only (it swaps
@@ -79,6 +83,7 @@ adi-tasks = { workspace = true, optional = true }
 adi-tools = { workspace = true, optional = true }
 adi-agents = { workspace = true, optional = true }
 adi-knowledge = { workspace = true, optional = true }
+adi-embeddings = { workspace = true, optional = true }
 adi-events = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }

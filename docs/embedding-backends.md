@@ -3,11 +3,54 @@
 One trait, many ways to make a vector. Read this before touching `crates/adi-embeddings` or
 any of the three crates that embed text today (`adi-indexer`, `adi-knowledge`, `adi-facts`).
 
-Status: **phase A built 2026-09-12, phase B built 2026-09-13.** Phase A is the spec, the registry
-crate, and the four runtimes (`docs/embedding-backends-survey.md` is the research this reconciles
-to). Phase B is the two things it deferred: the three consumers actually resolving through the
-registry, and the two staleness holes the survey flagged (Surprises #1 and #2) that made a
-consumer resolving *differently* from one process to the next dangerous.
+Status: **phase A built 2026-09-12, phase B built 2026-09-13, phase C built 2026-09-13 — the
+feature is complete.** Phase A is the spec, the registry crate, and the four runtimes
+(`docs/embedding-backends-survey.md` is the research this reconciles to). Phase B is the two
+things it deferred: the three consumers actually resolving through the registry, and the two
+staleness holes the survey flagged (Surprises #1 and #2) that made a consumer resolving
+*differently* from one process to the next dangerous. Phase C is the operator surface: a CLI, an
+API, and a panel page — mirroring the LLM backend registry's surface, deliberately narrower.
+
+**What phase C changed:**
+
+- `adi-embeddings` gained two small, purely computed additions the surface needed and the crate is
+  the honest place to answer from: `Runtime::available()` (cheap and local — whether *this binary*
+  can build a runtime, `false` only for `candle` without the feature) and `Runtime::fixed_model()`
+  (the model+width `candle`/`hash` always produce, `None` for `ollama`/`openai`, which take both
+  from the manifest). `CANDLE_FIXED_MODEL` is now a named constant instead of a literal duplicated
+  in `seed.rs`, and a feature-gated test pins it against the real embedder's constants so the two
+  cannot silently drift apart. A new `ensure_seeded(&Config)` exposes the seeding step on its own —
+  the "one-time migration command that seeds a store explicitly" this doc used to list as
+  deferred — without paying `resolve`'s cost of going on to *build* an embedder afterwards.
+- **CLI**: `adi-mono embeddings backends|show|save|delete|settings|seed`, reached through
+  `adi_core::embeddings` (a whole-module re-export beside `adi_core::llm`) rather than importing
+  `adi-embeddings` directly, mirroring `llm.rs`. `settings` doubles as the "what does each consumer
+  currently resolve to" answer an operator actually asks for, and `--assign consumer=backend`
+  changes one row while leaving the others untouched. No `Holds`/`Release`/`Probe`/`Migrate` —
+  nothing here is rate-limited the way a chat subscription is.
+- **API**: `GET /api/embeddings/backends` (listed in `SHARED_GETS`, so concurrent pollers share one
+  read), `POST /api/embeddings/backends/save|delete`, `POST /api/embeddings/settings`. All four
+  live in `adi-webapp-api` and run on the blocking pool like every other handler there — never an
+  async worker, per `adi-app/src/main.rs`'s own note on why `/api/knowledge/search` is the same
+  way. Delete is refused while a consumer is still assigned to a backend (409); a settings save is
+  refused if it names a backend that is not here (400) — the same "catch it at save time" instinct
+  `EmbeddingBackends::save` already applies to a fallback list.
+- **Not in the live channel** (`adi-app/src/live.rs`'s `watchable`): the LLM backend registry is
+  watched because the prober and other machines' runs move it without anyone touching the panel;
+  nothing here has an equivalent mover, so the page fetches once on open — the same pattern
+  `/api/knowledge` already uses, and for the same reason.
+- **Panel**: a page at `/settings/embedding-backends`, modelled on the LLM backends page and much
+  smaller — no warnings view, no rules view, no probe view. Page-local state
+  (`EmbeddingsConsole`), like the Knowledge page's console, since nothing here rides the shell's 4s
+  poll. Shows every backend with a live "available in this binary" status, a whole-object editor
+  whose fields depend on the runtime (`candle`/`hash` ask for nothing but the runtime itself;
+  `ollama` asks for a host, model and width; `openai` adds a base URL and the API key's environment
+  variable name — never the key), and a per-consumer assignment panel showing what `indexer`,
+  `knowledge` and `facts` each resolve to right now and whether that assignment would actually
+  work.
+- **Left undone, deliberately**: the panel's wasm build was verified with `cargo check --target
+  wasm32-unknown-unknown` and native `cargo check`/`clippy`/tests only — nobody loaded it in a
+  browser this pass, so "it renders correctly" is not a claim this note makes.
 
 **What phase B changed:**
 
@@ -40,10 +83,8 @@ consumer resolving *differently* from one process to the next dangerous.
 - `adi-embeddings`'s own tests remain on the `hash` runtime throughout — no test here loads a
   real candle model or talks to a live ollama.
 
-**Not yet built (phase C):** a CLI (`adi-mono embed backends|show|save|delete`), an API
-(`/api/embeddings/backends`), a panel tab, and a one-time migration command that seeds a store
-explicitly. See "Out of scope for this phase" at the bottom — everything phase A deferred to
-phase B is now built; what remains is the operator surface.
+**Everything phase A and B deferred is now built.** See "What phase C changed," above, and "Out of
+scope for this phase" at the bottom for what stays declined outright.
 
 ## The problem
 
@@ -309,7 +350,7 @@ The operator's calls, and the ones made here to fill in what they left to the im
     manifest that claimed otherwise would be lying about what a stored vector actually is, the
     exact failure mode "the principle" exists to close off.
 
-## Out of scope for this phase
+## Out of scope
 
 **Everything the survey's §4 recommended not copying from the LLM design, for the same reasons it
 gave:** holds and a prober (nothing here is rate-limited the way a chat subscription is — `hash`
@@ -317,14 +358,24 @@ and `candle` are local and free, and `ollama`/`openai` failing over on the same 
 handled by the chain itself, not by a background sweep) · `classify`/`failover`'s
 quota/rate/auth/transient taxonomy (an embedding call either works or it doesn't; there is no
 "ask the human" step to gate) · `ask_on_switch` (there is no live conversation to protect from a
-switch happening under it).
+switch happening under it). Phase C's surface followed this all the way through: no
+`Holds`/`Release`/`Probe`/`Migrate` verb, no hold column, no probe view.
 
-**Deferred to phase C, deliberately, not declined:** a CLI
-(`adi-mono embed backends|show|save|delete`) · an API (`/api/embeddings/backends`) · a panel tab
-· a one-time migration command that seeds a store explicitly rather than waiting for the first
-`resolve` call to do it lazily. (`adi-indexer`, `adi-knowledge` and `adi-facts` resolving their
-embedder through this registry — phase B's share of this list — is built; see the status line at
-the top.)
+**Built in phase C, smaller than the LLM surface it mirrors, on purpose:**
+
+- No rename-with-repoint. `LlmBackends::save` accepts a `rename_from` because an LLM backend can
+  be listed by many agents' rows, each a separate file a rename would otherwise strand. An embedding
+  backend has at most three possible namers — the fixed `indexer`/`knowledge`/`facts` rows in one
+  `embeddings/settings.toml` — so a rename is delete-the-old, save-the-new, then repoint the (at
+  most three) assignments by hand through `embeddings settings --assign`. Adding rename support
+  would be solving a fan-out problem that does not exist here.
+- No dedicated seed API endpoint. `ensure_seeded` is CLI-only (`adi-mono embeddings seed`),
+  mirroring `llm migrate`'s own CLI-only status — a one-time operational action, not a page an
+  operator watches.
+- The panel's assignment editor never calls `resolve`; it shows what the assignments file says and
+  whether the named backend is here and available (`Runtime::available`), never whether it would
+  actually answer a text — that would mean building it, which for `candle` is a model load neither
+  a page load nor a row edit should pay for.
 
 **Declined outright:** cross-model failover (the entire point of the narrower rule above) ·
 inheritance between backends (declined for the same reason the LLM design declined it —

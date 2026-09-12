@@ -79,6 +79,10 @@ pub(crate) enum Route {
     /// record of which are spent (`/settings/llm-backends`). Set up here once, ordered per
     /// agent on the agent form.
     LlmBackends,
+    /// The embedding backend registry — the ways `indexer`/`knowledge`/`facts` turn text into a
+    /// vector, and which backend each currently resolves through
+    /// (`/settings/embedding-backends`).
+    EmbeddingBackends,
     /// Trigger definitions (`/triggers`).
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
@@ -109,7 +113,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 21] = [
+    pub(crate) const NAV: [Route; 22] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -130,6 +134,7 @@ impl Route {
         Route::Mesh,
         Route::Fleet,
         Route::LlmBackends,
+        Route::EmbeddingBackends,
         Route::SharedAssets,
     ];
 
@@ -166,6 +171,7 @@ impl Route {
             "/settings/mesh" => Route::Mesh,
             "/settings/fleet" => Route::Fleet,
             "/settings/llm-backends" => Route::LlmBackends,
+            "/settings/embedding-backends" => Route::EmbeddingBackends,
             "/settings/shared-assets" => Route::SharedAssets,
             _ => Route::Projects,
         }
@@ -198,6 +204,7 @@ impl Route {
             Route::Mesh => "/extended/settings/mesh",
             Route::Fleet => "/extended/settings/fleet",
             Route::LlmBackends => "/extended/settings/llm-backends",
+            Route::EmbeddingBackends => "/extended/settings/embedding-backends",
             Route::SharedAssets => "/extended/settings/shared-assets",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
@@ -229,6 +236,7 @@ impl Route {
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
             Route::LlmBackends => "LLM backends",
+            Route::EmbeddingBackends => "Embedding backends",
             Route::SharedAssets => "Shared assets",
             Route::StoreFile => "File",
         }
@@ -262,6 +270,7 @@ impl Route {
             Route::Mesh => "Peers, allowed ports and forwards",
             Route::Fleet => "Paired devices and what they may reach",
             Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
+            Route::EmbeddingBackends => "How indexer, knowledge and facts turn text into a vector",
             Route::SharedAssets => "Serve the webapp bundle from a shared CDN cache",
             Route::StoreFile => "One file from the ADI store",
         }

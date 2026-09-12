@@ -5,6 +5,7 @@ mod agents;
 mod analytics;
 pub(crate) mod dashboards;
 mod db;
+mod embedding_backends;
 mod facts;
 pub(crate) mod fleet;
 mod hive;
@@ -37,6 +38,7 @@ pub(crate) mod columns {
     pub(crate) use super::analytics::{AGENT_COLS as ANALYTICS_AGENT_COLS, BUSIEST_FIRST};
     pub(crate) use super::dashboards::COLS as DASHBOARD_COLS;
     pub(crate) use super::db::{SCOPE_COLS as DB_SCOPE_COLS, TABLE_COLS as DB_TABLE_COLS};
+    pub(crate) use super::embedding_backends::COLS as EMBEDDING_BACKEND_COLS;
     pub(crate) use super::fleet::COLS as FLEET_COLS;
     pub(crate) use super::hive::COLS as HIVE_COLS;
     pub(crate) use super::knowledge::{
@@ -73,6 +75,7 @@ pub(crate) use agents::{
 pub(crate) use analytics::analytics_view;
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
+pub(crate) use embedding_backends::embedding_backends_view;
 pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
@@ -112,6 +115,7 @@ mod tests {
         ("dashboards", c::DASHBOARD_COLS),
         ("db-scopes", c::DB_SCOPE_COLS),
         ("db-tables", c::DB_TABLE_COLS),
+        ("embedding-backends", c::EMBEDDING_BACKEND_COLS),
         ("fleet", c::FLEET_COLS),
         ("hive", c::HIVE_COLS),
         ("knowledge-bases", c::KNOWLEDGE_BASE_COLS),

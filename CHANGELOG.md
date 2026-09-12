@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **An operator can now see and change which embedding backend the code index, knowledge base and
+  fact base each use, instead of only ever reading whatever an environment variable happened to
+  say at startup.** New `adi-mono embeddings` command group (`backends`, `show`, `save`, `delete`,
+  `settings`, `seed`), a matching `/api/embeddings/backends`/`/api/embeddings/settings` API, and a
+  panel page at *Settings → Embedding backends* — modelled on the LLM backend registry, and
+  deliberately smaller: no holds, no prober, nothing to migrate. Each backend states its runtime
+  (`candle`, `ollama`, an OpenAI-compatible endpoint, or the deterministic `hash` stub), the model
+  and width it produces, and any same-model fallback; a `candle` backend a build lacks the feature
+  for is shown unavailable rather than silently broken. An API key is always named by the
+  environment variable it is read from — this surface never displays or accepts a raw key.
+
 ### Fixed
 
 - **Knowledge search could rank a note as current when its vectors were made by a different
@@ -37,8 +50,7 @@ extraction script cares about.
 - **The knowledge base, fact base, and code indexer now share one place to configure which
   embedding model each uses**, instead of each reading its own hardcoded default or environment
   variable. Existing installs keep exactly the model they already had — this only changes where
-  the choice comes from, not what it resolves to, until an operator edits it (the tool to do that
-  is still to come).
+  the choice comes from, not what it resolves to, until an operator edits it.
 
 - **The live graph hung work on a conversation that had not started it.** One card could wear
   dozens of children it never had — on a real machine, forty-five of them — and the fan of edges

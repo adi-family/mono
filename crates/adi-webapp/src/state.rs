@@ -8,8 +8,9 @@ use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
     AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
     AgentStep, AgentTokens, AgentsState, AllAgentRuns, DashboardsState, DbExecResult,
-    DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes,
-    FleetState, Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
+    DbQueryResult, DbState, DbTablesState, DirListing, EmbeddingBackendDto, EmbeddingBackendsDto,
+    FileEntry, FleetDashboards, FleetNodes, FleetState, Health, HiveState, KnowledgeBaseDto,
+    KnowledgeNoteDto, KnowledgeNotes,
     KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
     MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState, ToolsState,
@@ -268,6 +269,9 @@ pub(crate) struct Tables {
     pub(crate) llm_calls: TableState,
     /// The LLM backends registry — the ways to answer a turn, not the traffic through them.
     pub(crate) llm_backends: TableState,
+    /// The embedding backends registry — the ways `indexer`/`knowledge`/`facts` turn text into a
+    /// vector.
+    pub(crate) embedding_backends: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -330,6 +334,7 @@ impl Tables {
             llm_clients: TableState::sorted("llm-clients", c::LLM_CLIENT_COLS, c::MOST_CALLS_FIRST),
             llm_calls: TableState::sorted("llm-calls", c::LLM_CALL_COLS, c::LATEST_FIRST),
             llm_backends: TableState::new("llm-backends", c::LLM_BACKEND_COLS),
+            embedding_backends: TableState::new("embedding-backends", c::EMBEDDING_BACKEND_COLS),
             tasks: TableState::new("tasks", c::TASK_COLS),
             tasks_done: TableState::new("tasks-done", c::TASK_COLS),
             tools: TableState::new("tools", c::TOOL_COLS),
@@ -1783,6 +1788,90 @@ impl LlmBackendsForm {
                 .map(|p| p.prompt.clone())
                 .unwrap_or_default(),
         );
+    }
+}
+
+/// Everything the Embeddings page holds that isn't on the server: the registry snapshot and the
+/// whole-object editor. Page-local, like [`KnowledgeConsole`]: nothing on this page is watched over
+/// the live channel (`adi-app/src/live.rs`'s own note on `/api/embeddings/backends` says why — no
+/// prober, no hold, nothing outside the panel moves it), so it is fetched once when the page opens
+/// rather than polled into the shell state every four seconds.
+///
+/// `Copy`, like [`LlmBackendsForm`] beside it, and for the same reason: it threads into the page
+/// view and its handlers as cheaply as the rest of this module.
+#[derive(Clone, Copy)]
+pub(crate) struct EmbeddingsConsole {
+    /// The registry, plus each consumer's assignment — or `None` before the first load.
+    pub(crate) backends: RwSignal<Option<EmbeddingBackendsDto>>,
+    /// Why the last load failed, kept beside the page rather than in the shared flash: a load
+    /// failure is about this page and nothing else, the same reasoning [`KnowledgeConsole::error`]
+    /// follows.
+    pub(crate) error: RwSignal<Option<String>>,
+    /// The id of the backend being edited, or empty when the form is writing a new one.
+    pub(crate) editing: RwSignal<String>,
+    pub(crate) id: RwSignal<String>,
+    pub(crate) label: RwSignal<String>,
+    pub(crate) runtime: RwSignal<String>,
+    /// Ignored on save for `candle`/`hash`, which take neither this nor [`dimensions`](Self::dimensions)
+    /// from configuration — see `adi_embeddings::Runtime::fixed_model`.
+    pub(crate) model: RwSignal<String>,
+    /// As typed, so an empty field is a real state ("not entered yet") rather than a false `0`.
+    pub(crate) dimensions: RwSignal<String>,
+    pub(crate) base_url: RwSignal<String>,
+    pub(crate) api_key_env: RwSignal<String>,
+    /// Other backend ids to fail over to, comma-separated as typed — only ever accepted between
+    /// backends declaring the same model and width; the registry refuses anything else.
+    pub(crate) fallbacks: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl EmbeddingsConsole {
+    pub(crate) fn new() -> Self {
+        Self {
+            backends: RwSignal::new(None),
+            error: RwSignal::new(None),
+            editing: RwSignal::new(String::new()),
+            id: RwSignal::new(String::new()),
+            label: RwSignal::new(String::new()),
+            runtime: RwSignal::new(String::new()),
+            model: RwSignal::new(String::new()),
+            dimensions: RwSignal::new(String::new()),
+            base_url: RwSignal::new(String::new()),
+            api_key_env: RwSignal::new(String::new()),
+            fallbacks: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// Empty the form back to "writing a new backend".
+    pub(crate) fn clear(self) {
+        self.editing.set(String::new());
+        self.id.set(String::new());
+        self.label.set(String::new());
+        self.runtime.set(String::new());
+        self.model.set(String::new());
+        self.dimensions.set(String::new());
+        self.base_url.set(String::new());
+        self.api_key_env.set(String::new());
+        self.fallbacks.set(String::new());
+    }
+
+    /// Load one backend into the editor. The computed halves of the DTO — whether it is available,
+    /// which consumers use it — are deliberately not read: they are facts about the backend, not
+    /// fields of it, and a save has nothing to say about either.
+    pub(crate) fn edit(self, backend: &EmbeddingBackendDto) {
+        self.editing.set(backend.id.clone());
+        self.id.set(backend.id.clone());
+        self.label.set(backend.label.clone());
+        self.runtime.set(backend.runtime.clone());
+        self.model.set(backend.model.clone());
+        self.dimensions.set(match backend.dimensions {
+            0 => String::new(),
+            n => n.to_string(),
+        });
+        self.base_url.set(backend.base_url.clone());
+        self.api_key_env.set(backend.api_key_env.clone());
+        self.fallbacks.set(backend.fallbacks.join(", "));
     }
 }
 

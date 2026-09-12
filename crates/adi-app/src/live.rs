@@ -99,6 +99,13 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             // another machine's run records one — which is the whole reason that page watches it
             // rather than reading it once.
             | "/api/llm/backends"
+            // `/api/embeddings/backends` is deliberately NOT here. It differs from the LLM
+            // registry just above in the one way that matters: nothing outside the panel moves
+            // it. There is no prober, no hold, and no other machine's run to record one — an
+            // embedding backend either builds or it does not, per call, with no background sweep
+            // watching it. So this page fetches once on open, the way `/api/knowledge` does, and
+            // every mutation already answers with the fresh registry in the same round trip.
+            //
             // The apps listing, watched by the marketplace door so an install made in another
             // tab — or by an agent — appears without a reload.
             | "/api/marketplace"

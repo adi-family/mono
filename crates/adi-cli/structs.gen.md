@@ -4,13 +4,14 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 24 enums across 19 files.
+5 structs · 25 enums across 20 files.
 
 ## Index
 
 - [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `AwaitsCommand`, `RunRow`
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
+- [`src/embeddings.rs`](#srcembeddingsrs) — `EmbeddingsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
 - [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `LlmCommand`, `TxCommand`
 - [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
@@ -349,6 +350,57 @@ pub(crate) enum DnsCommand {
     GrantDns,
     GrantNetwork,
     RemoveRoute,
+}
+```
+
+---
+
+## `src/embeddings.rs`
+
+### enum `EmbeddingsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum EmbeddingsCommand {
+    Backends {
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Save {
+        id: String,
+        #[arg(long)]
+        runtime: String,
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        dimensions: Option<u32>,
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
+        #[arg(long = "api-key-env")]
+        api_key_env: Option<String>,
+        #[arg(long = "fallback")]
+        fallbacks: Vec<String>,
+    },
+    Delete {
+        id: String,
+    },
+    Settings {
+        #[arg(long = "assign", value_name = "CONSUMER=BACKEND")]
+        assign: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Seed {
+        #[arg(long)]
+        json: bool,
+    },
 }
 ```
 
@@ -916,6 +968,10 @@ enum Command {
     Llm {
         #[command(subcommand)]
         command: LlmCommand,
+    },
+    Embeddings {
+        #[command(subcommand)]
+        command: EmbeddingsCommand,
     },
     Goals {
         #[command(subcommand)]

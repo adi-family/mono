@@ -5,6 +5,7 @@
 mod agents;
 mod db;
 mod dns;
+mod embeddings;
 mod events;
 mod facts;
 mod format;
@@ -29,6 +30,7 @@ use clap::{Parser, Subcommand};
 use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
+use crate::embeddings::{EmbeddingsCommand, run_embeddings};
 use crate::events::{EventsCommand, run_events};
 use crate::facts::{FactsCommand, run_facts};
 use crate::format::{print_bun, print_json, print_report, print_service};
@@ -139,6 +141,13 @@ enum Command {
     Llm {
         #[command(subcommand)]
         command: LlmCommand,
+    },
+    /// Embedding backend commands: the registry of ways to turn text into a vector, and which of
+    /// `indexer`/`knowledge`/`facts` resolves through each. Narrower than `llm` on purpose — no
+    /// holds, no prober — since nothing here is rate-limited the way a chat subscription is.
+    Embeddings {
+        #[command(subcommand)]
+        command: EmbeddingsCommand,
     },
     /// Goal commands: what a conversation is for, and the two ways it ends.
     Goals {
@@ -358,6 +367,12 @@ fn main() {
         }
         Command::Llm { command } => {
             if let Err(e) = run_llm(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Embeddings { command } => {
+            if let Err(e) = run_embeddings(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -615,6 +630,19 @@ mod tests {
         // `--watch` sweeps the whole store, so naming one backend as well is a contradiction.
         assert!(Cli::try_parse_from(["adi-mono", "llm", "probe", "x", "--watch"]).is_err());
         assert!(Cli::try_parse_from(["adi-mono", "llm"]).is_err());
+    }
+
+    #[test]
+    fn the_embeddings_group_is_reachable_from_the_top_level() {
+        let cli = Cli::try_parse_from(["adi-mono", "embeddings", "backends", "--json"])
+            .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Embeddings {
+                command: EmbeddingsCommand::Backends { json: true }
+            }
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "embeddings"]).is_err());
     }
 
     #[test]
