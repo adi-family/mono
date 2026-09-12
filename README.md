@@ -104,4 +104,7 @@ installs the update (`docs/adi-update.md`).
 
 Business Source License 1.1 — see [LICENSE](LICENSE). Free for personal,
 educational, research, and small-business use; larger commercial use needs a
-separate license from the Licensor (https://the-ihor.com).
+separate license from the Licensor (https://the-ihor.com). Reselling,
+distributing, or embedding it in something you sell, or running it as a
+service for other companies, also needs a separate license — and a license
+covers one company only.
