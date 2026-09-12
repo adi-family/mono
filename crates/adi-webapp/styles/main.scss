@@ -255,11 +255,12 @@
     font-variant-numeric: tabular-nums;
   }
 
-  // The way into the marketplace, between the viewers strip and the Apps rail. Its own band
-  // rather than a row inside the rail: the rail lists what is installed on this machine, and
-  // this is the door to what is not. Same metrics as the strip above it, so the two read as one
-  // stack of facts about the column rather than as a control dropped between them.
-  &__market {
+  // A door out of this column, between the viewers strip and the Apps rail: the marketplace, and
+  // the live graph. Each its own band rather than a row inside the rail, because the rail lists
+  // what is installed on this machine and these lead away from it. Same metrics as the strip
+  // above them, so the whole head reads as one stack of bands rather than as controls dropped
+  // between them — and they stack, each carrying the hairline under itself.
+  &__door {
     flex: none;
     display: flex;
     align-items: center;
@@ -274,7 +275,7 @@
     // sits one step back from the name.
     svg { flex: none; color: var(--ink-2); }
   }
-  &__market-name {
+  &__door-name {
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
@@ -282,7 +283,7 @@
     font-size: var(--fs-ui-sm);
   }
   // What is on the other side of the link, in the label style the rest of this column's meta uses.
-  &__market-note {
+  &__door-note {
     margin-left: auto;
     font-size: var(--fs-label);
     color: var(--ink-3);
