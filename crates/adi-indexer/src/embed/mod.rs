@@ -15,7 +15,7 @@ pub use config::EmbeddingConfig;
 pub use error::{EmbedError, Result};
 
 #[cfg(feature = "candle")]
-pub use candle::CandleEmbedder;
+pub use candle::{CandleEmbedder, DIMENSIONS as CANDLE_DIMENSIONS, MODEL_ID as CANDLE_MODEL_ID};
 
 /// A source of text embeddings.
 pub trait Embedder: std::fmt::Debug + Send + Sync {

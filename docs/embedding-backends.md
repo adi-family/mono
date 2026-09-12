@@ -1,0 +1,299 @@
+# Embedding backends — spec
+
+One trait, many ways to make a vector. Read this before touching `crates/adi-embeddings` or
+any of the three crates that embed text today (`adi-indexer`, `adi-knowledge`, `adi-facts`).
+
+Status: **phase A built 2026-09-12** — the spec, the registry crate, and the four runtimes
+(`docs/embedding-backends-survey.md` is the research this reconciles to). **Phase B is not
+built**: `adi-indexer`, `adi-knowledge` and `adi-facts` do not yet resolve their embedder
+through this registry, and there is no CLI, API or panel surface for it. Until phase B lands,
+the `candle` cargo feature and the `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED` environment variables
+remain the *live* configuration for those three crates exactly as they are today — the registry
+seeds itself correctly in the meantime, but nothing consumes what it seeds yet. See "Out of
+scope for this phase" at the bottom.
+
+## The problem
+
+Every embedder in this tree is built a different way, and none of the four ways can be changed
+without a rebuild:
+
+- `adi-indexer` hardcodes jina-embeddings-v2-base-code as Rust `const`s, gated by the `candle`
+  cargo feature.
+- `adi-knowledge` borrows that embedder when `candle` is on, and falls back to a word-overlap
+  stub when it is off — also a compile-time choice.
+- `adi-facts` embeds with a *different* model, nomic-embed-text, over a local ollama, moved only
+  by the `ADI_FACTS_OLLAMA` / `ADI_FACTS_EMBED` environment variables read once at process start.
+- `EmbeddingConfig` (`crates/adi-indexer/src/embed/config.rs`) already has the shape of a
+  config-driven multi-provider setting — `provider`, `model`, `dimensions`, `batch_size`,
+  `api_key`, `api_base` — and is never read by anything that builds an embedder. It is a design
+  nobody wired up, not a design nobody wanted.
+
+The consequence: there is no CLI or API surface today that lets an operator choose or configure
+any of this, no way to point a knowledge base at a hosted model without a rebuild, and no place
+that can answer "what embedders does this binary have, and which one is each store using" in one
+list.
+
+## The principle
+
+**A consumer names an assignment. An assignment names a backend. A backend is one complete way
+to turn text into a vector** — a runtime, a model, and the dials it runs with, under a name a
+human chose.
+
+This is the LLM backend design (`docs/llm-backends.md`), carried over for the same reason it was
+built there: a login-plus-configuration is one flat thing, not a preset layered on a record. It
+stops at that one borrowed idea, though — an embedding backend has no chat to fail over *within*,
+so most of the LLM design's other half (holds, a prober, ask-on-switch, full-transcript replay)
+has nothing to attach to here. See "Why this is narrower than the LLM design" below.
+
+**Two backends are interchangeable only when they would write the same vector space.** Every
+stored vector already records the model that made it, in every store in this tree
+(`adi-knowledge`'s `embedding.model`, `adi-facts`'s vector rows, the indexer's file cache) — this
+design does not get to relax that invariant, it has to keep it honest through a layer that did
+not exist before. A registry that let two different models stand in for each other silently
+would be strictly worse than the hardcoded status quo, which at least never mixes them within one
+store.
+
+## One object, one list
+
+```
+CONSUMER    indexer · knowledge · facts                        which store is asking?
+   │
+ASSIGNMENT  knowledge -> "candle"       settings.toml, one row per consumer, the only
+            facts     -> "ollama"       place a consumer's choice of backend is recorded
+            indexer   -> "candle"
+   │
+BACKEND     runtime · model · dimensions · dials · fallbacks   one flat object
+              candle = in-process    · jina-embeddings-v2-base-code · 768
+              ollama = local http    · nomic-embed-text             · 768 · fallback: (none)
+```
+
+**There is no fourth layer.** A consumer's assignment names exactly one backend; the backend's
+own `fallbacks` list is the only failover, and it is validated, not free-form (see below).
+
+## The backend
+
+One file per backend under `embeddings/backends/<id>.toml` in the mono store
+(`adi_config::Module`), mirroring `llm/backends/<id>.toml` exactly: **the id is the filename,
+and there is no `id` field to drift from it.**
+
+```toml
+# embeddings/backends/ollama.toml
+label = "Local ollama — nomic-embed-text"
+
+runtime     = "ollama"                 # candle | ollama | openai | hash
+model       = "nomic-embed-text"
+dimensions  = 768
+
+base_url    = "http://127.0.0.1:11434"
+# api_key_env = "OPENAI_API_KEY"       # openai only — the env var the key is read from
+
+fallbacks = ["ollama-hosted"]          # ids of other backends, tried in order if this one fails
+```
+
+- **`runtime`**, not `provider`. The survey found "provider" already meaning three different
+  things in this codebase before this design added a fourth: `adi-knowledge`'s `Provider` trait
+  is a *storage* backend, `EmbeddingConfig.provider` is dead code naming an embedding backend,
+  and an LLM backend's `provider` is the wire name of a hosted chat API. `runtime` names the
+  concern precisely — which of the four ways in this crate builds the `Embedder` — without
+  colliding with any of them.
+- **`model`** and **`dimensions`** are both required and both plain fields, not inferred: they
+  are what the same-model failover check compares, and inferring them from the runtime would mean
+  trusting a network call or a loaded model just to validate a save.
+- **`base_url`** — the ollama host, or the OpenAI-compatible endpoint's base. Unused by `candle`
+  and `hash`.
+- **`api_key_env`** — the environment variable the key is read from, for `openai`. Mirrors
+  `LlmBackendManifest::api_key_env` exactly: a name, not a secret, read at call time. No new
+  dependency on `adi-secrets` for this — the platform's own precedent for a hosted API key is
+  already "an env var name on the backend," not a secret-store integration, and matching it keeps
+  one convention across LLM and embedding backends rather than two.
+- **`fallbacks`** — an ordered list of other backend ids, tried in turn if this one's runtime
+  fails to build or fails to answer. Lives on the backend, not on a consumer's assignment,
+  because a fallback is a property of "how reliable is this way of embedding," which every
+  consumer that names this backend should inherit alike.
+
+## The four runtimes
+
+| runtime  | what it is | model | notes |
+|----------|-----------|-------|-------|
+| `candle` | in-process, `adi_indexer::embed::CandleEmbedder` | jina-embeddings-v2-base-code (fixed) | only exists in a binary built with the `candle` cargo feature; **listed as unavailable, not fatal, when it is not** |
+| `ollama` | local HTTP, one request per text | whatever `model` says | preserves `adi-facts`'s one-request-per-text behaviour deliberately — see below |
+| `openai` | any OpenAI-compatible `/v1/embeddings` endpoint | whatever `model` says | one batched request per call, `Authorization: Bearer` from `api_key_env` |
+| `hash`   | deterministic word-overlap, no model, no network | `hash-bow-256` (fixed) | the existing stub, nameable so tests and `--no-default-features` builds can ask for it explicitly instead of falling into it by default |
+
+**A backend this binary cannot build is listed, not hidden and not fatal.** A build with the
+`candle` feature off still lists a `candle` backend if one is on disk; asking the registry to
+resolve it returns `EmbedError::Unavailable` with a message naming the missing feature, the same
+shape `adi_indexer::embed::NoEmbedder` already answers with. This is the one behaviour the survey
+flagged as non-negotiable (§7): the cargo feature is a compile-time fork, and a registry that
+pretended every listed provider always works would lie to exactly the build that turned one off
+on purpose.
+
+**`ollama` keeps `adi-facts`'s one-request-per-text calibration.** `OllamaEmbedder::embed` still
+sends `texts.iter().map(embed_one).collect()` rather than batching through `/api/embed` — the
+recall thresholds in `adi-facts`'s own docs were measured through the single-request endpoint,
+and batching differently would be a second, unmeasured configuration wearing the same model name.
+
+**`openai` batches.** There is no prior calibration to preserve here — this runtime does not
+exist in the tree today — so it takes the more efficient shape: one `/v1/embeddings` call with
+every text in `input`, ordered by the response's own `index` rather than trusted to arrive in
+request order.
+
+## The assignment
+
+`embeddings/settings.toml` holds one thing: which backend each consumer uses.
+
+```toml
+[assignments]
+indexer   = "candle"
+knowledge = "candle"
+facts     = "ollama"
+```
+
+A consumer names itself with a short fixed string (`indexer`, `knowledge`, `facts` today); an
+unassigned consumer is a resolution error, never a silent default to whatever backend happens to
+exist. There is no `default_backend` and no inheritance between assignments — each consumer's
+row is independent, exactly as the LLM design has no `default_backend` because the default is
+just the first row of a list. Here there is no list to be first in; there is exactly one
+assignment per consumer, and changing it is the whole of "point this store at a different model."
+
+## Resolution
+
+```
+resolve(consumer):
+    seed_if_never_seeded()                         # see Seeding, below
+    id := settings.assignments[consumer]           # error if the consumer has no row
+    backend := store.get(id)                       # error if the id names nothing
+    chain := [backend] + backend.fallbacks
+               .filter(|f| f.model == backend.model && f.dimensions == backend.dimensions)
+    return FailoverEmbedder(chain.map(build))       # build() may itself fail per-runtime;
+                                                     # a failed member is skipped, not fatal,
+                                                     # unless every member fails
+```
+
+The chain is filtered by model and dimensions **again** at resolve time, not only at save time —
+a fallback that matched when it was named may have been edited since, and a stale mismatch must
+be dropped rather than trusted. Dropping it silently is correct here in a way it would not be for
+the primary: the primary backend is what the consumer explicitly asked for, and its own mismatch
+would be a config error worth surfacing, but a *fallback* going stale is exactly the kind of
+drift the validation exists to make survivable — the assignment still resolves, just without the
+now-untrustworthy fallback behind it.
+
+The returned `Embedder` tries each surviving chain member in order on every `embed()` call and
+returns the first success — so a runtime failure (an unreachable ollama, a network blip against a
+hosted endpoint) fails over per call, not only at start-up. A chain of one (the common case, no
+fallback configured) costs nothing extra: it is the primary, tried once.
+
+## The same-model failover rule, and why it is narrower than the LLM's
+
+The LLM design fails over between backends naming **different** models and even different
+vendors — Anthropic to GLM — because a chat conversation survives that: `docs/llm-backends.md`'s
+whole "handoff" section exists to replay the transcript into whatever answers next. An embedding
+has no equivalent replay. A vector already written under one model does not become a vector from
+another model by asking nicely; it is simply wrong from that moment on, silently, for every
+future comparison against it. Surprise #3 in the survey is exactly this failure mode already
+latent in the tree — two different 768-dimensional models sitting one string-equality check away
+from being treated as the same space.
+
+So embedding failover is deliberately the one case where **cross-backend rerouting is refused,
+not merely discouraged**: `EmbeddingBackends::save` and `resolve` both reject a fallback whose
+`model` or `dimensions` differ from the backend that names it. The case this narrow rule serves
+is real and worth building for — a local `ollama` running `nomic-embed-text` falling over to a
+hosted copy of the exact same model when the local server is down — and it is the *only* case a
+fallback list is for. Everything else is explicit assignment: wanting a different model for a
+consumer means editing that consumer's row in `settings.toml`, not adding it as a fallback.
+
+## Seeding
+
+**Upgrading must change no behaviour.** On the first call to `resolve` against a store that has
+never been seeded (`embeddings/settings.toml` does not yet exist — its presence is the one-shot
+marker, exactly as a migration's version stamp is, not "the store currently has zero backends"),
+the registry materializes the backends and assignments that reproduce today's hardcoded behaviour
+exactly:
+
+- a `candle` backend named `candle`, `model = "jinaai/jina-embeddings-v2-base-code"`,
+  `dimensions = 768` — matching `adi_indexer::embed::candle`'s `MODEL_ID`/`DIMENSIONS` constants,
+  which this file duplicates rather than imports (see "Known issues" below for why coupling to
+  them any tighter is not worth it yet);
+- an `ollama` backend named `ollama`, `model` and `base_url` read from `ADI_FACTS_EMBED` and
+  `ADI_FACTS_OLLAMA` **at seed time**, falling back to `nomic-embed-text` and
+  `http://127.0.0.1:11434` exactly as `adi_facts::embed::OllamaEmbedder::new()` does today;
+- assignments pointing `indexer` and `knowledge` at `candle`, and `facts` at `ollama` — the exact
+  pairing every consumer already has hardcoded.
+
+Seeding runs once. A machine whose `ADI_FACTS_OLLAMA` changes after that first resolve does not
+move the `ollama` backend's `base_url` — exactly the LLM design's own migration is a one-time
+lift out of ambient configuration, not an ongoing mirror of it. An operator who wants the backend
+to point somewhere else edits the backend, the same way they would edit any other.
+
+## Known issues
+
+**The candle attention-mask bug is out of scope for this phase**, and the code is deliberately
+untouched. `JinaBertModel::forward` (`crates/adi-indexer/src/embed/candle.rs:258-266`) is never
+handed the attention mask, so softmax runs over padded positions and a text's vector depends on
+what else shared its batch — up to six points of cosine drift on a ranking scale whose useful
+range is a few tenths, pinned by an `#[ignore]`d test that is never run in CI
+(`candle.rs:474-513`). A registry sitting on top of this runtime inherits the bug unchanged: a
+`candle` backend's vectors are not reproducible across re-indexes with different batch
+composition today, registry or not. Fixing it changes every vector already stored and needs its
+own re-embed and its own measurement — tracked separately, not folded into this work.
+
+## Decisions taken 2026-09-12
+
+The operator's calls, and the ones made here to fill in what they left to the implementation:
+
+1. **A new `adi-embeddings` crate**, sitting where the survey's §6 recommended a registry crate —
+   depending on `adi-indexer` (the `Embedder` trait, `EmbedError`, and, feature-gated,
+   `CandleEmbedder`) and `adi-config` (the `Module` store pattern), depended on by `adi-knowledge`
+   and `adi-facts` today and by `adi-cli`, `adi-webapp-api` and `adi-app` once phase B wires them
+   in. Not inside `adi-agents`: that crate sits *above* `adi-knowledge` in the dependency graph
+   (`adi-agents` depends on `adi-knowledge`, not the reverse), so a registry living there could
+   never be reached by the two crates that most need it without a cycle.
+2. **`embeddings/backends/<id>.toml` plus `embeddings/settings.toml`**, mirroring `llm/`
+   exactly, id-as-filename included.
+3. **The field is `runtime`, not `provider`** — see "The backend," above.
+4. **Failover only between a backend and a fallback declaring the same model and dimensions**,
+   refused at both save time and resolve time. See "The same-model failover rule," above.
+5. **Staleness is keyed on the model name, never on width.** Two 768-dimensional models are not
+   the same model (survey Surprise #3); nothing in this design compares vectors, or lets a
+   fallback stand in for a primary, on width alone.
+6. **A backend this binary cannot build is listed as unavailable, not fatal.** A `--no-default-
+   features` build (or one with `adi-embeddings`'s own `candle` feature off) still lists a
+   `candle` backend on disk and reports why resolving it fails, rather than hiding the entry or
+   erroring the whole store.
+7. **`HashEmbedder` moves down from `adi-knowledge` and `OllamaEmbedder`'s HTTP core moves down
+   from `adi-facts`**, with re-exports kept at both old paths. A registry that cannot list every
+   runtime in one place is not a registry (survey §6) — but `adi-facts`'s public
+   `OllamaEmbedder::new()`/`::at()` and `adi-knowledge`'s public `HashEmbedder` keep working
+   unchanged for every existing caller and test.
+8. **The candle attention-mask bug is out of scope.** See "Known issues," above.
+9. **`api_key_env`, not a secrets-store lookup**, for the `openai` runtime's key. Matches
+   `LlmBackendManifest::api_key_env` exactly, and avoids a new dependency edge from
+   `adi-embeddings` onto `adi-secrets` for a pattern the platform already has a convention for.
+10. **`hash` and `candle` backends must declare the exact model and width their runtime actually
+    produces**, checked at save time wherever this crate can know the answer without a network
+    call (always for `hash`; only in a build with the `candle` feature for `candle`, since the
+    constant lives behind that feature). Neither runtime takes its model from configuration — a
+    manifest that claimed otherwise would be lying about what a stored vector actually is, the
+    exact failure mode "the principle" exists to close off.
+
+## Out of scope for this phase
+
+**Everything the survey's §4 recommended not copying from the LLM design, for the same reasons it
+gave:** holds and a prober (nothing here is rate-limited the way a chat subscription is — `hash`
+and `candle` are local and free, and `ollama`/`openai` failing over on the same request is already
+handled by the chain itself, not by a background sweep) · `classify`/`failover`'s
+quota/rate/auth/transient taxonomy (an embedding call either works or it doesn't; there is no
+"ask the human" step to gate) · `ask_on_switch` (there is no live conversation to protect from a
+switch happening under it).
+
+**Deferred to phase B, deliberately, not declined:** `adi-indexer`, `adi-knowledge` and
+`adi-facts` resolving their embedder through this registry instead of their own hardcoded
+construction · a CLI (`adi-mono embed backends|show|save|delete`) · an API
+(`/api/embeddings/backends`) · a panel tab · a one-time migration command that seeds a store
+explicitly rather than waiting for the first `resolve` call to do it lazily.
+
+**Declined outright:** cross-model failover (the entire point of the narrower rule above) ·
+inheritance between backends (declined for the same reason the LLM design declined it —
+configuration, not programming) · a `batch_size` dial resurrected from the dead `EmbeddingConfig`
+(nothing in any of the four runtimes reads one yet; adding the field back without a reader would
+repeat survey Surprise #5, not fix it).

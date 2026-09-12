@@ -160,6 +160,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-embeddings"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-indexer",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "adi-events"
 version = "0.1.0"
 dependencies = [
@@ -173,6 +189,7 @@ name = "adi-facts"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-embeddings",
  "adi-indexer",
  "adi-knowledge",
  "reqwest",
@@ -274,6 +291,7 @@ name = "adi-knowledge"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-embeddings",
  "adi-indexer",
  "hex",
  "rusqlite",

@@ -28,6 +28,12 @@ adi-knowledge = { path = "../adi-knowledge", default-features = false }
 # test inject `HashEmbedder` without a network.
 adi-indexer = { path = "../adi-indexer", default-features = false }
 
+# The HTTP core of `OllamaEmbedder` lives here now — env-agnostic, so `embed.rs` wraps it and
+# keeps reading `ADI_FACTS_OLLAMA`/`ADI_FACTS_EMBED` itself. See `docs/embedding-backends.md`.
+# `default-features = false` for the same reason `adi-indexer` above is one: this crate never
+# needs the `candle` runtime, only `ollama`.
+adi-embeddings = { path = "../adi-embeddings", default-features = false }
+
 # Where bases live: the `facts` module of the mono store.
 adi-config = { workspace = true }
 

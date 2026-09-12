@@ -58,10 +58,7 @@ An embedder backed by a local ollama.
 
 ```rust
 #[derive(Debug, Clone)]
-pub struct OllamaEmbedder {
-    ollama: Ollama,
-    model: String,
-}
+pub struct OllamaEmbedder(adi_embeddings::OllamaEmbedder);
 ```
 
 ---

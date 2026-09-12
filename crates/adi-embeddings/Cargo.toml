@@ -1,0 +1,50 @@
+[package]
+name = "adi-embeddings"
+description = "The embedding backend registry: named, configurable embedding backends (candle, ollama, an OpenAI-compatible endpoint, or the hash stub), resolved per consumer. Pure library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# The in-process runtime: jina-embeddings-v2-base-code on candle, borrowed whole from the
+# indexer. On by default, so a store built normally can actually resolve a `candle` backend
+# rather than merely list one as unavailable. See `docs/embedding-backends.md`.
+candle = ["adi-indexer/candle"]
+default = ["candle"]
+
+[dependencies]
+# Where backends live: the `embeddings` module of the mono store.
+adi-config = { workspace = true }
+
+# The `Embedder` trait, `EmbedError`, and — with the `candle` feature — `CandleEmbedder`.
+# `default-features = false` for the same reason `adi-knowledge` takes it that way: this crate
+# wants the trait and the one embedder, never the eleven tree-sitter grammars the indexer's own
+# defaults carry.
+#
+# A path dependency rather than `workspace = true`: cargo refuses `default-features = false` on
+# an inherited dependency.
+adi-indexer = { path = "../adi-indexer", default-features = false }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# The `ollama` and `openai` runtimes talk plain HTTP. Blocking, and no tokio: every embedder in
+# this tree runs synchronously on a blocking pool, never inside the async runtime — see
+# `docs/embedding-backends-survey.md` §2 and §7.
+reqwest = { workspace = true, features = ["blocking"] }
+# reqwest is taken workspace-wide with `rustls-no-provider`, so a client cannot be built until
+# somebody installs a crypto provider process-wide. See `runtimes::install_tls_provider`.
+rustls = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

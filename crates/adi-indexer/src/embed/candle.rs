@@ -15,8 +15,10 @@ use candle_transformers::models::jina_bert::Config;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
 
-const MODEL_ID: &str = "jinaai/jina-embeddings-v2-base-code";
-const DIMENSIONS: u32 = 768;
+/// Exposed so `adi-embeddings` can validate a `candle` backend's declared model against the one
+/// this runtime actually produces, without loading it — see `docs/embedding-backends.md`.
+pub const MODEL_ID: &str = "jinaai/jina-embeddings-v2-base-code";
+pub const DIMENSIONS: u32 = 768;
 
 /// Tokens per symbol, past which the text is truncated.
 ///

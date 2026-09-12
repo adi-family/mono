@@ -4,7 +4,7 @@
 
 > The knowledge base: scoped collections of text notes, embedded for meaning-ranked search. Pure library — `adi-mono knowledge` is its CLI.
 
-29 structs · 3 enums · 1 type alias across 10 files.
+28 structs · 3 enums · 1 type alias across 10 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/backend/mod.rs`](#srcbackendmodrs) — `Query`, `ChunkHit`, `BaseContext`, `Providers`
 - [`src/backend/sqlite.rs`](#srcbackendsqliters) — `SqliteProvider`, `SqliteBackend`
 - [`src/base.rs`](#srcbasers) — `BaseManifest`, `Base`, `BaseStatus`, `BaseRegistry`
-- [`src/embed.rs`](#srcembedrs) — `EmbedderSlot`, `HashEmbedder`
+- [`src/embed.rs`](#srcembedrs) — `EmbedderSlot`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/lib.rs`](#srclibrs) — `Saved`, `ReembedReport`, `EmbedFailure`, `KnowledgeStore`
 - [`src/note.rs`](#srcnoters) — `Knowledge`, `EmbeddingState`, `NewKnowledge`, `KnowledgePatch`, `Filter`, `Hit`
@@ -210,15 +210,6 @@ pub struct EmbedderSlot {
     build: Arc<dyn Fn() -> Result<Arc<dyn Embedder>> + Send + Sync>,
     lazy: Arc<OnceLock<std::result::Result<Arc<dyn Embedder>, String>>>,
 }
-```
-
-### struct `HashEmbedder`
-
-A deterministic bag-of-words embedder: no model, no download, no network.
-
-```rust
-#[derive(Debug, Clone, Copy, Default)]
-pub struct HashEmbedder;
 ```
 
 ---

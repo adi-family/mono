@@ -20,6 +20,7 @@ default-members = [
     "crates/adi-dashboards",
     "crates/adi-db",
     "crates/adi-dns",
+    "crates/adi-embeddings",
     "crates/adi-events",
     "crates/adi-facts",
     "crates/adi-fs",
@@ -72,6 +73,7 @@ adi-marketplace = { path = "crates/adi-marketplace" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
 adi-db = { path = "crates/adi-db" }
+adi-embeddings = { path = "crates/adi-embeddings" }
 adi-events = { path = "crates/adi-events" }
 adi-facts = { path = "crates/adi-facts" }
 adi-fs = { path = "crates/adi-fs" }

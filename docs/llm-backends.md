@@ -2,9 +2,11 @@
 
 One agent, many backends. Read this before touching `crates/adi-agents` or the agent form.
 
-Status: **requirements confirmed 2026-09-09, not implemented.** Nothing in this document is
-built. The operator restated the requirements after the first draft; this document has been
-reconciled to that statement, and the differences are recorded under "Decisions taken".
+Status: **built.** The operator restated the requirements after the first draft; this document
+was reconciled to that statement, and the differences are recorded under "Decisions taken" — that
+part of the history stands. What was reconciled is now shipped: `crates/adi-agents/src/llm/`, the
+`adi-mono llm` CLI, the `/api/llm/*` handlers and the panel's LLM backends tab all exist and are
+exercised by passing tests.
 
 ## The problem
 

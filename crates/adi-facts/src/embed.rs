@@ -27,11 +27,19 @@
 //! happen is a *vector* from one model being compared with a vector from another; that is
 //! guarded by storing the model's name beside every cached vector and treating a row from any
 //! other model as absent.
+//!
+//! # Where the HTTP core actually lives now
+//!
+//! [`OllamaEmbedder`] here is a thin wrapper around `adi_embeddings::OllamaEmbedder`, which moved
+//! down into the embedding backend registry — a registry that lists every embedding provider must
+//! be able to list this one too (`docs/embedding-backends.md`). That inner type is deliberately
+//! **env-agnostic**: it takes a host and a model as plain arguments. Reading `ADI_FACTS_OLLAMA`
+//! and `ADI_FACTS_EMBED` stays here, so `OllamaEmbedder::new()`/`::at()` keep working exactly as
+//! every existing caller and test expects.
 
 use adi_indexer::embed::{EmbedError, Embedder};
-use serde_json::json;
 
-use crate::ollama::{Ollama, env_or};
+use crate::ollama::env_or;
 
 /// The model every threshold in this design was measured against.
 pub const DEFAULT_MODEL: &str = "nomic-embed-text";
@@ -48,10 +56,7 @@ const DIMENSIONS: u32 = 768;
 
 /// An embedder backed by a local ollama.
 #[derive(Debug, Clone)]
-pub struct OllamaEmbedder {
-    ollama: Ollama,
-    model: String,
-}
+pub struct OllamaEmbedder(adi_embeddings::OllamaEmbedder);
 
 impl Default for OllamaEmbedder {
     fn default() -> Self {
@@ -63,75 +68,30 @@ impl OllamaEmbedder {
     /// The embedder described by `ADI_FACTS_OLLAMA` and `ADI_FACTS_EMBED`, else the defaults.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            ollama: Ollama::new(),
-            model: env_or(MODEL_VAR, DEFAULT_MODEL),
-        }
+        let host = crate::ollama::Ollama::new().host().to_string();
+        Self::at(host, env_or(MODEL_VAR, DEFAULT_MODEL))
     }
 
     /// Point it at a specific host and model.
     #[must_use]
     pub fn at(host: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            ollama: Ollama::at(host),
-            model: model.into(),
-        }
-    }
-
-    fn embed_one(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
-        let answer = self
-            .ollama
-            .post("embeddings", &json!({"model": self.model, "prompt": text}))
-            .map_err(|e| EmbedError::Embedding(format!("embedding with {}: {e}", self.model)))?;
-        let raw = answer["embedding"].as_array().ok_or_else(|| {
-            EmbedError::Embedding(format!(
-                "{}: no `embedding` array in the answer — is `{}` pulled? (`ollama pull {}`)",
-                self.ollama.host(),
-                self.model,
-                self.model
-            ))
-        })?;
-        let vector: Vec<f32> = raw
-            .iter()
-            .filter_map(serde_json::Value::as_f64)
-            .map(|v| v as f32)
-            .collect();
-        if vector.len() != raw.len() || vector.is_empty() {
-            return Err(EmbedError::Embedding(format!(
-                "{}: the embedding was not a vector of numbers",
-                self.model
-            )));
-        }
-        // Normalized here rather than at every comparison, exactly as the prototype does, so a
-        // cosine is a dot product and the cached blob is directly comparable to any other.
-        let norm = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm <= 0.0 {
-            return Err(EmbedError::Embedding(format!(
-                "{}: the embedding was all zeros",
-                self.model
-            )));
-        }
-        Ok(vector.into_iter().map(|x| x / norm).collect())
+        Self(adi_embeddings::OllamaEmbedder::new(host, model, DIMENSIONS))
     }
 }
 
 impl Embedder for OllamaEmbedder {
-    /// One request per text.
-    ///
-    /// `/api/embeddings` takes a single `prompt`, which is what the prototype calls and what the
-    /// measurements were taken through. Newer ollama also serves `/api/embed` with an `input`
-    /// array; switching would mean the requests are batched differently from the ones the numbers
-    /// came from, for a saving that is round trips to localhost.
+    /// One request per text — see `adi_embeddings::runtimes::ollama`, which carries this
+    /// crate's own calibration note in full.
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
-        texts.iter().map(|t| self.embed_one(t)).collect()
+        self.0.embed(texts)
     }
 
     fn dimensions(&self) -> u32 {
-        DIMENSIONS
+        self.0.dimensions()
     }
 
     fn model_name(&self) -> &str {
-        &self.model
+        self.0.model_name()
     }
 }
 
