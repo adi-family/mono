@@ -63,7 +63,10 @@ pub mod sources;
 pub mod sync;
 
 pub use address::{Address, ElementAddress};
-pub use bundle::{BundleInstalled, BundleOutcome, ElementOutcome, Ledger, LedgerElement};
+pub use bundle::{
+    BundleInstalled, BundleOutcome, BundleUpdated, ElementOutcome, ElementUninstalled,
+    ElementUpdateOutcome, Ledger, LedgerElement, ServiceStarted,
+};
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
 pub use install::{AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated};

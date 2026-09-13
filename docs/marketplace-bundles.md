@@ -281,7 +281,15 @@ one real directory (a dashboard) — most of them have nowhere to put a sidecar 
 a foreign field into a schema that is supposed to be exactly the real store's own.
 
 So provenance moves up one level, to the marketplace module itself, mirroring how `sources.toml`
-and `cache/<name>.json` already live there rather than beside a dashboard:
+and `cache/<name>.json` already live there rather than beside a dashboard. `<bundle-id>` below is
+built the same way everywhere it appears: **two path segments, the source's local name then the
+bundle's published slug** — `<marketplace>/<slug>`, nested rather than flattened into one string,
+because both are already one safe path segment each and joining them as a path costs nothing that
+inventing a delimiter would not also have to pay for. `marketplace/bundles/<bundle-id>/` therefore
+means `marketplace/bundles/<marketplace>/<slug>/`, and `marketplace/installs/<bundle-id>.json`
+means `marketplace/installs/<marketplace>/<slug>.json` — the shape phase B actually shipped
+(`crates/adi-marketplace/src/bundle.rs`), written out here because drift detection depends on the
+document and the code agreeing on it:
 
 - **The bundle keeps one permanent git clone of its own**, `marketplace/bundles/<bundle-id>/` —
   not staged-and-discarded the way v1's staging directory is, kept, because it is now the one

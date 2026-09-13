@@ -1,5 +1,16 @@
-//! Installing a bundle's elements — phase B of `docs/marketplace-bundles.md`: "Installing part of
-//! a bundle" through "Provenance, without one directory per element".
+//! Installing, updating, uninstalling and starting a bundle's elements — phase B of
+//! `docs/marketplace-bundles.md` ("Installing part of a bundle" through "Provenance, without one
+//! directory per element") and phase C ("Update" through "Uninstall").
+//!
+//! [`update`], [`uninstall_element`] and [`start_service`] are [`install`]'s own counterparts, one
+//! ledger entry at a time: an update re-lands every already-installed element from the clone's
+//! fresh pin (per element, not all-or-nothing — a drifted element is left alone and reported,
+//! [`Relanded`] is [`Landed`]'s mirror for it), an uninstall removes one element by its own kind's
+//! ordinary path and drops it from the ledger, and starting a service copies its parked
+//! `ServiceSpec` block into the target `hive.yaml`. None of the three touch the legacy
+//! single-dashboard bundle (decision #6): it keeps no ledger, so [`read_ledger`] answers `None` for
+//! it and [`update`]/[`uninstall_element`] refuse with [`Error::BundleNotInstalled`] — it keeps
+//! updating through `crate::install::update`, by its own dashboard id, unchanged.
 //!
 //! [`install()`] is new code beside `crate::install`'s own pipeline, not a change to it (see that
 //! document's "What v1's code assumes this design changes"): a v1 app moves one clone into one
@@ -42,7 +53,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::address::Address;
+use crate::address::{Address, ElementAddress};
 use crate::error::{Error, Result};
 use crate::git;
 use crate::install::{self, entry_of};
@@ -181,6 +192,78 @@ impl Ledger {
             .iter()
             .find(|e| e.kind == kind && e.name == name)
     }
+
+    /// The position of the ledger element an [`ElementAddress`] names — every kind matches by its
+    /// published name, except the [`Kind::Project`] singleton, which the address carries no name
+    /// for at all and the ledger keeps filed under the bundle's own slug instead. A position
+    /// rather than the element itself, so a caller that is about to remove it never needs a second
+    /// pass to relocate what it just found.
+    fn position_addressed(&self, target: &ElementAddress) -> Option<usize> {
+        self.elements.iter().position(|e| {
+            e.kind == target.kind
+                && (target.kind == Kind::Project || target.name.as_deref() == Some(e.name.as_str()))
+        })
+    }
+}
+
+/// One element's own outcome from an [`update`] call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElementUpdateOutcome {
+    pub kind: Kind,
+    /// The published name — how [`update`] matches this ledger entry against the fresh pin's tree.
+    pub name: String,
+    /// The id it is landed as, unchanged by an update (only a fresh install ever mints one).
+    pub id: String,
+    /// Whether this element's content actually moved.
+    pub changed: bool,
+    /// Anything worth telling the operator: that it was left alone because it was edited, that an
+    /// edit was overwritten because `--force` named it, that the new pin no longer publishes it.
+    pub note: Option<String>,
+}
+
+/// What updating a general (non-legacy) bundle answers with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleUpdated {
+    pub marketplace: String,
+    pub slug: String,
+    /// The commit this bundle's internal clone stood at before the update.
+    pub from: String,
+    /// The commit it stands at now.
+    pub to: String,
+    /// Whether the internal clone actually moved — an update onto the pin it already had is not a
+    /// failure, and touches no element.
+    pub changed: bool,
+    /// Every installed element this call considered, in ledger order.
+    pub elements: Vec<ElementUpdateOutcome>,
+}
+
+/// What [`uninstall_element`] answers with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElementUninstalled {
+    pub marketplace: String,
+    pub slug: String,
+    pub kind: Kind,
+    pub name: String,
+    pub id: String,
+    /// Set when this was the last element the ledger carried: the ledger entry and the permanent
+    /// clone were removed along with it.
+    pub bundle_removed: bool,
+    /// Anything worth telling the operator — a `runner.docker` service whose container keeps
+    /// running, say.
+    pub note: Option<String>,
+}
+
+/// What [`start_service`] answers with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceStarted {
+    pub marketplace: String,
+    pub slug: String,
+    pub name: String,
+    pub id: String,
+    /// The project whose `.adi/hive.yaml` the service's block now lives in, or `None` for the
+    /// global `hive.yaml` — the bundle's own project, when it carries one (`docs/marketplace-bundles.md`
+    /// decision #4).
+    pub project: Option<String>,
 }
 
 /// One element's landing, before it is folded into an [`ElementOutcome`] and (on success) a
@@ -198,6 +281,25 @@ enum Landed {
     /// refusal, an I/O error. Never the whole install's problem: the loop moves on to the next
     /// element, per "a failure partway leaves what landed landed" (`docs/marketplace-bundles.md`,
     /// "What is deliberately not here").
+    Failed(String),
+}
+
+/// One already-installed element's relanding, before it is folded into an
+/// [`ElementUpdateOutcome`] and — on success — the fresh fingerprint the ledger keeps.
+enum Relanded {
+    Ok {
+        fingerprint: String,
+        /// Whether the content on disk actually moved — fast-forwarding onto a pin that never
+        /// touched this element is a success too, just not a change.
+        changed: bool,
+        note: Option<String>,
+    },
+    /// Left alone rather than overwritten: a drifted fingerprint without `--force`, a kind with no
+    /// in-place update path, or an element the new pin no longer publishes.
+    Skipped(String),
+    /// Anything else that stopped this one element's update — a parse failure, a store's own
+    /// validation refusal, an I/O error. Never the whole update's problem, per the same rule
+    /// [`Landed::Failed`] follows for a fresh install.
     Failed(String),
 }
 
@@ -314,6 +416,274 @@ pub fn install(market: &Marketplace, spec: &str) -> Result<BundleOutcome> {
     }))
 }
 
+/// Update `<marketplace>/<slug>`: fast-forward the bundle's own internal clone onto its manifest's
+/// current pin, then re-apply every ledgered element from that clone into its live location — per
+/// element, not all-or-nothing (`docs/marketplace-bundles.md`, "Update").
+///
+/// A flat-file or script element whose live fingerprint still matches what was last written is
+/// fast-forwarded; one that has drifted (the operator edited it) is left alone and reported, unless
+/// `force` names it — `(kind, published name)` pairs, exactly the coordinates [`LedgerElement`]
+/// keeps. A dashboard gets the same treatment over its tracked files, the three generated entry
+/// points excluded. A project scaffold is never relanded in place: nothing in `adi_projects`
+/// exposes an in-place rewrite of a project's name or description outside creation, so it is always
+/// reported rather than silently skipped.
+///
+/// Nothing here applies to the legacy single-dashboard bundle (decision #6): it keeps no ledger, so
+/// [`read_ledger`] answers `None` for it and this refuses with [`Error::BundleNotInstalled`] —
+/// exactly as it would for a slug nothing has ever installed. It keeps updating through
+/// [`crate::install::update`], by its own dashboard id, unchanged.
+///
+/// # Errors
+/// [`Error::BundleNotInstalled`] when nothing is installed from this address yet, whatever
+/// [`entry_of`] and [`BundleEntry::validate`] refuse, and [`Error::Git`] when the internal clone's
+/// own fast-forward fails. Anything one element's own relanding can fail on is reported in that
+/// element's own [`ElementUpdateOutcome::note`] instead — the rest of the ledger still updates.
+pub fn update(
+    market: &Marketplace,
+    marketplace: &str,
+    slug: &str,
+    force: &[(Kind, &str)],
+) -> Result<BundleUpdated> {
+    let config = market.config();
+    let mut ledger = read_ledger(market, marketplace, slug)
+        .ok_or_else(|| Error::BundleNotInstalled(marketplace.to_string(), slug.to_string()))?;
+    let entry = entry_of(config, marketplace, slug)?;
+    entry.validate()?;
+
+    let clone_dir = bundle_dir(market, marketplace, slug);
+    let from = ledger.commit.clone();
+    let to = entry.pin();
+    let branch = entry.branch().or(ledger.branch.as_deref()).map(str::to_string);
+    let pin = git::move_to(&clone_dir, &to, branch.as_deref(), false).map_err(Error::Git)?;
+
+    if pin.commit.eq_ignore_ascii_case(&from) {
+        // Nothing moved, so nothing was re-read from the tree: every element answers exactly as
+        // installed, the same "already at the pin" no-op v1's own update reports.
+        let elements = ledger
+            .elements
+            .iter()
+            .map(|e| ElementUpdateOutcome {
+                kind: e.kind,
+                name: e.name.clone(),
+                id: e.id.clone(),
+                changed: false,
+                note: None,
+            })
+            .collect();
+        return Ok(BundleUpdated {
+            marketplace: marketplace.to_string(),
+            slug: slug.to_string(),
+            from,
+            to: pin.commit,
+            changed: false,
+            elements,
+        });
+    }
+
+    let tree = layout::read_layout(&clone_dir, slug)?;
+    let stores = Stores::open(market, config, marketplace, slug);
+    let project = ledger.project_id();
+    let target_hive = target_hive_path(market, &stores.projects, project.as_deref())?;
+
+    let mut outcomes = Vec::with_capacity(ledger.elements.len());
+    for i in 0..ledger.elements.len() {
+        let el = ledger.elements[i].clone();
+        let forced = force.iter().any(|(k, n)| *k == el.kind && *n == el.name.as_str());
+        let layout_el = tree.elements.iter().find(|le| {
+            le.kind == el.kind && (el.kind == Kind::Project || le.name.as_deref() == Some(el.name.as_str()))
+        });
+        let (outcome, new_fingerprint) = match layout_el {
+            None => (
+                ElementUpdateOutcome {
+                    kind: el.kind,
+                    name: el.name.clone(),
+                    id: el.id.clone(),
+                    changed: false,
+                    note: Some("no longer published at the new pin — left as it stands".to_string()),
+                },
+                None,
+            ),
+            Some(layout_el) => {
+                let relanded = stores.reland(&el, layout_el, &clone_dir, project.as_deref(), &target_hive, forced);
+                fold_update(el.kind, el.name.clone(), el.id.clone(), relanded)
+            }
+        };
+        if let Some(fingerprint) = new_fingerprint {
+            ledger.elements[i].fingerprint = fingerprint;
+        }
+        outcomes.push(outcome);
+    }
+
+    ledger.commit.clone_from(&pin.commit);
+    ledger.branch = Some(pin.branch);
+    ledger.updated_at = Some(adi_config::now_unix());
+    write_ledger(market, marketplace, slug, &ledger)?;
+
+    Ok(BundleUpdated {
+        marketplace: marketplace.to_string(),
+        slug: slug.to_string(),
+        from,
+        to: pin.commit,
+        changed: true,
+        elements: outcomes,
+    })
+}
+
+/// Uninstall one element of `<marketplace>/<slug>/<kind>/<name>` by its own kind's ordinary path
+/// (`docs/marketplace-bundles.md`, "Uninstall"), drop it from the ledger, and leave every sibling
+/// untouched. The ledger entry and the permanent clone go only once nothing from the bundle remains
+/// installed anywhere.
+///
+/// # Errors
+/// [`Error::BadAddress`] when `spec` names the whole bundle rather than one element (there is no
+/// marketplace-wide uninstall verb), [`Error::BundleNotInstalled`] when nothing is installed from
+/// this bundle, [`Error::ElementNotInstalled`] when the address names nothing in the ledger,
+/// [`Error::EmbeddingInUse`] for an embedding backend a consumer still resolves through, and
+/// [`Error::Store`] for anything else the owning store refused.
+pub fn uninstall_element(market: &Marketplace, spec: &str) -> Result<ElementUninstalled> {
+    let addr = Address::parse(spec)?;
+    let Some(target) = &addr.element else {
+        return Err(Error::BadAddress(spec.to_string()));
+    };
+    let mut ledger = read_ledger(market, &addr.marketplace, &addr.slug)
+        .ok_or_else(|| Error::BundleNotInstalled(addr.marketplace.clone(), addr.slug.clone()))?;
+    let idx = ledger
+        .position_addressed(target)
+        .ok_or_else(|| Error::ElementNotInstalled(spec.to_string()))?;
+    let element = ledger.elements[idx].clone();
+    let config = market.config();
+
+    let note = match element.kind {
+        Kind::Agent => {
+            adi_agents::Agents::with_config(config.clone())
+                .delete(&element.id)
+                .map_err(store_err)?;
+            None
+        }
+        Kind::Tool => {
+            let tools = adi_tools::Tools::with_config(config.clone());
+            tools.archive(&element.id).map_err(store_err)?;
+            tools.remove(&element.id).map_err(store_err)?;
+            None
+        }
+        Kind::Trigger => {
+            adi_triggers::Triggers::with_config(config.clone())
+                .delete(&element.id)
+                .map_err(store_err)?;
+            None
+        }
+        Kind::Llm => {
+            adi_agents::llm::LlmBackends::with_config(config.clone())
+                .delete(&element.id)
+                .map_err(store_err)?;
+            None
+        }
+        Kind::Embedding => {
+            uninstall_embedding(config, &element.id)?;
+            None
+        }
+        Kind::Project => {
+            adi_projects::Projects::with_config(config.clone())
+                .remove(&element.id)
+                .map_err(store_err)?;
+            None
+        }
+        Kind::Dashboard => {
+            uninstall_dashboard(&market.dashboards_dir(), &element.id)?;
+            None
+        }
+        Kind::Service => uninstall_service(market, &addr.marketplace, &addr.slug, &ledger, &element)?,
+    };
+
+    ledger.elements.remove(idx);
+    let bundle_removed = ledger.elements.is_empty();
+    if bundle_removed {
+        delete_ledger(market, &addr.marketplace, &addr.slug);
+        let _ = std::fs::remove_dir_all(bundle_dir(market, &addr.marketplace, &addr.slug));
+        let _ = std::fs::remove_dir_all(services_dir(market, &addr.marketplace, &addr.slug));
+    } else {
+        write_ledger(market, &addr.marketplace, &addr.slug, &ledger)?;
+    }
+
+    Ok(ElementUninstalled {
+        marketplace: addr.marketplace,
+        slug: addr.slug,
+        kind: element.kind,
+        name: element.name,
+        id: element.id,
+        bundle_removed,
+        note,
+    })
+}
+
+/// Start a parked hive service: copy its `ServiceSpec` block out of `marketplace/services/…` into
+/// the target `hive.yaml` — the bundle's own project, when it carries one, else the global hive —
+/// under its landed key, and drop the parked file. From here the supervisor's own periodic re-read
+/// picks it up and its `start:` policy governs it like any hand-written service
+/// (`docs/marketplace-bundles.md`, "Inert on arrival, per kind").
+///
+/// Idempotent: starting a service that is already started (its parked file is already gone, and its
+/// block is already in the target hive.yaml) answers the same outcome rather than erroring.
+///
+/// # Errors
+/// [`Error::BadAddress`] when `spec` does not name one `service` element, [`Error::BundleNotInstalled`]
+/// / [`Error::ElementNotInstalled`] when the address does not name an installed service, and
+/// [`Error::Store`] when the target hive.yaml cannot be read or written, or already names something
+/// under this service's key.
+pub fn start_service(market: &Marketplace, spec: &str) -> Result<ServiceStarted> {
+    let addr = Address::parse(spec)?;
+    let Some(target) = &addr.element else {
+        return Err(Error::BadAddress(spec.to_string()));
+    };
+    if target.kind != Kind::Service {
+        return Err(Error::BadAddress(spec.to_string()));
+    }
+    let name = target.name.clone().unwrap_or_default();
+    let ledger = read_ledger(market, &addr.marketplace, &addr.slug)
+        .ok_or_else(|| Error::BundleNotInstalled(addr.marketplace.clone(), addr.slug.clone()))?;
+    let Some(ledger_el) = ledger.find(Kind::Service, &name) else {
+        return Err(Error::ElementNotInstalled(spec.to_string()));
+    };
+    let id = ledger_el.id.clone();
+    let project = ledger.project_id();
+    let projects = adi_projects::Projects::with_config(market.config().clone());
+    let target_hive = target_hive_path(market, &projects, project.as_deref())?;
+    let parked_path = services_dir(market, &addr.marketplace, &addr.slug).join(format!("{id}.yaml"));
+
+    if !parked_path.is_file() {
+        // Either already started, or nothing was ever parked here — the two look identical from
+        // this side, and only the first is a state worth answering rather than refusing.
+        if read_service_block(&target_hive, &id).is_some() {
+            return Ok(ServiceStarted {
+                marketplace: addr.marketplace,
+                slug: addr.slug,
+                name,
+                id,
+                project,
+            });
+        }
+        return Err(Error::ElementNotInstalled(spec.to_string()));
+    }
+
+    if read_service_block(&target_hive, &id).is_some() {
+        return Err(Error::Store(format!(
+            "{id} already names a service in {} — remove or rename it there first",
+            target_hive.display()
+        )));
+    }
+    let text = std::fs::read_to_string(&parked_path)?;
+    write_service_block(&target_hive, &id, &text)?;
+    let _ = std::fs::remove_file(&parked_path);
+
+    Ok(ServiceStarted {
+        marketplace: addr.marketplace,
+        slug: addr.slug,
+        name,
+        id,
+        project,
+    })
+}
+
 /// One handle per store a bundle might land an element into, opened once per [`install`] call
 /// rather than once per element — cheap (every one of them is a thin wrapper over [`Config`]), and
 /// it is what keeps [`install`] itself down to the address/layout/ledger bookkeeping.
@@ -366,6 +736,40 @@ impl Stores {
             Kind::Project => land_project(&self.projects, root, el, bundle_slug),
         }
     }
+
+    /// Dispatch one already-installed element to its kind's own update path — [`update`]'s
+    /// per-element fast-forward, drift check included.
+    fn reland(
+        &self,
+        ledger_el: &LedgerElement,
+        layout_el: &LayoutElement,
+        root: &Path,
+        project: Option<&str>,
+        target_hive: &Path,
+        forced: bool,
+    ) -> Relanded {
+        match ledger_el.kind {
+            Kind::Agent => reland_agent(&self.agents, root, layout_el, ledger_el, project, forced),
+            Kind::Tool => reland_tool(&self.tools, root, layout_el, ledger_el, forced),
+            Kind::Dashboard => reland_dashboard(&self.dashboards_dir, root, layout_el, ledger_el, forced),
+            Kind::Llm => reland_llm(&self.llm_backends, root, layout_el, ledger_el, forced),
+            Kind::Embedding => reland_embedding(&self.embedding_backends, root, layout_el, ledger_el, forced),
+            Kind::Service => {
+                reland_service(&self.parked_services_dir, target_hive, root, layout_el, ledger_el, forced)
+            }
+            Kind::Trigger => reland_trigger(&self.triggers, root, layout_el, ledger_el, project, forced),
+            // No public store API rewrites a project's name or description in place outside
+            // creation (`adi_projects::Projects` has `archive`/`unarchive`/`rename`/`remove` and
+            // nothing else) — reported rather than silently skipped, and never relanded, forced
+            // or not (`docs/marketplace-bundles.md`'s own "Update" section names this a flat-file
+            // fast-forward like any other; the real store gives it no such path).
+            Kind::Project => Relanded::Skipped(
+                "a project scaffold's name and description cannot be changed after install — \
+                 there is no in-place update for it in adi_projects — left as it stands"
+                    .to_string(),
+            ),
+        }
+    }
 }
 
 /// Fold one element's [`Landed`] outcome into what the caller reports and — on success — what the
@@ -409,6 +813,47 @@ fn fold(kind: Kind, name: String, landed: Landed) -> (ElementOutcome, Option<Led
                 id: None,
                 renamed: false,
                 note: Some(format!("did not install: {reason}")),
+            },
+            None,
+        ),
+    }
+}
+
+/// Fold one element's [`Relanded`] outcome into what [`update`] reports and — on success — the
+/// fresh fingerprint the ledger should keep from here on.
+fn fold_update(kind: Kind, name: String, id: String, relanded: Relanded) -> (ElementUpdateOutcome, Option<String>) {
+    match relanded {
+        Relanded::Ok {
+            fingerprint,
+            changed,
+            note,
+        } => (
+            ElementUpdateOutcome {
+                kind,
+                name,
+                id,
+                changed,
+                note,
+            },
+            Some(fingerprint),
+        ),
+        Relanded::Skipped(reason) => (
+            ElementUpdateOutcome {
+                kind,
+                name,
+                id,
+                changed: false,
+                note: Some(reason),
+            },
+            None,
+        ),
+        Relanded::Failed(reason) => (
+            ElementUpdateOutcome {
+                kind,
+                name,
+                id,
+                changed: false,
+                note: Some(format!("did not update: {reason}")),
             },
             None,
         ),
@@ -462,6 +907,16 @@ fn write_ledger(market: &Marketplace, marketplace: &str, slug: &str, ledger: &Le
         .module(crate::MODULE)
         .write_raw(&ledger_raw_name(marketplace, slug), &bytes)?;
     Ok(())
+}
+
+/// Drop a bundle's ledger file — [`uninstall_element`]'s last step once nothing it names remains
+/// installed. Best-effort: a ledger that is already gone is not this function's problem.
+fn delete_ledger(market: &Marketplace, marketplace: &str, slug: &str) {
+    let path = market
+        .config()
+        .module(crate::MODULE)
+        .raw_path(&ledger_raw_name(marketplace, slug));
+    let _ = std::fs::remove_file(path);
 }
 
 /// Clone the bundle's repository at its pinned commit into the permanent location, or — the
@@ -574,6 +1029,225 @@ fn fingerprint_dashboard_files(files: &[adi_dashboards::BundleFile]) -> String {
     hex::encode(hasher.finalize())
 }
 
+// MARK: update — the note shared by every relanding kind's drift check
+
+/// What every `reland_*` function answers when the live fingerprint has drifted from the ledger's
+/// and `force` did not name this element — v1's `Dirty` refusal, scoped to one element.
+fn drift_note() -> String {
+    "edited since it was installed or last updated — left alone; update this element with --force \
+     to overwrite the edit and lose it"
+        .to_string()
+}
+
+/// The note a successful reland carries when it overwrote a drifted element anyway, because
+/// `force` named it — `None` when there was nothing to overwrite in the first place.
+fn forced_note(was_dirty: bool) -> Option<String> {
+    was_dirty.then(|| "forced over a local edit — the edit is gone".to_string())
+}
+
+// MARK: hive service blocks — one key inside a hive.yaml's `services:` mapping, read generically
+// so every field this crate does not model survives (the same reasoning `create_service` in
+// `adi-webapp-api` already applies to the same file).
+
+/// The raw YAML of `services.<key>` in the hive.yaml at `path`, or `None` when the file, the
+/// mapping, or the key itself is not there.
+fn read_service_block(path: &Path, key: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&raw).ok()?;
+    let value = doc.get("services")?.as_mapping()?.get(key)?;
+    serde_yaml_ng::to_string(value).ok()
+}
+
+/// Insert or overwrite `services.<key>` in the hive.yaml at `path` with `block_yaml`, creating the
+/// file (and the `services:` mapping) if neither exists yet, and leaving every other key exactly as
+/// it was.
+///
+/// # Errors
+/// [`Error::Store`] when the existing file, once read, is not a YAML mapping, or `block_yaml`
+/// itself does not parse; [`Error::Io`] on a read or write failure.
+fn write_service_block(path: &Path, key: &str, block_yaml: &str) -> Result<()> {
+    use serde_yaml_ng::{Mapping, Value as Yaml};
+
+    let raw = std::fs::read_to_string(path).unwrap_or_default();
+    let mut doc: Yaml = if raw.trim().is_empty() {
+        Yaml::Mapping(Mapping::new())
+    } else {
+        serde_yaml_ng::from_str(&raw)
+            .map_err(|e| Error::Store(format!("parsing {}: {e}", path.display())))?
+    };
+    let value: Yaml = serde_yaml_ng::from_str(block_yaml)
+        .map_err(|e| Error::Store(format!("re-parsing the service before writing it: {e}")))?;
+    let Yaml::Mapping(root) = &mut doc else {
+        return Err(Error::Store(format!("{} is not a YAML mapping", path.display())));
+    };
+    let services = root
+        .entry(Yaml::String("services".to_string()))
+        .or_insert_with(|| Yaml::Mapping(Mapping::new()));
+    let Yaml::Mapping(services) = services else {
+        return Err(Error::Store(format!("{}'s services is not a mapping", path.display())));
+    };
+    services.insert(Yaml::String(key.to_string()), value);
+
+    let text = serde_yaml_ng::to_string(&doc)
+        .map_err(|e| Error::Store(format!("encoding {}: {e}", path.display())))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
+/// Remove `services.<key>` from the hive.yaml at `path`. Answers the raw YAML of what was removed
+/// (which is what a caller reads to decide whether it was a `runner.docker` service worth a note),
+/// or `None` when the file, the mapping, or the key was never there.
+///
+/// # Errors
+/// [`Error::Store`] when the file, once read, is not a YAML mapping; [`Error::Io`] on a write
+/// failure.
+fn drop_service_block(path: &Path, key: &str) -> Result<Option<String>> {
+    use serde_yaml_ng::Value as Yaml;
+
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    let mut doc: Yaml = serde_yaml_ng::from_str(&raw)
+        .map_err(|e| Error::Store(format!("parsing {}: {e}", path.display())))?;
+    let Yaml::Mapping(root) = &mut doc else {
+        return Ok(None);
+    };
+    let Some(Yaml::Mapping(services)) = root.get_mut("services") else {
+        return Ok(None);
+    };
+    let Some(removed) = services.remove(key) else {
+        return Ok(None);
+    };
+    let text = serde_yaml_ng::to_string(&doc)
+        .map_err(|e| Error::Store(format!("encoding {}: {e}", path.display())))?;
+    std::fs::write(path, text)?;
+    Ok(Some(serde_yaml_ng::to_string(&removed).unwrap_or_default()))
+}
+
+/// Where a bundle's hive service lands once started, and where its update or its uninstall looks
+/// for it having been: the bundle's own project's `.adi/hive.yaml` when it carries one, else the
+/// global `hive.yaml` — the same project-scoped escape hatch every other kind's naming collision
+/// gets (`docs/marketplace-bundles.md` decision #4).
+fn target_hive_path(
+    market: &Marketplace,
+    projects: &adi_projects::Projects,
+    project: Option<&str>,
+) -> Result<PathBuf> {
+    match project {
+        Some(id) => projects.hive_path(id).map_err(|e| Error::Store(e.to_string())),
+        None => Ok(market.config().module("hive").raw_path("hive.yaml")),
+    }
+}
+
+/// Whether a service block names a `runner.docker` container — the note [`uninstall_service`]
+/// attaches, because dropping the key stops the supervisor's own `docker wait` loop but never the
+/// container itself (`docs/marketplace-bundles.md`, "Inert on arrival, per kind").
+fn docker_note(block_yaml: &str) -> Option<String> {
+    let spec: adi_hive::config::ServiceSpec = serde_yaml_ng::from_str(block_yaml).ok()?;
+    spec.runner
+        .as_ref()
+        .is_some_and(|r| r.docker.is_some())
+        .then(|| {
+            "this was a runner.docker service — the supervisor no longer knows about it, but the \
+             container itself is documented to survive that; stop and remove it yourself with \
+             `docker stop`/`docker rm`"
+                .to_string()
+        })
+}
+
+// MARK: uninstall — one element, by its own kind's ordinary path
+
+/// Wrap any per-kind store's own error as [`Error::Store`] — every one of these crates already
+/// phrases its own refusals for the person reading them, so nothing here re-translates.
+fn store_err<E: std::fmt::Display>(e: E) -> Error {
+    Error::Store(e.to_string())
+}
+
+/// Uninstall an embedding backend — refused while a consumer still resolves through it, the same
+/// check `POST /api/embeddings/backends/delete` makes (`crates/adi-webapp-api/src/handlers/
+/// embedding_backends.rs`), reproduced here because this call never goes through that endpoint.
+///
+/// # Errors
+/// [`Error::EmbeddingInUse`] while a consumer still resolves through it, [`Error::Store`] for
+/// anything else the registry refuses.
+fn uninstall_embedding(config: &adi_config::Config, id: &str) -> Result<()> {
+    let settings = adi_embeddings::EmbeddingSettings::open(config).map_err(store_err)?;
+    let users: Vec<String> = [
+        adi_embeddings::CONSUMER_INDEXER,
+        adi_embeddings::CONSUMER_KNOWLEDGE,
+        adi_embeddings::CONSUMER_FACTS,
+    ]
+    .into_iter()
+    .filter(|consumer| settings.assignments.get(*consumer).map(String::as_str) == Some(id))
+    .map(str::to_string)
+    .collect();
+    if !users.is_empty() {
+        return Err(Error::EmbeddingInUse(format!(
+            "{id} is still assigned to {} — point {} at another backend first",
+            users.join(", "),
+            if users.len() == 1 { "it" } else { "them" }
+        )));
+    }
+    adi_embeddings::EmbeddingBackends::with_config(config.clone())
+        .delete(id)
+        .map_err(store_err)?;
+    Ok(())
+}
+
+/// Uninstall a dashboard — the Dashboards page's own Archive → Delete, in one call: stamp
+/// `archived_at`, park its hive file so the supervisor's glob no longer matches it, then remove the
+/// directory whole. A directory that is already gone is not an error — nothing left to remove.
+///
+/// # Errors
+/// [`Error::Io`] on a write or removal failure.
+fn uninstall_dashboard(dashboards_dir: &Path, id: &str) -> Result<()> {
+    let dest = dashboards_dir.join(id);
+    if !dest.is_dir() {
+        return Ok(());
+    }
+    let mut manifest = adi_dashboards::read_manifest(&dest);
+    manifest.archived_at = Some(adi_config::now_unix());
+    adi_dashboards::write_manifest(&dest, &manifest)?;
+    let _ = std::fs::remove_file(dest.join(".adi").join(adi_dashboards::HIVE_LIVE));
+    std::fs::remove_dir_all(&dest)?;
+    Ok(())
+}
+
+/// Uninstall a hive service: drop it from wherever it is — the parked fragment file if it was never
+/// started, the target hive.yaml's `services` mapping if it was — and say so when it was a
+/// `runner.docker` service whose container survives regardless.
+///
+/// # Errors
+/// [`Error::Store`] when the target hive.yaml cannot be read as YAML; [`Error::Io`] on a write
+/// failure.
+fn uninstall_service(
+    market: &Marketplace,
+    marketplace: &str,
+    slug: &str,
+    ledger: &Ledger,
+    element: &LedgerElement,
+) -> Result<Option<String>> {
+    let parked_path = services_dir(market, marketplace, slug).join(format!("{}.yaml", element.id));
+    if parked_path.is_file() {
+        let text = std::fs::read_to_string(&parked_path).unwrap_or_default();
+        let _ = std::fs::remove_file(&parked_path);
+        return Ok(docker_note(&text));
+    }
+    let projects = adi_projects::Projects::with_config(market.config().clone());
+    let target = target_hive_path(market, &projects, ledger.project_id().as_deref())?;
+    match drop_service_block(&target, &element.id)? {
+        Some(text) => Ok(docker_note(&text)),
+        None => Ok(Some(
+            "was not found parked or in its hive.yaml — nothing left to remove there, but it is \
+             dropped from this bundle's own record"
+                .to_string(),
+        )),
+    }
+}
+
 // MARK: the two collision regimes
 
 /// Why a refuse-kind collision is refused rather than minted past — folded into every
@@ -647,6 +1321,45 @@ fn land_agent(
     }
 }
 
+/// `update`'s own fast-forward of an already-landed agent — same file, same id, no minting: a
+/// collision was already settled the first time this element landed.
+fn reland_agent(
+    agents: &adi_agents::Agents,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    project: Option<&str>,
+    forced: bool,
+) -> Relanded {
+    let path = agents.dir().join(format!("{}.toml", ledger_el.id));
+    let live_fp = fingerprint_file(&path);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    let mut manifest: adi_agents::StoredAgentManifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Relanded::Failed(format!("agents/{}.toml: {e}", ledger_el.name)),
+    };
+    manifest.created_at = 0;
+    manifest.updated_at = 0;
+    manifest.project = project.map(str::to_string);
+    match agents.save(&ledger_el.id, manifest) {
+        Ok(_) => {
+            let fingerprint = fingerprint_file(&path);
+            Relanded::Ok {
+                changed: fingerprint != ledger_el.fingerprint,
+                note: forced_note(live_fp != ledger_el.fingerprint),
+                fingerprint,
+            }
+        }
+        Err(e) => Relanded::Failed(e.to_string()),
+    }
+}
+
 fn land_trigger(
     triggers: &adi_triggers::Triggers,
     root: &Path,
@@ -694,6 +1407,58 @@ fn land_trigger(
             note,
         },
         Err(e) => Landed::Failed(e.to_string()),
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed trigger — forced disabled again on every
+/// update, exactly as on a fresh install: the repository's `enabled` is never the operator's
+/// deliberate act, whatever pin it arrives on.
+fn reland_trigger(
+    triggers: &adi_triggers::Triggers,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    project: Option<&str>,
+    forced: bool,
+) -> Relanded {
+    let path = triggers.dir().join(format!("{}.toml", ledger_el.id));
+    let live_fp = fingerprint_file(&path);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    let mut manifest: adi_triggers::TriggerManifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Relanded::Failed(format!("triggers/{}.toml: {e}", ledger_el.name)),
+    };
+    manifest.created_at = 0;
+    manifest.updated_at = 0;
+    manifest.project = project.map(str::to_string);
+    let mut note = forced_note(live_fp != ledger_el.fingerprint);
+    if manifest.enabled {
+        let forced_disabled = format!(
+            "triggers/{}.toml asked to arrive enabled — forced to disabled again",
+            ledger_el.name
+        );
+        note = Some(match note {
+            Some(existing) => format!("{existing}; {forced_disabled}"),
+            None => forced_disabled,
+        });
+    }
+    manifest.enabled = false;
+    match triggers.save(&ledger_el.id, manifest) {
+        Ok(_) => {
+            let fingerprint = fingerprint_file(&path);
+            Relanded::Ok {
+                changed: fingerprint != ledger_el.fingerprint,
+                fingerprint,
+                note,
+            }
+        }
+        Err(e) => Relanded::Failed(e.to_string()),
     }
 }
 
@@ -755,6 +1520,64 @@ fn land_dashboard(
     }
 }
 
+/// `update`'s own fast-forward of an already-landed dashboard's tracked files — the same carve-out
+/// v1's own update already gives the three generated entry points (`GENERATED_DASHBOARD_FILES`):
+/// they are the panel's to rewrite, so they are never collected into what gets written here, and
+/// never counted as an edit worth blocking the rest of the dashboard's own fast-forward.
+fn reland_dashboard(
+    dashboards_dir: &Path,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let dest = dashboards_dir.join(&ledger_el.id);
+    let mut live_files = Vec::new();
+    let mut live_rel = PathBuf::new();
+    let mut live_total = 0_u64;
+    if let Err(e) = adi_dashboards::collect_files(&dest, &mut live_rel, &mut live_files, &mut live_total) {
+        return Relanded::Failed(e.to_string());
+    }
+    let live_fp = fingerprint_dashboard_files(&live_files);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+
+    let src = root.join(&layout_el.path);
+    let mut new_files = Vec::new();
+    let mut new_rel = PathBuf::new();
+    let mut new_total = 0_u64;
+    if let Err(e) = adi_dashboards::collect_files(&src, &mut new_rel, &mut new_files, &mut new_total) {
+        return Relanded::Failed(e.to_string());
+    }
+    let writable: Vec<adi_dashboards::BundleFile> = new_files
+        .iter()
+        .filter(|f| !GENERATED_DASHBOARD_FILES.contains(&f.path.as_str()))
+        .cloned()
+        .collect();
+    let decoded = match adi_dashboards::decode_bundle(&dest, &writable) {
+        Ok(d) => d,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    for (path, bytes) in decoded {
+        if let Some(parent) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return Relanded::Failed(e.to_string());
+        }
+        if let Err(e) = std::fs::write(&path, bytes) {
+            return Relanded::Failed(e.to_string());
+        }
+    }
+
+    let fingerprint = fingerprint_dashboard_files(&new_files);
+    Relanded::Ok {
+        changed: fingerprint != ledger_el.fingerprint,
+        note: forced_note(live_fp != ledger_el.fingerprint),
+        fingerprint,
+    }
+}
+
 fn land_service(services_dir: &Path, root: &Path, el: &LayoutElement) -> Landed {
     let name = el.name.clone().unwrap_or_default();
     let text = match std::fs::read_to_string(root.join(&el.path)) {
@@ -784,6 +1607,61 @@ fn land_service(services_dir: &Path, root: &Path, el: &LayoutElement) -> Landed 
         renamed: id != name,
         id,
         note: None,
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed hive service — the parked fragment file if it
+/// was never started, or the block inside `target_hive` if it was (`docs/marketplace-bundles.md`,
+/// "Update"): a started service's entry is a plain YAML block an operator could just as well have
+/// hand-edited, so it gets the same drift check either way.
+fn reland_service(
+    parked_dir: &Path,
+    target_hive: &Path,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    if let Err(e) = serde_yaml_ng::from_str::<adi_hive::config::ServiceSpec>(&text) {
+        return Relanded::Failed(format!("services/{}.yaml is not a hive service: {e}", ledger_el.name));
+    }
+
+    let parked_path = parked_dir.join(format!("{}.yaml", ledger_el.id));
+    if parked_path.is_file() {
+        let live_fp = fingerprint_file(&parked_path);
+        if live_fp != ledger_el.fingerprint && !forced {
+            return Relanded::Skipped(drift_note());
+        }
+        if let Err(e) = std::fs::write(&parked_path, &text) {
+            return Relanded::Failed(e.to_string());
+        }
+        let fingerprint = fingerprint_bytes(text.as_bytes());
+        return Relanded::Ok {
+            changed: fingerprint != ledger_el.fingerprint,
+            note: forced_note(live_fp != ledger_el.fingerprint),
+            fingerprint,
+        };
+    }
+
+    let Some(live_block) = read_service_block(target_hive, &ledger_el.id) else {
+        return Relanded::Skipped("no longer found parked or in its hive.yaml — left alone".to_string());
+    };
+    let live_fp = fingerprint_bytes(live_block.as_bytes());
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    if let Err(e) = write_service_block(target_hive, &ledger_el.id, &text) {
+        return Relanded::Failed(e.to_string());
+    }
+    let fingerprint = fingerprint_bytes(text.as_bytes());
+    Relanded::Ok {
+        changed: fingerprint != ledger_el.fingerprint,
+        note: forced_note(live_fp != ledger_el.fingerprint),
+        fingerprint,
     }
 }
 
@@ -819,6 +1697,37 @@ fn land_tool(
         fingerprint,
         renamed: false,
         note: None,
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed tool: only the script content ever came from
+/// the repository (`config.toml`'s name and runtime are this machine's own, set once at install),
+/// so that is all a fast-forward ever rewrites.
+fn reland_tool(
+    tools: &adi_tools::Tools,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let cfg_path = tools.tool_dir(&ledger_el.id).unwrap_or_default().join("config.toml");
+    let script_path = tools.script_path(&ledger_el.id).unwrap_or_default();
+    let live_fp = fingerprint_files(&[cfg_path.clone(), script_path.clone()]);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let content = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(c) => c,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    if let Err(e) = tools.write_script(&ledger_el.id, &content) {
+        return Relanded::Failed(e.to_string());
+    }
+    let fingerprint = fingerprint_files(&[cfg_path, script_path]);
+    Relanded::Ok {
+        changed: fingerprint != ledger_el.fingerprint,
+        note: forced_note(live_fp != ledger_el.fingerprint),
+        fingerprint,
     }
 }
 
@@ -863,6 +1772,41 @@ fn land_llm(
     }
 }
 
+/// `update`'s own fast-forward of an already-landed LLM backend — always verbatim, since this kind
+/// never mints past a collision (its id is always its published name).
+fn reland_llm(
+    backends: &adi_agents::llm::LlmBackends,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let path = backends.dir().join(format!("{}.toml", ledger_el.id));
+    let live_fp = fingerprint_file(&path);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    let manifest: adi_agents::llm::LlmBackendManifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Relanded::Failed(format!("llm/{}.toml: {e}", ledger_el.name)),
+    };
+    match backends.save(&ledger_el.id, manifest) {
+        Ok(_) => {
+            let fingerprint = fingerprint_file(&path);
+            Relanded::Ok {
+                changed: fingerprint != ledger_el.fingerprint,
+                note: forced_note(live_fp != ledger_el.fingerprint),
+                fingerprint,
+            }
+        }
+        Err(e) => Relanded::Failed(e.to_string()),
+    }
+}
+
 fn land_embedding(
     backends: &adi_embeddings::EmbeddingBackends,
     root: &Path,
@@ -901,6 +1845,41 @@ fn land_embedding(
             note,
         },
         Err(e) => Landed::Failed(e.to_string()),
+    }
+}
+
+/// `update`'s own fast-forward of an already-landed embedding backend — the same verbatim-only
+/// reasoning as [`reland_llm`].
+fn reland_embedding(
+    backends: &adi_embeddings::EmbeddingBackends,
+    root: &Path,
+    layout_el: &LayoutElement,
+    ledger_el: &LedgerElement,
+    forced: bool,
+) -> Relanded {
+    let path = backends.dir().join(format!("{}.toml", ledger_el.id));
+    let live_fp = fingerprint_file(&path);
+    if live_fp != ledger_el.fingerprint && !forced {
+        return Relanded::Skipped(drift_note());
+    }
+    let text = match std::fs::read_to_string(root.join(&layout_el.path)) {
+        Ok(t) => t,
+        Err(e) => return Relanded::Failed(e.to_string()),
+    };
+    let manifest: adi_embeddings::EmbeddingBackendManifest = match toml::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return Relanded::Failed(format!("embeddings/{}.toml: {e}", ledger_el.name)),
+    };
+    match backends.save(&ledger_el.id, manifest) {
+        Ok(_) => {
+            let fingerprint = fingerprint_file(&path);
+            Relanded::Ok {
+                changed: fingerprint != ledger_el.fingerprint,
+                note: forced_note(live_fp != ledger_el.fingerprint),
+                fingerprint,
+            }
+        }
+        Err(e) => Relanded::Failed(e.to_string()),
     }
 }
 
@@ -1049,6 +2028,29 @@ mod tests {
         let repo = format!("file://{}", dir.display());
         synced(&market, slug, &repo, &commit);
         (market, repo, commit)
+    }
+
+    fn write_docker_service(root: &Path, name: &str) {
+        std::fs::create_dir_all(root.join("services")).expect("dir");
+        std::fs::write(
+            root.join("services").join(format!("{name}.yaml")),
+            "runner:\n  docker:\n    image: postgres:16\n",
+        )
+        .expect("service");
+    }
+
+    fn upstream_dir(market: &Marketplace) -> PathBuf {
+        market.config().root().join("publisher").join("upstream")
+    }
+
+    /// Mutate the upstream repository and commit — the fixture's own stand-in for "the publisher
+    /// cut a new release" — then re-sync `market` so its cached pin moves onto that new commit.
+    fn advance(market: &Marketplace, slug: &str, repo: &str, mutate: impl FnOnce(&Path)) -> String {
+        let root = upstream_dir(market);
+        mutate(&root);
+        let commit = git_commit(&root, "v2");
+        synced(market, slug, repo, &commit);
+        commit
     }
 
     fn bundle_dir_of(market: &Marketplace, slug: &str) -> PathBuf {
@@ -1453,6 +2455,523 @@ mod tests {
             read_ledger(&market, "adi", "crm").is_none(),
             "none of this module's ledger machinery applies to the legacy shape"
         );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: growing an install — phase C item 3
+
+    #[test]
+    fn installing_a_further_element_later_grows_the_same_ledger_entry() {
+        let (market, ..) = fixture("grow-further", "grow-further-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+            write_tool(root, "csv-import");
+        });
+        let first = unwrap_bundle(install(&market, "adi/grow-further-bundle/agents/sales-bot").expect("first"));
+        assert_eq!(first.elements.len(), 1);
+        let installed_at = read_ledger(&market, "adi", "grow-further-bundle").expect("ledger").installed_at;
+
+        let second = unwrap_bundle(install(&market, "adi/grow-further-bundle/tools/csv-import").expect("second"));
+        assert_eq!(second.elements.len(), 1);
+        assert_eq!(second.elements[0].kind, Kind::Tool);
+
+        let ledger = read_ledger(&market, "adi", "grow-further-bundle").expect("ledger");
+        assert_eq!(ledger.elements.len(), 2, "the same entry grew rather than a second ledger appearing");
+        assert_eq!(ledger.installed_at, installed_at, "still the original install's own record");
+        assert!(
+            adi_agents::Agents::with_config(market.config().clone())
+                .get("sales-bot")
+                .expect("get")
+                .is_some(),
+            "the first element is untouched by the second call"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: update
+
+    #[test]
+    fn update_refuses_when_nothing_is_installed() {
+        let (market, ..) = fixture("upd-none", "upd-none-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        let err = update(&market, "adi", "upd-none-bundle", &[]).expect_err("refused");
+        assert!(matches!(err, Error::BundleNotInstalled(_, _)), "{err}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn updating_a_bundle_still_at_its_pin_is_a_no_op() {
+        let (market, ..) = fixture("upd-noop", "upd-noop-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        unwrap_bundle(install(&market, "adi/upd-noop-bundle").expect("install"));
+        let done = update(&market, "adi", "upd-noop-bundle", &[]).expect("update");
+        assert!(!done.changed);
+        assert_eq!(done.from, done.to);
+        assert_eq!(done.elements.len(), 1);
+        assert!(!done.elements[0].changed);
+        assert!(done.elements[0].note.is_none());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn an_unedited_flat_file_element_fast_forwards_on_update() {
+        let (market, repo, _first) = fixture("upd-ff", "upd-ff-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-ff-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Agent, "sales-bot").id.clone().expect("id");
+
+        advance(&market, "upd-ff-bundle", &repo, |root| {
+            write_agent(root, "sales-bot", "starred = true\n");
+        });
+        let done = update(&market, "adi", "upd-ff-bundle", &[]).expect("update");
+        assert!(done.changed);
+        let outcome = done
+            .elements
+            .iter()
+            .find(|e| e.kind == Kind::Agent && e.name == "sales-bot")
+            .expect("outcome");
+        assert!(outcome.changed);
+        assert!(outcome.note.is_none());
+
+        let agent = adi_agents::Agents::with_config(market.config().clone())
+            .get(&id)
+            .expect("get")
+            .expect("present");
+        assert!(agent.manifest.starred, "fast-forwarded onto the new pin's content");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn an_edited_flat_file_element_is_left_alone_and_reported() {
+        let (market, repo, _first) = fixture("upd-dirty", "upd-dirty-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-dirty-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Agent, "sales-bot").id.clone().expect("id");
+
+        // The operator edits the installed agent, through the store's own path.
+        let agents = adi_agents::Agents::with_config(market.config().clone());
+        let mut manifest = agents.get(&id).expect("get").expect("present").manifest;
+        manifest.starred = true;
+        agents.save(&id, manifest).expect("operator edit");
+
+        advance(&market, "upd-dirty-bundle", &repo, |root| {
+            write_agent(root, "sales-bot", "starred = false\n");
+        });
+        let done = update(&market, "adi", "upd-dirty-bundle", &[]).expect("update");
+        let outcome = done.elements.iter().find(|e| e.kind == Kind::Agent).expect("outcome");
+        assert!(!outcome.changed);
+        assert!(outcome.note.as_deref().is_some_and(|n| n.contains("edited")), "{outcome:?}");
+
+        let agent = agents.get(&id).expect("get").expect("present");
+        assert!(agent.manifest.starred, "left exactly as the operator set it");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn force_on_one_element_overwrites_and_loses_the_edit() {
+        let (market, repo, _first) = fixture("upd-force", "upd-force-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-force-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Agent, "sales-bot").id.clone().expect("id");
+        let agents = adi_agents::Agents::with_config(market.config().clone());
+        let mut manifest = agents.get(&id).expect("get").expect("present").manifest;
+        manifest.starred = true;
+        agents.save(&id, manifest).expect("operator edit");
+
+        // Tagged, not just un-starred: a field the original install never carried, so the
+        // fast-forwarded content can never coincidentally hash the same as what was there before
+        // the operator's edit even happened (which `starred = false` alone would, `now_unix()`
+        // being second-granular and this test running well inside one).
+        advance(&market, "upd-force-bundle", &repo, |root| {
+            write_agent(root, "sales-bot", "starred = false\ntags = [\"from-new-pin\"]\n");
+        });
+        let done = update(&market, "adi", "upd-force-bundle", &[(Kind::Agent, "sales-bot")]).expect("update");
+        let outcome = done.elements.iter().find(|e| e.kind == Kind::Agent).expect("outcome");
+        assert!(outcome.changed);
+        assert!(outcome.note.as_deref().is_some_and(|n| n.contains("forced")), "{outcome:?}");
+
+        let agent = agents.get(&id).expect("get").expect("present");
+        assert!(!agent.manifest.starred, "the local edit is gone, overwritten by the forced update");
+        assert_eq!(agent.manifest.tags, vec!["from-new-pin".to_string()]);
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn partial_success_reports_which_elements_moved_and_which_were_blocked() {
+        let (market, repo, _first) = fixture("upd-partial", "upd-partial-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+            write_tool(root, "csv-import");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-partial-bundle").expect("install"));
+        let agent_id = outcome_of(&installed, Kind::Agent, "sales-bot").id.clone().expect("id");
+
+        let agents = adi_agents::Agents::with_config(market.config().clone());
+        let mut manifest = agents.get(&agent_id).expect("get").expect("present").manifest;
+        manifest.starred = true;
+        agents.save(&agent_id, manifest).expect("operator edit");
+
+        advance(&market, "upd-partial-bundle", &repo, |root| {
+            write_agent(root, "sales-bot", "starred = false\n");
+            std::fs::write(root.join("tools").join("csv-import.sh"), "#!/bin/sh\necho v2\n").expect("tool v2");
+        });
+        let done = update(&market, "adi", "upd-partial-bundle", &[]).expect("update");
+        assert!(done.changed, "the clone itself moved");
+        let agent_outcome = done.elements.iter().find(|e| e.kind == Kind::Agent).expect("agent");
+        assert!(!agent_outcome.changed);
+        assert!(agent_outcome.note.is_some());
+        let tool_outcome = done.elements.iter().find(|e| e.kind == Kind::Tool).expect("tool");
+        assert!(tool_outcome.changed);
+        assert!(tool_outcome.note.is_none());
+
+        let tools = adi_tools::Tools::with_config(market.config().clone());
+        assert_eq!(tools.read_script("csv-import").expect("read"), "#!/bin/sh\necho v2\n");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_dashboards_generated_entry_points_are_excluded_from_the_drift_check() {
+        let (market, repo, _first) = fixture("upd-dash", "upd-dash-bundle", |root| {
+            write_dashboard(root, "crm");
+            let modules = root.join("dashboards").join("crm").join("frontend").join("modules");
+            std::fs::create_dir_all(&modules).expect("modules dir");
+            std::fs::write(modules.join("panel.ts"), "// panel v1\n").expect("panel v1");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-dash-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Dashboard, "crm").id.clone().expect("id");
+        let dest = market.dashboards_dir().join(&id);
+
+        // The panel rewrites a generated entry point in place — never the operator's edit to
+        // notice, and never something an update fast-forwards back over.
+        std::fs::write(dest.join("frontend").join("index.ts"), "// panel rewrite\n").expect("panel");
+
+        advance(&market, "upd-dash-bundle", &repo, |root| {
+            std::fs::write(
+                root.join("dashboards").join("crm").join("frontend").join("modules").join("panel.ts"),
+                "// panel v2\n",
+            )
+            .expect("panel v2");
+            std::fs::write(
+                root.join("dashboards").join("crm").join("backend").join("index.ts"),
+                "// back v2\n",
+            )
+            .expect("back v2 (generated — must never land)");
+        });
+        let done = update(&market, "adi", "upd-dash-bundle", &[]).expect("update");
+        let outcome = done.elements.iter().find(|e| e.kind == Kind::Dashboard).expect("outcome");
+        assert!(outcome.changed, "{outcome:?}");
+        assert!(outcome.note.is_none(), "the panel's own rewrite must not read as an edit: {outcome:?}");
+
+        assert_eq!(
+            std::fs::read_to_string(dest.join("frontend").join("modules").join("panel.ts")).expect("panel"),
+            "// panel v2\n",
+            "an ordinary tracked file is fast-forwarded"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("frontend").join("index.ts")).expect("front"),
+            "// panel rewrite\n",
+            "the generated entry point is never fast-forwarded over"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dest.join("backend").join("index.ts")).expect("back"),
+            "// back\n",
+            "the other generated entry point is untouched by the update too"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_hive_service_still_parked_updates_the_parked_fragment() {
+        let (market, repo, _first) = fixture("upd-svc-parked", "upd-svc-parked-bundle", |root| {
+            write_service(root, "redis");
+        });
+        unwrap_bundle(install(&market, "adi/upd-svc-parked-bundle").expect("install"));
+        advance(&market, "upd-svc-parked-bundle", &repo, |root| {
+            std::fs::write(root.join("services").join("redis.yaml"), "proxy:\n  host: redis2.adi\n")
+                .expect("v2");
+        });
+        let done = update(&market, "adi", "upd-svc-parked-bundle", &[]).expect("update");
+        let outcome = done.elements.iter().find(|e| e.kind == Kind::Service).expect("outcome");
+        assert!(outcome.changed);
+        let parked = services_dir(&market, "adi", "upd-svc-parked-bundle").join(format!("{}.yaml", outcome.id));
+        assert!(std::fs::read_to_string(parked).expect("parked").contains("redis2.adi"));
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn a_started_hive_services_live_entry_updates_in_its_hive_yaml() {
+        let (market, repo, _first) = fixture("upd-svc-started", "upd-svc-started-bundle", |root| {
+            write_service(root, "redis");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/upd-svc-started-bundle").expect("install"));
+        let svc_id = outcome_of(&installed, Kind::Service, "redis").id.clone().expect("id");
+        start_service(&market, "adi/upd-svc-started-bundle/services/redis").expect("start");
+        let global_hive = market.config().module("hive").raw_path("hive.yaml");
+        assert!(read_service_block(&global_hive, &svc_id).is_some());
+
+        advance(&market, "upd-svc-started-bundle", &repo, |root| {
+            std::fs::write(root.join("services").join("redis.yaml"), "proxy:\n  host: redis2.adi\n")
+                .expect("v2");
+        });
+        let done = update(&market, "adi", "upd-svc-started-bundle", &[]).expect("update");
+        let outcome = done.elements.iter().find(|e| e.kind == Kind::Service).expect("outcome");
+        assert!(outcome.changed, "{outcome:?}");
+        let block = read_service_block(&global_hive, &svc_id).expect("block");
+        assert!(block.contains("redis2.adi"), "{block}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn the_legacy_bundle_has_no_ledger_so_update_refuses_cleanly() {
+        let (market, ..) = fixture("upd-legacy", "crm", |root| {
+            std::fs::create_dir_all(root.join("frontend")).expect("frontend");
+            std::fs::create_dir_all(root.join("backend")).expect("backend");
+            std::fs::write(root.join("frontend").join("index.ts"), "// front\n").expect("f");
+            std::fs::write(root.join("backend").join("index.ts"), "// back\n").expect("b");
+        });
+        install(&market, "adi/crm").expect("install");
+        let err = update(&market, "adi", "crm", &[]).expect_err("refused");
+        assert!(matches!(err, Error::BundleNotInstalled(_, _)), "{err}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: uninstall
+
+    #[test]
+    fn uninstalling_one_element_leaves_siblings_and_the_ledger_untouched() {
+        let (market, ..) = fixture("uninst-sib", "uninst-sib-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+            write_tool(root, "csv-import");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-sib-bundle").expect("install"));
+        let done = uninstall_element(&market, "adi/uninst-sib-bundle/agents/sales-bot").expect("uninstall");
+        assert!(!done.bundle_removed);
+        assert!(
+            adi_agents::Agents::with_config(market.config().clone())
+                .get("sales-bot")
+                .expect("get")
+                .is_none()
+        );
+        assert!(
+            adi_tools::Tools::with_config(market.config().clone())
+                .get("csv-import")
+                .expect("get")
+                .is_some(),
+            "the sibling tool is untouched"
+        );
+        let ledger = read_ledger(&market, "adi", "uninst-sib-bundle").expect("ledger still exists");
+        assert_eq!(ledger.elements.len(), 1);
+        assert!(
+            bundle_dir_of(&market, "uninst-sib-bundle").exists(),
+            "the clone is kept while a sibling remains"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_the_last_element_removes_the_ledger_and_the_clone() {
+        let (market, ..) = fixture("uninst-last", "uninst-last-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-last-bundle").expect("install"));
+        let done = uninstall_element(&market, "adi/uninst-last-bundle/agents/sales-bot").expect("uninstall");
+        assert!(done.bundle_removed);
+        assert!(read_ledger(&market, "adi", "uninst-last-bundle").is_none());
+        assert!(!bundle_dir_of(&market, "uninst-last-bundle").exists());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_an_embedding_backend_in_use_is_refused() {
+        let (market, ..) = fixture("uninst-embed", "uninst-embed-bundle", |root| {
+            write_embedding(root, "e5");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/uninst-embed-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Embedding, "e5").id.clone().expect("id");
+        let mut settings = adi_embeddings::EmbeddingSettings::open(market.config()).expect("settings");
+        settings
+            .assignments
+            .insert(adi_embeddings::CONSUMER_INDEXER.to_string(), id.clone());
+        settings
+            .save(&market.config().module(adi_embeddings::EMBEDDINGS_MODULE))
+            .expect("save settings");
+
+        let err = uninstall_element(&market, "adi/uninst-embed-bundle/embeddings/e5").expect_err("refused");
+        assert!(matches!(err, Error::EmbeddingInUse(_)), "{err}");
+        assert!(
+            adi_embeddings::EmbeddingBackends::with_config(market.config().clone())
+                .get(&id)
+                .expect("get")
+                .is_some(),
+            "untouched by the refusal"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_a_parked_docker_service_says_the_container_survives() {
+        let (market, ..) = fixture("uninst-docker", "uninst-docker-bundle", |root| {
+            write_docker_service(root, "db");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-docker-bundle").expect("install"));
+        let done = uninstall_element(&market, "adi/uninst-docker-bundle/services/db").expect("uninstall");
+        assert!(done.note.as_deref().is_some_and(|n| n.contains("docker stop")), "{done:?}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_a_started_service_drops_its_hive_yaml_key() {
+        let (market, ..) = fixture("uninst-started-svc", "uninst-started-svc-bundle", |root| {
+            write_service(root, "redis");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-started-svc-bundle").expect("install"));
+        start_service(&market, "adi/uninst-started-svc-bundle/services/redis").expect("start");
+        let global_hive = market.config().module("hive").raw_path("hive.yaml");
+        let id = read_ledger(&market, "adi", "uninst-started-svc-bundle")
+            .expect("ledger")
+            .find(Kind::Service, "redis")
+            .expect("service")
+            .id
+            .clone();
+        assert!(read_service_block(&global_hive, &id).is_some());
+
+        let done = uninstall_element(&market, "adi/uninst-started-svc-bundle/services/redis").expect("uninstall");
+        assert!(done.note.is_none(), "{done:?}");
+        assert!(read_service_block(&global_hive, &id).is_none());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_the_whole_bundle_is_refused_there_is_no_such_verb() {
+        let (market, ..) = fixture("uninst-whole", "uninst-whole-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-whole-bundle").expect("install"));
+        let err = uninstall_element(&market, "adi/uninst-whole-bundle").expect_err("refused");
+        assert!(matches!(err, Error::BadAddress(_)), "{err}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_something_not_installed_is_refused() {
+        let (market, ..) = fixture("uninst-missing", "uninst-missing-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+            write_tool(root, "csv-import");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-missing-bundle/agents/sales-bot").expect("install"));
+        let err = uninstall_element(&market, "adi/uninst-missing-bundle/tools/csv-import").expect_err("refused");
+        assert!(matches!(err, Error::ElementNotInstalled(_)), "{err}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_a_dashboard_element_removes_its_directory() {
+        let (market, ..) = fixture("uninst-dash", "uninst-dash-bundle", |root| {
+            write_dashboard(root, "crm");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/uninst-dash-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Dashboard, "crm").id.clone().expect("id");
+        uninstall_element(&market, "adi/uninst-dash-bundle/dashboards/crm").expect("uninstall");
+        assert!(!market.dashboards_dir().join(&id).exists());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn uninstalling_a_project_scaffold_removes_it() {
+        let (market, ..) = fixture("uninst-proj", "uninst-proj-bundle", |root| {
+            write_project(root, "Uninst Proj");
+        });
+        unwrap_bundle(install(&market, "adi/uninst-proj-bundle").expect("install"));
+        let done = uninstall_element(&market, "adi/uninst-proj-bundle/project").expect("uninstall");
+        assert!(done.bundle_removed);
+        assert!(
+            adi_projects::Projects::with_config(market.config().clone())
+                .get("uninst-proj-bundle")
+                .expect("get")
+                .is_none()
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    // MARK: starting a parked service
+
+    #[test]
+    fn starting_a_parked_service_lands_in_the_global_hive_and_drops_the_parked_file() {
+        let (market, ..) = fixture("start-global", "start-global-bundle", |root| {
+            write_service(root, "redis");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/start-global-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Service, "redis").id.clone().expect("id");
+        let parked = services_dir(&market, "adi", "start-global-bundle").join(format!("{id}.yaml"));
+        assert!(parked.is_file());
+
+        let started = start_service(&market, "adi/start-global-bundle/services/redis").expect("start");
+        assert_eq!(started.project, None);
+        assert!(!parked.exists(), "moved, not copied");
+        let global_hive = market.config().module("hive").raw_path("hive.yaml");
+        let block = read_service_block(&global_hive, &id).expect("block");
+        assert!(block.contains("redis.adi"), "{block}");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn starting_a_service_lands_in_the_bundles_own_project_hive_yaml() {
+        let (market, ..) = fixture("start-proj", "start-proj-bundle", |root| {
+            write_project(root, "Start Proj");
+            write_service(root, "redis");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/start-proj-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Service, "redis").id.clone().expect("id");
+        let project_id = installed.project.clone().expect("project");
+
+        let started = start_service(&market, "adi/start-proj-bundle/services/redis").expect("start");
+        assert_eq!(started.project.as_deref(), Some(project_id.as_str()));
+        let projects = adi_projects::Projects::with_config(market.config().clone());
+        let hive_path = projects.hive_path(&project_id).expect("hive path");
+        assert!(read_service_block(&hive_path, &id).is_some());
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn starting_is_idempotent_when_already_started() {
+        let (market, ..) = fixture("start-idem", "start-idem-bundle", |root| {
+            write_service(root, "redis");
+        });
+        unwrap_bundle(install(&market, "adi/start-idem-bundle").expect("install"));
+        start_service(&market, "adi/start-idem-bundle/services/redis").expect("start");
+        let again = start_service(&market, "adi/start-idem-bundle/services/redis").expect("start again");
+        assert_eq!(again.name, "redis");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn starting_refuses_when_the_target_hive_already_names_that_key() {
+        let (market, ..) = fixture("start-collide", "start-collide-bundle", |root| {
+            write_service(root, "redis");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/start-collide-bundle").expect("install"));
+        let id = outcome_of(&installed, Kind::Service, "redis").id.clone().expect("id");
+        let global_hive = market.config().module("hive").raw_path("hive.yaml");
+        write_service_block(&global_hive, &id, "proxy:\n  host: somebody-elses.adi\n").expect("seed stranger");
+
+        let err = start_service(&market, "adi/start-collide-bundle/services/redis").expect_err("refused");
+        assert!(matches!(err, Error::Store(_)), "{err}");
+        let block = read_service_block(&global_hive, &id).expect("still there");
+        assert!(block.contains("somebody-elses.adi"), "untouched by the refusal");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
+    fn starting_an_uninstalled_service_is_refused() {
+        let (market, ..) = fixture("start-missing", "start-missing-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+        });
+        unwrap_bundle(install(&market, "adi/start-missing-bundle").expect("install"));
+        let err = start_service(&market, "adi/start-missing-bundle/services/redis").expect_err("refused");
+        assert!(matches!(err, Error::ElementNotInstalled(_)), "{err}");
         let _ = std::fs::remove_dir_all(market.config().root());
     }
 }

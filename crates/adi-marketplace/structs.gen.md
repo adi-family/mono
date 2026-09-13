@@ -4,12 +4,12 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-27 structs · 6 enums · 1 type alias across 12 files.
+31 structs · 7 enums · 1 type alias across 12 files.
 
 ## Index
 
 - [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
-- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `Landed`, `Stores`
+- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `Stores`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
@@ -129,6 +129,69 @@ pub struct Ledger {
 }
 ```
 
+### struct `ElementUpdateOutcome`
+
+One element's own outcome from an `update` call.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElementUpdateOutcome {
+    pub kind: Kind,
+    pub name: String,
+    pub id: String,
+    pub changed: bool,
+    pub note: Option<String>,
+}
+```
+
+### struct `BundleUpdated`
+
+What updating a general (non-legacy) bundle answers with.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleUpdated {
+    pub marketplace: String,
+    pub slug: String,
+    pub from: String,
+    pub to: String,
+    pub changed: bool,
+    pub elements: Vec<ElementUpdateOutcome>,
+}
+```
+
+### struct `ElementUninstalled`
+
+What `uninstall_element` answers with.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElementUninstalled {
+    pub marketplace: String,
+    pub slug: String,
+    pub kind: Kind,
+    pub name: String,
+    pub id: String,
+    pub bundle_removed: bool,
+    pub note: Option<String>,
+}
+```
+
+### struct `ServiceStarted`
+
+What `start_service` answers with.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ServiceStarted {
+    pub marketplace: String,
+    pub slug: String,
+    pub name: String,
+    pub id: String,
+    pub project: Option<String>,
+}
+```
+
 ### enum `Landed`
 
 One element's landing, before it is folded into an `ElementOutcome` and (on success) a `LedgerElement`.
@@ -142,6 +205,22 @@ enum Landed {
         note: Option<String>,
     },
     Blocked(String),
+    Failed(String),
+}
+```
+
+### enum `Relanded`
+
+One already-installed element's relanding, before it is folded into an `ElementUpdateOutcome` and — on success — the fresh fingerprint the ledger keeps.
+
+```rust
+enum Relanded {
+    Ok {
+        fingerprint: String,
+        changed: bool,
+        note: Option<String>,
+    },
+    Skipped(String),
     Failed(String),
 }
 ```
@@ -262,6 +341,14 @@ pub enum Error {
     UnknownElement(String),
     #[error("{0} carries nothing installable — no kind directory, and no dashboard at its root")]
     EmptyBundle(String),
+    #[error("nothing installed from {0}/{1} — install it first")]
+    BundleNotInstalled(String, String),
+    #[error("{0:?} names no element this machine has installed from that bundle")]
+    ElementNotInstalled(String),
+    #[error("{0}")]
+    Store(String),
+    #[error("{0}")]
+    EmbeddingInUse(String),
 }
 ```
 

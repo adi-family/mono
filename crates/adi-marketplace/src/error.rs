@@ -126,6 +126,26 @@ pub enum Error {
     /// the legacy dashboard-at-the-root shape either.
     #[error("{0} carries nothing installable — no kind directory, and no dashboard at its root")]
     EmptyBundle(String),
+    /// Nothing has been installed from `<marketplace>/<slug>` yet, so there is no ledger to
+    /// update, grow, or remove an element from. Never fired for the legacy single-dashboard
+    /// bundle on purpose (decision #6): it writes no ledger at all, and keeps updating through
+    /// `install::update` by its own dashboard id instead.
+    #[error("nothing installed from {0}/{1} — install it first")]
+    BundleNotInstalled(String, String),
+    /// An address named one element of a bundle, but nothing under that coordinate is in the
+    /// ledger — never installed, or already removed.
+    #[error("{0:?} names no element this machine has installed from that bundle")]
+    ElementNotInstalled(String),
+    /// A per-kind store refused an uninstall, an update, or a start for a reason of its own —
+    /// carried verbatim rather than translated, because every store already phrases its own
+    /// refusals for the person reading them.
+    #[error("{0}")]
+    Store(String),
+    /// An embedding backend was asked to be uninstalled while a consumer still resolves through
+    /// it — the same refusal `/api/embeddings/backends/delete` gives, because a consumer whose
+    /// assignment names nothing cannot resolve at all.
+    #[error("{0}")]
+    EmbeddingInUse(String),
 }
 
 /// The outcome alias every fallible operation answers with.
