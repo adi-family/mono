@@ -4,11 +4,12 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-22 structs · 4 enums · 1 type alias across 11 files.
+27 structs · 6 enums · 1 type alias across 12 files.
 
 ## Index
 
 - [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
+- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `Landed`, `Stores`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
@@ -46,6 +47,120 @@ The third coordinate: which element, of which kind.
 pub struct ElementAddress {
     pub kind: Kind,
     pub name: Option<String>,
+}
+```
+
+---
+
+## `src/bundle.rs`
+
+### struct `ElementOutcome`
+
+One element as an install call answers for it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ElementOutcome {
+    pub kind: Kind,
+    pub name: String,
+    pub id: Option<String>,
+    pub renamed: bool,
+    pub note: Option<String>,
+}
+```
+
+### struct `BundleInstalled`
+
+What installing a general (non-legacy) bundle answers with.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleInstalled {
+    pub marketplace: String,
+    pub slug: String,
+    pub project: Option<String>,
+    pub elements: Vec<ElementOutcome>,
+    pub missing_secrets: Vec<String>,
+    pub notes: Vec<String>,
+}
+```
+
+### enum `BundleOutcome`
+
+What `install()` answers with — the legacy single-dashboard bundle is decision #6's named exception, kept on v1's own mechanism verbatim rather than folded into the general shape above.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum BundleOutcome {
+    Legacy(install::Installed),
+    Bundle(BundleInstalled),
+}
+```
+
+### struct `LedgerElement`
+
+One installed element, as the ledger keeps it: enough to answer "what does this bundle have installed, and under what id" without re-reading every store — and, once phase C reads it, a content fingerprint to notice an operator's edit.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerElement {
+    pub kind: Kind,
+    pub name: String,
+    pub id: String,
+    pub fingerprint: String,
+}
+```
+
+### struct `Ledger`
+
+One bundle's whole install record, at `marketplace/installs/<marketplace>/<slug>.json`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ledger {
+    pub marketplace: String,
+    pub slug: String,
+    pub repo: String,
+    pub commit: String,
+    pub branch: Option<String>,
+    pub installed_at: u64,
+    pub updated_at: Option<u64>,
+    pub elements: Vec<LedgerElement>,
+}
+```
+
+### enum `Landed`
+
+One element's landing, before it is folded into an `ElementOutcome` and (on success) a `LedgerElement`.
+
+```rust
+enum Landed {
+    Ok {
+        id: String,
+        fingerprint: String,
+        renamed: bool,
+        note: Option<String>,
+    },
+    Blocked(String),
+    Failed(String),
+}
+```
+
+### struct `Stores`
+
+One handle per store a bundle might land an element into, opened once per `install` call rather than once per element — cheap (every one of them is a thin wrapper over `Config`), and it is what keeps `install` itself down to the address/layout/ledger bookkeeping.
+
+```rust
+struct Stores {
+    agents: adi_agents::Agents,
+    tools: adi_tools::Tools,
+    triggers: adi_triggers::Triggers,
+    projects: adi_projects::Projects,
+    llm_backends: adi_agents::llm::LlmBackends,
+    embedding_backends: adi_embeddings::EmbeddingBackends,
+    secrets: adi_secrets::Secrets,
+    dashboards_dir: PathBuf,
+    parked_services_dir: PathBuf,
 }
 ```
 
@@ -143,6 +258,10 @@ pub enum Error {
     BadAddress(String),
     #[error( "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary \ (docs/marketplace-bundles.md)" )]
     CarriesRust(String, String, String),
+    #[error("{0:?} names no element the repository actually carries")]
+    UnknownElement(String),
+    #[error("{0} carries nothing installable — no kind directory, and no dashboard at its root")]
+    EmptyBundle(String),
 }
 ```
 

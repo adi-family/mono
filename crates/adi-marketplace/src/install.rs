@@ -482,7 +482,10 @@ fn land(
 /// The cached entry `<marketplace>/<slug>` names, from the cache and never the network — install
 /// works offline once a manifest is synced, and the entry a person read on the listing is the
 /// entry they get.
-fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<BundleEntry> {
+///
+/// `pub(crate)` because `crate::bundle`'s installer needs the same lookup for a general bundle —
+/// there is exactly one place a source and a slug become a cached [`BundleEntry`].
+pub(crate) fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<BundleEntry> {
     let source = sources::list(config)?
         .into_iter()
         .find(|s| s.name == source_name)

@@ -241,8 +241,10 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         | E::BadElementName { .. }
         | E::NotAnApp { .. }
         | E::CarriesRust { .. }
+        | E::EmptyBundle(_)
         | E::Git(_)
         | E::Fetch(_) => 502,
+        E::UnknownElement(_) => 404,
         E::Config(_) | E::Io(_) => 500,
     };
     error(status, &e.to_string())

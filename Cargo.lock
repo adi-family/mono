@@ -338,12 +338,22 @@ dependencies = [
 name = "adi-marketplace"
 version = "0.1.0"
 dependencies = [
+ "adi-agents",
  "adi-config",
  "adi-dashboards",
+ "adi-embeddings",
+ "adi-hive",
+ "adi-projects",
+ "adi-secrets",
+ "adi-tools",
+ "adi-triggers",
+ "hex",
  "reqwest",
  "rustls",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "toml",
 ]

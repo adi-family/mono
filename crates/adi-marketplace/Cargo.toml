@@ -13,9 +13,22 @@ adi-config = { workspace = true }
 # A landed app is a dashboard: the manifest it carries, the one-origin hive file both of its
 # services share, and the hostname it claims are all that crate's rules, not this one's.
 adi-dashboards = { workspace = true }
+# Phase B — a bundle's other seven kinds, each landed through its own store's own write path
+# rather than a hand-rolled file write (`docs/marketplace-bundles.md`, "Installing part of a
+# bundle").
+adi-agents = { workspace = true }
+adi-embeddings = { workspace = true }
+adi-hive = { workspace = true }
+adi-projects = { workspace = true }
+adi-secrets = { workspace = true }
+adi-tools = { workspace = true }
+adi-triggers = { workspace = true }
 
+hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml_ng = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 

@@ -45,11 +45,12 @@
 //! is the special case of a bundle whose only element is a dashboard — exactly what this crate
 //! already ships. [`Kind`] is the eight kinds an element may be; [`Address`] is the third
 //! coordinate that addresses one of them; [`read_layout`] and [`scan_for_rust`] read and refuse a
-//! repository's tree at install time. None of it lands anything yet — a bundle installer is new
-//! code beside `install`'s own pipeline, not a change to it (see that document's "What v1's code
-//! assumes this design changes").
+//! repository's tree at install time; [`bundle::install`] lands a selection of them — new code
+//! beside `install`'s own pipeline, not a change to it, except for the one shape decision #6 keeps
+//! on that pipeline verbatim ([`BundleOutcome::Legacy`]).
 
 mod address;
+pub mod bundle;
 mod cache;
 mod error;
 mod fetch;
@@ -62,6 +63,7 @@ pub mod sources;
 pub mod sync;
 
 pub use address::{Address, ElementAddress};
+pub use bundle::{BundleInstalled, BundleOutcome, ElementOutcome, Ledger, LedgerElement};
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
 pub use install::{AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated};

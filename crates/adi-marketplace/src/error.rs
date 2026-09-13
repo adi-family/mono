@@ -116,6 +116,16 @@ pub enum Error {
          (docs/marketplace-bundles.md)"
     )]
     CarriesRust(String, String, String),
+    /// An address named one element of a bundle, but the tree at the pinned commit does not carry
+    /// it — the manifest's preview promised something the repository does not, or the operator
+    /// simply mistyped the coordinate (`docs/marketplace-bundles.md` decision #2: the preview is
+    /// advisory, checked against the real tree only here).
+    #[error("{0:?} names no element the repository actually carries")]
+    UnknownElement(String),
+    /// A bundle whose tree, once read, carries nothing installable: no kind directory, and not
+    /// the legacy dashboard-at-the-root shape either.
+    #[error("{0} carries nothing installable — no kind directory, and no dashboard at its root")]
+    EmptyBundle(String),
 }
 
 /// The outcome alias every fallible operation answers with.

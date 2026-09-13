@@ -12,6 +12,8 @@
 
 use std::fmt;
 
+use serde::de::Error as _;
+
 /// One of the eight platform surfaces a bundle may carry an element for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
@@ -102,6 +104,24 @@ impl fmt::Display for Kind {
     }
 }
 
+/// Serialized as [`Kind::dir`] — the spelling an install report and the install ledger
+/// (`crate::bundle`) both use, since both are keyed by the same coordinate an address is.
+impl serde::Serialize for Kind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.dir())
+    }
+}
+
+/// The inverse of the `Serialize` impl above — a ledger that names a kind this build no longer
+/// recognises is a corrupt read, not a silent drop, because the ledger is this machine's own
+/// record of what it installed.
+impl<'de> serde::Deserialize<'de> for Kind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Kind::from_dir(&word).ok_or_else(|| D::Error::custom(format!("not a bundle element kind: {word:?}")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +156,16 @@ mod tests {
         assert_eq!(Kind::from_wire("apps"), None);
         assert_eq!(Kind::from_wire("agents"), None, "the manifest spells it singular");
         assert_eq!(Kind::from_dir("agent"), None, "the address spells it plural");
+    }
+
+    #[test]
+    fn every_kind_round_trips_through_serde_as_its_dir_spelling() {
+        for kind in Kind::ALL {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            assert_eq!(json, format!("\"{}\"", kind.dir()));
+            let back: Kind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, kind);
+        }
+        assert!(serde_json::from_str::<Kind>("\"apps\"").is_err(), "not a bundle kind");
     }
 }
