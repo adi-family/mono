@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.14.0 — 2026-09-13
+
 ### Added
 
 - **An operator can now see and change which embedding backend the code index, knowledge base and
@@ -32,6 +34,16 @@ extraction script cares about.
   and width it produces, and any same-model fallback; a `candle` backend a build lacks the feature
   for is shown unavailable rather than silently broken. An API key is always named by the
   environment variable it is read from — this surface never displays or accepts a raw key.
+
+### Changed
+
+- **The licence now says plainly what a small organisation may do, and how far one licence
+  reaches.** Restrictions 1(c) and 1(d) — embedding the Licensed Work in something you sell, and
+  running it as a service — contradicted the small-organisation carve-out in the Grant of Rights;
+  small organisations are now exempt from both. What has not changed is the reach: a licence covers
+  one company, so anyone using the Licensed Work *through* another org's product or service needs
+  their own. Nothing in the software behaves differently — read
+  [LICENSE](LICENSE) if you run adi commercially.
 
 ### Fixed
 
@@ -91,6 +103,13 @@ extraction script cares about.
   band regardless of the filter, the ★, or whether it was hidden, and shows there once rather than
   also in the Hidden list — the question is what needs seeing, not who started the conversation or
   where it was filed.
+
+- **Opening the live graph on a busy machine drew the shape of the work with none of its words.**
+  Fitting eighty-three cards takes the scale below the point where labels are dropped, so the first
+  view was a field of unlabelled boxes — and no wrap setting or card limit tunes that out. An
+  automatic fit now stops at the readable floor with the left edge on screen, where the roots are
+  and where the story starts. The *Fit* button itself is unchanged: ask for the whole graph and you
+  still get it, labels or no labels.
 
 ## 1.13.3 — 2026-09-12
 
