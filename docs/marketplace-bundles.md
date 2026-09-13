@@ -1,11 +1,17 @@
-# Marketplace bundles — a design for v2
+# Marketplace bundles — v2
 
-**Status: design.** Nothing described here is built. It extends the shipped v1 spec
-(`docs/marketplace.md`) rather than replacing it — every v1 property without a stated reason to
-break it still holds: one HTTPS JSON manifest the operator adds by hand, an entry pins a git repo
-at a full 40-hex commit, install reads the cache and never the network, what lands is inert until
-somebody starts it, and there is no server, no accounts, no hosting. This document is what changes
-on top of that, and why. Tracked as ADI-MONO-49.
+**Status: built.** `c895763` laid out the design below; `6fd62c3` (phase A — bundle manifest, repo
+layout reader, no-Rust scan), `3776305` (phase B — installing a bundle's elements), `3cf8fcc`
+(phase C — update, growing an install, removing an element, starting a service), `59bff6b` (phase
+D — the operator surface: CLI, API, panel) and `acbd8b9` (the panel's bundle status block) built
+it, all on `main`. It extends the shipped v1 spec (`docs/marketplace.md`) rather than replacing
+it — every v1 property without a stated reason to break it still holds: one HTTPS JSON manifest
+the operator adds by hand, an entry pins a git repo at a full 40-hex commit, install reads the
+cache and never the network, what lands is inert until somebody starts it, and there is no server,
+no accounts, no hosting. This document is what changes on top of that, and why. Tracked as
+ADI-MONO-49. The `adi-mono` binary installed on this machine is deliberately not redeployed for
+this — the new `marketplace` verbs reach it at the next release cut, the same as any other CLI
+change here.
 
 ## What changed, in one paragraph
 
