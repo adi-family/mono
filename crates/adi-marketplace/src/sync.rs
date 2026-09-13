@@ -111,7 +111,7 @@ fn sync_one(
         .and_then(|bytes| manifest::parse(&bytes).map_err(|e| e.to_string()))
     {
         Ok(fresh) => {
-            let apps = fresh.apps.len();
+            let apps = fresh.bundles.len();
             let cached = cache::write(
                 config,
                 &source.name,
@@ -138,7 +138,7 @@ fn sync_one(
             };
             match manifest {
                 Some(manifest) => {
-                    let apps = manifest.apps.len();
+                    let apps = manifest.bundles.len();
                     let cached = cache::write(
                         config,
                         &source.name,

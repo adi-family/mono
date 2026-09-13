@@ -39,20 +39,35 @@
 //! Sync degrades rather than fails: a URL that cannot be fetched leaves the stale cache standing
 //! with a warning recorded beside it, because a marketplace that is unreachable is a listing
 //! problem, not a data-loss problem.
+//!
+//! **v2 (`docs/marketplace-bundles.md`) generalizes what an item is** without breaking anything
+//! above: every marketplace item is a bundle, a named collection of platform elements, and an app
+//! is the special case of a bundle whose only element is a dashboard — exactly what this crate
+//! already ships. [`Kind`] is the eight kinds an element may be; [`Address`] is the third
+//! coordinate that addresses one of them; [`read_layout`] and [`scan_for_rust`] read and refuse a
+//! repository's tree at install time. None of it lands anything yet — a bundle installer is new
+//! code beside `install`'s own pipeline, not a change to it (see that document's "What v1's code
+//! assumes this design changes").
 
+mod address;
 mod cache;
 mod error;
 mod fetch;
 pub mod git;
 pub mod install;
+mod kind;
+mod layout;
 mod manifest;
 pub mod sources;
 pub mod sync;
 
+pub use address::{Address, ElementAddress};
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
 pub use install::{AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated};
-pub use manifest::{AppEntry, MarketplaceManifest, Media, MediaKind};
+pub use kind::Kind;
+pub use layout::{Layout, LayoutElement, read_layout, scan_for_rust};
+pub use manifest::{BundleEntry, Element, MarketplaceManifest, Media, MediaKind};
 
 use adi_config::Config;
 

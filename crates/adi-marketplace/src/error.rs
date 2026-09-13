@@ -30,11 +30,11 @@ pub enum Error {
     #[error("{0:?} names no app — install takes <marketplace>/<app-slug>, e.g. adi/crm")]
     BadSpec(String),
     /// The slug an entry carries is not one safe path segment.
-    #[error("app slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
+    #[error("bundle slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
     BadSlug(String),
     /// The repository an entry names is not one this build will clone.
     #[error(
-        "{0:?} is not a repository this installs from — an app's repo must be an https:// url \
+        "{0:?} is not a repository this installs from — a bundle's repo must be an https:// url \
          (or a file:// path while it is being developed)"
     )]
     BadRepo(String),
@@ -46,7 +46,7 @@ pub enum Error {
     BadCommit(String, String),
     /// The icon an entry publishes is not one a listing will draw.
     #[error(
-        "{0} carries an icon this will not draw: {1:?} — an app's icon must be an https:// url, \
+        "{0} carries an icon this will not draw: {1:?} — a bundle's icon must be an https:// url, \
          or a data:image/… uri to carry it in the manifest itself and fetch nothing"
     )]
     BadIcon(String, String),
@@ -86,6 +86,36 @@ pub enum Error {
     /// Nothing could be fetched.
     #[error("{0}")]
     Fetch(String),
+    /// An element in a bundle's preview carries no kind — required whenever `elements` is
+    /// published at all.
+    #[error(
+        "{0} publishes an element with no kind — one of agent, tool, dashboard, llm, embedding, \
+         service, trigger, project is required"
+    )]
+    BadElementKind(String),
+    /// An element's name is not one safe path segment — it doubles as the third address
+    /// coordinate (`<marketplace>/<slug>/<kind>/<name>`), so it is held to the same rule a slug is.
+    #[error(
+        "{0} publishes an element named {1:?}, which is not a single safe path segment: {rule}",
+        rule = adi_config::NAME_RULE
+    )]
+    BadElementName(String, String),
+    /// An address named more than a bundle, and what followed the slug was not one element of it.
+    #[error(
+        "{0:?} does not name one element of a bundle — use <marketplace>/<slug>/<kind>/<name> \
+         (agents, tools, dashboards, llm, embeddings, services, triggers) or \
+         <marketplace>/<slug>/project for the scaffold"
+    )]
+    BadAddress(String),
+    /// A bundle repository carries Rust — source or a compiled binary — under one of its kind
+    /// directories. Refused per "No Rust in an item": the store has never grown the capability to
+    /// compile or run anything untrusted, and a bundle is not where that starts
+    /// (`docs/marketplace-bundles.md`).
+    #[error(
+        "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary \
+         (docs/marketplace-bundles.md)"
+    )]
+    CarriesRust(String, String, String),
 }
 
 /// The outcome alias every fallible operation answers with.

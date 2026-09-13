@@ -4,18 +4,50 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-17 structs · 3 enums · 1 type alias across 8 files.
+22 structs · 4 enums · 1 type alias across 11 files.
 
 ## Index
 
+- [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
 - [`src/install.rs`](#srcinstallrs) — `InstallRecord`, `CachedApp`, `AppMedia`, `AppInstall`, `Installed`, `Started`, `Updated`
+- [`src/kind.rs`](#srckindrs) — `Kind`
+- [`src/layout.rs`](#srclayoutrs) — `Layout`, `LayoutElement`
 - [`src/lib.rs`](#srclibrs) — `Marketplace`
-- [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `AppEntry`, `Media`, `MediaKind`
+- [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `BundleEntry`, `Element`, `Media`, `MediaKind`
 - [`src/sources.rs`](#srcsourcesrs) — `Source`, `SourcesFile`
 - [`src/sync.rs`](#srcsyncrs) — `SyncResult`, `SyncStatus`
+
+---
+
+## `src/address.rs`
+
+### struct `Address`
+
+One marketplace item, addressed down to at most one element.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Address {
+    pub marketplace: String,
+    pub slug: String,
+    pub element: Option<ElementAddress>,
+}
+```
+
+### struct `ElementAddress`
+
+The third coordinate: which element, of which kind.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ElementAddress {
+    pub kind: Kind,
+    pub name: Option<String>,
+}
+```
 
 ---
 
@@ -77,13 +109,13 @@ pub enum Error {
     UnknownSource(String),
     #[error("{0:?} names no app — install takes <marketplace>/<app-slug>, e.g. adi/crm")]
     BadSpec(String),
-    #[error("app slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
+    #[error("bundle slug {0:?} is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE)]
     BadSlug(String),
-    #[error( "{0:?} is not a repository this installs from — an app's repo must be an https:// url \ (or a file:// path while it is being developed)" )]
+    #[error( "{0:?} is not a repository this installs from — a bundle's repo must be an https:// url \ (or a file:// path while it is being developed)" )]
     BadRepo(String),
     #[error( "{0} pins {1:?}, which is not a commit — a manifest pins a full 40-character commit, \ never a branch or a tag, because the pin is what makes an install repeatable" )]
     BadCommit(String, String),
-    #[error( "{0} carries an icon this will not draw: {1:?} — an app's icon must be an https:// url, \ or a data:image/… uri to carry it in the manifest itself and fetch nothing" )]
+    #[error( "{0} carries an icon this will not draw: {1:?} — a bundle's icon must be an https:// url, \ or a data:image/… uri to carry it in the manifest itself and fetch nothing" )]
     BadIcon(String, String),
     #[error( "{0} carries a gallery item this will not draw: {1:?} — a picture or clip must be an \ https:// url, or a data:image/… or data:video/… uri to carry it in the manifest itself" )]
     BadMedia(String, String),
@@ -103,6 +135,14 @@ pub enum Error {
     Dirty(String),
     #[error("{0}")]
     Fetch(String),
+    #[error( "{0} publishes an element with no kind — one of agent, tool, dashboard, llm, embedding, \ service, trigger, project is required" )]
+    BadElementKind(String),
+    #[error( "{0} publishes an element named {1:?}, which is not a single safe path segment: {rule}", rule = adi_config::NAME_RULE )]
+    BadElementName(String, String),
+    #[error( "{0:?} does not name one element of a bundle — use <marketplace>/<slug>/<kind>/<name> \ (agents, tools, dashboards, llm, embeddings, services, triggers) or \ <marketplace>/<slug>/project for the scaffold" )]
+    BadAddress(String),
+    #[error( "{0} carries {1} at {2} — an item may never carry Rust source or a compiled binary \ (docs/marketplace-bundles.md)" )]
+    CarriesRust(String, String, String),
 }
 ```
 
@@ -253,6 +293,57 @@ pub struct Updated {
 
 ---
 
+## `src/kind.rs`
+
+### enum `Kind`
+
+One of the eight platform surfaces a bundle may carry an element for.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Kind {
+    Agent,
+    Tool,
+    Dashboard,
+    Llm,
+    Embedding,
+    Service,
+    Trigger,
+    Project,
+}
+```
+
+---
+
+## `src/layout.rs`
+
+### struct `Layout`
+
+What a repository's tree really carries, read off the pinned commit.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Layout {
+    pub elements: Vec<LayoutElement>,
+    pub legacy: bool,
+}
+```
+
+### struct `LayoutElement`
+
+One element as the tree actually carries it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutElement {
+    pub kind: Kind,
+    pub name: Option<String>,
+    pub path: PathBuf,
+}
+```
+
+---
+
 ## `src/lib.rs`
 
 ### struct `Marketplace`
@@ -279,18 +370,18 @@ One marketplace's manifest, as hosted at its URL.
 pub struct MarketplaceManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default)]
-    pub apps: Vec<AppEntry>,
+    #[serde(default, alias = "apps")]
+    pub bundles: Vec<BundleEntry>,
 }
 ```
 
-### struct `AppEntry`
+### struct `BundleEntry`
 
-One app in a marketplace: the listing text, and the repository and commit it installs from.
+One bundle in a marketplace: the listing text, and the repository and commit it installs from.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AppEntry {
+pub struct BundleEntry {
     pub slug: String,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -309,6 +400,22 @@ pub struct AppEntry {
     pub commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<Element>,
+}
+```
+
+### struct `Element`
+
+One element a bundle's manifest previews.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Element {
+    pub kind: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 ```
 

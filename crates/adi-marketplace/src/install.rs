@@ -35,7 +35,7 @@ use crate::Marketplace;
 use crate::cache;
 use crate::error::{Error, Result};
 use crate::git;
-use crate::manifest::{AppEntry, MediaKind};
+use crate::manifest::{BundleEntry, MediaKind};
 use crate::sources;
 use adi_config::Config;
 
@@ -245,7 +245,7 @@ pub fn cached_apps(config: &Config) -> Vec<CachedApp> {
         let Some(manifest) = envelope.manifest else {
             continue;
         };
-        for entry in manifest.apps {
+        for entry in manifest.bundles {
             let pin = entry.pin();
             let installs = here
                 .iter()
@@ -374,7 +374,7 @@ fn staging_dir(market: &Marketplace) -> PathBuf {
 
 /// Clone the entry into staging, strip what a repository may not bring, and say what stood out.
 /// The staged directory is left at `staging/<id>` for the caller to move in.
-fn stage(market: &Marketplace, id: &str, entry: &AppEntry) -> Result<(git::Pin, Vec<String>)> {
+fn stage(market: &Marketplace, id: &str, entry: &BundleEntry) -> Result<(git::Pin, Vec<String>)> {
     let staging = staging_dir(market);
     let dest = staging.join(id);
     let _ = std::fs::remove_dir_all(&dest);
@@ -443,7 +443,7 @@ fn land(
     dir: &Path,
     marketplace: &str,
     name: &str,
-    entry: &AppEntry,
+    entry: &BundleEntry,
     pin: &git::Pin,
 ) -> Result<String> {
     write_manifest(
@@ -482,7 +482,7 @@ fn land(
 /// The cached entry `<marketplace>/<slug>` names, from the cache and never the network — install
 /// works offline once a manifest is synced, and the entry a person read on the listing is the
 /// entry they get.
-fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<AppEntry> {
+fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<BundleEntry> {
     let source = sources::list(config)?
         .into_iter()
         .find(|s| s.name == source_name)
@@ -494,7 +494,7 @@ fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<AppEntry> 
         .manifest
         .ok_or_else(|| Error::NotSynced(source.name.clone()))?;
     manifest
-        .app(slug)
+        .bundle(slug)
         .cloned()
         .ok_or_else(|| Error::UnknownApp(source.name.clone(), slug.to_string(), manifest.slugs()))
 }

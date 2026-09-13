@@ -229,7 +229,7 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
     let status = match e {
         E::UnknownSource(_) | E::UnknownApp { .. } | E::NotInstalled(_) => 404,
         E::NotSynced(_) | E::Duplicate(_) | E::Dirty(_) => 409,
-        E::InvalidName(_) | E::NotHttps(_) | E::BadSpec(_) | E::EmptyName => 400,
+        E::InvalidName(_) | E::NotHttps(_) | E::BadSpec(_) | E::BadAddress(_) | E::EmptyName => 400,
         // Everything a publisher got wrong, and everything git or the network refused: the ask
         // was fine, the far end was not.
         E::BadSlug(_)
@@ -237,7 +237,10 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         | E::BadCommit { .. }
         | E::BadIcon { .. }
         | E::BadMedia { .. }
+        | E::BadElementKind(_)
+        | E::BadElementName { .. }
         | E::NotAnApp { .. }
+        | E::CarriesRust { .. }
         | E::Git(_)
         | E::Fetch(_) => 502,
         E::Config(_) | E::Io(_) => 500,
@@ -498,5 +501,12 @@ mod tests {
         assert_eq!(status(&E::Git("clone failed".into())), 502);
         assert_eq!(status(&E::Fetch("unreachable".into())), 502);
         assert_eq!(status(&E::Duplicate("adi".into())), 409);
+        assert_eq!(status(&E::BadAddress("adi/crm/nope".into())), 400);
+        assert_eq!(status(&E::BadElementKind("crm-suite".into())), 502);
+        assert_eq!(status(&E::BadElementName("crm-suite".into(), "../evil".into())), 502);
+        assert_eq!(
+            status(&E::CarriesRust("crm-suite".into(), "a .rs file".into(), "tools/x.rs".into())),
+            502
+        );
     }
 }
