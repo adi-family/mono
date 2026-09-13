@@ -20,6 +20,49 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.15.0 — 2026-09-14
+
+### Added
+
+- **The marketplace installs more than apps now.** An item is a *bundle*: a named collection of
+  platform elements from one repository — agents, tools, dashboards, LLM and embedding backends,
+  hive services, triggers, and a project of its own — and you can take all of it or exactly one
+  element (`adi-mono marketplace install adi/crm-suite/tools/csv-import`). Each element is written
+  through its own store's ordinary path, so what lands is a normal agent, a normal tool, a normal
+  backend. Nothing arrives running: a trigger lands disabled whatever the publisher wrote, a hive
+  service lands parked outside the supervisor's reach until you start it, a dashboard lands inert
+  as it always has. An item may never carry Rust source or a compiled binary, and an install that
+  finds either refuses before anything is written. Updating is per element and fast-forward only —
+  an element you have edited is left alone and reported rather than walked over.
+
+- **An install now goes somewhere you choose, and the same bundle can be installed more than
+  once.** Pressing Install asks where: a new project (the default, and what we recommend), a
+  project you already have, or globally — which is offered, marked, and never the default, because
+  every agent on the machine can reach what lands there and a second copy of the same bundle would
+  have nowhere to go. Each install keeps its own pin, so the CRM suite in one project can sit two
+  releases behind the copy in another and update when you say so. Where a name is already taken, a
+  project-scoped copy lands under one of its own (`csv-import-2`) and the install rewrites that
+  bundle's own references — an agent's tools, its backends — to the ids that really landed, so the
+  second copy's agent uses the second copy's tool. `--project` and `--new-project` do the same from
+  the CLI.
+
+- **A marketplace source may be a `file://` manifest**, so a bundle and the manifest that lists it
+  can be developed and installed end to end before either has anywhere to be published. Fetching
+  over the network is still HTTPS, always.
+
+### Changed
+
+- **The Marketplace screen is a shelf you browse and a page per item you act from.** A listing row
+  is a link and carries nothing to press: the mark, the name, what the item contains in plain words
+  ("agent · 2 tools · dashboard"), where it comes from compressed to `host/path @ 9f2c1d4`, and a
+  dot saying what this machine already has of it. The item's own page is where everything happens —
+  one filled Install, the publisher's gallery with a caption and a counter, the three things
+  installing actually does to your machine, **What's included** with an action per element,
+  **Installed here** with one block per copy, and the repository, commit, branch and address last,
+  where somebody checking them knows to look. The version before this put an install button, an
+  install form and an element list on every row, which read as a configuration dump rather than a
+  place to find something.
+
 ## 1.14.0 — 2026-09-13
 
 ### Added
