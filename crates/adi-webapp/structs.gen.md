@@ -688,7 +688,7 @@ type LoginField = (&'static str, fn(LlmBackendsForm) -> RwSignal<String>);
 
 ### type `OpenApp`
 
-Where a click on an app's name goes.
+Where a click on an item's name goes.
 
 ```rust
 type OpenApp = Option<RwSignal<String>>;

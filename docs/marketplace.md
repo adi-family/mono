@@ -230,11 +230,24 @@ whether you are trusting the publisher's *latest* or the publisher's *published*
 
 ## The panel
 
+The marketplace is two screens, and the split is deliberate: **the listing is for browsing and the
+item's own page is where you act.**
+
 `/marketplace` lists cached entries grouped by marketplace, with the source's URL and freshness
-(each source's stale state is said out loud), the repository and pinned commit on each row, and
-the install form that asks what to call your copy. Every installed copy appears under its entry
-with where it stands, a Start button while it is inert, and Update when the manifest has moved
-past it. **No install counts anywhere on it** — under the standing decision
+(each source's stale state is said out loud). A row is a link to the item's page and carries
+nothing to press: the mark, the name, the one-line description, what the item contains
+("agent · 2 tools · dashboard"), the repository and pinned commit compressed to
+`host/path @ 9f2c1d4`, and — when this machine has any of it — a dot and a short state
+("installed", "2 of 4 installed", "update waiting").
+
+`/marketplace/<marketplace>/<slug>` is the item: its mark and name, the one filled action (Install
+— which for a legacy single-dashboard entry opens the form that asks what to call your copy, and
+for a bundle installs every element it offers), its gallery, the three things installing actually
+does to this machine, **What's included** with an action per element, the long form, and last of
+all the repository, commit, branch and address in full. Every installed copy appears under it with
+where it stands, a Start button while it is inert, and Update when the manifest has moved past it.
+
+**No install counts anywhere on either** — under the standing decision
 (`decisions/2026-08-22-ten-thousand-counts-only-adi-installs.md`) a marketplace install does not
 count toward the 10,000, and a count is not the story the page should tell.
 

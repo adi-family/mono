@@ -362,8 +362,9 @@ per-element question for a multi-element bundle, not a single yes/no the way it 
 
 The listing shows a bundle the way v1 shows an app — cached entry, every install of it — with one
 addition: **installed** is now a fraction. A bundle's row names how many of its `elements` are
-installed here (2 of 4, say), which ones, under what ids, whether each is outdated against the
-current pin, and whether any named secret is still missing. There is no "fully installed" state
+installed here (2 of 4, say) and whether the pin has moved past them; the bundle's own page is
+where that fraction is broken out — which ones, under what ids, whether any named secret is still
+missing, and an Install or an Uninstall per element (`docs/marketplace.md`, "The panel"). There is no "fully installed" state
 that means anything more than "every element the manifest currently lists happens to be here" —
 installing a fifth element the publisher adds later is exactly as ordinary as installing the first
 four were, addressed the same way (`adi/crm-suite/agents/new-thing`), against the same install

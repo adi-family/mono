@@ -1,9 +1,15 @@
 // Page-local styles for `src/pages/marketplace.rs`. Shared components live in adi-css; a shape
 // that exists on one page lives here. Tokens from design/tokens.css only.
+//
+// Two screens, and the difference between them is the whole design: the **listing** is a shelf —
+// rows that are links, one tone, nothing to press — and an **item's page** is where the acts are.
+// So the listing is tuned for scanning (one weight for names, everything else dim, no control in
+// sight) and the page is tuned for deciding (a head with one filled action, the pictures, the
+// contents with an action each, the machine facts last).
 
 // ---- the page it has of its own (`/marketplace`, the `Market` door in `src/main.rs`) ---------
 // The workbench's lid over a body that scrolls on its own, and nothing else: no explorer, no
-// store rail — the apps are the page. The listing inside it is the same one the panel draws.
+// store rail — the items are the page. The listing inside it is the same one the panel draws.
 .adi-market-page {
   height: 100dvh;
   display: flex;
@@ -19,9 +25,9 @@
   }
 
   // The reading width the rest of the system uses, centred in the viewport. Without the width a
-  // row's name and its one action sit at opposite ends of a 27" display, with the sentence
-  // between them belonging to neither; without the centring the page hangs off the left edge —
-  // this screen has no explorer beside it to be pushed over by, which is the only reason the
+  // row's name and its state sit at opposite ends of a 27" display, with the sentence between
+  // them belonging to neither; without the centring the page hangs off the left edge — this
+  // screen has no explorer beside it to be pushed over by, which is the only reason the
   // workbench's own container sits where it does.
   .adi-container {
     max-width: var(--container);
@@ -29,14 +35,18 @@
   }
 }
 
-// The line under the page title: what the page does, and Sync at the right.
+// The line under the page title: what the shelf is, and Sync at the right.
 .adi-market__lead {
   display: flex;
   align-items: center;
   gap: 16px;
   margin-bottom: 8px;
+  max-width: 80ch;
   font-size: var(--fs-small);
   color: var(--ink-2);
+
+  // Sync is the one control here and it should not be pushed off the measure with the sentence.
+  .adi-spacer { min-width: 16px; }
 }
 
 // A source's URL in its section head: a machine string, and never wider than the room it has.
@@ -48,33 +58,44 @@
   white-space: nowrap;
 }
 
-// One entry: the row, its install form while it is open, and a line per copy installed here.
-// The hairline sits on the entry rather than the row, so a form and its copies read as belonging
-// to the app above them instead of as three separate rows.
-.adi-market__entry {
-  border-bottom: 1px solid var(--line);
+// A stale source's sentence runs long (it carries the fetch's own error), so it wraps inside the
+// head rather than pushing the section's name off the left edge.
+.adi-updated {
+  max-width: 60ch;
+  text-align: right;
 }
 
-// One app per row: its mark, what it is, and the one action — the middle takes the slack, so the
-// mark stays beside the name it belongs to however wide the page is.
+// ---- the shelf ------------------------------------------------------------------------------
+// One item per row, and the whole row is a link to its page. The hover tone bleeds 12px into the
+// gutters so the target reads as the row rather than as the text inside it, and the hairline
+// stays on the row's own box so the rule still lines up with the section above it.
 .adi-market__row {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 0;
+  padding: 14px 12px;
+  margin-inline: -12px;
+  border-radius: var(--r);
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--transition);
+
+  &:hover {
+    background: var(--bg-hover);
+    text-decoration: none;
+  }
+
+  &:last-child { border-bottom: none; }
 }
 
-// The app's mark at the head of its row. One size whether the manifest published an image or
+// The item's mark at the head of its row. One size whether the manifest published an image or
 // not, so the column of names stays a column; `--bg-raise` under the image as well as behind the
 // glyph, so an icon that fails to load is the same quiet square as one that was never published.
 .adi-market__icon {
   flex: none;
-  // Beside the name rather than the middle of the block: a row is four lines deep by the time it
-  // has a description, keywords and a repository, and a mark centred against all of that reads
-  // as belonging to whichever line it happens to land on.
-  align-self: flex-start;
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: var(--r);
   background: var(--bg-raise);
   object-fit: cover;
@@ -87,53 +108,12 @@
   color: var(--ink-3);
 }
 
-// What the entry is about, under its description: tags, wrapping — a publisher may file an app
-// under more words than a row is wide.
-.adi-market__tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding-top: 2px;
-}
-
-// Where the app comes from: repository and pinned commit, a machine string on one line.
-.adi-market__origin {
-  min-width: 0;
-  max-width: 60ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-// The install form and the line under it that says the name is not a decision to agonise over.
-.adi-market__install {
-  padding: 0 0 12px;
-
-  .adi-hint {
-    padding-top: 6px;
-  }
-}
-
-// One installed copy, under the entry it came from.
-.adi-market__copy {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 0 8px 16px;
-  border-top: 1px solid var(--line);
-  font-size: var(--fs-small);
-}
-
-.adi-market__copy-name {
-  color: var(--ink);
-}
-
 .adi-market__about {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .adi-market__title {
@@ -142,91 +122,87 @@
   gap: 8px;
 }
 
+// The one thing on the row carrying weight. Everything under it is dimmer and smaller, which is
+// what makes a listing of twenty scannable in one pass (§2.2).
 .adi-market__name {
+  font-size: var(--fs-ui-sm);
   font-weight: 500;
   color: var(--ink);
 }
 
 .adi-market__desc {
+  max-width: 80ch;
   font-size: var(--fs-small);
   color: var(--ink-2);
 }
 
-.adi-market__actions {
+// The row's third line: what the item carries, then where it comes from. Two facts of different
+// kinds, so they are two spans with a middot between rather than one sentence.
+.adi-market__meta {
   display: flex;
-  gap: 12px;
-  align-items: center;
-  flex: none;
-}
-
-// What the row is waiting on, said beside the button rather than as a badge.
-.adi-market__state {
-  font-size: var(--fs-small);
-  color: var(--ink-3);
-}
-
-// A general bundle's own status: installed as a fraction, which elements under what ids, the
-// update prompt when it is behind, and any secret its installed elements still lack. Under the
-// entry's copies (or the app page's facts) the same way they are — a hairline above, never a
-// card — because this is one more thing the entry has to say, not a second surface.
-.adi-market__bundle {
-  padding: 8px 0 8px 16px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
+  align-items: baseline;
   gap: 8px;
-  font-size: var(--fs-small);
-}
-
-// One kind's own section under the bundle status: a heading naming it, then its elements. Only
-// the kinds a bundle actually carries an element of are drawn, so this never has to say "none."
-.adi-market__group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-// Sentence case, untracked: a kind heading is a label, and DESIGN.md §8 has no "anywhere" in it
-// by accident — an uppercase tracked one here would be the only one in the panel.
-.adi-market__grouphead {
-  margin: 0;
-  color: var(--ink-3);
+  min-width: 0;
   font-size: var(--fs-label);
-  font-weight: 500;
+  color: var(--ink-3);
+
+  > * + *::before {
+    content: "\00b7";
+    margin-right: 8px;
+  }
 }
 
-// One element per line: no bullets, no indent beyond the group's own — it already reads as a
-// sub-list of the kind heading above it.
-.adi-market__elements {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
+.adi-market__contents { flex: none; }
 
-// The one line the manifest's preview publishes for an element not yet installed — beside its
-// name rather than under it, since the row still has to fit the action on the same line.
-.adi-market__elementdesc {
-  color: var(--ink-2);
-  font-size: var(--fs-small);
+// Where the item comes from: repository and pinned commit, elided rather than wrapped — the whole
+// string is in the row's `title` and on the item's own page.
+.adi-market__origin {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--ink-3);
+  font-size: var(--fs-label);
 }
 
-// ---- one app's own page (`/marketplace/<marketplace>/<slug>`) --------------------------------
+// What this machine already has of the item, at the end of the row: at most two short states,
+// right-aligned so they form their own column down the listing.
+.adi-market__rowstate {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+// A state said with a dot and a word — never a filled badge (§6 Status).
+//
+// The gap is on the container and the dot's own right margin is dropped inside it: these are flex
+// items, and whitespace between flex items is not rendered — "installed as" and the id it landed
+// under would otherwise run together into one word.
+.adi-market__here {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--fs-small);
+  color: var(--ink-2);
+  white-space: nowrap;
+
+  .adi-dot { margin-right: 0; }
+  .adi-mono { color: var(--code); }
+}
+
+// ---- one item's own page (`/marketplace/<marketplace>/<slug>`) -------------------------------
 // The order down the page is the order it is read in: what it is, what it looks like, what it
-// does in full, then the machine facts about what would be cloned. Sections are separated by
+// costs you, what is in it, the long form, then the machine facts. Sections are separated by
 // space and hairlines (§2.5), never by cards.
 .adi-market__app {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 32px;
   // The prose and the pictures read at one width; the page itself is wider than either.
-  max-width: 900px;
+  max-width: 920px;
+  padding-bottom: 48px;
 }
 
 // The way back to the listing, above everything.
@@ -235,27 +211,36 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  margin-bottom: -16px;
   color: var(--ink-3);
   font-size: var(--fs-small);
 
   &:hover { color: var(--ink); text-decoration: none; }
 }
 
-// The head: the mark, the name and what it is for, and the one action.
-.adi-market__apphead {
+// Everything above the pictures: the head, the name form when it is open, and whatever the last
+// action had to say. One child of the page's flex column, so a closed form costs no space.
+.adi-market__head {
   display: flex;
-  align-items: flex-start;
+  flex-direction: column;
   gap: 16px;
 }
 
-// The mark at page size. The tile inside it is the listing's, told to fill this box, so an app
+// The head: the mark, what this is and what it is for, and the one act.
+.adi-market__hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+// The mark at page size. The tile inside it is the listing's, told to fill this box, so an item
 // with no icon gets the same square here as it does in the row.
 .adi-market__appmark {
   flex: none;
 
   .adi-market__icon {
-    width: 64px;
-    height: 64px;
+    width: 72px;
+    height: 72px;
     border-radius: var(--r-lg);
   }
 }
@@ -268,23 +253,69 @@
   gap: 6px;
 }
 
-// The page's one title (§4): 20px/600, with the published version beside it in mono.
+// The line above the name: shape, size, source. A label, so 12px and `--ink-3` — sentence case
+// and untracked like every other label in the app (§8).
+.adi-market__eyebrow {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+}
+
+// The page's one title (§4): 22px/600, with the published version beside it in mono.
 .adi-market__apptitle {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
   margin: 0;
-  font-size: 20px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -.01em;
 }
 
-// The one-liner under it, in the reading width a lead gets.
+// The publisher's own sentence, at the width prose is read at.
 .adi-market__applead {
   margin: 0;
   max-width: 64ch;
   color: var(--ink-2);
-  font-size: var(--fs-ui);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+}
+
+// What the item is about, as tags under the lead (§6 "Tag").
+.adi-market__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+// The act, and the one line under it that says what pressing it does not do. Right-aligned
+// against the head, so the eye finds it in the same place on every item's page.
+.adi-market__heroact {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 34ch;
+
+  // The screen's one orange, a step larger than an ordinary button because it is the reason the
+  // page exists — still the system's own 13.5px label, never a marketing button.
+  .adi-btn {
+    padding: 9px 18px;
+  }
+}
+
+.adi-market__heronote {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  text-align: right;
+}
+
+// The name form, under the head rather than inside it so the head does not move when it opens.
+.adi-market__install {
+  padding: 0;
+
+  .adi-hint { padding-top: 6px; }
 }
 
 // --- the gallery ---------------------------------------------------------------------------
@@ -297,15 +328,13 @@
 // The stage: one picture or clip at a time, on the raised surface so a transparent PNG and a
 // letterboxed video both sit on something rather than floating on the page.
 .adi-market__stage {
-  margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .adi-market__media {
   width: 100%;
-  max-height: 60vh;
+  max-height: 62vh;
   border-radius: var(--r-lg);
   border: 1px solid var(--line);
   background: var(--bg-raise);
@@ -313,9 +342,28 @@
   object-fit: contain;
 }
 
+// Under the stage: the publisher's line on the left, where you are and the way on at the right.
+.adi-market__galleryfoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+
 .adi-market__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ink-3);
   font-size: var(--fs-label);
+}
+
+// "3 of 4" — a count, so sans and tabular (§8), never mono.
+.adi-market__counter {
+  font-size: var(--fs-label);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 
 // The strip under it. Only drawn when there is more than one thing to show.
@@ -368,17 +416,156 @@
   color: var(--ink);
 }
 
-// --- the long form -------------------------------------------------------------------------
-// adi-ui's Markdown brings its own type; what is here is the measure it reads at and the rule
-// that separates it from the pictures above.
+// --- what installing actually costs you ------------------------------------------------------
+// Three properties the store implements, on one line between the pictures and the contents —
+// which is where somebody has decided they want it and started wondering what it does to their
+// machine. Hairlines above and below, no fill: it is a line of the page, not a banner.
+.adi-market__assurances {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 32px;
+  margin: 0;
+  padding: 12px 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  svg { flex: none; }
+}
+
+// --- what's included -------------------------------------------------------------------------
+.adi-market__included,
+.adi-market__copies,
+.adi-market__readme {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.adi-market__sechead {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.adi-market__sectitle {
+  margin: 0;
+  font-size: var(--fs-section);
+  font-weight: 600;
+}
+
+// What the row is waiting on, said beside the heading or the button rather than as a badge.
+.adi-market__state {
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+
+// One element per line: no bullets, and a hairline between rows rather than a card around each —
+// this is a list of things, and a card each would be six cards on one page (§8).
+.adi-market__elements {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+.adi-market__element {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-inline: -12px;
+  border-radius: var(--r);
+  border-bottom: 1px solid var(--line);
+
+  &:hover { background: var(--bg-hover); }
+  &:last-child { border-bottom: none; }
+}
+
+// The kind's glyph, in a fixed slot so every name on the list starts at the same x. No tile
+// behind it: §9 is explicit that an icon never sits on a square of its own.
+.adi-market__elementicon {
+  flex: none;
+  display: inline-flex;
+  width: 20px;
+  color: var(--ink-3);
+}
+
+.adi-market__elementabout {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.adi-market__elementname {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--fs-ui-sm);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+// Which of the eight this is, as a tag beside the name (§6 "Tag": sans, 12px, pill, `--ink-2`) —
+// dimmer than the tag a keyword gets, because the reader is scanning names and this is the
+// column they land in only when two names look alike.
+.adi-market__kind {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--r-pill);
+  background: var(--chip);
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+  font-weight: 400;
+}
+
+// The one line the manifest's preview publishes for an element — under the name, where a second
+// line belongs, rather than beside it fighting for the same 40 characters.
+.adi-market__elementdesc {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+}
+
+// --- the copies already here (the legacy single-dashboard shape) -------------------------------
+.adi-market__copy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-small);
+}
+
+.adi-market__copy-name {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+// --- the long form ---------------------------------------------------------------------------
+// adi-ui's Markdown brings its own type and its own headings; what is here is the measure it
+// reads at and the rule that separates the publisher's prose from the list above it.
 .adi-market__readme {
   max-width: 80ch;
-  padding-top: 16px;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
-// --- what would be cloned --------------------------------------------------------------------
+// --- what would be cloned ----------------------------------------------------------------------
 // A key-value line rather than a table: four facts, read across, in the same mono the row uses.
+// Last on the page and dimmest on it — checkable, not sold.
 .adi-market__facts {
   display: flex;
   flex-wrap: wrap;
@@ -405,16 +592,4 @@
 .adi-market__factkey {
   color: var(--ink-3);
   font-size: var(--fs-label);
-}
-
-// --- the copies already here ------------------------------------------------------------------
-.adi-market__copies {
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
-}
-
-.adi-market__copieshead {
-  margin: 0 0 4px;
-  font-size: var(--fs-section);
-  font-weight: 600;
 }
