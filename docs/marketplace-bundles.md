@@ -13,6 +13,11 @@ ADI-MONO-49. The `adi-mono` binary installed on this machine is deliberately not
 this — the new `marketplace` verbs reach it at the next release cut, the same as any other CLI
 change here.
 
+**To look at it:** `scripts/dev-marketplace-fixtures.sh` publishes five local bundle repositories
+and a `file://` manifest into the dev store, covering the shapes worth comparing — tools only, one
+dashboard, one agent, the four-kind suite below, and all eight kinds at once. Nothing here is
+published anywhere yet, so without it the panel's bundle block has nothing to draw.
+
 ## What changed, in one paragraph
 
 v1 shipped exactly one kind of item — an app, which is a dashboard. This round generalizes what an

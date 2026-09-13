@@ -186,13 +186,13 @@
   gap: 4px;
 }
 
+// Sentence case, untracked: a kind heading is a label, and DESIGN.md §8 has no "anywhere" in it
+// by accident — an uppercase tracked one here would be the only one in the panel.
 .adi-market__grouphead {
   margin: 0;
   color: var(--ink-3);
   font-size: var(--fs-label);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .02em;
+  font-weight: 500;
 }
 
 // One element per line: no bullets, no indent beyond the group's own — it already reads as a
