@@ -9,12 +9,13 @@ use clap::Subcommand;
 /// The verbs, as `adi-mono marketplace <verb>` spells them.
 #[derive(Debug, Subcommand)]
 pub(crate) enum MarketplaceCommand {
-    /// Add a marketplace: a name to know it by, and the https:// URL of its manifest.
+    /// Add a marketplace: a name to know it by, and the URL of its manifest.
     Add {
         /// The local name — the first half of <marketplace>/<slug> installs are addressed by.
         #[arg(value_name = "NAME")]
         name: String,
-        /// Where the manifest is fetched from. https only.
+        /// Where the manifest is fetched from. https://, or a file:// path while it is being
+        /// developed.
         #[arg(value_name = "URL")]
         url: String,
     },
@@ -135,7 +136,7 @@ fn list_sources(market: &Marketplace) {
     let states = adi_marketplace::source_states(market.config());
     if states.is_empty() {
         println!("no marketplaces configured — add one:");
-        println!("  adi-mono marketplace add <name> <https://manifest-url>");
+        println!("  adi-mono marketplace add <name> <https://manifest-url or file:// path>");
         return;
     }
     for state in states {
