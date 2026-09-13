@@ -1,5 +1,9 @@
 # The marketplace — a manifest you host, a repository you install
 
+For the next version — an item as a bundle of platform elements (agents, tools, LLM/embedding
+backends, hive services, triggers, a project scaffold), installable whole or one element at a
+time — see `docs/marketplace-bundles.md` (design only, not yet built).
+
 A marketplace is **one JSON manifest at an HTTPS URL the operator chose** — GitHub raw, a gist,
 any host that serves the file. The store keeps an *array* of them; each URL is one source. There
 is no platform here: no hosting, no accounts, no server, nothing to operate.
