@@ -288,4 +288,53 @@ mod tests {
         assert!(matches!(results[0].status, SyncStatus::Failed { .. }));
         let _ = std::fs::remove_dir_all(market.config().root());
     }
+
+    #[test]
+    fn a_file_source_round_trips_through_the_real_fetch() {
+        // Through `sync`, not `sync_with` — this is the one test that exercises the real
+        // `fetch::get` dispatch to a local path rather than the injected closure every other test
+        // here uses to stand in for the network.
+        let market = crate::tests::scratch("file-source");
+        let manifest_path = std::env::temp_dir().join(format!(
+            "adi-marketplace-sync-file-source-{}-{:?}.json",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        std::fs::write(&manifest_path, MANIFEST).expect("write the local manifest");
+
+        sources::add(
+            market.config(),
+            "local",
+            &format!("file://{}", manifest_path.display()),
+        )
+        .expect("add a file:// source");
+
+        let results = sync(&market).expect("sync");
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].status,
+            SyncStatus::Synced { apps: 2 },
+            "{}",
+            results[0].summary()
+        );
+
+        let states = cache::source_states(market.config());
+        assert_eq!(states[0].name, "local");
+        assert!(states[0].synced_at.is_some());
+        assert_eq!(states[0].error, None);
+
+        // The envelope on disk holds exactly what the file said.
+        let envelope = cache::read(market.config(), "local").expect("cached envelope");
+        assert_eq!(
+            envelope
+                .manifest
+                .expect("manifest cached")
+                .bundle("crm")
+                .map(|b| b.name.clone()),
+            Some("CRM".to_string())
+        );
+
+        let _ = std::fs::remove_file(&manifest_path);
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
 }

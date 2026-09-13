@@ -146,7 +146,14 @@ url = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/market
 - The configured `name` is the local identity — the first half of `<marketplace>/<slug>` and the
   cache file's name. The manifest's own `name` is display text, so two machines can alias one URL
   under different names.
-- `url` must be `https://`. Fetching a manifest is HTTPS, always.
+- `url` must be `https://` — or a `file://` path while a bundle is being developed against a
+  local manifest, before either has anywhere real to be published. This is the same carve-out
+  `apps[].repo` already gets, and for the same reason: an app's `repo` may already legitimately be
+  `file:///…`, and a sample manifest listing it has nowhere honest to live but the same scheme —
+  refusing that would mean the only way to try the install path end to end is to publish first.
+  Fetching over the network is still HTTPS, always; a `file://` source is not fetched over the
+  network at all, it is read straight off this machine's own disk, so it is exactly as trustworthy
+  as the path itself and never more. `http://` and everything else stay refused outright.
 
 ## Sync and the cache
 

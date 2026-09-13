@@ -14,9 +14,13 @@ pub enum Error {
     /// A source's name has to be one safe path segment — it names the cache file.
     #[error("invalid marketplace name {0:?}: {rule}", rule = adi_config::NAME_RULE)]
     InvalidName(String),
-    /// A source URL has to be `https://` — this is the one place a manifest is fetched from, and
-    /// the operator's ruling is that fetching is HTTPS, always.
-    #[error("a marketplace url must start with https:// — got {0:?}")]
+    /// A source URL has to be `https://`, or a `file:///` absolute path for a manifest developed
+    /// locally before it is published — the same carve-out a bundle's own `repo` gets, and for the
+    /// same reason (`sources::valid_url`).
+    #[error(
+        "a marketplace url must be https:// (or a file:// path while it is being developed) — \
+         got {0:?}"
+    )]
     NotHttps(String),
     /// A source by that name is already configured.
     #[error(

@@ -309,7 +309,7 @@ pub enum Error {
     Io(std::io::Error),
     #[error("invalid marketplace name {0:?}: {rule}", rule = adi_config::NAME_RULE)]
     InvalidName(String),
-    #[error("a marketplace url must start with https:// — got {0:?}")]
+    #[error( "a marketplace url must be https:// (or a file:// path while it is being developed) — \ got {0:?}" )]
     NotHttps(String),
     #[error( "a marketplace named {0} is already configured — remove it first, or pick another name" )]
     Duplicate(String),
@@ -675,7 +675,7 @@ pub enum MediaKind {
 
 ### struct `Source`
 
-One configured marketplace: a name this machine knows it by, and the HTTPS URL of its manifest.
+One configured marketplace: a name this machine knows it by, and the URL of its manifest.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

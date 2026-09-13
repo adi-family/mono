@@ -16,13 +16,14 @@ use adi_config::Config;
 /// The file the array lives in, within the marketplace module.
 const SOURCES_FILE: &str = "sources.toml";
 
-/// One configured marketplace: a name this machine knows it by, and the HTTPS URL of its manifest.
+/// One configured marketplace: a name this machine knows it by, and the URL of its manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     /// Local identity: the first half of `<marketplace>/<slug>`, and the cache file's name.
     /// One safe path segment, enforced by [`add`](Sources::add).
     pub name: String,
-    /// Where the manifest is fetched from. Always `https://`.
+    /// Where the manifest is fetched from. `https://`, or a `file:///` absolute path for a
+    /// manifest developed locally before it is published anywhere — see [`valid_url`].
     pub url: String,
 }
 
@@ -65,15 +66,15 @@ pub fn list(config: &Config) -> Result<Vec<Source>> {
 ///
 /// # Errors
 /// [`Error::InvalidName`] for a name that is not one safe path segment, [`Error::NotHttps`] for a
-/// URL that does not spell `https://`, [`Error::Duplicate`] when the name is taken, plus
-/// [`Error::Config`] on a write failure.
+/// URL that is neither `https://` nor a `file:///` absolute path, [`Error::Duplicate`] when the
+/// name is taken, plus [`Error::Config`] on a write failure.
 pub fn add(config: &Config, name: &str, url: &str) -> Result<Source> {
     let name = name.trim();
     if !adi_config::valid_name(name) {
         return Err(Error::InvalidName(name.to_string()));
     }
     let url = url.trim();
-    if !url.starts_with("https://") || url.len() <= "https://".len() {
+    if !valid_url(url) {
         return Err(Error::NotHttps(url.to_string()));
     }
     let mut file = SourcesFile::load(config)?;
@@ -87,6 +88,20 @@ pub fn add(config: &Config, name: &str, url: &str) -> Result<Source> {
     file.marketplaces.push(source.clone());
     SourcesFile::save(config, &file)?;
     Ok(source)
+}
+
+/// Whether a source URL is one this build will fetch.
+///
+/// `https://` because fetching is HTTPS, always — and `file:///` because a marketplace listing a
+/// bundle in development has nowhere legitimate to be listed from yet: the same carve-out
+/// `BundleEntry::repo` already gets (`manifest::valid_repo`), for the same reason, and it costs
+/// the same thing — a manifest URL, like a repo URL, can now point at this machine's own
+/// filesystem, so a source added over `file://` is only ever as trustworthy as the path itself.
+/// `file://host/path` — a URI with an authority, not a local path — is refused: it is not the
+/// shape a bundle's own `repo` accepts either, and there is no host component this build reads.
+fn valid_url(url: &str) -> bool {
+    (url.starts_with("https://") && url.len() > "https://".len())
+        || (url.starts_with("file:///") && url.len() > "file:///".len())
 }
 
 /// Remove the source named `name` and its cache with it, answering whether anything was there.
@@ -153,13 +168,18 @@ mod tests {
         for bad in [
             "http://insecure.example/manifest.json",
             "ftp://example/manifest.json",
-            "https://", // scheme and nothing else
+            "https://",          // scheme and nothing else
+            "file://",           // scheme and nothing else
+            "file:///",          // no path past the third slash
+            "file://host/etc/x", // an authority, not a local path
         ] {
             assert!(
                 matches!(add(&cfg, "other", bad), Err(Error::NotHttps(_))),
                 "{bad}"
             );
         }
+        // A local manifest, mid-development — the same carve-out `repo` gets.
+        add(&cfg, "local", "file:///tmp/sample/marketplace.json").expect("file:// admitted");
         assert!(matches!(
             add(&cfg, "adi", "https://other.example/m.json"),
             Err(Error::Duplicate(_))
