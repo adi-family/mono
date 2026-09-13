@@ -1,8 +1,9 @@
 # The marketplace — a manifest you host, a repository you install
 
-For the next version — an item as a bundle of platform elements (agents, tools, LLM/embedding
-backends, hive services, triggers, a project scaffold), installable whole or one element at a
-time — see `docs/marketplace-bundles.md` (design only, not yet built).
+An item is now a **bundle** of platform elements (agents, tools, LLM/embedding backends, hive
+services, triggers, a project scaffold), installable whole or one element at a time, into a project
+or globally — see `docs/marketplace-bundles.md`, which is built and shipped. Everything below still
+holds: a bundle whose only element is a dashboard is exactly the app this document describes.
 
 A marketplace is **one JSON manifest at an HTTPS URL the operator chose** — GitHub raw, a gist,
 any host that serves the file. The store keeps an *array* of them; each URL is one source. There
@@ -240,12 +241,16 @@ nothing to press: the mark, the name, the one-line description, what the item co
 `host/path @ 9f2c1d4`, and — when this machine has any of it — a dot and a short state
 ("installed", "2 of 4 installed", "update waiting").
 
-`/marketplace/<marketplace>/<slug>` is the item: its mark and name, the one filled action (Install
-— which for a legacy single-dashboard entry opens the form that asks what to call your copy, and
-for a bundle installs every element it offers), its gallery, the three things installing actually
-does to this machine, **What's included** with an action per element, the long form, and last of
-all the repository, commit, branch and address in full. Every installed copy appears under it with
-where it stands, a Start button while it is inert, and Update when the manifest has moved past it.
+`/marketplace/<marketplace>/<slug>` is the item: its mark and name, the one filled action
+(Install), its gallery, the three things installing actually does to this machine, **What's
+included** with an action per element, **Installed here** with one block per install, the long
+form, and last of all the repository, commit, branch and address in full.
+
+**Install asks where it goes.** A dialog offers a new project (the default, and what we recommend),
+a project you already have, or globally — which is marked as the one that closes doors, because a
+second copy of the same bundle cannot land beside a global one
+(`docs/marketplace-bundles.md`, "Where an install goes"). The legacy single-dashboard shape asks
+its own two questions in the same dialog: what to call the copy, and whether to start it.
 
 **No install counts anywhere on either** — under the standing decision
 (`decisions/2026-08-22-ten-thousand-counts-only-adi-installs.md`) a marketplace install does not

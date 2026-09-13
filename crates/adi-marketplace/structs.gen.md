@@ -4,12 +4,12 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-33 structs · 7 enums · 1 type alias across 12 files.
+35 structs · 8 enums · 1 type alias across 13 files.
 
 ## Index
 
 - [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
-- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `BundleStatus`, `BundleElementRow`, `Stores`
+- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `Renames`, `BundleStatus`, `BundleInstall`, `BundleElementRow`, `Stores`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
@@ -18,6 +18,7 @@
 - [`src/layout.rs`](#srclayoutrs) — `Layout`, `LayoutElement`
 - [`src/lib.rs`](#srclibrs) — `Marketplace`
 - [`src/manifest.rs`](#srcmanifestrs) — `MarketplaceManifest`, `BundleEntry`, `Element`, `Media`, `MediaKind`
+- [`src/scope.rs`](#srcscopers) — `Scope`
 - [`src/sources.rs`](#srcsourcesrs) — `Source`, `SourcesFile`
 - [`src/sync.rs`](#srcsyncrs) — `SyncResult`, `SyncStatus`
 
@@ -225,6 +226,17 @@ enum Relanded {
 }
 ```
 
+### struct `Renames`
+
+What one install landed each of its elements as, keyed by what the publisher called it.
+
+```rust
+#[derive(Debug, Default)]
+struct Renames {
+    landed: Vec<(Kind, String, String)>,
+}
+```
+
 ### struct `BundleStatus`
 
 One general bundle's status for a listing, per `docs/marketplace-bundles.md`'s "What 'installed' means for a partially-installed bundle": installed is a fraction of what the manifest's own preview declares, and every field here is computed live off the ledger, the current pin and the current secrets store — never stored and frozen at install time, the same posture `outdated` and `missing_secrets` already take right after an install.
@@ -233,7 +245,20 @@ One general bundle's status for a listing, per `docs/marketplace-bundles.md`'s "
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BundleStatus {
     pub declared: usize,
-    pub installed: Vec<LedgerElement>,
+    pub elements: Vec<BundleElementRow>,
+    pub installs: Vec<BundleInstall>,
+}
+```
+
+### struct `BundleInstall`
+
+One install of one bundle — what it landed, where it is filed, and where it stands.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleInstall {
+    pub project: Option<String>,
+    pub commit: String,
     pub outdated: bool,
     pub missing_secrets: Vec<String>,
     pub elements: Vec<BundleElementRow>,
@@ -378,6 +403,10 @@ pub enum Error {
     Store(String),
     #[error("{0}")]
     EmbeddingInUse(String),
+    #[error( "{0:?} is not a project this can install into: {rule}", rule = adi_config::NAME_RULE )]
+    BadScope(String),
+    #[error("no project named {0} on this machine — create it first, or install globally")]
+    UnknownProject(String),
 }
 ```
 
@@ -681,6 +710,22 @@ What a gallery entry is.
 pub enum MediaKind {
     Image,
     Video,
+}
+```
+
+---
+
+## `src/scope.rs`
+
+### enum `Scope`
+
+Where one install of a bundle lives.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Scope {
+    Global,
+    Project(String),
 }
 ```
 

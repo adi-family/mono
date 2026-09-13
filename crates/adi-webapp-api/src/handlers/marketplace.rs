@@ -12,7 +12,8 @@ use adi_config::Config;
 use adi_marketplace::{Kind, Marketplace};
 
 use crate::types::{
-    InstallMarketplaceApp, MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleStatus,
+    InstallMarketplaceApp, MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleInstall,
+    MarketplaceBundleStatus,
     MarketplaceDone, MarketplaceElementPreview, MarketplaceInstall, MarketplaceMedia,
     MarketplaceMediaKind, MarketplaceSource, MarketplaceState, StartMarketplaceApp,
     StartMarketplaceService, UninstallMarketplaceElement, UpdateMarketplaceApp,
@@ -24,6 +25,12 @@ use super::response::{Response, error, ok_json};
 /// The whole state as the panel renders it, read from the store with no network.
 #[must_use]
 pub fn state(market: &Marketplace) -> MarketplaceState {
+    // Read once for the whole listing: every install block wants its project's display name, and
+    // the registry is a directory read, not a per-row lookup.
+    let projects = adi_projects::Projects::with_config(market.config().clone())
+        .list()
+        .unwrap_or_default();
+    let projects = &projects;
     let config = market.config();
     MarketplaceState {
         sources: adi_marketplace::source_states(config)
@@ -58,7 +65,7 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                 let bundle = entry
                     .as_ref()
                     .and_then(|e| adi_marketplace::bundle::status(market, &a.marketplace, &a.slug, e))
-                    .map(bundle_status);
+                    .map(|s| bundle_status(s, projects));
                 MarketplaceApp {
                     marketplace: a.marketplace,
                     slug: a.slug,
@@ -92,25 +99,48 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
     }
 }
 
-/// A general bundle's status, onto the wire shape.
-fn bundle_status(s: adi_marketplace::BundleStatus) -> MarketplaceBundleStatus {
+/// A general bundle's status, onto the wire shape — the catalogue, then one block per install.
+///
+/// `projects` is the registry, read once per request rather than per install, so a block can say
+/// the project's name where its id is what everything is addressed by.
+fn bundle_status(
+    s: adi_marketplace::BundleStatus,
+    projects: &[adi_projects::Project],
+) -> MarketplaceBundleStatus {
     MarketplaceBundleStatus {
         declared: s.declared,
-        outdated: s.outdated,
-        missing_secrets: s.missing_secrets,
-        // `kind.to_string()`, not `kind.wire()`: this is the address spelling
-        // (`crate::Kind::dir`), because the panel builds `<kind>/<name>` straight off this field
-        // to install, uninstall or start the element it names.
-        elements: s
-            .elements
+        elements: s.elements.into_iter().map(bundle_element).collect(),
+        installs: s
+            .installs
             .into_iter()
-            .map(|e| MarketplaceBundleElement {
-                kind: e.kind.to_string(),
-                name: e.name,
-                description: e.description,
-                id: e.id,
+            .map(|i| MarketplaceBundleInstall {
+                project_name: i.project.as_ref().and_then(|id| {
+                    projects
+                        .iter()
+                        .find(|p| p.id == *id)
+                        .map(|p| p.manifest.name.clone())
+                }),
+                project: i.project,
+                commit: i.commit,
+                outdated: i.outdated,
+                missing_secrets: i.missing_secrets,
+                elements: i.elements.into_iter().map(bundle_element).collect(),
             })
             .collect(),
+    }
+}
+
+/// One element row, onto the wire.
+///
+/// `kind.to_string()`, not `kind.wire()`: this is the address spelling (`adi_marketplace::Kind::dir`),
+/// because the panel builds `<kind>/<name>` straight off this field to install, uninstall or start
+/// the element it names.
+fn bundle_element(e: adi_marketplace::bundle::BundleElementRow) -> MarketplaceBundleElement {
+    MarketplaceBundleElement {
+        kind: e.kind.to_string(),
+        name: e.name,
+        description: e.description,
+        id: e.id,
     }
 }
 
@@ -167,13 +197,39 @@ pub fn install_marketplace_app(cfg: &Config, body: &[u8]) -> Response {
     };
     let spec = spec_of(&req.marketplace, &req.slug, req.element.as_deref());
     let market = Marketplace::with_config(cfg.clone());
-    match adi_marketplace::bundle::install(&market, &spec, &req.name, req.start) {
+    let scope = match destination(&market, req.project.as_deref(), req.new_project.as_deref()) {
+        Ok(scope) => scope,
+        Err(e) => return refusal(&e),
+    };
+    match adi_marketplace::bundle::install(&market, &spec, &req.name, req.start, &scope) {
         Ok(done) => ok_json(&MarketplaceDone {
             message: install_message(&done),
             state: state(&market),
         }),
         Err(e) => refusal(&e),
     }
+}
+
+/// Where an install is to land, from the two fields a request may carry: an existing project, a
+/// project registered on the spot, or — neither given — the machine's global scope.
+///
+/// Registering first and installing second is deliberate (see `adi_marketplace::Scope::new_project`):
+/// a failed install leaves an empty project, which the operator can remove, rather than elements
+/// with nowhere to be filed.
+fn destination(
+    market: &Marketplace,
+    project: Option<&str>,
+    new_project: Option<&str>,
+) -> Result<adi_marketplace::Scope, adi_marketplace::Error> {
+    match new_project.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => adi_marketplace::Scope::new_project(market.config(), name),
+        None => adi_marketplace::Scope::from_project(project),
+    }
+}
+
+/// The scope a request's `project` field names — the install it is about.
+fn scope_of(project: Option<&str>) -> Result<adi_marketplace::Scope, adi_marketplace::Error> {
+    adi_marketplace::Scope::from_project(project)
 }
 
 /// `<marketplace>/<slug>`, or `<marketplace>/<slug>/<element>` when the request names one — the
@@ -315,7 +371,11 @@ pub fn uninstall_marketplace_element(cfg: &Config, body: &[u8]) -> Response {
     };
     let spec = spec_of(&req.marketplace, &req.slug, Some(&req.element));
     let market = Marketplace::with_config(cfg.clone());
-    match adi_marketplace::bundle::uninstall_element(&market, &spec) {
+    let scope = match scope_of(req.project.as_deref()) {
+        Ok(scope) => scope,
+        Err(e) => return refusal(&e),
+    };
+    match adi_marketplace::bundle::uninstall_element(&market, &spec, &scope) {
         Ok(done) => {
             let mut message = format!("uninstalled {}/{} ({})", done.kind, done.name, done.id);
             if done.bundle_removed {
@@ -344,7 +404,11 @@ pub fn start_marketplace_service(cfg: &Config, body: &[u8]) -> Response {
     };
     let spec = spec_of(&req.marketplace, &req.slug, Some(&format!("{}/{}", Kind::Service, req.name)));
     let market = Marketplace::with_config(cfg.clone());
-    match adi_marketplace::bundle::start_service(&market, &spec) {
+    let scope = match scope_of(req.project.as_deref()) {
+        Ok(scope) => scope,
+        Err(e) => return refusal(&e),
+    };
+    match adi_marketplace::bundle::start_service(&market, &spec, &scope) {
         Ok(started) => {
             let where_ = match &started.project {
                 Some(project) => format!("into {project}'s own hive.yaml"),
@@ -375,7 +439,11 @@ pub fn update_marketplace_bundle(cfg: &Config, body: &[u8]) -> Response {
     };
     let force: Vec<(Kind, &str)> = req.force.iter().filter_map(|f| force_pair(f)).collect();
     let market = Marketplace::with_config(cfg.clone());
-    match adi_marketplace::bundle::update(&market, &req.marketplace, &req.slug, &force) {
+    let scope = match scope_of(req.project.as_deref()) {
+        Ok(scope) => scope,
+        Err(e) => return refusal(&e),
+    };
+    match adi_marketplace::bundle::update(&market, &req.marketplace, &req.slug, &scope, &force) {
         Ok(done) => {
             let short = adi_marketplace::git::short;
             let mut message = if done.changed {
@@ -458,7 +526,10 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         | E::NotInstalled(_)
         | E::UnknownElement(_)
         | E::BundleNotInstalled(_, _)
-        | E::ElementNotInstalled(_) => 404,
+        | E::ElementNotInstalled(_)
+        // A destination that is not a project here is the same class of wrong as an app that is
+        // not in the listing: the name is fine, this machine simply has nothing under it.
+        | E::UnknownProject(_) => 404,
         E::NotSynced(_) | E::Duplicate(_) | E::Dirty(_) | E::EmbeddingInUse(_) => 409,
         // Everything about the ask itself was malformed — including a per-kind store's own
         // refusal (`E::Store`), carried verbatim: every reason it can fire (a hive.yaml that is
@@ -469,6 +540,7 @@ fn refusal(e: &adi_marketplace::Error) -> Response {
         | E::BadSpec(_)
         | E::BadAddress(_)
         | E::EmptyName
+        | E::BadScope(_)
         | E::Store(_) => 400,
         // Everything a publisher got wrong, and everything git or the network refused: the ask
         // was fine, the far end was not.

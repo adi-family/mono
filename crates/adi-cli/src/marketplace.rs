@@ -3,7 +3,7 @@
 //! No `adi` facade, like `mesh` and `indexer`: the state is the marketplace module's own under
 //! the store, and the handle opens it itself.
 
-use adi_marketplace::{Kind, Marketplace};
+use adi_marketplace::{Kind, Marketplace, Scope};
 use clap::Subcommand;
 
 /// The verbs, as `adi-mono marketplace <verb>` spells them.
@@ -51,6 +51,16 @@ pub(crate) enum MarketplaceCommand {
         /// legacy single-dashboard bundle.
         #[arg(long)]
         start: bool,
+        /// File everything this install lands under a project you already have, by id. The
+        /// recommended destination: it is the only way to hold the same bundle twice, and it keeps
+        /// the bundle's tools, agents and triggers running in that project's own directory and
+        /// database. Without it (and without --new-project) the install is global.
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
+        /// Register a new project under this name and install into it — the same thing as
+        /// `--project`, for the common case where the project is the bundle's.
+        #[arg(long = "new-project", value_name = "NAME", conflicts_with = "project")]
+        new_project: Option<String>,
     },
     /// Uninstall one element of a bundle: <marketplace>/<slug>/<kind>/<name>, by its own kind's
     /// ordinary path. There is no whole-bundle uninstall verb — a legacy single-dashboard bundle
@@ -58,6 +68,10 @@ pub(crate) enum MarketplaceCommand {
     Uninstall {
         #[arg(value_name = "MARKETPLACE/SLUG/KIND/NAME")]
         spec: String,
+        /// Which install of that bundle to take the element out of — the project it is filed
+        /// under. Without it, the global install.
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
     /// Start an installed app, or a parked hive service element: its servers (or its copied-in
     /// `ServiceSpec` block) come up within a few seconds of the supervisor's next read.
@@ -66,6 +80,10 @@ pub(crate) enum MarketplaceCommand {
         /// <marketplace>/<slug>/services/<name> to start a parked service element.
         #[arg(value_name = "ID_OR_MARKETPLACE/SLUG/services/NAME")]
         target: String,
+        /// Which install's parked service to start — the project it is filed under. Without it,
+        /// the global install's.
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
     /// Update an installed copy onto the commit its marketplace now pins — a fast-forward, so
     /// your own commits on top of it are never walked over.
@@ -83,6 +101,11 @@ pub(crate) enum MarketplaceCommand {
         /// repeatable. Every element not named here fast-forwards, or is left alone and reported.
         #[arg(long = "force-element", value_name = "KIND/NAME")]
         force_element: Vec<String>,
+        /// Which install to move onto the current pin — the project it is filed under. Without
+        /// it, the global one. Two installs of one bundle update independently, which is the point
+        /// of installing it twice.
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
 }
 
@@ -120,15 +143,44 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
             list_apps(&market);
             Ok(())
         }
-        MarketplaceCommand::Install { spec, name, start } => {
-            install(&market, &spec, name.as_deref().unwrap_or(""), start)
+        MarketplaceCommand::Install { spec, name, start, project, new_project } => {
+            let scope = destination(&market, project.as_deref(), new_project.as_deref())?;
+            install(&market, &spec, name.as_deref().unwrap_or(""), start, &scope)
         }
-        MarketplaceCommand::Uninstall { spec } => uninstall(&market, &spec),
-        MarketplaceCommand::Start { target } => start_target(&market, &target),
-        MarketplaceCommand::Update { target, force, force_element } => {
-            update_target(&market, &target, force, &force_element)
+        MarketplaceCommand::Uninstall { spec, project } => {
+            uninstall(&market, &spec, &scope_of(project.as_deref())?)
+        }
+        MarketplaceCommand::Start { target, project } => {
+            start_target(&market, &target, &scope_of(project.as_deref())?)
+        }
+        MarketplaceCommand::Update { target, force, force_element, project } => {
+            update_target(&market, &target, force, &force_element, &scope_of(project.as_deref())?)
         }
     }
+}
+
+/// The scope a `--project` flag names, refused here rather than deep inside an install.
+fn scope_of(project: Option<&str>) -> Result<Scope, String> {
+    Scope::from_project(project).map_err(|e| e.to_string())
+}
+
+/// Where an install is to land: an existing project, a project registered on the spot, or the
+/// machine's global scope.
+///
+/// `--new-project` registers before installing rather than after, so an install that then fails
+/// leaves an empty project rather than a half-filed one — and the project is the operator's
+/// either way, removable on the Projects page like any other.
+fn destination(
+    market: &Marketplace,
+    project: Option<&str>,
+    new_project: Option<&str>,
+) -> Result<Scope, String> {
+    let Some(name) = new_project.map(str::trim).filter(|n| !n.is_empty()) else {
+        return scope_of(project);
+    };
+    let scope = Scope::new_project(market.config(), name).map_err(|e| e.to_string())?;
+    println!("registered project {} — installing {scope}", scope.key());
+    Ok(scope)
 }
 
 /// `list`: one line per source — where it points, and whether what is cached is fresh.
@@ -297,28 +349,58 @@ fn print_bundle_status(
         println!("    0 of {declared} elements installed");
         return;
     };
-    println!("    {} of {declared} elements installed", status.installed.len());
-    for element in &status.installed {
-        println!("      {}/{} → {}", element.kind, element.name, element.id);
+    if status.installs.is_empty() {
+        println!("    0 of {declared} elements installed");
+        return;
     }
-    if status.outdated {
+    // One block per install: the same bundle in two projects is two copies, each with its own pin
+    // and its own update, and a listing that summed them would be describing neither.
+    for install in &status.installs {
+        let (where_, flag) = match &install.project {
+            Some(project) => (format!("in {project}"), format!(" --project {project}")),
+            None => ("globally".to_string(), String::new()),
+        };
         println!(
-            "    behind — `adi-mono marketplace update {marketplace}/{slug}` moves it onto the current pin"
+            "    {where_}: {} of {declared} elements, at {}",
+            install.elements.len(),
+            adi_marketplace::git::short(&install.commit)
         );
-    }
-    if !status.missing_secrets.is_empty() {
-        println!(
-            "    missing secret(s): {} — set them, or the elements that name them will not work",
-            status.missing_secrets.join(", ")
-        );
+        for element in &install.elements {
+            println!(
+                "      {}/{} → {}",
+                element.kind,
+                element.name,
+                element.id.as_deref().unwrap_or_default()
+            );
+        }
+        if install.outdated {
+            println!(
+                "      behind — `adi-mono marketplace update {marketplace}/{slug}{flag}` moves it \
+                 onto the current pin"
+            );
+        }
+        if !install.missing_secrets.is_empty() {
+            println!(
+                "      missing secret(s): {} — set them, or the elements that name them will not work",
+                install.missing_secrets.join(", ")
+            );
+        }
     }
 }
 
 /// `install`: install a bundle, or one element of it. A legacy single-dashboard bundle installs
 /// exactly as v1 always has; a general bundle lands every element the spec selects and reports
 /// each one's own outcome.
-fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<(), String> {
-    match adi_marketplace::bundle::install(market, spec, name, start).map_err(|e| e.to_string())? {
+fn install(
+    market: &Marketplace,
+    spec: &str,
+    name: &str,
+    start: bool,
+    scope: &Scope,
+) -> Result<(), String> {
+    match adi_marketplace::bundle::install(market, spec, name, start, scope)
+        .map_err(|e| e.to_string())?
+    {
         adi_marketplace::BundleOutcome::Legacy(done) => {
             let dir = market.dashboards_dir().join(&done.id);
             println!(
@@ -349,7 +431,7 @@ fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<
             );
         }
         adi_marketplace::BundleOutcome::Bundle(done) => {
-            println!("{}/{}:", done.marketplace, done.slug);
+            println!("{}/{} — installed {scope}:", done.marketplace, done.slug);
             for element in &done.elements {
                 match (&element.id, &element.note) {
                     (Some(id), _) if !element.renamed => {
@@ -369,8 +451,9 @@ fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<
 }
 
 /// `uninstall`: remove one element of a bundle by its own kind's ordinary path.
-fn uninstall(market: &Marketplace, spec: &str) -> Result<(), String> {
-    let done = adi_marketplace::bundle::uninstall_element(market, spec).map_err(|e| e.to_string())?;
+fn uninstall(market: &Marketplace, spec: &str, scope: &Scope) -> Result<(), String> {
+    let done = adi_marketplace::bundle::uninstall_element(market, spec, scope)
+        .map_err(|e| e.to_string())?;
     println!("uninstalled {}/{} ({})", done.kind, done.name, done.id);
     if done.bundle_removed {
         println!("  the last element from this bundle — its own record is gone too");
@@ -383,9 +466,10 @@ fn uninstall(market: &Marketplace, spec: &str) -> Result<(), String> {
 
 /// `start`: a dashboard id starts an app; a `<marketplace>/<slug>/services/<name>` address starts
 /// a parked hive service element instead.
-fn start_target(market: &Marketplace, target: &str) -> Result<(), String> {
+fn start_target(market: &Marketplace, target: &str, scope: &Scope) -> Result<(), String> {
     if target.contains('/') {
-        let started = adi_marketplace::bundle::start_service(market, target).map_err(|e| e.to_string())?;
+        let started = adi_marketplace::bundle::start_service(market, target, scope)
+            .map_err(|e| e.to_string())?;
         let where_ = match &started.project {
             Some(project) => format!("into {project}'s own hive.yaml"),
             None => "into the global hive.yaml".to_string(),
@@ -407,11 +491,17 @@ fn start_target(market: &Marketplace, target: &str) -> Result<(), String> {
 /// `update`: a dashboard id fast-forwards a legacy copy onto the commit its marketplace pins now,
 /// exactly as v1 always has; a `<marketplace>/<slug>` address re-applies a general bundle's whole
 /// ledger instead, per element.
-fn update_target(market: &Marketplace, target: &str, force: bool, force_element: &[String]) -> Result<(), String> {
+fn update_target(
+    market: &Marketplace,
+    target: &str,
+    force: bool,
+    force_element: &[String],
+    scope: &Scope,
+) -> Result<(), String> {
     let short = adi_marketplace::git::short;
     if let Some((marketplace, slug)) = target.split_once('/') {
         let pairs: Vec<(Kind, &str)> = force_element.iter().filter_map(|f| force_pair(f)).collect();
-        let done = adi_marketplace::bundle::update(market, marketplace, slug, &pairs)
+        let done = adi_marketplace::bundle::update(market, marketplace, slug, scope, &pairs)
             .map_err(|e| e.to_string())?;
         if done.changed {
             println!("{}/{} updated from {} to {}:", done.marketplace, done.slug, short(&done.from), short(&done.to));

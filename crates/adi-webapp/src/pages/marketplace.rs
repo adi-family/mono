@@ -28,16 +28,16 @@
 //! Installed and running stay different states on purpose: the item's code is somebody else's, and
 //! running it is a choice somebody makes.
 
-use adi_ui::{Icon, IconSize, Lucide, Markdown};
+use adi_ui::{Icon, IconSize, Lucide, Markdown, Modal};
 use adi_webapp_api::types::{
-    MarketplaceApp, MarketplaceBundleElement, MarketplaceInstall, MarketplaceMedia,
-    MarketplaceMediaKind as MediaKind, MarketplaceSource,
+    MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleInstall, MarketplaceInstall,
+    MarketplaceMedia, MarketplaceMediaKind as MediaKind, MarketplaceSource,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{Flash, MarketplaceForm, State};
+use crate::state::{Destination, Flash, MarketplaceForm, State};
 use crate::ui::{TextField, confirm, field_hint, flash_view, menu_item, row_actions};
 
 /// Where a click on an item's name goes.
@@ -268,8 +268,12 @@ fn entry_row(app: &MarketplaceApp, open: OpenApp) -> AnyView {
 /// than "not installed" — the absence *is* the answer, and repeating it down a listing of twenty
 /// items is twenty words that never change.
 fn here_note(app: &MarketplaceApp, elements: &[MarketplaceBundleElement]) -> AnyView {
-    let installed = elements.iter().filter(|el| el.id.is_some()).count();
-    let outdated = app.bundle.as_ref().is_some_and(|b| b.outdated)
+    let installs = app.bundle.as_ref().map(|b| b.installs.clone()).unwrap_or_default();
+    let landed: usize = installs.iter().map(|i| i.elements.len()).sum();
+    let outdated = app
+        .bundle
+        .as_ref()
+        .is_some_and(|b| b.installs.iter().any(|i| i.outdated))
         || app.installs.iter().any(|i| i.outdated);
     let state = if !app.installs.is_empty() {
         // The legacy single-dashboard shape counts copies, not elements: two copies of one app is
@@ -278,12 +282,16 @@ fn here_note(app: &MarketplaceApp, elements: &[MarketplaceBundleElement]) -> Any
             1 => "installed".to_string(),
             n => format!("{n} copies installed"),
         }
-    } else if installed == 0 {
+    } else if installs.is_empty() {
         String::new()
-    } else if installed == elements.len() {
-        "installed".to_string()
+    } else if installs.len() > 1 {
+        // Which projects, not how many elements: the interesting fact about a bundle installed
+        // twice is that it is installed twice.
+        format!("installed in {} places", installs.len())
+    } else if landed == elements.len() {
+        format!("installed {}", where_installed(&installs[0]))
     } else {
-        format!("{installed} of {} installed", elements.len())
+        format!("{landed} of {} installed {}", elements.len(), where_installed(&installs[0]))
     };
 
     view! {
@@ -295,6 +303,15 @@ fn here_note(app: &MarketplaceApp, elements: &[MarketplaceBundleElement]) -> Any
         })}
     }
     .into_any()
+}
+
+/// Where one install is filed, as a listing row says it in passing.
+fn where_installed(install: &MarketplaceBundleInstall) -> String {
+    match (&install.project_name, &install.project) {
+        (Some(name), _) => format!("in {name}"),
+        (None, Some(id)) => format!("in {id}"),
+        (None, None) => "globally".to_string(),
+    }
 }
 
 /// Every element an item offers, installed here or not — the merged list the store computes when
@@ -510,15 +527,17 @@ fn app_page(
             // 32px gap, and a form that is closed — or a flash with nothing to say — would
             // otherwise still take a gap each and leave a hole under the title.
             <div class="adi-market__head">
-                {hero(state, form, app)}
+                {hero(form, app)}
                 {flash_view(state.flash)}
             </div>
             {gallery_view(app)}
             {assurances()}
             {included_view(state, form, app)}
+            {installs_view(state, form, app)}
             {installed_here(state, form, app)}
             {readme_view(app)}
             {facts_view(&owned)}
+            {install_dialog(state, form, app)}
         </div>
     }
     .into_any()
@@ -526,16 +545,12 @@ fn app_page(
 
 /// The head of an item's page: the mark, what this is in one line above the name, the name, the
 /// publisher's own sentence, its tags — and the one act the page is for.
-fn hero(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
-    let key = app_key(app);
+fn hero(form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     let (name, version, description) = (
         app.name.clone(),
         app.version.clone(),
         app.description.clone(),
     );
-    let owned = app.clone();
-    let form_key = key.clone();
-
     view! {
         <header class="adi-market__hero">
             <div class="adi-market__appmark">{app_icon(app)}</div>
@@ -548,14 +563,8 @@ fn hero(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
                 {description.map(|d| view! { <p class="adi-market__applead">{d}</p> })}
                 {keyword_tags(app)}
             </div>
-            <div class="adi-market__heroact">{hero_action(state, form, app)}</div>
+            <div class="adi-market__heroact">{hero_action(form, app)}</div>
         </header>
-        {
-            // The name form, for the one shape that has a name to ask about. It opens under the
-            // head rather than in it, so the head does not jump when it does.
-            let app = owned.clone();
-            move || (form.installing.get() == form_key).then(|| install_form(state, form, &app))
-        }
     }
     .into_any()
 }
@@ -584,70 +593,72 @@ fn eyebrow(app: &MarketplaceApp) -> String {
 ///   stands by the installer itself, so this is safe to press at any time.
 /// * A **fully installed** one offers nothing here: what is left to do to it is per element, in
 ///   the list below, and Update when the manifest has moved.
-fn hero_action(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
-    let key = app_key(app);
+fn hero_action(form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     let busy = form.busy;
     let elements = bundle_elements(app);
-    let installed = elements.iter().filter(|el| el.id.is_some()).count();
-    let legacy = app.bundle.is_none() && elements.is_empty();
-    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
+    let installs = app.bundle.as_ref().map(|b| b.installs.len()).unwrap_or(0)
+        + app.installs.len();
+    let legacy = is_legacy(app);
+    let owned = app.clone();
 
-    if legacy {
-        let again = !app.installs.is_empty();
-        let default_name = app.name.clone();
-        let toggle_key = key.clone();
-        return view! {
-            <button class="adi-btn adi-btn--accent" type="button"
-                prop:disabled=move || busy.get().is_some()
-                on:click=move |_| {
-                    // Prefilled with the publisher's name, because it is the answer most people
-                    // want and the form is here to let them disagree with it.
-                    form.name.set(default_name.clone());
-                    form.start_now.set(true);
-                    form.installing.update(|open| {
-                        *open = if *open == toggle_key { String::new() } else { toggle_key.clone() };
-                    });
-                }>
-                <Icon icon=Lucide::Download size=IconSize::Sm/>
-                {if again { "Install another copy" } else { "Install" }}
-            </button>
-            <span class="adi-market__heronote">"you name your copy"</span>
-        }
-        .into_any();
-    }
-
-    if installed == elements.len() && !elements.is_empty() {
-        return view! {
-            <span class="adi-market__here">
-                <span class="adi-dot adi-dot--ok"></span>
-                "Everything here is installed"
-            </span>
-        }
-        .into_any();
-    }
-
-    let label = match (installed, elements.len()) {
-        (0, 1) => "Install".to_string(),
+    // Every destination question is the dialog's; this button's only job is to ask it. Which is
+    // also why it says "Install" and not "Install everything" once a copy is already here: the
+    // second one is a *copy*, and the dialog is where that becomes clear.
+    let label = match (installs, elements.len()) {
+        (0, 0 | 1) => "Install".to_string(),
         (0, _) => "Install everything".to_string(),
-        (installed, total) if total - installed == 1 => "Install the last one".to_string(),
-        (installed, total) => format!("Install the other {}", total - installed),
+        _ if legacy => "Install another copy".to_string(),
+        _ => "Install another copy".to_string(),
     };
-    let install_key = format!("install:{key}");
+    let note = if legacy {
+        "you name your copy"
+    } else if installs == 0 {
+        "nothing runs until you start it"
+    } else {
+        "a second copy, in a project of its own"
+    };
+
     view! {
         <button class="adi-btn adi-btn--accent" type="button"
             prop:disabled=move || busy.get().is_some()
-            on:click=move |_| {
-                run(state, form, install_key.clone(),
-                    fetch::install_marketplace_app(
-                        marketplace.clone(), slug.clone(), None, String::new(), false,
-                    ));
-            }>
+            on:click=move |_| open_dialog(form, &owned, "")>
             <Icon icon=Lucide::Download size=IconSize::Sm/>
             {label}
         </button>
-        <span class="adi-market__heronote">"nothing runs until you start it"</span>
+        <span class="adi-market__heronote">{note}</span>
     }
     .into_any()
+}
+
+/// The v1 shape: no elements, no bundle status — one dashboard and nothing else
+/// (`docs/marketplace-bundles.md` decision #6).
+fn is_legacy(app: &MarketplaceApp) -> bool {
+    app.bundle.is_none() && app.elements.is_empty()
+}
+
+/// Open the install dialog for this item — the whole bundle, or the one `<kind>/<name>` named.
+///
+/// Seeded every time it opens rather than once: the destination most installs want is a project
+/// that does not exist yet, named after the bundle, and an operator who installed something else
+/// five minutes ago should not find that install's answers still in the fields.
+fn open_dialog(form: MarketplaceForm, app: &MarketplaceApp, element: &str) {
+    form.element.set(element.to_string());
+    form.name.set(app.name.clone());
+    form.start_now.set(true);
+    form.new_project.set(suggested_project(app));
+    form.dest.set(Destination::New);
+    form.installing.set(app_key(app));
+}
+
+/// The name to offer for the project an install would register: the one the bundle's own scaffold
+/// publishes when it ships one — that is the publisher's own answer to "what is this for" — and
+/// the item's name otherwise.
+fn suggested_project(app: &MarketplaceApp) -> String {
+    bundle_elements(app)
+        .iter()
+        .find(|el| el.kind == "project")
+        .map(|el| el.name.clone())
+        .unwrap_or_else(|| app.name.clone())
 }
 
 /// The three things this machine can actually promise about installing somebody else's item, in
@@ -729,71 +740,68 @@ fn kind_icon(kind: &str) -> Lucide {
     }
 }
 
-/// **What's included**: every element the item offers, one row each, with the action that applies
-/// to it.
+/// **What's included**: everything the item offers, one row each, with the one act that applies.
+///
+/// The catalogue — about the *bundle*, not about any one install of it. So no ids here and no
+/// "installed" state: a bundle may be installed in three projects, and a row that tried to say
+/// what it landed as would have to pick one. Each row's Install opens the same dialog the head's
+/// does, aimed at that one element.
 ///
 /// Flat and in [`KIND_ORDER`], with the kind on the row itself — not eight headings over eight
 /// single rows, which is what the first version drew and which made a bundle of one of everything
-/// read as an outline rather than as a list of things you can have. The section is the page's
-/// middle and the reason the whole design exists: a bundle you can take one element of.
+/// read as an outline rather than as a list of things you can have.
 fn included_view(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> Option<AnyView> {
     let elements = bundle_elements(app);
     if elements.is_empty() {
         return None;
     }
-    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
-    let installed = elements.iter().filter(|el| el.id.is_some()).count();
-    let total = elements.len();
-    let bundle = app.bundle.clone();
-    let outdated = bundle.as_ref().is_some_and(|b| b.outdated);
-    let missing_secrets = bundle.map(|b| b.missing_secrets).unwrap_or_default();
-    let busy = form.busy;
-    let update_key = format!("bundle-update:{marketplace}/{slug}");
-    let (up_marketplace, up_slug) = (marketplace.clone(), slug.clone());
-
+    let owned = app.clone();
     Some(
         view! {
             <section class="adi-market__included">
                 <div class="adi-market__sechead">
                     <h2 class="adi-market__sectitle">"What's included"</h2>
                     <span class="adi-market__state">
-                        {if installed == 0 {
-                            "install the lot above, or one element at a time".to_string()
-                        } else {
-                            format!("{installed} of {total} installed here")
+                        {match elements.len() {
+                            1 => "one element — take it on its own, or with the bundle".to_string(),
+                            n => format!("{n} elements — install the lot, or one at a time"),
                         }}
                     </span>
-                    <span class="adi-spacer"></span>
-                    {outdated.then(move || view! {
-                        <button class="adi-btn" type="button"
-                            prop:disabled=move || busy.get().is_some()
-                            on:click=move |_| {
-                                run(state, form, update_key.clone(),
-                                    fetch::update_marketplace_bundle(
-                                        up_marketplace.clone(), up_slug.clone(), Vec::new()));
-                            }>
-                            <Icon icon=Lucide::ArrowUp size=IconSize::Sm/>
-                            "Update all"
-                        </button>
-                    })}
                 </div>
                 <ul class="adi-market__elements">
                     {elements.iter()
-                        .map(|el| element_row(state, form, &marketplace, &slug, el))
+                        .map(|el| catalogue_row(state, form, &owned, el))
                         .collect::<Vec<_>>()}
                 </ul>
-                {(!missing_secrets.is_empty()).then(|| view! {
-                    <p class="adi-hint">
-                        {format!(
-                            "Set {} \u{2014} the elements that name it will not work until you do.",
-                            missing_secrets.join(", ")
-                        )}
-                    </p>
-                })}
             </section>
         }
         .into_any(),
     )
+}
+
+/// One element of the catalogue: what it is, what it does, and Install — which asks where.
+fn catalogue_row(
+    state: State,
+    form: MarketplaceForm,
+    app: &MarketplaceApp,
+    el: &MarketplaceBundleElement,
+) -> AnyView {
+    let _ = state;
+    let busy = form.busy;
+    let spec = element_spec(&el.kind, &el.name);
+    let owned = app.clone();
+    view! {
+        <li class="adi-market__element">
+            {element_about(el)}
+            <span class="adi-spacer"></span>
+            <button class="adi-btn" type="button"
+                prop:disabled=move || busy.get().is_some()
+                on:click=move |_| open_dialog(form, &owned, &spec)>
+                "Install"
+            </button>
+        </li>
+    }
+    .into_any()
 }
 
 /// The `<kind>/<name>` address this element installs, uninstalls or starts under — `project` alone
@@ -806,91 +814,184 @@ fn element_spec(kind: &str, name: &str) -> String {
     }
 }
 
-/// One element's own row: what it is, what it does, and the one act that applies to it.
+/// The left of an element row, wherever it is drawn: the kind's glyph, the published name, the
+/// kind as a tag, and the publisher's line.
+fn element_about(el: &MarketplaceBundleElement) -> AnyView {
+    let (kind, name) = (el.kind.clone(), el.name.clone());
+    let description = el.description.clone();
+    let landed = el.id.clone().filter(|id| *id != name);
+    view! {
+        <span class="adi-market__elementicon" aria-hidden="true">
+            <Icon icon=kind_icon(&kind)/>
+        </span>
+        <span class="adi-market__elementabout">
+            <span class="adi-market__elementname">
+                {name}
+                <span class="adi-market__kind">{kind_label(&kind).to_string()}</span>
+                // Only when they differ: a copy that had to mint an id of its own is the one case
+                // where the name the publisher chose is not what an operator will type afterwards.
+                {landed.map(|id| view! {
+                    <span class="adi-mono adi-muted">"\u{2192} "{id}</span>
+                })}
+            </span>
+            {description.map(|d| view! { <span class="adi-market__elementdesc">{d}</span> })}
+        </span>
+    }
+    .into_any()
+}
+
+/// **Installed here**: one block per install, because two installs of one bundle are two copies —
+/// in different projects, at possibly different commits, updated and uninstalled independently.
 ///
-/// **Not installed** draws Install, the row's whole point. **Installed** says so with a dot and the
-/// id it landed under, and puts Uninstall — and, for a hive service, which arrives parked, Start —
-/// in the row's `⋯` (§8: row actions in a menu, and never the same destructive word repeated down a
-/// column). Start is idempotent on a service already started, so offering it always costs nothing.
-fn element_row(
+/// Where the catalogue above says what the bundle offers, this says what this machine actually has
+/// and under which project. It is the section that makes "the changelog tools in project A and
+/// again in project B" a thing you can see rather than a thing you have to remember.
+fn installs_view(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> Option<AnyView> {
+    let bundle = app.bundle.as_ref()?;
+    if bundle.installs.is_empty() {
+        return None;
+    }
+    let total = bundle.elements.len();
+    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
+    Some(
+        view! {
+            <section class="adi-market__installs">
+                <div class="adi-market__sechead">
+                    <h2 class="adi-market__sectitle">"Installed here"</h2>
+                    <span class="adi-market__state">
+                        {match bundle.installs.len() {
+                            1 => String::new(),
+                            n => format!("{n} copies, each with its own pin"),
+                        }}
+                    </span>
+                </div>
+                {bundle.installs.iter()
+                    .map(|install| install_block(state, form, &marketplace, &slug, install, total))
+                    .collect::<Vec<_>>()}
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// One install: where it is filed, where it stands, what it landed, and what is left to do to it.
+fn install_block(
     state: State,
     form: MarketplaceForm,
     marketplace: &str,
     slug: &str,
-    el: &MarketplaceBundleElement,
+    install: &MarketplaceBundleInstall,
+    total: usize,
 ) -> AnyView {
     let busy = form.busy;
-    let (marketplace, slug) = (marketplace.to_string(), slug.to_string());
-    let spec = element_spec(&el.kind, &el.name);
-    let is_service = el.kind == "services";
-    let (kind, name) = (el.kind.clone(), el.name.clone());
-    let description = el.description.clone();
-    let landed = el.id.clone();
-
-    let actions = match landed.clone() {
-        None => {
-            let install_key = format!("install:{marketplace}/{slug}/{spec}");
-            let (m, s, sp) = (marketplace.clone(), slug.clone(), spec.clone());
-            view! {
-                <button class="adi-btn" type="button"
-                    prop:disabled=move || busy.get().is_some()
-                    on:click=move |_| {
-                        run(state, form, install_key.clone(),
-                            fetch::install_marketplace_app(
-                                m.clone(), s.clone(), Some(sp.clone()), String::new(), false,
-                            ));
-                    }>
-                    "Install"
-                </button>
-            }
-            .into_any()
-        }
-        Some(id) => {
-            let start_key = format!("start-service:{marketplace}/{slug}/{spec}");
-            let uninstall_key = format!("uninstall:{marketplace}/{slug}/{spec}");
-            let (sm, ss, sname) = (marketplace.clone(), slug.clone(), name.clone());
-            let (um, us, uspec) = (marketplace.clone(), slug.clone(), spec.clone());
-            let confirm_spec = spec.clone();
-            let mut items = Vec::new();
-            if is_service {
-                items.push(menu_item(state, "Start", false, move || {
-                    run(state, form, start_key.clone(),
-                        fetch::start_marketplace_service(sm.clone(), ss.clone(), sname.clone()));
-                }));
-            }
-            items.push(menu_item(state, "Uninstall", true, move || {
-                if confirm(&format!(
-                    "Uninstall {confirm_spec}? Its siblings in this bundle are untouched."
-                )) {
-                    run(state, form, uninstall_key.clone(),
-                        fetch::uninstall_marketplace_element(um.clone(), us.clone(), uspec.clone()));
-                }
-            }));
-            let inline = view! {
-                <span class="adi-market__here">
-                    <span class="adi-dot adi-dot--ok"></span>
-                    "installed as "
-                    <span class="adi-mono">{id}</span>
-                </span>
-            };
-            row_actions(state, format!("market:{marketplace}/{slug}/{spec}"), inline, items)
-        }
+    let project = install.project.clone();
+    let where_ = match (&install.project, &install.project_name) {
+        (Some(_), Some(name)) => format!("in {name}"),
+        (Some(id), None) => format!("in {id}"),
+        (None, _) => "globally".to_string(),
     };
+    let commit = short_commit(&install.commit);
+    let (missing, outdated) = (install.missing_secrets.clone(), install.outdated);
+    let landed = install.elements.len();
+    let (m, s) = (marketplace.to_string(), slug.to_string());
+    let update_key = format!("bundle-update:{m}/{s}/{}", project.clone().unwrap_or_default());
+    let (um, us, up) = (m.clone(), s.clone(), project.clone());
 
     view! {
-        <li class="adi-market__element" class:is-installed=move || landed.is_some()>
-            <span class="adi-market__elementicon" aria-hidden="true">
-                <Icon icon=kind_icon(&kind)/>
-            </span>
-            <span class="adi-market__elementabout">
-                <span class="adi-market__elementname">
-                    {name}
-                    <span class="adi-market__kind">{kind_label(&kind).to_string()}</span>
+        <div class="adi-market__install">
+            <div class="adi-market__installhead">
+                <span class="adi-market__installwhere">
+                    <Icon icon=if project.is_some() { Lucide::Folder } else { Lucide::Globe }
+                        size=IconSize::Sm/>
+                    {where_}
                 </span>
-                {description.map(|d| view! { <span class="adi-market__elementdesc">{d}</span> })}
-            </span>
+                <span class="adi-market__state">
+                    {format!("{landed} of {total} elements \u{b7} ")}
+                    <span class="adi-mono">{commit}</span>
+                </span>
+                <span class="adi-spacer"></span>
+                {outdated.then(move || view! {
+                    <span class="adi-market__here">
+                        <span class="adi-dot adi-dot--warn"></span>"update waiting"
+                    </span>
+                    <button class="adi-btn" type="button"
+                        prop:disabled=move || busy.get().is_some()
+                        on:click=move |_| {
+                            run(state, form, update_key.clone(),
+                                fetch::update_marketplace_bundle(
+                                    um.clone(), us.clone(), Vec::new(), up.clone()));
+                        }>
+                        <Icon icon=Lucide::ArrowUp size=IconSize::Sm/>
+                        "Update"
+                    </button>
+                })}
+            </div>
+            <ul class="adi-market__elements">
+                {install.elements.iter()
+                    .map(|el| installed_row(state, form, &m, &s, project.clone(), el))
+                    .collect::<Vec<_>>()}
+            </ul>
+            {(!missing.is_empty()).then(|| view! {
+                <p class="adi-hint">
+                    {format!(
+                        "Set {} \u{2014} the elements that name it will not work until you do.",
+                        missing.join(", ")
+                    )}
+                </p>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// One element inside an install: what it landed as, and — in the row's `\u{22ef}` — the acts that
+/// only make sense for something already here (§8: row actions in a menu, never a destructive word
+/// repeated down a column). A hive service, which arrives parked, gets Start there too; Start is
+/// idempotent on one already started, so offering it always costs nothing.
+fn installed_row(
+    state: State,
+    form: MarketplaceForm,
+    marketplace: &str,
+    slug: &str,
+    project: Option<String>,
+    el: &MarketplaceBundleElement,
+) -> AnyView {
+    let spec = element_spec(&el.kind, &el.name);
+    let is_service = el.kind == "services";
+    let (m, s) = (marketplace.to_string(), slug.to_string());
+    let scope_key = project.clone().unwrap_or_default();
+    let start_key = format!("start-service:{m}/{s}/{spec}/{scope_key}");
+    let uninstall_key = format!("uninstall:{m}/{s}/{spec}/{scope_key}");
+    let (sm, ss, sname, sp) = (m.clone(), s.clone(), el.name.clone(), project.clone());
+    let (um, us, uspec, up) = (m.clone(), s.clone(), spec.clone(), project.clone());
+    let confirm_spec = spec.clone();
+    let where_ = match &project {
+        Some(id) => format!(" from {id}"),
+        None => String::new(),
+    };
+
+    let mut items = Vec::new();
+    if is_service {
+        items.push(menu_item(state, "Start", false, move || {
+            run(state, form, start_key.clone(),
+                fetch::start_marketplace_service(sm.clone(), ss.clone(), sname.clone(), sp.clone()));
+        }));
+    }
+    items.push(menu_item(state, "Uninstall", true, move || {
+        if confirm(&format!(
+            "Uninstall {confirm_spec}{where_}? Its siblings in this install are untouched, and so \
+             is any other copy of this bundle."
+        )) {
+            run(state, form, uninstall_key.clone(),
+                fetch::uninstall_marketplace_element(um.clone(), us.clone(), uspec.clone(), up.clone()));
+        }
+    }));
+
+    view! {
+        <li class="adi-market__element is-installed">
+            {element_about(el)}
             <span class="adi-spacer"></span>
-            {actions}
+            {row_actions(state, format!("market:{m}/{s}/{spec}/{scope_key}"), (), items)}
         </li>
     }
     .into_any()
@@ -1089,54 +1190,231 @@ fn facts_view(app: &MarketplaceApp) -> AnyView {
     .into_any()
 }
 
-/// The one question an install of the legacy shape has to ask: what to call this copy.
+/// The install dialog: **where does this go?**
 ///
-/// The name becomes the dashboard's name, its id (`Sales CRM` → `sales-crm`) and its hostname, so
-/// it is worth a form rather than a guess — and the hint says out loud that it is renameable,
-/// which is what makes the form cheap to answer rather than a decision to agonise over.
-fn install_form(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
+/// The question the panel used to not ask at all — everything landed globally, and the same bundle
+/// could only ever be installed once. Three destinations, and they are deliberately not equal:
+///
+/// * **A new project** is the default and the recommendation. It is the only destination that lets
+///   the same bundle be installed twice (every kind's ids live in one global namespace, so a second
+///   global copy of a tool has nowhere to go), and it files the bundle's tools, agents and triggers
+///   under a project of their own, where they run in that project's directory and against its
+///   database.
+/// * **A project you already have** is the same thing, for the second bundle that belongs with the
+///   first.
+/// * **Globally** is offered, marked, and never the default: every agent on the machine can reach
+///   what lands there, it spends the shared id namespace, and a second copy of this bundle will be
+///   refused rather than renamed.
+///
+/// The legacy single-dashboard shape asks its own two questions here too (what to call the copy,
+/// and whether to start it), because for that shape they are the whole of the install.
+fn install_dialog(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> AnyView {
     let key = app_key(app);
-    let busy = form.busy;
-    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
+    // `Modal`'s children may be built more than once, so anything the submit handler owns has to
+    // survive being captured again — a `StoredValue` is `Copy` and does, where a `String` moved
+    // into the closure makes that closure `FnOnce` and the children closure with it.
+    let addr = StoredValue::new((app.marketplace.clone(), app.slug.clone()));
+    let legacy = is_legacy(app);
+    let open = RwSignal::new(false);
+    // The dialog is one component per item page; `form.installing` is the signal that opens it, so
+    // the two are kept in step rather than duplicated.
+    let key = StoredValue::new(key);
+    // Two signals, kept in step in both directions — and **each write is guarded by a read of the
+    // other side untracked**. Without the guard these two effects feed each other: `set` notifies
+    // whether or not the value changed, so opening the dialog once spins the reactive graph
+    // forever, which shows up as a page that never settles and a browser that gets OOM-killed
+    // rather than as anything that looks like a loop.
+    Effect::new(move |_| {
+        let wanted = form.installing.get() == key.get_value();
+        if open.get_untracked() != wanted {
+            open.set(wanted);
+        }
+    });
+    // The other direction: a dialog dismissed by the scrim, the × or Escape has to put the signal
+    // that opened it back, or the button that opens it stops working.
+    Effect::new(move |_| {
+        if !open.get() && form.installing.get_untracked() == key.get_value() {
+            form.installing.set(String::new());
+        }
+    });
+
+    let title = format!("Install {}", app.name);
+
     view! {
-        <div class="adi-market__install">
-            <form class="adi-form" on:submit=move |ev| {
+        <Modal open=open title=title width="max-w-lg">
+            <form class="adi-form adi-market__dialog" on:submit=move |ev| {
                 ev.prevent_default();
-                let (name, start) = (form.name.get().trim().to_string(), form.start_now.get());
-                let (marketplace, slug) = (marketplace.clone(), slug.clone());
-                form.installing.set(String::new());
+                let element = form.element.get();
+                let (project, new_project) = match form.dest.get() {
+                    Destination::New => (None, Some(form.new_project.get().trim().to_string())),
+                    Destination::Existing => (Some(form.project.get()), None),
+                    Destination::Global => (None, None),
+                };
+                open.set(false);
+                let (marketplace, slug) = addr.get_value();
                 run(
                     state,
                     form,
-                    key.clone(),
-                    fetch::install_marketplace_app(marketplace, slug, None, name, start),
+                    format!("install:{marketplace}/{slug}"),
+                    fetch::install_marketplace_app(
+                        marketplace,
+                        slug,
+                        (!element.is_empty()).then_some(element),
+                        form.name.get().trim().to_string(),
+                        form.start_now.get(),
+                        project.filter(|p| !p.is_empty()),
+                        new_project.filter(|p| !p.is_empty()),
+                    ),
                 );
             }>
-                <TextField id="market-name" label="Name it" placeholder="Sales CRM"
-                    value=form.name />
-                <label class="adi-field adi-field--check">
-                    <input type="checkbox"
-                        prop:checked=move || form.start_now.get()
-                        on:change=move |ev| form.start_now.set(event_target_checked(&ev)) />
-                    <span class="adi-field__label">"Start it right away"</span>
-                    {field_hint("this runs the app's own code on this machine")}
-                </label>
-                <button class="adi-btn adi-btn--primary" type="submit"
-                    prop:disabled=move || busy.get().is_some()>
-                    "Install"
-                </button>
-                <button class="adi-btn adi-btn--ghost" type="button"
-                    on:click=move |_| form.installing.set(String::new())>
-                    "Cancel"
-                </button>
+                <p class="adi-market__dialoglead">
+                    // Which element, when it is one element — the dialog's title names the item,
+                    // and this is the only other thing it could be about.
+                    {move || match form.element.get() {
+                        el if el.is_empty() => String::new(),
+                        el => format!("Installing {el} on its own. "),
+                    }}
+                    "Where should this be filed? A project of its own is what we recommend \u{2014} \
+                     it keeps this bundle's tools and agents in one place, and it is the only way \
+                     to install the same bundle more than once."
+                </p>
+
+                {destination_option(
+                    form, Destination::New, "A new project",
+                    "Registered now, named below. Recommended.", None,
+                )}
+                <div class="adi-market__dialogfield" class:is-off=move || form.dest.get() != Destination::New>
+                    <TextField id="market-new-project" label="Call the project"
+                        placeholder="On-call kit" value=form.new_project />
+                </div>
+
+                {destination_option(
+                    form, Destination::Existing, "A project you already have",
+                    "Files everything under it, beside whatever is there.", None,
+                )}
+                <div class="adi-market__dialogfield" class:is-off=move || form.dest.get() != Destination::Existing>
+                    {project_select(state, form)}
+                </div>
+
+                {destination_option(
+                    form, Destination::Global, "Globally",
+                    "Every agent on this machine can reach it, and a second copy of this bundle \
+                     will be refused rather than renamed.",
+                    Some("not recommended"),
+                )}
+
+                {legacy.then(|| view! {
+                    <div class="adi-market__dialoglegacy">
+                        <TextField id="market-name" label="Name it" placeholder="Sales CRM"
+                            value=form.name />
+                        <label class="adi-field adi-field--check">
+                            <input type="checkbox"
+                                prop:checked=move || form.start_now.get()
+                                on:change=move |ev| form.start_now.set(event_target_checked(&ev)) />
+                            <span class="adi-field__label">"Start it right away"</span>
+                            {field_hint("this runs the app's own code on this machine")}
+                        </label>
+                    </div>
+                })}
+
+                <div class="adi-market__dialogfoot">
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        on:click=move |_| open.set(false)>
+                        "Cancel"
+                    </button>
+                    // Ink, not orange: the page's own Install button behind this dialog is the
+                    // screen's one accent (§8), and this is the same act confirmed.
+                    <button class="adi-btn adi-btn--primary" type="submit"
+                        prop:disabled=move || form.busy.get().is_some()>
+                        "Install"
+                    </button>
+                </div>
             </form>
-            // Said out loud rather than behind a hint marker: the whole reason the form is worth
-            // filling in is that the answer is cheap, and nobody knows that until they are told.
-            <p class="adi-hint">
-                "This is what you will see it under \u{2014} it becomes the dashboard's name and \
-                 its address, and you can rename it later."
-            </p>
-        </div>
+        </Modal>
+    }
+    .into_any()
+}
+
+/// One destination, as a row you choose: a radio, what it is, and what it costs.
+///
+/// A radio rather than a segmented control because each choice needs a sentence under it, and a
+/// segmented control that wraps prose is neither. The marked one carries a `--warn` dot and the
+/// words, never a red row: nothing here is destructive, it is simply the choice that closes doors
+/// (§3 — warn is a dot and a word, never coloured prose).
+fn destination_option(
+    form: MarketplaceForm,
+    dest: Destination,
+    label: &str,
+    why: &str,
+    caution: Option<&str>,
+) -> AnyView {
+    let (label, why) = (label.to_string(), why.to_string());
+    let caution = caution.map(str::to_string);
+    view! {
+        <label class="adi-market__dest" class:is-on=move || form.dest.get() == dest>
+            <input type="radio" name="market-destination"
+                prop:checked=move || form.dest.get() == dest
+                on:change=move |_| form.dest.set(dest) />
+            <span class="adi-market__destabout">
+                <span class="adi-market__destname">
+                    {label}
+                    {caution.map(|word| view! {
+                        <span class="adi-market__here">
+                            <span class="adi-dot adi-dot--warn"></span>{word}
+                        </span>
+                    })}
+                </span>
+                <span class="adi-market__destwhy">{why}</span>
+            </span>
+        </label>
+    }
+    .into_any()
+}
+
+/// The projects this machine has, for the "a project you already have" destination.
+///
+/// Archived ones are left out: filing a fresh install under a project somebody has put away is a
+/// state nobody asked for. A machine with no projects at all says so rather than offering an empty
+/// select — the other two destinations still work.
+fn project_select(state: State, form: MarketplaceForm) -> AnyView {
+    view! {
+        {move || {
+            let projects: Vec<adi_webapp_api::types::Project> = state
+                .projects
+                .get()
+                .map(|p| p.projects.into_iter().filter(|p| p.archived_at.is_none()).collect())
+                .unwrap_or_default();
+            if projects.is_empty() {
+                return view! {
+                    <p class="adi-hint">"No projects yet \u{2014} a new one is the way in."</p>
+                }
+                .into_any();
+            }
+            // The first project is the standing answer until somebody picks another, so the field
+            // is never submitted empty.
+            if form.project.get_untracked().is_empty()
+                && let Some(first) = projects.first()
+            {
+                form.project.set(first.id.clone());
+            }
+            view! {
+                <label class="adi-field">
+                    <span class="adi-field__label">"Which project"</span>
+                    <select class="adi-input"
+                        on:change=move |ev| form.project.set(event_target_value(&ev))>
+                        {projects.into_iter().map(|p| {
+                            let selected = form.project.get_untracked() == p.id;
+                            view! {
+                                <option value=p.id.clone() selected=selected>
+                                    {p.name.clone()}
+                                </option>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </select>
+                </label>
+            }
+            .into_any()
+        }}
     }
     .into_any()
 }

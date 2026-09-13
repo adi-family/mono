@@ -150,6 +150,19 @@ pub enum Error {
     /// assignment names nothing cannot resolve at all.
     #[error("{0}")]
     EmbeddingInUse(String),
+    /// An install was aimed at a project whose id is not one safe path segment — or at the one
+    /// name the global scope's own state is filed under. Either would put an install's ledger
+    /// somewhere other than where it belongs (`crate::scope`).
+    #[error(
+        "{0:?} is not a project this can install into: {rule}",
+        rule = adi_config::NAME_RULE
+    )]
+    BadScope(String),
+    /// An install was aimed at a project that is not registered here. Refused rather than created
+    /// silently: a typo would otherwise mint a project nobody asked for, and creating one is its
+    /// own deliberate act (`--new-project`, or the panel's own "a new project" choice).
+    #[error("no project named {0} on this machine — create it first, or install globally")]
+    UnknownProject(String),
 }
 
 /// The outcome alias every fallible operation answers with.

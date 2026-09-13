@@ -1079,14 +1079,22 @@ pub(crate) enum MarketplaceCommand {
         name: Option<String>,
         #[arg(long)]
         start: bool,
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
+        #[arg(long = "new-project", value_name = "NAME", conflicts_with = "project")]
+        new_project: Option<String>,
     },
     Uninstall {
         #[arg(value_name = "MARKETPLACE/SLUG/KIND/NAME")]
         spec: String,
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
     Start {
         #[arg(value_name = "ID_OR_MARKETPLACE/SLUG/services/NAME")]
         target: String,
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
     Update {
         #[arg(value_name = "ID_OR_MARKETPLACE/SLUG")]
@@ -1095,6 +1103,8 @@ pub(crate) enum MarketplaceCommand {
         force: bool,
         #[arg(long = "force-element", value_name = "KIND/NAME")]
         force_element: Vec<String>,
+        #[arg(long, value_name = "ID")]
+        project: Option<String>,
     },
 }
 ```

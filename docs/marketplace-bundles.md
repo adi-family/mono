@@ -195,12 +195,15 @@ reference.
 
 **Consequence worth stating plainly: installing the same bundle twice is not the free "crm/crm-2"
 that a second dashboard install is**, the moment that bundle carries a tool, a backend, or a
-project. Every such element collides with the first copy's and has to be renamed by hand, one at a
-time. This is real, new friction v1 never had, and it is the direct cost of refusing to let a
-suffix silently desync a bundle's own wiring. The escape hatch is the same one hive services
-already need for their own state (see below): a project-scoped second copy, filed under a
-different project, so its tools and backends are wanted under different names by design rather
-than by luck.
+project — *in the global scope*. Every such element collides with the first copy's, and there is
+nothing there to tell the two copies apart, so it is refused.
+
+**The escape hatch is a project, and it is now the recommended destination for every install**
+(decision #7 below): a second copy filed under a project of its own mints past the collision —
+`csv-import-2` — and the install rewrites its own siblings' structured references to match, so the
+second copy's agent names the second copy's tool. That rewrite is exact, because the installer
+knows what every element of the install it just made landed as; it is not available to a global
+install, which has no way to tell whose `csv-import` an agent meant.
 
 ### Cross-element dependencies
 
@@ -228,6 +231,41 @@ code is expected to name its own siblings by their published id**, and a renamed
 breaks that reference the same way it would break a hand-edited one, with no automatic fix-up
 possible. The install's report says which ids were renamed; fixing the code that assumed the old
 one is the operator's or the publisher's job, not this design's.
+
+## Where an install goes: the scope
+
+Every install is filed under a **scope** — one project, or the machine's global scope — and the
+scope is the key everything per-install hangs off: its ledger, its own clone of the repository, its
+parked services. Two installs of one bundle therefore never share a pin: project A updates when its
+operator says so, project B does not, and each one's `git log` answers for the files landed under
+it. `adi_marketplace::Scope` is the type; `--project <id>` / `--new-project <name>` are the CLI
+flags; the panel asks in a dialog when you press Install.
+
+**A project is what we recommend, and the panel says so.** Not because global is unsafe — nothing
+here destroys anything — but because of what the store already does with the `project` field every
+kind carries:
+
+- a project-scoped tool runs in its project's directory and against its project's database, and a
+  project-scoped agent, trigger or dashboard is filed the same way;
+- uninstalling is "the things under this project", not "which of the forty tools on this machine
+  came from where";
+- it is the only way to hold the same bundle twice (above).
+
+**Global is offered, marked, and never the default.** What it costs is said in the dialog rather
+than implied: every agent on the machine can reach what lands there, it spends the one shared id
+namespace, and a second copy of the same bundle will be refused rather than renamed.
+
+**A bundle's own project scaffold is the publisher's suggestion, not a second project.** When an
+install names a destination, the scaffold is skipped and reported ("not created: this install is
+filed under <project>, which you chose"); its published name is what the panel prefills the "a new
+project" field with, which is the honest use for it. Installed globally, a bundle that carries a
+scaffold still behaves exactly as decision #4 describes: the scaffold lands, and its siblings are
+filed under it.
+
+**What is still not possible: picking an old version.** A manifest publishes exactly one commit per
+entry, so two installs hold different versions only by ageing apart — install, let the publisher
+move the pin, install again, and update one of them. There is no version picker, for the same
+reason there is no version comparison: the pin is the identity.
 
 ## Secrets
 
@@ -302,12 +340,13 @@ means `marketplace/installs/<marketplace>/<slug>.json` — the shape phase B act
 (`crates/adi-marketplace/src/bundle.rs`), written out here because drift detection depends on the
 document and the code agreeing on it:
 
-- **The bundle keeps one permanent git clone of its own**, `marketplace/bundles/<bundle-id>/` —
+- **Each install keeps one permanent git clone of its own**, `marketplace/bundles/<bundle-id>/<scope>/` —
   not staged-and-discarded the way v1's staging directory is, kept, because it is now the one
   place `git log` answers "what installed this" the way v1's per-app `.git` used to answer it for
   every element at once. The operator is not expected to edit it; it is the publisher's copy, and
   it only moves under `update`.
-- **One install ledger per bundle**, `marketplace/installs/<bundle-id>.json`, mapping every
+- **One install ledger per install**, `marketplace/installs/<bundle-id>/<scope>.json` — where
+  `<scope>` is the project's id, or `_global` for the machine's own scope — mapping every
   installed element to the id it actually landed as, its kind, and — for every kind other than a
   dashboard's own clone (below) — a content fingerprint of what was last written there. This is
   what a listing reads to answer "what does this bundle have installed, and is any of it edited,"
@@ -451,6 +490,16 @@ why they were made this way:
    machinery this design adds specifically to make "inert on arrival" true for this one kind — it
    is the one place this document proposes behavior beyond what `adi-hive` already does, and it is
    worth the operator's attention for exactly that reason.
+7. **The operator chooses where an install goes, and a project-scoped install may mint past a
+   collision where a global one may not.** This revises decision #3 exactly where it hurt: the
+   refusal stands in the global scope, where nothing can tell two copies apart, and gives way in a
+   project, where the install rewrites `bin_tools` / `backends[].backend` / `project` to the ids
+   that really landed. The rewrite is only ever applied to references *inside the install that made
+   them*, which is why it is exact — and it still cannot touch an unstructured reference in a shell
+   command or a dashboard's TypeScript, which remains the named hole above. The alternative
+   (per-project id namespaces in every registry) is a change to the whole store, not to the
+   marketplace, and it is not this document's to make.
+
 6. **The bundle keeps one permanent internal git clone, rather than discarding staging the way v1
    does.** It costs disk (one clone per bundle, held indefinitely) that v1's transient staging
    never paid. It was kept because it is the only way "what installed this" stays a `git log` away

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-75 structs · 14 enums · 4 type aliases across 30 files.
+75 structs · 15 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -35,7 +35,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -1261,8 +1261,25 @@ The Marketplace page's action state. Sources are added from the CLI (`adi-mono m
 pub(crate) struct MarketplaceForm {
     pub(crate) busy: RwSignal<Option<String>>,
     pub(crate) installing: RwSignal<String>,
+    pub(crate) element: RwSignal<String>,
+    pub(crate) dest: RwSignal<Destination>,
+    pub(crate) project: RwSignal<String>,
+    pub(crate) new_project: RwSignal<String>,
     pub(crate) name: RwSignal<String>,
     pub(crate) start_now: RwSignal<bool>,
+}
+```
+
+### enum `Destination`
+
+Where an install the dialog is about would land.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Destination {
+    New,
+    Existing,
+    Global,
 }
 ```
 

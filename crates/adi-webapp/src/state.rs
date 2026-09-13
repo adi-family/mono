@@ -712,8 +712,18 @@ pub(crate) struct DashboardsForm {
 #[derive(Clone, Copy)]
 pub(crate) struct MarketplaceForm {
     pub(crate) busy: RwSignal<Option<String>>,
-    /// The `<marketplace>/<slug>` whose install form is open, or empty.
+    /// The `<marketplace>/<slug>` whose install dialog is open, or empty.
     pub(crate) installing: RwSignal<String>,
+    /// Which element the open dialog is about — `<kind>/<name>`, or empty for the whole bundle.
+    pub(crate) element: RwSignal<String>,
+    /// Where the open dialog would install: a project it registers, one that already exists, or
+    /// the machine's global scope. A new project is the default because it is what we recommend
+    /// (`docs/marketplace-bundles.md` decision #7).
+    pub(crate) dest: RwSignal<Destination>,
+    /// The project id chosen under [`Destination::Existing`].
+    pub(crate) project: RwSignal<String>,
+    /// The name a [`Destination::New`] project is registered under — prefilled from the bundle.
+    pub(crate) new_project: RwSignal<String>,
     /// What this copy will be called — prefilled with the entry's own name when the form opens.
     pub(crate) name: RwSignal<String>,
     /// Whether to start the app as part of installing it. Set true each time the form opens: on
@@ -722,11 +732,30 @@ pub(crate) struct MarketplaceForm {
     pub(crate) start_now: RwSignal<bool>,
 }
 
+/// Where an install the dialog is about would land.
+///
+/// Three, not two, because "a project that does not exist yet" is the answer most installs want
+/// and making the operator go and create one first is how a recommendation becomes a chore.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Destination {
+    /// Register a project and install into it. The default, and what the panel recommends.
+    New,
+    /// A project this machine already has.
+    Existing,
+    /// No project at all: every agent on the machine can reach it, and a second copy of the same
+    /// bundle has nowhere to go.
+    Global,
+}
+
 impl MarketplaceForm {
     pub(crate) fn new() -> Self {
         Self {
             busy: RwSignal::new(None),
             installing: RwSignal::new(String::new()),
+            element: RwSignal::new(String::new()),
+            dest: RwSignal::new(Destination::New),
+            project: RwSignal::new(String::new()),
+            new_project: RwSignal::new(String::new()),
             name: RwSignal::new(String::new()),
             start_now: RwSignal::new(false),
         }

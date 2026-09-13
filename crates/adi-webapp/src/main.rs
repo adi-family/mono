@@ -513,6 +513,13 @@ fn Market() -> impl IntoView {
             state.marketplace.set(Some(m));
         }
     });
+    // The install dialog offers "a project you already have", so the door needs the registry the
+    // workbench's own pages load for it. One read: nothing here creates or renames a project.
+    spawn_local(async move {
+        if let Ok(p) = fetch::projects().await {
+            state.projects.set(Some(p));
+        }
+    });
     // …and watched, so an install made in another tab — or by an agent — shows up here without a
     // reload. One read is the whole page, so this is the whole watch list.
     Effect::new(move |_| {

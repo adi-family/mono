@@ -4011,15 +4011,37 @@ pub struct MarketplaceElementPreview {
 pub struct MarketplaceBundleStatus {
     /// How many elements the manifest's own preview lists — `0` when it publishes none.
     pub declared: usize,
-    /// Whether this bundle's own internal clone stands behind the manifest's current pin.
+    /// Everything this bundle offers, installed or not — the catalogue the item's page draws its
+    /// "What's included" list from. Never carries an id: what something landed as is a fact about
+    /// one install, and a bundle may have several.
+    pub elements: Vec<MarketplaceBundleElement>,
+    /// Every install of this bundle on this machine: the global one first, then one per project.
+    /// More than one is ordinary — a bundle installed into two projects is two copies, each with
+    /// its own pin and its own update.
+    #[serde(default)]
+    pub installs: Vec<MarketplaceBundleInstall>,
+}
+
+/// One install of one bundle: where it is filed, where it stands, and what it landed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceBundleInstall {
+    /// The project everything here is filed under, or `None` for the machine's global scope.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// That project's display name, when it has one — the panel says the name and addresses the
+    /// id, the way every other project row on the machine does.
+    #[serde(default)]
+    pub project_name: Option<String>,
+    /// The commit this install's own clone stands at.
+    pub commit: String,
+    /// Whether this install stands behind the manifest's current pin. Per install: one project's
+    /// copy may be behind while another's is current.
     pub outdated: bool,
-    /// Every secret name an installed element still declares and this machine does not have set,
+    /// Every secret name an element of this install declares and this machine does not have set,
     /// computed live rather than frozen at install time.
     #[serde(default)]
     pub missing_secrets: Vec<String>,
-    /// Every element this bundle offers, installed here or not: the union of the manifest's own
-    /// preview and what the ledger actually landed, in a fixed order so a row groups the same way
-    /// for every bundle — this is what the panel draws one line per kind for.
+    /// Every element this install landed, each with the id it landed as.
     pub elements: Vec<MarketplaceBundleElement>,
 }
 
@@ -4095,6 +4117,16 @@ pub struct InstallMarketplaceApp {
     pub slug: String,
     #[serde(default)]
     pub element: Option<String>,
+    /// File everything under this project, by id — the recommended destination, and the only way
+    /// to hold the same bundle twice (`docs/marketplace-bundles.md` decision #7). Absent, and with
+    /// no `new_project` either, installs globally.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Register a project under this name and install into it. The panel's own default, because
+    /// the destination most installs want does not exist yet when the operator presses Install.
+    #[serde(default)]
+    pub new_project: Option<String>,
+
     /// What the copy is called here. Empty takes the entry's own name; it is renameable
     /// afterwards like any dashboard's, and the id and hostname are minted from it.
     #[serde(default)]
@@ -4115,6 +4147,10 @@ pub struct UninstallMarketplaceElement {
     pub slug: String,
     /// `<kind>/<name>`, or `project` for the scaffold.
     pub element: String,
+    /// Which install this is about — the project it is filed under, or absent for the global one.
+    /// Two installs of one bundle are two copies, and every verb has to say which.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// `POST /api/marketplace/start` — the installed copy to start, by dashboard id.
@@ -4131,6 +4167,10 @@ pub struct StartMarketplaceService {
     pub slug: String,
     /// The service's published name — the third address coordinate.
     pub name: String,
+    /// Which install this is about — the project it is filed under, or absent for the global one.
+    /// Two installs of one bundle are two copies, and every verb has to say which.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// `POST /api/marketplace/update` — move an installed copy onto the commit its marketplace now
@@ -4154,6 +4194,10 @@ pub struct UpdateMarketplaceBundle {
     pub slug: String,
     #[serde(default)]
     pub force: Vec<String>,
+    /// Which install this is about — the project it is filed under, or absent for the global one.
+    /// Two installs of one bundle are two copies, and every verb has to say which.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// What a marketplace mutation answers with: the fresh state, and the one line that says what

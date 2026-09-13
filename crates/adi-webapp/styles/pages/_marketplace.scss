@@ -593,3 +593,127 @@
   color: var(--ink-3);
   font-size: var(--fs-label);
 }
+
+// --- installed here: one block per install ------------------------------------------------------
+// Two installs of one bundle are two copies — different projects, possibly different commits — so
+// each gets its own block rather than a shared list with a project column. The block's head says
+// where it is filed and where it stands; its rows are the elements that actually landed.
+.adi-market__installs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.adi-market__install {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+  // A left rule rather than a card (§5): these are sections of one page, not detachable things.
+  border-left: 2px solid var(--line-strong);
+}
+
+.adi-market__installhead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 4px;
+}
+
+// Where this copy is filed — the one thing that tells two installs apart, so it carries the weight
+// on the line and the glyph that says which kind of place it is.
+.adi-market__installwhere {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-ui-sm);
+  font-weight: 500;
+  color: var(--ink);
+
+  svg { color: var(--ink-3); }
+}
+
+// --- the install dialog --------------------------------------------------------------------------
+.adi-market__dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.adi-market__dialoglead {
+  margin: 0 0 4px;
+  max-width: 64ch;
+  font-size: var(--fs-small);
+  color: var(--ink-2);
+}
+
+// One destination. The row is the target, so the whole thing is the label and the radio sits in
+// it rather than beside it — and the chosen one is a tone, never the accent (§8).
+.adi-market__dest {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  cursor: pointer;
+
+  &:hover { background: var(--bg-hover); }
+  &.is-on {
+    background: var(--bg-active);
+    border-color: var(--line-strong);
+  }
+
+  input { margin-top: 3px; accent-color: var(--ink-2); }
+}
+
+.adi-market__destabout {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.adi-market__destname {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: var(--fs-ui-sm);
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.adi-market__destwhy {
+  font-size: var(--fs-small);
+  color: var(--ink-2);
+}
+
+// The field a destination needs, under the row that asks for it. Hidden rather than unmounted, so
+// choosing a destination does not make the dialog jump by the height of a field.
+.adi-market__dialogfield {
+  padding: 0 0 4px 34px;
+
+  &.is-off {
+    display: none;
+  }
+}
+
+// The legacy shape's own two questions, under a rule: they are about the copy, not about where it
+// goes, and running them together reads as one long form.
+.adi-market__dialoglegacy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.adi-market__dialogfoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}

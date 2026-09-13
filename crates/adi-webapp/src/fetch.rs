@@ -1081,6 +1081,8 @@ pub async fn install_marketplace_app(
     element: Option<String>,
     name: String,
     start: bool,
+    project: Option<String>,
+    new_project: Option<String>,
 ) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/install",
@@ -1088,6 +1090,8 @@ pub async fn install_marketplace_app(
             marketplace,
             slug,
             element,
+            project,
+            new_project,
             name,
             start,
         },
@@ -1101,6 +1105,7 @@ pub async fn uninstall_marketplace_element(
     marketplace: String,
     slug: String,
     element: String,
+    project: Option<String>,
 ) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/uninstall",
@@ -1108,6 +1113,7 @@ pub async fn uninstall_marketplace_element(
             marketplace,
             slug,
             element,
+            project,
         },
     )
     .await
@@ -1124,6 +1130,7 @@ pub async fn start_marketplace_service(
     marketplace: String,
     slug: String,
     name: String,
+    project: Option<String>,
 ) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/start-service",
@@ -1131,6 +1138,7 @@ pub async fn start_marketplace_service(
             marketplace,
             slug,
             name,
+            project,
         },
     )
     .await
@@ -1153,6 +1161,7 @@ pub async fn update_marketplace_bundle(
     marketplace: String,
     slug: String,
     force: Vec<String>,
+    project: Option<String>,
 ) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/bundle/update",
@@ -1160,6 +1169,7 @@ pub async fn update_marketplace_bundle(
             marketplace,
             slug,
             force,
+            project,
         },
     )
     .await

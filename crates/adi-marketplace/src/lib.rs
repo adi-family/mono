@@ -59,12 +59,13 @@ pub mod install;
 mod kind;
 mod layout;
 mod manifest;
+mod scope;
 pub mod sources;
 pub mod sync;
 
 pub use address::{Address, ElementAddress};
 pub use bundle::{
-    BundleInstalled, BundleOutcome, BundleStatus, BundleUpdated, ElementOutcome,
+    BundleInstall, BundleInstalled, BundleOutcome, BundleStatus, BundleUpdated, ElementOutcome,
     ElementUninstalled, ElementUpdateOutcome, Ledger, LedgerElement, ServiceStarted,
 };
 pub use cache::{SourceState, source_states};
@@ -75,6 +76,7 @@ pub use install::{
 pub use kind::Kind;
 pub use layout::{Layout, LayoutElement, read_layout, scan_for_rust};
 pub use manifest::{BundleEntry, Element, MarketplaceManifest, Media, MediaKind};
+pub use scope::{GLOBAL_KEY, Scope};
 
 use adi_config::Config;
 
