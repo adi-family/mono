@@ -261,7 +261,7 @@ fetched, so an icon carried inside it costs no further request and works with th
 has no host — the same reason the manifest itself is a file:// source here.
 """
 
-import base64, json, subprocess, sys
+import base64, json, os, shutil, subprocess, sys
 from pathlib import Path
 
 repos, manifest_path = Path(sys.argv[1]), Path(sys.argv[2])
@@ -315,26 +315,143 @@ ICONS = {
 }
 
 
-def shot(title, rows):
-    """A still for the gallery: what the publisher would have screenshotted, at 1200x750.
+# --- mock screens -------------------------------------------------------------------------------
+# A publisher's screenshots, drawn rather than captured: these five repositories do not exist, so
+# there is nothing to photograph. Four shapes, because a gallery of one shape tells you nothing
+# about how the page handles a set — a list, a terminal, a transcript, a queue.
+#
+# Real text rather than grey bars: a row of placeholder rectangles reads as a loading state, and
+# what is being reviewed here is whether a screenshot of a working thing sits well on the page.
+# No orange anywhere in them, deliberately — a gallery image is drawn on the same screen as the
+# panel's own one filled accent (§8), and a mock is not worth spending it on.
 
-    No orange anywhere in it, deliberately. A gallery image is drawn on the same screen as the
-    panel's own one filled accent (§8), and a mock screenshot is not worth spending it on.
-    """
-    lines = "".join(
-        f'<rect x="40" y="{124 + i * 58}" width="{w}" height="11" rx="5" fill="{DIM}"/>'
-        f'<rect x="{40 + w + 24}" y="{124 + i * 58}" width="90" height="11" rx="5" fill="#3A3A3A"/>'
-        f'<line x1="40" y1="{158 + i * 58}" x2="1160" y2="{158 + i * 58}" stroke="#242424"/>'
-        for i, w in enumerate(rows)
+W, H = 1200, 750
+BG, SIDE, RULE = "#161616", "#101010", "#242424"
+INK_1, INK_2, INK_3, CODE = "#ECEAE6", "#A9A6A0", "#6F6C67", "#D6D3CD"
+OK, WARN, ERR = "#4CB77A", "#E0A84B", "#E25C5C"
+SANS = "system-ui,-apple-system,Segoe UI,sans-serif"
+MONO = "ui-monospace,SFMono-Regular,Menlo,monospace"
+
+
+def esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def label(x, y, s, fill=INK_2, size=15, family=SANS, weight=400, anchor="start"):
+    return (
+        f'<text x="{x}" y="{y}" font-family="{family}" font-size="{size}" font-weight="{weight}" '
+        f'fill="{fill}" text-anchor="{anchor}">{esc(s)}</text>'
     )
+
+
+def frame(title, body):
+    """The window every mock is drawn in: a bar with the screen's own name, the page under it."""
     return data_uri(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="750" viewBox="0 0 1200 750">'
-        '<rect width="1200" height="750" fill="#161616"/>'
-        '<rect width="1200" height="76" fill="#101010"/>'
-        f'<text x="40" y="48" font-family="system-ui,sans-serif" font-size="24" fill="#ECEAE6">{title}</text>'
-        '<rect x="1040" y="24" width="120" height="28" rx="6" fill="#2A2A2A"/>'
-        f'{lines}</svg>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">'
+        f'<rect width="{W}" height="{H}" fill="{BG}"/>'
+        f'<rect width="{W}" height="76" fill="{SIDE}"/>'
+        f'{label(40, 48, title, INK_1, 22, weight=500)}'
+        f'<rect x="1040" y="24" width="120" height="28" rx="6" fill="#2A2A2A"/>'
+        f'{body}</svg>'
     )
+
+
+def screen_rows(title, rows):
+    """A list screen: a name on the left, a value on the right, a hairline between."""
+    body = ""
+    for i, (left, right) in enumerate(rows):
+        y = 130 + i * 54
+        body += label(40, y, left, INK_1, 15)
+        body += label(1160, y, right, INK_3, 14, anchor="end")
+        body += f'<line x1="40" y1="{y + 20}" x2="1160" y2="{y + 20}" stroke="{RULE}"/>'
+    return frame(title, body)
+
+
+def screen_queue(title, rows):
+    """The same, with a status dot in front — what an incident list or a run list looks like."""
+    body = ""
+    for i, (dot, left, meta, right) in enumerate(rows):
+        y = 130 + i * 60
+        body += f'<circle cx="46" cy="{y - 5}" r="4" fill="{dot}"/>'
+        body += label(64, y, left, INK_1, 15)
+        body += label(64, y + 20, meta, INK_3, 13)
+        body += label(1160, y, right, INK_3, 14, anchor="end")
+        body += f'<line x1="40" y1="{y + 34}" x2="1160" y2="{y + 34}" stroke="{RULE}"/>'
+    return frame(title, body)
+
+
+def screen_terminal(title, lines):
+    """A shell: a prompt, its output, and whatever the tool had to say about it."""
+    body = f'<rect x="40" y="108" width="1120" height="{H - 148}" rx="10" fill="#1E1E1E"/>'
+    for i, (text, tone) in enumerate(lines):
+        fill = {"prompt": CODE, "out": INK_2, "dim": INK_3, "ok": OK, "err": ERR}[tone]
+        body += label(66, 146 + i * 30, text, fill, 15, family=MONO)
+    return frame(title, body)
+
+
+def screen_chat(title, turns):
+    """A transcript: who spoke, then what they said, at the measure the real one reads at."""
+    body, y = "", 132
+    for who, said in turns:
+        body += label(40, y, who, INK_3, 13)
+        y += 26
+        for line in said:
+            body += label(40, y, line, INK_1, 16)
+            y += 28
+        y += 22
+    return frame(title, body)
+
+
+def build_clip(stills, out_dir):
+    """A short clip for the one gallery that should have one, cross-faded from two of its stills.
+
+    The video path is a real part of the page — a poster on the stage, a play glyph on the
+    thumbnail, `<video controls>` that waits to be asked — and a manifest of pictures never
+    exercises it. Built rather than shipped: an mp4 checked into this repository would be a binary
+    nobody can review, and the two frames are already here.
+
+    `shot` rasterises the SVG (no rasteriser in the standard library, and every mock is an SVG);
+    ffmpeg does the fade. Missing either is a note, not a failure — a gallery of stills is still a
+    gallery, and this script has to run on a machine that has neither.
+    """
+    if not (shutil.which("shot") and shutil.which("ffmpeg")):
+        print("clip: no shot/ffmpeg on PATH — that gallery goes out as stills")
+        return None
+    # `shot` is `adi-mono tools run shot`, so it resolves the tool out of whatever store ADI_DIR
+    # names — and this script has pointed that at the dev store, which has no tools in it at all
+    # ("error: no such tool: shot"). Dropping the override for this one call puts it back on the
+    # real store, where the tool lives. The fixtures it writes are still the dev store's.
+    env = {k: v for k, v in os.environ.items() if k != "ADI_DIR"}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    try:
+        for i, still in enumerate(stills):
+            html, png = out_dir / f"frame{i}.html", out_dir / f"frame{i}.png"
+            html.write_text(
+                f'<body style="margin:0;background:{BG}">'
+                f'<img src="{still}" width="{W}" height="{H}">'
+            )
+            subprocess.run(
+                ["shot", str(html), "--out", str(png),
+                 "--width", str(W), "--height", str(H), "--dpr", "1"],
+                check=True, capture_output=True, env=env,
+            )
+            frames.append(png)
+        mp4 = out_dir / "tour.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loop", "1", "-t", "2.2", "-i", str(frames[0]),
+             "-loop", "1", "-t", "2.2", "-i", str(frames[1]),
+             "-filter_complex",
+             "[0][1]xfade=transition=fade:duration=0.7:offset=1.6,format=yuv420p",
+             "-r", "20", "-c:v", "libx264", "-crf", "32", "-preset", "veryfast",
+             "-movflags", "+faststart", str(mp4)],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"clip: {e.cmd[0]} failed — that gallery goes out as stills")
+        return None
+    print(f"clip: {mp4.stat().st_size // 1024} KiB of mp4, carried in the manifest")
+    return "data:video/mp4;base64," + base64.b64encode(mp4.read_bytes()).decode()
 
 
 STANDUP_README = """\
@@ -379,6 +496,137 @@ empty bin until the tool lands too. That is the ordinary state of an agent whose
 ticked, not an error.
 """
 
+# The stills, built before the manifest so the clip can be cross-faded from two of them.
+CHANGELOG_STILLS = [
+    screen_terminal("changelog", [
+        ("$ changelog v1.1.0..HEAD", "prompt"),
+        ("- marketplace: a shelf you browse, and a page per item you act from", "out"),
+        ("- marketplace: five local bundles to look at", "out"),
+        ("- chat rail: never filter out a run asking a person a question", "out"),
+        ("- embedding backends: wire the three consumers", "out"),
+        ("- hive: a service may arrive parked and start on your say-so", "out"),
+        ("- indexer: bump the pipeline version after a schema change", "out"),
+        ("", "out"),
+        ("21 commits, 6 worth reading, 15 filtered", "dim"),
+        ("", "out"),
+        ("$ changelog v1.1.0..HEAD --since-tag", "prompt"),
+        ("nothing new since v1.2.0", "dim"),
+    ]),
+    screen_terminal("commit-lint", [
+        ("$ commit-lint .git/COMMIT_EDITMSG", "prompt"),
+        ("subject is 94 characters, over 72", "err"),
+        ("", "out"),
+        ("$ commit-lint .git/COMMIT_EDITMSG", "prompt"),
+        ("ok", "ok"),
+    ]),
+]
+
+STANDUP_STILLS = [
+    screen_rows("Standup · yesterday", [
+        ("adi-ui — rebuilt the marketplace as a shelf and a page", "1h 12m"),
+        ("adi-dev — embedding backends, the operator surface", "3h 04m"),
+        ("adi-docs — comments audit over adi-agents", "22m"),
+        ("adi-ui — five marketplace bundles to look at", "36m"),
+        ("adi-mesh — relay ping timeout, reproduced", "2h 21m"),
+        ("landing — hero copy, third pass", "12m"),
+        ("adi-dev — clone lint across the workspace", "58m"),
+        ("adi-ui — sentence case on the kind headings", "6m"),
+        ("adi-db — vacuum on the events spool", "9m"),
+        ("adi-dev — trigger that arrives disabled, tested", "41m"),
+    ]),
+    screen_chat("Standup · one run", [
+        ("asked for", ["Make the marketplace look like a marketplace."]),
+        ("shipped", [
+            "The listing is a shelf now: rows are links, no buttons,",
+            "and what an item carries is said in words.",
+            "Every act moved to the item's own page — one orange Install,",
+            "a gallery, and what is included with an action each.",
+        ]),
+        ("checked", [
+            "Installed an element and took it back out again, in a browser.",
+            "7 unit tests. Five screenshots read.",
+        ]),
+        ("took", ["1h 12m · 4 files · 1 commit"]),
+    ]),
+]
+
+REVIEWER_STILLS = [
+    screen_chat("reviewer · pull/318", [
+        ("reviewer", [
+            "install.rs:412 — the staging directory is removed before the",
+            "rename, so a failed rename leaves nothing to retry from.",
+            "Move the cleanup after it, or keep the path.",
+        ]),
+        ("reviewer", [
+            "bundle.rs:1842 — land_tool mints an id and then undoes it on a",
+            "collision. That is two writes where one check would do, and the",
+            "undo is not on the error path.",
+        ]),
+        ("reviewer", ["Nothing else here would break."]),
+    ]),
+    screen_chat("reviewer · pull/319", [
+        ("reviewer", ["This one is fine."]),
+        ("you", ["Say why."]),
+        ("reviewer", [
+            "One function, one caller, the test covers the empty case and the",
+            "two-element case. The name says what it returns.",
+            "There is nothing here to be wrong about.",
+        ]),
+    ]),
+]
+
+CRM_STILLS = [
+    screen_rows("CRM · gone quiet", [
+        ("Marta Kaufmann — Northwind", "47 days"),
+        ("Ben Okoro — Sable & Co", "31 days"),
+        ("Priya Raman — Halter Logistics", "28 days"),
+        ("Tom Whitfield — Gearbox", "22 days"),
+        ("Ana Ferreira — Mistral Freight", "19 days"),
+        ("Jonas Lind — Kestrel", "14 days"),
+        ("Hana Sato — Orchard Lane", "12 days"),
+        ("Dmitri Volkov — Ternary", "9 days"),
+        ("Grace Mbeki — Fieldnote", "8 days"),
+        ("Luis Ferrán — Costa Dorada", "6 days"),
+    ]),
+    screen_chat("sales-bot · draft for Marta", [
+        ("last heard from her", ["12 March — \"circle back after the Q2 budget lands\""]),
+        ("sales-bot", [
+            "Hi Marta — you mentioned in March that the pilot was waiting",
+            "on your Q2 budget. That is behind you now, so: still worth",
+            "picking up, or shall I stop asking?",
+        ]),
+        ("waiting on you", ["Send · Edit · Never mind"]),
+    ]),
+]
+
+OPS_STILLS = [
+    screen_queue("Ops · open incidents", [
+        (ERR, "api-gateway returning 502 on /v2/search", "opened 12m ago · nobody assigned", "sev 1"),
+        (WARN, "queue depth over 10k for twenty minutes", "opened 1h ago · oncall", "sev 2"),
+        (WARN, "nightly export ran twice", "opened 4h ago · oncall", "sev 3"),
+        (WARN, "certificate on relay-2 expires in six days", "opened 9h ago · oncall", "sev 3"),
+        (OK, "disk pressure on builder-2", "closed 6h ago · swept", "closed"),
+        (OK, "webhook retries backed off correctly", "closed 11h ago · swept", "closed"),
+        (OK, "index rebuild finished", "closed 1d ago · oncall", "closed"),
+    ]),
+    screen_terminal("pager", [
+        ("$ pager 'api-gateway 502s on /v2/search'", "prompt"),
+        ("paged: oncall (primary) — acknowledged in 41s", "ok"),
+        ("", "out"),
+        ("$ pager --who", "prompt"),
+        ("primary: you, until 09:00", "out"),
+        ("secondary: dmitri, until Thursday", "out"),
+        ("", "out"),
+        ("$ pager --dry-run 'queue depth over 10k'", "prompt"),
+        ("would page: oncall (primary)", "dim"),
+        ("would not page: secondary (sev 2 policy)", "dim"),
+    ]),
+]
+
+# One clip, on the item with the most to show in motion. Everything else is stills — a gallery of
+# clips is a page that asks to be watched, and these are tools.
+CRM_CLIP = build_clip(CRM_STILLS, manifest_path.parent / "clip")
+
 BUNDLES = [
     {
         "slug": "changelog",
@@ -387,6 +635,10 @@ BUNDLES = [
         "keywords": ["git", "release", "notes"],
         "version": "1.2.0",
         "icon": ICONS["changelog"],
+        "gallery": [
+            {"url": CHANGELOG_STILLS[0], "caption": "One release, as the tool writes it"},
+            {"url": CHANGELOG_STILLS[1], "caption": "…and the subject it refused first"},
+        ],
         "elements": [
             {"kind": "tool", "name": "changelog", "description": "Reads a commit range and writes the note."},
             {"kind": "tool", "name": "commit-lint", "description": "Checks a subject line against the house rules."},
@@ -401,11 +653,8 @@ BUNDLES = [
         "icon": ICONS["standup"],
         "readme": STANDUP_README,
         "gallery": [
-            {"url": shot("Standup · yesterday",
-                         [420, 300, 360, 250, 390, 280, 330, 450, 270, 360, 240]),
-             "caption": "The board itself, newest run first"},
-            {"url": shot("Standup · one run",
-                         [520, 340, 300, 470, 360, 280, 420, 250, 380, 310, 290]),
+            {"url": STANDUP_STILLS[0], "caption": "The board itself, newest run first"},
+            {"url": STANDUP_STILLS[1],
              "caption": "One run opened: what it was asked for, and what it shipped"},
         ],
         "elements": [
@@ -420,6 +669,10 @@ BUNDLES = [
         "version": "2.0.0",
         # No icon on purpose: this is the entry that draws the placeholder tile, so a listing
         # where only some publishers ship a mark can be looked at rather than guessed about.
+        "gallery": [
+            {"url": REVIEWER_STILLS[0], "caption": "What it says when something would break"},
+            {"url": REVIEWER_STILLS[1], "caption": "…and when nothing would"},
+        ],
         "elements": [
             {"kind": "agent", "name": "reviewer", "description": "The reviewer itself. Wants REVIEWER_GITHUB_TOKEN."},
         ],
@@ -432,6 +685,14 @@ BUNDLES = [
         "version": "0.4.2",
         "icon": ICONS["crm-suite"],
         "readme": CRM_README,
+        # A clip in the middle of the strip, so the thumbnail that carries the play glyph is not
+        # the one the stage opens on — which is the arrangement worth looking at.
+        "gallery": [
+            {"url": CRM_STILLS[0], "caption": "Who has gone quiet, oldest silence first"},
+        ] + ([{"url": CRM_CLIP, "poster": CRM_STILLS[0], "kind": "video",
+               "caption": "From a contacts export to the first draft"}] if CRM_CLIP else []) + [
+            {"url": CRM_STILLS[1], "caption": "The draft sales-bot writes, before anybody sends it"},
+        ],
         "elements": [
             {"kind": "agent", "name": "sales-bot", "description": "Drafts the follow-up."},
             {"kind": "tool", "name": "csv-import", "description": "Loads a contacts export."},
@@ -446,6 +707,10 @@ BUNDLES = [
         "keywords": ["ops", "on-call", "incidents"],
         "version": "1.0.0",
         "icon": ICONS["ops-kit"],
+        "gallery": [
+            {"url": OPS_STILLS[0], "caption": "Open incidents, oldest first"},
+            {"url": OPS_STILLS[1], "caption": "pager, from the on-call agent's own bin"},
+        ],
         "elements": [
             {"kind": "agent", "name": "oncall", "description": "First responder. Reads the alert, hands over."},
             {"kind": "tool", "name": "pager", "description": "Pages whoever is on call."},
