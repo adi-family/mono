@@ -4011,22 +4011,34 @@ pub struct MarketplaceElementPreview {
 pub struct MarketplaceBundleStatus {
     /// How many elements the manifest's own preview lists — `0` when it publishes none.
     pub declared: usize,
-    /// Every element actually installed here, in ledger order.
-    pub installed: Vec<MarketplaceElementInstall>,
     /// Whether this bundle's own internal clone stands behind the manifest's current pin.
     pub outdated: bool,
     /// Every secret name an installed element still declares and this machine does not have set,
     /// computed live rather than frozen at install time.
     #[serde(default)]
     pub missing_secrets: Vec<String>,
+    /// Every element this bundle offers, installed here or not: the union of the manifest's own
+    /// preview and what the ledger actually landed, in a fixed order so a row groups the same way
+    /// for every bundle — this is what the panel draws one line per kind for.
+    pub elements: Vec<MarketplaceBundleElement>,
 }
 
-/// One element of a general bundle actually installed here.
+/// One element of a general bundle, whether or not it is installed here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MarketplaceElementInstall {
+pub struct MarketplaceBundleElement {
+    /// One of the eight repository directory names (`agents`, `tools`, `dashboards`, `llm`,
+    /// `embeddings`, `services`, `triggers`, `project`) — the address spelling
+    /// (`crate::Kind::dir`), since this is what a row's Install/Uninstall/Start action addresses
+    /// it by.
     pub kind: String,
+    /// The published name — the third address coordinate.
     pub name: String,
-    pub id: String,
+    /// The one line the manifest's preview publishes for it, if it publishes one at all.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The id it landed as, or `None` when it is declared but not installed here.
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 /// One picture or clip in an app's gallery. The kind is resolved by the store — off the entry's

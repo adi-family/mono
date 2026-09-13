@@ -178,8 +178,25 @@
   font-size: var(--fs-small);
 }
 
-// One installed element per line: no bullets, no indent beyond the bundle's own — it already
-// reads as a sub-list of the row above it.
+// One kind's own section under the bundle status: a heading naming it, then its elements. Only
+// the kinds a bundle actually carries an element of are drawn, so this never has to say "none."
+.adi-market__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.adi-market__grouphead {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .02em;
+}
+
+// One element per line: no bullets, no indent beyond the group's own — it already reads as a
+// sub-list of the kind heading above it.
 .adi-market__elements {
   list-style: none;
   margin: 0;
@@ -187,6 +204,17 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+// The one line the manifest's preview publishes for an element not yet installed — beside its
+// name rather than under it, since the row still has to fit the action on the same line.
+.adi-market__elementdesc {
+  color: var(--ink-2);
+  font-size: var(--fs-small);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 // ---- one app's own page (`/marketplace/<marketplace>/<slug>`) --------------------------------

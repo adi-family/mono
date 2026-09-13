@@ -709,21 +709,110 @@ pub struct BundleStatus {
     /// `api_key_env`) that this machine does not currently have set, read fresh off the landed
     /// files and the secrets store on every call.
     pub missing_secrets: Vec<String>,
+    /// Every element this bundle offers, whether or not it is installed here: the union of what
+    /// the manifest's own preview declares and what the ledger actually landed, one row per
+    /// `(kind, published name)`, in a fixed order ([`Kind::ALL`], then name) so a listing groups
+    /// the same way for every bundle. This is what a row renders — the fraction above is the
+    /// summary, this is the detail it summarizes.
+    pub elements: Vec<BundleElementRow>,
 }
 
-/// A general bundle's status for the listing, or `None` for one nothing has been installed from
-/// yet — the legacy single-dashboard bundle included, since it keeps no ledger at all (decision
-/// #6) and is shown through `crate::install::cached_apps` instead.
+/// One row of [`BundleStatus::elements`] — a declared element, an installed one, or both at once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleElementRow {
+    pub kind: Kind,
+    /// The published name — the file or directory stem the repository carries it under, and the
+    /// third address coordinate.
+    pub name: String,
+    /// The one line the manifest's preview publishes for it, when it publishes one at all — the
+    /// preview is advisory, so this is absent whenever the manifest never described this element
+    /// (an old-shape publisher, or one whose preview undersells what the tree actually carries).
+    pub description: Option<String>,
+    /// The id it landed as, or `None` when the manifest declares it but nothing has installed it
+    /// here yet.
+    pub id: Option<String>,
+}
+
+/// A general bundle's status for the listing — `None` only when there is truly nothing to say:
+/// the manifest publishes no preview *and* nothing has been installed from it, which is exactly
+/// what the legacy single-dashboard bundle looks like from here too (it keeps no ledger at all,
+/// decision #6, and is shown through `crate::install::cached_apps` instead). A bundle that
+/// declares a preview but has never been installed still answers `Some`, every row's `id` absent
+/// — the preview is the only list there is to show before anything is cloned
+/// (`docs/marketplace-bundles.md` decision #2), and showing nothing for it would read as "this
+/// bundle carries nothing" when the honest answer is "nothing here has been installed yet."
 #[must_use]
 pub fn status(market: &Marketplace, marketplace: &str, slug: &str, entry: &BundleEntry) -> Option<BundleStatus> {
-    let ledger = read_ledger(market, marketplace, slug)?;
-    let outdated = !ledger.commit.eq_ignore_ascii_case(&entry.pin());
-    let missing_secrets = live_missing_secrets(market.config(), &ledger);
+    let declared = entry.elements();
+    let ledger = read_ledger(market, marketplace, slug);
+    if declared.is_empty() && ledger.is_none() {
+        return None;
+    }
+
+    let (installed, outdated, missing_secrets) = match &ledger {
+        Some(ledger) => (
+            ledger.elements.clone(),
+            !ledger.commit.eq_ignore_ascii_case(&entry.pin()),
+            live_missing_secrets(market.config(), ledger),
+        ),
+        None => (Vec::new(), false, Vec::new()),
+    };
+
+    // Every installed element first, carrying whatever description the preview publishes for it
+    // when the two agree on kind and name — then every declared element nothing has installed
+    // yet, `id: None`. A declared element the ledger already carries is never listed twice.
+    //
+    // The project scaffold is the one exception to "agree on kind and name": it lands under the
+    // bundle's own slug, never under whatever name the manifest's preview happened to publish for
+    // it (`docs/marketplace-bundles.md` decision #4 — it has no name of its own to land under, and
+    // `install`'s own `addr.slug.clone()` is what actually lands). Matching it by name would never
+    // agree with what landed and would draw the one scaffold twice: once installed, once still
+    // "declared." So a project entry matches by kind alone, on both sides of this merge.
+    let mut elements: Vec<BundleElementRow> = installed
+        .iter()
+        .map(|e| {
+            let description = declared
+                .iter()
+                .find(|(kind, el)| *kind == e.kind && (e.kind == Kind::Project || el.name() == e.name))
+                .and_then(|(_, el)| el.description().map(str::to_string));
+            BundleElementRow {
+                kind: e.kind,
+                name: e.name.clone(),
+                description,
+                id: Some(e.id.clone()),
+            }
+        })
+        .collect();
+    for (kind, el) in &declared {
+        let name = el.name();
+        let already_listed = elements
+            .iter()
+            .any(|row| row.kind == *kind && (*kind == Kind::Project || row.name == name));
+        if already_listed {
+            continue;
+        }
+        elements.push(BundleElementRow {
+            kind: *kind,
+            // Predicts the name it would actually land under, rather than showing the preview's
+            // own (irrelevant) name for a kind an address never names in the first place.
+            name: if *kind == Kind::Project { slug.to_string() } else { name.to_string() },
+            description: el.description().map(str::to_string),
+            id: None,
+        });
+    }
+    elements.sort_by_key(|row| {
+        (
+            Kind::ALL.iter().position(|k| *k == row.kind).unwrap_or(Kind::ALL.len()),
+            row.name.clone(),
+        )
+    });
+
     Some(BundleStatus {
-        declared: entry.elements().len(),
-        installed: ledger.elements,
+        declared: declared.len(),
+        installed,
         outdated,
         missing_secrets,
+        elements,
     })
 }
 
@@ -3091,6 +3180,28 @@ mod tests {
     }
 
     #[test]
+    fn status_lists_every_declared_element_unstalled_when_the_preview_exists_but_nothing_is() {
+        // A manifest that previews two elements, and an install call nobody has made yet — the
+        // only list there is to show before anything is cloned (decision #2), and it should read
+        // as "nothing installed yet," not as "this bundle carries nothing."
+        let (market, repo, commit) = fixture("status-preview-only", "preview-bundle", |root| {
+            write_agent(root, "sales-bot", "");
+            write_tool(root, "csv-import");
+        });
+        synced_with_preview(&market, "preview-bundle", &repo, &commit);
+        let entry = entry_of_adi(&market, "preview-bundle");
+        let s = status(&market, "adi", "preview-bundle", &entry).expect("a preview is something to say");
+        assert_eq!(s.declared, 2);
+        assert!(s.installed.is_empty(), "nothing has been installed");
+        assert_eq!(s.elements.len(), 2, "{:?}", s.elements);
+        assert!(s.elements.iter().all(|row| row.id.is_none()), "{:?}", s.elements);
+        assert_eq!(s.elements[0].kind, Kind::Agent, "agents sort ahead of tools (Kind::ALL)");
+        assert_eq!(s.elements[0].name, "sales-bot");
+        assert_eq!(s.elements[1].kind, Kind::Tool);
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    #[test]
     fn status_reports_the_installed_fraction_and_whether_it_is_outdated() {
         let (market, repo, commit) = fixture("status-fraction", "status-bundle", |root| {
             write_agent(root, "sales-bot", "");
@@ -3107,6 +3218,14 @@ mod tests {
         assert_eq!(s.installed[0].kind, Kind::Agent);
         assert!(!s.outdated, "installed at the pin the manifest names now");
 
+        // The merged rows carry both: the agent with the id it landed as, and the tool the
+        // manifest still previews but nothing has installed.
+        assert_eq!(s.elements.len(), 2, "{:?}", s.elements);
+        let agent_row = s.elements.iter().find(|r| r.kind == Kind::Agent).expect("agent row");
+        assert_eq!(agent_row.id.as_deref(), Some("sales-bot"));
+        let tool_row = s.elements.iter().find(|r| r.kind == Kind::Tool).expect("tool row");
+        assert_eq!(tool_row.id, None, "declared, not yet installed");
+
         // The publisher cuts a new release; the ledger's own clone is now behind it.
         advance(&market, "status-bundle", &repo, |root| {
             write_agent(root, "sales-bot", "label = \"v2\"\n");
@@ -3114,6 +3233,52 @@ mod tests {
         let entry = entry_of_adi(&market, "status-bundle");
         let s = status(&market, "adi", "status-bundle", &entry).expect("still installed");
         assert!(s.outdated, "the manifest moved on and the ledger has not");
+        let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    /// Sync a source called `adi` whose one bundle publishes a preview naming its project
+    /// scaffold something other than the bundle's own slug — exactly what a real publisher does
+    /// (`project`/`config`, say) and exactly the shape that broke the merge in [`status`]: the
+    /// scaffold always lands under the bundle's slug (`install`'s own `addr.slug.clone()`), never
+    /// under the preview's own name, so matching the two by name would show the one scaffold
+    /// twice.
+    fn synced_with_project_preview(market: &Marketplace, slug: &str, repo: &str, commit: &str) {
+        let manifest = format!(
+            r#"{{"name":"t","bundles":[{{"slug":"{slug}","name":"{slug}","repo":"{repo}","commit":"{commit}",
+               "elements":[{{"kind":"project","name":"config","description":"The scaffold."}}]}}]}}"#
+        );
+        if crate::sources::list(market.config()).expect("sources").is_empty() {
+            crate::sources::add(market.config(), "adi", "https://example/marketplace.json")
+                .expect("add");
+        }
+        crate::sync::sync_with(market, |_| Ok(manifest.clone().into_bytes())).expect("sync");
+    }
+
+    #[test]
+    fn status_never_lists_the_project_scaffold_twice_under_two_different_names() {
+        let (market, repo, commit) = fixture("status-project", "status-project-bundle", |root| {
+            write_project(root, "Status Project Bundle");
+        });
+        synced_with_project_preview(&market, "status-project-bundle", &repo, &commit);
+
+        // Before install: one row, predicting the slug it will actually land under — not the
+        // preview's own "config", which an address never names anyway.
+        let entry = entry_of_adi(&market, "status-project-bundle");
+        let s = status(&market, "adi", "status-project-bundle", &entry).expect("a preview exists");
+        assert_eq!(s.elements.len(), 1, "{:?}", s.elements);
+        assert_eq!(s.elements[0].kind, Kind::Project);
+        assert_eq!(s.elements[0].name, "status-project-bundle");
+        assert_eq!(s.elements[0].id, None);
+        assert_eq!(s.elements[0].description.as_deref(), Some("The scaffold."));
+
+        // Installed: still one row, now carrying the id it landed as and the preview's own
+        // description — not two, one for "config" and one for whatever it actually landed as.
+        unwrap_bundle(install(&market, "adi/status-project-bundle", "", false).expect("install"));
+        let s = status(&market, "adi", "status-project-bundle", &entry).expect("installed");
+        assert_eq!(s.elements.len(), 1, "{:?}", s.elements);
+        assert_eq!(s.elements[0].kind, Kind::Project);
+        assert_eq!(s.elements[0].id.as_deref(), Some("status-project-bundle"));
+        assert_eq!(s.elements[0].description.as_deref(), Some("The scaffold."));
         let _ = std::fs::remove_dir_all(market.config().root());
     }
 

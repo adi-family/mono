@@ -4,12 +4,12 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-32 structs · 7 enums · 1 type alias across 12 files.
+33 structs · 7 enums · 1 type alias across 12 files.
 
 ## Index
 
 - [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
-- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `BundleStatus`, `Stores`
+- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `BundleStatus`, `BundleElementRow`, `Stores`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
@@ -236,6 +236,21 @@ pub struct BundleStatus {
     pub installed: Vec<LedgerElement>,
     pub outdated: bool,
     pub missing_secrets: Vec<String>,
+    pub elements: Vec<BundleElementRow>,
+}
+```
+
+### struct `BundleElementRow`
+
+One row of `BundleStatus::elements` — a declared element, an installed one, or both at once.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleElementRow {
+    pub kind: Kind,
+    pub name: String,
+    pub description: Option<String>,
+    pub id: Option<String>,
 }
 ```
 

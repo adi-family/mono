@@ -12,8 +12,8 @@ use adi_config::Config;
 use adi_marketplace::{Kind, Marketplace};
 
 use crate::types::{
-    InstallMarketplaceApp, MarketplaceApp, MarketplaceBundleStatus, MarketplaceDone,
-    MarketplaceElementInstall, MarketplaceElementPreview, MarketplaceInstall, MarketplaceMedia,
+    InstallMarketplaceApp, MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleStatus,
+    MarketplaceDone, MarketplaceElementPreview, MarketplaceInstall, MarketplaceMedia,
     MarketplaceMediaKind, MarketplaceSource, MarketplaceState, StartMarketplaceApp,
     StartMarketplaceService, UninstallMarketplaceElement, UpdateMarketplaceApp,
     UpdateMarketplaceBundle,
@@ -96,17 +96,21 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
 fn bundle_status(s: adi_marketplace::BundleStatus) -> MarketplaceBundleStatus {
     MarketplaceBundleStatus {
         declared: s.declared,
-        installed: s
-            .installed
+        outdated: s.outdated,
+        missing_secrets: s.missing_secrets,
+        // `kind.to_string()`, not `kind.wire()`: this is the address spelling
+        // (`crate::Kind::dir`), because the panel builds `<kind>/<name>` straight off this field
+        // to install, uninstall or start the element it names.
+        elements: s
+            .elements
             .into_iter()
-            .map(|e| MarketplaceElementInstall {
-                kind: e.kind.wire().to_string(),
+            .map(|e| MarketplaceBundleElement {
+                kind: e.kind.to_string(),
                 name: e.name,
+                description: e.description,
                 id: e.id,
             })
             .collect(),
-        outdated: s.outdated,
-        missing_secrets: s.missing_secrets,
     }
 }
 

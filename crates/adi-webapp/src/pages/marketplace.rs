@@ -23,7 +23,7 @@
 
 use adi_ui::{Icon, IconSize, Lucide, Markdown};
 use adi_webapp_api::types::{
-    MarketplaceApp, MarketplaceElementInstall, MarketplaceInstall, MarketplaceMedia,
+    MarketplaceApp, MarketplaceBundleElement, MarketplaceInstall, MarketplaceMedia,
     MarketplaceMediaKind as MediaKind, MarketplaceSource,
 };
 use leptos::prelude::*;
@@ -231,20 +231,22 @@ fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp, open: Op
     .into_any()
 }
 
-/// A general bundle's own status: installed as a fraction of what the manifest's preview
-/// declares, which elements landed under what ids, whether it is behind the current pin, and any
-/// declared secret still missing here. `None` for the app-only shape v1 shipped — `app.elements`
-/// is empty whenever a manifest publishes no preview, so this section simply does not exist for
-/// it and the page looks exactly as it did before this design.
+/// A general bundle's own status: every element it offers, grouped by kind, each with the action
+/// that applies to it — installed as a fraction, whether it is behind the current pin, and any
+/// declared secret still missing here. `None` for the app-only shape v1 shipped — `app.bundle` is
+/// `None` whenever the manifest publishes no preview *and* nothing has been installed from it, the
+/// one case this machine truly has nothing to say about (`crate::bundle::status`'s own doc), and
+/// the page looks exactly as it did before this design for it.
 fn bundle_status_view(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> Option<AnyView> {
-    if app.elements.is_empty() {
-        return None;
-    }
-    let declared = app.elements.len();
-    let installed: &[MarketplaceElementInstall] =
-        app.bundle.as_ref().map_or(&[], |b| b.installed.as_slice());
-    let outdated = app.bundle.as_ref().is_some_and(|b| b.outdated);
-    let missing_secrets = app.bundle.as_ref().map(|b| b.missing_secrets.clone()).unwrap_or_default();
+    let bundle = app.bundle.as_ref()?;
+    // The denominator is every row this section is about to draw, not `bundle.declared` alone —
+    // an element the ledger carries but the manifest's own preview never mentioned (installed by
+    // address, ahead of the publisher writing a preview for it) is still one more thing installed
+    // here, and "3 of 0" would read as broken rather than as what it is.
+    let total = bundle.elements.len();
+    let installed_count = bundle.elements.iter().filter(|el| el.id.is_some()).count();
+    let outdated = bundle.outdated;
+    let missing_secrets = bundle.missing_secrets.clone();
     let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
     let key = format!("bundle-update:{marketplace}/{slug}");
     let busy = form.busy;
@@ -252,15 +254,9 @@ fn bundle_status_view(state: State, form: MarketplaceForm, app: &MarketplaceApp)
     view! {
         <div class="adi-market__bundle">
             <span class="adi-market__state">
-                {format!("{} of {declared} elements installed", installed.len())}
+                {format!("{installed_count} of {total} elements installed")}
             </span>
-            {(!installed.is_empty()).then(|| view! {
-                <ul class="adi-market__elements">
-                    {installed.iter()
-                        .map(|el| bundle_element_row(state, form, &marketplace, &slug, el))
-                        .collect::<Vec<_>>()}
-                </ul>
-            })}
+            {bundle_element_groups(state, form, &marketplace, &slug, &bundle.elements)}
             {outdated.then({
                 let (marketplace, slug, key) = (marketplace.clone(), slug.clone(), key.clone());
                 move || view! {
@@ -294,57 +290,162 @@ fn bundle_status_view(state: State, form: MarketplaceForm, app: &MarketplaceApp)
     .into()
 }
 
-/// One installed element's own line: what it is and what it landed as, an Uninstall that removes
-/// just this one (its siblings are untouched), and — for a hive service, which arrives parked —
-/// a Start that copies its block into the live hive.yaml. Idempotent on a service already
+/// The eight kind directories, in the fixed order [`crate::bundle::status`] on the Rust side
+/// already sorts by (`adi_marketplace::Kind::ALL`) — repeated here rather than derived, since the
+/// wire type carries the spelling but not the enum. One order for every bundle is the whole point:
+/// the eye learns it once, and never has to re-learn it row to row.
+const KIND_ORDER: [&str; 8] =
+    ["agents", "tools", "dashboards", "llm", "embeddings", "services", "triggers", "project"];
+
+/// The plain-language heading a kind's group draws under, for the directory word its address
+/// segment spells. A word outside the eight this build knows — a manifest already several
+/// versions ahead — is drawn as-is rather than hidden, the same tolerance the rest of the page
+/// gives an unrecognised field.
+fn kind_heading(kind: &str) -> &str {
+    match kind {
+        "agents" => "Agents",
+        "tools" => "Tools",
+        "dashboards" => "Dashboards",
+        "llm" => "LLM backends",
+        "embeddings" => "Embedding backends",
+        "services" => "Hive services",
+        "triggers" => "Triggers",
+        "project" => "Project",
+        _ => kind,
+    }
+}
+
+/// One section per kind the bundle actually has an element of, in [`KIND_ORDER`] — a kind with
+/// nothing declared or installed is skipped rather than drawn as an empty heading.
+fn bundle_element_groups(
+    state: State,
+    form: MarketplaceForm,
+    marketplace: &str,
+    slug: &str,
+    elements: &[MarketplaceBundleElement],
+) -> AnyView {
+    KIND_ORDER
+        .iter()
+        .filter_map(|kind| {
+            let group: Vec<&MarketplaceBundleElement> =
+                elements.iter().filter(|el| el.kind == *kind).collect();
+            (!group.is_empty()).then(|| bundle_kind_group(state, form, marketplace, slug, kind, &group))
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// One kind's own group: a heading naming it, then one row per element of it.
+fn bundle_kind_group(
+    state: State,
+    form: MarketplaceForm,
+    marketplace: &str,
+    slug: &str,
+    kind: &str,
+    elements: &[&MarketplaceBundleElement],
+) -> AnyView {
+    view! {
+        <div class="adi-market__group">
+            <h3 class="adi-market__grouphead">{kind_heading(kind)}</h3>
+            <ul class="adi-market__elements">
+                {elements.iter()
+                    .map(|el| bundle_element_row(state, form, marketplace, slug, el))
+                    .collect::<Vec<_>>()}
+            </ul>
+        </div>
+    }
+    .into_any()
+}
+
+/// The `<kind>/<name>` address this element installs, uninstalls or starts under — `project` alone
+/// for the one singleton kind, which an address never gives a name of its own.
+fn bundle_element_spec(kind: &str, name: &str) -> String {
+    if kind == "project" {
+        "project".to_string()
+    } else {
+        format!("{kind}/{name}")
+    }
+}
+
+/// One element's own line, in whichever of its two states it is in: **not installed** draws
+/// Install, the one action that applies to it; **installed** draws Uninstall — which leaves every
+/// sibling in the bundle untouched — and, for a hive service, which arrives parked, a Start beside
+/// it that copies its block into the live hive.yaml. Start is idempotent on a service already
 /// started, so there is no need to track that state here to offer it safely.
 fn bundle_element_row(
     state: State,
     form: MarketplaceForm,
     marketplace: &str,
     slug: &str,
-    el: &MarketplaceElementInstall,
+    el: &MarketplaceBundleElement,
 ) -> AnyView {
     let busy = form.busy;
     let (marketplace, slug) = (marketplace.to_string(), slug.to_string());
-    let element_spec = format!("{}/{}", el.kind, el.name);
-    let is_service = el.kind == "service";
-    let uninstall_key = format!("uninstall:{marketplace}/{slug}/{element_spec}");
-    let start_key = format!("start-service:{marketplace}/{slug}/{element_spec}");
-    let label = format!("{}/{} → {}", el.kind, el.name, el.id);
+    let element_spec = bundle_element_spec(&el.kind, &el.name);
+    let is_service = el.kind == "services";
+    let label = match &el.id {
+        Some(id) => format!("{} \u{2192} {id}", el.name),
+        None => el.name.clone(),
+    };
+    let description = el.description.clone();
+    let installed = el.id.is_some();
 
     view! {
         <li class="adi-market__row">
             <span class="adi-mono adi-muted">{label}</span>
+            {description.map(|d| view! { <span class="adi-market__elementdesc">{d}</span> })}
             <span class="adi-spacer"></span>
-            {is_service.then({
-                let (marketplace, slug, name, start_key) =
-                    (marketplace.clone(), slug.clone(), el.name.clone(), start_key.clone());
-                move || view! {
-                    <button class="adi-btn" type="button"
+            {if installed {
+                let uninstall_key = format!("uninstall:{marketplace}/{slug}/{element_spec}");
+                let start_key = format!("start-service:{marketplace}/{slug}/{element_spec}");
+                view! {
+                    {is_service.then({
+                        let (marketplace, slug, name, start_key) =
+                            (marketplace.clone(), slug.clone(), el.name.clone(), start_key.clone());
+                        move || view! {
+                            <button class="adi-btn" type="button"
+                                prop:disabled=move || busy.get().is_some()
+                                on:click={
+                                    let (marketplace, slug, name, start_key) =
+                                        (marketplace.clone(), slug.clone(), name.clone(), start_key.clone());
+                                    move |_| {
+                                        run(state, form, start_key.clone(),
+                                            fetch::start_marketplace_service(marketplace.clone(), slug.clone(), name.clone()));
+                                    }
+                                }>
+                                "Start"
+                            </button>
+                        }
+                    })}
+                    <button class="adi-btn adi-btn--ghost" type="button"
                         prop:disabled=move || busy.get().is_some()
-                        on:click={
-                            let (marketplace, slug, name, start_key) =
-                                (marketplace.clone(), slug.clone(), name.clone(), start_key.clone());
-                            move |_| {
-                                run(state, form, start_key.clone(),
-                                    fetch::start_marketplace_service(marketplace.clone(), slug.clone(), name.clone()));
+                        on:click=move |_| {
+                            if confirm(&format!("Uninstall {element_spec}? Its siblings in this bundle are untouched.")) {
+                                run(state, form, uninstall_key.clone(),
+                                    fetch::uninstall_marketplace_element(marketplace.clone(), slug.clone(), element_spec.clone()));
                             }
                         }>
-                        "Start"
+                        "Uninstall"
                     </button>
                 }
-            })}
-            <button class="adi-btn adi-btn--ghost" type="button"
-                prop:disabled=move || busy.get().is_some()
-                on:click=move |_| {
-                    if confirm(&format!("Uninstall {element_spec}? Its siblings in this bundle are untouched.")) {
-                        run(state, form, uninstall_key.clone(),
-                            fetch::uninstall_marketplace_element(marketplace.clone(), slug.clone(), element_spec.clone()));
-                    }
-                }>
-                "Uninstall"
-            </button>
+                .into_any()
+            } else {
+                let install_key = format!("install:{marketplace}/{slug}/{element_spec}");
+                view! {
+                    <button class="adi-btn" type="button"
+                        prop:disabled=move || busy.get().is_some()
+                        on:click=move |_| {
+                            run(state, form, install_key.clone(),
+                                fetch::install_marketplace_app(
+                                    marketplace.clone(), slug.clone(),
+                                    Some(element_spec.clone()), String::new(), false,
+                                ));
+                        }>
+                        "Install"
+                    </button>
+                }
+                .into_any()
+            }}
         </li>
     }
     .into_any()
