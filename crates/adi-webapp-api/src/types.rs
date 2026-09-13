@@ -3979,6 +3979,54 @@ pub struct MarketplaceApp {
     /// ordinary, since each copy is named by whoever installed it.
     #[serde(default)]
     pub installs: Vec<MarketplaceInstall>,
+    /// What the manifest's own preview publishes for this bundle — advisory, not authoritative
+    /// (`docs/marketplace-bundles.md` decision #2). Empty for an old-shape entry, or one that
+    /// publishes no preview yet; the app-only case v1 shipped looks exactly like that.
+    #[serde(default)]
+    pub elements: Vec<MarketplaceElementPreview>,
+    /// A general bundle's own install status — installed as a fraction of what [`Self::elements`]
+    /// declares, which elements landed under what ids, whether it stands behind the manifest's
+    /// current pin, and which secret names its installed elements still lack. `None` for the
+    /// legacy single-dashboard shape (told through [`Self::installs`] instead, unchanged from v1)
+    /// or for one nothing has been installed from yet.
+    #[serde(default)]
+    pub bundle: Option<MarketplaceBundleStatus>,
+}
+
+/// One element the manifest's preview names, before anything is cloned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceElementPreview {
+    /// One of `agent` | `tool` | `dashboard` | `llm` | `embedding` | `service` | `trigger` |
+    /// `project`.
+    pub kind: String,
+    /// The published name — the third address coordinate, `<marketplace>/<slug>/<kind>/<name>`.
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// A general bundle's status for the listing (`docs/marketplace-bundles.md`, "What 'installed'
+/// means for a partially-installed bundle").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceBundleStatus {
+    /// How many elements the manifest's own preview lists — `0` when it publishes none.
+    pub declared: usize,
+    /// Every element actually installed here, in ledger order.
+    pub installed: Vec<MarketplaceElementInstall>,
+    /// Whether this bundle's own internal clone stands behind the manifest's current pin.
+    pub outdated: bool,
+    /// Every secret name an installed element still declares and this machine does not have set,
+    /// computed live rather than frozen at install time.
+    #[serde(default)]
+    pub missing_secrets: Vec<String>,
+}
+
+/// One element of a general bundle actually installed here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceElementInstall {
+    pub kind: String,
+    pub name: String,
+    pub id: String,
 }
 
 /// One picture or clip in an app's gallery. The kind is resolved by the store — off the entry's
@@ -4024,10 +4072,17 @@ pub struct MarketplaceInstall {
 }
 
 /// `POST /api/marketplace/install` — which entry, what to call the copy, and whether to start it.
+///
+/// `element`, when given, installs one `<kind>/<name>` of the bundle alone (`project` for the
+/// scaffold, no name) rather than the whole thing — `name`/`start` still apply, and still mean
+/// something only for the legacy single-dashboard shape (`docs/marketplace-bundles.md`): an
+/// element of a general bundle always lands under its own published name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallMarketplaceApp {
     pub marketplace: String,
     pub slug: String,
+    #[serde(default)]
+    pub element: Option<String>,
     /// What the copy is called here. Empty takes the entry's own name; it is renameable
     /// afterwards like any dashboard's, and the id and hostname are minted from it.
     #[serde(default)]
@@ -4038,10 +4093,32 @@ pub struct InstallMarketplaceApp {
     pub start: bool,
 }
 
+/// `POST /api/marketplace/uninstall` — remove one installed element of a bundle by its own kind's
+/// ordinary path (`docs/marketplace-bundles.md`, "Uninstall"). There is no whole-bundle uninstall
+/// verb, the same as v1 has none for an app — a legacy dashboard install still goes through the
+/// Dashboards page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UninstallMarketplaceElement {
+    pub marketplace: String,
+    pub slug: String,
+    /// `<kind>/<name>`, or `project` for the scaffold.
+    pub element: String,
+}
+
 /// `POST /api/marketplace/start` — the installed copy to start, by dashboard id.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StartMarketplaceApp {
     pub id: String,
+}
+
+/// `POST /api/marketplace/start-service` — copy a parked hive service element's block into the
+/// live hive.yaml it belongs in, so the supervisor's own periodic re-read picks it up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartMarketplaceService {
+    pub marketplace: String,
+    pub slug: String,
+    /// The service's published name — the third address coordinate.
+    pub name: String,
 }
 
 /// `POST /api/marketplace/update` — move an installed copy onto the commit its marketplace now
@@ -4052,6 +4129,19 @@ pub struct UpdateMarketplaceApp {
     pub id: String,
     #[serde(default)]
     pub force: bool,
+}
+
+/// `POST /api/marketplace/bundle/update` — fast-forward a general bundle's own internal clone onto
+/// its manifest's current pin, and re-apply every ledgered element, per element rather than
+/// all-or-nothing (`docs/marketplace-bundles.md`, "Update"). `force` lists the `<kind>/<name>`
+/// pairs to overwrite past their own local edit; every other ledgered element fast-forwards, or is
+/// left alone and reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateMarketplaceBundle {
+    pub marketplace: String,
+    pub slug: String,
+    #[serde(default)]
+    pub force: Vec<String>,
 }
 
 /// What a marketplace mutation answers with: the fresh state, and the one line that says what

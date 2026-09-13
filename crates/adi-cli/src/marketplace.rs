@@ -3,7 +3,7 @@
 //! No `adi` facade, like `mesh` and `indexer`: the state is the marketplace module's own under
 //! the store, and the handle opens it itself.
 
-use adi_marketplace::Marketplace;
+use adi_marketplace::{Kind, Marketplace};
 use clap::Subcommand;
 
 /// The verbs, as `adi-mono marketplace <verb>` spells them.
@@ -28,37 +28,60 @@ pub(crate) enum MarketplaceCommand {
     /// Fetch every marketplace's manifest and cache it. A failing URL keeps the stale cache and
     /// warns; only a first fetch that fails with nothing to fall back on is an error.
     Sync,
-    /// List the cached entries, grouped by marketplace, with where each stands on this machine.
+    /// List the cached entries, grouped by marketplace, with where each stands on this machine —
+    /// a plain app's copies, or a bundle's installed elements as a fraction of what it declares.
     Apps,
-    /// Install an app: clone its repository at the commit its manifest pins, as a dashboard of
-    /// your own naming. Installed is not started — `start` is the act that runs it.
+    /// Install a bundle, or one `<kind>/<name>` element of it: clone its repository at the commit
+    /// its manifest pins, and land the selection. A legacy single-dashboard bundle installs
+    /// exactly as v1 always has — a dashboard of your own naming, inert until `start`.
     Install {
-        /// Which app: <marketplace>/<slug>, e.g. adi/crm.
-        #[arg(value_name = "MARKETPLACE/SLUG")]
+        /// Which bundle, or element: <marketplace>/<slug>, <marketplace>/<slug>/<kind>/<name>, or
+        /// <marketplace>/<slug>/project for the scaffold. e.g. adi/crm or
+        /// adi/crm-suite/agents/sales-bot.
+        #[arg(value_name = "SPEC")]
         spec: String,
-        /// What to call your copy. It becomes the dashboard's name, its id and its hostname, and
-        /// you can rename it later. Defaults to the name the marketplace published.
+        /// What to call your copy, for a legacy single-dashboard bundle. It becomes the
+        /// dashboard's name, its id and its hostname, and you can rename it later. Defaults to
+        /// the name the marketplace published. Ignored for a general bundle: every element lands
+        /// under its own published name.
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
-        /// Start it as part of installing it, rather than leaving it inert.
+        /// Start it as part of installing it, rather than leaving it inert. Only meaningful for a
+        /// legacy single-dashboard bundle.
         #[arg(long)]
         start: bool,
     },
-    /// Start an installed app: its servers come up on leased ports within a few seconds.
+    /// Uninstall one element of a bundle: <marketplace>/<slug>/<kind>/<name>, by its own kind's
+    /// ordinary path. There is no whole-bundle uninstall verb — a legacy single-dashboard bundle
+    /// still goes through the Dashboards page (Archive → Delete), same as v1.
+    Uninstall {
+        #[arg(value_name = "MARKETPLACE/SLUG/KIND/NAME")]
+        spec: String,
+    },
+    /// Start an installed app, or a parked hive service element: its servers (or its copied-in
+    /// `ServiceSpec` block) come up within a few seconds of the supervisor's next read.
     Start {
-        /// The dashboard id of the copy to start, as `apps` lists it.
-        #[arg(value_name = "ID")]
-        id: String,
+        /// A dashboard id (as `apps` lists it) to start an app, or
+        /// <marketplace>/<slug>/services/<name> to start a parked service element.
+        #[arg(value_name = "ID_OR_MARKETPLACE/SLUG/services/NAME")]
+        target: String,
     },
     /// Update an installed copy onto the commit its marketplace now pins — a fast-forward, so
     /// your own commits on top of it are never walked over.
     Update {
-        /// The dashboard id of the copy to update, as `apps` lists it.
-        #[arg(value_name = "ID")]
-        id: String,
-        /// Reset onto the pin, throwing away uncommitted changes and local commits.
+        /// A dashboard id (as `apps` lists it) for a legacy single-dashboard bundle, or
+        /// <marketplace>/<slug> for a bundle installed from this design — the whole ledger is
+        /// re-applied, per element.
+        #[arg(value_name = "ID_OR_MARKETPLACE/SLUG")]
+        target: String,
+        /// Reset a legacy dashboard onto the pin, throwing away uncommitted changes and local
+        /// commits. Ignored for a bundle spec — forcing there is per element (`--force-element`).
         #[arg(long)]
         force: bool,
+        /// Force one element of a bundle update past its own local edit: <kind>/<name>,
+        /// repeatable. Every element not named here fast-forwards, or is left alone and reported.
+        #[arg(long = "force-element", value_name = "KIND/NAME")]
+        force_element: Vec<String>,
     },
 }
 
@@ -99,8 +122,11 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
         MarketplaceCommand::Install { spec, name, start } => {
             install(&market, &spec, name.as_deref().unwrap_or(""), start)
         }
-        MarketplaceCommand::Start { id } => start_app(&market, &id),
-        MarketplaceCommand::Update { id, force } => update(&market, &id, force),
+        MarketplaceCommand::Uninstall { spec } => uninstall(&market, &spec),
+        MarketplaceCommand::Start { target } => start_target(&market, &target),
+        MarketplaceCommand::Update { target, force, force_element } => {
+            update_target(&market, &target, force, &force_element)
+        }
     }
 }
 
@@ -208,8 +234,22 @@ fn list_apps(market: &Marketplace) {
                 app.slug
             );
         }
+        // The manifest's own preview and this bundle's live status — a general bundle, or a
+        // legacy single-dashboard one that simply has nothing to show here.
+        let entry = adi_marketplace::entry_of(market.config(), &app.marketplace, &app.slug).ok();
+        let status = entry
+            .as_ref()
+            .and_then(|e| adi_marketplace::bundle::status(market, &app.marketplace, &app.slug, e));
+        if let Some(entry) = &entry
+            && !entry.elements().is_empty()
+        {
+            print_bundle_status(&app.marketplace, &app.slug, entry, status.as_ref());
+        }
+
         if app.installs.is_empty() {
-            println!("    not installed");
+            if status.is_none() {
+                println!("    not installed");
+            }
             continue;
         }
         // One line per copy: the same app installed twice under two names is ordinary, and the
@@ -242,37 +282,120 @@ fn list_apps(market: &Marketplace) {
     }
 }
 
-/// `install`: clone the app under the name the operator chose, then say where it went and what
-/// the next deliberate act is.
-fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<(), String> {
-    let done =
-        adi_marketplace::install::install(market, spec, name, start).map_err(|e| e.to_string())?;
-    let dir = market.dashboards_dir().join(&done.id);
-    println!(
-        "installed “{}” as {} at {} → {}",
-        done.name,
-        done.id,
-        adi_marketplace::git::short(&done.commit),
-        dir.display()
-    );
-    for note in &done.notes {
-        println!("  note: {note}");
+/// A general bundle's own line in the listing: installed as a fraction of what the manifest's
+/// preview declares, which elements under what ids, whether it is behind the pin, and any secret
+/// its installed elements still lack — the panel's own "installed as a fraction," in text.
+fn print_bundle_status(
+    marketplace: &str,
+    slug: &str,
+    entry: &adi_marketplace::BundleEntry,
+    status: Option<&adi_marketplace::BundleStatus>,
+) {
+    let declared = entry.elements().len();
+    let Some(status) = status else {
+        println!("    0 of {declared} elements installed");
+        return;
+    };
+    println!("    {} of {declared} elements installed", status.installed.len());
+    for element in &status.installed {
+        println!("      {}/{} → {}", element.kind, element.name, element.id);
     }
-    if done.started {
-        println!("started — http://{} (a few seconds for the servers to come up)", done.host);
-    } else {
+    if status.outdated {
         println!(
-            "not started — run it when you want it: adi-mono marketplace start {}",
-            done.id
+            "    behind — `adi-mono marketplace update {marketplace}/{slug}` moves it onto the current pin"
         );
     }
-    println!("it is a clone: edit it in place, commit, and `git -C {} pull` when you want the publisher's newer work", dir.display());
+    if !status.missing_secrets.is_empty() {
+        println!(
+            "    missing secret(s): {} — set them, or the elements that name them will not work",
+            status.missing_secrets.join(", ")
+        );
+    }
+}
+
+/// `install`: install a bundle, or one element of it. A legacy single-dashboard bundle installs
+/// exactly as v1 always has; a general bundle lands every element the spec selects and reports
+/// each one's own outcome.
+fn install(market: &Marketplace, spec: &str, name: &str, start: bool) -> Result<(), String> {
+    match adi_marketplace::bundle::install(market, spec, name, start).map_err(|e| e.to_string())? {
+        adi_marketplace::BundleOutcome::Legacy(done) => {
+            let dir = market.dashboards_dir().join(&done.id);
+            println!(
+                "installed “{}” as {} at {} → {}",
+                done.name,
+                done.id,
+                adi_marketplace::git::short(&done.commit),
+                dir.display()
+            );
+            for note in &done.notes {
+                println!("  note: {note}");
+            }
+            if done.started {
+                println!(
+                    "started — http://{} (a few seconds for the servers to come up)",
+                    done.host
+                );
+            } else {
+                println!(
+                    "not started — run it when you want it: adi-mono marketplace start {}",
+                    done.id
+                );
+            }
+            println!(
+                "it is a clone: edit it in place, commit, and `git -C {} pull` when you want the \
+                 publisher's newer work",
+                dir.display()
+            );
+        }
+        adi_marketplace::BundleOutcome::Bundle(done) => {
+            println!("{}/{}:", done.marketplace, done.slug);
+            for element in &done.elements {
+                match (&element.id, &element.note) {
+                    (Some(id), _) if !element.renamed => {
+                        println!("  {}/{} → {id}", element.kind, element.name);
+                    }
+                    (Some(id), _) => println!("  {}/{} → {id} (renamed)", element.kind, element.name),
+                    (None, Some(note)) => println!("  {}/{}: {note}", element.kind, element.name),
+                    (None, None) => println!("  {}/{}: did not land", element.kind, element.name),
+                }
+            }
+            for note in &done.notes {
+                println!("  note: {note}");
+            }
+        }
+    }
     Ok(())
 }
 
-/// `start`: move the copy into the supervisor's glob and say where it will answer.
-fn start_app(market: &Marketplace, id: &str) -> Result<(), String> {
-    let started = adi_marketplace::install::start(market, id).map_err(|e| e.to_string())?;
+/// `uninstall`: remove one element of a bundle by its own kind's ordinary path.
+fn uninstall(market: &Marketplace, spec: &str) -> Result<(), String> {
+    let done = adi_marketplace::bundle::uninstall_element(market, spec).map_err(|e| e.to_string())?;
+    println!("uninstalled {}/{} ({})", done.kind, done.name, done.id);
+    if done.bundle_removed {
+        println!("  the last element from this bundle — its own record is gone too");
+    }
+    if let Some(note) = &done.note {
+        println!("  note: {note}");
+    }
+    Ok(())
+}
+
+/// `start`: a dashboard id starts an app; a `<marketplace>/<slug>/services/<name>` address starts
+/// a parked hive service element instead.
+fn start_target(market: &Marketplace, target: &str) -> Result<(), String> {
+    if target.contains('/') {
+        let started = adi_marketplace::bundle::start_service(market, target).map_err(|e| e.to_string())?;
+        let where_ = match &started.project {
+            Some(project) => format!("into {project}'s own hive.yaml"),
+            None => "into the global hive.yaml".to_string(),
+        };
+        println!(
+            "started {} ({}) — copied {where_}; the supervisor picks it up on its next read",
+            started.name, started.id
+        );
+        return Ok(());
+    }
+    let started = adi_marketplace::install::start(market, target).map_err(|e| e.to_string())?;
     println!(
         "started {} — http://{} (a few seconds for the servers to come up)",
         started.id, started.host
@@ -280,10 +403,35 @@ fn start_app(market: &Marketplace, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// `update`: fast-forward a copy onto the commit its marketplace pins now.
-fn update(market: &Marketplace, id: &str, force: bool) -> Result<(), String> {
-    let done = adi_marketplace::install::update(market, id, force).map_err(|e| e.to_string())?;
+/// `update`: a dashboard id fast-forwards a legacy copy onto the commit its marketplace pins now,
+/// exactly as v1 always has; a `<marketplace>/<slug>` address re-applies a general bundle's whole
+/// ledger instead, per element.
+fn update_target(market: &Marketplace, target: &str, force: bool, force_element: &[String]) -> Result<(), String> {
     let short = adi_marketplace::git::short;
+    if let Some((marketplace, slug)) = target.split_once('/') {
+        let pairs: Vec<(Kind, &str)> = force_element.iter().filter_map(|f| force_pair(f)).collect();
+        let done = adi_marketplace::bundle::update(market, marketplace, slug, &pairs)
+            .map_err(|e| e.to_string())?;
+        if done.changed {
+            println!("{}/{} updated from {} to {}:", done.marketplace, done.slug, short(&done.from), short(&done.to));
+            for element in &done.elements {
+                match (&element.note, element.changed) {
+                    (Some(note), _) => println!("  {}/{}: {note}", element.kind, element.name),
+                    (None, true) => println!("  {}/{} → {}", element.kind, element.name, element.id),
+                    (None, false) => println!("  {}/{} unchanged", element.kind, element.name),
+                }
+            }
+        } else {
+            println!(
+                "{}/{} is already at {}, the commit its marketplace pins",
+                done.marketplace,
+                done.slug,
+                short(&done.to)
+            );
+        }
+        return Ok(());
+    }
+    let done = adi_marketplace::install::update(market, target, force).map_err(|e| e.to_string())?;
     if done.changed {
         println!("updated {} from {} to {}", done.id, short(&done.from), short(&done.to));
         if done.started {
@@ -297,6 +445,14 @@ fn update(market: &Marketplace, id: &str, force: bool) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+/// `<kind>/<name>` onto the pair [`adi_marketplace::bundle::update`] takes — silently dropped
+/// when it does not parse, so a stray `--force-element` value forces nothing rather than refusing
+/// the whole update.
+fn force_pair(raw: &str) -> Option<(Kind, &str)> {
+    let (kind, name) = raw.split_once('/')?;
+    Some((Kind::from_dir(kind)?, name))
 }
 
 /// Unix seconds as a person reads the gap: `just now`, `5m ago`, `3h ago`, `4d ago`.
@@ -347,13 +503,43 @@ mod tests {
         ));
 
         let cli = Cli::try_parse_from(["marketplace", "start", "crm"]).expect("start");
-        assert!(matches!(cli.command, MarketplaceCommand::Start { ref id } if id == "crm"));
+        assert!(matches!(cli.command, MarketplaceCommand::Start { ref target } if target == "crm"));
+        let cli = Cli::try_parse_from(["marketplace", "start", "adi/crm-suite/services/redis"])
+            .expect("start a service element");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Start { ref target } if target == "adi/crm-suite/services/redis"
+        ));
 
         let cli =
             Cli::try_parse_from(["marketplace", "update", "crm", "--force"]).expect("update");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Update { ref id, force: true } if id == "crm"
+            MarketplaceCommand::Update { ref target, force: true, ref force_element }
+                if target == "crm" && force_element.is_empty()
+        ));
+        let cli = Cli::try_parse_from([
+            "marketplace",
+            "update",
+            "adi/crm-suite",
+            "--force-element",
+            "agents/sales-bot",
+            "--force-element",
+            "tools/csv-import",
+        ])
+        .expect("bundle update with per-element force");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Update { ref target, force: false, ref force_element }
+                if target == "adi/crm-suite"
+                    && force_element == &["agents/sales-bot".to_string(), "tools/csv-import".to_string()]
+        ));
+
+        let cli = Cli::try_parse_from(["marketplace", "uninstall", "adi/crm-suite/agents/sales-bot"])
+            .expect("uninstall");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Uninstall { ref spec } if spec == "adi/crm-suite/agents/sales-bot"
         ));
 
         for verb in ["list", "sync", "apps"] {

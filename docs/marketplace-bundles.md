@@ -329,8 +329,12 @@ element from that clone into its live location — **per element**, not as one a
   tracked files — with the same carve-out v1 already solved for its generated entry points
   (`frontend/index.ts`, `frontend/index.html`, `backend/index.ts`): those three are the panel's to
   rewrite, excluded from the drift check exactly as they are today, reused unchanged.
-- **A project scaffold** updates its `config.toml` the same way as any flat file — in practice
-  almost never, since a publisher revising a bundle rarely changes the project's own name.
+- **A project scaffold is never relanded in place.** `adi_projects::Projects` has no API that
+  rewrites a project's name or description outside creation — `create_with_id`, `archive`,
+  `unarchive`, `rename`, `remove`, and nothing else — so there is no in-place update for `update`
+  to call even when the publisher did change the scaffold. It is always reported and left as it
+  stands, whether or not its fingerprint has drifted; a bundle's own project can only be renamed by
+  hand, on the Projects page, like any other project.
 - **A hive service element** updates the parked fragment file if it was never started, or the live
   entry in the target `hive.yaml` if it was — fingerprinted the same way, since a started service's
   entry is a plain YAML block an operator could also have hand-edited.

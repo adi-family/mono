@@ -23,8 +23,8 @@
 
 use adi_ui::{Icon, IconSize, Lucide, Markdown};
 use adi_webapp_api::types::{
-    MarketplaceApp, MarketplaceInstall, MarketplaceMedia, MarketplaceMediaKind as MediaKind,
-    MarketplaceSource,
+    MarketplaceApp, MarketplaceElementInstall, MarketplaceInstall, MarketplaceMedia,
+    MarketplaceMediaKind as MediaKind, MarketplaceSource,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -210,8 +210,8 @@ fn freshness_note(source: &MarketplaceSource) -> String {
     }
 }
 
-/// One entry: the row itself, the install form when it is open on this entry, and a line per copy
-/// already installed here.
+/// One entry: the row itself, the install form when it is open on this entry, a line per copy
+/// already installed here, and — for a general bundle — its own installed-as-a-fraction status.
 fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp, open: OpenApp) -> AnyView {
     let key = app_key(app);
     let (row_key, form_key) = (key.clone(), key.clone());
@@ -225,7 +225,127 @@ fn app_entry(state: State, form: MarketplaceForm, app: &MarketplaceApp, open: Op
             {app.installs.iter()
                 .map(|install| copy_row(state, form, install))
                 .collect::<Vec<_>>()}
+            {bundle_status_view(state, form, app)}
         </div>
+    }
+    .into_any()
+}
+
+/// A general bundle's own status: installed as a fraction of what the manifest's preview
+/// declares, which elements landed under what ids, whether it is behind the current pin, and any
+/// declared secret still missing here. `None` for the app-only shape v1 shipped — `app.elements`
+/// is empty whenever a manifest publishes no preview, so this section simply does not exist for
+/// it and the page looks exactly as it did before this design.
+fn bundle_status_view(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> Option<AnyView> {
+    if app.elements.is_empty() {
+        return None;
+    }
+    let declared = app.elements.len();
+    let installed: &[MarketplaceElementInstall] =
+        app.bundle.as_ref().map_or(&[], |b| b.installed.as_slice());
+    let outdated = app.bundle.as_ref().is_some_and(|b| b.outdated);
+    let missing_secrets = app.bundle.as_ref().map(|b| b.missing_secrets.clone()).unwrap_or_default();
+    let (marketplace, slug) = (app.marketplace.clone(), app.slug.clone());
+    let key = format!("bundle-update:{marketplace}/{slug}");
+    let busy = form.busy;
+
+    view! {
+        <div class="adi-market__bundle">
+            <span class="adi-market__state">
+                {format!("{} of {declared} elements installed", installed.len())}
+            </span>
+            {(!installed.is_empty()).then(|| view! {
+                <ul class="adi-market__elements">
+                    {installed.iter()
+                        .map(|el| bundle_element_row(state, form, &marketplace, &slug, el))
+                        .collect::<Vec<_>>()}
+                </ul>
+            })}
+            {outdated.then({
+                let (marketplace, slug, key) = (marketplace.clone(), slug.clone(), key.clone());
+                move || view! {
+                    <div class="adi-market__row">
+                        <span class="adi-market__state">"an update is waiting"</span>
+                        <button class="adi-btn" type="button"
+                            prop:disabled=move || busy.get().is_some()
+                            on:click={
+                                let (marketplace, slug, key) = (marketplace.clone(), slug.clone(), key.clone());
+                                move |_| {
+                                    run(state, form, key.clone(),
+                                        fetch::update_marketplace_bundle(marketplace.clone(), slug.clone(), Vec::new()));
+                                }
+                            }>
+                            "Update"
+                        </button>
+                    </div>
+                }
+            })}
+            {(!missing_secrets.is_empty()).then(|| view! {
+                <p class="adi-hint">
+                    {format!(
+                        "missing secret(s): {} — set them, or the elements that name them will not work",
+                        missing_secrets.join(", ")
+                    )}
+                </p>
+            })}
+        </div>
+    }
+    .into_any()
+    .into()
+}
+
+/// One installed element's own line: what it is and what it landed as, an Uninstall that removes
+/// just this one (its siblings are untouched), and — for a hive service, which arrives parked —
+/// a Start that copies its block into the live hive.yaml. Idempotent on a service already
+/// started, so there is no need to track that state here to offer it safely.
+fn bundle_element_row(
+    state: State,
+    form: MarketplaceForm,
+    marketplace: &str,
+    slug: &str,
+    el: &MarketplaceElementInstall,
+) -> AnyView {
+    let busy = form.busy;
+    let (marketplace, slug) = (marketplace.to_string(), slug.to_string());
+    let element_spec = format!("{}/{}", el.kind, el.name);
+    let is_service = el.kind == "service";
+    let uninstall_key = format!("uninstall:{marketplace}/{slug}/{element_spec}");
+    let start_key = format!("start-service:{marketplace}/{slug}/{element_spec}");
+    let label = format!("{}/{} → {}", el.kind, el.name, el.id);
+
+    view! {
+        <li class="adi-market__row">
+            <span class="adi-mono adi-muted">{label}</span>
+            <span class="adi-spacer"></span>
+            {is_service.then({
+                let (marketplace, slug, name, start_key) =
+                    (marketplace.clone(), slug.clone(), el.name.clone(), start_key.clone());
+                move || view! {
+                    <button class="adi-btn" type="button"
+                        prop:disabled=move || busy.get().is_some()
+                        on:click={
+                            let (marketplace, slug, name, start_key) =
+                                (marketplace.clone(), slug.clone(), name.clone(), start_key.clone());
+                            move |_| {
+                                run(state, form, start_key.clone(),
+                                    fetch::start_marketplace_service(marketplace.clone(), slug.clone(), name.clone()));
+                            }
+                        }>
+                        "Start"
+                    </button>
+                }
+            })}
+            <button class="adi-btn adi-btn--ghost" type="button"
+                prop:disabled=move || busy.get().is_some()
+                on:click=move |_| {
+                    if confirm(&format!("Uninstall {element_spec}? Its siblings in this bundle are untouched.")) {
+                        run(state, form, uninstall_key.clone(),
+                            fetch::uninstall_marketplace_element(marketplace.clone(), slug.clone(), element_spec.clone()));
+                    }
+                }>
+                "Uninstall"
+            </button>
+        </li>
     }
     .into_any()
 }
@@ -465,6 +585,7 @@ fn app_page(
                         .collect::<Vec<_>>()}
                 </section>
             })}
+            {bundle_status_view(state, form, &owned)}
         </div>
     }
     .into_any()
@@ -639,7 +760,7 @@ fn install_form(state: State, form: MarketplaceForm, app: &MarketplaceApp) -> An
                     state,
                     form,
                     key.clone(),
-                    fetch::install_marketplace_app(marketplace, slug, name, start),
+                    fetch::install_marketplace_app(marketplace, slug, None, name, start),
                 );
             }>
                 <TextField id="market-name" label="Name it" placeholder="Sales CRM"

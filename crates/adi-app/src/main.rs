@@ -985,11 +985,20 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/marketplace/install") => {
             handlers::install_marketplace_app(projects.config(), &req.body)
         }
+        ("POST", "/api/marketplace/uninstall") => {
+            handlers::uninstall_marketplace_element(projects.config(), &req.body)
+        }
         ("POST", "/api/marketplace/start") => {
             handlers::start_marketplace_app(projects.config(), &req.body)
         }
+        ("POST", "/api/marketplace/start-service") => {
+            handlers::start_marketplace_service(projects.config(), &req.body)
+        }
         ("POST", "/api/marketplace/update") => {
             handlers::update_marketplace_app(projects.config(), &req.body)
+        }
+        ("POST", "/api/marketplace/bundle/update") => {
+            handlers::update_marketplace_bundle(projects.config(), &req.body)
         }
         // Starting or stopping a service changes what is listening, and the page asks that next —
         // so drop the port-scan memo rather than answering it from a scan taken before the change.

@@ -24,12 +24,13 @@ use adi_webapp_api::types::{
     SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
     SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
     SetSecret, SetSharedAssets, SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn,
-    StarRun, StartMarketplaceApp, StartResult, StartService, StopResult, TaskRef, TasksState,
-    ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode, UnqueueFromRun,
-    UpdateMarketplaceApp, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
-    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
-    WriteToolScript,
+    StarRun, StartMarketplaceApp, StartMarketplaceService, StartResult, StartService, StopResult,
+    TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView,
+    TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
+    UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
+    UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
+    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState, WriteFile, WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -1070,11 +1071,14 @@ pub async fn sync_marketplace() -> Result<MarketplaceDone, String> {
     post("/api/marketplace/sync", &()).await
 }
 
-/// Install an app: clone its repository at the commit the manifest pins, under the name the
-/// operator chose. Nothing runs unless `start` says so.
+/// Install a bundle, or one `<kind>/<name>` element of it: clone its repository at the commit the
+/// manifest pins, and land the selection. `name`/`start` matter only for a legacy
+/// single-dashboard bundle; a general bundle's elements always land under their own published
+/// names.
 pub async fn install_marketplace_app(
     marketplace: String,
     slug: String,
+    element: Option<String>,
     name: String,
     start: bool,
 ) -> Result<MarketplaceDone, String> {
@@ -1083,8 +1087,27 @@ pub async fn install_marketplace_app(
         &InstallMarketplaceApp {
             marketplace,
             slug,
+            element,
             name,
             start,
+        },
+    )
+    .await
+}
+
+/// Uninstall one installed element of a bundle by its own kind's ordinary path. Every sibling is
+/// left untouched.
+pub async fn uninstall_marketplace_element(
+    marketplace: String,
+    slug: String,
+    element: String,
+) -> Result<MarketplaceDone, String> {
+    post(
+        "/api/marketplace/uninstall",
+        &UninstallMarketplaceElement {
+            marketplace,
+            slug,
+            element,
         },
     )
     .await
@@ -1095,12 +1118,49 @@ pub async fn start_marketplace_app(id: String) -> Result<MarketplaceDone, String
     post("/api/marketplace/start", &StartMarketplaceApp { id }).await
 }
 
+/// Copy a parked hive service element's block into the live hive.yaml it belongs in. Idempotent —
+/// safe to press again on one already started.
+pub async fn start_marketplace_service(
+    marketplace: String,
+    slug: String,
+    name: String,
+) -> Result<MarketplaceDone, String> {
+    post(
+        "/api/marketplace/start-service",
+        &StartMarketplaceService {
+            marketplace,
+            slug,
+            name,
+        },
+    )
+    .await
+}
+
 /// Move an installed copy onto the commit its marketplace now pins. `force` resets onto the pin
 /// and loses local work; without it an update that cannot fast-forward is refused.
 pub async fn update_marketplace_app(id: String, force: bool) -> Result<MarketplaceDone, String> {
     post(
         "/api/marketplace/update",
         &UpdateMarketplaceApp { id, force },
+    )
+    .await
+}
+
+/// Fast-forward a general bundle's own internal clone onto its manifest's current pin, and
+/// re-apply every ledgered element, per element — a drifted one is left alone and reported unless
+/// `force` names it.
+pub async fn update_marketplace_bundle(
+    marketplace: String,
+    slug: String,
+    force: Vec<String>,
+) -> Result<MarketplaceDone, String> {
+    post(
+        "/api/marketplace/bundle/update",
+        &UpdateMarketplaceBundle {
+            marketplace,
+            slug,
+            force,
+        },
     )
     .await
 }

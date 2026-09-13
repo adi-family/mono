@@ -64,12 +64,14 @@ pub mod sync;
 
 pub use address::{Address, ElementAddress};
 pub use bundle::{
-    BundleInstalled, BundleOutcome, BundleUpdated, ElementOutcome, ElementUninstalled,
-    ElementUpdateOutcome, Ledger, LedgerElement, ServiceStarted,
+    BundleInstalled, BundleOutcome, BundleStatus, BundleUpdated, ElementOutcome,
+    ElementUninstalled, ElementUpdateOutcome, Ledger, LedgerElement, ServiceStarted,
 };
 pub use cache::{SourceState, source_states};
 pub use error::{Error, Result};
-pub use install::{AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated};
+pub use install::{
+    AppInstall, AppMedia, CachedApp, InstallRecord, Installed, Started, Updated, entry_of,
+};
 pub use kind::Kind;
 pub use layout::{Layout, LayoutElement, read_layout, scan_for_rust};
 pub use manifest::{BundleEntry, Element, MarketplaceManifest, Media, MediaKind};

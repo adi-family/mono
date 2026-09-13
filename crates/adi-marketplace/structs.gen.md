@@ -4,12 +4,12 @@
 
 > Apps from a manifest you host anywhere: sources in the store config, a cached sync, and an install that clones a repository at a pinned commit without starting it.
 
-31 structs · 7 enums · 1 type alias across 12 files.
+32 structs · 7 enums · 1 type alias across 12 files.
 
 ## Index
 
 - [`src/address.rs`](#srcaddressrs) — `Address`, `ElementAddress`
-- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `Stores`
+- [`src/bundle.rs`](#srcbundlers) — `ElementOutcome`, `BundleInstalled`, `BundleOutcome`, `LedgerElement`, `Ledger`, `ElementUpdateOutcome`, `BundleUpdated`, `ElementUninstalled`, `ServiceStarted`, `Landed`, `Relanded`, `BundleStatus`, `Stores`
 - [`src/cache.rs`](#srccachers) — `Envelope`, `SourceState`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/git.rs`](#srcgitrs) — `Pin`
@@ -222,6 +222,20 @@ enum Relanded {
     },
     Skipped(String),
     Failed(String),
+}
+```
+
+### struct `BundleStatus`
+
+One general bundle's status for a listing, per `docs/marketplace-bundles.md`'s "What 'installed' means for a partially-installed bundle": installed is a fraction of what the manifest's own preview declares, and every field here is computed live off the ledger, the current pin and the current secrets store — never stored and frozen at install time, the same posture `outdated` and `missing_secrets` already take right after an install.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BundleStatus {
+    pub declared: usize,
+    pub installed: Vec<LedgerElement>,
+    pub outdated: bool,
+    pub missing_secrets: Vec<String>,
 }
 ```
 

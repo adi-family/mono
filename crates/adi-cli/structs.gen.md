@@ -1073,22 +1073,28 @@ pub(crate) enum MarketplaceCommand {
     Sync,
     Apps,
     Install {
-        #[arg(value_name = "MARKETPLACE/SLUG")]
+        #[arg(value_name = "SPEC")]
         spec: String,
         #[arg(long, value_name = "NAME")]
         name: Option<String>,
         #[arg(long)]
         start: bool,
     },
+    Uninstall {
+        #[arg(value_name = "MARKETPLACE/SLUG/KIND/NAME")]
+        spec: String,
+    },
     Start {
-        #[arg(value_name = "ID")]
-        id: String,
+        #[arg(value_name = "ID_OR_MARKETPLACE/SLUG/services/NAME")]
+        target: String,
     },
     Update {
-        #[arg(value_name = "ID")]
-        id: String,
+        #[arg(value_name = "ID_OR_MARKETPLACE/SLUG")]
+        target: String,
         #[arg(long)]
         force: bool,
+        #[arg(long = "force-element", value_name = "KIND/NAME")]
+        force_element: Vec<String>,
     },
 }
 ```

@@ -483,9 +483,15 @@ fn land(
 /// works offline once a manifest is synced, and the entry a person read on the listing is the
 /// entry they get.
 ///
-/// `pub(crate)` because `crate::bundle`'s installer needs the same lookup for a general bundle —
-/// there is exactly one place a source and a slug become a cached [`BundleEntry`].
-pub(crate) fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<BundleEntry> {
+/// Public because it is the one lookup three callers share: `crate::bundle`'s own installer, and
+/// — from outside this crate — the panel and the CLI, both of which need the same [`BundleEntry`]
+/// to compute a general bundle's live status ([`crate::bundle::status`]) beside its listing.
+///
+/// # Errors
+/// [`Error::UnknownSource`] for a name nothing here added, [`Error::NotSynced`] for one with no
+/// cached manifest (or a stale cache from a URL the source no longer names), and
+/// [`Error::UnknownApp`] when the manifest does not carry this slug.
+pub fn entry_of(config: &Config, source_name: &str, slug: &str) -> Result<BundleEntry> {
     let source = sources::list(config)?
         .into_iter()
         .find(|s| s.name == source_name)
