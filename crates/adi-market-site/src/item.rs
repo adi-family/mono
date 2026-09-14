@@ -5,9 +5,10 @@
 //! only last the machine facts. Somebody deciding whether to install this is not reading a commit
 //! id, and somebody checking a commit id knows where to scroll.
 //!
-//! What this page has that the panel's cannot is a **URL** — and the URL is the install address
-//! (`<marketplace>/<slug>`), so the thing a reader copies out of the address bar is the thing they
-//! paste after `marketplace install`.
+//! What this page has that the panel's cannot is a **URL**: `<store>/<slug>`, which a reader can
+//! send to somebody who has never installed adi. The install address it belongs to
+//! (`<marketplace>/<slug>`) is printed on the page, in the command and again under Where it comes
+//! from.
 
 // Every list on this page is built by mapping a handful of values into markup and collecting the
 // result. `clippy::format_collect` would have each one be a `fold` with a `write!` inside it to
@@ -40,12 +41,12 @@ pub fn render(site: &Site, source: &Source, entry: &BundleEntry) -> String {
         readme = readme(entry),
         facts = facts(source, entry),
     );
-    shell::document(site, &head(site, source, entry), 2, &body)
+    shell::document(site, &head(site, entry), 1, &body)
 }
 
 /// What a crawler, a link preview and a search result are given for this item.
-fn head(site: &Site, source: &Source, entry: &BundleEntry) -> Head {
-    let url = site.item_url(&source.name, entry);
+fn head(site: &Site, entry: &BundleEntry) -> Head {
+    let url = site.item_url(entry);
     let description = description(entry);
     let mut data = serde_json::json!({
         "@context": "https://schema.org",
@@ -75,19 +76,19 @@ fn head(site: &Site, source: &Source, entry: &BundleEntry) -> Head {
         description,
         canonical: url.clone(),
         image: preview_image(entry),
-        data: vec![data, breadcrumb(site, source, entry)],
+        data: vec![data, breadcrumb(site, entry)],
     }
 }
 
 /// The trail a search result prints under its title: the shelf, then this item.
-fn breadcrumb(site: &Site, source: &Source, entry: &BundleEntry) -> serde_json::Value {
+fn breadcrumb(site: &Site, entry: &BundleEntry) -> serde_json::Value {
     serde_json::json!({
         "@context": "https://schema.org",
         "@type": "BreadcrumbList",
         "itemListElement": [
             { "@type": "ListItem", "position": 1, "name": site.name, "item": site.url("/") },
             { "@type": "ListItem", "position": 2, "name": entry.name,
-              "item": site.item_url(&source.name, entry) },
+              "item": site.item_url(entry) },
         ],
     })
 }
@@ -129,10 +130,10 @@ fn preview_image(entry: &BundleEntry) -> Option<String> {
         .filter(|url| url.starts_with("https://"))
 }
 
-/// Back to the shelf — two levels up, since an item lives at `<marketplace>/<slug>/`.
+/// Back to the shelf — one level up, since an item lives at `<slug>/` under the store's root.
 fn back() -> String {
     format!(
-        "<a class=\"back\" href=\"../../\">{}All apps</a>",
+        "<a class=\"back\" href=\"../\">{}All apps</a>",
         Icon::ArrowLeft.svg("i--sm")
     )
 }
@@ -211,7 +212,7 @@ fn act(source: &Source, entry: &BundleEntry) -> String {
          <a class=\"btn btn--promoted\" href=\"{panel}\">Open it in your panel</a>\
          {ask_no}\
          </div></div>",
-        get = crate::get::href("../../", Some(&address)),
+        get = crate::get::href("../", Some(&address)),
         ask_yes = crate::get::toggle(false),
         install = crate::get::step(
             "Install it",
@@ -424,7 +425,7 @@ mod tests {
         let html = page("crm-suite");
         assert!(html.contains("adi-mono marketplace install local/crm-suite"), "{html}");
         assert!(
-            html.contains("<link rel=\"canonical\" href=\"https://market.example.com/local/crm-suite/\">"),
+            html.contains("<link rel=\"canonical\" href=\"https://market.example.com/crm-suite/\">"),
             "{html}"
         );
     }

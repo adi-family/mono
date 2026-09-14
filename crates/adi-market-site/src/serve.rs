@@ -26,7 +26,7 @@ pub fn run(addr: SocketAddr, files: Vec<File>) -> std::io::Result<()> {
         .map(|file| (file.path.clone(), file))
         .collect();
     let listener = TcpListener::bind(addr)?;
-    println!("the marketplace is at http://{addr}/  ({} files)", site.len());
+    println!("the ADI Store is at http://{addr}/  ({} files)", site.len());
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         if let Err(e) = answer(&mut stream, &site) {

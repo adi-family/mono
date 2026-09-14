@@ -81,12 +81,24 @@ pub fn contents_note(entry: &BundleEntry) -> String {
         .join(" \u{b7} ")
 }
 
-/// How an entry is addressed everywhere: `<marketplace>/<slug>`. It is also this page's own path
-/// under the site root, which is not a coincidence worth hiding — the URL a reader copies out of
-/// the address bar is the argument they paste after `marketplace install`.
+/// How an entry is addressed on a machine: `<marketplace>/<slug>`, the argument that goes after
+/// `marketplace install`.
 #[must_use]
 pub fn address(source: &str, entry: &BundleEntry) -> String {
     format!("{source}/{}", entry.slug)
+}
+
+/// Where this item's page lives under the store's own root: its slug, and nothing else.
+///
+/// **Flat on purpose.** The marketplace an item came from is a fact on its page, not a URL
+/// segment: a store published at `withadi.dev/store` with a marketplace named `store` would
+/// otherwise put every item at `/store/store/<slug>`, and — worse — adding a second marketplace
+/// later would move every URL that already existed, which on the one surface built to be found by
+/// search is the expensive kind of tidy-up. Two marketplaces publishing one slug is refused at
+/// build time instead ([`crate::check`]).
+#[must_use]
+pub fn page_path(entry: &BundleEntry) -> String {
+    entry.slug.clone()
 }
 
 /// The command that installs this entry on a machine that already has adi.

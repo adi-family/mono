@@ -257,51 +257,57 @@ its own two questions in the same dialog: what to call the copy, and whether to 
 count toward the 10,000, and a count is not the story the page should tell. The public site below
 holds to the same thing: the only number on it is how many items a manifest publishes.
 
-## The public site
+## The ADI Store — the public pages
 
 The panel's two screens are for somebody who **already has adi**. Everything published here is
 also a thing a stranger should be able to read about — from a search result, from a link in a
-message — without installing anything first. That is `crates/adi-market-site`: the same manifest,
-written out as plain HTML.
+message — without installing anything first. That is the **ADI Store**, at
+**`withadi.dev/store`**: the same manifest, written out as plain HTML by
+`crates/adi-market-site`.
 
 ```sh
-cargo run -p adi-market-site -- serve --source adi=apps/marketplace.json   # look at it
-cargo run -p adi-market-site -- build --source adi=apps/marketplace.json \
-  --source-url adi=https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json \
-  --base-url https://marketplace.withadi.dev --out dist                    # publish it
+scripts/store.sh                 # look at it, against this repo's dev fixtures
+scripts/store.sh --into-landing  # write it into the landing checkout, as withadi.dev/store
 ```
 
+Two names, and both are meant. A reader sees the *Store*; what it is made of is a *marketplace*
+manifest, which is what the CLI, the panel and this document call it — and the pages print
+`adi-mono marketplace add`, so they use that word too.
+
+- **It is part of the landing**, not a site of its own. The landing's masthead and footer link
+  Store beside Docs, Source and Download; Astro copies `public/store/` into `dist/` verbatim, so
+  the pages are generated here and committed there. The landing's `for-agents` integration then
+  picks them up: a Markdown mirror per page, a line each in `llms.txt`, and the store's URLs in
+  the site's own `sitemap.xml`.
+- **An item's page lives at `/<slug>/`** under the store — `withadi.dev/store/crm-suite/`. The
+  marketplace is not a URL segment: with the published marketplace added as `store`, the last two
+  segments are exactly the install address (`marketplace install store/crm-suite`), and adding a
+  second marketplace later cannot move a URL that already exists. Two marketplaces publishing one
+  slug is refused at build time.
 - **The shelf** (`index.html`) is the listing, with one section per marketplace and the
-  `marketplace add` line for each — so a reader who does have adi can follow what they are
-  looking at. Each section is headed *Marketplace* over the manifest's own name, because a bare
-  heading reading "Local bundles" gets taken as a claim about the items rather than as the name
-  its publisher chose.
+  `marketplace add` line for each. Each section is headed *Marketplace* over the manifest's own
+  name, because a bare heading reading "Local bundles" gets taken as a claim about the items
+  rather than as the name its publisher chose.
 - **Every install is two commands, in that order.** `marketplace install <name>/<slug>` names a
   marketplace, so a machine that has not added it fails on the address; the item page numbers
   `marketplace add <name> <url>` above it.
-- **"Get adi" leads somewhere** — `/get/`, which carries the three downloads (the same assets the
-  landing links), then the same two commands, then the way back to what the reader was looking at.
-  The site cannot *check* whether somebody has adi (an https page cannot fetch `http://app.adi`,
-  adi-app refuses a foreign `Origin`, and no `adi://` scheme is registered), so it carries both
-  answers and asks once; the answer is remembered, and from then on every page leads with the
-  commands and a link into the reader's own panel instead of the download.
-- **An item's page** lives at `/<marketplace>/<slug>/`, which *is* its install address: the URL
-  somebody copies out of the address bar is what they paste after `marketplace install`. It
-  carries the same blocks the panel's item page does, in the same order, minus the two that are
-  about one machine (Installed here, and the actions).
+- **"Get adi" leads somewhere** — `/store/get/`, which carries the three downloads (the same
+  assets the landing links), then the same two commands, then the way back to what the reader was
+  looking at. The site cannot *check* whether somebody has adi (an https page cannot fetch
+  `http://app.adi`, adi-app refuses a foreign `Origin`, and no `adi://` scheme is registered), so
+  it carries both answers and asks once; the answer is remembered, and from then on every page
+  leads with the commands and a link into the reader's own panel instead of the download.
 - **It is built by the publisher, from the manifest file** — not from a machine's synced cache,
-  which would publish whatever that machine last managed to fetch. The parser is this crate's
+  which would publish whatever that machine last managed to fetch. The parser is the installer's
   own (`adi_marketplace::parse_manifest`), so a manifest the installer would refuse cannot be
   published as a page.
 - **No runtime, and nothing that needs a script to be read**: a static directory, relative links
   throughout, one stylesheet, and one small script that only decides which of the two answers
   above is in front. Every page carries its canonical URL, Open Graph tags and JSON-LD
-  (`SoftwareApplication`, priced at zero, with the repository named), and the site carries a
-  `sitemap.xml` and a `robots.txt` — the point of having public pages at all is that they can be
-  found.
+  (`SoftwareApplication`, priced at zero, with the repository named). `robots.txt` is written
+  only when the store is a host root — inside a bigger site, that file belongs to the host.
 
-The crate's own README has the flags and what each one decides; `scripts/market-site.sh` serves it
-against the dev fixtures for a look.
+The crate's own README has the flags and what each one decides.
 
 ## Limits, and where they live
 

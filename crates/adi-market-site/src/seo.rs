@@ -42,7 +42,7 @@ pub fn sitemap(site: &Site, sources: &[Source]) -> Option<String> {
     let mut urls = vec![home, site.url("/get/")];
     for source in sources {
         for entry in &source.manifest.bundles {
-            urls.push(site.item_url(&source.name, entry));
+            urls.push(site.item_url(entry));
         }
     }
     let mut body = String::new();
@@ -64,7 +64,7 @@ mod tests {
     fn the_sitemap_lists_the_shelf_and_every_item_absolutely() {
         let xml = sitemap(&fixture_site(), &[fixture_source()]).expect("a base url");
         assert!(xml.contains("<loc>https://market.example.com/</loc>"), "{xml}");
-        assert!(xml.contains("<loc>https://market.example.com/local/crm-suite/</loc>"), "{xml}");
+        assert!(xml.contains("<loc>https://market.example.com/crm-suite/</loc>"), "{xml}");
         assert!(xml.contains("<loc>https://market.example.com/get/</loc>"), "{xml}");
         assert_eq!(xml.matches("<url>").count(), 4, "the shelf, get, and two entries: {xml}");
     }

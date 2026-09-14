@@ -95,7 +95,7 @@ pub fn render(site: &Site, sources: &[Source]) -> String {
          <h1>Get adi</h1>\
          <p class=\"lede\">It runs on your own machine \u{2014} one file, and no account to create \
          before or after. Installing it gives you a control panel at <code>app.adi</code>, and \
-         everything on this marketplace installs into that.</p>\
+         everything in the store installs into that.</p>\
          </header>\
          <section class=\"section\"><h2>Download</h2><ul class=\"dl\">{downloads}</ul>\
          <p class=\"note-after\">Always the newest release. Free while in beta.</p></section>\
@@ -181,9 +181,8 @@ mod tests {
     #[test]
     fn adding_the_marketplace_comes_before_installing_from_it() {
         let html = render(&fixture_site(), &[fixture_source()]);
-        // The whole command, not "marketplace install": the page's own prose says "everything on
-        // this marketplace installs into that" well before either step, and a looser needle finds
-        // that sentence instead.
+        // The whole command, not "marketplace install": prose about installing sits well above
+        // either step, and a looser needle finds a sentence rather than a command.
         let add = html.find("adi-mono marketplace add local").expect("the add line");
         let install = html.find("adi-mono marketplace install").expect("the install line");
         assert!(add < install, "add comes first: {html}");

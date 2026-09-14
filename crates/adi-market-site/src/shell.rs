@@ -11,8 +11,9 @@
 //! is ([`crate::get`]) only decides which of the two answers is in front, which is why the
 //! three lines of it that must beat the first paint are inlined here rather than fetched.
 //!
-//! Every internal link is **relative** (`../../site.css`), so the same output directory serves
-//! correctly at a domain root, under a path prefix on a static host, and from `file://`.
+//! Every internal link is **relative** (`../site.css`), so the same output directory serves
+//! correctly at a domain root, under a path prefix on a static host — which is what
+//! `withadi.dev/store` is — and from `file://`.
 
 use crate::html::{escape, json_ld};
 use crate::icons::Icon;
@@ -21,9 +22,9 @@ use crate::{Site, links};
 /// The mark at bar size, monochrome — see the file's own comment for what pins it.
 const MARK: &str = include_str!("../assets/mark.svg");
 
-/// The word after the wordmark in the bar. Not the site's configured name: the bar says where you
-/// are in two words, and "ADI marketplace — starter apps" is a `<title>`, not a location.
-const HERE: &str = "marketplace";
+/// The word after the wordmark in the bar. Not the site's configured name: the bar says where
+/// you are in two words, and "ADI Store — starter apps" is a `<title>`, not a location.
+const HERE: &str = "store";
 
 /// The only thing on this site that has to run before the first paint: which of the two answers to
 /// "have you got adi" this reader has already given, read back onto `<html>` so the stylesheet can
@@ -55,8 +56,8 @@ pub struct Head {
 
 /// One page, whole.
 ///
-/// `depth` is how far this page sits below the site root (0 for the shelf, 2 for an item at
-/// `<marketplace>/<slug>/`), and everything relative is built from it.
+/// `depth` is how far this page sits below the store's root (0 for the shelf, 1 for an item at
+/// `<slug>/`), and everything relative is built from it.
 #[must_use]
 pub fn document(site: &Site, head: &Head, depth: usize, body: &str) -> String {
     let up = up(depth);
@@ -130,7 +131,7 @@ fn bar(up: &str) -> String {
     let root = if up.is_empty() { "./" } else { up };
     format!(
         "<header class=\"bar\"><div class=\"wrap\">\
-         <a class=\"brand\" href=\"{root}\">{MARK}adi<span class=\"here\">{HERE}</span></a>\
+         <a class=\"brand\" href=\"{root}\">{MARK}adi <span class=\"here\">{HERE}</span></a>\
          <nav>\
          <a href=\"{root}\">All apps</a>\
          <a class=\"wide-only\" href=\"{docs}\">How it works{arrow}</a>\
@@ -169,7 +170,7 @@ mod tests {
 
     fn site() -> Site {
         Site {
-            name: "ADI marketplace".to_string(),
+            name: "ADI Store".to_string(),
             base_url: "https://example.com".to_string(),
         }
     }

@@ -134,7 +134,7 @@ struct Input {
     sources: Vec<String>,
     #[arg(long = "source-url", value_name = "NAME=URL")]
     source_urls: Vec<String>,
-    #[arg(long, default_value = "ADI marketplace")]
+    #[arg(long, default_value = "ADI Store")]
     name: String,
 }
 ```

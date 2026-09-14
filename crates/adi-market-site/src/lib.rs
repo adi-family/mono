@@ -1,4 +1,4 @@
-//! adi-market-site — the public marketplace: plain HTML, generated from a manifest.
+//! adi-market-site — **the ADI Store**: plain HTML, generated from a marketplace manifest.
 //!
 //! The control panel already draws this listing, and draws it well (`adi-webapp`'s Marketplace
 //! screen). But it is a wasm application served from somebody's own machine, so **nothing outside
@@ -9,11 +9,17 @@
 //!
 //! ```text
 //! index.html                  the shelf — everything published, grouped by marketplace
-//! <marketplace>/<slug>/       one page per item, at the address it installs by
+//! <slug>/                     one page per item
 //! get/                        how to get adi, for the reader who has not got it
-//! sitemap.xml  robots.txt     so it can be crawled
+//! sitemap.xml  robots.txt     so it can be crawled (robots.txt only at a host root)
 //! site.css  site.js  fonts/   the design system, once, for the whole site
 //! ```
+//!
+//! **The crate is named for the mechanism, the pages for the reader.** What a visitor sees is
+//! called the ADI Store and lives at `withadi.dev/store`; what it is made of is a *marketplace*
+//! manifest, which is the word the CLI, the panel and `docs/marketplace.md` all use. The one word
+//! this crate deliberately does not take for itself is `store` on its own — in this tree that
+//! means the operator's own `~/.adi/mono`, and one of those is enough.
 //!
 //! Three decisions shape all of it:
 //!
@@ -54,7 +60,7 @@ mod shell;
 /// The site as a whole — the two things that are not in any manifest.
 #[derive(Debug, Clone)]
 pub struct Site {
-    /// What this marketplace is called on its own pages, in `og:site_name` and in the breadcrumb.
+    /// What the store is called on its own pages, in `og:site_name` and in the breadcrumb.
     pub name: String,
     /// Where the site will be published, with no trailing slash — the base every canonical URL,
     /// the sitemap and the structured data is built from. Empty builds a site with no absolute
@@ -73,10 +79,27 @@ impl Site {
         format!("{}{path}", self.base_url)
     }
 
-    /// One item's absolute URL. The path is its install address — see [`entry::address`].
+    /// One item's absolute URL — see [`entry::page_path`] for why it carries no marketplace.
     #[must_use]
-    pub fn item_url(&self, source: &str, entry: &BundleEntry) -> String {
-        self.url(&format!("/{}/", entry::address(source, entry)))
+    pub fn item_url(&self, entry: &BundleEntry) -> String {
+        self.url(&format!("/{}/", entry::page_path(entry)))
+    }
+
+    /// Whether the store is the whole of the host it is published on, rather than a directory of a
+    /// bigger site.
+    ///
+    /// It decides one thing: who owns `robots.txt`. That file is only ever read at a host's root,
+    /// so a store published at `withadi.dev/store` must not write one — it would be a file nothing
+    /// reads, sitting next to the landing's real one, saying something slightly different. The
+    /// store's own `sitemap.xml` is still written either way; a sitemap may live in any directory
+    /// as long as it only lists URLs beneath it, which this one does.
+    #[must_use]
+    pub fn is_host_root(&self) -> bool {
+        let rest = self
+            .base_url
+            .split_once("://")
+            .map_or(self.base_url.as_str(), |(_, rest)| rest);
+        !rest.trim_end_matches('/').contains('/')
     }
 }
 
@@ -157,17 +180,46 @@ pub fn render(site: &Site, sources: &[Source]) -> Vec<File> {
     for source in sources {
         for entry in &source.manifest.bundles {
             files.push(File::text(
-                &format!("{}/index.html", entry::address(&source.name, entry)),
+                &format!("{}/index.html", entry::page_path(entry)),
                 item::render(site, source, entry),
             ));
         }
     }
-    files.push(File::text("robots.txt", seo::robots(site)));
+    // Only when the store is the whole host — see `Site::is_host_root`.
+    if site.is_host_root() {
+        files.push(File::text("robots.txt", seo::robots(site)));
+    }
     if let Some(sitemap) = seo::sitemap(site, sources) {
         files.push(File::text("sitemap.xml", sitemap));
     }
     files.extend(assets::files());
     files
+}
+
+/// Whether these marketplaces can share one store.
+///
+/// Every item gets a page at `/<slug>/`, so two marketplaces publishing the same slug would be two
+/// items wanting one URL. Refused here, before anything is written, rather than resolved by
+/// whichever happened to be rendered second.
+///
+/// # Errors
+/// The slug, and the two marketplaces that both claim it.
+pub fn check(sources: &[Source]) -> Result<(), String> {
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for source in sources {
+        for entry in &source.manifest.bundles {
+            if let Some((slug, first)) = seen.iter().find(|(slug, _)| *slug == entry.slug) {
+                return Err(format!(
+                    "both the {first} and {} marketplaces publish {slug:?}, and every item in a \
+                     store has a page at /{slug}/. Rename one of them, or publish them as two \
+                     stores.",
+                    source.name
+                ));
+            }
+            seen.push((&entry.slug, &source.name));
+        }
+    }
+    Ok(())
 }
 
 /// Write a rendered site into `dir`, creating what it needs.
@@ -280,8 +332,8 @@ pub(crate) mod tests {
         let files = render(&fixture_site(), &[fixture_source()]);
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert!(paths.contains(&"index.html"));
-        assert!(paths.contains(&"local/crm-suite/index.html"));
-        assert!(paths.contains(&"local/plain/index.html"));
+        assert!(paths.contains(&"crm-suite/index.html"));
+        assert!(paths.contains(&"plain/index.html"));
         assert!(paths.contains(&"sitemap.xml"));
         assert!(paths.contains(&"robots.txt"));
         assert!(paths.contains(&"site.css"));
@@ -292,7 +344,7 @@ pub(crate) mod tests {
     #[test]
     fn a_site_with_no_base_url_publishes_no_absolute_addresses() {
         let site = Site {
-            name: "ADI marketplace".to_string(),
+            name: "ADI Store".to_string(),
             base_url: String::new(),
         };
         let files = render(&site, &[fixture_source()]);
@@ -303,5 +355,52 @@ pub(crate) mod tests {
             .expect("the shelf");
         let html = String::from_utf8(shelf.bytes.clone()).expect("utf-8");
         assert!(!html.contains("rel=\"canonical\""), "{html}");
+    }
+
+    /// A store inside a bigger site owns no `robots.txt` — only a host's root one is ever read —
+    /// but it still publishes its own sitemap, which is legal from any directory.
+    #[test]
+    fn a_store_in_a_subdirectory_writes_a_sitemap_and_no_robots() {
+        let site = Site {
+            name: "ADI Store".to_string(),
+            base_url: "https://withadi.dev/store".to_string(),
+        };
+        assert!(!site.is_host_root());
+        let paths: Vec<String> = render(&site, &[fixture_source()])
+            .into_iter()
+            .map(|f| f.path)
+            .collect();
+        assert!(!paths.contains(&"robots.txt".to_string()));
+        assert!(paths.contains(&"sitemap.xml".to_string()));
+        assert_eq!(
+            site.item_url(&fixture_source().manifest.bundles[0]),
+            "https://withadi.dev/store/crm-suite/",
+            "the store's directory, then the slug \u{2014} and no marketplace in between"
+        );
+    }
+
+    #[test]
+    fn a_store_on_its_own_host_owns_the_robots_file() {
+        for base in ["https://store.withadi.dev", "https://store.withadi.dev/"] {
+            let site = Site {
+                name: "ADI Store".to_string(),
+                base_url: base.to_string(),
+            };
+            assert!(site.is_host_root(), "{base}");
+        }
+    }
+
+    /// Two marketplaces publishing one slug is two items wanting one URL. It is refused before
+    /// anything is written rather than settled by whichever rendered second.
+    #[test]
+    fn one_slug_cannot_come_from_two_marketplaces() {
+        let one = fixture_source();
+        let mut two = fixture_source();
+        two.name = "other".to_string();
+        assert!(check(std::slice::from_ref(&one)).is_ok());
+        let refused = check(&[one, two]).expect_err("a collision");
+        assert!(refused.contains("crm-suite"), "{refused}");
+        assert!(refused.contains("local"), "{refused}");
+        assert!(refused.contains("other"), "{refused}");
     }
 }

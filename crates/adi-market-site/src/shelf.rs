@@ -3,8 +3,8 @@
 //! It answers two readers at once, and the order of the page is which one it answers first. A
 //! **stranger off a search engine** does not know what adi is, so the hero says what installing
 //! something here does to their machine before a single entry is named. Somebody who **already
-//! runs adi** wants the address to paste, so every section carries the one command that adds this
-//! marketplace to their store.
+//! runs adi** wants the address to paste, so every section carries the one command that adds
+//! that marketplace to their own machine.
 //!
 //! A row is a link and carries nothing to press, which is the panel's own rule for its listing
 //! (`crates/adi-webapp/src/pages/marketplace.rs`): the shelf is for browsing, and an item's page
@@ -51,7 +51,7 @@ fn head(site: &Site, sources: &[Source]) -> Head {
                 serde_json::json!({
                     "@type": "ListItem",
                     "name": entry.name,
-                    "url": site.item_url(&source.name, entry),
+                    "url": site.item_url(entry),
                 })
             })
         })
@@ -126,7 +126,7 @@ fn section(source: &Source) -> String {
                 .manifest
                 .bundles
                 .iter()
-                .map(|entry| tile(&source.name, entry))
+                .map(tile)
                 .collect::<String>()
         )
     };
@@ -152,8 +152,8 @@ fn items(n: usize) -> String {
     }
 }
 
-/// The line that puts this marketplace in somebody's own store, and the label that says what the
-/// name above it *is*.
+/// The line that puts this marketplace on somebody's own machine, and the label that says what
+/// the name above it *is*.
 ///
 /// The label is not filler. A bare heading reading "Local bundles" was taken as a claim about the
 /// items — are these local, as opposed to remote ones? — when it is only the name its publisher
@@ -177,7 +177,7 @@ fn add_command(source: &Source) -> String {
 
 /// One entry on the shelf. The whole row is the link: every part of it is about the same item, and
 /// a store where only the four words of the name are clickable is a store people think is broken.
-fn tile(source: &str, entry: &BundleEntry) -> String {
+fn tile(entry: &BundleEntry) -> String {
     let contents = contents_note(entry);
     let meta = if contents.is_empty() {
         format!(
@@ -195,7 +195,7 @@ fn tile(source: &str, entry: &BundleEntry) -> String {
          {description}\
          <div class=\"tile__meta\">{meta}</div>\
          </div></a>",
-        href = escape(&crate::entry::address(source, entry)),
+        href = escape(&crate::entry::page_path(entry)),
         icon = icon_html(entry, "icon--tile"),
         name = escape(&entry.name),
         version = entry.version.as_deref().map_or_else(String::new, |v| format!(
@@ -223,8 +223,8 @@ mod tests {
     #[test]
     fn every_entry_is_a_link_to_its_own_page_and_no_row_is_a_control() {
         let html = render(&fixture_site(), &[fixture_source()]);
-        assert!(html.contains("href=\"local/crm-suite/\""), "{html}");
-        assert!(html.contains("href=\"local/plain/\""), "{html}");
+        assert!(html.contains("href=\"crm-suite/\""), "{html}");
+        assert!(html.contains("href=\"plain/\""), "{html}");
         let shelf = html.split("<div class=\"shelf\">").nth(1).expect("the shelf");
         assert!(!shelf.contains("<button"), "a row presses nothing: {shelf}");
     }
@@ -266,7 +266,7 @@ mod tests {
         let html = render(&fixture_site(), &[fixture_source()]);
         assert!(html.contains("\"@type\":\"ItemList\""), "{html}");
         assert!(
-            html.contains("https://market.example.com/local/crm-suite/"),
+            html.contains("https://market.example.com/crm-suite/"),
             "absolute URLs in structured data: {html}"
         );
     }

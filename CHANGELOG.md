@@ -22,15 +22,16 @@ extraction script cares about.
 
 ### Added
 
-- **The marketplace has public pages now.** Everything a marketplace publishes can be read by
-  somebody who has never installed adi — a shelf of everything in it, and a page per item with its
-  screenshots, what it contains, what installing actually does to a machine, the publisher's long
-  form, and the repository and commit it clones from. An item's page lives at its install address
-  (`/adi/crm-suite/`), so the URL somebody sends you is the argument you paste after
-  `marketplace install`. It is a directory of plain HTML: it can be hosted anywhere, it carries a
-  sitemap, canonical URLs, link previews and structured data, and it is therefore something a
-  search engine can find. Generate it from the manifest you publish with `adi-market-site build`,
-  or look at it first with `adi-market-site serve`.
+- **There is an ADI Store, and it is part of withadi.dev.** Everything a marketplace publishes can
+  now be read by somebody who has never installed adi — a shelf of everything in it, and a page per
+  item with its screenshots, what it contains, what installing actually does to a machine, the
+  publisher's long form, and the repository and commit it clones from. It lives at
+  **withadi.dev/store**, linked from the landing's own nav beside Docs, Source and Download, and an
+  item is `withadi.dev/store/crm-suite` — the last two segments of which are exactly what you paste
+  after `marketplace install`. It is a directory of plain HTML: it carries a sitemap, canonical
+  URLs, link previews and structured data, every page is also served as Markdown for an agent to
+  read, and it is therefore something a search engine can find. Build it from the manifest you
+  publish with `scripts/store.sh`.
 
 - **And they know what to do with you.** Installing something from a marketplace is two commands
   and they have an order — `marketplace add` the manifest, then `marketplace install` the item —

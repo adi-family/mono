@@ -69,14 +69,21 @@ struct Input {
     /// the `marketplace add` line, so a reader who already runs adi can follow the listing.
     #[arg(long = "source-url", value_name = "NAME=URL")]
     source_urls: Vec<String>,
-    /// What this marketplace is called on its own pages.
-    #[arg(long, default_value = "ADI marketplace")]
+    /// What the store is called on its own pages.
+    #[arg(long, default_value = "ADI Store")]
     name: String,
 }
 
 impl Input {
-    /// Read every manifest named on the command line.
+    /// Read every manifest named on the command line, and refuse a set that cannot share one store.
     fn read(&self) -> anyhow::Result<Vec<Source>> {
+        let sources = self.read_each()?;
+        adi_market_site::check(&sources).map_err(|e| anyhow::anyhow!(e))?;
+        Ok(sources)
+    }
+
+    /// Each manifest, in the order it was named.
+    fn read_each(&self) -> anyhow::Result<Vec<Source>> {
         let mut sources = Vec::new();
         for spec in &self.sources {
             let (name, path) = pair(spec, "--source")?;
@@ -129,6 +136,16 @@ fn main() -> anyhow::Result<()> {
                 files.len(),
                 out.display()
             );
+            // A store inside a bigger site writes no robots.txt, because only the host's root one
+            // is ever read (`Site::is_host_root`). Say so once, here, rather than leaving the
+            // sitemap unannounced on a site nobody told a crawler about.
+            if !site.is_host_root() {
+                println!(
+                    "this store is a directory of a bigger site, so it wrote no robots.txt \u{2014} \
+                     add this line to the host's own:\n  Sitemap: {}",
+                    site.url("/sitemap.xml")
+                );
+            }
             Ok(())
         }
         Command::Serve {
