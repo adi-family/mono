@@ -13,7 +13,9 @@ mod knowledge;
 mod live_graph;
 mod llm;
 mod llm_backends;
-mod marketplace;
+// `pub(crate)` for one function: `open_install`, which the marketplace door calls when a link out
+// of the ADI Store carries `?install=1`. Everything else here is reached through `page_view`.
+pub(crate) mod marketplace;
 mod mesh;
 mod meta;
 mod onboarding;

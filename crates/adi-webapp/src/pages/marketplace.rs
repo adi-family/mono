@@ -31,7 +31,7 @@
 use adi_ui::{Icon, IconSize, Lucide, Markdown, Modal};
 use adi_webapp_api::types::{
     MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleInstall, MarketplaceInstall,
-    MarketplaceMedia, MarketplaceMediaKind as MediaKind, MarketplaceSource,
+    MarketplaceMedia, MarketplaceMediaKind as MediaKind, MarketplaceSource, MarketplaceState,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -648,6 +648,20 @@ fn open_dialog(form: MarketplaceForm, app: &MarketplaceApp, element: &str) {
     form.new_project.set(suggested_project(app));
     form.dest.set(Destination::New);
     form.installing.set(app_key(app));
+}
+
+/// Open the install dialog for `key` (`<marketplace>/<slug>`), if this listing carries that item.
+///
+/// What a `?install=1` link out of the ADI Store asks for — somebody pressed Install out there, so
+/// the dialog is what they are waiting for. It goes through [`open_dialog`] rather than setting
+/// `form.installing` directly, because the seeding is half of what pressing that button means: a
+/// dialog opened without it offers to register a project called "".
+///
+/// Called once the listing has arrived, since until then there is no item to seed from.
+pub(crate) fn open_install(form: MarketplaceForm, loaded: &MarketplaceState, key: &str) {
+    if let Some(app) = loaded.apps.iter().find(|app| app_key(app) == key) {
+        open_dialog(form, app, "");
+    }
 }
 
 /// The name to offer for the project an install would register: the one the bundle's own scaffold

@@ -2,10 +2,21 @@
 //! tables — one `name` + `url` per manifest the operator pointed this machine at.
 //!
 //! An array, not one hardcoded repo, because the operator's ruling at launch was explicit:
-//! sources are MULTIPLE, each URL one JSON manifest hosted anywhere. The array ships empty; a
-//! name is local identity (what `<marketplace>/<slug>` and the cache file are keyed by), and the
-//! manifest's own `name` — if it carries one — is display text only, so two operators can add the
-//! same URL under different names without either being wrong.
+//! sources are MULTIPLE, each URL one JSON manifest hosted anywhere. A name is local identity
+//! (what `<marketplace>/<slug>` and the cache file are keyed by), and the manifest's own `name` —
+//! if it carries one — is display text only, so two operators can add the same URL under
+//! different names without either being wrong.
+//!
+//! **The official marketplace is there to begin with** ([`OFFICIAL_NAME`]). It shipped empty until
+//! 2026-09-14 and the operator reversed that: the ADI Store is ours, the apps in it are ours, and
+//! asking somebody to type a raw GitHub URL before they can see any of them was a chore standing
+//! in front of the product. Nothing else about the shape changes — it is one entry in the same
+//! array, and `marketplace remove store` removes it like any other.
+//!
+//! The mechanism is deliberately the file's own **absence**: no `sources.toml` means a machine
+//! that has never configured sources, and that machine gets the official one. The moment anything
+//! writes the file — an add, or a remove — the file is the whole truth, so a removal sticks
+//! rather than coming back on the next read.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +26,24 @@ use adi_config::Config;
 
 /// The file the array lives in, within the marketplace module.
 const SOURCES_FILE: &str = "sources.toml";
+
+/// The name the official marketplace is added under, and therefore the first half of every
+/// address into it: `store/crm-suite`. It is the word the ADI Store's own pages print.
+pub const OFFICIAL_NAME: &str = "store";
+
+/// Where the official manifest is published. One file in a public repository — the same shape
+/// every other source has, so the official one is not a special case anywhere but here.
+pub const OFFICIAL_URL: &str =
+    "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
+
+/// The one source a machine has before anybody configures any.
+#[must_use]
+pub fn official() -> Source {
+    Source {
+        name: OFFICIAL_NAME.to_string(),
+        url: OFFICIAL_URL.to_string(),
+    }
+}
 
 /// One configured marketplace: a name this machine knows it by, and the URL of its manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,12 +83,28 @@ impl SourcesFile {
     }
 }
 
-/// Read every configured source, in the order they were added.
+/// Read every configured source, in the order they were added — starting from the official one on
+/// a machine where nothing has been configured yet.
 ///
 /// # Errors
 /// [`Error::Config`] if the file cannot be read or does not parse.
 pub fn list(config: &Config) -> Result<Vec<Source>> {
+    // The file's absence is the signal, not an empty array inside it: `[]` on disk is somebody
+    // having removed everything, and putting the official source back under them would make
+    // `marketplace remove` a suggestion.
+    if !configured(config) {
+        return Ok(vec![official()]);
+    }
     Ok(SourcesFile::load(config)?.marketplaces)
+}
+
+/// Whether anything has ever written the array — see [`list`] for why that is the question.
+fn configured(config: &Config) -> bool {
+    config
+        .module(MODULE)
+        .file::<SourcesFile>(SOURCES_FILE)
+        .path()
+        .exists()
 }
 
 /// Add a source: validate the name and the URL, refuse a duplicate name, persist.
@@ -77,16 +122,18 @@ pub fn add(config: &Config, name: &str, url: &str) -> Result<Source> {
     if !valid_url(url) {
         return Err(Error::NotHttps(url.to_string()));
     }
-    let mut file = SourcesFile::load(config)?;
-    if file.marketplaces.iter().any(|s| s.name == name) {
+    // Through `list`, so the first `add` on a fresh machine writes the official source down
+    // beside the new one instead of quietly replacing it with it.
+    let mut marketplaces = list(config)?;
+    if marketplaces.iter().any(|s| s.name == name) {
         return Err(Error::Duplicate(name.to_string()));
     }
     let source = Source {
         name: name.to_string(),
         url: url.to_string(),
     };
-    file.marketplaces.push(source.clone());
-    SourcesFile::save(config, &file)?;
+    marketplaces.push(source.clone());
+    SourcesFile::save(config, &SourcesFile { marketplaces })?;
     Ok(source)
 }
 
@@ -109,13 +156,15 @@ fn valid_url(url: &str) -> bool {
 /// # Errors
 /// [`Error::Config`] on a read or write failure.
 pub fn remove(config: &Config, name: &str) -> Result<bool> {
-    let mut file = SourcesFile::load(config)?;
-    let before = file.marketplaces.len();
-    file.marketplaces.retain(|s| s.name != name.trim());
-    if file.marketplaces.len() == before {
+    // Also through `list`: removing the official source on a machine that has never written the
+    // file has to *write* one, or the next read would hand it straight back.
+    let mut marketplaces = list(config)?;
+    let before = marketplaces.len();
+    marketplaces.retain(|s| s.name != name.trim());
+    if marketplaces.len() == before {
         return Ok(false);
     }
-    SourcesFile::save(config, &file)?;
+    SourcesFile::save(config, &SourcesFile { marketplaces })?;
     // The cache outliving its source is a listing that renders from nowhere; gone is gone.
     let _ = config
         .module(MODULE)
@@ -139,11 +188,52 @@ mod tests {
 
     const URL: &str = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
 
+    /// A machine nobody has configured has the official marketplace and nothing else — that is
+    /// the whole of "it is added by default".
     #[test]
-    fn the_store_starts_empty_and_writes_the_documented_shape() {
-        let cfg = config("shape");
-        assert!(list(&cfg).expect("list").is_empty());
+    fn a_fresh_store_has_the_official_marketplace() {
+        let cfg = config("official");
+        assert_eq!(list(&cfg).expect("list"), vec![official()]);
+        assert_eq!(official().name, "store", "the word every address into it starts with");
+        assert!(!configured(&cfg), "and nothing has been written to say so");
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
 
+    /// The first `add` writes the default down beside the new one. Taking `list`'s answer as the
+    /// starting point is what does it; starting from the file would drop the official source on
+    /// the floor the first time anybody added a second marketplace.
+    #[test]
+    fn adding_a_second_marketplace_keeps_the_official_one() {
+        let cfg = config("keeps");
+        add(&cfg, "other", "https://other.example/m.json").expect("add");
+        let names: Vec<String> = list(&cfg).expect("list").into_iter().map(|s| s.name).collect();
+        assert_eq!(names, vec!["store".to_string(), "other".to_string()]);
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
+
+    /// And removing it sticks: the removal writes the file, and a written file is the whole truth.
+    #[test]
+    fn removing_the_official_marketplace_is_final() {
+        let cfg = config("final");
+        assert!(remove(&cfg, "store").expect("remove"));
+        assert!(list(&cfg).expect("list").is_empty(), "it does not come back on the next read");
+        assert!(!remove(&cfg, "store").expect("remove again"), "and it is not there to remove twice");
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
+
+    /// Removing something that was never there writes nothing, so it does not silently take the
+    /// default away with it.
+    #[test]
+    fn removing_a_stranger_leaves_the_default_alone() {
+        let cfg = config("stranger");
+        assert!(!remove(&cfg, "nope").expect("remove"));
+        assert_eq!(list(&cfg).expect("list"), vec![official()]);
+        let _ = std::fs::remove_dir_all(cfg.root());
+    }
+
+    #[test]
+    fn the_store_writes_the_documented_shape() {
+        let cfg = config("shape");
         add(&cfg, "adi", URL).expect("add");
         let raw =
             std::fs::read_to_string(cfg.module(MODULE).file::<SourcesFile>(SOURCES_FILE).path())
@@ -216,7 +306,11 @@ mod tests {
         );
 
         assert!(remove(&cfg, "adi").expect("remove"));
-        assert!(list(&cfg).expect("list").is_empty());
+        assert_eq!(
+            list(&cfg).expect("list"),
+            vec![official()],
+            "the one that was added is gone; the default it was added beside is not"
+        );
         assert!(
             !cfg.module(MODULE)
                 .raw_path(&crate::cache::cache_path("adi"))

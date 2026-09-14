@@ -500,6 +500,11 @@ fn Market() -> impl IntoView {
     // Which app is open (`<marketplace>/<slug>`), empty for the listing. Seeded from the URL, so a
     // deep link and a refresh land on the same page a click reaches.
     let open = RwSignal::new(routing::market_app_from_path(&current_path()).unwrap_or_default());
+    // `?install=1` — a link out of the ADI Store, where the reader already pressed Install. What
+    // they are waiting for is the dialog that asks which project it goes into, so it opens as soon
+    // as the listing lands (below) rather than leaving them the same button to find and press
+    // again on the page behind it.
+    let wants_install = routing::query_param("install").is_some() && !open.get_untracked().is_empty();
     // The version row and the install offer the ⌘K menu carries on every screen (see [`menu`]).
     let updates = update::watch();
     let can_install = pwa::installable();
@@ -510,6 +515,9 @@ fn Market() -> impl IntoView {
     // state back in, so nothing on this page polls.
     spawn_local(async move {
         if let Ok(m) = fetch::marketplace().await {
+            if wants_install {
+                pages::marketplace::open_install(form, &m, &open.get_untracked());
+            }
             state.marketplace.set(Some(m));
         }
     });

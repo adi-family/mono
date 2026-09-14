@@ -2520,7 +2520,15 @@ mod tests {
         let manifest = format!(
             r#"{{"name":"t","bundles":[{{"slug":"{slug}","name":"{slug}","repo":"{repo}","commit":"{commit}"}}]}}"#
         );
-        if crate::sources::list(market.config()).expect("sources").is_empty() {
+        // Seeded once, and asked about BY NAME: a scratch store is no longer empty to begin with
+        // — every machine starts with the official marketplace (`sources::official`) — so an
+        // `is_empty` guard here silently skipped the add and left `entry_of("adi", …)` looking
+        // for a source nothing had created.
+        if !crate::sources::list(market.config())
+            .expect("sources")
+            .iter()
+            .any(|source| source.name == "adi")
+        {
             crate::sources::add(market.config(), "adi", "https://example/marketplace.json")
                 .expect("add");
         }
@@ -3494,7 +3502,15 @@ mod tests {
             r#"{{"name":"t","bundles":[{{"slug":"{slug}","name":"{slug}","repo":"{repo}","commit":"{commit}",
                "elements":[{{"kind":"agent","name":"sales-bot"}},{{"kind":"tool","name":"csv-import"}}]}}]}}"#
         );
-        if crate::sources::list(market.config()).expect("sources").is_empty() {
+        // Seeded once, and asked about BY NAME: a scratch store is no longer empty to begin with
+        // — every machine starts with the official marketplace (`sources::official`) — so an
+        // `is_empty` guard here silently skipped the add and left `entry_of("adi", …)` looking
+        // for a source nothing had created.
+        if !crate::sources::list(market.config())
+            .expect("sources")
+            .iter()
+            .any(|source| source.name == "adi")
+        {
             crate::sources::add(market.config(), "adi", "https://example/marketplace.json")
                 .expect("add");
         }
@@ -3584,7 +3600,15 @@ mod tests {
             r#"{{"name":"t","bundles":[{{"slug":"{slug}","name":"{slug}","repo":"{repo}","commit":"{commit}",
                "elements":[{{"kind":"project","name":"config","description":"The scaffold."}}]}}]}}"#
         );
-        if crate::sources::list(market.config()).expect("sources").is_empty() {
+        // Seeded once, and asked about BY NAME: a scratch store is no longer empty to begin with
+        // — every machine starts with the official marketplace (`sources::official`) — so an
+        // `is_empty` guard here silently skipped the add and left `entry_of("adi", …)` looking
+        // for a source nothing had created.
+        if !crate::sources::list(market.config())
+            .expect("sources")
+            .iter()
+            .any(|source| source.name == "adi")
+        {
             crate::sources::add(market.config(), "adi", "https://example/marketplace.json")
                 .expect("add");
         }

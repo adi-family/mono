@@ -32,10 +32,15 @@ extraction script cares about.
   the command you run. Every page carries a canonical URL, a line in the site's sitemap and a
   Markdown mirror for an agent to read, which is what makes any of it findable at all.
 
-- **And they say how to install.** That is two commands with an order — `marketplace add` the
-  manifest, then `marketplace install` the item — so an item's page numbers both. Printing the
-  second one alone, as the first version did, is a command that works only on a machine already
-  following that marketplace.
+- **Installing from the Store is one click.** An item's page has an **Install** button; pressing it
+  hands the item to your own control panel, which opens the dialog asking which project it goes
+  into, already filled in. No command to copy, and nothing to add first — **the official
+  marketplace is now on every machine by default**, under the name `store`, so `store/crm-suite`
+  is an address that means something the moment you install ADI. It is an ordinary entry with no
+  privileges: `adi-mono marketplace remove store` removes it, and it stays removed.
+
+- The panel takes `?install=1` on an item's URL and opens that dialog on arrival, which is what
+  makes the Store's button one click rather than one click and a hunt.
 
 ## 1.15.0 — 2026-09-14
 

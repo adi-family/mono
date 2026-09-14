@@ -130,6 +130,12 @@ mod tests {
     use super::*;
 
     /// A store of this test's own, under the system temp dir — never the operator's live one.
+    ///
+    /// **And with no marketplaces in it.** A real fresh store starts with the official one
+    /// (`sources::official`), which every test below would then have to count, sync and fetch
+    /// around — so the scratch store removes it and each test adds exactly the sources it is
+    /// about. `sources`' own tests use a plain `Config` instead, and are where the default's
+    /// behaviour is checked.
     pub(crate) fn scratch(tag: &str) -> Marketplace {
         let root = std::env::temp_dir().join(format!(
             "adi-marketplace-{tag}-{}-{:?}",
@@ -138,7 +144,9 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("scratch root");
-        Marketplace::with_config(Config::with_root(root))
+        let market = Marketplace::with_config(Config::with_root(root));
+        sources::remove(market.config(), sources::OFFICIAL_NAME).expect("start with none");
+        market
     }
 
     #[test]

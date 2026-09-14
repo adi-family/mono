@@ -139,11 +139,18 @@ it.
 
 ```toml
 [[marketplaces]]
-name = "adi"
+name = "store"
 url = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json"
 ```
 
-- The array **ships empty**. Adding URLs is the operator's act (`adi-mono marketplace add`).
+- **The official marketplace is there by default**, under the name `store` — so every address into
+  it reads `store/<slug>`, and nobody has to paste a raw GitHub URL before they can see an app.
+  It shipped empty until 2026-09-14; the reversal is the operator's, and the reasoning is in
+  `crates/adi-marketplace/src/sources.rs`. It is one entry in the same array with no privileges:
+  `adi-mono marketplace remove store` removes it like any other, and the removal sticks.
+  The mechanism is the file's own absence — no `sources.toml` means a machine that has never
+  configured sources, and an `add` or a `remove` writes the file, after which the file is the
+  whole truth.
 - The configured `name` is the local identity — the first half of `<marketplace>/<slug>` and the
   cache file's name. The manifest's own `name` is display text, so two machines can alias one URL
   under different names.
@@ -246,6 +253,11 @@ nothing to press: the mark, the name, the one-line description, what the item co
 included** with an action per element, **Installed here** with one block per install, the long
 form, and last of all the repository, commit, branch and address in full.
 
+**A link can open the install dialog.** `/marketplace/<marketplace>/<slug>?install=1` lands with
+it already open and already filled in — the same state pressing Install on the page produces
+(`pages::marketplace::open_install`). That is what the ADI Store's own Install button points at, so
+installing from the public page is one click and a confirmation rather than a command to copy.
+
 **Install asks where it goes.** A dialog offers a new project (the default, and what we recommend),
 a project you already have, or globally — which is marked as the one that closes doors, because a
 second copy of the same bundle cannot land beside a global one
@@ -271,19 +283,22 @@ landing is an Astro app (`adi-family/withadi.dev`, checked out on this machine u
 | route | what it is |
 | --- | --- |
 | `/store` | the shelf — every bundle the manifest carries, one hairline row each |
-| `/store/<slug>` | one item: its mark, gallery, what's included, the two commands, the publisher's long form, and the repository and commit it clones from |
+| `/store/<slug>` | one item: its mark, gallery, what's included, an Install button, the publisher's long form, and the repository and commit it clones from |
 
 - **The data is a manifest**, read and validated at build time (`src/store/manifest.ts`), with the
   same refusals the installer applies — an entry this site lists and the installer would refuse is
-  a listing that offers something nobody can install. The file is `src/store/marketplace.json`,
-  which is **gitignored**: a developer's copy is this repo's dev fixtures, and committing those
-  would publish invented apps. A build without it is an empty shelf that says so.
+  a listing that offers something nobody can install. `src/store/marketplace.json` is a committed
+  copy of what is published at the URL above, so a deploy publishes the listing somebody looked at;
+  `marketplace.local.json` beside it wins when present and is gitignored, which is where this
+  repo's dev fixtures go.
 - **An item's URL is `/store/<slug>`.** With the marketplace added under the name the site
   publishes it as, the last two segments are exactly the install address —
   `withadi.dev/store/crm-suite` ↔ `marketplace install store/crm-suite`.
-- **Every install is two commands, in that order.** `marketplace install <name>/<slug>` names a
-  marketplace, so a machine that has not added it fails on the address; the item page numbers
-  `marketplace add <name> <url>` above it.
+- **Installing is one click, and there is no command on the page.** An item's Install button hands
+  its address to the reader's own panel — `app.adi/marketplace/<marketplace>/<slug>?install=1` —
+  which opens the dialog that asks which project it goes into. Nothing has to be added first: the
+  official marketplace is on every machine by default (above). A reader whose ADI the page cannot
+  see gets Download instead, and a quiet line offering the same panel link.
 - **No new dependency and no script.** The publisher's readme is parsed into blocks and rendered
   as elements (`src/store/markdown.ts` — the same subset `adi_ui::Markdown` draws), so a readme
   cannot become markup on the page. Nothing on either page needs JavaScript.
