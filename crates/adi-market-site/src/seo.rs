@@ -37,7 +37,9 @@ pub fn sitemap(site: &Site, sources: &[Source]) -> Option<String> {
     if home.is_empty() {
         return None;
     }
-    let mut urls = vec![home];
+    // The shelf, then the page somebody who has not got adi is sent to, then the items. All three
+    // kinds are pages a search result can land on.
+    let mut urls = vec![home, site.url("/get/")];
     for source in sources {
         for entry in &source.manifest.bundles {
             urls.push(site.item_url(&source.name, entry));
@@ -63,7 +65,8 @@ mod tests {
         let xml = sitemap(&fixture_site(), &[fixture_source()]).expect("a base url");
         assert!(xml.contains("<loc>https://market.example.com/</loc>"), "{xml}");
         assert!(xml.contains("<loc>https://market.example.com/local/crm-suite/</loc>"), "{xml}");
-        assert_eq!(xml.matches("<url>").count(), 3, "the shelf and two entries: {xml}");
+        assert!(xml.contains("<loc>https://market.example.com/get/</loc>"), "{xml}");
+        assert_eq!(xml.matches("<url>").count(), 4, "the shelf, get, and two entries: {xml}");
     }
 
     #[test]

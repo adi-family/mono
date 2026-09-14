@@ -115,6 +115,9 @@ fn content_type(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
+        // Served as anything else, a browser refuses to execute it — so the preview would show a
+        // page whose state swap silently never happens.
+        Some("js") => "text/javascript; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
         Some("woff2") => "font/woff2",

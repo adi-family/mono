@@ -81,17 +81,32 @@ fn head(site: &Site, sources: &[Source]) -> Head {
 }
 
 /// The hero. Its button is the page's one orange (DESIGN.md §4): for a reader who does not have
-/// adi, nothing else on the shelf is an action at all.
+/// adi, nothing else on the shelf is an action at all — and for one who does, the orange moves to
+/// the panel link, because by then that is the only act left on the page (`.btn--promoted`).
+///
+/// The panel group is `only-adi`, not `if-adi`: the item pages carry both answers side by side
+/// because the commands there are worth reading either way, but on the shelf the second group is
+/// one more control in the same line of sight and answers nothing a browsing reader asked.
 fn hero() -> String {
     format!(
         "<section class=\"hero\"><div class=\"wrap\">\
          <h1>{HEADLINE}</h1>\
          <p class=\"lede\">{LEDE}</p>\
          <div class=\"hero__actions\">\
-         <a class=\"btn btn--primary\" href=\"{adi}\">Get adi</a>\
-         <span class=\"label\">Free while in beta \u{b7} macOS and Linux</span>\
+         <span class=\"hero__group if-no-adi\">\
+         <a class=\"btn btn--primary\" href=\"{get}\">Get adi</a>\
+         <span class=\"label\">Free while in beta \u{b7} macOS, Linux and Windows</span>\
+         {ask_yes}\
+         </span>\
+         <span class=\"hero__group only-adi\">\
+         <a class=\"btn btn--promoted\" href=\"{panel}\">Open your panel</a>\
+         {ask_no}\
+         </span>\
          </div></div></section>",
-        adi = links::ADI,
+        get = crate::get::href("./", None),
+        panel = links::panel_market(),
+        ask_yes = crate::get::toggle(false),
+        ask_no = crate::get::toggle(true),
     )
 }
 
@@ -117,35 +132,46 @@ fn section(source: &Source) -> String {
     };
     format!(
         "<section class=\"source\">\
-         <div class=\"source__head\"><h2>{name}</h2><span class=\"label\">{count}</span></div>\
+         <div class=\"source__head\">\
+         <p class=\"eyebrow\">Marketplace</p>\
+         <div class=\"source__name\"><h2>{name}</h2><span class=\"label\">{count}</span></div>\
+         </div>\
          {add}{entries}</section>",
         name = escape(&name),
-        count = published(source.manifest.bundles.len()),
+        count = items(source.manifest.bundles.len()),
         add = add_command(source),
     )
 }
 
-/// "5 published" — the one count on this site, and it is a fact about a file rather than about
+/// "5 items" — the one count on this site, and it is a fact about a file rather than about
 /// anybody's popularity. Install counts are deliberately nowhere (`docs/marketplace.md`).
-fn published(n: usize) -> String {
+fn items(n: usize) -> String {
     match n {
-        1 => "1 published".to_string(),
-        n => format!("{n} published"),
+        1 => "1 item".to_string(),
+        n => format!("{n} items"),
     }
 }
 
-/// The line that puts this marketplace in somebody's own store, for the reader who has adi
-/// already. Omitted when the site was built without saying where the manifest is published: a
-/// command with a guess in it is worse than no command.
+/// The line that puts this marketplace in somebody's own store, and the label that says what the
+/// name above it *is*.
+///
+/// The label is not filler. A bare heading reading "Local bundles" was taken as a claim about the
+/// items — are these local, as opposed to remote ones? — when it is only the name its publisher
+/// gave the manifest. Saying "Marketplace" over it, and printing the URL it is fetched from right
+/// underneath, answers both questions in the reader's first glance.
+///
+/// Omitted when the site was built without saying where the manifest is published: a command with
+/// a guess in it is worse than no command.
 fn add_command(source: &Source) -> String {
-    let Some(url) = source.url.as_deref() else {
+    let Some(command) = crate::get::add_command(source) else {
         return String::new();
     };
     format!(
-        "<p class=\"cmd\"><span class=\"prompt\">$</span>\
-         <code>adi-mono marketplace add {name} {url}</code></p>",
-        name = escape(&source.name),
-        url = escape(url),
+        "<div class=\"if-adi source__add\">\
+         <p class=\"label\">Add it to your own adi:</p>\
+         <p class=\"cmd\"><span class=\"prompt\">$</span><code>{}</code></p>\
+         </div>",
+        escape(&command),
     )
 }
 
@@ -195,16 +221,21 @@ mod tests {
     use crate::tests::{fixture_site, fixture_source};
 
     #[test]
-    fn every_entry_is_a_link_to_its_own_page_and_nothing_on_the_shelf_is_a_control() {
+    fn every_entry_is_a_link_to_its_own_page_and_no_row_is_a_control() {
         let html = render(&fixture_site(), &[fixture_source()]);
         assert!(html.contains("href=\"local/crm-suite/\""), "{html}");
         assert!(html.contains("href=\"local/plain/\""), "{html}");
-        assert_eq!(html.matches("<button").count(), 0, "the shelf presses nothing");
-        assert_eq!(
-            html.matches("btn--primary").count(),
-            1,
-            "one orange per screen (DESIGN.md \u{a7}4)"
-        );
+        let shelf = html.split("<div class=\"shelf\">").nth(1).expect("the shelf");
+        assert!(!shelf.contains("<button"), "a row presses nothing: {shelf}");
+    }
+
+    /// In every state the reader can be in, exactly one element is filled orange: Get adi while
+    /// that is the act, the panel link once it is not (DESIGN.md §4, and `.btn--promoted`).
+    #[test]
+    fn one_orange_in_each_state() {
+        let html = render(&fixture_site(), &[fixture_source()]);
+        assert_eq!(html.matches("btn--primary").count(), 1, "{html}");
+        assert_eq!(html.matches("btn--promoted").count(), 1, "{html}");
     }
 
     #[test]

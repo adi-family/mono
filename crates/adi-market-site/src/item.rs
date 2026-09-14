@@ -146,11 +146,7 @@ fn hero(source: &Source, entry: &BundleEntry) -> String {
          <div class=\"item__title\"><h1>{name}</h1>{version}</div>\
          {description}{tags}\
          </div>\
-         <div class=\"item__act\">\
-         <a class=\"btn btn--primary\" href=\"{adi}\">Get adi</a>\
-         <span class=\"label\">Already running it? Install this from a shell:</span>\
-         <p class=\"cmd\"><span class=\"prompt\">$</span><code>{command}</code></p>\
-         </div></header>",
+         {act}</header>",
         icon = icon_html(entry, "icon--hero"),
         name = escape(&entry.name),
         version = entry.version.as_deref().map_or_else(String::new, |v| format!(
@@ -176,8 +172,54 @@ fn hero(source: &Source, entry: &BundleEntry) -> String {
                     .collect::<String>()
             )
         },
-        adi = links::ADI,
-        command = escape(&install_command(&source.name, entry)),
+        act = act(source, entry),
+    )
+}
+
+/// The one act, in both of the states a reader can be in.
+///
+/// A page cannot look at somebody's disk (`crate::get`), so both answers are here and the stranger
+/// gets the one in front: **Get adi**. Under it, and still readable with no script at all, are the
+/// two lines that install this bundle on a machine that already has adi — in the order they have
+/// to be run.
+///
+/// **The `add` line is not decoration.** `marketplace install local/crm-suite` names a marketplace,
+/// and a machine that has never added it has never heard of it: the install fails on the address.
+/// The first version of this page printed only the second line, which was a command that works on
+/// exactly one machine in the world — the one that already followed this manifest.
+fn act(source: &Source, entry: &BundleEntry) -> String {
+    let address = address(&source.name, entry);
+    let add = crate::get::add_command(source)
+        .map(|command| {
+            crate::get::step(
+                &format!("Add the {} marketplace \u{2014} once, on this machine", source.title()),
+                Some(&command),
+                "",
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        "<div class=\"item__act\">\
+         <div class=\"if-no-adi\">\
+         <a class=\"btn btn--primary\" href=\"{get}\">Get adi</a>\
+         <p class=\"label\">Free, runs on your own machine, and nothing here starts by itself.</p>\
+         {ask_yes}\
+         </div>\
+         <div class=\"if-adi\">\
+         <p class=\"label\">Already running adi? Two lines:</p>\
+         <ol class=\"steps\">{add}{install}</ol>\
+         <a class=\"btn btn--promoted\" href=\"{panel}\">Open it in your panel</a>\
+         {ask_no}\
+         </div></div>",
+        get = crate::get::href("../../", Some(&address)),
+        ask_yes = crate::get::toggle(false),
+        install = crate::get::step(
+            "Install it",
+            Some(&install_command(&source.name, entry)),
+            "",
+        ),
+        panel = escape(&links::panel_item(&source.name, &entry.slug)),
+        ask_no = crate::get::toggle(true),
     )
 }
 
@@ -351,6 +393,30 @@ mod tests {
         let html = page("crm-suite");
         assert_eq!(html.matches("<h1>").count(), 1, "{html}");
         assert_eq!(html.matches("btn--primary").count(), 1, "DESIGN.md \u{a7}4");
+    }
+
+    /// The two lines, in the order they have to be run. `install local/crm-suite` names a
+    /// marketplace, and a machine that has not added it fails on the address — so a page that
+    /// printed only the second line printed a command that works nowhere.
+    #[test]
+    fn the_marketplace_is_added_before_anything_is_installed_from_it() {
+        let html = page("crm-suite");
+        let add = html.find("adi-mono marketplace add local").expect("the add line");
+        let install = html
+            .find("adi-mono marketplace install local/crm-suite")
+            .expect("the install line");
+        assert!(add < install, "{html}");
+    }
+
+    /// Both answers to "have you got adi" are in the markup — the script only takes one away — so
+    /// a reader with no script gets the button *and* the commands.
+    #[test]
+    fn the_page_carries_both_answers_and_a_way_into_the_panel() {
+        let html = page("crm-suite");
+        assert!(html.contains("class=\"if-no-adi\""), "{html}");
+        assert!(html.contains("class=\"if-adi\""), "{html}");
+        assert!(html.contains("href=\"http://app.adi/marketplace/local/crm-suite\""), "{html}");
+        assert!(html.contains("data-adi-set=\"yes\""), "the question is asked: {html}");
     }
 
     #[test]

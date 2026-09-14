@@ -4,8 +4,12 @@
 //! it lists them well — but it is a wasm application behind somebody's own machine, so nothing
 //! outside can read it and nobody can link to one item. These pages exist so an item has a URL
 //! that answers with its name, its description and its structured data in the first response,
-//! before any script runs. Which is also why there is no script: a page of plain elements is the
-//! whole of it, and [`crate::assets`] ships one stylesheet.
+//! before any script runs.
+//!
+//! Nothing on these pages *needs* a script: every word, every command and both answers to "have
+//! you got adi" are in the markup, and [`crate::assets`] ships one stylesheet. What script there
+//! is ([`crate::get`]) only decides which of the two answers is in front, which is why the
+//! three lines of it that must beat the first paint are inlined here rather than fetched.
 //!
 //! Every internal link is **relative** (`../../site.css`), so the same output directory serves
 //! correctly at a domain root, under a path prefix on a static host, and from `file://`.
@@ -20,6 +24,18 @@ const MARK: &str = include_str!("../assets/mark.svg");
 /// The word after the wordmark in the bar. Not the site's configured name: the bar says where you
 /// are in two words, and "ADI marketplace — starter apps" is a `<title>`, not a location.
 const HERE: &str = "marketplace";
+
+/// The only thing on this site that has to run before the first paint: which of the two answers to
+/// "have you got adi" this reader has already given, read back onto `<html>` so the stylesheet can
+/// hide the other one without it being drawn first and taken away.
+///
+/// Inline rather than in `site.js`, because a deferred file runs *after* paint and the swap would
+/// be a visible flicker on every page. `class="js"` is the other half: the controls that ask the
+/// question are hidden until something can answer it, so a reader with no script never sees a
+/// button that does nothing.
+const STATE: &str = "<script>try{document.documentElement.className='js';\
+                     document.documentElement.dataset.adi=\
+                     localStorage.getItem('adi.installed')||''}catch(e){}</script>";
 
 /// What a crawler and a link preview are given for one page.
 #[derive(Debug, Clone)]
@@ -78,6 +94,7 @@ pub fn document(site: &Site, head: &Head, depth: usize, body: &str) -> String {
          <meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <meta name=\"color-scheme\" content=\"dark\">\n\
+         {STATE}\n\
          <title>{title}</title>\n\
          <meta name=\"description\" content=\"{description}\">\n\
          {canonical}\
@@ -90,6 +107,7 @@ pub fn document(site: &Site, head: &Head, depth: usize, body: &str) -> String {
          <link rel=\"icon\" href=\"{up}favicon.svg\" type=\"image/svg+xml\">\n\
          <link rel=\"icon\" href=\"{up}favicon.png\" sizes=\"any\">\n\
          <link rel=\"stylesheet\" href=\"{up}site.css\">\n\
+         <script src=\"{up}site.js\" defer></script>\n\
          {data}\n</head>\n<body>\n{bar}\n<main>\n{body}\n</main>\n{foot}\n</body>\n</html>\n",
         title = escape(&head.title),
         description = escape(&head.description),
@@ -116,10 +134,14 @@ fn bar(up: &str) -> String {
          <nav>\
          <a href=\"{root}\">All apps</a>\
          <a class=\"wide-only\" href=\"{docs}\">How it works{arrow}</a>\
-         <a href=\"{adi}\">Get adi{arrow}</a>\
+         <a class=\"if-no-adi\" href=\"{get}\">Get adi</a>\
+         <a class=\"only-adi\" href=\"{panel}\">Your panel{arrow}</a>\
          </nav></div></header>",
         docs = links::MARKETPLACE_DOCS,
-        adi = links::ADI,
+        // The site's own page, not withadi.dev: the reader is being asked to do something, and
+        // the thing to do depends on what they already have. The foot still links the product.
+        get = crate::get::href(root, None),
+        panel = links::panel_market(),
         arrow = Icon::ArrowUpRight.svg("i--sm"),
     )
 }
@@ -185,9 +207,20 @@ mod tests {
     fn a_page_two_levels_down_reaches_the_stylesheet_and_the_root() {
         let html = document(&site(), &head(), 2, "<p>hi</p>");
         assert!(html.contains("href=\"../../site.css\""), "{html}");
+        assert!(html.contains("src=\"../../site.js\""), "{html}");
         assert!(html.contains("class=\"brand\" href=\"../../\""), "{html}");
         assert!(html.contains("content=\"https://example.com/a/b/\""), "canonical: {html}");
-        assert!(!html.contains("<script src"), "there is no script on these pages");
+    }
+
+    /// Two scripts on a page with no structured data: the three inline lines that must beat the
+    /// first paint, and the deferred file. Nothing else, and no behaviour written into the markup.
+    #[test]
+    fn the_only_script_is_the_one_that_swaps_the_two_answers() {
+        let html = document(&site(), &head(), 0, "<p>hi</p>");
+        assert_eq!(html.matches("<script").count(), 2, "{html}");
+        assert!(html.contains("<script src=\"site.js\" defer>"), "{html}");
+        assert!(html.contains("localStorage.getItem('adi.installed')"), "{html}");
+        assert!(!html.contains("onclick"), "no behaviour in the markup: {html}");
     }
 
     #[test]

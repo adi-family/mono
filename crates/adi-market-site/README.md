@@ -11,8 +11,9 @@ in a message, not Google. This crate writes the same listing out as files.
 ```text
 index.html                  the shelf — everything published, grouped by marketplace
 <marketplace>/<slug>/       one page per item, at the address it installs by
+get/                        how to get adi, for the reader who has not got it
 sitemap.xml  robots.txt     so it can be crawled
-site.css  fonts/  favicon   the design system, once, for the whole site
+site.css  site.js  fonts/   the design system, once, for the whole site
 ```
 
 ## Using it
@@ -43,11 +44,37 @@ The input is the manifest **file**, not a machine's synced cache. A public listi
 whoever publishes the manifest; building it from a local cache would publish whatever that machine
 last managed to fetch.
 
+## Have you got adi? — the one thing the site cannot know
+
+A page cannot look at somebody's disk, and both mechanisms that would answer this are closed:
+`http://app.adi` cannot be *fetched* from an https page (mixed content), adi-app refuses an `/api`
+request whose `Origin` is not its own `Host` anyway, and there is no `adi://` scheme registered to
+deep-link into and time out on. Guessing from the user agent would be a guess.
+
+So the site carries **both answers in the markup**, leads with the one that is right for a
+stranger, and asks once:
+
+| the reader | what the page leads with |
+| --- | --- |
+| has not said (and anyone with no script) | **Get adi**, and under it the commands, which is the order a first-time reader wants anyway |
+| said "I already have adi" | the two commands, and **Open it in your panel** — the download disappears |
+
+`assets/site.js` is the whole of it: it remembers the answer in `localStorage` and sets
+`data-adi` on `<html>`, and the stylesheet hides what does not apply. Three of those lines are
+inlined in `<head>`, because a deferred file runs after the first paint and the swap would
+otherwise be a visible flicker on every page. Nothing on any page *depends* on it having run.
+
+**Two commands, in that order.** `marketplace install <name>/<slug>` names a marketplace, so a
+machine that has never added it fails on the address — every page that offers the install also
+offers `marketplace add <name> <url>` above it, numbered. The first version of this site printed
+only the second line, which was a command that worked on exactly one machine in the world.
+
 ## What is deliberate
 
-- **No script, anywhere.** Every page is complete in its first response, so a crawler that runs
-  nothing still reads the name, the description, the contents and the JSON-LD. It also means the
-  output is a directory any static host will serve, with no runtime to keep alive.
+- **Complete without script.** Every page is complete in its first response, so a crawler that
+  runs nothing still reads the name, the description, the contents, the commands and the JSON-LD.
+  It also means the output is a directory any static host will serve, with no runtime to keep
+  alive.
 - **Relative links.** `../../site.css`, never `/site.css` — so the same output serves correctly at
   a domain root, under a path prefix, and from `file://`.
 - **One schema.** The manifest is parsed by [`adi-marketplace`](../adi-marketplace)'s own reader

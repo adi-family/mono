@@ -273,7 +273,18 @@ cargo run -p adi-market-site -- build --source adi=apps/marketplace.json \
 
 - **The shelf** (`index.html`) is the listing, with one section per marketplace and the
   `marketplace add` line for each — so a reader who does have adi can follow what they are
-  looking at.
+  looking at. Each section is headed *Marketplace* over the manifest's own name, because a bare
+  heading reading "Local bundles" gets taken as a claim about the items rather than as the name
+  its publisher chose.
+- **Every install is two commands, in that order.** `marketplace install <name>/<slug>` names a
+  marketplace, so a machine that has not added it fails on the address; the item page numbers
+  `marketplace add <name> <url>` above it.
+- **"Get adi" leads somewhere** — `/get/`, which carries the three downloads (the same assets the
+  landing links), then the same two commands, then the way back to what the reader was looking at.
+  The site cannot *check* whether somebody has adi (an https page cannot fetch `http://app.adi`,
+  adi-app refuses a foreign `Origin`, and no `adi://` scheme is registered), so it carries both
+  answers and asks once; the answer is remembered, and from then on every page leads with the
+  commands and a link into the reader's own panel instead of the download.
 - **An item's page** lives at `/<marketplace>/<slug>/`, which *is* its install address: the URL
   somebody copies out of the address bar is what they paste after `marketplace install`. It
   carries the same blocks the panel's item page does, in the same order, minus the two that are
@@ -282,10 +293,12 @@ cargo run -p adi-market-site -- build --source adi=apps/marketplace.json \
   which would publish whatever that machine last managed to fetch. The parser is this crate's
   own (`adi_marketplace::parse_manifest`), so a manifest the installer would refuse cannot be
   published as a page.
-- **No script and no runtime**: a static directory, relative links throughout, one stylesheet.
-  Every page carries its canonical URL, Open Graph tags and JSON-LD (`SoftwareApplication`,
-  priced at zero, with the repository named), and the site carries a `sitemap.xml` and a
-  `robots.txt` — the point of having public pages at all is that they can be found.
+- **No runtime, and nothing that needs a script to be read**: a static directory, relative links
+  throughout, one stylesheet, and one small script that only decides which of the two answers
+  above is in front. Every page carries its canonical URL, Open Graph tags and JSON-LD
+  (`SoftwareApplication`, priced at zero, with the repository named), and the site carries a
+  `sitemap.xml` and a `robots.txt` — the point of having public pages at all is that they can be
+  found.
 
 The crate's own README has the flags and what each one decides; `scripts/market-site.sh` serves it
 against the dev fixtures for a look.

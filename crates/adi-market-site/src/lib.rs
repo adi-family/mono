@@ -10,16 +10,18 @@
 //! ```text
 //! index.html                  the shelf — everything published, grouped by marketplace
 //! <marketplace>/<slug>/       one page per item, at the address it installs by
+//! get/                        how to get adi, for the reader who has not got it
 //! sitemap.xml  robots.txt     so it can be crawled
-//! site.css  fonts/  favicon   the design system, once, for the whole site
+//! site.css  site.js  fonts/   the design system, once, for the whole site
 //! ```
 //!
 //! Three decisions shape all of it:
 //!
-//! * **Static, and no script.** Every page is complete in its first response: a crawler that runs
-//!   nothing still reads the name, the description, the contents and the structured data. It also
-//!   means the output is a directory anyone can host — a static bucket, a git-hosted page, the
-//!   front door — with no runtime to keep alive.
+//! * **Static, and complete without script.** Every page is complete in its first response: a
+//!   crawler that runs nothing still reads the name, the description, the contents, the commands
+//!   and the structured data. The one script ([`get`]) decides only which of two answers already
+//!   in the markup is in front. The output is a directory anyone can host — a static bucket, a
+//!   git-hosted page, the front door — with no runtime to keep alive.
 //! * **One schema.** The types are `adi-marketplace`'s own, so the page cannot describe a bundle
 //!   the installer would refuse, and a field added to the manifest is a field this site can show
 //!   rather than a second struct to remember.
@@ -38,6 +40,7 @@ use adi_marketplace::{BundleEntry, MarketplaceManifest};
 
 pub mod assets;
 mod entry;
+mod get;
 mod html;
 mod icons;
 mod item;
@@ -147,7 +150,10 @@ impl File {
 /// The whole site.
 #[must_use]
 pub fn render(site: &Site, sources: &[Source]) -> Vec<File> {
-    let mut files = vec![File::text("index.html", shelf::render(site, sources))];
+    let mut files = vec![
+        File::text("index.html", shelf::render(site, sources)),
+        File::text("get/index.html", get::render(site, sources)),
+    ];
     for source in sources {
         for entry in &source.manifest.bundles {
             files.push(File::text(

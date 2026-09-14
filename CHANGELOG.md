@@ -27,10 +27,19 @@ extraction script cares about.
   screenshots, what it contains, what installing actually does to a machine, the publisher's long
   form, and the repository and commit it clones from. An item's page lives at its install address
   (`/adi/crm-suite/`), so the URL somebody sends you is the argument you paste after
-  `marketplace install`. It is a directory of plain HTML with no script in it: it can be hosted
-  anywhere, it carries a sitemap, canonical URLs, link previews and structured data, and it is
-  therefore something a search engine can find. Generate it from the manifest you publish with
-  `adi-market-site build`, or look at it first with `adi-market-site serve`.
+  `marketplace install`. It is a directory of plain HTML: it can be hosted anywhere, it carries a
+  sitemap, canonical URLs, link previews and structured data, and it is therefore something a
+  search engine can find. Generate it from the manifest you publish with `adi-market-site build`,
+  or look at it first with `adi-market-site serve`.
+
+- **And they know what to do with you.** Installing something from a marketplace is two commands
+  and they have an order — `marketplace add` the manifest, then `marketplace install` the item —
+  so every page numbers both, rather than printing the second one alone, which is a command that
+  works only on a machine already following that marketplace. **Get adi** now leads to a page of
+  the site's own: the three downloads, those same two lines, and the way back to what you were
+  reading. A web page cannot look at your disk, so it asks instead — say once that you already
+  have adi and every page from then on leads with the commands and a link into your own panel
+  instead of the download.
 
 ## 1.15.0 — 2026-09-14
 

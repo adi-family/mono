@@ -20,6 +20,10 @@ const FACES: &str = include_str!("../../adi-ui/fonts/fonts.css");
 /// This site's own rules.
 const SITE: &str = include_str!("../assets/site.css");
 
+/// The one script: which of the two answers to "have you got adi" is in front. Nothing on any page
+/// depends on it having run.
+const SCRIPT: &str = include_str!("../assets/site.js");
+
 /// The three faces of DESIGN.md §4, one woff2 per script. The list mirrors what
 /// `scripts/fonts.sh` writes; `the_sheet_names_exactly_the_faces_that_ship` fails if the two
 /// stop agreeing, which is the only way a page would ask for a font that is not there.
@@ -56,6 +60,7 @@ pub fn stylesheet() -> String {
 pub fn files() -> Vec<File> {
     let mut files = vec![
         File::text("site.css", stylesheet()),
+        File::text("site.js", SCRIPT.to_string()),
         File::text("favicon.svg", FAVICON_SVG.to_string()),
         File {
             path: "favicon.png".to_string(),
