@@ -262,52 +262,37 @@ holds to the same thing: the only number on it is how many items a manifest publ
 The panel's two screens are for somebody who **already has adi**. Everything published here is
 also a thing a stranger should be able to read about — from a search result, from a link in a
 message — without installing anything first. That is the **ADI Store**, at
-**`withadi.dev/store`**: the same manifest, written out as plain HTML by
-`crates/adi-market-site`.
+**`withadi.dev/store`**.
 
-```sh
-scripts/store.sh                 # look at it, against this repo's dev fixtures
-scripts/store.sh --into-landing  # write it into the landing checkout, as withadi.dev/store
-```
+**It is pages of the landing, not a site of its own and not a generator in this repo.** The
+landing is an Astro app (`adi-family/withadi.dev`, checked out on this machine under
+`~/.adi/mono/projects/adi-landing`), and the store is two routes in it:
 
-Two names, and both are meant. A reader sees the *Store*; what it is made of is a *marketplace*
-manifest, which is what the CLI, the panel and this document call it — and the pages print
-`adi-mono marketplace add`, so they use that word too.
+| route | what it is |
+| --- | --- |
+| `/store` | the shelf — every bundle the manifest carries, one hairline row each |
+| `/store/<slug>` | one item: its mark, gallery, what's included, the two commands, the publisher's long form, and the repository and commit it clones from |
 
-- **It is part of the landing**, not a site of its own. The landing's masthead and footer link
-  Store beside Docs, Source and Download; Astro copies `public/store/` into `dist/` verbatim, so
-  the pages are generated here and committed there. The landing's `for-agents` integration then
-  picks them up: a Markdown mirror per page, a line each in `llms.txt`, and the store's URLs in
-  the site's own `sitemap.xml`.
-- **An item's page lives at `/<slug>/`** under the store — `withadi.dev/store/crm-suite/`. The
-  marketplace is not a URL segment: with the published marketplace added as `store`, the last two
-  segments are exactly the install address (`marketplace install store/crm-suite`), and adding a
-  second marketplace later cannot move a URL that already exists. Two marketplaces publishing one
-  slug is refused at build time.
-- **The shelf** (`index.html`) is the listing, with one section per marketplace and the
-  `marketplace add` line for each. Each section is headed *Marketplace* over the manifest's own
-  name, because a bare heading reading "Local bundles" gets taken as a claim about the items
-  rather than as the name its publisher chose.
+- **The data is a manifest**, read and validated at build time (`src/store/manifest.ts`), with the
+  same refusals the installer applies — an entry this site lists and the installer would refuse is
+  a listing that offers something nobody can install. The file is `src/store/marketplace.json`,
+  which is **gitignored**: a developer's copy is this repo's dev fixtures, and committing those
+  would publish invented apps. A build without it is an empty shelf that says so.
+- **An item's URL is `/store/<slug>`.** With the marketplace added under the name the site
+  publishes it as, the last two segments are exactly the install address —
+  `withadi.dev/store/crm-suite` ↔ `marketplace install store/crm-suite`.
 - **Every install is two commands, in that order.** `marketplace install <name>/<slug>` names a
   marketplace, so a machine that has not added it fails on the address; the item page numbers
   `marketplace add <name> <url>` above it.
-- **"Get adi" leads somewhere** — `/store/get/`, which carries the three downloads (the same
-  assets the landing links), then the same two commands, then the way back to what the reader was
-  looking at. The site cannot *check* whether somebody has adi (an https page cannot fetch
-  `http://app.adi`, adi-app refuses a foreign `Origin`, and no `adi://` scheme is registered), so
-  it carries both answers and asks once; the answer is remembered, and from then on every page
-  leads with the commands and a link into the reader's own panel instead of the download.
-- **It is built by the publisher, from the manifest file** — not from a machine's synced cache,
-  which would publish whatever that machine last managed to fetch. The parser is the installer's
-  own (`adi_marketplace::parse_manifest`), so a manifest the installer would refuse cannot be
-  published as a page.
-- **No runtime, and nothing that needs a script to be read**: a static directory, relative links
-  throughout, one stylesheet, and one small script that only decides which of the two answers
-  above is in front. Every page carries its canonical URL, Open Graph tags and JSON-LD
-  (`SoftwareApplication`, priced at zero, with the repository named). `robots.txt` is written
-  only when the store is a host root — inside a bigger site, that file belongs to the host.
+- **No new dependency and no script.** The publisher's readme is parsed into blocks and rendered
+  as elements (`src/store/markdown.ts` — the same subset `adi_ui::Markdown` draws), so a readme
+  cannot become markup on the page. Nothing on either page needs JavaScript.
+- Because they are ordinary routes, the landing's own build gives them the rest: a canonical URL,
+  the site's `sitemap.xml`, a Markdown mirror at `/store/<slug>/index.md`, and a line each in
+  `llms.txt`.
 
-The crate's own README has the flags and what each one decides.
+**Getting adi** is the landing's own `#download` block, linked from every item — the store does
+not carry a second download page.
 
 ## Limits, and where they live
 

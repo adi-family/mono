@@ -23,24 +23,19 @@ extraction script cares about.
 ### Added
 
 - **There is an ADI Store, and it is part of withadi.dev.** Everything a marketplace publishes can
-  now be read by somebody who has never installed adi — a shelf of everything in it, and a page per
-  item with its screenshots, what it contains, what installing actually does to a machine, the
-  publisher's long form, and the repository and commit it clones from. It lives at
-  **withadi.dev/store**, linked from the landing's own nav beside Docs, Source and Download, and an
-  item is `withadi.dev/store/crm-suite` — the last two segments of which are exactly what you paste
-  after `marketplace install`. It is a directory of plain HTML: it carries a sitemap, canonical
-  URLs, link previews and structured data, every page is also served as Markdown for an agent to
-  read, and it is therefore something a search engine can find. Build it from the manifest you
-  publish with `scripts/store.sh`.
+  now be read by somebody who has never installed adi — a shelf of everything in it at
+  **withadi.dev/store**, and a page per item with its screenshots, what it contains, what
+  installing actually does to a machine, the publisher's long form, and the repository and commit
+  it clones from. It is pages of the landing itself: same masthead, same paper, linked from the nav
+  beside Docs, Source and Download. An item is `withadi.dev/store/crm-suite`, whose last two
+  segments are exactly what you paste after `marketplace install` — so a link somebody sends you is
+  the command you run. Every page carries a canonical URL, a line in the site's sitemap and a
+  Markdown mirror for an agent to read, which is what makes any of it findable at all.
 
-- **And they know what to do with you.** Installing something from a marketplace is two commands
-  and they have an order — `marketplace add` the manifest, then `marketplace install` the item —
-  so every page numbers both, rather than printing the second one alone, which is a command that
-  works only on a machine already following that marketplace. **Get adi** now leads to a page of
-  the site's own: the three downloads, those same two lines, and the way back to what you were
-  reading. A web page cannot look at your disk, so it asks instead — say once that you already
-  have adi and every page from then on leads with the commands and a link into your own panel
-  instead of the download.
+- **And they say how to install.** That is two commands with an order — `marketplace add` the
+  manifest, then `marketplace install` the item — so an item's page numbers both. Printing the
+  second one alone, as the first version did, is a command that works only on a machine already
+  following that marketplace.
 
 ## 1.15.0 — 2026-09-14
 

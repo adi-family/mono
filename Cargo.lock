@@ -335,16 +335,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "adi-market-site"
-version = "0.1.0"
-dependencies = [
- "adi-marketplace",
- "anyhow",
- "clap",
- "serde_json",
-]
-
-[[package]]
 name = "adi-marketplace"
 version = "0.1.0"
 dependencies = [
