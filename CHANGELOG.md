@@ -20,6 +20,17 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **An Install link from the ADI Store no longer dead-ends on a machine that named the marketplace
+  itself.** A marketplace's name is local — it is the word you chose when you added it — but the
+  Store's pages can only print the word *it* publishes under, `store/…`. So a machine that had
+  added the same manifest as, say, `adi` met "nothing called store/crm-suite" on every Install
+  link, with the item sitting one screen behind under another word. That page now says which
+  marketplaces this machine does follow that publish that item, and shows each one's row to open.
+  It offers rather than redirects: two manifests can publish the same name for two different
+  repositories, and which one gets cloned is not a choice to make on somebody's behalf.
+
 ## 1.16.0 — 2026-09-14
 
 ### Added

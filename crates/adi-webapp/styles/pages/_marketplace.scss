@@ -65,6 +65,13 @@
   text-align: right;
 }
 
+// What this machine does have under an address it does not have (`not_here`). The panels inside
+// are the listing's own; this only gives them the air a page title would have given them, since
+// the sentence above them is one line of `--ink-3` and they would otherwise start against it.
+.adi-market__elsewhere {
+  margin: 24px 0 32px;
+}
+
 // ---- the shelf ------------------------------------------------------------------------------
 // One item per row, and the whole row is a link to its page. The hover tone bleeds 12px into the
 // gutters so the target reads as the row rather than as the text inside it, and the hairline

@@ -258,6 +258,16 @@ it already open and already filled in — the same state pressing Install on the
 (`pages::marketplace::open_install`). That is what the ADI Store's own Install button points at, so
 installing from the public page is one click and a confirmation rather than a command to copy.
 
+**An address that does not resolve offers what this machine has under that slug.** A marketplace's
+name is *local* — it is the word whoever ran `marketplace add` chose — while the ADI Store's public
+pages can only print the word they publish it under (`store/<slug>`). A machine that added the same
+manifest under another name would otherwise meet a dead end on every Install link out of the store,
+with the item it asked for one screen behind under a different word. So `/marketplace/store/crm-suite`
+on a machine that files that manifest as `adi` says nothing is called `store/crm-suite`, then draws
+the source panels for every marketplace it *does* follow that publishes `crm-suite`. Offered, not
+opened: a slug is not an identity, and two manifests may publish the same word for two different
+repositories.
+
 **Install asks where it goes.** A dialog offers a new project (the default, and what we recommend),
 a project you already have, or globally — which is marked as the one that closes doors, because a
 second copy of the same bundle cannot land beside a global one

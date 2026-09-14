@@ -65,17 +65,62 @@ pub(crate) fn market_view(state: State, form: MarketplaceForm, open: RwSignal<St
             };
             match loaded.apps.iter().find(|app| app_key(app) == key) {
                 Some(app) => app_page(state, form, app, open),
-                // A link to an item the manifest no longer lists — or a slug typed by hand. Say
-                // so, and offer the one way on rather than an empty page.
-                None => view! {
-                    <div class="adi-empty">
-                        {format!("Nothing called {key} in the marketplaces this machine follows.")}
-                    </div>
-                    {back_link(Some(open))}
-                }
-                .into_any(),
+                None => not_here(&loaded, &key, open),
             }
         }}
+    }
+    .into_any()
+}
+
+/// What an address that resolves to nothing gets, instead of a sentence and a way back.
+///
+/// The case worth designing for is not a typo. **A marketplace's name is local** — it is the word
+/// whoever added the manifest chose (`adi-mono marketplace add <name> <url>`), and the ADI Store's
+/// public pages can only print the word *they* publish it under (`store/<slug>`). So a machine that
+/// added the same manifest under a name of its own lands here on every Install link out of the
+/// store, with the item it asked for sitting one screen behind under another word.
+///
+/// Hence the answer names what this machine does have with that slug, in the source panels the
+/// listing would have drawn — which is what says under which name, and at which manifest, it has
+/// it. Offered rather than opened: a slug is not an identity (two manifests may publish the same
+/// word for two different repositories), and quietly swapping one for the other decides whose code
+/// gets cloned, which is not this page's decision to make.
+fn not_here(loaded: &MarketplaceState, key: &str, open: RwSignal<String>) -> AnyView {
+    let slug = key.rsplit('/').next().unwrap_or(key).to_string();
+    let elsewhere: Vec<(MarketplaceSource, Vec<MarketplaceApp>)> = loaded
+        .sources
+        .iter()
+        .filter_map(|source| {
+            let apps: Vec<MarketplaceApp> = loaded
+                .apps
+                .iter()
+                .filter(|app| app.slug == slug && app.marketplace == source.name)
+                .cloned()
+                .collect();
+            (!apps.is_empty()).then(|| (source.clone(), apps))
+        })
+        .collect();
+    let (key, found) = (key.to_string(), slug.clone());
+
+    view! {
+        <div class="adi-empty">
+            "Nothing called "<span class="adi-mono">{key}</span>
+            " in the marketplaces this machine follows."
+        </div>
+        {(!elsewhere.is_empty()).then(move || view! {
+            <p class="adi-hint">
+                "A marketplace's name is local \u{2014} whoever adds one chooses the word it is \
+                 addressed by. This machine follows "
+                <span class="adi-mono">{found}</span>
+                " under:"
+            </p>
+            <div class="adi-market__elsewhere">
+                {elsewhere.iter()
+                    .map(|(source, apps)| source_panel(source, apps, Some(open)))
+                    .collect::<Vec<_>>()}
+            </div>
+        })}
+        {back_link(Some(open))}
     }
     .into_any()
 }
