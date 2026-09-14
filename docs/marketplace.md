@@ -254,7 +254,41 @@ its own two questions in the same dialog: what to call the copy, and whether to 
 
 **No install counts anywhere on either** — under the standing decision
 (`decisions/2026-08-22-ten-thousand-counts-only-adi-installs.md`) a marketplace install does not
-count toward the 10,000, and a count is not the story the page should tell.
+count toward the 10,000, and a count is not the story the page should tell. The public site below
+holds to the same thing: the only number on it is how many items a manifest publishes.
+
+## The public site
+
+The panel's two screens are for somebody who **already has adi**. Everything published here is
+also a thing a stranger should be able to read about — from a search result, from a link in a
+message — without installing anything first. That is `crates/adi-market-site`: the same manifest,
+written out as plain HTML.
+
+```sh
+cargo run -p adi-market-site -- serve --source adi=apps/marketplace.json   # look at it
+cargo run -p adi-market-site -- build --source adi=apps/marketplace.json \
+  --source-url adi=https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json \
+  --base-url https://marketplace.withadi.dev --out dist                    # publish it
+```
+
+- **The shelf** (`index.html`) is the listing, with one section per marketplace and the
+  `marketplace add` line for each — so a reader who does have adi can follow what they are
+  looking at.
+- **An item's page** lives at `/<marketplace>/<slug>/`, which *is* its install address: the URL
+  somebody copies out of the address bar is what they paste after `marketplace install`. It
+  carries the same blocks the panel's item page does, in the same order, minus the two that are
+  about one machine (Installed here, and the actions).
+- **It is built by the publisher, from the manifest file** — not from a machine's synced cache,
+  which would publish whatever that machine last managed to fetch. The parser is this crate's
+  own (`adi_marketplace::parse_manifest`), so a manifest the installer would refuse cannot be
+  published as a page.
+- **No script and no runtime**: a static directory, relative links throughout, one stylesheet.
+  Every page carries its canonical URL, Open Graph tags and JSON-LD (`SoftwareApplication`,
+  priced at zero, with the repository named), and the site carries a `sitemap.xml` and a
+  `robots.txt` — the point of having public pages at all is that they can be found.
+
+The crate's own README has the flags and what each one decides; `scripts/market-site.sh` serves it
+against the dev fixtures for a look.
 
 ## Limits, and where they live
 

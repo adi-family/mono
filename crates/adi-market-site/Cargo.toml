@@ -1,0 +1,22 @@
+[package]
+name = "adi-market-site"
+description = "The public marketplace: plain HTML generated from a marketplace manifest, readable by somebody who has never installed adi — and by a crawler."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The manifest types themselves, so the public page and the installer read one schema. A second
+# set of structs here would drift the first time a field is added, and the page would go on
+# publishing what the installer no longer believes.
+adi-marketplace = { workspace = true }
+
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

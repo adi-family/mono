@@ -30,6 +30,7 @@ default-members = [
     "crates/adi-knowledge",
     "crates/adi-launcher",
     "crates/adi-llm-gateway",
+    "crates/adi-market-site",
     "crates/adi-marketplace",
     "crates/adi-mesh",
     "crates/adi-mesh-ffi",

@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The marketplace has public pages now.** Everything a marketplace publishes can be read by
+  somebody who has never installed adi — a shelf of everything in it, and a page per item with its
+  screenshots, what it contains, what installing actually does to a machine, the publisher's long
+  form, and the repository and commit it clones from. An item's page lives at its install address
+  (`/adi/crm-suite/`), so the URL somebody sends you is the argument you paste after
+  `marketplace install`. It is a directory of plain HTML with no script in it: it can be hosted
+  anywhere, it carries a sitemap, canonical URLs, link previews and structured data, and it is
+  therefore something a search engine can find. Generate it from the manifest you publish with
+  `adi-market-site build`, or look at it first with `adi-market-site serve`.
+
 ## 1.15.0 — 2026-09-14
 
 ### Added

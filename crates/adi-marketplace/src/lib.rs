@@ -76,6 +76,11 @@ pub use install::{
 pub use kind::Kind;
 pub use layout::{Layout, LayoutElement, read_layout, scan_for_rust};
 pub use manifest::{BundleEntry, Element, MarketplaceManifest, Media, MediaKind};
+/// Reading a manifest from bytes is not only the sync path's job: `adi-market-site` generates the
+/// public listing from the same file a publisher hosts, and a second `from_slice` + `validate`
+/// there would be a second opinion about what a manifest is — including which error a manifest
+/// still in the retired artifact shape gets.
+pub use manifest::parse as parse_manifest;
 pub use scope::{GLOBAL_KEY, Scope};
 
 use adi_config::Config;
