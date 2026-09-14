@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.16.0 — 2026-09-14
+
 ### Added
 
 - **There is an ADI Store, and it is part of withadi.dev.** Everything a marketplace publishes can
