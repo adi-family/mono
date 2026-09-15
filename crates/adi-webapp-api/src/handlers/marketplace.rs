@@ -13,11 +13,10 @@ use adi_marketplace::{Kind, Marketplace};
 
 use crate::types::{
     InstallMarketplaceApp, MarketplaceApp, MarketplaceBundleElement, MarketplaceBundleInstall,
-    MarketplaceBundleStatus,
-    MarketplaceDone, MarketplaceElementPreview, MarketplaceInstall, MarketplaceMedia,
-    MarketplaceMediaKind, MarketplaceSource, MarketplaceState, StartMarketplaceApp,
-    StartMarketplaceService, UninstallMarketplaceElement, UpdateMarketplaceApp,
-    UpdateMarketplaceBundle,
+    MarketplaceBundleStatus, MarketplaceDone, MarketplaceElementPreview, MarketplaceInstall,
+    MarketplaceMedia, MarketplaceMediaKind, MarketplaceSource, MarketplaceState,
+    StartMarketplaceApp, StartMarketplaceService, UninstallMarketplaceElement,
+    UpdateMarketplaceApp, UpdateMarketplaceBundle,
 };
 
 use super::response::{Response, error, ok_json};
@@ -64,7 +63,9 @@ pub fn state(market: &Marketplace) -> MarketplaceState {
                     .unwrap_or_default();
                 let bundle = entry
                     .as_ref()
-                    .and_then(|e| adi_marketplace::bundle::status(market, &a.marketplace, &a.slug, e))
+                    .and_then(|e| {
+                        adi_marketplace::bundle::status(market, &a.marketplace, &a.slug, e)
+                    })
                     .map(|s| bundle_status(s, projects));
                 MarketplaceApp {
                     marketplace: a.marketplace,
@@ -379,7 +380,9 @@ pub fn uninstall_marketplace_element(cfg: &Config, body: &[u8]) -> Response {
         Ok(done) => {
             let mut message = format!("uninstalled {}/{} ({})", done.kind, done.name, done.id);
             if done.bundle_removed {
-                message.push_str(" — the last element from this bundle, so its own record is gone too");
+                message.push_str(
+                    " — the last element from this bundle, so its own record is gone too",
+                );
             }
             if let Some(note) = &done.note {
                 message.push_str(" · ");
@@ -402,7 +405,11 @@ pub fn start_marketplace_service(cfg: &Config, body: &[u8]) -> Response {
         Ok(req) => req,
         Err(e) => return error(400, &format!("invalid request body: {e}")),
     };
-    let spec = spec_of(&req.marketplace, &req.slug, Some(&format!("{}/{}", Kind::Service, req.name)));
+    let spec = spec_of(
+        &req.marketplace,
+        &req.slug,
+        Some(&format!("{}/{}", Kind::Service, req.name)),
+    );
     let market = Marketplace::with_config(cfg.clone());
     let scope = match scope_of(req.project.as_deref()) {
         Ok(scope) => scope,
@@ -566,7 +573,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// A store of this test's own, under the system temp dir — never the operator's live one.
+    /// A store of this test's own, under the system temp dir — never the operator's live one,
+    /// and holding nothing but what the test puts in it.
     fn store(tag: &str) -> Config {
         let root = std::env::temp_dir().join(format!(
             "adi-webapp-api-marketplace-{tag}-{}-{:?}",
@@ -574,7 +582,15 @@ mod tests {
             std::thread::current().id(),
         ));
         let _ = std::fs::remove_dir_all(&root);
-        Config::with_root(root)
+        let cfg = Config::with_root(root);
+        // Every machine now starts with the official marketplace, which none of this is about.
+        // Left in, it takes `sources[0]` and `apps[0]` away from the fixture's own entry — and
+        // `sync` fetches every configured source, so a unit test would go to the real manifest
+        // over the network. Removing it is the ordinary act `marketplace remove store` is, and
+        // it sticks.
+        adi_marketplace::sources::remove(&cfg, adi_marketplace::sources::OFFICIAL_NAME)
+            .expect("the official source is removable");
+        cfg
     }
 
     /// A real repository standing in for what a publisher hosts: dashboard-shaped, one commit.
@@ -688,7 +704,12 @@ mod tests {
         let res = install_marketplace_app(&cfg, br#"{"marketplace":"adi","slug":"crm"}"#);
         assert_eq!(res.status, 200, "{}", res.body);
         let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
-        assert_eq!(done.state.apps[0].installs.len(), 2, "{:?}", done.state.apps);
+        assert_eq!(
+            done.state.apps[0].installs.len(),
+            2,
+            "{:?}",
+            done.state.apps
+        );
         assert!(
             done.state.apps[0].installs.iter().any(|i| i.id == "crm"),
             "an unnamed copy takes the entry's own name: {:?}",
@@ -751,8 +772,14 @@ mod tests {
             done.state.apps[0].installs[0].host.as_deref(),
             Some("crm.adi")
         );
-        assert!(live.exists(), "the hive file is in the supervisor's glob now");
-        assert_eq!(start_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status, 404);
+        assert!(
+            live.exists(),
+            "the hive file is in the supervisor's glob now"
+        );
+        assert_eq!(
+            start_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status,
+            404
+        );
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -776,7 +803,10 @@ mod tests {
             "and it says which: {}",
             done.message
         );
-        assert_eq!(update_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(
+            update_marketplace_app(&cfg, br#"{"id":"ghost"}"#).status,
+            404
+        );
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -810,18 +840,31 @@ mod tests {
         assert_eq!(status(&E::BadSlug("../x".into())), 502);
         assert_eq!(status(&E::BadRepo("git://x".into())), 502);
         assert_eq!(status(&E::BadCommit("crm".into(), "main".into())), 502);
-        assert_eq!(status(&E::NotAnApp("crm".into(), "no frontend".into())), 502);
+        assert_eq!(
+            status(&E::NotAnApp("crm".into(), "no frontend".into())),
+            502
+        );
         assert_eq!(status(&E::Git("clone failed".into())), 502);
         assert_eq!(status(&E::Fetch("unreachable".into())), 502);
         assert_eq!(status(&E::Duplicate("adi".into())), 409);
         assert_eq!(status(&E::BadAddress("adi/crm/nope".into())), 400);
         assert_eq!(status(&E::BadElementKind("crm-suite".into())), 502);
-        assert_eq!(status(&E::BadElementName("crm-suite".into(), "../evil".into())), 502);
         assert_eq!(
-            status(&E::CarriesRust("crm-suite".into(), "a .rs file".into(), "tools/x.rs".into())),
+            status(&E::BadElementName("crm-suite".into(), "../evil".into())),
             502
         );
-        assert_eq!(status(&E::UnknownElement("adi/crm-suite/agents/nope".into())), 404);
+        assert_eq!(
+            status(&E::CarriesRust(
+                "crm-suite".into(),
+                "a .rs file".into(),
+                "tools/x.rs".into()
+            )),
+            502
+        );
+        assert_eq!(
+            status(&E::UnknownElement("adi/crm-suite/agents/nope".into())),
+            404
+        );
         assert_eq!(
             status(&E::BundleNotInstalled("adi".into(), "crm-suite".into())),
             404
@@ -831,7 +874,10 @@ mod tests {
             404
         );
         assert_eq!(status(&E::Store("not a mapping".into())), 400);
-        assert_eq!(status(&E::EmbeddingInUse("e5 is still assigned".into())), 409);
+        assert_eq!(
+            status(&E::EmbeddingInUse("e5 is still assigned".into())),
+            409
+        );
     }
 
     // MARK: the general bundle path — installing, uninstalling, updating and starting an element
@@ -859,7 +905,11 @@ mod tests {
             "backend = \"harness:adi\"\n",
         )
         .expect("agent");
-        std::fs::write(dir.join("tools").join("csv-import.sh"), "#!/bin/sh\necho hi\n").expect("tool");
+        std::fs::write(
+            dir.join("tools").join("csv-import.sh"),
+            "#!/bin/sh\necho hi\n",
+        )
+        .expect("tool");
         std::fs::write(
             dir.join("services").join("redis.yaml"),
             "proxy:\n  host: redis.adi\n",
@@ -907,7 +957,16 @@ mod tests {
         let (cfg, _commit) = seeded_bundle("listing-status");
         let v: serde_json::Value = serde_json::from_str(&marketplace(&cfg).body).expect("json");
         assert_eq!(v["apps"][0]["elements"].as_array().map(Vec::len), Some(3));
-        assert!(v["apps"][0]["bundle"].is_null(), "nothing installed yet");
+        // The preview is what the bundle *offers*, so it is there before anything is installed —
+        // it is the install list that is empty, and the catalogue names no id.
+        let bundle = &v["apps"][0]["bundle"];
+        assert_eq!(bundle["declared"], 3);
+        assert_eq!(bundle["elements"].as_array().map(Vec::len), Some(3));
+        assert_eq!(
+            bundle["installs"].as_array().map(Vec::len),
+            Some(0),
+            "nothing installed yet"
+        );
 
         let _ = install_marketplace_app(
             &cfg,
@@ -915,9 +974,15 @@ mod tests {
         );
         let v: serde_json::Value = serde_json::from_str(&marketplace(&cfg).body).expect("json");
         let bundle = &v["apps"][0]["bundle"];
-        assert_eq!(bundle["declared"], 3);
-        assert_eq!(bundle["installed"].as_array().map(Vec::len), Some(1));
-        assert!(!bundle["outdated"].as_bool().unwrap());
+        assert_eq!(
+            bundle["declared"], 3,
+            "the catalogue does not shrink to what landed"
+        );
+        let installs = bundle["installs"].as_array().expect("installs");
+        assert_eq!(installs.len(), 1, "one install: the global one");
+        assert!(installs[0]["project"].is_null(), "installed globally");
+        assert_eq!(installs[0]["elements"].as_array().map(Vec::len), Some(1));
+        assert!(!installs[0]["outdated"].as_bool().expect("outdated"));
         let _ = std::fs::remove_dir_all(cfg.root());
     }
 
@@ -930,7 +995,11 @@ mod tests {
         );
         assert_eq!(res.status, 200, "{}", res.body);
         let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
-        assert!(done.message.contains("agents/sales-bot → sales-bot"), "{}", done.message);
+        assert!(
+            done.message.contains("agents/sales-bot → sales-bot"),
+            "{}",
+            done.message
+        );
         assert!(
             adi_agents::Agents::with_config(cfg.clone())
                 .get("sales-bot")
@@ -938,7 +1007,10 @@ mod tests {
                 .is_some()
         );
         assert!(
-            adi_tools::Tools::with_config(cfg.clone()).get("csv-import").expect("get").is_none(),
+            adi_tools::Tools::with_config(cfg.clone())
+                .get("csv-import")
+                .expect("get")
+                .is_none(),
             "only the agent was asked for"
         );
         let _ = std::fs::remove_dir_all(cfg.root());
@@ -955,12 +1027,22 @@ mod tests {
         );
         assert_eq!(res.status, 200, "{}", res.body);
         let done: MarketplaceDone = serde_json::from_str(&res.body).expect("done");
-        assert!(done.message.contains("uninstalled agents/sales-bot"), "{}", done.message);
         assert!(
-            adi_agents::Agents::with_config(cfg.clone()).get("sales-bot").expect("get").is_none()
+            done.message.contains("uninstalled agents/sales-bot"),
+            "{}",
+            done.message
         );
         assert!(
-            adi_tools::Tools::with_config(cfg.clone()).get("csv-import").expect("get").is_some(),
+            adi_agents::Agents::with_config(cfg.clone())
+                .get("sales-bot")
+                .expect("get")
+                .is_none()
+        );
+        assert!(
+            adi_tools::Tools::with_config(cfg.clone())
+                .get("csv-import")
+                .expect("get")
+                .is_some(),
             "the sibling tool is untouched"
         );
 
@@ -990,7 +1072,9 @@ mod tests {
         assert!(done.message.contains("started redis"), "{}", done.message);
         let hive = cfg.module("hive").raw_path("hive.yaml");
         assert!(
-            std::fs::read_to_string(&hive).expect("hive").contains("redis.adi"),
+            std::fs::read_to_string(&hive)
+                .expect("hive")
+                .contains("redis.adi"),
             "the service's own block landed in the global hive.yaml"
         );
 
