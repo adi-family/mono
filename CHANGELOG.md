@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.16.1 — 2026-09-15
+
 ### Fixed
 
 - **One dead nameserver no longer takes the whole mesh down.** On a machine whose primary DNS
