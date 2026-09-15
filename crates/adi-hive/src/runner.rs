@@ -652,6 +652,29 @@ mod tests {
         );
     }
 
+    /// Wait for a runner's own evidence that it ran: the file its command appends to on start.
+    ///
+    /// `Phase::Running` is not that evidence. These specs declare no `http_port`, so there is
+    /// nothing for the tick to probe and [`listening`] says yes at once — the phase flips as soon
+    /// as the child is *spawned*, while the shell behind it has still to reach its first command.
+    /// Reading the file the moment the phase says Running is a race, and a loaded machine loses
+    /// it.
+    async fn wait_for_contents(path: &std::path::Path, want: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let found = std::fs::read_to_string(path).unwrap_or_default();
+            if found == want {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{} never became {want:?} (it is {found:?})",
+                path.display(),
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// The core hot-reload contract: an added service starts, a removed one stops, and a service
     /// whose spec is unchanged is left strictly alone (same task, never bounced).
     #[tokio::test]
@@ -743,7 +766,7 @@ mod tests {
 
         assert!(demand.touch("web"), "the front door can wake it");
         wait_for_phase(&demand, "web", Phase::Running).await;
-        assert!(marker.exists(), "the request started the process");
+        wait_for_contents(&marker, "x").await;
 
         sup.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
@@ -767,13 +790,17 @@ mod tests {
 
         demand.touch("web");
         wait_for_phase(&demand, "web", Phase::Running).await;
+        // Let the first process actually reach its command before the idle window takes it: a
+        // start that was signalled before it ever wrote is not the first of the two starts this
+        // is counting.
+        wait_for_contents(&dir.join("starts"), "x").await;
         // Nothing asks for it again, so its idle window runs out.
         wait_for_phase(&demand, "web", Phase::IdleStopped).await;
 
         demand.touch("web");
         wait_for_phase(&demand, "web", Phase::Running).await;
-        let starts = std::fs::read_to_string(dir.join("starts")).expect("the start log");
-        assert_eq!(starts, "xx", "a second visit starts a second process");
+        // "xx": a second visit starts a second process, rather than finding the first one.
+        wait_for_contents(&dir.join("starts"), "xx").await;
 
         sup.shutdown().await;
         let _ = std::fs::remove_dir_all(&dir);
