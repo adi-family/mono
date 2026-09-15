@@ -377,6 +377,35 @@ On a shared LAN, `RelayMode::Disabled` plus mDNS address lookup gives direct QUI
 at all. Off-LAN with no outbound connectivity is impossible by construction — the minimum is one
 outbound UDP/443 session.
 
+**Both the relay and discovery are names before they are addresses**, and that is its own failure
+mode. iroh's default resolver reads only the system's *global* DNS configuration — on macOS
+SystemConfiguration's `State:/Network/Global/DNS`, the list `/etc/resolv.conf` mirrors and `dig`
+asks. macOS itself does not resolve that way: mDNSResponder queries every resolver in
+`scutil --dns`, scoped ones included. So a VPN that becomes the primary service and whose
+nameserver has stopped answering takes the whole mesh down on a machine where the browser, `curl`
+and the App Store all keep working — every node's tile 502s, and the page's advice about pairing
+and grants sends you looking in the wrong place. Measured 2026-09-15 on a 1.16.0 install: `dig`
+timed out, `curl https://mad.mono-relay.withadi.dev/` returned 200 throughout, and the log repeated
+`Resolve failed, IPv4: Request timed out, IPv6: Request timed out` for the relay *and* for
+`dns.iroh.link`.
+
+The one-line test that tells this apart from blocked traffic:
+
+```sh
+dig +short mad.mono-relay.withadi.dev                                   # what the mesh asks
+curl -sS -o /dev/null -w '%{http_code}\n' https://mad.mono-relay.withadi.dev/   # what everything else asks
+```
+
+A timeout above a 200 means one dead nameserver, not a blocked network. Since 2026-09-15 the
+endpoint is built with a resolver that keeps the system's servers and **appends** public ones
+(`adi-mesh/src/dns.rs`, `DEFAULT_FALLBACK_DNS`), so hickory settles on whichever answers and a dead
+primary costs a slow first lookup instead of the fleet. Name your own in `mesh.toml` to replace the
+public defaults — addresses, never hostnames, since a resolver cannot resolve its own server:
+
+```toml
+dns = ["1.1.1.1", "https://9.9.9.9"]   # udp:// by default; https:// is DoH, for a network that blocks :53
+```
+
 Running one: `iroh-relay` with the `server` feature, `cert_mode = "LetsEncrypt"` (which **requires**
 a `contact` email or it exits at start-up), TCP 443 for the protocol, TCP 80 for ACME, and **UDP
 7842 for QUIC address discovery** — that last one is what lets a direct path form at all, so a relay

@@ -22,6 +22,19 @@ extraction script cares about.
 
 ### Fixed
 
+- **One dead nameserver no longer takes the whole mesh down.** On a machine whose primary DNS
+  server has stopped answering — most often a VPN's, which macOS keeps reporting as reachable —
+  every fleet node went dark at once: each tile a 502 reading "the mesh gateway could not reach
+  <node>", advising you to check pairing and grants, none of which was the problem. Everything else
+  on the machine kept working, because macOS quietly asks its other resolvers and the mesh did not:
+  it looked names up through the system's *global* configuration alone, so it could resolve neither
+  its relay nor the discovery service, and had no address to dial any peer at. The mesh now keeps
+  the system's nameservers and falls back to public ones when they do not answer, so a broken
+  primary costs a slow first lookup instead of every node you have. A network that must keep its
+  queries to itself names its own servers with `dns = [...]` in `mesh.toml` (`docs/fleet.md` §9),
+  which replaces the fallbacks rather than adding to them; `https://<address>` there is DNS-over-
+  HTTPS, for a network that blocks port 53 outright.
+
 - **An Install link from the ADI Store no longer dead-ends on a machine that named the marketplace
   itself.** A marketplace's name is local — it is the word you chose when you added it — but the
   Store's pages can only print the word *it* publishes under, `store/…`. So a machine that had

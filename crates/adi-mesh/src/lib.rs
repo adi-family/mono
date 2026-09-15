@@ -11,6 +11,7 @@
 pub mod activity;
 pub mod auth;
 pub mod config;
+pub mod dns;
 pub mod fleet;
 pub mod gateway;
 pub mod identity;

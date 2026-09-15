@@ -63,8 +63,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tracing::{debug, info, warn};
 
+use crate::config::MeshConfig;
 use crate::fleet::{FleetRegistry, Grant, Pairing, Scope};
-use crate::{identity, node, ticket};
+use crate::{dns, identity, node, ticket};
 
 /// The ALPN identifying the join protocol during the iroh/QUIC handshake. The trailing `/1` is
 /// the wire version: bump the ALPN (not just [`VERSION`]) on an incompatible change, so an old
@@ -803,6 +804,10 @@ pub async fn join(token: &str) -> anyhow::Result<Joined> {
     let secret = identity::load_or_create()?;
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
+        // A ticket carries addresses, but reaching the viewer through a relay still resolves that
+        // relay's name — and pairing is the one moment a machine cannot fall back on "it worked
+        // yesterday". See [`crate::dns`].
+        .dns_resolver(dns::resolver(&MeshConfig::load().unwrap_or_default().dns))
         .bind()
         .await?;
 

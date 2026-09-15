@@ -38,6 +38,19 @@ pub struct MeshConfig {
     /// strings: this file parses and tests without pulling iroh in. They are turned into a relay
     /// map where the endpoint is built — see [`crate::relay::relay_mode`].
     pub relays: Vec<String>,
+    /// Nameservers to look the relay hosts and `dns.iroh.link` up through, **in addition to the
+    /// ones the system is configured with**. Empty means the public fallbacks
+    /// ([`crate::dns::DEFAULT_FALLBACK_DNS`]); naming any here replaces those, which is how a
+    /// machine that must keep every query inside its own network says so.
+    ///
+    /// It exists because iroh reads only the system's *global* DNS configuration, while macOS
+    /// resolves through every resolver in `scutil --dns` — so a VPN whose nameserver has stopped
+    /// answering takes the mesh down on a machine where everything else still works. See
+    /// [`crate::dns`], which has the measurement.
+    ///
+    /// Addresses, not hostnames (a resolver cannot resolve its own server), with an optional port
+    /// and an optional `udp://` / `tcp://` / `https://` scheme.
+    pub dns: Vec<String>,
 }
 
 /// The serving side: the ports peers may reach, and which peers may reach them.
@@ -230,6 +243,10 @@ port = 5432
             cfg.relays.is_empty(),
             "no relays configured is the public-relay default, and must stay expressible"
         );
+        assert!(
+            cfg.dns.is_empty(),
+            "no nameservers configured is the public-fallback default, and must stay expressible"
+        );
     }
 
     #[test]
@@ -264,6 +281,29 @@ allow = [3000]
         let round_tripped: MeshConfig =
             toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("re-parses");
         assert_eq!(round_tripped.relays, cfg.relays);
+    }
+
+    #[test]
+    fn dns_servers_parse_as_a_list_and_round_trip() {
+        let cfg: MeshConfig = toml::from_str(
+            r#"
+dns = ["1.1.1.1", "https://9.9.9.9"]
+
+[host]
+allow = [3000]
+"#,
+        )
+        .expect("parses");
+        assert_eq!(
+            cfg.dns,
+            vec!["1.1.1.1".to_string(), "https://9.9.9.9".to_string()],
+        );
+
+        // Same reason as the relays: every `mesh allow`/`grant` mutation rewrites this file, and a
+        // machine that loses its nameservers loses its mesh the next time its VPN comes up.
+        let round_tripped: MeshConfig =
+            toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("re-parses");
+        assert_eq!(round_tripped.dns, cfg.dns);
     }
 
     #[test]

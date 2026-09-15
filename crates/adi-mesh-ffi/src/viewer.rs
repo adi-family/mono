@@ -34,7 +34,7 @@ use adi_mesh::config::MeshConfig;
 use adi_mesh::fleet::{FleetRegistry, Grant, Scope};
 use adi_mesh::gateway::{IrohDialer, Pool};
 use adi_mesh::protocol::{self, HttpStatus};
-use adi_mesh::{identity, join, relay, ticket, tunnel};
+use adi_mesh::{dns, identity, join, relay, ticket, tunnel};
 use anyhow::Context as _;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId};
@@ -199,11 +199,14 @@ impl Viewer {
             // it needs, home or not). So a phone talks over the fleet's own relay the moment the
             // *nodes* are configured — this only decides where the phone itself would be reached,
             // and nothing dials a phone.
-            let relays = MeshConfig::load().map(|cfg| cfg.relays).unwrap_or_default();
-            if let Some(mode) = relay::relay_mode(&relays) {
-                info!(?relays, "adi-mesh viewer using configured relays");
+            let cfg = MeshConfig::load().unwrap_or_default();
+            if let Some(mode) = relay::relay_mode(&cfg.relays) {
+                info!(relays = ?cfg.relays, "adi-mesh viewer using configured relays");
                 builder = builder.relay_mode(mode);
             }
+            // Load-bearing here in a way the relay map is not: a phone that cannot resolve a name
+            // cannot reach a node at all. See [`adi_mesh::dns`].
+            builder = builder.dns_resolver(dns::resolver(&cfg.dns));
             builder.bind().await.context("binding the mesh endpoint")
         })?;
         let key = endpoint.id();

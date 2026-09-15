@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::config::MeshConfig;
 use crate::gateway::{self, Gateway, NodeCredentials};
-use crate::{client, host, identity, join, protocol, relay, ticket};
+use crate::{client, dns, host, identity, join, protocol, relay, ticket};
 
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
 const TICKET_RELAY_WAIT: Duration = Duration::from_secs(8);
@@ -73,6 +73,10 @@ impl Daemon {
             info!(relays = ?cfg.relays, "adi-mesh using configured relays");
             builder = builder.relay_mode(mode);
         }
+        // Both of the above are names before they are addresses, and the preset's resolver asks
+        // only what the system was configured with — see [`crate::dns`] for the machine that took
+        // its whole fleet down that way while its browser kept working.
+        builder = builder.dns_resolver(dns::resolver(&cfg.dns));
         let endpoint = builder.bind().await?;
         let id = endpoint.id();
         info!(%id, "adi-mesh endpoint bound");
@@ -187,6 +191,9 @@ pub async fn current_ticket() -> anyhow::Result<String> {
     let secret = identity::load_or_create()?;
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
+        // This one waits for a *relay* address, so it is the command that hangs longest on a
+        // machine whose system resolver is dead. An unreadable config is not worth failing it for.
+        .dns_resolver(dns::resolver(&MeshConfig::load().unwrap_or_default().dns))
         .alpns(vec![protocol::ALPN.to_vec()])
         .bind()
         .await?;
