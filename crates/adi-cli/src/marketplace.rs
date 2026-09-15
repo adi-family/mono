@@ -143,7 +143,13 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
             list_apps(&market);
             Ok(())
         }
-        MarketplaceCommand::Install { spec, name, start, project, new_project } => {
+        MarketplaceCommand::Install {
+            spec,
+            name,
+            start,
+            project,
+            new_project,
+        } => {
             let scope = destination(&market, project.as_deref(), new_project.as_deref())?;
             install(&market, &spec, name.as_deref().unwrap_or(""), start, &scope)
         }
@@ -153,9 +159,18 @@ pub(crate) fn run_marketplace(command: MarketplaceCommand) -> Result<(), String>
         MarketplaceCommand::Start { target, project } => {
             start_target(&market, &target, &scope_of(project.as_deref())?)
         }
-        MarketplaceCommand::Update { target, force, force_element, project } => {
-            update_target(&market, &target, force, &force_element, &scope_of(project.as_deref())?)
-        }
+        MarketplaceCommand::Update {
+            target,
+            force,
+            force_element,
+            project,
+        } => update_target(
+            &market,
+            &target,
+            force,
+            &force_element,
+            &scope_of(project.as_deref())?,
+        ),
     }
 }
 
@@ -437,7 +452,9 @@ fn install(
                     (Some(id), _) if !element.renamed => {
                         println!("  {}/{} → {id}", element.kind, element.name);
                     }
-                    (Some(id), _) => println!("  {}/{} → {id} (renamed)", element.kind, element.name),
+                    (Some(id), _) => {
+                        println!("  {}/{} → {id} (renamed)", element.kind, element.name)
+                    }
                     (None, Some(note)) => println!("  {}/{}: {note}", element.kind, element.name),
                     (None, None) => println!("  {}/{}: did not land", element.kind, element.name),
                 }
@@ -504,11 +521,19 @@ fn update_target(
         let done = adi_marketplace::bundle::update(market, marketplace, slug, scope, &pairs)
             .map_err(|e| e.to_string())?;
         if done.changed {
-            println!("{}/{} updated from {} to {}:", done.marketplace, done.slug, short(&done.from), short(&done.to));
+            println!(
+                "{}/{} updated from {} to {}:",
+                done.marketplace,
+                done.slug,
+                short(&done.from),
+                short(&done.to)
+            );
             for element in &done.elements {
                 match (&element.note, element.changed) {
                     (Some(note), _) => println!("  {}/{}: {note}", element.kind, element.name),
-                    (None, true) => println!("  {}/{} → {}", element.kind, element.name, element.id),
+                    (None, true) => {
+                        println!("  {}/{} → {}", element.kind, element.name, element.id)
+                    }
                     (None, false) => println!("  {}/{} unchanged", element.kind, element.name),
                 }
             }
@@ -522,9 +547,15 @@ fn update_target(
         }
         return Ok(());
     }
-    let done = adi_marketplace::install::update(market, target, force).map_err(|e| e.to_string())?;
+    let done =
+        adi_marketplace::install::update(market, target, force).map_err(|e| e.to_string())?;
     if done.changed {
-        println!("updated {} from {} to {}", done.id, short(&done.from), short(&done.to));
+        println!(
+            "updated {} from {} to {}",
+            done.id,
+            short(&done.from),
+            short(&done.to)
+        );
         if done.started {
             println!("it is running, so bun has already reloaded it");
         }
@@ -582,32 +613,44 @@ mod tests {
             .expect("install");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Install { ref spec, ref name, start: false }
-                if spec == "adi/crm" && name.as_deref() == Some("Sales CRM")
+            MarketplaceCommand::Install {
+                ref spec,
+                ref name,
+                start: false,
+                project: None,
+                new_project: None,
+            } if spec == "adi/crm" && name.as_deref() == Some("Sales CRM")
         ));
         // The name is optional — the entry's own is the default — and starting is opt-in.
-        let cli = Cli::try_parse_from(["marketplace", "install", "adi/crm", "--start"])
-            .expect("install");
+        let cli =
+            Cli::try_parse_from(["marketplace", "install", "adi/crm", "--start"]).expect("install");
         assert!(matches!(
             cli.command,
             MarketplaceCommand::Install { ref name, start: true, .. } if name.is_none()
         ));
 
         let cli = Cli::try_parse_from(["marketplace", "start", "crm"]).expect("start");
-        assert!(matches!(cli.command, MarketplaceCommand::Start { ref target } if target == "crm"));
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Start { ref target, project: None } if target == "crm"
+        ));
         let cli = Cli::try_parse_from(["marketplace", "start", "adi/crm-suite/services/redis"])
             .expect("start a service element");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Start { ref target } if target == "adi/crm-suite/services/redis"
+            MarketplaceCommand::Start { ref target, .. }
+                if target == "adi/crm-suite/services/redis"
         ));
 
-        let cli =
-            Cli::try_parse_from(["marketplace", "update", "crm", "--force"]).expect("update");
+        let cli = Cli::try_parse_from(["marketplace", "update", "crm", "--force"]).expect("update");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Update { ref target, force: true, ref force_element }
-                if target == "crm" && force_element.is_empty()
+            MarketplaceCommand::Update {
+                ref target,
+                force: true,
+                ref force_element,
+                project: None,
+            } if target == "crm" && force_element.is_empty()
         ));
         let cli = Cli::try_parse_from([
             "marketplace",
@@ -621,16 +664,18 @@ mod tests {
         .expect("bundle update with per-element force");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Update { ref target, force: false, ref force_element }
+            MarketplaceCommand::Update { ref target, force: false, ref force_element, .. }
                 if target == "adi/crm-suite"
                     && force_element == &["agents/sales-bot".to_string(), "tools/csv-import".to_string()]
         ));
 
-        let cli = Cli::try_parse_from(["marketplace", "uninstall", "adi/crm-suite/agents/sales-bot"])
-            .expect("uninstall");
+        let cli =
+            Cli::try_parse_from(["marketplace", "uninstall", "adi/crm-suite/agents/sales-bot"])
+                .expect("uninstall");
         assert!(matches!(
             cli.command,
-            MarketplaceCommand::Uninstall { ref spec } if spec == "adi/crm-suite/agents/sales-bot"
+            MarketplaceCommand::Uninstall { ref spec, project: None }
+                if spec == "adi/crm-suite/agents/sales-bot"
         ));
 
         for verb in ["list", "sync", "apps"] {
@@ -639,6 +684,57 @@ mod tests {
         assert!(Cli::try_parse_from(["marketplace", "remove", "adi"]).is_ok());
         // Only the flags above exist; nothing else is.
         assert!(Cli::try_parse_from(["marketplace", "install", "adi/crm", "--yes"]).is_err());
+    }
+
+    #[test]
+    fn a_destination_is_named_the_same_way_by_every_verb_that_has_one() {
+        // Where an install lands is the one thing four verbs have to agree on: `--project <id>`
+        // everywhere, and on `install` the `--new-project <name>` shorthand that registers it
+        // first. Absent means global, which the assertions above pin.
+        let cli = Cli::try_parse_from(["marketplace", "install", "adi/crm", "--project", "shop"])
+            .expect("install into a project");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Install { ref project, new_project: None, .. }
+                if project.as_deref() == Some("shop")
+        ));
+        let cli =
+            Cli::try_parse_from(["marketplace", "install", "adi/crm", "--new-project", "Shop"])
+                .expect("install into a project registered on the way");
+        assert!(matches!(
+            cli.command,
+            MarketplaceCommand::Install { project: None, ref new_project, .. }
+                if new_project.as_deref() == Some("Shop")
+        ));
+        // Naming both says two different destinations at once; clap refuses it for us.
+        assert!(
+            Cli::try_parse_from([
+                "marketplace",
+                "install",
+                "adi/crm",
+                "--project",
+                "shop",
+                "--new-project",
+                "Shop",
+            ])
+            .is_err()
+        );
+
+        for (verb, target) in [
+            ("start", "adi/crm-suite/services/redis"),
+            ("update", "adi/crm-suite"),
+            ("uninstall", "adi/crm-suite/agents/sales-bot"),
+        ] {
+            let cli = Cli::try_parse_from(["marketplace", verb, target, "--project", "shop"])
+                .unwrap_or_else(|e| panic!("{verb} takes --project: {e}"));
+            let project = match cli.command {
+                MarketplaceCommand::Start { project, .. }
+                | MarketplaceCommand::Update { project, .. }
+                | MarketplaceCommand::Uninstall { project, .. } => project,
+                other => panic!("{verb} parsed as {other:?}"),
+            };
+            assert_eq!(project.as_deref(), Some("shop"), "{verb}");
+        }
     }
 
     #[test]
