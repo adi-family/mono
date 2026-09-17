@@ -4,12 +4,13 @@
 
 > The embedding backend registry: named, configurable embedding backends (candle, ollama, an OpenAI-compatible endpoint, or the hash stub), resolved per consumer. Pure library.
 
-8 structs · 2 enums · 1 type alias across 6 files.
+9 structs · 3 enums · 1 type alias across 7 files.
 
 ## Index
 
 - [`src/backend.rs`](#srcbackendrs) — `Runtime`, `EmbeddingBackendManifest`, `EmbeddingBackend`, `EmbeddingBackends`, `FailoverEmbedder`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
+- [`src/ondemand.rs`](#srcondemandrs) — `TestResult`, `TestVerdict`
 - [`src/runtimes/hash.rs`](#srcruntimeshashrs) — `HashEmbedder`
 - [`src/runtimes/ollama.rs`](#srcruntimesollamars) — `OllamaEmbedder`
 - [`src/runtimes/openai.rs`](#srcruntimesopenairs) — `OpenAiEmbedder`
@@ -125,6 +126,38 @@ pub enum Error {
     Embed(adi_indexer::embed::EmbedError),
     #[error("embedding store I/O error: {0}")]
     Io(std::io::Error),
+}
+```
+
+---
+
+## `src/ondemand.rs`
+
+### struct `TestResult`
+
+What a test found, and how long it took.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestResult {
+    pub verdict: TestVerdict,
+    pub elapsed_ms: u64,
+}
+```
+
+### enum `TestVerdict`
+
+The outcome. There is no rate-limited state to distinguish here the way an LLM backend has one: none of the four runtimes' failure modes are usefully "try again later" rather than "broken", so every failure is reported the same way, in the runtime's own words.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestVerdict {
+    Answered {
+        dimensions: u32,
+    },
+    Failed {
+        error: String,
+    },
 }
 ```
 

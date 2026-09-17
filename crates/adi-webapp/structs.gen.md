@@ -735,7 +735,6 @@ pub(crate) struct OnboardingForm {
     key: RwSignal<String>,
     error: RwSignal<Option<String>>,
     pub(crate) reconfiguring: RwSignal<bool>,
-    pub(crate) target: RwSignal<String>,
     show_help: RwSignal<bool>,
     show_prompt: RwSignal<bool>,
 }

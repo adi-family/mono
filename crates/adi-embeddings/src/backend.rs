@@ -355,7 +355,7 @@ impl EmbeddingBackends {
         let primary = self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))?;
         let mut chain: Vec<Arc<dyn Embedder>> = Vec::new();
         let mut built_primary = None;
-        match self.build(&primary.manifest) {
+        match build_embedder(&primary.manifest) {
             Ok(embedder) => {
                 built_primary = Some((embedder.dimensions(), embedder.model_name().to_string()));
                 chain.push(embedder);
@@ -376,7 +376,7 @@ impl EmbeddingBackends {
             {
                 continue; // edited out of alignment since the primary named it — drop it, not the chain
             }
-            if let Ok(embedder) = self.build(&fallback.manifest) {
+            if let Ok(embedder) = build_embedder(&fallback.manifest) {
                 chain.push(embedder);
             }
         }
@@ -395,34 +395,38 @@ impl EmbeddingBackends {
         }))
     }
 
-    /// Build the concrete [`Embedder`] one manifest describes, with no fallback involved.
-    ///
-    /// # Errors
-    /// [`Error::Embed`] — [`EmbedError::Unavailable`] for a `candle` backend in a build without
-    /// the `candle` feature, [`EmbedError::Config`]/[`EmbedError::Embedding`] for a runtime that
-    /// failed to construct (a candle model download failure, say).
-    fn build(&self, manifest: &EmbeddingBackendManifest) -> Result<Arc<dyn Embedder>> {
-        match manifest.runtime {
-            Runtime::Candle => build_candle(),
-            Runtime::Ollama => {
-                let host = manifest.base_url.clone().unwrap_or_default();
-                Ok(Arc::new(OllamaEmbedder::new(
-                    host,
-                    manifest.model.clone(),
-                    manifest.dimensions,
-                )))
-            }
-            Runtime::OpenAi => {
-                let base_url = manifest.base_url.clone().unwrap_or_default();
-                Ok(Arc::new(OpenAiEmbedder::new(
-                    base_url,
-                    manifest.model.clone(),
-                    manifest.dimensions,
-                    manifest.api_key_env.clone(),
-                )))
-            }
-            Runtime::Hash => Ok(Arc::new(HashEmbedder)),
+}
+
+/// Build the concrete [`Embedder`] one manifest describes, with no fallback involved — what
+/// [`EmbeddingBackends::resolve`] calls per chain member, and what [`crate::ondemand`] calls
+/// directly to build a **draft** manifest's embedder: one an operator has typed into the panel and
+/// may never save, so there is no id yet to open a [`Config`]-backed store with.
+///
+/// # Errors
+/// [`Error::Embed`] — [`EmbedError::Unavailable`] for a `candle` backend in a build without the
+/// `candle` feature, [`EmbedError::Config`]/[`EmbedError::Embedding`] for a runtime that failed to
+/// construct (a candle model download failure, say).
+pub(crate) fn build_embedder(manifest: &EmbeddingBackendManifest) -> Result<Arc<dyn Embedder>> {
+    match manifest.runtime {
+        Runtime::Candle => build_candle(),
+        Runtime::Ollama => {
+            let host = manifest.base_url.clone().unwrap_or_default();
+            Ok(Arc::new(OllamaEmbedder::new(
+                host,
+                manifest.model.clone(),
+                manifest.dimensions,
+            )))
         }
+        Runtime::OpenAi => {
+            let base_url = manifest.base_url.clone().unwrap_or_default();
+            Ok(Arc::new(OpenAiEmbedder::new(
+                base_url,
+                manifest.model.clone(),
+                manifest.dimensions,
+                manifest.api_key_env.clone(),
+            )))
+        }
+        Runtime::Hash => Ok(Arc::new(HashEmbedder)),
     }
 }
 

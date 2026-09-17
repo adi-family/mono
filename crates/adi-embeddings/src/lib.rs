@@ -22,6 +22,8 @@
 //! * [`runtimes`] — the four ways a backend can actually turn text into a vector: `candle`
 //!   (dispatched directly to [`adi_indexer::embed::CandleEmbedder`] from [`backend`]), and
 //!   [`runtimes::ollama`], [`runtimes::openai`], [`runtimes::hash`].
+//! * [`ondemand`] — the human-triggered test: embed one short string through a backend (saved or
+//!   still a draft) and report success, width and latency, right now.
 //!
 //! **Phase B is built.** `adi-knowledge` and `adi-facts` call [`resolve`] from
 //! `KnowledgeStore::with_config`/`FactStore::with_config`; `adi-indexer` cannot call it itself
@@ -31,6 +33,7 @@
 //! surface: a CLI, an API, and a panel tab. See `docs/embedding-backends.md`.
 
 pub mod backend;
+pub mod ondemand;
 pub mod runtimes;
 pub mod seed;
 pub mod settings;
@@ -46,6 +49,7 @@ pub use backend::{
     CANDLE_FIXED_MODEL, EmbeddingBackend, EmbeddingBackendManifest, EmbeddingBackends, Runtime,
 };
 pub use error::{Error, Result};
+pub use ondemand::{TestResult, TestVerdict, test_backend, test_manifest};
 pub use runtimes::hash::HashEmbedder;
 pub use runtimes::ollama::OllamaEmbedder;
 pub use runtimes::openai::OpenAiEmbedder;
