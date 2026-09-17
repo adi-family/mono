@@ -3,13 +3,39 @@
 One trait, many ways to make a vector. Read this before touching `crates/adi-embeddings` or
 any of the three crates that embed text today (`adi-indexer`, `adi-knowledge`, `adi-facts`).
 
-Status: **phase A built 2026-09-12, phase B built 2026-09-13, phase C built 2026-09-13 — the
-feature is complete.** Phase A is the spec, the registry crate, and the four runtimes
-(`docs/embedding-backends-survey.md` is the research this reconciles to). Phase B is the two
-things it deferred: the three consumers actually resolving through the registry, and the two
-staleness holes the survey flagged (Surprises #1 and #2) that made a consumer resolving
-*differently* from one process to the next dangerous. Phase C is the operator surface: a CLI, an
-API, and a panel page — mirroring the LLM backend registry's surface, deliberately narrower.
+Status: **phase A built 2026-09-12, phase B built 2026-09-13, phase C built 2026-09-13, the
+on-demand test built 2026-09-17 — the feature is complete.** Phase A is the spec, the registry
+crate, and the four runtimes (`docs/embedding-backends-survey.md` is the research this reconciles
+to). Phase B is the two things it deferred: the three consumers actually resolving through the
+registry, and the two staleness holes the survey flagged (Surprises #1 and #2) that made a
+consumer resolving *differently* from one process to the next dangerous. Phase C is the operator
+surface: a CLI, an API, and a panel page — mirroring the LLM backend registry's surface,
+deliberately narrower. The on-demand test is the one action that surface was still missing: a way
+to find out whether a backend actually works, right now, without embedding real data through it
+first.
+
+**What the on-demand test added:**
+
+- `adi_embeddings::{test_backend, test_manifest}` (`crates/adi-embeddings/src/ondemand.rs`): embed
+  one short, fixed string through the backend's own runtime and report success, the vector's width,
+  and how long it took. `test_manifest` takes a manifest directly rather than an id, so a **draft**
+  — a form an operator is still typing into, never saved — can be tested exactly as it stands;
+  `test_backend` is the thin id-based wrapper over it, for a saved row. Neither touches a hold,
+  because there is no hold here to touch (see "Why this is narrower than the LLM design").
+- **The width is the test.** Every vector a base holds is recorded against the backend's declared
+  `dimensions`, so a runtime that quietly returns a different width is reported as a **failure**,
+  not a success at the wrong number — a mismatch here would otherwise poison every future search
+  against whatever base trusted it.
+- **CLI**: `adi-mono embeddings test <id> [--json]`.
+- **API**: `POST /api/embeddings/backends/test`, accepting either a saved backend's `id` or a
+  `draft` (the same shape `save` takes) — `draft` wins when both arrive. Always a `200`: the
+  verdict (`ok`/`failed`), a human-readable message and the elapsed milliseconds are the payload,
+  not the status code, because a failed test is a successful answer to "does this work."
+- **Panel**: a **Test** button beside **Save** in the editor, sending the form as currently edited
+  (a draft, whether or not it has ever been saved) and showing the verdict inline once it lands —
+  green for an answer (with the width and the latency), plain text carrying the runtime's own error
+  otherwise. Shared with the LLM backends editor's identical button through one
+  `crate::ui::test_verdict_view`, since both answer with the same wire shape.
 
 **What phase C changed:**
 
@@ -298,6 +324,33 @@ Seeding runs once. A machine whose `ADI_FACTS_OLLAMA` changes after that first r
 move the `ollama` backend's `base_url` — exactly the LLM design's own migration is a one-time
 lift out of ambient configuration, not an ongoing mirror of it. An operator who wants the backend
 to point somewhere else edits the backend, the same way they would edit any other.
+
+## The on-demand test
+
+Unlike the LLM design, there is no background sweep here to be distinct from — nothing in this
+registry is rate-limited the way a chat subscription is, so nothing needed a prober in the first
+place. The on-demand test is simply the first thing that ever asks a backend anything, other than
+a real caller storing real vectors: a human pressing **Test**, or running `adi-mono embeddings test
+<id>`.
+
+```
+test(manifest):
+    embedder := build(manifest)              # the same construction resolve() uses, no fallback
+    vector   := embedder.embed([TEST_TEXT])  # one short, fixed string
+    if manifest.dimensions != 0 && vector.width != manifest.dimensions:
+        fail("returned a Nw vector, but this backend declares M")
+    else:
+        ok(vector.width)
+```
+
+Taking a manifest rather than an id is what lets a **draft** be tested — the whole point of a
+**Test** button beside a form that has not been saved yet. `EmbeddingBackends::build`'s body moved
+out to a free `build_embedder(&EmbeddingBackendManifest)` for exactly this: building an embedder
+has never needed the store's `Config`, only the manifest, and a draft has no id to open a
+`Config`-backed store with.
+
+An undeclared width (`dimensions == 0`, the state of a form nobody has finished filling in) is not
+checked against — there is nothing yet to disagree with.
 
 ## Known issues
 

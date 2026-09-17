@@ -8,6 +8,12 @@ part of the history stands. What was reconciled is now shipped: `crates/adi-agen
 `adi-mono llm` CLI, the `/api/llm/*` handlers and the panel's LLM backends tab all exist and are
 exercised by passing tests.
 
+**The on-demand test, built 2026-09-17**, is the one action this surface was still missing: the
+prober (below) only ever reaches `harness:adi` and only ever runs on a timer against a hold, so
+there was no way to ask "does this backend actually work?" by hand for the vast majority of
+backends — every vendor-CLI one — without launching a real agent against it. See "The on-demand
+test" for what it is and how it differs from the prober.
+
 ## The problem
 
 A model choice is currently welded to an agent definition. `adi-agent`, `adi-agent-glm` and
@@ -235,6 +241,61 @@ own stated deadline, because nothing may be marked recovered on a guess.
 
 **Recovery never costs a chat turn.** A run must never be the thing that discovers a
 backend is back, because that discovery is paid for with a failed turn.
+
+## The on-demand test
+
+A different transaction from the prober above, and deliberately not reachable from it: a human
+pressing **Test** (or running `adi-mono llm test <id>`) is asking once, by name, and paying for it
+once — not the sweep asking on a timer against a hold nobody chose to watch. So this reaches
+**every** runtime a backend can name, `[probe]` block or none, where the prober reaches only
+`harness:adi`:
+
+```
+test(manifest):
+    (prompt, model) := manifest.probe, else (the tiny default prompt, manifest.model)
+    outcome := ask(manifest, model, prompt)      # every runtime — see below
+    case outcome:
+        Ok        -> Answered
+        Err(text) -> classify(text, manifest.limit_rules)   # the same classifier the prober uses
+                       .holds() -> RateLimited(reason)
+                       else     -> Failed(error)
+```
+
+`adi_agents::llm::ondemand::{test_backend, test_manifest}`. `ask` dispatches on the runtime:
+
+- `harness:adi` reuses the prober's own HTTP ask (`adi_loop::probe`) — the one runtime both paths
+  can reach the same way.
+- `harness:claude-sdk` / `pty:claude` / `process:claude` all run the `claude` CLI, so all three get
+  the same plain `claude --print --tools "" --output-format text` ask: no built-in tools (so a
+  two-token prompt cannot turn into the model reaching for the filesystem), plain text so the
+  answer needs no stream parser, and the backend's settings file when it names one.
+- `pty:codex` / `process:codex` both run `codex exec --sandbox read-only --ask-for-approval never
+  --json`, read the same way a real run's log is (`crate::backends::codex_stream`), so a startup
+  failure that never reached the model still reads as an error rather than a silent success.
+
+Each vendor-CLI ask is bounded by a short timeout (45s) — generous enough for a cold process start
+and a real round trip, far short of a full turn's ten-minute budget, because a human watching a
+button is not paying for a turn's worth of patience.
+
+**It writes nothing.** No hold touched, released, or created, whatever the verdict — this answers
+a question, it does not change the answer to anyone else's. That is also why `RateLimited` here is
+informational rather than a hold: the prober is what decides whether a chat turn should skip this
+backend, and this path has no opinion on that.
+
+**A draft is testable.** `test_manifest` takes a manifest, not an id, so the panel's **Test**
+button can send the form exactly as typed — a backend that has never been saved — without a save
+happening first. `test_backend` is the thin id-based wrapper over it, for a saved row (`adi-mono
+llm test <id>`, `POST /api/llm/backends/test` with a bare `id`).
+
+**The API** (`POST /api/llm/backends/test`) accepts either that `id` or a `draft` (the same shape
+`save` takes); `draft` wins when both arrive. Always a `200`: the verdict
+(`ok`/`rate_limited`/`failed`), a human-readable message (the provider's own words for anything
+that is not `ok`) and the elapsed milliseconds are the payload, not the status code.
+
+**The panel** puts a **Test** button beside **Save** in the backend editor. Green for an answer
+(with the latency); plain text carrying the provider's own error otherwise — the same
+`crate::ui::test_verdict_view` the embedding backends editor uses, since both answer with the same
+wire shape. The button's own help text says plainly that it is a real, billed request.
 
 ## Decisions taken 2026-09-09
 
