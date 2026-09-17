@@ -15,7 +15,8 @@
 use adi_core::Adi;
 use adi_core::embeddings::{
     CONSUMER_FACTS, CONSUMER_INDEXER, CONSUMER_KNOWLEDGE, EMBEDDINGS_MODULE, EmbeddingBackend,
-    EmbeddingBackendManifest, EmbeddingBackends, EmbeddingSettings, Runtime, ensure_seeded,
+    EmbeddingBackendManifest, EmbeddingBackends, EmbeddingSettings, Runtime, TestVerdict,
+    ensure_seeded, test_backend,
 };
 use clap::Subcommand;
 
@@ -77,6 +78,15 @@ pub(crate) enum EmbeddingsCommand {
     /// Delete a backend. Refused while a consumer is still assigned to it — unlike an LLM agent's
     /// row, a consumer whose assignment names nothing cannot resolve at all.
     Delete { id: String },
+    /// Embed a short test string through this backend, right now, and report success, the vector's
+    /// width, and how long it took. A wrong width is reported as a failure, not a quiet success at
+    /// the wrong number — every vector a base holds is recorded against the backend's declared
+    /// width, and a mismatch poisons the whole base.
+    Test {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Read or change which backend each consumer resolves through, and show whether that
     /// assignment would actually resolve in this binary right now.
     Settings {
@@ -218,6 +228,24 @@ pub(crate) fn run_embeddings(adi: Adi, command: EmbeddingsCommand) -> Result<(),
                 return Err(format!("no embedding backend named {id}"));
             }
         }
+        EmbeddingsCommand::Test { id, json } => {
+            let result = test_backend(&config, id.trim()).map_err(|e| e.to_string())?;
+            if json {
+                let dimensions = match &result.verdict {
+                    TestVerdict::Answered { dimensions } => Some(*dimensions),
+                    TestVerdict::Failed { .. } => None,
+                };
+                print_json(&serde_json::json!({
+                    "backend": id.trim(),
+                    "verdict": result.verdict.tag(),
+                    "message": result.message(),
+                    "elapsed_ms": result.elapsed_ms,
+                    "dimensions": dimensions,
+                }));
+            } else {
+                println!("{} — {}", id.trim(), result.message());
+            }
+        }
         EmbeddingsCommand::Settings { assign, json } => {
             let mut settings = EmbeddingSettings::open(&config).map_err(|e| e.to_string())?;
             if !assign.is_empty() {
@@ -347,6 +375,37 @@ fn blank<'a>(value: &'a str, instead: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    /// A parser for this group alone, so a test states argv the way a user types it without
+    /// carrying the whole top-level CLI's required arguments.
+    #[derive(Debug, Parser)]
+    struct Harness {
+        #[command(subcommand)]
+        command: EmbeddingsCommand,
+    }
+
+    fn parse(args: &[&str]) -> EmbeddingsCommand {
+        Harness::try_parse_from(std::iter::once("embeddings").chain(args.iter().copied()))
+            .expect("parses")
+            .command
+    }
+
+    /// `test` takes an id positionally and an optional `--json`, mirroring `show`/`delete`.
+    #[test]
+    fn test_takes_an_id_and_an_optional_json_flag() {
+        let EmbeddingsCommand::Test { id, json } = parse(&["test", "ollama"]) else {
+            panic!("expected test");
+        };
+        assert_eq!(id, "ollama");
+        assert!(!json);
+
+        let EmbeddingsCommand::Test { id, json } = parse(&["test", "ollama", "--json"]) else {
+            panic!("expected test");
+        };
+        assert_eq!(id, "ollama");
+        assert!(json);
+    }
 
     #[test]
     fn an_unknown_runtime_spelling_is_refused() {

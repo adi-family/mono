@@ -12,7 +12,7 @@
 use adi_core::Adi;
 use adi_core::llm::{
     Hold, HoldKey, Holds, LimitRule, LlmBackend, LlmBackendManifest, LlmBackends, LlmSettings,
-    Probe, Prober, Verdict, holds::clock, migrate,
+    Probe, Prober, Verdict, holds::clock, migrate, test_backend,
 };
 use clap::Subcommand;
 
@@ -141,6 +141,17 @@ pub(crate) enum LlmCommand {
         /// Sweep forever, every `probe_every` seconds. What the supervised prober service runs.
         #[arg(long, conflicts_with = "id")]
         watch: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ask a backend its test prompt, right now — a human's diagnostic, distinct from `probe`.
+    ///
+    /// Unlike `probe`, every runtime is reachable: a vendor CLI backend is actually asked (its own
+    /// CLI, run headless, once) rather than reported unreachable, and a backend with no `[probe]`
+    /// block still gets a tiny default prompt on its own model. Writes nothing — no hold touched,
+    /// no hold created — because this is one person asking a question, not the sweep.
+    Test {
+        id: String,
         #[arg(long)]
         json: bool,
     },
@@ -357,6 +368,19 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             }
             let swept = prober.sweep().map_err(|e| e.to_string())?;
             report_sweep(&swept, json);
+        }
+        LlmCommand::Test { id, json } => {
+            let result = test_backend(&config, id.trim()).map_err(|e| e.to_string())?;
+            if json {
+                print_json(&serde_json::json!({
+                    "backend": id.trim(),
+                    "verdict": result.verdict.tag(),
+                    "message": result.message(),
+                    "elapsed_ms": result.elapsed_ms,
+                }));
+            } else {
+                println!("{} — {}", id.trim(), result.message());
+            }
         }
     }
     Ok(())
@@ -645,6 +669,39 @@ fn blank<'a>(value: &'a str, instead: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    /// A parser for this group alone, so a test states argv the way a user types it without
+    /// carrying the whole top-level CLI's required arguments.
+    #[derive(Debug, Parser)]
+    struct Harness {
+        #[command(subcommand)]
+        command: LlmCommand,
+    }
+
+    fn parse(args: &[&str]) -> LlmCommand {
+        Harness::try_parse_from(std::iter::once("llm").chain(args.iter().copied()))
+            .expect("parses")
+            .command
+    }
+
+    /// `test` takes an id positionally and an optional `--json`, the same shape `probe` and `show`
+    /// already use — and it must stay a command of its own, distinct from `probe`, which this test
+    /// pins by asserting it parses at all under its own name.
+    #[test]
+    fn test_takes_an_id_and_an_optional_json_flag() {
+        let LlmCommand::Test { id, json } = parse(&["test", "anthropic"]) else {
+            panic!("expected test");
+        };
+        assert_eq!(id, "anthropic");
+        assert!(!json);
+
+        let LlmCommand::Test { id, json } = parse(&["test", "anthropic", "--json"]) else {
+            panic!("expected test");
+        };
+        assert_eq!(id, "anthropic");
+        assert!(json);
+    }
 
     #[test]
     fn limit_rules_read_as_the_json_the_file_and_the_api_use() {

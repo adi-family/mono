@@ -391,6 +391,11 @@ pub(crate) enum EmbeddingsCommand {
     Delete {
         id: String,
     },
+    Test {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
     Settings {
         #[arg(long = "assign", value_name = "CONSUMER=BACKEND")]
         assign: Vec<String>,
@@ -892,6 +897,11 @@ pub(crate) enum LlmCommand {
         id: Option<String>,
         #[arg(long, conflicts_with = "id")]
         watch: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Test {
+        id: String,
         #[arg(long)]
         json: bool,
     },
