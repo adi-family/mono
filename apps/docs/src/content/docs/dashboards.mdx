@@ -1,0 +1,42 @@
+---
+title: Dashboards
+description: A small web app an agent can scaffold and edit for you — a frontend and a backend, hot-reloading, with its own `<host>.adi` address.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A dashboard is a pair of Bun services — a frontend and a backend — under
+`~/.adi/mono/dashboards/<id>/`, authored as loose `.ts` files. It's a [[Hive|hive service]] under
+the hood (the per-user dashboards hive supervises both halves), so it gets a real `<host>.adi`
+address the moment it's created.
+
+## Why it exists
+
+An agent that builds you something you want to actually look at — a table of results, a small
+control panel for a job it's running — needs somewhere to put a UI. A dashboard is that
+somewhere: create one, and an agent (or you) drops a `frontend/modules/<name>.ts` for a panel or
+a `backend/routes/<name>.ts` for an endpoint, and it hot-reloads. No build step, no deploy.
+
+## Do it
+
+Panel: `/dashboards`. API: `POST /api/dashboards/create` (`{ "name", "description" }`) —
+scaffolds the files, and the supervisor leases ports and starts both servers within seconds.
+
+Edit `frontend/modules/*.ts` and `backend/routes/*.ts` directly; those two directories are the
+only ones never regenerated. Everything else (`frontend/index.ts`, `backend/index.ts`, the
+`.adi/hive.yaml`) is generated and gets rewritten on migration — read the scaffold's own
+`README.md` for the exact shape a module or route has to export.
+
+## One origin, relative paths only <Flags>Expert area</Flags>
+
+A dashboard is **one hostname**: the frontend owns `/`, the backend claims `/api` on the same
+host. A panel calls `ctx.api.get("/status")`, never `http://127.0.0.1:<port>/status` and never
+`http://<host>.adi/status` — no host or port is ever written into a panel, a route, or the
+shell. That's what makes the exact same dashboard work locally at `<host>.adi`, over
+[[Fleet|the mesh]] at `<host>.<node>.n.adi`, and behind a real domain later, for every viewer,
+with no substitution.
+
+## Archiving
+
+`POST /api/dashboards/archive`, then `/delete` — delete refuses unless the dashboard is
+archived first, so removing one is always two deliberate steps.

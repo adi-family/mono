@@ -1,0 +1,50 @@
+---
+title: Projects
+description: The folder everything else in ADI belongs to — agents, tools, tasks, secrets, services, and a database, all filed under one id.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A project is a named unit of work. Everything else in ADI — an agent, a tool, a task, a secret,
+a hive service, a database — can be filed under one, and most of it works better when it is:
+a tool scoped to a project runs in that project's directory against that project's database
+instead of the whole machine's shared one; a task filed under a project shows up on that
+project's badge instead of a global list you have to search.
+
+Under the hood a project is a directory, `~/.adi/mono/projects/<id>/`, holding a `config.toml`
+(name, description, optional parent) and, if it runs anything long-lived, a `.adi/hive.yaml` —
+see [[Hive]].
+
+## Why it exists
+
+Without projects, every agent, tool, and secret on a machine sits in one flat list — fine for a
+handful, unworkable once you're running several unrelated pieces of work at once. A project is
+the boundary: its own database, its own tools, its own agents, its own task list, and — if it
+supervises services — its own `.adi/hive.yaml`. A sub-project nests under a parent, so a big
+piece of work can be broken down without losing that boundary.
+
+## Do it
+
+List: `adi-mono projects list`. Panel: `/projects`, showing every project's hierarchy with a
+badge for its open task count.
+
+```bash
+adi-mono projects add my-app --description "the thing I'm building"
+adi-mono projects list
+```
+
+## What lives where
+
+| Filed under a project | Filed globally |
+| --- | --- |
+| [[Tools]] scoped with `--project <id>` | A tool several projects need |
+| [[Secrets]] that override a global of the same name | An API key every agent uses |
+| [[Database]] — a project gets its own `.db` file | The shared `global.db` |
+| [[Hive]] services in `.adi/hive.yaml` | Services in `~/.adi/mono/hive/hive.yaml` |
+| [[Tasks]] and [[Agents]] tagged with `project` | Anything not tied to one piece of work |
+
+## Notes <Flags>Expert area</Flags>
+
+Renaming a project's id (`adi-mono projects rename`) moves everything filed under it — tools,
+agents, triggers, secrets, database, knowledge bases — to the new id; nothing is left orphaned
+under the old name. Archiving is reversible (`unarchive`); `rm` deletes the directory outright.

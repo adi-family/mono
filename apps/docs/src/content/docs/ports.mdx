@@ -1,0 +1,40 @@
+---
+title: Ports
+description: The manager that leases every port a hive service uses, so nothing is ever hand-picked and no two services are handed the same one.
+---
+
+import Flags from '../../components/Flags.astro';
+
+Every [[Hive|hive service]] needs a port to actually listen on. Rather than a service's config
+naming one — which two services could pick the same value for, silently — it asks the ports
+manager for a lease: `ports-manager.get('service', 'key')`. The reservation is idempotent, so
+asking again for the same `(service, key)` always returns the same port instead of a new one.
+
+## Why it exists
+
+Hand-picked ports collide the moment a machine runs more than a couple of services, and the
+collision usually surfaces as "my dev server won't start" with no indication which other
+process got there first. The manager avoids that by hand: it hands out one port per
+`(service, key)` from a fixed range and never assigns the same one to two leases, so "what's
+using port 8042" has one authoritative answer instead of a grep through shell history.
+
+## Do it
+
+Panel: `/settings/ports-manager`. API: `GET /api/ports` — the live lease table.
+
+```json
+{
+  "range": { "start": 8000, "end": 9999 },
+  "reserved": [{ "start": 0, "end": 1023 }, { "start": 15000, "end": 15999 }],
+  "leases": [{ "service": "app", "key": "http", "port": 8000 }]
+}
+```
+
+You rarely call this directly — a service without a `ports:` block in its `hive.yaml` gets an `http` port leased for it automatically the first time it's read. See [[Hive#Ports: leased, never picked]] for the full field reference and the reserved ranges.
+
+## The one hard rule <Flags>Enterprise interest</Flags>
+
+`0–1023` is never handed out (it needs root); `15000–15999` is reserved around ADI's own DNS
+resolver on `127.0.0.1:15353` and is never touched by anything else. Never pick a port in either
+range by hand, and never stop, kill, or restart the DNS service to free one — see [[DNS and the
+front door]].

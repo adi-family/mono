@@ -1,0 +1,31 @@
+---
+title: Tasks
+description: A task tree that survives across runs — the shared to-do list an agent and the person working with it both read and write.
+---
+
+A task is one entry in a tree, stored at `~/.adi/mono/tasks/tasks.json`. It's what an
+[[Agents|agent]] uses to remember what's agreed and how far it got, so progress outlives any one
+run rather than living only in a chat transcript that scrolls away.
+
+## Why it exists
+
+An agent's own run ends; the work it was doing for you doesn't. A task closed today, reopened
+next week, and nested under a parent gives both of you — the agent, and whoever's reading the
+panel — one place to check "what's left" that doesn't depend on remembering which conversation
+it was mentioned in.
+
+## Do it
+
+List: `adi-mono tasks list`. Panel: `/tasks`, showing the tree across every project.
+
+```bash
+adi-mono tasks list --project my-app
+```
+
+A task can belong to a [[Projects|project]] (so it counts toward that project's open-task badge
+in the explorer) and nest under another task, for breaking down a larger piece of work.
+
+## Notes
+
+Small, verifiable tasks read better than one big one closed at the very end — an agent is
+expected to close each as it confirms it, not batch them up.

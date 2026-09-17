@@ -1,0 +1,45 @@
+---
+title: Triggers
+description: A code block ADI launches for you — on a webhook, as a background process, or in response to a platform event — instead of one you have to remember to run.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A trigger is a `shell` or `typescript` code block the stack runs on your behalf, in one of three
+shapes:
+
+- **webhook** — an inbound HTTP call runs the block.
+- **background** — a supervised, long-lived process.
+- **event** — subscribes to a platform event name and runs on a match.
+
+## Why it exists
+
+Most of what an [[Agents|agent]] does starts with a click — Run, in the panel. A trigger is for
+the rest: the pipeline that has to fire the moment a webhook lands, the sweep that has to run
+every night, the follow-up that has to happen the instant a task closes. Without one, "run this
+automatically" means a cron job or a script babysitting a queue somewhere outside ADI's view;
+with one, it's a definition in `/triggers` like everything else here.
+
+## Events
+
+The stack publishes dotted topics — `adi.tasks.created`, `adi.agents.run.finished` — and an
+`event` trigger subscribes to a name pattern (`*` matches one segment, `**` the tail) and fires
+on a match. Only the `adi.tasks.*` and `adi.agents.*` families exist today, so a trigger can
+*act* on a hive service but has no event to *react to* when one changes.
+
+```bash
+adi-mono events emit adi.test.probe --payload '{"from":"me"}'
+adi-mono events list
+```
+
+## A trigger that launches an agent is capped <Flags>Expert area</Flags>
+
+A block that runs `adi-agents run` is an *automatic* launch, so it's bound by the same run caps
+as everything else — see [[Agents#When a run can't decide]]. At a full cap the run is refused
+with the reason on stderr rather than piling on; retry on the next event, or give the trigger's
+project its own slot so one noisy pipeline can't eat the whole machine's capacity.
+
+## Do it
+
+Panel: `/triggers` — create, edit, enable/disable, and fire one by hand to see its log before
+wiring it to a real source.

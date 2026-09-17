@@ -1,0 +1,47 @@
+---
+title: Mesh
+description: The peer-to-peer network fleet pairing rides on — and, used directly, a way to expose or forward a raw TCP port to a specific peer.
+---
+
+import Flags from '../../components/Flags.astro';
+
+Mesh is the network daemon underneath [[Fleet]]: a peer-to-peer connection between machines
+(built on iroh) that needs no open inbound port on either side — a machine dials out to reach a
+peer, or is dialled by one it has authorized. Pairing a node and reaching its dashboards, covered
+on the [[Fleet]] page, is the everyday way this gets used. The Mesh panel is the layer under
+that: this machine's own network identity, and raw port exposure that doesn't go through a hive
+service at all.
+
+## Why it exists on its own
+
+Not everything worth reaching from another machine is an HTTP service with a hostname. A
+database port, an SSH-like service, anything that just needs "let this one peer reach this one
+local port" — that's what the raw mesh primitives are for, independent of [[Hive]] routing and
+[[DNS and the front door|DNS]] entirely.
+
+## Do it
+
+Panel: `/settings/mesh` — start or stop the daemon, and three tables:
+
+- **This machine** — its endpoint id (the minimal token a peer resolves through discovery) and
+  its ticket (id + relay + direct addresses — the reliable one to hand a peer that can't rely on
+  discovery).
+- **Ports exposed to peers** — a local port an authorized peer may connect to directly.
+- **Forwards** — the other direction: a local port that tunnels to a port on a specific peer,
+  the way `ssh -L` does.
+
+## A narrower, older gate <Flags>Enterprise interest</Flags>
+
+Exposing a port here is authorized by **peer identity alone** — an endpoint id or ticket on the
+"Authorized peers" list — with no HTTP password layer on top of it, unlike a fleet grant reaching
+a hive service. Treat "expose a port to a peer" as handing that peer direct access to whatever's
+listening on it, not as equivalent to granting `http:<service>` through [[Fleet]]. An empty
+authorized-peers list admits nobody, never everybody.
+
+## Relative to Fleet <Flags>Expert area</Flags>
+
+Fleet's `http:` grants and this page's raw ports/forwards are two different mechanisms sharing
+one transport. A fleet grant is scoped to one named HTTP service and sits behind the node's
+password; a mesh forward is a bare TCP tunnel scoped to a peer and a port, with nothing above the
+peer-authorization check. Reach for Fleet for anything that's a hive service; reach for a mesh
+forward only for the raw, non-HTTP case Fleet has no way to express.

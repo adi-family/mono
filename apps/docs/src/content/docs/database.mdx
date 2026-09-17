@@ -1,0 +1,58 @@
+---
+title: Database
+description: One shared SQLite database every agent, tool, trigger, and dashboard can read and write — for anything that has to outlive a single run.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A shared SQLite database that every [[Agents|agent]], [[Tools|tool]], [[Triggers|trigger]], and
+[[Dashboards|dashboard]] can read and write. Reach for it whenever something has to outlive one
+run or be seen by someone else: notes, a queue, a cache, a findings table — anything you'd
+otherwise scatter across ad-hoc JSON files that only one script knows how to read.
+
+Two scopes: **global** (`~/.adi/mono/db/global.db`, shared by everything) or filed under a
+[[Projects|project]] (its own `.db` file). `$ADI_DB` is exported into every run already pointing
+at the right scope, so the usual code never hardcodes a path.
+
+## Why it exists
+
+Agents and dashboards are separate processes with no shared memory. Without a common database,
+"remember this between runs" means each script inventing its own file format, and "read what the
+dashboard wrote" means guessing at that format from the outside. One SQLite file, read and
+written from both a shell tool and a Bun/TypeScript dashboard backend at once, removes the need
+for either.
+
+## Do it
+
+```bash
+adi-db exec "create table if not exists notes (id integer primary key, body text not null, at integer)"
+adi-db query "select * from notes order by at desc limit 5"
+adi-db tables                                  # what exists, with columns and row counts
+adi-db --project my-app query "select * from things"
+```
+
+From TypeScript — a dashboard backend, a `.ts` tool, a `ts` trigger — `@adi/db` needs no install
+step:
+
+```ts
+import { query, run } from '@adi/db';
+run("insert into notes (body, at) values (?, ?)", "found it", Date.now());
+```
+
+## It's the same file from both sides <Flags>Expert area</Flags>
+
+A table created with `adi-db` is visible to `@adi/db` a moment later, and back — one engine, one
+file, WAL mode, so a concurrent reader and a writer don't block each other. **Always bind values
+with `--param`** (or a placeholder in TypeScript), never paste them into the SQL: it's the
+injection boundary, and it binds numbers as numbers — SQLite compares text `'5'` and integer `5`
+as unequal, so an interpolated value can silently match nothing instead of erroring.
+
+There's no server to be "down" — a write reporting the database locked means another writer held
+it past five seconds; retry once. `adi-db backup` before anything destructive.
+
+## Sharing it well
+
+Name tables for what they hold and who owns them (`inbox_triage`, not `data`), use
+`create table if not exists`, and never `drop`/`alter` a table you didn't create — check
+`adi-db tables` first. If the work belongs to a project, scope to it (`--project <id>`, or file
+the tool/agent under it) so its data stays separable from everything else on the machine.

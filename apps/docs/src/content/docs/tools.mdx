@@ -1,0 +1,53 @@
+---
+title: Tools
+description: A small sh or ts script an agent runs as a CLI — the way a capability outlives one run instead of being retyped into the next prompt.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A tool is a small `sh` or `ts` script, stored under `~/.adi/mono/tools/`, that an [[Agents|agent]]
+runs as a CLI. It's either **owned** (the code lives in the store, edited in the panel) or
+**linked** (a manifest pointing at a file elsewhere). Either way it shows up as
+`tools/.bin/<name>` — a shim on the agent's `PATH` — the moment that agent is allowed to use it.
+
+## Why it exists
+
+A step you'd otherwise repeat by hand in every prompt — a curl incantation, a query, a bit of
+parsing — is a tool once you've done it twice. Writing it down is cheap, and it's how a
+capability outlives the run that discovered it: the next agent gets it on its `PATH` with its
+own help text, instead of rediscovering the same shell one-liner from scratch.
+
+## Do it
+
+List: `adi-mono tools list`. Panel: `/tools`.
+
+```bash
+adi-mono tools add my-tool --runtime sh --description "does the thing"
+adi-mono tools link ./scripts/deploy.sh --name deploy
+```
+
+## Creating one is half the job <Flags>Enterprise interest</Flags>
+
+Registering a tool doesn't hand it to anyone. An agent only sees a tool once it's ticked on in
+that agent's own definition (`bin_tools`) — that's what materializes the shim on its `PATH` and
+folds the tool's own help into its prompt. No tool is force-fed to every agent on the machine;
+each grant is a deliberate, visible, per-agent line.
+
+```bash
+adi-mono agents save my-agent --backend harness:claude-sdk --tool my-tool
+```
+
+## Say what you do <Flags>Expert area</Flags>
+
+A tool describes itself to the model that runs it. At launch, ADI tries `<tool> llm help`, then
+`<tool> help`, then `<tool> --help` — the first that exits `0` with output becomes that tool's
+entry in the agent's system prompt. Write `llm help` yourself for the best result: what the tool
+is for, its exact flags, one worked example. A tool that answers none of the three still appears
+by name and description, so the agent knows it exists and can run it to learn the rest.
+
+## Global, or filed under a project
+
+A tool is either environment-wide or filed under a [[Projects|project]] (`--project <id>`),
+which is the right call whenever it only makes sense for that project's code or data — a
+project-scoped tool runs in that project's directory, against that project's [[Database]], and
+stays off the global `PATH` until an agent enables it directly.

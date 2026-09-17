@@ -209,8 +209,8 @@ is dropped with a warning rather than routed, so a local project can never shado
 machine's namespace. A request for an `n.adi` host is forwarded verbatim to whatever loopback
 address `proxy.mesh_gateway` names, if the machine has one configured, or answered with its own
 "mesh unavailable" page — distinct from the plain 404, because the name is valid, this machine
-just has no way to reach it. The full contract for that namespace — pairing, routing over iroh,
-one origin per dashboard — is the fleet documentation's job (`docs/fleet.md`), not this page's.
+just has no way to reach it. See [[Fleet]] for pairing and grants, and [[Mesh]] for the
+peer-to-peer transport.
 
 ## On-demand start and idle-stop
 

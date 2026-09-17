@@ -8,8 +8,8 @@ head:
 hero:
   tagline: AI agents that run on your own machine, with a real address, a supervisor watching them, and one page in your browser to see what they're doing.
   actions:
-    - text: Start with Hive
-      link: /hive/
+    - text: Start with Projects
+      link: /projects/
       variant: primary
 ---
 
@@ -29,6 +29,25 @@ If you're comfortable installing software on a machine you control and running a
 terminal, ADI is for you. It isn't a hosted product you sign into — there's no account behind it
 sitting on someone else's server.
 
+## The pieces, in the order you'd meet them
+
+ADI is made of a small number of concepts that build on each other:
+
+1. **[[Projects]]** — the folder everything else is filed under.
+2. **[[Agents]]** — the AI workers: a model, a prompt, and what they're allowed to touch.
+3. **[[Tools]]** — small CLIs you give an agent, so it doesn't retype the same shell command.
+4. **[[Tasks]]** — the to-do list an agent and you both read and write.
+5. **[[Triggers]]** — what runs an agent automatically, on a webhook, a schedule, or an event.
+6. **[[Secrets]]** — the credentials an agent is explicitly allowed to see.
+7. **[[Database]]** — the shared SQLite store agents, tools, and dashboards read and write.
+8. **[[Hive]]** — the supervisor and front door that gives a long-running process a real
+   `<name>.adi` address.
+9. **[[Ports]]** — how a hive service gets a port without anyone picking one by hand.
+10. **[[DNS and the front door|DNS]]** — why `.adi` names resolve on your machine at all.
+11. **[[Dashboards]]** — a small web app, hosted on hive, that an agent can build for you.
+12. **[[Fleet]]** — pairing another machine running ADI, to reach its services by name.
+13. **[[Mesh]]** — the peer-to-peer network fleet pairing rides on.
+
 ## For an enterprise evaluating this <Flags>Enterprise interest</Flags>
 
 The front door — the piece that answers every `*.adi` address — binds loopback addresses only,
@@ -38,17 +57,21 @@ leaf it signs isn't a certificate any real browser will accept for anything outs
 machine's own names, however its key is handled. Services meant to stay up are supervised and
 restarted under their own restart policy instead of left to quietly die, and the whole routing
 table is one API call away rather than scattered across shell history and config files. See
-[[Hive]] for the routing, HTTPS, and supervision detail behind all of this.
+[[Hive]] for the routing, HTTPS, and supervision detail, and [[Secrets]] for how a credential is
+encrypted at rest and scoped to exactly the agent that needs it.
 
 ## For the technically curious <Flags>Expert area</Flags>
 
 A service lives as a few lines of YAML in a project's `.adi/hive.yaml`, and the CLI, `adi-mono`,
 is the one command line every part of the system answers to. Under the hood there's a DNS
-resolver for the `.adi` zone, a task tree, a code index (symbol search, call graph, clone
-detection), knowledge bases with embedded semantic search, a fleet layer that joins remote
-machines over iroh, and a port manager that leases ports instead of guessing at them. The one
-piece with a real page right now is the front door and process supervisor — [[Hive]].
+resolver for the `.adi` zone (see [[DNS and the front door]]), a task tree, a code index (symbol
+search, call graph, clone detection), knowledge bases with embedded semantic search, a fleet
+layer that joins remote machines over iroh (see [[Fleet]] and [[Mesh]]), and a port manager that
+leases ports instead of guessing at them (see [[Ports]]).
 
 ## Where to start
 
-These docs are early — [[Hive]] is the only page written in depth so far. Start there.
+New to ADI: read [[Projects]], then [[Agents]] — those two explain most of what the panel shows
+you when you first open it. Setting something up to run unattended: [[Triggers]] and [[Secrets]].
+Confused about why a hostname works at all: [[DNS and the front door]]. Connecting a second
+machine: [[Fleet]].

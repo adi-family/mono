@@ -1,0 +1,53 @@
+---
+title: Fleet
+description: Pair another machine running ADI and reach its services by name — `<service>.<node>.n.adi` — with no open port on either side.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A fleet is the set of other ADI machines you've paired with this one. Pairing turns a remote
+node's services into ordinary-looking hostnames on your own front door:
+`<service>.<node>.n.adi` — a laptop's `nosh` dashboard, paired as `laptop-b`, is
+`nosh.laptop-b.n.adi` in your browser, right beside your own `<service>.adi` names.
+
+## Why it exists
+
+Reaching a service on another machine normally means an open inbound port, a VPN, or a tunnel
+you set up by hand — and remembering which of those you used, on which machine, for which
+service. Fleet needs none of it: a node only ever dials *out*, so it can sit behind any NAT with
+zero inbound firewall rules, and once paired its services just appear under real hostnames on
+your machine, the same way a local hive service does.
+
+## Do it
+
+Panel: `/settings/fleet`. On the CLI, pairing and grants are grouped under `adi-mono mesh`
+(the network layer's name — see [[Mesh]] — though what these commands manage is the fleet):
+
+```bash
+adi-mono mesh invite                    # mint a one-time invite, on the machine you want to reach
+adi-mono mesh join <token>              # spend it, on the machine dialing in
+adi-mono mesh fleet                     # list paired nodes: petname, key, grants
+adi-mono mesh grant laptop-b http:nosh  # let that node reach one more service here
+```
+
+A phone or a browser tab pairs the other way round — it mints nothing, since nothing can dial
+into a browser; the node it's pairing with mints the invite instead, and the tab scans or pastes
+it.
+
+## Two locks, both required <Flags>Enterprise interest</Flags>
+
+Pairing alone doesn't open anything. Reaching a node's service needs both:
+
+- **A grant**, per node, naming what it may reach (`http:app`, `http:nosh`, `http:*`) —
+  default-deny, so an empty grant list means nobody gets in, not everybody.
+- **A password**, set on the node itself and required over HTTP for every request that arrives
+  through the mesh, including its own control panel. A mesh grant is machine-scoped — anything
+  on your paired laptop could otherwise reach the node — the password is what stops that, and
+  what stops someone else on a shared machine from driving it.
+
+Pairing hands out exactly one default grant, `http:app` — the node's own control panel, nothing
+else. A dashboard isn't reachable until it's named.
+
+## What's on the far side <Flags>Expert area</Flags>
+
+A paired node keeps its own full stack — its own [[Hive|hive]], its own [[DNS and the front door|DNS]] — so its services resolve locally on it exactly as yours do on you. What crosses the mesh is HTTP, over one pooled connection per peer; see [[Mesh]] for the transport itself, and for reaching something that isn't a hive service at all.

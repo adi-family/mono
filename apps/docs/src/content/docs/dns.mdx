@@ -1,0 +1,58 @@
+---
+title: DNS and the front door
+description: Why `app.adi` resolves to anything at all — a tiny local resolver that owns the `.adi` zone, and the front door it hands every request to.
+---
+
+import Flags from '../../components/Flags.astro';
+
+`app.adi`, `docs.adi`, `<your-project>.adi` — none of that is a real domain. `.adi` isn't
+delegated anywhere on the internet; nothing outside your machine has ever heard of it. It
+resolves because ADI runs its own tiny DNS resolver and tells your operating system: for names
+ending in `.adi`, ask me first.
+
+## Why it exists
+
+Without it, "run a local dev server" means a bare port you have to remember
+(`http://localhost:8042`) or a line added to `/etc/hosts` by hand for every single service. The
+resolver removes both: register a [[Hive|hive service]] and its hostname exists the moment the
+config is read, for every browser and every terminal on the machine, with no file to edit.
+
+## How the name actually resolves
+
+ADI installs a **split-DNS** route — only queries ending in `.adi` are sent to it; everything
+else (`google.com`, your VPN's internal names) keeps going to your normal upstream resolver
+untouched. The mechanism is different per OS, but the shape is the same everywhere:
+
+| OS | The route |
+| --- | --- |
+| macOS | a `/etc/resolver/adi` file |
+| Linux | a systemd-resolved split-DNS domain |
+| Windows | an NRPT rule |
+
+The resolver itself answers on an unprivileged local port; only *installing that OS route* needs
+an admin prompt, once, at setup. Once it's in place, resolving `app.adi` returns `127.0.0.1` —
+the front door — and the [[Hive|front door]] takes it from there: matching the hostname to a
+service and proxying the request to whatever port that service actually leased.
+
+## Do it
+
+```bash
+adi-mono dns status              # is the route installed, is the resolver up
+adi-mono dns enable               # install the route + front-door proxy, if not already
+```
+
+## Never stop it by hand <Flags>Enterprise interest</Flags>
+
+The DNS resolver is the one hive-adjacent piece you should never restart casually: every `*.adi`
+address on the machine — including the control panel itself — depends on it answering. It binds
+its own reserved port range (`127.0.0.1:15353` and `15000–15999`, kept out of the
+[[Ports|ports manager]]'s lease pool) specifically so nothing else on the machine can collide
+with it or be mistaken for it.
+
+## What it isn't <Flags>Expert area</Flags>
+
+The resolver only answers names — `app.adi` → `127.0.0.1`. Matching a *host* to a *service* and
+proxying the request is the front door's job, covered in full in [[Hive]]: routing rules,
+on-demand start, and the HTTPS — backed by a locally trusted certificate authority — that makes
+`https://app.adi` a real secure context.
+This page is the "why does the name even work" half; that one is the "what happens after" half.

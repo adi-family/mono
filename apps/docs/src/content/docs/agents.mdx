@@ -1,0 +1,68 @@
+---
+title: Agents
+description: An agent is a saved definition — model, prompt, tools, secrets — that ADI can launch, watch, and let you reply to from anywhere.
+---
+
+import Flags from '../../components/Flags.astro';
+
+An agent is a definition, not a process: a name, a backend (which CLI or engine runs it), a
+model, a system prompt, which [[Tools]] and [[Secrets]] it's allowed to touch. Launching it
+starts a run; the definition itself just sits in `~/.adi/mono/agents/` until you do. `adi-agent`,
+the environment's own default agent, is a definition like any other — nothing about it is
+special-cased except that it starts with every tool enabled.
+
+## Why it exists
+
+Point a coding CLI at a terminal and it forgets everything the moment you close the tab. An
+agent definition survives that: the same prompt, the same tools, the same model choice, run
+again tomorrow or by a [[Triggers|trigger]] at 3am, with every run's outcome kept
+(`adi-mono agents runs`) so "did it work" is a question you ask the store instead of hunting
+logs.
+
+## Backends
+
+| Backend | What it is |
+| --- | --- |
+| `pty:claude` / `pty:codex` | The CLI in a live terminal session, on your own subscription login |
+| `process:claude` / `process:codex` | The same CLI headless, one `--print` turn |
+| `harness:claude-sdk` | `claude --print` under ADI's own harness — a turn cap, scoped tools |
+| `harness:adi` | ADI's own agent loop, multi-provider — needs a provider API key |
+
+## Do it
+
+List: `adi-mono agents list`. Panel: `/agents`.
+
+```bash
+adi-mono agents run my-agent
+adi-mono agents runs --since 6h          # every run, newest first, with how it ended
+adi-mono agents questions                # what's waiting on you to answer
+```
+
+## Nothing is on by default <Flags>Enterprise interest</Flags>
+
+A new agent starts with an empty grant in both directions. A tool exists on the machine — it
+isn't usable by an agent until that agent's definition ticks it on (`bin_tools`); an engine's own
+built-in surface (file access, web, a second task tracker) exists in the CLI — it isn't callable
+until named in that agent's **Allowed tools**. An agent that names nothing runs on ADI's own
+`Bash`/`Await`/`Ask` alone. Widening either list is a deliberate, per-agent, auditable act — not
+a machine-wide switch. `adi-agent`, this environment's own default, is the one deliberate
+exception: it ships with every tool ticked on, because its job is operating the whole
+environment.
+
+## When a run can't decide <Flags>Expert area</Flags>
+
+A run can't sit and wait for a person — a turn ends like any other. When it hits a genuine fork
+it calls `Ask`, which writes the question down and ends the turn with nothing held open; the
+answer arrives as a new message with the whole transcript still there. `adi-mono agents answer`
+settles it from anywhere. An agent nobody would see the question from — a trigger's agent, a
+3am sweep — is marked `unattended`, and `Ask` refuses so the run decides for itself instead of
+stopping silently until morning.
+
+Two numbers cap how many runs may be live at once: a global ceiling and, per project, a
+narrower one — `adi-mono agents limit`. Automatic launches (a trigger, a queued chat turn) are
+refused once a cap is full; a human overrides it with `--force`.
+
+## See also
+
+[[Tools]] for what an agent can run, [[Triggers]] for what starts one without a person clicking
+Run, [[Secrets]] for what credentials it can see.
