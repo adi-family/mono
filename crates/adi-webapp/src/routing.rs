@@ -493,6 +493,16 @@ pub(crate) fn agent_form_path(name: &str) -> String {
     }
 }
 
+/// The root document's setup wizard, opened on a named agent (`/?reconfigure=<name>`) rather than
+/// this panel's own editor — the wizard is `main::Home`'s, a document of its own the same way
+/// [`MARKET`] is (see its own doc), so a "Reconfigure" row crosses into it as a real navigation.
+/// `main::Home` reads the param once `/api/meta` and `/api/agents` have both landed, then clears
+/// it. No escaping, for the reason [`agent_form_path`] needs none: an agent name is one path-safe
+/// segment already.
+pub(crate) fn reconfigure_href(name: &str) -> String {
+    format!("/?reconfigure={name}")
+}
+
 /// The store-relative file path in a `/files/<path>` URL, or `None` for any other path. Each
 /// segment is percent-decoded, so a name with a space or `#` round-trips through the address bar.
 pub(crate) fn store_path_from_path(path: &str) -> Option<String> {

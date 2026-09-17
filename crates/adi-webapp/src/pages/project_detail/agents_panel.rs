@@ -9,7 +9,7 @@ use crate::pages::agents::{
     agent_actions, agent_cell, agent_key, agent_name_cell, open_agent_editor,
     project_run_limit_view,
 };
-use crate::routing::{ProjectSection, Route};
+use crate::routing::{ProjectSection, Route, reconfigure_href};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{Key, TextField, apply_mutation, menu_item, row_actions, sort_rows};
 
@@ -185,14 +185,22 @@ fn project_agent_rows(
             // The full 49-field form lives on the agent's own editor page; Edit takes you there,
             // rather than duplicating the schema-driven form in this panel.
             let a_edit = a.clone();
+            let a_name = a.name.clone();
             let edit = menu_item(state, "Edit", false, move || {
                 open_agent_editor(state, route, edit_form, Some(&a_edit));
+            });
+            // The setup wizard, on this agent — a real navigation into the root document (see
+            // `routing::reconfigure_href`), not a route change.
+            let reconfigure = menu_item(state, "Reconfigure", false, move || {
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().set_href(&reconfigure_href(&a_name));
+                }
             });
             let actions = row_actions(
                 state,
                 format!("agent:{}", a.name),
                 agent_actions(state, watch, &a),
-                vec![edit],
+                vec![edit, reconfigure],
             );
             view! { <TableRow state=table cell=move |col| match col {
                 // Running is a live state: the accent dot (DESIGN.md §3), not a badge.

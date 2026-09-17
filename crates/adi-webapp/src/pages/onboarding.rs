@@ -1,11 +1,14 @@
 //! The root onboarding wizard (`/`): the guided first run that stands the root agent up, and the
-//! same form again behind the chat bar's "reconfigure agent".
+//! same form again for a **reconfigure** — the chat bar's own row, or a "Reconfigure" reached from
+//! elsewhere in the panel (the Agents page, an agent's own page, a project's Agents panel), which
+//! names any agent rather than only the root one ([`OnboardingForm::target`]).
 //!
-//! A first run opens on the **welcome screen**: the greeting and two doors — a simple setup for
+//! Every pass opens on the **welcome screen**: the greeting and two doors — a simple setup for
 //! someone who has never seen adi, an extended one for someone who has. The door is remembered
 //! ([`SetupMode`]) and decides where the form behind it starts; the steps after it will branch on
-//! the same answer as the wizard grows. A reconfigure is already past that question and opens on
-//! the form itself.
+//! the same answer as the wizard grows. A reconfigure's form still opens with the target agent's
+//! existing values behind it — the welcome screen only decides where the fields start, never what
+//! is already in them.
 //!
 //! The wizard asks as little as it can. A **setup preset** — served by the API beside the form
 //! schema — names a backend, pins the arguments that choice implies, and leaves only the real
@@ -23,8 +26,8 @@ use std::collections::BTreeSet;
 
 use adi_ui::{Icon, IconSize, Lang, Lucide};
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentDto, AgentFormSpec, AgentSetupPreset, AgentSetupSecret, MetaState,
-    SaveAgent, SecretRef, SetSecret,
+    AgentBackendOption, AgentDto, AgentFormSpec, AgentSetupPreset, AgentSetupSecret, AgentsState,
+    MetaState, SaveAgent, SecretRef, SetSecret,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -122,6 +125,11 @@ pub(crate) struct OnboardingForm {
     error: RwSignal<Option<String>>,
     /// True while editing an agent that already exists, so the wizard shows in place of the chat.
     pub(crate) reconfiguring: RwSignal<bool>,
+    /// Which agent this pass reconfigures: an existing agent's own name, or empty for the root one
+    /// — the target a first run and the chat bar's own "Reconfigure agent" row both take. Set by
+    /// whichever entry point opens the wizard ([`start_reconfigure`], [`start_reconfigure_agent`]),
+    /// and read back by [`submit_onb_agent`] to say which agent it is saving.
+    pub(crate) target: RwSignal<String>,
     /// Whether the manual preset's "help me to choose?" runtime dialog is open.
     show_help: RwSignal<bool>,
     /// The system prompt is advanced and seeded from a sensible default, so it starts collapsed.
@@ -137,6 +145,7 @@ impl OnboardingForm {
             key: RwSignal::new(String::new()),
             error: RwSignal::new(None),
             reconfiguring: RwSignal::new(false),
+            target: RwSignal::new(String::new()),
             show_help: RwSignal::new(false),
             show_prompt: RwSignal::new(false),
         }
@@ -162,13 +171,40 @@ pub(crate) fn seed_onboarding(form: OnboardingForm, m: &MetaState) {
     }
 }
 
-/// The chat bar's "reconfigure agent": load the stored agent into the wizard and show it in place
-/// of the chat.
+/// The chat bar's "reconfigure agent": load the stored root agent into the wizard and show it in
+/// place of the chat, from the welcome screen (ADI-MONO-64) — the same pass [`start_reconfigure_agent`]
+/// opens on a named one.
 pub(crate) fn start_reconfigure(form: OnboardingForm, m: &MetaState) {
     if let Some(agent) = m.agent.as_ref() {
         load_reconfigure(form, m, agent);
+        // Reset explicitly rather than trusting the default: a previous pass through this form may
+        // have targeted somebody else and left both behind.
+        form.target.set(String::new());
+        form.mode.set(None);
         form.reconfiguring.set(true);
     }
+}
+
+/// A "Reconfigure" elsewhere in the panel (the Agents page, an agent's own page, a project's
+/// Agents panel — ADI-MONO-65): load a *named* agent into the wizard and show it in place of the
+/// chat, from the welcome screen. `agents` is `state.agents` — the root document already
+/// subscribes to `/api/agents` (see `main::Home`) — searched rather than trusted, since the name
+/// crossed in from a URL a stale tab or an old bookmark could still be carrying. `false` when it
+/// isn't there, so the caller can flash instead of opening a wizard with nothing behind it.
+pub(crate) fn start_reconfigure_agent(
+    form: OnboardingForm,
+    m: &MetaState,
+    agents: &AgentsState,
+    name: &str,
+) -> bool {
+    let Some(agent) = agents.agents.iter().find(|a| a.name == name) else {
+        return false;
+    };
+    load_reconfigure(form, m, agent);
+    form.target.set(agent.name.clone());
+    form.mode.set(None);
+    form.reconfiguring.set(true);
+    true
 }
 
 /// Load an existing agent into the wizard, on the preset that describes it.
@@ -222,23 +258,40 @@ fn apply_preset(form: OnboardingForm, presets: &[AgentSetupPreset], id: &str) {
     }
 }
 
-/// The wizard: the welcome screen on a first run until a door is taken, then the title and its
-/// lead, the stepper, and step 1's form — one element, so the shell's column spaces nothing
-/// inside it and the page keeps its own rhythm.
+/// Whether the wizard's target agent exists yet — the root one via `m.agent` with no target, else
+/// a lookup in `state.agents` (the same list [`start_reconfigure_agent`] found it in, read tracked
+/// so a target deleted out from under an open wizard is noticed the way `agent_detail_view`'s own
+/// `missing` is). Decides "create" vs "reconfigure" wherever that question is asked below, in
+/// place of the old `m.agent.is_none()`, which only ever asked it of the root agent.
+fn target_missing(state: State, m: &MetaState, target: &str) -> bool {
+    if target.is_empty() {
+        return m.agent.is_none();
+    }
+    !state
+        .agents
+        .get()
+        .is_some_and(|a| a.agents.iter().any(|d| d.name == target))
+}
+
+/// The wizard: the welcome screen until a door is taken, then the title and its lead, the
+/// stepper, and step 1's form — one element, so the shell's column spaces nothing inside it and
+/// the page keeps its own rhythm.
 pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
-    let first_run = m.agent.is_none();
     view! {
         <div class="adi-onb__wizard">
             {move || {
+                let target = form.target.get();
+                let creating = target_missing(state, &m, &target);
+                let name = if target.is_empty() { m.name.clone() } else { target.clone() };
                 let mode = form.mode.get();
-                if first_run && mode.is_none() {
-                    return welcome_view(form, m.form.presets.clone());
+                if mode.is_none() {
+                    return welcome_view(form, m.form.presets.clone(), creating, name);
                 }
                 let m = m.clone();
                 view! {
-                    {onb_intro(first_run, mode)}
-                    <ol class="adi-onb__steps">{onb_steps(first_run)}</ol>
-                    {onb_setup(state, form, m)}
+                    {onb_intro(creating, mode, name.clone())}
+                    <ol class="adi-onb__steps">{onb_steps(creating)}</ol>
+                    {onb_setup(state, form, m, creating, target.is_empty(), name)}
                 }
                     .into_any()
             }}
@@ -249,11 +302,31 @@ pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) 
 
 /// The first screen: the greeting and the two ways in, and nothing else. No stepper — a fork is
 /// not a step — and no form, because the only question here is which of the two people you are.
-fn welcome_view(form: OnboardingForm, presets: Vec<AgentSetupPreset>) -> AnyView {
+/// A first run greets a stranger; a reconfigure — of the root agent or any other — names what it
+/// is about to go through again and offers a way back to the chat instead.
+fn welcome_view(
+    form: OnboardingForm,
+    presets: Vec<AgentSetupPreset>,
+    creating: bool,
+    name: String,
+) -> AnyView {
+    let (title, lead) = if creating {
+        (
+            "Welcome to adi".to_string(),
+            "Let\u{2019}s set up your primary agent.".to_string(),
+        )
+    } else {
+        (
+            format!("Reconfigure {name}"),
+            "Pick how it should run, from the top \u{2014} its existing setup is still behind \
+             it."
+            .to_string(),
+        )
+    };
     view! {
         <div class="adi-onb__welcome">
-            <h1 class="adi-onb__title">"Welcome to adi"</h1>
-            <p class="adi-onb__lead">"Let\u{2019}s set up your primary agent."</p>
+            <h1 class="adi-onb__title">{title}</h1>
+            <p class="adi-onb__lead">{lead}</p>
             <div class="adi-onb__doors">
                 {onb_door(
                     form,
@@ -275,6 +348,12 @@ fn welcome_view(form: OnboardingForm, presets: Vec<AgentSetupPreset>) -> AnyView
                 )}
             </div>
             <p class="adi-onb__welcome-note">"Either way, you can change all of it later."</p>
+            {(!creating).then(|| view! {
+                <div class="adi-onb__actions">
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        on:click=move |_| form.reconfiguring.set(false)>"Cancel"</button>
+                </div>
+            })}
         </div>
     }
     .into_any()
@@ -329,12 +408,12 @@ fn choose_mode(form: OnboardingForm, presets: &[AgentSetupPreset], mode: SetupMo
 
 /// The wizard's title once a door is behind it. A first run is titled by the door it took — the
 /// greeting was said on the welcome screen, and saying it again reads as if the wizard restarted.
-/// A reconfigure (same form, reached from the chat's bar) gets a title that says where you are
-/// instead of greeting someone who has been here all along.
-fn onb_intro(first_run: bool, mode: Option<SetupMode>) -> AnyView {
-    if !first_run {
+/// A reconfigure (of the root agent or any other) gets a title that names the agent instead of
+/// greeting someone who has been here all along.
+fn onb_intro(creating: bool, mode: Option<SetupMode>, name: String) -> AnyView {
+    if !creating {
         return view! {
-            <h1 class="adi-onb__title">"Reconfigure your agent"</h1>
+            <h1 class="adi-onb__title">{format!("Reconfigure {name}")}</h1>
             <p class="adi-onb__lead">
                 "Change the runtime it runs on, its credentials, or its system prompt."
             </p>
@@ -358,10 +437,10 @@ fn onb_intro(first_run: bool, mode: Option<SetupMode>) -> AnyView {
     .into_any()
 }
 
-/// The stepper row: one node per onboarding step, a hairline between. Step 1 is `active` on a
-/// first run and `done` once the agent exists (a reconfigure is step 1 again, from the other
-/// side); later steps are `upcoming`.
-fn onb_steps(first_run: bool) -> Vec<AnyView> {
+/// The stepper row: one node per onboarding step, a hairline between. Step 1 is `active` while
+/// the target agent doesn't exist yet and `done` once it does (a reconfigure is step 1 again, from
+/// the other side); later steps are `upcoming`.
+fn onb_steps(creating: bool) -> Vec<AnyView> {
     let last = ONBOARDING_STEPS.len() - 1;
     ONBOARDING_STEPS
         .iter()
@@ -369,7 +448,7 @@ fn onb_steps(first_run: bool) -> Vec<AnyView> {
         .map(|(i, label)| {
             let state = if i > 0 {
                 "upcoming"
-            } else if first_run {
+            } else if creating {
                 "active"
             } else {
                 "done"
@@ -392,21 +471,43 @@ fn onb_steps(first_run: bool) -> Vec<AnyView> {
 }
 
 /// Step 1: the section title and intro, the preset picker, the fields that preset asks for, the
-/// (collapsed) system prompt, and the save. Doubles as create (no agent yet) and reconfigure (an
-/// agent exists and Cancel returns to the chat).
-fn onb_setup(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
-    let creating = m.agent.is_none();
+/// (collapsed) system prompt, and the save. Doubles as create (no target agent yet) and
+/// reconfigure (the target exists and Cancel returns to the chat). `is_root` and `name` say which
+/// agent this pass is about, for the intro paragraph and the submit button — everywhere else reads
+/// `form` and `m` the same way regardless.
+fn onb_setup(
+    state: State,
+    form: OnboardingForm,
+    m: MetaState,
+    creating: bool,
+    is_root: bool,
+    name: String,
+) -> AnyView {
     let presets = m.form.presets.clone();
     let for_submit = m.clone();
     let for_body = m.clone();
+    let button_name = name.clone();
     view! {
         <h2 class="adi-onb__section">"Set up your primary agent"</h2>
-        <p class="adi-onb__intro">
-            <b>"adi-agent"</b>
-            " is your environment's root agent — a meta-agent that helps you set up and
-             operate this ADI stack. Pick how it should run and give it what that needs;
-             every tool in your store is enabled on it. You can change all of it later."
-        </p>
+        {if is_root {
+            view! {
+                <p class="adi-onb__intro">
+                    <b>{name}</b>
+                    " is your environment's root agent — a meta-agent that helps you set up and
+                     operate this ADI stack. Pick how it should run and give it what that needs;
+                     every tool in your store is enabled on it. You can change all of it later."
+                </p>
+            }
+            .into_any()
+        } else {
+            view! {
+                <p class="adi-onb__intro">
+                    "Pick how "<b>{name}</b>" should run and give it what that needs. You can
+                     change all of it later."
+                </p>
+            }
+            .into_any()
+        }}
         <form class="adi-onb__form" on:submit=move |ev| {
             ev.prevent_default();
             submit_onb_agent(state, form, &for_submit);
@@ -431,10 +532,12 @@ fn onb_setup(state: State, form: OnboardingForm, m: MetaState) -> AnyView {
                 <span class="adi-spacer"></span>
                 <button class="adi-btn adi-btn--accent" type="submit"
                     prop:disabled=move || form.agent.busy.get()>
-                    {move || match (form.agent.busy.get(), creating) {
-                        (true, _) => "Saving…",
-                        (false, true) => "Create adi-agent",
-                        (false, false) => "Save changes",
+                    {move || if form.agent.busy.get() {
+                        "Saving…".to_string()
+                    } else if creating {
+                        format!("Create {button_name}")
+                    } else {
+                        "Save changes".to_string()
                     }}
                 </button>
             </div>
@@ -663,12 +766,14 @@ fn onb_help_dialog(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> A
     .into_any()
 }
 
-/// Save the wizard as the `adi-agent` definition (create or update): store the preset's API key as
-/// a secret if one was typed, save the agent with that secret attached, then refresh `/api/meta`.
+/// Save the wizard as the target agent's definition (create or update, root or not): store the
+/// preset's API key as a secret if one was typed, save the agent with that secret attached, then
+/// refresh `/api/meta`.
 ///
 /// The key is stored **first**: an agent saved against a variable that holds nothing is an agent
 /// whose first run fails for a reason the setup page had in its hand.
 fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
+    let target = form.target.get_untracked();
     let backend = form.agent.backend.get_untracked().trim().to_string();
     if backend.is_empty() {
         form.error
@@ -709,16 +814,26 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         agent_param_applies(Some(&spec), &backend, &provider, "temperature"),
     );
 
-    // The root agent is created with every tool the store has (see `meta_bin_tools`).
-    let bin_tools = Some(meta_bin_tools(Some(m)));
+    // The root agent is created with every tool the store has (see `meta_bin_tools`) — every tool
+    // in the store is exactly what the intro paragraph above promises it. Handing that to an
+    // ordinary agent would be a very different agent than the one being reconfigured, so anybody
+    // else's pass leaves the checkboxes exactly as they already are.
+    let bin_tools = target.is_empty().then(|| meta_bin_tools(Some(m)));
     let manual = preset.as_ref().is_some_and(|p| p.manual);
     let body = SaveAgent {
-        name: m.name.clone(),
+        name: if target.is_empty() {
+            m.name.clone()
+        } else {
+            target.clone()
+        },
         // Onboarding creates the agent with no chain, so the preset's runtime is its to state.
         backend: Some(backend),
         arguments,
-        // Onboarding creates the agent, so it states its tags, star and secrets outright; `project`
-        // stays unstated because there is nothing to keep and an unfiled agent is a global one.
+        // This pass states its tags and star outright — the wizard writes back exactly what it
+        // loaded on anything it doesn't itself offer a field for, so this is a no-op wherever it
+        // isn't a change. `project` stays unstated: omitted means "keep whatever the agent already
+        // has" (see `handlers::agents::save_agent`) — nothing to keep for a brand-new root agent,
+        // and whichever project an existing target is already filed under otherwise.
         tags: Some(
             form.agent
                 .tags

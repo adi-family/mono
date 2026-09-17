@@ -51,16 +51,14 @@ use wasm_bindgen_futures::spawn_local;
 
 use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
-    agents_view,
-    analytics_view, chat_home_view, dashboards_view, database_view, embedding_backends_view,
-    facts_view, fleet_view,
-    hive_view, knowledge_view, live_graph_view, live_view, llm_backends_view, llm_view,
-    load_agent_into_form, load_dir, load_store_file, market_view, marketplace_view, mesh_view,
-    meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
-    seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure, store_file_view,
-    tasks_view,
-    tools_view, triggers_view,
+    agents_view, analytics_view, chat_home_view, dashboards_view, database_view,
+    embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, live_graph_view,
+    live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir, load_store_file,
+    market_view, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
+    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
+    reset_chat_home, secrets_view, seed_onboarding, settings_view, shared_assets_view,
+    start_onb_reconfigure, start_onb_reconfigure_agent, store_file_view, tasks_view, tools_view,
+    triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -166,6 +164,31 @@ fn Home() -> impl IntoView {
     spawn_local(async move {
         if let Ok(s) = fetch::secrets().await {
             state.secrets.set(Some(s));
+        }
+    });
+
+    // A panel row's "Reconfigure" crosses into this document with `?reconfigure=<name>`
+    // (`routing::reconfigure_href`) rather than an SPA route, because the wizard is this
+    // document's and the panel is `/extended`'s. Opened once both `/api/meta` (the presets, the
+    // default prompt) and `/api/agents` (the target's own definition) have landed — either may
+    // still be in flight from the loads above — then cleared from the address bar so Cancel and a
+    // later refresh don't reopen it. A name that isn't in the list is never a blank wizard, just a
+    // flash on the chat the dead link leaves us on.
+    let reconfigure_target = RwSignal::new(routing::query_param("reconfigure"));
+    Effect::new(move |_| {
+        let Some(name) = reconfigure_target.get() else {
+            return;
+        };
+        let Some(m) = meta.get() else { return };
+        let Some(a) = state.agents.get() else {
+            return;
+        };
+        reconfigure_target.set(None);
+        routing::replace_state("/");
+        if !start_onb_reconfigure_agent(onb, &m, &a, &name) {
+            state.flash.set(Some(Flash::err(format!(
+                "No agent named \u{201c}{name}\u{201d} \u{2014} it may have been deleted or renamed."
+            ))));
         }
     });
 
@@ -399,7 +422,14 @@ fn Home() -> impl IntoView {
             };
             if m.agent.is_some() && !onb.reconfiguring.get() {
                 view! {
-                    <div class="adi-chome-root">{chat_home_view(state, watch, launcher)}</div>
+                    <div class="adi-chome-root">
+                        // A reconfigure link that named an agent nobody has — never a blank
+                        // wizard, just this, on the chat its dead end lands us on anyway.
+                        {move || state.flash.get().map(|f| view! {
+                            <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
+                        })}
+                        {chat_home_view(state, watch, launcher)}
+                    </div>
                 }
                 .into_any()
             } else {

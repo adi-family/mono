@@ -90,6 +90,14 @@
     padding: 12px 0 96px;
   }
 
+  // The back link and the wizard's own way in, sharing the row above the title.
+  &__toprow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
   &__back {
     display: inline-flex;
     align-items: center;

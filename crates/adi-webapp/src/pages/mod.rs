@@ -91,6 +91,7 @@ pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
 pub(crate) use onboarding::{
     OnboardingForm, onboarding_view, seed_onboarding, start_reconfigure as start_onb_reconfigure,
+    start_reconfigure_agent as start_onb_reconfigure_agent,
 };
 pub(crate) use ports::ports_manager_view;
 pub(crate) use project_detail::{load_dir, project_detail_view};

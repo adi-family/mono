@@ -16,7 +16,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::{
-    Route, agent_form_path, push_state, replace_state, scroll_top, spa_click, spa_nav,
+    Route, agent_form_path, push_state, reconfigure_href, replace_state, scroll_top, spa_click,
+    spa_nav,
 };
 use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State, read_error};
 use crate::ui::{Key, flash_view, menu_item, row_actions, rows_or_status, sort_rows, updated_text};
@@ -165,11 +166,24 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
     });
     view! {
         <div class="adi-agents__form">
-            <a class="adi-agents__back" href=Route::Agents.path() title="Back to every agent"
-                on:click=move |ev| spa_click(&ev, route, Route::Agents)>
-                <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
-                "Agents"
-            </a>
+            <div class="adi-agents__toprow">
+                <a class="adi-agents__back" href=Route::Agents.path() title="Back to every agent"
+                    on:click=move |ev| spa_click(&ev, route, Route::Agents)>
+                    <Icon icon=Lucide::ArrowLeft size=IconSize::Sm/>
+                    "Agents"
+                </a>
+                // The guided wizard, on this same agent — a real navigation into the root
+                // document (see `routing::reconfigure_href`), not this page's own route change.
+                // Only once the agent exists: a definition still being created has nothing for
+                // the wizard to load.
+                {move || editing.get().map(|n| view! {
+                    <a class="adi-agents__back" href=reconfigure_href(&n)
+                        title="Open the guided setup wizard on this agent">
+                        "Reconfigure with the wizard"
+                        <Icon icon=Lucide::ArrowRight size=IconSize::Sm/>
+                    </a>
+                })}
+            </div>
             <h1 class="adi-agents__title">
                 {move || match editing.get() {
                     Some(n) => format!("Reconfigure {n}"),
@@ -731,6 +745,7 @@ fn agent_rows(
         .map(|a| {
             let del_name = a.name.clone();
             let a_edit = a.clone();
+            let a_name = a.name.clone();
             let sim_name = a.name.clone();
             let mut items = Vec::new();
             // The launch controls lead the menu, on the rows that have any.
@@ -742,6 +757,13 @@ fn agent_rows(
             }
             items.push(menu_item(state, "Edit", false, move || {
                 open_agent_editor(state, route, form, Some(&a_edit));
+            }));
+            // The setup wizard, on this agent — a real navigation into the root document (see
+            // `routing::reconfigure_href`), not a route change.
+            items.push(menu_item(state, "Reconfigure", false, move || {
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().set_href(&reconfigure_href(&a_name));
+                }
             }));
             // Take the model's seat in a run of this agent: a way of reading what the agent is
             // told, not of running it — it opens a screen rather than starting work.
