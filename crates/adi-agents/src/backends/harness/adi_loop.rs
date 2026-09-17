@@ -38,6 +38,7 @@
 //! makes correcting a turn possible at all — a wrong direction spotted at round three is worth
 //! saying at round three, not once sixty rounds of it have been paid for.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -201,9 +202,16 @@ pub(crate) fn probe(
     let args: HarnessAdiArguments = crate::agent::decode_arguments(arguments.clone())?;
     validate(&args)?;
     let wire = Wire::of(&args, model)?;
+    // No session behind a probe, so a failure report has nowhere to write its sidecar file — the
+    // capped copy in the error is all there is.
+    let run = RunCtx::new(1, 1, None);
     // Withheld, so a model that would rather call a tool than answer cannot turn a two-token probe
     // into a loop. Anything it says back counts as alive.
-    let reply = wire.round(&[json!({ "role": "user", "content": prompt })], Calls::Withheld)?;
+    let reply = wire.round(
+        &[json!({ "role": "user", "content": prompt })],
+        Calls::Withheld,
+        &run,
+    )?;
     Ok(reply.text)
 }
 
@@ -237,6 +245,21 @@ struct Reply {
     raw: Value,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    /// Why the provider stopped generating — its own word for it (`stop_reason`, `finish_reason`,
+    /// `done_reason`…), verbatim. `None` where a provider has no such field (a shape-error
+    /// response, or a dialect that doesn't send one) rather than a guess.
+    finish_reason: Option<String>,
+    /// The id the provider gave this response, where it gives one — worth having in a bug report
+    /// because it's what the provider's own support can look a bad response up by.
+    response_id: Option<String>,
+    /// A structured refusal, on the dialects that send one separately from the answer text.
+    refusal: Option<String>,
+    /// The credential this round's request carried, if any — kept only so a failure report can
+    /// scrub it out of `raw` before showing it anywhere. Never otherwise read.
+    secret: Option<String>,
+    /// The endpoint this round actually hit, resolved `base_url` override and all — worth more in
+    /// a bug report than the provider's name alone when the failure is the endpoint itself.
+    endpoint: String,
 }
 
 /// Ask, run what was asked for, and ask again — until the model answers without calling anything.
@@ -267,7 +290,8 @@ fn tool_loop(
             max_rounds = round.saturating_sub(1).saturating_add(allowance);
         }
 
-        let reply = wire.round(&messages, Calls::Allowed)?;
+        let run = RunCtx::new(round, max_rounds, Some((ctx.agent_dir, ctx.conv)));
+        let reply = wire.round(&messages, Calls::Allowed, &run)?;
         metrics.num_turns = Some(round);
         add(&mut metrics.input_tokens, reply.input_tokens);
         add(&mut metrics.output_tokens, reply.output_tokens);
@@ -276,10 +300,12 @@ fn tool_loop(
             if reply.text.trim().is_empty() {
                 metrics.is_error = true;
                 adi_events::metrics(sink, &metrics);
-                return Err(Error::Process(format!(
+                let sentence = format!(
                     "{} answered with neither text nor a tool call",
                     wire.provider()
-                )));
+                );
+                let report = FailureReport::from_reply(wire, &reply, messages.len(), &run);
+                return Err(report.into_error(&sentence, reply.secret.as_deref(), run.session));
             }
             adi_events::answer(sink, &reply.text);
             adi_events::metrics(sink, &metrics);
@@ -323,7 +349,8 @@ fn tool_loop(
         ),
     );
     wire.interject(&mut messages, WRAP_UP);
-    let reply = wire.round(&messages, Calls::Withheld)?;
+    let run = RunCtx::new(max_rounds + 1, max_rounds, Some((ctx.agent_dir, ctx.conv)));
+    let reply = wire.round(&messages, Calls::Withheld, &run)?;
     metrics.num_turns = Some(max_rounds + 1);
     add(&mut metrics.input_tokens, reply.input_tokens);
     add(&mut metrics.output_tokens, reply.output_tokens);
@@ -331,11 +358,13 @@ fn tool_loop(
     if reply.text.trim().is_empty() {
         metrics.is_error = true;
         adi_events::metrics(sink, &metrics);
-        return Err(Error::Process(format!(
+        let sentence = format!(
             "the turn was still calling tools after {rounds}, and wrote nothing when asked to \
              stop and summarise — the steps above are what it did; raise the agent's max turns if \
              the work genuinely needs more"
-        )));
+        );
+        let report = FailureReport::from_reply(wire, &reply, messages.len(), &run);
+        return Err(report.into_error(&sentence, reply.secret.as_deref(), run.session));
     }
     adi_events::answer(sink, &reply.text);
     adi_events::metrics(sink, &metrics);
@@ -387,6 +416,27 @@ enum Calls {
 impl Calls {
     fn withheld(self) -> bool {
         self == Self::Withheld
+    }
+}
+
+/// Where in the run one round sits, carried down into every provider's round fn for no reason
+/// but a failure report: which round this was out of how many, and where its sidecar file (the
+/// untruncated report a capped one in the error can point at) belongs.
+struct RunCtx<'a> {
+    round: u64,
+    max_rounds: u64,
+    /// This run's agent directory and conversation id, so a failure report has somewhere to write
+    /// its untruncated copy — `None` for [`probe`], which is not a session and keeps nothing.
+    session: Option<(&'a Path, &'a str)>,
+}
+
+impl<'a> RunCtx<'a> {
+    fn new(round: u64, max_rounds: u64, session: Option<(&'a Path, &'a str)>) -> Self {
+        Self {
+            round,
+            max_rounds,
+            session,
+        }
     }
 }
 
@@ -444,6 +494,15 @@ impl<'a> Wire<'a> {
             Self::OpenAi { dialect, .. } => dialect.provider,
             Self::Gemini { .. } => "gemini",
             Self::Ollama { .. } => "ollama",
+        }
+    }
+
+    fn model(&self) -> &'a str {
+        match self {
+            Self::Anthropic { model, .. }
+            | Self::OpenAi { model, .. }
+            | Self::Gemini { model, .. }
+            | Self::Ollama { model, .. } => model,
         }
     }
 
@@ -543,17 +602,18 @@ impl<'a> Wire<'a> {
         }
     }
 
-    /// Send one round and read it back.
-    fn round(&self, messages: &[Value], calls: Calls) -> Result<Reply> {
+    /// Send one round and read it back. `run` is carried only for a failure report: which round
+    /// this was, and where its sidecar file (if any) belongs.
+    fn round(&self, messages: &[Value], calls: Calls, run: &RunCtx<'_>) -> Result<Reply> {
         match self {
-            Self::Anthropic { args, model } => anthropic_round(args, model, messages, calls),
+            Self::Anthropic { args, model } => anthropic_round(args, model, messages, calls, run),
             Self::OpenAi {
                 args,
                 model,
                 dialect,
-            } => openai_round(args, model, messages, dialect, calls),
-            Self::Gemini { args, model } => gemini_round(args, model, messages, calls),
-            Self::Ollama { args, model } => ollama_round(args, model, messages, calls),
+            } => openai_round(args, model, messages, dialect, calls, run),
+            Self::Gemini { args, model } => gemini_round(args, model, messages, calls, run),
+            Self::Ollama { args, model } => ollama_round(args, model, messages, calls, run),
         }
     }
 
@@ -862,11 +922,14 @@ fn function_declarations() -> Vec<Value> {
 
 // ---- Anthropic ---------------------------------------------------------------------
 
+#[allow(clippy::too_many_lines)] // one request field per agent option, one reply field per thing
+// worth a bug report — splitting either half would only move the list, not shorten it.
 fn anthropic_round(
     args: &HarnessAdiArguments,
     model: &str,
     messages: &[Value],
     calls: Calls,
+    run: &RunCtx<'_>,
 ) -> Result<Reply> {
     let key = api_key(args, "ANTHROPIC_API_KEY", "Anthropic")?;
 
@@ -918,6 +981,17 @@ fn anthropic_round(
         ("anthropic-version", "2023-06-01"),
     ];
     let resp = post_json(&url, &headers, &body)?;
+    let shape_error = || {
+        provider_shape_error(
+            "anthropic",
+            model,
+            &url,
+            messages.len(),
+            run,
+            &resp,
+            Some(&key),
+        )
+    };
 
     // The reply is a list of content blocks: text ones make up what it said, tool_use ones are what
     // it wants run. Both can appear in the same round, which is exactly the "here's what I'm about
@@ -925,7 +999,7 @@ fn anthropic_round(
     let blocks = resp
         .get("content")
         .and_then(Value::as_array)
-        .ok_or_else(|| provider_shape_error("anthropic", &resp))?;
+        .ok_or_else(shape_error)?;
     let mut text = String::new();
     let mut calls = Vec::new();
     for block in blocks {
@@ -966,6 +1040,14 @@ fn anthropic_round(
         raw: json!({ "role": "assistant", "content": blocks }),
         input_tokens: usage(&resp, &["usage", "input_tokens"]),
         output_tokens: usage(&resp, &["usage", "output_tokens"]),
+        finish_reason: resp
+            .get("stop_reason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        response_id: resp.get("id").and_then(Value::as_str).map(str::to_string),
+        refusal: None,
+        secret: Some(key),
+        endpoint: url,
     })
 }
 
@@ -1043,12 +1125,15 @@ const ZAI: OpenAiDialect = OpenAiDialect {
 /// the fix and nothing else says so. And several of them (`kimi-k2.6`, `OpenAI`'s o-series and
 /// gpt-5) accept only the default temperature, which is why nothing is sent unless the agent asked
 /// for it explicitly.
+#[allow(clippy::too_many_lines)] // one request field per agent option, one reply field per thing
+// worth a bug report — splitting either half would only move the list, not shorten it.
 fn openai_round(
     args: &HarnessAdiArguments,
     model: &str,
     messages: &[Value],
     dialect: &OpenAiDialect,
     calls: Calls,
+    run: &RunCtx<'_>,
 ) -> Result<Reply> {
     let key = api_key(args, dialect.default_key_env, dialect.provider)?;
 
@@ -1099,15 +1184,24 @@ fn openai_round(
     let url = versioned_url(&base, dialect.version, "chat/completions");
     let bearer = format!("Bearer {key}");
     let resp = post_json(&url, &[("authorization", bearer.as_str())], &body)?;
+    let shape_error = || {
+        provider_shape_error(
+            dialect.provider,
+            model,
+            &url,
+            messages.len(),
+            run,
+            &resp,
+            Some(&key),
+        )
+    };
 
     let choice = resp
         .get("choices")
         .and_then(Value::as_array)
         .and_then(|c| c.first())
-        .ok_or_else(|| provider_shape_error(dialect.provider, &resp))?;
-    let message = choice
-        .get("message")
-        .ok_or_else(|| provider_shape_error(dialect.provider, &resp))?;
+        .ok_or_else(shape_error)?;
+    let message = choice.get("message").ok_or_else(shape_error)?;
     let text = message
         .get("content")
         .and_then(Value::as_str)
@@ -1148,6 +1242,17 @@ fn openai_round(
         raw: message.clone(),
         input_tokens: usage(&resp, &["usage", "prompt_tokens"]),
         output_tokens: usage(&resp, &["usage", "completion_tokens"]),
+        finish_reason: choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        response_id: resp.get("id").and_then(Value::as_str).map(str::to_string),
+        refusal: message
+            .get("refusal")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        secret: Some(key),
+        endpoint: url,
     })
 }
 
@@ -1159,11 +1264,14 @@ fn openai_round(
 /// name is part of the URL rather than the body, tool declarations nest one level deeper, and a
 /// 2.5-series reply interleaves *thought* parts with answer parts in one list — so the read keeps
 /// only the parts that aren't thoughts.
+#[allow(clippy::too_many_lines)] // one request field per agent option, one reply field per thing
+// worth a bug report — splitting either half would only move the list, not shorten it.
 fn gemini_round(
     args: &HarnessAdiArguments,
     model: &str,
     messages: &[Value],
     calls: Calls,
+    run: &RunCtx<'_>,
 ) -> Result<Reply> {
     let key = api_key(args, "GEMINI_API_KEY", "Gemini")?;
 
@@ -1209,12 +1317,23 @@ fn gemini_round(
         ("x-goog-api-key", key.as_str())
     };
     let resp = post_json(&url, &[header], &body)?;
+    let shape_error = || {
+        provider_shape_error(
+            "gemini",
+            model,
+            &url,
+            messages.len(),
+            run,
+            &resp,
+            Some(&key),
+        )
+    };
 
     let candidate = resp
         .get("candidates")
         .and_then(Value::as_array)
         .and_then(|c| c.first())
-        .ok_or_else(|| provider_shape_error("gemini", &resp))?;
+        .ok_or_else(shape_error)?;
     let parts = candidate
         .get("content")
         .and_then(|c| c.get("parts"))
@@ -1258,7 +1377,7 @@ fn gemini_round(
             Some(reason) if reason != "STOP" => Err(Error::Process(format!(
                 "gemini stopped before writing an answer: {reason}"
             ))),
-            _ => Err(provider_shape_error("gemini", &resp)),
+            _ => Err(shape_error()),
         };
     }
     Ok(Reply {
@@ -1267,6 +1386,17 @@ fn gemini_round(
         raw: json!({ "role": "model", "parts": parts }),
         input_tokens: usage(&resp, &["usageMetadata", "promptTokenCount"]),
         output_tokens: usage(&resp, &["usageMetadata", "candidatesTokenCount"]),
+        finish_reason: candidate
+            .get("finishReason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        response_id: resp
+            .get("responseId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        refusal: None,
+        secret: Some(key),
+        endpoint: url,
     })
 }
 
@@ -1277,6 +1407,7 @@ fn ollama_round(
     model: &str,
     messages: &[Value],
     calls: Calls,
+    run: &RunCtx<'_>,
 ) -> Result<Reply> {
     let mut options = serde_json::Map::new();
     put_f64(&mut options, "temperature", args.temperature);
@@ -1325,9 +1456,9 @@ fn ollama_round(
     let url = format!("{base}/api/chat");
     let resp = post_json(&url, &[], &body)?;
 
-    let message = resp
-        .get("message")
-        .ok_or_else(|| provider_shape_error("ollama", &resp))?;
+    let message = resp.get("message").ok_or_else(|| {
+        provider_shape_error("ollama", model, &url, messages.len(), run, &resp, None)
+    })?;
     let text = message
         .get("content")
         .and_then(Value::as_str)
@@ -1353,7 +1484,15 @@ fn ollama_round(
         .unwrap_or_default();
 
     if text.trim().is_empty() && calls.is_empty() {
-        return Err(provider_shape_error("ollama", &resp));
+        return Err(provider_shape_error(
+            "ollama",
+            model,
+            &url,
+            messages.len(),
+            run,
+            &resp,
+            None,
+        ));
     }
     Ok(Reply {
         text,
@@ -1361,6 +1500,14 @@ fn ollama_round(
         raw: message.clone(),
         input_tokens: usage(&resp, &["prompt_eval_count"]),
         output_tokens: usage(&resp, &["eval_count"]),
+        finish_reason: resp
+            .get("done_reason")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        response_id: None,
+        refusal: None,
+        secret: None,
+        endpoint: url,
     })
 }
 
@@ -1428,11 +1575,238 @@ fn post_json(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value>
     serde_json::from_str(&text).map_err(|e| Error::Process(format!("invalid JSON from {url}: {e}")))
 }
 
-fn provider_shape_error(provider: &str, resp: &Value) -> Error {
-    Error::Process(format!(
-        "{provider} response had no answer text: {}",
-        resp.to_string().chars().take(300).collect::<String>()
-    ))
+/// A response that doesn't have the shape this dialect's own parse expects at all — no
+/// `choices`, no `message`, no `content` array. There is no assistant message to pull a
+/// `finish_reason` or a token count out of, so whatever the top-level response happens to carry
+/// is read best-effort instead: it usually still has one, and a report that shows it is worth
+/// more than one that gives up because the field it wanted moved.
+fn provider_shape_error(
+    provider: &'static str,
+    model: &str,
+    url: &str,
+    messages: usize,
+    run: &RunCtx<'_>,
+    resp: &Value,
+    secret: Option<&str>,
+) -> Error {
+    let (input_tokens, output_tokens) = shape_error_tokens(provider, resp);
+    let report = FailureReport {
+        provider,
+        model: model.to_string(),
+        endpoint: url.to_string(),
+        round: run.round,
+        max_rounds: run.max_rounds,
+        messages,
+        finish_reason: shape_error_finish_reason(provider, resp),
+        response_id: shape_error_response_id(provider, resp),
+        refusal: None,
+        input_tokens,
+        output_tokens,
+        raw: resp.clone(),
+    };
+    report.into_error(
+        &format!("{provider} response had no answer text"),
+        secret,
+        run.session,
+    )
+}
+
+/// The finish/stop reason a malformed response happens to carry anyway, read from wherever this
+/// provider would normally put it.
+fn shape_error_finish_reason(provider: &str, resp: &Value) -> Option<String> {
+    match provider {
+        "anthropic" => resp.get("stop_reason").and_then(Value::as_str),
+        "gemini" => resp
+            .get("candidates")
+            .and_then(Value::as_array)
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("finishReason"))
+            .and_then(Value::as_str),
+        "ollama" => resp.get("done_reason").and_then(Value::as_str),
+        // The chat-completions dialects: openai, monshoot, zai.
+        _ => resp
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|c| c.first())
+            .and_then(|c| c.get("finish_reason"))
+            .and_then(Value::as_str),
+    }
+    .map(str::to_string)
+}
+
+/// The response id a malformed response happens to carry anyway. Ollama has none to look for.
+fn shape_error_response_id(provider: &str, resp: &Value) -> Option<String> {
+    if provider == "ollama" {
+        return None;
+    }
+    let key = if provider == "gemini" {
+        "responseId"
+    } else {
+        "id"
+    };
+    resp.get(key).and_then(Value::as_str).map(str::to_string)
+}
+
+/// The token counts a malformed response happens to carry anyway, from each provider's own usage
+/// field.
+fn shape_error_tokens(provider: &str, resp: &Value) -> (Option<u64>, Option<u64>) {
+    match provider {
+        "anthropic" => (
+            usage(resp, &["usage", "input_tokens"]),
+            usage(resp, &["usage", "output_tokens"]),
+        ),
+        "gemini" => (
+            usage(resp, &["usageMetadata", "promptTokenCount"]),
+            usage(resp, &["usageMetadata", "candidatesTokenCount"]),
+        ),
+        "ollama" => (
+            usage(resp, &["prompt_eval_count"]),
+            usage(resp, &["eval_count"]),
+        ),
+        _ => (
+            usage(resp, &["usage", "prompt_tokens"]),
+            usage(resp, &["usage", "completion_tokens"]),
+        ),
+    }
+}
+
+/// Everything a "the model gave us nothing usable" bug report needs, gathered once so the three
+/// exits that can hit it — mid-loop, wrap-up, and a response that isn't even shaped the way this
+/// dialect expects — don't each show a different subset of it.
+struct FailureReport {
+    provider: &'static str,
+    model: String,
+    endpoint: String,
+    round: u64,
+    max_rounds: u64,
+    messages: usize,
+    finish_reason: Option<String>,
+    response_id: Option<String>,
+    refusal: Option<String>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    /// The raw assistant message (a normal empty reply) or the whole response body (a shape
+    /// error, where there is no message to single out) — whichever the caller actually has.
+    raw: Value,
+}
+
+/// How much of the raw payload the *shown* report carries. A generous few KB: several rounds of
+/// tool calls make a transcript long, but what this dump is proving is the shape of one reply,
+/// not the whole conversation. The sidecar file next to the session's log carries the whole
+/// thing, uncapped.
+const RAW_DUMP_LIMIT: usize = 4096;
+
+impl FailureReport {
+    /// Everything [`Reply`] already carried, for the two exits (mid-loop, wrap-up) that have one.
+    fn from_reply(wire: &Wire<'_>, reply: &Reply, messages: usize, run: &RunCtx<'_>) -> Self {
+        Self {
+            provider: wire.provider(),
+            model: wire.model().to_string(),
+            endpoint: reply.endpoint.clone(),
+            round: run.round,
+            max_rounds: run.max_rounds,
+            messages,
+            finish_reason: reply.finish_reason.clone(),
+            response_id: reply.response_id.clone(),
+            refusal: reply.refusal.clone(),
+            input_tokens: reply.input_tokens,
+            output_tokens: reply.output_tokens,
+            raw: reply.raw.clone(),
+        }
+    }
+
+    /// The sentence stays first and unchanged, so the panel's run summary still reads well; the
+    /// fenced block after it is what makes the failure shareable — paste it whole into an issue.
+    /// Writes the untruncated report beside this run's session log when there is one to write
+    /// beside, and names that path so the capped copy in the error isn't the only way to see it.
+    fn into_error(
+        self,
+        sentence: &str,
+        secret: Option<&str>,
+        session: Option<(&Path, &str)>,
+    ) -> Error {
+        let sidecar = session.and_then(|(agent_dir, conv)| {
+            let path = agent_dir.join(format!("{conv}.adi-loop-report.txt"));
+            let full = self.render(secret, None);
+            std::fs::write(&path, full).ok().map(|()| path)
+        });
+        let mut text = format!(
+            "{sentence}\n\n```\n{}\n```",
+            self.render(secret, Some(RAW_DUMP_LIMIT))
+        );
+        if let Some(path) = sidecar {
+            let _ = write!(text, "\n\nFull report: {}", path.display());
+        }
+        Error::Process(text)
+    }
+
+    /// The report body: everything but the leading sentence. `limit` caps how much of the raw
+    /// dump survives, `None` for the untruncated copy written to the sidecar file.
+    fn render(&self, secret: Option<&str>, limit: Option<usize>) -> String {
+        let raw = redact(&self.raw.to_string(), secret);
+        let (raw, truncated) = match limit {
+            Some(n) if raw.chars().count() > n => (raw.chars().take(n).collect::<String>(), true),
+            _ => (raw, false),
+        };
+        let mut out = String::new();
+        let _ = writeln!(out, "adi-mono {}", adi_update::BUILT_VERSION);
+        let _ = writeln!(out, "provider: {} · model: {}", self.provider, self.model);
+        let _ = writeln!(out, "endpoint: {}", self.endpoint);
+        let _ = writeln!(out, "round: {} of {}", self.round, self.max_rounds);
+        let _ = writeln!(
+            out,
+            "finish reason: {}",
+            self.finish_reason.as_deref().unwrap_or("(none given)")
+        );
+        if let Some(id) = &self.response_id {
+            let _ = writeln!(out, "response id: {id}");
+        }
+        if let Some(refusal) = &self.refusal {
+            let _ = writeln!(out, "refusal: {refusal}");
+        }
+        let _ = writeln!(
+            out,
+            "tokens: {} prompt / {} completion",
+            fmt_tokens(self.input_tokens),
+            fmt_tokens(self.output_tokens),
+        );
+        let _ = writeln!(out, "transcript: {} message(s)", self.messages);
+        let _ = write!(out, "raw: {raw}");
+        if truncated {
+            let _ = write!(out, " …[truncated]");
+        }
+        out
+    }
+}
+
+fn fmt_tokens(n: Option<u64>) -> String {
+    n.map_or_else(|| "?".to_string(), |n| n.to_string())
+}
+
+/// Scrub anything a bug report must never carry: the credential this call actually sent, any
+/// value currently in the environment that looks like a credential by name, and the `Bearer
+/// <token>` shape on its own — in case a misbehaving provider or proxy echoes a request header
+/// back inside an error body, which none of the others would catch.
+fn redact(text: &str, secret: Option<&str>) -> String {
+    let mut out = text.to_string();
+    if let Some(secret) = secret.filter(|s| !s.is_empty()) {
+        out = out.replace(secret, "[REDACTED]");
+    }
+    for (name, value) in std::env::vars() {
+        if value.is_empty() {
+            continue;
+        }
+        let looks_like_a_credential = ["KEY", "TOKEN", "SECRET", "PASSWORD"]
+            .iter()
+            .any(|marker| name.to_ascii_uppercase().contains(marker));
+        if looks_like_a_credential {
+            out = out.replace(value.as_str(), "[REDACTED]");
+        }
+    }
+    regex::Regex::new(r"(?i)bearer\s+\S+")
+        .expect("a fixed, valid pattern")
+        .replace_all(&out, "Bearer [REDACTED]")
+        .into_owned()
 }
 
 /// A reply that is all reasoning and no answer. Every thinking model can produce one, and the fix
@@ -1757,6 +2131,11 @@ mod tests {
             raw: json!({ "role": "assistant" }),
             input_tokens: None,
             output_tokens: None,
+            finish_reason: None,
+            response_id: None,
+            refusal: None,
+            secret: None,
+            endpoint: "https://example.test".to_string(),
         };
         let call = || ToolCall {
             id: "c1".into(),
@@ -2098,5 +2477,92 @@ mod tests {
         if planted {
             let _ = std::fs::remove_file(&sibling);
         }
+    }
+
+    #[test]
+    fn redact_scrubs_the_request_secret_and_a_bearer_token_on_its_own() {
+        let text = "request carried key=sk-request-secret, the header read \
+                     Authorization: Bearer abcdef123";
+        let out = redact(text, Some("sk-request-secret"));
+
+        assert!(!out.contains("sk-request-secret"), "{out}");
+        assert!(!out.contains("abcdef123"), "{out}");
+        assert!(out.contains("Bearer [REDACTED]"), "{out}");
+    }
+
+    #[test]
+    fn the_shown_report_truncates_the_raw_dump_but_the_sidecar_copy_does_not() {
+        let report = FailureReport {
+            provider: "openai",
+            model: "gpt-x".to_string(),
+            endpoint: "https://api.openai.com/v1/chat/completions".to_string(),
+            round: 1,
+            max_rounds: 1,
+            messages: 3,
+            finish_reason: Some("stop".to_string()),
+            response_id: None,
+            refusal: None,
+            input_tokens: Some(10),
+            output_tokens: Some(0),
+            raw: json!({ "content": "x".repeat(RAW_DUMP_LIMIT * 2) }),
+        };
+
+        let capped = report.render(None, Some(RAW_DUMP_LIMIT));
+        assert!(capped.ends_with("…[truncated]"), "{capped}");
+
+        let full = report.render(None, None);
+        assert!(!full.contains("[truncated]"), "{full}");
+        assert!(
+            full.len() > capped.len(),
+            "full {} vs capped {}",
+            full.len(),
+            capped.len()
+        );
+    }
+
+    /// Moonshot's chat-completions shape: an assistant message whose `content` is an empty
+    /// string comes back as a normal [`Reply`], not a [`provider_shape_error`] — the loop's own
+    /// "nothing usable" check is what catches it. This is the report that exit builds.
+    #[test]
+    fn a_kimi_shaped_empty_reply_carries_its_finish_reason_into_the_report() {
+        let reply = Reply {
+            text: String::new(),
+            calls: Vec::new(),
+            raw: json!({ "role": "assistant", "content": "" }),
+            input_tokens: Some(512),
+            output_tokens: Some(0),
+            finish_reason: Some("stop".to_string()),
+            response_id: Some("chatcmpl-kimi-1".to_string()),
+            refusal: None,
+            secret: Some("sk-moonshot-secret".to_string()),
+            endpoint: "https://api.moonshot.ai/v1/chat/completions".to_string(),
+        };
+        let args = args_for(HarnessProvider::Monshoot);
+        let wire = Wire::of(&args, "kimi-k2-turbo-preview").expect("wire");
+        let run = RunCtx::new(3, 64, None);
+        let report = FailureReport::from_reply(&wire, &reply, 5, &run);
+
+        let Error::Process(text) = report.into_error(
+            &format!(
+                "{} answered with neither text nor a tool call",
+                wire.provider()
+            ),
+            reply.secret.as_deref(),
+            run.session,
+        ) else {
+            panic!("into_error always returns Process");
+        };
+
+        assert!(
+            text.starts_with("monshoot answered with neither text nor a tool call"),
+            "{text}"
+        );
+        assert!(
+            text.contains("provider: monshoot · model: kimi-k2-turbo-preview"),
+            "{text}"
+        );
+        assert!(text.contains("finish reason: stop"), "{text}");
+        assert!(text.contains("response id: chatcmpl-kimi-1"), "{text}");
+        assert!(!text.contains("sk-moonshot-secret"), "{text}");
     }
 }

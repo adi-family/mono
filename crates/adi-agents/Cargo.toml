@@ -63,6 +63,9 @@ rustls = { workspace = true }
 schemars = { workspace = true }
 # Transcript analytics counts context in tokens, not characters — see `analytics`.
 tiktoken-rs = { workspace = true }
+# A "the model gave us nothing" bug report names the build it happened on, the same convention
+# `adi-core::VERSION` re-exports for the CLI's own `--version`.
+adi-update = { workspace = true }
 
 [dev-dependencies]
 # The registry is TOML on disk (adi-config writes it), so the manifest tests assert against the
