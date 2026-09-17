@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-130 structs · 36 enums · 5 type aliases across 55 files.
+133 structs · 36 enums · 5 type aliases across 55 files.
 
 ## Index
 
@@ -18,7 +18,7 @@
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
-- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`
+- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `FailureReport`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
@@ -36,7 +36,7 @@
 - [`src/llm/failover.rs`](#srcllmfailoverrs) — `Decision`, `Failure`
 - [`src/llm/holds.rs`](#srcllmholdsrs) — `HoldKey`, `Hold`, `Holds`
 - [`src/llm/migrate.rs`](#srcllmmigraters) — `Move`, `Skip`, `Plan`
-- [`src/llm/ondemand.rs`](#srcllmondemandrs) — `TestResult`, `TestVerdict`
+- [`src/llm/ondemand.rs`](#srcllmondemandrs) — `TestResult`, `TestVerdict`, `Credential`
 - [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
@@ -818,6 +818,11 @@ struct Reply {
     raw: Value,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    finish_reason: Option<String>,
+    response_id: Option<String>,
+    refusal: Option<String>,
+    secret: Option<String>,
+    endpoint: String,
 }
 ```
 
@@ -830,6 +835,18 @@ Whether a round is allowed to reach for a tool.
 enum Calls {
     Allowed,
     Withheld,
+}
+```
+
+### struct `RunCtx`
+
+Where in the run one round sits, carried down into every provider's round fn for no reason but a failure report: which round this was out of how many, and where its sidecar file (the untruncated report a capped one in the error can point at) belongs.
+
+```rust
+struct RunCtx<'a> {
+    round: u64,
+    max_rounds: u64,
+    session: Option<(&'a Path, &'a str)>,
 }
 ```
 
@@ -907,6 +924,27 @@ struct OpenAiDialect {
     default_max_tokens: u64,
     tool_choice_none: bool,
     takes_thinking: bool,
+}
+```
+
+### struct `FailureReport`
+
+Everything a "the model gave us nothing usable" bug report needs, gathered once so the three exits that can hit it — mid-loop, wrap-up, and a response that isn't even shaped the way this dialect expects — don't each show a different subset of it.
+
+```rust
+struct FailureReport {
+    provider: &'static str,
+    model: String,
+    endpoint: String,
+    round: u64,
+    max_rounds: u64,
+    messages: usize,
+    finish_reason: Option<String>,
+    response_id: Option<String>,
+    refusal: Option<String>,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    raw: Value,
 }
 ```
 
@@ -1734,6 +1772,7 @@ What a test found, and how long it took.
 pub struct TestResult {
     pub verdict: TestVerdict,
     pub elapsed_ms: u64,
+    pub credential: String,
 }
 ```
 
@@ -1751,6 +1790,18 @@ pub enum TestVerdict {
     Failed {
         error: String,
     },
+}
+```
+
+### struct `Credential`
+
+A credential a test resolved, and what to inject for it: `None` when the backend's own arguments already carry it (a `--settings` file), `Some((name, value))` when a secret needs to ride into the child's environment under the name its vendor CLI reads.
+
+```rust
+#[derive(Debug)]
+struct Credential {
+    description: String,
+    env: Option<(String, String)>,
 }
 ```
 

@@ -277,15 +277,43 @@ Each vendor-CLI ask is bounded by a short timeout (45s) — generous enough for 
 and a real round trip, far short of a full turn's ten-minute budget, because a human watching a
 button is not paying for a turn's worth of patience.
 
+**Two things a vendor CLI needs that this process was never handed, fixed 2026-09-17:**
+
+- **`PATH`.** The app service runs under a bare minimal environment — the same
+  `/usr/bin:/bin` launchd or systemd hands every daemon — so a vendor CLI installed in
+  `~/.local/bin` or `~/.cargo/bin` is invisible to a child spawned with this process's own
+  inherited `PATH`. Every vendor-CLI ask is now spawned on `crate::launch::run_path`'s widened
+  one instead, the same assembly a real agent run gets, rather than inventing a second one.
+- **A credential.** A backend naming no `settings` file authenticates on whatever is logged
+  into that runtime's CLI — and on this deployment that login is not ambient, it is a secret an
+  agent's `[[secrets]]` row attaches at launch (`CLAUDE_CODE_OAUTH_TOKEN`, for the claude
+  runtimes). A test spawned with none of that reached the CLI and reported "not logged in" for
+  a backend every agent uses successfully — worse than no button, because it looked like a real
+  answer. `resolve_credential` now mirrors what a run effectively does: the backend's own
+  `settings` or `api_key_env` when it names one; otherwise the *global* secret carrying the env
+  var that runtime honours (`CLAUDE_CODE_OAUTH_TOKEN` for `claude`, `OPENAI_API_KEY` for
+  `codex` — its own `~/.codex/auth.json` carries that field alongside a ChatGPT login, so the
+  CLI accepts either). A backend naming an `api_key_env` nothing answers to is refused before a
+  request is ever sent — a named credential that resolves nowhere is a dead end, not something
+  a request could still succeed against. A backend naming *nothing at all* is not refused the
+  same way: `LlmBackendManifest::credential` already treats "the runtime's own ambient login" as
+  a legitimate credential in its own right, so a missing global secret there falls back to
+  running with no extra environment, exactly as an agent with no attached secret would — which
+  is how `process-codex` keeps working on a host that has run `codex login` by hand, without an
+  `OPENAI_API_KEY` secret anywhere in ADI. Either way, the verdict names which credential it
+  used (`"answered in 2167ms via global secret CLAUDE_CODE_OAUTH_TOKEN"`), so a genuine "not
+  logged in" is never a mystery about which login was even tried.
+
 **It writes nothing.** No hold touched, released, or created, whatever the verdict — this answers
 a question, it does not change the answer to anyone else's. That is also why `RateLimited` here is
 informational rather than a hold: the prober is what decides whether a chat turn should skip this
 backend, and this path has no opinion on that.
 
-**A draft is testable.** `test_manifest` takes a manifest, not an id, so the panel's **Test**
-button can send the form exactly as typed — a backend that has never been saved — without a save
-happening first. `test_backend` is the thin id-based wrapper over it, for a saved row (`adi-mono
-llm test <id>`, `POST /api/llm/backends/test` with a bare `id`).
+**A draft is testable.** `test_manifest(config, manifest)` takes a manifest, not an id, so the
+panel's **Test** button can send the form exactly as typed — a backend that has never been saved —
+without a save happening first; `config` is only there to reach the secrets store for
+`resolve_credential`, above. `test_backend` is the thin id-based wrapper over it, for a saved row
+(`adi-mono llm test <id>`, `POST /api/llm/backends/test` with a bare `id`).
 
 **The API** (`POST /api/llm/backends/test`) accepts either that `id` or a `draft` (the same shape
 `save` takes); `draft` wins when both arrive. Always a `200`: the verdict

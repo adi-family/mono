@@ -244,7 +244,7 @@ pub fn test_llm_backend(store: &Agents, body: &[u8]) -> Response {
             Err(e) => return Response::from(&e),
         }
     };
-    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(&manifest)))
+    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(store.config(), &manifest)))
 }
 
 // ------------------------------------------------------------------ mapping

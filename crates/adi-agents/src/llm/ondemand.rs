@@ -16,11 +16,20 @@
 //! prompt and the backend's own model when it has none. A failure is read with
 //! [`classify`](super::classify::classify) against the backend's own limit rules, so "still
 //! rate-limited" means exactly what it means everywhere else that word is used.
+//!
+//! A vendor CLI spawned here needs two things a real agent run gets that this process was never
+//! handed: a `PATH` wide enough to find it (see [`run_with_env`]), and a credential to authenticate
+//! with (see [`resolve_credential`]) — a backend naming no `settings`/`api_key_env` of its own
+//! answers through whatever CLI is ambiently logged in on a real run, which in practice means the
+//! global secret an agent's `[[secrets]]` row attaches. Skipping either makes this lie: it reaches
+//! for a shell that was never on this process's `PATH`, or a login nothing here ever provided, and
+//! reports "not logged in" about a backend every agent uses successfully.
 
 use std::process::Command;
 use std::time::Instant;
 
 use adi_config::{Config, now_unix};
+use adi_secrets::Secrets;
 
 use crate::backend::Backend;
 use crate::error::{Error, Result};
@@ -40,16 +49,34 @@ pub struct TestResult {
     /// Wall-clock time the ask itself took, from the first byte of the command line to the last byte
     /// read back — not the classification that follows it, which is local and free.
     pub elapsed_ms: u64,
+    /// Which credential the test used, in words a human recognises (`"global secret
+    /// CLAUDE_CODE_OAUTH_TOKEN"`, `"settings file ~/.claude/settings.glm.json"`) — empty for a
+    /// runtime this function never reached (an unset backend, `harness:adi`). Folded into
+    /// [`message`](Self::message) so a "not logged in" is never a mystery about which login was
+    /// even tried.
+    pub credential: String,
 }
 
 impl TestResult {
-    /// One line for a human — what happened, in the words the provider used where there are any.
+    /// One line for a human — what happened, in the words the provider used where there are any,
+    /// and which credential answered for it.
     #[must_use]
     pub fn message(&self) -> String {
+        let via = if self.credential.is_empty() {
+            String::new()
+        } else {
+            format!(" via {}", self.credential)
+        };
         match &self.verdict {
-            TestVerdict::Answered => format!("answered in {}ms", self.elapsed_ms),
-            TestVerdict::RateLimited { reason } => format!("still rate-limited — {reason}"),
-            TestVerdict::Failed { error } => error.clone(),
+            TestVerdict::Answered => format!("answered in {}ms{via}", self.elapsed_ms),
+            TestVerdict::RateLimited { reason } => format!("still rate-limited{via} — {reason}"),
+            TestVerdict::Failed { error } => {
+                if via.is_empty() {
+                    error.clone()
+                } else {
+                    format!("{error}{via}")
+                }
+            }
         }
     }
 }
@@ -87,32 +114,37 @@ pub fn test_backend(config: &Config, id: &str) -> Result<TestResult> {
     let backend = LlmBackends::with_config(config.clone())
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
-    Ok(test_manifest(&backend.manifest))
+    Ok(test_manifest(config, &backend.manifest))
 }
 
 /// Test a backend that may not be saved at all — a draft an operator is still typing into the panel.
 /// This is the whole reason the core function takes a manifest rather than an id: the point of a
 /// "Test" button beside a form is to test the form as it stands, not whatever was last saved.
+///
+/// `config` is where the credential lives, not the backend: a vendor CLI authenticates off the
+/// environment it is started with, and a real run gets that from a secret an agent attached, not
+/// from anything on the backend's own manifest. See [`resolve_credential`].
 #[must_use]
-pub fn test_manifest(manifest: &LlmBackendManifest) -> TestResult {
+pub fn test_manifest(config: &Config, manifest: &LlmBackendManifest) -> TestResult {
     let (prompt, model) = test_prompt(manifest);
 
     let start = Instant::now();
-    let outcome = ask(manifest, model, prompt);
+    let outcome = ask(config, manifest, model, prompt);
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-    let verdict = match outcome {
-        Ok(()) => TestVerdict::Answered,
-        Err(text) => {
+    let (verdict, credential) = match outcome {
+        Ok(credential) => (TestVerdict::Answered, credential),
+        Err((credential, text)) => {
             let found = classify(&text, &manifest.limit_rules, None, now_unix());
-            if found.class.holds() {
+            let verdict = if found.class.holds() {
                 TestVerdict::RateLimited { reason: found.evidence }
             } else {
                 TestVerdict::Failed { error: text }
-            }
+            };
+            (verdict, credential)
         }
     };
-    TestResult { verdict, elapsed_ms }
+    TestResult { verdict, elapsed_ms, credential }
 }
 
 /// [`Probe::default`]'s own prompt, kept as a `'static` literal so [`test_prompt`] can hand back a
@@ -136,38 +168,145 @@ fn test_prompt(manifest: &LlmBackendManifest) -> (&str, &str) {
 
 /// Ask one backend its test prompt, once, through whatever runs it — no tools, no transcript, no
 /// session, and (unlike [`super::prober::ask`]) no refusal for a runtime that isn't `harness:adi`.
-fn ask(manifest: &LlmBackendManifest, model: &str, prompt: &str) -> std::result::Result<(), String> {
+///
+/// Returns the credential description on both paths: [`TestResult`] wants it whether the ask
+/// answered or failed, so a genuine "not logged in" is never a mystery about which login was even
+/// tried. Empty for a runtime this reaches without resolving one (`harness:adi` reads its own
+/// `api_key_env` from this process's environment; an unset or unknown runtime is refused before
+/// any credential question arises).
+fn ask(
+    config: &Config,
+    manifest: &LlmBackendManifest,
+    model: &str,
+    prompt: &str,
+) -> std::result::Result<String, (String, String)> {
     match &manifest.runtime {
-        Backend::HarnessAdi => {
-            crate::backends::harness::adi_loop::probe(&manifest.arguments(), model, prompt)
-                .map(drop)
-                .map_err(|e| e.to_string())
-        }
+        Backend::HarnessAdi => crate::backends::harness::adi_loop::probe(&manifest.arguments(), model, prompt)
+            .map(|_| String::new())
+            .map_err(|e| (String::new(), e.to_string())),
         // All three run the `claude` CLI; a pty backend's live session and a harness backend's
         // scoped turn are both beside the point here, so every one of them gets the same plain
         // `--print` ask instead.
         Backend::PtyClaude | Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
+            let credential = match resolve_credential(config, manifest) {
+                Ok(credential) => credential,
+                Err(message) => return Err((String::new(), message)),
+            };
             let argv = claude_argv(model, manifest.settings.as_deref(), prompt);
-            run(&argv).and_then(|output| {
+            let env: Vec<(String, String)> = credential.env.into_iter().collect();
+            let outcome = run_with_env(&argv, &env).and_then(|output| {
                 if output.status.success() {
                     Ok(())
                 } else {
                     Err(command_error("claude", &output))
                 }
-            })
+            });
+            match outcome {
+                Ok(()) => Ok(credential.description),
+                Err(error) => Err((credential.description, error)),
+            }
         }
         // Likewise for `codex`: `codex exec` is the headless one-shot both the pty and the process
         // engine ultimately open a terminal or a child around.
         Backend::PtyCodex | Backend::ProcessCodex => {
+            let credential = match resolve_credential(config, manifest) {
+                Ok(credential) => credential,
+                Err(message) => return Err((String::new(), message)),
+            };
             let argv = codex_argv(model, prompt);
-            let mut env = Vec::new();
+            let mut env: Vec<(String, String)> = credential.env.into_iter().collect();
             crate::backends::quiet_codex_env(&mut env);
-            run_with_env(&argv, &env).and_then(|output| read_codex(&output))
+            let outcome = run_with_env(&argv, &env).and_then(|output| read_codex(&output));
+            match outcome {
+                Ok(()) => Ok(credential.description),
+                Err(error) => Err((credential.description, error)),
+            }
         }
-        Backend::Other(other) => Err(format!(
-            "{} is not a runtime this build knows how to test",
-            if other.is_empty() { "(no runtime set)" } else { other }
+        Backend::Other(other) => Err((
+            String::new(),
+            format!(
+                "{} is not a runtime this build knows how to test",
+                if other.is_empty() { "(no runtime set)" } else { other }
+            ),
         )),
+    }
+}
+
+/// A credential a test resolved, and what to inject for it: [`None`] when the backend's own
+/// arguments already carry it (a `--settings` file), `Some((name, value))` when a secret needs to
+/// ride into the child's environment under the name its vendor CLI reads.
+#[derive(Debug)]
+struct Credential {
+    /// What to tell a human this test used — see [`TestResult::credential`].
+    description: String,
+    env: Option<(String, String)>,
+}
+
+/// The environment variable a vendor CLI reads for its login when a backend names no credential of
+/// its own — the *only* other place a run's credential can come from, so this is also the name
+/// [`resolve_credential`] reports missing when nothing on this machine carries it.
+///
+/// `claude` honours `CLAUDE_CODE_OAUTH_TOKEN` — confirmed against the global secret of that name,
+/// whose own description records it as "the env-var name the claude CLI actually honours". `codex`
+/// persists a `ChatGPT` login in `~/.codex/auth.json`, but that file carries an `OPENAI_API_KEY`
+/// field alongside it: the CLI accepts either, so an `OPENAI_API_KEY` secret is the one worth
+/// checking here rather than assuming a host has already run `codex login` by hand.
+fn ambient_credential_env(runtime: &Backend) -> Option<&'static str> {
+    match runtime {
+        Backend::PtyClaude | Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
+            Some("CLAUDE_CODE_OAUTH_TOKEN")
+        }
+        Backend::PtyCodex | Backend::ProcessCodex => Some("OPENAI_API_KEY"),
+        Backend::HarnessAdi | Backend::Other(_) => None,
+    }
+}
+
+/// Resolve a vendor-CLI backend's credential the way a real run's would: the backend's own
+/// `settings` or `api_key_env` when it names one, otherwise the global secret carrying the env var
+/// that runtime honours. A real run gets the same secret from an agent's `[[secrets]]` attachment
+/// ([`crate::attached_secret_env`]) — this differs only in reaching for the *global* scope
+/// directly, since a bare backend id has no agent, and therefore no project, to resolve one
+/// against.
+///
+/// # Errors
+/// A backend that names an `api_key_env` no secret answers to is a dead end nothing else can
+/// rescue — refused here rather than sent to fail as "not logged in" downstream. A backend naming
+/// nothing is not refused the same way: [`LlmBackendManifest::credential`] treats "the runtime's
+/// own ambient login" as a legitimate credential in its own right, so a missing global secret here
+/// falls back to running with no extra environment at all, exactly as an agent with no attached
+/// secret would.
+fn resolve_credential(
+    config: &Config,
+    manifest: &LlmBackendManifest,
+) -> std::result::Result<Credential, String> {
+    if let Some(settings) = manifest.settings.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(Credential { description: format!("settings file {settings}"), env: None });
+    }
+    let secrets = Secrets::with_config(config.clone());
+    if let Some(name) = manifest.api_key_env.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        return match secrets.reveal(None, name) {
+            Ok(Some(value)) => Ok(Credential {
+                description: format!("api_key_env {name}"),
+                env: Some((name.to_string(), value)),
+            }),
+            _ => Err(format!(
+                "names api_key_env {name}, but no secret named {name} is available — set one \
+                 (`adi-mono secrets set {name}`) or point the backend at a settings file instead"
+            )),
+        };
+    }
+    match ambient_credential_env(&manifest.runtime) {
+        Some(name) => match secrets.reveal(None, name) {
+            Ok(Some(value)) => Ok(Credential {
+                description: format!("global secret {name}"),
+                env: Some((name.to_string(), value)),
+            }),
+            _ => Ok(Credential {
+                description: format!("ambient {} login (no {name} secret set)", manifest.runtime),
+                env: None,
+            }),
+        },
+        None => Ok(Credential { description: format!("ambient {} login", manifest.runtime), env: None }),
     }
 }
 
@@ -255,17 +394,21 @@ fn run_prompt(prompt: &str) -> String {
     if prompt.is_empty() { "ok".to_string() } else { prompt.to_string() }
 }
 
-fn run(argv: &[String]) -> std::result::Result<std::process::Output, String> {
-    run_with_env(argv, &[])
-}
-
+/// Spawn the vendor CLI on the same `PATH` a real run gets, not whatever this process inherited.
+/// Under the app service that is launchd's or systemd's bare minimum — `/usr/bin:/bin` and
+/// nothing else — which is a `PATH` no vendor CLI installed for a human, in a shell profile, was
+/// ever going to be found on; a human pressing "Test" from a terminal never notices, because their
+/// own shell's `PATH` already has it. [`crate::launch::run_path`] is the one place that gap is
+/// closed for a real agent run, so this closes it the same way rather than inventing a second one.
 fn run_with_env(
     argv: &[String],
     env: &[(String, String)],
 ) -> std::result::Result<std::process::Output, String> {
     let (program, rest) = argv.split_first().expect("argv always starts with the program");
     let mut cmd = Command::new(program);
-    cmd.args(rest).envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    cmd.args(rest)
+        .env("PATH", crate::launch::run_path(None, &[]))
+        .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     crate::backends::harness::tools::wait_with_timeout(cmd, TEST_TIMEOUT_MS)
 }
 
@@ -303,12 +446,22 @@ mod tests {
         }
     }
 
+    fn scratch_config(tag: &str) -> Config {
+        let root = std::env::temp_dir().join(format!(
+            "adi-agents-ondemand-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Config::with_root(root)
+    }
+
     /// The one refusal that remains: a backend naming no runtime at all, or one this build has never
     /// heard of, has nothing to spawn. This is a pure dispatch failure — it never reaches `Command`,
     /// which is what makes it safe to run as an ordinary unit test.
     #[test]
     fn an_unset_runtime_fails_by_name_rather_than_being_asked_anything() {
-        let result = test_manifest(&manifest(Backend::default()));
+        let result = test_manifest(&scratch_config("unset-runtime"), &manifest(Backend::default()));
         assert!(
             matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("no runtime set")),
             "{result:?}"
@@ -427,6 +580,143 @@ mod tests {
                 "--json",
                 "ok",
             ]
+        );
+    }
+
+    /// A settings file is the whole credential — nothing to look up, so a scratch store with no
+    /// secrets in it still resolves one.
+    #[test]
+    fn a_settings_file_is_the_credential_and_needs_no_secret_lookup() {
+        let m = LlmBackendManifest {
+            settings: Some("~/.claude/settings.glm.json".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let credential = resolve_credential(&scratch_config("settings-credential"), &m)
+            .expect("a settings file is enough");
+        assert_eq!(credential.description, "settings file ~/.claude/settings.glm.json");
+        assert!(credential.env.is_none());
+    }
+
+    /// A backend naming a specific `api_key_env` that nothing answers to is a dead end nothing else
+    /// can rescue — refused before a request is ever sent, rather than left to fail downstream as
+    /// "not logged in".
+    #[test]
+    fn a_named_api_key_env_with_no_matching_secret_is_refused_before_sending_anything() {
+        let m = LlmBackendManifest {
+            api_key_env: Some("SOME_MISSING_KEY".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let err = resolve_credential(&scratch_config("missing-api-key-env"), &m)
+            .expect_err("nothing answers to that name");
+        assert!(err.contains("SOME_MISSING_KEY"), "{err}");
+    }
+
+    /// A named `api_key_env` backed by a secret of the same name is injected under that name —
+    /// exactly the env var the backend said it reads its key from.
+    #[test]
+    fn a_named_api_key_env_backed_by_a_secret_is_injected_under_its_own_name() {
+        let config = scratch_config("api-key-env-secret");
+        Secrets::with_config(config.clone())
+            .set(None, "MY_KEY", "s3cr3t", None)
+            .expect("set");
+        let m = LlmBackendManifest {
+            api_key_env: Some("MY_KEY".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let credential = resolve_credential(&config, &m).expect("the secret answers to that name");
+        assert_eq!(credential.description, "api_key_env MY_KEY");
+        assert_eq!(credential.env, Some(("MY_KEY".to_string(), "s3cr3t".to_string())));
+    }
+
+    /// The bug this whole module exists to fix: a claude backend naming no credential of its own
+    /// resolves the global `CLAUDE_CODE_OAUTH_TOKEN` secret exactly the way an agent's
+    /// `[[secrets]]` attachment would, instead of quietly asking with none and reporting a false
+    /// "not logged in".
+    #[test]
+    fn a_claude_backend_naming_nothing_falls_back_to_the_global_oauth_token_secret() {
+        let config = scratch_config("claude-ambient-secret");
+        Secrets::with_config(config.clone())
+            .set(None, "CLAUDE_CODE_OAUTH_TOKEN", "tok", None)
+            .expect("set");
+        let credential = resolve_credential(&config, &manifest(Backend::HarnessClaudeSdk))
+            .expect("the global secret answers");
+        assert_eq!(credential.description, "global secret CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(
+            credential.env,
+            Some(("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "tok".to_string()))
+        );
+    }
+
+    /// With no settings, no `api_key_env`, and no global secret, a claude backend still gets a
+    /// credential — [`LlmBackendManifest::credential`] already treats the runtime's own ambient
+    /// login as legitimate, so this runs on it rather than refusing a request that might yet
+    /// succeed against a CLI already logged in on this host.
+    #[test]
+    fn a_claude_backend_naming_nothing_with_no_global_secret_runs_on_ambient_login_instead_of_refusing() {
+        let credential = resolve_credential(&scratch_config("claude-no-secret"), &manifest(Backend::PtyClaude))
+            .expect("ambient login is a legitimate credential, not an error");
+        assert_eq!(
+            credential.description,
+            "ambient pty:claude login (no CLAUDE_CODE_OAUTH_TOKEN secret set)"
+        );
+        assert!(credential.env.is_none());
+    }
+
+    /// Codex's own conventional env var is `OPENAI_API_KEY`, not the claude token — the two vendor
+    /// CLIs must never be checked against each other's secret.
+    #[test]
+    fn a_codex_backend_naming_nothing_checks_openai_api_key_not_the_claude_token() {
+        let credential = resolve_credential(&scratch_config("codex-ambient"), &manifest(Backend::ProcessCodex))
+            .expect("ambient login is a legitimate credential");
+        assert_eq!(
+            credential.description,
+            "ambient process:codex login (no OPENAI_API_KEY secret set)"
+        );
+    }
+
+    /// The message a human reads names the credential, on both a success and a failure — a genuine
+    /// "not logged in" must never leave them guessing which login was even tried.
+    #[test]
+    fn the_message_names_which_credential_was_used() {
+        let answered = TestResult {
+            verdict: TestVerdict::Answered,
+            elapsed_ms: 42,
+            credential: "global secret CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+        };
+        assert_eq!(answered.message(), "answered in 42ms via global secret CLAUDE_CODE_OAUTH_TOKEN");
+
+        let failed = TestResult {
+            verdict: TestVerdict::Failed { error: "Not logged in".to_string() },
+            elapsed_ms: 12,
+            credential: "global secret CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+        };
+        assert_eq!(
+            failed.message(),
+            "Not logged in via global secret CLAUDE_CODE_OAUTH_TOKEN"
+        );
+    }
+
+    /// The `PATH` a vendor CLI is spawned on reaches past a bare `/usr/bin:/bin` — the shape of what
+    /// launchd or systemd hand the app service — the same way [`crate::launch::run_path`] widens it
+    /// for a real agent run. Proven by asking `run_with_env` to run `sh -c 'command -v claude'` with
+    /// only the vendor CLI's own install directory on the inherited `PATH`, then wiping the
+    /// inherited `PATH` out from under it — if this reached only that, the lookup would fail.
+    #[test]
+    fn the_child_gets_the_same_widened_path_a_real_run_gets() {
+        let output = run_with_env(
+            &[
+                "sh".to_string(),
+                "-c".to_string(),
+                "echo \"$PATH\"".to_string(),
+            ],
+            &[],
+        )
+        .expect("sh is always on a minimal PATH");
+        let path = String::from_utf8_lossy(&output.stdout);
+        let path = path.trim();
+        assert!(
+            std::env::split_paths(path).any(|dir| dir == std::path::Path::new("/usr/local/bin")),
+            "{path}"
         );
     }
 }
