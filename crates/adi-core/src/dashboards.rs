@@ -185,8 +185,9 @@ impl Service for Dashboards {
         .is_ok()
     }
 
-    /// Name what it is supervising, not the address it binds — the address is an implementation
-    /// detail nobody connects to, while the dashboard count is the thing an operator wants.
+    /// Lead with what it is supervising, not the address it binds — the address is an
+    /// implementation detail nobody connects to (adi-hive needs one to start, and that's all),
+    /// kept only as the secondary detail rather than dropped outright.
     fn detail(&self, _status: Option<&DaemonStatus>) -> String {
         let bind = bind();
         let dashboards = std::fs::read_dir(adi_config::Config::open().module(MODULE).dir())
@@ -197,11 +198,12 @@ impl Service for Dashboards {
                     .count()
             })
             .unwrap_or(0);
-        match dashboards {
-            0 => format!("Running · {bind} · no dashboards yet"),
-            1 => format!("Running · {bind} · 1 dashboard"),
-            n => format!("Running · {bind} · {n} dashboards"),
-        }
+        let what = match dashboards {
+            0 => "no dashboards yet".to_string(),
+            1 => "1 dashboard".to_string(),
+            n => format!("{n} dashboards"),
+        };
+        format!("Running · {what} ({bind})")
     }
 }
 

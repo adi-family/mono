@@ -594,6 +594,15 @@ mod linux {
         systemctl(&["is-enabled", &unit::service_name(label)]).ok()
     }
 
+    /// Running right now — distinct from [`is_loaded`], which only says systemd will bring it up
+    /// on its own. Asked where an `AddrInUse` on a socket the unit owns has to be told apart from
+    /// a foreign process holding it: "enabled" says nothing about which one currently has the
+    /// port, "active" does.
+    #[must_use]
+    pub fn is_active(label: &str) -> bool {
+        systemctl(&["is-active", "-q", &unit::service_name(label)]).ok()
+    }
+
     /// Restart a loaded unit so it picks up a replaced binary. A no-op if not installed.
     pub fn kickstart(label: &str) {
         if !is_loaded(label) {

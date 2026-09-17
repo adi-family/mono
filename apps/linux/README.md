@@ -1,17 +1,22 @@
-ADI for Linux — a fleet node
-============================
+ADI for Linux
+=============
 
 The ADI platform (DNS + front door + control panel + mesh), statically linked against musl so
 one tarball runs on any x86-64 distro.
 
-This package builds a **node** in the sense of `docs/fleet.md`: a full adi machine whose only
-network-facing action is an *outbound* QUIC session to an iroh relay. It listens on nothing but
-loopback — no `:22` exposure, no `:80`, no `:443` — and you reach it from your own machine
-through the mesh, at `<service>.<node>.n.adi`.
+This installs a full ADI machine on **this** one: a control panel, at
+`http://127.0.0.1:<port>` from the moment `install.sh` finishes, with nothing to configure
+first. Pairing it into a fleet is optional, not the point of installing it — do it now with
+`--pair <token>` (or at the interactive prompt), or later with `adi-mono mesh join <token>`.
+
+Paired or not, the machine listens on nothing but loopback by default — no `:22` exposure, no
+`:80`, no `:443` — everything a fleet peer reaches is through the mesh, at
+`<service>.<node>.n.adi`, and everything you reach standing at this machine is through the
+loopback ports above.
 
 There is no GUI and no launcher. The control panel is the same web UI `adi-app` serves
-everywhere; on a node you open it from *your* browser, through the mesh, at
-`app.<node>.n.adi`.
+everywhere; open it in a browser on this machine at the loopback address `install.sh` prints,
+or — once paired — reach it from elsewhere in the fleet at `app.<node>.n.adi`.
 
 
 What's in this folder
@@ -24,25 +29,37 @@ What's in this folder
     bin/adi-mesh   The standalone mesh CLI — `id`, `ticket`, `forward` (the daemon itself runs
                    inside adi-app, so this is for inspection and port forwards).
 
-    install.sh     Install, start, and pair. The only thing you have to run.
+    install.sh     Install and start; pair too, if you ask it to. The only thing you have to run.
     VERSION        The workspace version this package was built from.
 
 
 Quick start
 -----------
 
-On the machine you are pairing *from*, mint an invite token. Then, on the node:
-
     tar -xzf adi-linux-x64.tar.gz
     cd adi-linux-x64
-    ./install.sh '<invite-token>'
+    ./install.sh
 
-That is the whole install. It needs no root, and it opens no inbound port — not even
-temporarily — because pairing is a dial-out: the node contacts the relay, never the reverse.
+That is the whole install: no token, no fleet, nothing to answer. Run it with no arguments on
+a terminal and it asks a couple of questions (where to put things, whether to fetch bun); pipe
+it into a non-interactive session (`ssh node ./install.sh`) and it takes the defaults for all of
+them instead. Either way it finishes by printing the address of the control panel it just
+started — `install.sh` is the only thing you have to run.
 
-`install.sh` copies the binaries to `~/.local/adi/bin`, enables lingering, runs `adi-mono up`,
-and then `adi-mono mesh join <token>`. Pass `--prefix DIR` to install elsewhere, or `--no-pair`
-to bring the services up now and pair later.
+It needs no root, and it opens no inbound port — not even temporarily: the control panel binds
+loopback only, and pairing (if you ask for it) is a dial-out, never the reverse.
+
+`install.sh` copies the binaries to `~/.local/adi/bin` — and tries to link `adi-mono` into
+`/usr/local/bin` too, so it is on `PATH` immediately rather than only in your next shell; where
+that needs a password it can't ask for, it prints the one line to run instead — enables
+lingering, and runs `adi-mono up`. Pass `--prefix DIR` to install elsewhere.
+
+To join a fleet — reach this machine, and open its dashboards, from another one you already run
+ADI on — mint an invite token there and either pass it here:
+
+    ./install.sh --pair '<invite-token>'
+
+or pair later, any time, with `adi-mono mesh join <invite-token>`.
 
 ### bun — fetched, not bundled
 
@@ -158,49 +175,46 @@ keep an out-of-band console (cloud serial console, KVM, physical access) availab
 change that also removes your only way back in is the classic way to lose a box.
 
 
-The `.adi` domain on a node (optional, needs root)
---------------------------------------------------
+Why there is a DNS resolver at all, and the `.adi` domain (optional, needs root)
+--------------------------------------------------------------------------------
 
-The installer does not touch system DNS, and a node does not need it. You reach the node's
-services from *your* machine, where your own front door resolves `<service>.<node>.n.adi`; the
-mesh gateway on the node then resolves the service label against the node's own `hive.yaml`
-route table and connects to that service's loopback port. Nothing on the node has to resolve a
-name for any of that to work — which is why there is no root step in the install.
+`adi-dns` exists because `http://app.adi` is friendlier than `http://127.0.0.1:8090`, and that is
+its whole job: it resolves `.adi` names to the loopback front door, on `127.0.0.1:10053`. It is
+enabled by default and needs no root — but on its own, resolving a name that nothing has told
+your machine to ask it about does nothing, which is the routing step below.
 
-If you want the friendly names *on the node itself* (you ssh in and `curl http://app.adi/`),
-that is one root-owned file. `adi-dns`'s Linux routing is a systemd-resolved drop-in:
+The panel already works at `http://127.0.0.1:<port>` (`install.sh` prints the port) with none of
+this. `.adi` names — here, on this machine, `http://app.adi` — are one step further and are
+**never turned on automatically**, on purpose: it means binding `:80`, a port your machine may
+already have something on (nginx, say), and a routine `adi-mono up` must never silently fight it
+for that port. You turn it on by name, once:
 
-    # /etc/systemd/resolved.conf.d/adi-dns-adi.conf
-    [Resolve]
-    DNS=127.0.0.1:10053
-    Domains=~adi
+    adi-mono dns install-route
 
-    sudo systemctl restart systemd-resolved
+This does two separate things, and reports each:
 
-`Domains=~adi` is a *routing-only* domain: only `.adi` queries go to the local resolver, so this
-cannot disturb the rest of the machine's DNS. It requires systemd-resolved; a machine using a
-hand-written `/etc/resolv.conf` or dnsmasq needs the equivalent for its own resolver.
+* the `.adi` **route** — a systemd-resolved drop-in at
+  `/etc/systemd/resolved.conf.d/adi-dns-adi.conf` (`Domains=~adi`, so only `.adi` queries leave
+  the rest of the machine's DNS alone; a machine on hand-written `/etc/resolv.conf` or dnsmasq
+  needs the equivalent for its own resolver instead);
+* the front door's one **capability** — `cap_net_bind_service` on `adi-hive`, the smallest grant
+  that lets it bind `:80`/`:443` as your own unprivileged user (`sudo sysctl
+  net.ipv4.ip_unprivileged_port_start=80` is the machine-wide alternative, if you'd rather lower
+  the floor than grant one binary a capability — a bigger change, so it is not what `install-route`
+  reaches for on its own).
 
-Two further caveats, both only relevant if you want `.adi` names locally:
+It uses `sudo -n`, so it fails immediately rather than hanging an unattended `ssh node adi-mono
+up` on a password prompt; on refusal it prints the exact commands to run by hand. **It also
+checks first whether something else already answers on `:80`**, names it, and refuses rather
+than start a front door that can only crash-loop against it — free the port (or point the other
+service at the panel yourself), then run `install-route` again.
 
-* The front door (`adi-hive`) serves those names on port 80, which is privileged. Either grant
-  the capability once — `sudo setcap 'cap_net_bind_service=+ep' ~/.local/adi/bin/adi-hive` (redo
-  it after an upgrade; capabilities do not survive a file replacement) — or lower the floor with
-  `sudo sysctl net.ipv4.ip_unprivileged_port_start=80`.
-* `adi-mono up` supervises the front door on Linux as a `systemd --user` unit beside the
-  resolver — deliberately not a root system daemon, so nothing in `~/.adi/mono` ends up
-  root-owned. It is only enabled once the binary can actually bind: `adi-hive` exits when no
-  address bound, and `Restart=always` would turn that into a permanent crash loop, so `up`
-  probes first and prints the `setcap` line instead of starting a unit that cannot work.
-* `adi-mono dns install-route` performs the two privileged steps and reports each: the
-  `systemd-resolved` drop-in and the capability grant. It uses `sudo -n`, so it fails
-  immediately rather than hanging an unattended `ssh node adi-mono up` on a password prompt; on
-  refusal it prints the exact commands to run by hand.
-* Re-run `dns install-route` after upgrading the binaries — a file capability does not survive
-  the file being replaced.
-* None of this is needed to *reach* the node. Mesh access does not go through the node's front
-  door, so a node is fully usable with no route and no capability; this only affects browsing
-  `.adi` names while logged into the node itself.
+Re-run it after upgrading the binaries — a file capability does not survive the file being
+replaced.
+
+None of this is needed to *reach* a paired node from elsewhere in the fleet: mesh access goes
+through `<service>.<node>.n.adi`, resolved on the *viewer's* machine, never through this one's
+own front door. It only affects browsing `.adi` names while logged into this machine itself.
 
 
 Requirements & notes
@@ -212,5 +226,6 @@ Requirements & notes
   optional: the firewall, the `.adi` DNS drop-in, and the port-80 capability.
 * Some features that shell out to Unix tools (project hooks, dashboard runners, `lsof`/`docker`
   port helpers) expect a normal POSIX userland; a stripped container image may not have it.
-* Upgrades: unpack the new tarball and re-run `./install.sh --no-pair`. The binaries are
-  replaced and the units re-written; pairing is already recorded and is not repeated.
+* Upgrades: unpack the new tarball and re-run `./install.sh` (no token needed — it only pairs
+  when asked to, and a machine that is already paired stays paired). The binaries are replaced
+  and the units re-written.

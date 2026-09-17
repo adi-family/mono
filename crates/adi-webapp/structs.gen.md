@@ -1645,6 +1645,8 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) probe_model: RwSignal<String>,
     pub(crate) probe_prompt: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) testing: RwSignal<bool>,
+    pub(crate) test_result: RwSignal<Option<TestResultDto>>,
 }
 ```
 
@@ -1667,6 +1669,8 @@ pub(crate) struct EmbeddingsConsole {
     pub(crate) api_key_env: RwSignal<String>,
     pub(crate) fallbacks: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) testing: RwSignal<bool>,
+    pub(crate) test_result: RwSignal<Option<TestResultDto>>,
 }
 ```
 

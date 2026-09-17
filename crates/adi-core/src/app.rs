@@ -98,11 +98,17 @@ impl Service for App {
             .is_ok()
     }
 
-    /// The running line names the port the panel serves (and the mesh it hosts) on loopback.
+    /// Lead with the URL an operator can actually open, not the socket behind it: `app.adi`
+    /// once `.adi` is routed on this machine, the loopback form as the fallback when it is not
+    /// (a plain node, say, where `.adi` was never installed — `apps/linux/README.md`).
     fn detail(&self, _status: Option<&DaemonStatus>) -> String {
-        reserved_port().map_or_else(
-            || "Running".to_string(),
-            |p| format!("Running · 127.0.0.1:{p} · app.adi"),
-        )
+        let Some(p) = reserved_port() else {
+            return "Running".to_string();
+        };
+        if crate::dns::Dns::new().route_installed() {
+            format!("Running · http://app.adi (127.0.0.1:{p})")
+        } else {
+            format!("Running · http://127.0.0.1:{p} (.adi not routed)")
+        }
     }
 }

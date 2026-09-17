@@ -7,10 +7,10 @@
 # anything else without having to match the distro's libc. A fleet node is whatever cheap box was
 # available; the package must not care which.
 #
-# There is no launcher here, unlike the Windows package. A node is headless (docs/fleet.md §6):
-# no GUI, no browser to open, and nothing listening off loopback. The entry point is install.sh —
-# it lands the binaries, brings the services up under `systemd --user`, enables lingering so they
-# survive logout, and pairs the node with an invite token.
+# There is no launcher here, unlike the Windows package. There is no GUI to open either — the
+# entry point is install.sh, and it prints the control panel's address when it's done. It lands
+# the binaries, brings the services up under `systemd --user`, and enables lingering so they
+# survive logout; pairing into a fleet (docs/fleet.md §6) is optional, with `--pair <token>`.
 #
 # Output:  apps/linux/build/adi-linux-x64/         (the unpacked package)
 #          apps/linux/build/adi-linux-x64.tar.gz   (the shippable archive)
@@ -258,5 +258,5 @@ echo "==> done"
 echo "    package: $PKG"
 echo "    tarball: $BUILD/$PKG_NAME.tar.gz"
 echo
-echo "    Install on a node:"
-echo "      tar -xzf $PKG_NAME.tar.gz && cd $PKG_NAME && ./install.sh <invite-token>"
+echo "    Install:"
+echo "      tar -xzf $PKG_NAME.tar.gz && cd $PKG_NAME && ./install.sh"

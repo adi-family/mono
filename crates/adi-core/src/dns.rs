@@ -597,6 +597,10 @@ fn write_config() {
 /// True when the installed front-door config already matches what we'd render now, so no
 /// update/restart is needed. A mismatch (or missing file) means the front door is running an
 /// old config and should be refreshed once.
+///
+/// Not used on Linux: `on_enable` there never refreshes an installed front door on its own —
+/// only `dns install-route` / `grant-network` do, and both just reinstall unconditionally.
+#[cfg(not(target_os = "linux"))]
 fn frontdoor_config_current() -> bool {
     let rendered = render_frontdoor_hive(
         &frontdoor_hosts(),
@@ -1182,11 +1186,26 @@ mod linux_plan {
             .join("\n")
     }
 
-    /// The machine-wide alternative to the capability, named in full so an operator who prefers it
-    /// does not have to go and look it up.
+    /// The process name in one line of `ss -tlnp` output whose local port is `port`, if any line
+    /// matches and `ss` could see the process behind it.
+    ///
+    /// Column 4 (`State Recv-Q Send-Q Local-Address:Port Peer-Address:Port [Process]`) is matched
+    /// by suffix rather than parsed as an address, because the occupant may be bound to the
+    /// wildcard address rather than the one this install probed — that mismatch is exactly the
+    /// case this exists to catch. `-p` appends `users:(("name",pid=N,fd=N))`, which an unprivileged
+    /// `ss` prints empty for a process it may not see — a system nginx run as root, say — so no
+    /// match there is "can't tell", not "nothing's listening".
     #[must_use]
-    pub fn port_floor_alternative() -> String {
-        "sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80".to_string()
+    pub fn port_holder_name(ss_output: &str, port: u16) -> Option<String> {
+        let suffix = format!(":{port}");
+        ss_output.lines().find_map(|line| {
+            let local = line.split_whitespace().nth(3)?;
+            if !local.ends_with(&suffix) {
+                return None;
+            }
+            let rest = line.split("users:((\"").nth(1)?;
+            rest.split('"').next().map(str::to_string)
+        })
     }
 
     /// Whether `getcap`'s output says the port-bind capability is on the file.
@@ -1267,7 +1286,9 @@ fn install_frontdoor_unit() {
 /// Two independent ways it can be true, so both are tried:
 /// 1. this process can bind the port itself — true when the machine's
 ///    `net.ipv4.ip_unprivileged_port_start` has been lowered, or when we are root. `AddrInUse`
-///    counts as yes: something already holds it, which on a working node is our own front door;
+///    counts as yes only when the systemd unit already active is our own front door — a foreign
+///    occupant (nginx on the wildcard address, say) fails the bind the same way and must not read
+///    as permission to start a second listener next to it;
 /// 2. the `adi-hive` binary carries `CAP_NET_BIND_SERVICE`. The probe above cannot see this — a
 ///    file capability belongs to the *file*, not to us — so it is read off the file with `getcap`.
 #[cfg(target_os = "linux")]
@@ -1278,7 +1299,11 @@ fn frontdoor_can_bind() -> bool {
     match TcpListener::bind((frontdoor_addr(), FRONTDOOR_PORT)) {
         // Bound and immediately dropped — this is a question, not a reservation.
         Ok(_) => return true,
-        Err(e) if e.kind() == ErrorKind::AddrInUse => return true,
+        // AddrInUse only means "yes" when what holds the port is our OWN front door — nginx
+        // listening on the wildcard address fails this exact probe the exact same way, and
+        // answering true for that used to send the caller on to install a second listener that
+        // could never bind, which `Restart=always` then turned into a permanent crash loop.
+        Err(e) if e.kind() == ErrorKind::AddrInUse => return launchd::is_active(&frontdoor_label()),
         Err(_) => {}
     }
     let bin = hive_binary_path();
@@ -1288,6 +1313,37 @@ fn frontdoor_can_bind() -> bool {
         .map(|getcap| proc::run(&[getcap, bin.as_str()]))
         .find(proc::Output::ok)
         .is_some_and(|out| linux_plan::capability_granted(&out.text))
+}
+
+/// The process name `ss` says is holding `:80`, when it can be told at all — an unprivileged
+/// `ss` cannot see the process behind a socket owned by another user (root, for a system nginx),
+/// so this is best-effort and callers must have a fallback phrase ready.
+#[cfg(target_os = "linux")]
+fn frontdoor_port_holder() -> Option<String> {
+    let out = proc::run(&["ss", "-H", "-tln", "-p"]);
+    if !out.ok() {
+        return None;
+    }
+    linux_plan::port_holder_name(&out.text, FRONTDOOR_PORT)
+}
+
+/// Whether `:80` is already held by something that is not this install's own front door, and —
+/// best-effort — what. `None` means the port is free, or it is our own unit restarting (the
+/// distinction [`frontdoor_can_bind`]'s `AddrInUse` branch exists to draw).
+#[cfg(target_os = "linux")]
+fn foreign_frontdoor_occupant() -> Option<String> {
+    use std::io::ErrorKind;
+    use std::net::TcpListener;
+
+    match TcpListener::bind((frontdoor_addr(), FRONTDOOR_PORT)) {
+        Ok(_) => return None,
+        Err(e) if e.kind() != ErrorKind::AddrInUse => return None,
+        Err(_) => {}
+    }
+    if launchd::is_active(&frontdoor_label()) {
+        return None;
+    }
+    Some(frontdoor_port_holder().unwrap_or_else(|| "another process".to_string()))
 }
 
 /// Are we root already? Then `sudo` is neither needed nor necessarily installed.
@@ -1339,8 +1395,11 @@ fn report_frontdoor_blocked() {
         frontdoor_addr()
     );
     eprintln!(
-        "adi: grant it once (or use {}), then re-run `{} dns install-route`:",
-        linux_plan::port_floor_alternative(),
+        "adi: the control panel already works without it, at http://127.0.0.1:{}.",
+        crate::app::port()
+    );
+    eprintln!(
+        "adi: grant it the one capability it needs, then re-run `{} dns install-route`:",
         crate::BIN_NAME
     );
     eprintln!(
@@ -1348,6 +1407,25 @@ fn report_frontdoor_blocked() {
         linux_plan::manual(&linux_plan::capability_steps(&hive_binary_path()))
     );
     eprintln!("adi: a node you reach over the mesh does not need this — see apps/linux/README.md.");
+}
+
+/// Tell the operator `:80` already belongs to something else, and refuse — rather than install a
+/// front door that would crash-loop against it — so the operator's own service stays up.
+#[cfg(target_os = "linux")]
+fn report_frontdoor_port_taken(occupant: &str) {
+    eprintln!(
+        "adi: not starting the .{} front door — {occupant} is already listening on {}:{FRONTDOOR_PORT}.",
+        domain(),
+        frontdoor_addr()
+    );
+    eprintln!(
+        "adi: the control panel already works without it, at http://127.0.0.1:{}.",
+        crate::app::port()
+    );
+    eprintln!(
+        "adi: free the port (or point {occupant} at the panel yourself), then re-run `{} dns install-route`.",
+        crate::BIN_NAME
+    );
 }
 
 // MARK: paired nodes on the front door (docs/fleet.md F2)
@@ -1728,15 +1806,23 @@ impl Dns {
             &linux_plan::route_install_steps(&stage.to_string_lossy(), &drop_in.to_string_lossy()),
         );
 
+        // Same reason as `on_enable`: this file is the node's route table for the mesh gateway,
+        // not just the front door's config, so it is written even when nothing below can run.
+        write_frontdoor_config();
+
+        // Checked before granting anything: a foreign occupant of `:80` (nginx, say) fails the
+        // bind probe exactly like our own restarting front door does, and granting the capability
+        // and installing the unit anyway would only hand `Restart=always` a listener that can
+        // never bind — a crash loop next to whatever was already serving that port.
+        if let Some(occupant) = foreign_frontdoor_occupant() {
+            report_frontdoor_port_taken(&occupant);
+            return;
+        }
+
         let granted = run_privileged(
             "letting the front door bind :80/:443",
             &linux_plan::capability_steps(&hive_binary_path()),
         );
-
-        // Same reason as `on_enable`: this file is the node's route table for the mesh gateway,
-        // not just the front door's config, so it is written even when neither privileged step
-        // above succeeded and no front door will run.
-        write_frontdoor_config();
 
         // The front door itself is ordinary user work — but only worth starting if it can bind.
         if granted || frontdoor_can_bind() {
@@ -1938,40 +2024,26 @@ impl Service for Dns {
         }
     }
 
-    /// Linux: bring up the half that needs no privilege, and *say* what the other half needs.
+    /// Linux: write the node's route table, and leave `:80` untouched.
     ///
-    /// Two deliberate departures from macOS, both because a node is not a laptop:
-    ///
-    /// * **`up` never installs the DNS route.** On macOS `.adi` names are the whole point, so the
-    ///   first `up` earns its one prompt. A node's services are reached over the mesh under
-    ///   `<service>.<node>.n.adi`, resolved on the *viewer's* machine — routing `.adi` on the node
-    ///   itself is a convenience for someone ssh'd in, and touching `/etc` on a machine that never
-    ///   asked is not something a routine `up` should do. `dns install-route` is where that lives.
-    /// * **The front door is only started when it can bind.** `adi-hive` exits if it bound
-    ///   nothing, and the unit restarts it forever; enabling it without the capability would leave
-    ///   a crash loop as the node's welcome. So we check first, and if it cannot, we say so with
-    ///   the command that fixes it — the case that used to be a silent no-op.
+    /// A node's services are reached over the mesh under `<service>.<node>.n.adi`, resolved on
+    /// the *viewer's* machine — routing `.adi`, and starting anything that binds `:80`, are both
+    /// things only the operator asks for by name (`dns install-route` / `grant-network`), never
+    /// something a routine `up` does behind their back. Binding a shared, low-numbered port is
+    /// exactly the kind of thing `up` must not do on its own: on a box that already has something
+    /// else answering `:80` (nginx, say), an automatic attempt is either a silent no-op or, worse,
+    /// a unit that can never bind and that `Restart=always` then crash-loops forever.
     #[cfg(target_os = "linux")]
     fn on_enable(&self) {
         // The rendered front-door config is also the node's **route table**: the mesh gateway
         // resolves an incoming service label against it (`docs/fleet.md` §6), falling back to this
-        // generated file when there is no hand-managed `hive/hive.yaml`. So it is written whether
-        // or not a front door can be supervised. Writing it only alongside the unit was the bug
-        // that made a mesh-only node — the normal case, since binding :80 needs a capability the
-        // node never has to grant — answer every request with `ServiceUnknown` while looking
-        // perfectly healthy: paired, authorized, reachable, serving nothing.
+        // generated file when there is no hand-managed `hive/hive.yaml`. So it is written on every
+        // `up` regardless of whether a front door is, or will ever be, running. Writing it only
+        // alongside the unit was the bug that made a mesh-only node — the normal case, since a
+        // node never binds `:80` unless the operator explicitly grants it — answer every request
+        // with `ServiceUnknown` while looking perfectly healthy: paired, authorized, reachable,
+        // serving nothing.
         write_frontdoor_config();
-        if !frontdoor_can_bind() {
-            report_frontdoor_blocked();
-            return;
-        }
-        if launchd::is_loaded(&frontdoor_label()) {
-            if !frontdoor_config_current() {
-                self.update_frontdoor();
-            }
-        } else {
-            install_frontdoor_unit();
-        }
     }
 
     // Windows: install the NRPT route + front-door task once; thereafter only refresh the
@@ -1985,14 +2057,21 @@ impl Service for Dns {
         }
     }
 
+    /// No user-facing URL — say what the resolver is FOR, since a raw port is not something
+    /// anyone types. The socket stays, as the secondary detail every other service's line keeps.
     #[cfg(not(target_os = "linux"))]
     fn detail(&self, status: Option<&DaemonStatus>) -> String {
+        let domain = domain();
         status.map_or_else(String::new, |s| {
-            format!("Running · {RESOLVER_BIND}:{}", s.port)
+            format!(
+                "Running · resolves .{domain} names on this machine ({RESOLVER_BIND}:{})",
+                s.port
+            )
         })
     }
 
-    /// Linux: a running resolver is not the same thing as a working `.adi`, so say which.
+    /// Linux: a running resolver is not the same thing as a working `.adi`, so say which — and,
+    /// like every OS, say what the resolver is FOR rather than lead with a port nobody types.
     ///
     /// On macOS the route and the front door are installed together on the first `up` and are
     /// therefore a safe assumption. On a node neither is, by design — and "Running" on its own
@@ -2000,9 +2079,10 @@ impl Service for Dns {
     /// describe the ordinary mesh-only node; neither is phrased as a fault.
     #[cfg(target_os = "linux")]
     fn detail(&self, status: Option<&DaemonStatus>) -> String {
+        let domain = domain();
         status.map_or_else(String::new, |s| {
             format!(
-                "Running · {RESOLVER_BIND}:{}{}",
+                "Running · resolves .{domain} names on this machine ({RESOLVER_BIND}:{}){}",
                 s.port,
                 linux_plan::detail_suffix(
                     resolver_file().exists(),
@@ -2638,10 +2718,6 @@ mod tests {
         for (line, step) in manual.lines().zip(&steps) {
             assert_eq!(line, format!("    sudo {step}"));
         }
-        assert_eq!(
-            linux_plan::port_floor_alternative(),
-            "sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80"
-        );
     }
 
     /// libcap changed how `getcap` prints, and a file with no capabilities prints nothing at all.
@@ -2658,6 +2734,32 @@ mod tests {
         assert!(!linux_plan::capability_granted(
             "/opt/adi-hive cap_net_raw=ep\n"
         ));
+    }
+
+    /// `ss` prints the process behind a socket, when it is allowed to see it; when it is not
+    /// (a root-owned nginx, probed unprivileged) the column is simply absent, and that must read
+    /// as "can't tell" rather than as "nothing's listening" — the caller still has to refuse.
+    #[test]
+    fn port_holder_name_reads_the_process_column_when_ss_can_see_it() {
+        let with_process = "LISTEN 0 511 0.0.0.0:80 0.0.0.0:* users:((\"nginx\",pid=1234,fd=6))\n";
+        assert_eq!(
+            linux_plan::port_holder_name(with_process, 80),
+            Some("nginx".to_string())
+        );
+
+        let unprivileged = "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\n";
+        assert_eq!(linux_plan::port_holder_name(unprivileged, 80), None);
+
+        let other_port = "LISTEN 0 511 127.0.0.1:8000 0.0.0.0:* users:((\"adi-app\",pid=1,fd=6))\n";
+        assert_eq!(linux_plan::port_holder_name(other_port, 80), None);
+
+        // The occupant may be on the wildcard address rather than the one this install probed —
+        // matched by port suffix alone, deliberately, so that mismatch is still caught.
+        let wildcard = "LISTEN 0 511 127.0.0.53:80 0.0.0.0:* users:((\"adi-hive\",pid=9,fd=6))\n";
+        assert_eq!(
+            linux_plan::port_holder_name(wildcard, 80),
+            Some("adi-hive".to_string())
+        );
     }
 
     /// Mesh-only is a node's *normal* state, so the status line describes it rather than

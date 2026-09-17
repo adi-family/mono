@@ -1,25 +1,31 @@
 #!/bin/sh
 #
-# Install this ADI node package and pair it with a fleet.
+# Install ADI on this machine.
 #
-#   ./install.sh <invite-token>
-#   ./install.sh --prefix /opt/adi <invite-token>
-#   ./install.sh --no-pair                 # install only; pair later with `adi-mono mesh join`
+#   ./install.sh                     # standalone install (asks a few questions on a terminal)
+#   ./install.sh --pair <token>      # install and join a fleet, using a token minted elsewhere
+#   ./install.sh --prefix /opt/adi   # install elsewhere
 #
 # What it does, in order:
 #
-#   1. copies the five binaries into $PREFIX/bin (default ~/.local/adi/bin) and puts that
-#      directory on PATH, because `adi-mono` is re-invoked *by name* by the agent harness;
+#   1. copies the five binaries into $PREFIX/bin (default ~/.local/adi/bin), puts that directory
+#      on PATH for future shells, and links `adi-mono` into /usr/local/bin so it works in *this*
+#      one too — `adi-mono` is re-invoked *by name* by the agent harness;
 #   2. enables logind *lingering*, so the per-user systemd manager — and every adi service under
 #      it — keeps running after the installing session logs out. A node is headless; without
 #      this the whole stack dies the moment you close the ssh session that installed it;
 #   3. runs `adi-mono up`, which writes one `systemd --user` unit per service into
 #      ~/.config/systemd/user and enables it (adi-core's supervisor abstraction owns the unit
 #      contents — this script never templates a unit itself);
-#   4. pairs, with `adi-mono mesh join <token>`.
+#   4. pairs, with `adi-mono mesh join <token>` — only if asked to.
 #
-# It needs **no root** and opens **no inbound port**, not even during install: the node dials
-# out to an iroh relay and is reached back down that session. See README.md.
+# It needs **no root** and opens **no inbound port**, not even during install: nothing but the
+# in-process resolver and control panel bind, both to loopback, and a fleet dial-out is *outward*
+# to an iroh relay. See README.md.
+#
+# With no arguments on a terminal it asks a few questions instead of assuming (a prefix, whether
+# to pair now, whether to fetch bun); every flag below still works, and a non-terminal run (a CI
+# job, `ssh node ./install.sh`) always installs unattended with no prompt, using the defaults.
 #
 # POSIX sh on purpose — a minimal node image may have no bash.
 set -eu
@@ -29,15 +35,17 @@ say() { echo "==> $*"; }
 
 usage() {
     cat <<'USAGE'
-Usage: ./install.sh [--prefix DIR] [--no-pair] [--no-bun] <invite-token>
+Usage: ./install.sh [--prefix DIR] [--pair TOKEN] [--no-bun] [TOKEN]
 
   --prefix DIR   where to install the binaries (default: ~/.local/adi)
-  --no-pair      install and start the services, but do not pair yet
+  --pair TOKEN   join a fleet now, using an invite token minted on another machine
+                 (a bare TOKEN with no flag means the same thing)
+  --no-pair      install standalone (the default; accepted so old scripts keep working)
   --no-bun       skip fetching the bun runtime (dashboards will not run)
   -h, --help     this message
 
-The invite token comes from the machine you are pairing with; it is a single opaque
-string, so quote it if your shell might touch it.
+No token at all is a complete, standalone install — pair later with `adi-mono mesh join <token>`
+whenever you like. Run with no arguments on a terminal and the installer asks instead.
 USAGE
 }
 
@@ -53,29 +61,66 @@ BUN_SHA256_BASELINE="a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b3
 
 PREFIX="${ADI_PREFIX:-$HOME/.local/adi}"
 TOKEN=""
-PAIR=1
+PAIR=0
 WANT_BUN=1
+
+# Captured before the arg parser below consumes "$@" — the question that decides whether this is
+# an interactive run at all.
+NO_ARGS=0
+[ $# -eq 0 ] && NO_ARGS=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --prefix)   [ $# -ge 2 ] || die "--prefix needs a directory"; PREFIX="$2"; shift 2 ;;
         --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
+        --pair)     [ $# -ge 2 ] || die "--pair needs an invite token"; TOKEN="$2"; PAIR=1; shift 2 ;;
+        --pair=*)   TOKEN="${1#--pair=}"; PAIR=1; shift ;;
         --no-pair)  PAIR=0; shift ;;
         --no-bun)   WANT_BUN=0; shift ;;
         -h|--help)  usage; exit 0 ;;
-        --)         shift; if [ $# -gt 0 ]; then TOKEN="$1"; fi; break ;;
+        --)         shift; if [ $# -gt 0 ]; then TOKEN="$1"; PAIR=1; fi; break ;;
         -*)         die "unknown option: $1 (see --help)" ;;
-        *)          [ -z "$TOKEN" ] || die "more than one invite token given"; TOKEN="$1"; shift ;;
+        *)          [ -z "$TOKEN" ] || die "more than one invite token given"; TOKEN="$1"; PAIR=1; shift ;;
     esac
 done
+
+[ "$PAIR" -eq 0 ] || [ -n "$TOKEN" ] || die "--pair needs an invite token"
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 [ -d "$HERE/bin" ] || die "no bin/ beside $0 — run install.sh from inside the unpacked package"
 
-[ "$PAIR" -eq 0 ] || [ -n "$TOKEN" ] || {
-    usage >&2
-    die "an invite token is required (or pass --no-pair to install without pairing)"
-}
+# ── questions, only when nothing on the command line already answered them ────────────────────
+if [ "$NO_ARGS" -eq 1 ] && [ -t 0 ]; then
+    printf 'Where should ADI live? [%s]: ' "$PREFIX"
+    read -r ans
+    [ -n "$ans" ] && PREFIX="$ans"
+    echo
+
+    printf 'Pairing links this machine into a fleet, so you can open its control panel and\n'
+    printf 'dashboards from another machine you already run ADI on — skip it to use ADI\n'
+    printf 'standalone here and pair later with `adi-mono mesh join <token>`.\n'
+    printf 'Pair with a fleet now? [y/N]: '
+    read -r ans
+    case "$ans" in
+        [Yy]*)
+            PAIR=1
+            while [ -z "$TOKEN" ]; do
+                printf 'Invite token (minted on the machine you are pairing with): '
+                read -r TOKEN
+            done
+            ;;
+        *) PAIR=0 ;;
+    esac
+    echo
+
+    printf 'Install bun, so dashboards can run? [Y/n]: '
+    read -r ans
+    case "$ans" in
+        [Nn]*) WANT_BUN=0 ;;
+        *) WANT_BUN=1 ;;
+    esac
+    echo
+fi
 
 # ── preflight ───────────────────────────────────────────────────────────────────────────────
 command -v systemctl >/dev/null 2>&1 \
@@ -116,6 +161,21 @@ PROFILE="$HOME/.profile"
 if ! grep -qF "$PREFIX/bin" "$PROFILE" 2>/dev/null; then
     say "adding $PREFIX/bin to PATH in $PROFILE"
     printf '\n# added by the ADI node installer\nexport PATH="%s/bin:$PATH"\n' "$PREFIX" >> "$PROFILE"
+fi
+
+# A shell already open never re-reads .profile, so without this `adi-mono` stays missing until a
+# fresh login — in exactly the shell you just installed from. A symlink in a directory already on
+# every shell's PATH fixes that at once, and needs no new shell to take effect.
+LOCAL_BIN=/usr/local/bin
+if [ -d "$LOCAL_BIN" ] && [ -w "$LOCAL_BIN" ]; then
+    ln -sf "$PREFIX/bin/adi-mono" "$LOCAL_BIN/adi-mono"
+    say "linked $LOCAL_BIN/adi-mono -> $PREFIX/bin/adi-mono"
+elif command -v sudo >/dev/null 2>&1 \
+    && sudo -n ln -sf "$PREFIX/bin/adi-mono" "$LOCAL_BIN/adi-mono" 2>/dev/null; then
+    say "linked $LOCAL_BIN/adi-mono -> $PREFIX/bin/adi-mono"
+else
+    say "note: could not link adi-mono into $LOCAL_BIN (no write access, and no passwordless sudo)"
+    say "      it works in a new shell now, or right away here: sudo ln -sf '$PREFIX/bin/adi-mono' '$LOCAL_BIN/adi-mono'"
 fi
 
 # ── 1b. bun ─────────────────────────────────────────────────────────────────────────────────
@@ -250,6 +310,12 @@ if [ "$PAIR" -eq 1 ]; then
     adi-mono mesh join "$TOKEN"
 fi
 
+# ── closing summary ─────────────────────────────────────────────────────────────────────────
+# Captured, not echoed: this is the one machine-readable call in the whole script, and it stays
+# off the scroll so the summary below — what the operator actually reads — is the last thing
+# printed, not one screen among several saying where the panel is in a different way.
+PANEL_PORT="$(adi-mono status 2>/dev/null | sed -n 's/^App — .*127\.0\.0\.1:\([0-9]*\).*/\1/p' | head -n1)"
+
 echo
 say "done — $(cat "$HERE/VERSION" 2>/dev/null || echo "adi") installed in $PREFIX"
 
@@ -260,17 +326,22 @@ say "done — $(cat "$HERE/VERSION" 2>/dev/null || echo "adi") installed in $PRE
 if [ ! -x "$PREFIX/bin/bun" ] && ! command -v bun >/dev/null 2>&1; then
     say "note: bun is not installed, so dashboards on this node cannot run."
     say "      re-run this installer, or:  curl -fsSL https://bun.sh/install | bash"
-    say "      the rest of the node — control panel, mesh, services — needs nothing further."
 fi
 
-adi-mono status || true
-cat <<EOF
+if [ -n "$PANEL_PORT" ]; then
+    cat <<EOF
 
-Next:
-  * open a new shell (or: export PATH="$PREFIX/bin:\$PATH") so \`adi-mono\` is on PATH
-  * adi-mono status                              what is enabled and running
-  * systemctl --user list-units 'family.adi.*'   the units behind that
-  * tail -f ~/.adi/mono/logs/*.log               service output (the units append to files,
-                                                 so this is the log, not journalctl)
-  * README.md                                    firewall, DNS, and how to reach this node
+Your ADI control panel:
+  http://127.0.0.1:$PANEL_PORT   works right now
+  http://app.adi              needs \`adi-mono dns install-route\` first (see README.md)
+
+Next: open one of those in a browser. README.md covers pairing, firewall, and .adi routing.
 EOF
+else
+    cat <<EOF
+
+Your ADI control panel is starting; \`adi-mono status\` will show its address once it is up.
+
+Next: check that, then open it in a browser. README.md covers pairing, firewall, and .adi routing.
+EOF
+fi
