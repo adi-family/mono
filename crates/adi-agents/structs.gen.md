@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-133 structs · 36 enums · 5 type aliases across 55 files.
+134 structs · 37 enums · 5 type aliases across 55 files.
 
 ## Index
 
@@ -18,7 +18,7 @@
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
-- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `FailureReport`
+- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `RunCtx`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`, `HttpCtx`, `ContextLimit`, `FailureReport`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
@@ -927,9 +927,34 @@ struct OpenAiDialect {
 }
 ```
 
+### struct `HttpCtx`
+
+What a non-2xx response needs in order to become a `FailureReport` instead of a raw dump of the body: which provider and model this was, where in the run, and the credential to scrub out of it. Everything a caller of `post_json` already has in scope for the round it's making.
+
+```rust
+struct HttpCtx<'a> {
+    provider: &'static str,
+    model: &'a str,
+    messages: usize,
+    run: &'a RunCtx<'a>,
+    secret: Option<&'a str>,
+}
+```
+
+### enum `ContextLimit`
+
+Whether a rejection is about the model's context window being too small for what was asked.
+
+```rust
+enum ContextLimit {
+    Unrelated,
+    TooSmall(Option<u64>),
+}
+```
+
 ### struct `FailureReport`
 
-Everything a "the model gave us nothing usable" bug report needs, gathered once so the three exits that can hit it — mid-loop, wrap-up, and a response that isn't even shaped the way this dialect expects — don't each show a different subset of it.
+Everything a "the model gave us nothing usable" bug report needs, gathered once so the four exits that can hit it — mid-loop, wrap-up, a response that isn't even shaped the way this dialect expects, and a non-2xx status — don't each show a different subset of it.
 
 ```rust
 struct FailureReport {
@@ -939,6 +964,7 @@ struct FailureReport {
     round: u64,
     max_rounds: u64,
     messages: usize,
+    status: Option<u16>,
     finish_reason: Option<String>,
     response_id: Option<String>,
     refusal: Option<String>,

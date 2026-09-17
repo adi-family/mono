@@ -980,7 +980,14 @@ fn anthropic_round(
         ("x-api-key", key.as_str()),
         ("anthropic-version", "2023-06-01"),
     ];
-    let resp = post_json(&url, &headers, &body)?;
+    let http_ctx = HttpCtx {
+        provider: "anthropic",
+        model,
+        messages: messages.len(),
+        run,
+        secret: Some(&key),
+    };
+    let resp = post_json(&url, &headers, &body, &http_ctx)?;
     let shape_error = || {
         provider_shape_error(
             "anthropic",
@@ -1183,7 +1190,14 @@ fn openai_round(
     let base = base_url(args, dialect.default_base);
     let url = versioned_url(&base, dialect.version, "chat/completions");
     let bearer = format!("Bearer {key}");
-    let resp = post_json(&url, &[("authorization", bearer.as_str())], &body)?;
+    let http_ctx = HttpCtx {
+        provider: dialect.provider,
+        model,
+        messages: messages.len(),
+        run,
+        secret: Some(&key),
+    };
+    let resp = post_json(&url, &[("authorization", bearer.as_str())], &body, &http_ctx)?;
     let shape_error = || {
         provider_shape_error(
             dialect.provider,
@@ -1316,7 +1330,14 @@ fn gemini_round(
     } else {
         ("x-goog-api-key", key.as_str())
     };
-    let resp = post_json(&url, &[header], &body)?;
+    let http_ctx = HttpCtx {
+        provider: "gemini",
+        model,
+        messages: messages.len(),
+        run,
+        secret: Some(&key),
+    };
+    let resp = post_json(&url, &[header], &body, &http_ctx)?;
     let shape_error = || {
         provider_shape_error(
             "gemini",
@@ -1454,7 +1475,14 @@ fn ollama_round(
 
     let base = base_url(args, "http://localhost:11434");
     let url = format!("{base}/api/chat");
-    let resp = post_json(&url, &[], &body)?;
+    let http_ctx = HttpCtx {
+        provider: "ollama",
+        model,
+        messages: messages.len(),
+        run,
+        secret: None,
+    };
+    let resp = post_json(&url, &[], &body, &http_ctx)?;
 
     let message = resp.get("message").ok_or_else(|| {
         provider_shape_error("ollama", model, &url, messages.len(), run, &resp, None)
@@ -1547,9 +1575,23 @@ fn ensure_provider() {
         .ok();
 }
 
+/// What a non-2xx response needs in order to become a [`FailureReport`] instead of a raw dump of
+/// the body: which provider and model this was, where in the run, and the credential to scrub out
+/// of it. Everything a caller of [`post_json`] already has in scope for the round it's making.
+struct HttpCtx<'a> {
+    provider: &'static str,
+    model: &'a str,
+    messages: usize,
+    run: &'a RunCtx<'a>,
+    /// The credential this request carried, so a bug report never shows it. `None` for Ollama,
+    /// which sends none.
+    secret: Option<&'a str>,
+}
+
 /// POST `body` as JSON with the given extra headers, returning the decoded JSON response. A non-2xx
-/// status surfaces the provider's own error body, which is what the caller needs to see.
-fn post_json(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value> {
+/// status becomes a [`FailureReport`]: a sentence a person can act on, the provider's own body
+/// underneath it capped for the chat, and the whole thing uncapped in the run's log.
+fn post_json(url: &str, headers: &[(&str, &str)], body: &Value, ctx: &HttpCtx<'_>) -> Result<Value> {
     ensure_provider();
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
@@ -1567,12 +1609,108 @@ fn post_json(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value>
         .text()
         .map_err(|e| Error::Process(format!("reading response from {url} failed: {e}")))?;
     if !status.is_success() {
-        return Err(Error::Process(format!(
-            "{url} returned {status}: {}",
-            text.trim()
-        )));
+        return Err(http_status_error(ctx, url, status, &text));
     }
     serde_json::from_str(&text).map_err(|e| Error::Process(format!("invalid JSON from {url}: {e}")))
+}
+
+/// A non-2xx response, turned into a report shaped like [`provider_shape_error`]'s: one sentence a
+/// person can act on, with the provider's own body — parsed where it's JSON, verbatim where it
+/// isn't — behind it rather than in front of it.
+fn http_status_error(
+    ctx: &HttpCtx<'_>,
+    url: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> Error {
+    let parsed: Option<Value> = serde_json::from_str(body).ok();
+    let message = parsed.as_ref().and_then(error_message).or_else(|| {
+        let trimmed = body.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    let sentence = http_failure_sentence(ctx.provider, status, message.as_deref());
+    let report = FailureReport {
+        provider: ctx.provider,
+        model: ctx.model.to_string(),
+        endpoint: url.to_string(),
+        round: ctx.run.round,
+        max_rounds: ctx.run.max_rounds,
+        messages: ctx.messages,
+        status: Some(status.as_u16()),
+        finish_reason: None,
+        response_id: None,
+        refusal: None,
+        input_tokens: None,
+        output_tokens: None,
+        raw: parsed.unwrap_or_else(|| json!({ "body": body })),
+    };
+    report.into_error(&sentence, ctx.secret, ctx.run.session)
+}
+
+/// The human sentence inside a provider's error body, wherever that provider's dialect nests it.
+/// Anthropic, `OpenAI`, Moonshot, z.ai, Gemini, and the many `OpenAI`-compatible local servers
+/// (llama.cpp, vLLM, and whatever was listening on `http://localhost:1337` here) all nest it one of
+/// two ways — `error.message` or a bare `error` string — so both are tried before falling back to
+/// reading the body whole.
+fn error_message(body: &Value) -> Option<String> {
+    let nested = body
+        .get("error")
+        .and_then(|e| e.as_str().or_else(|| e.get("message").and_then(Value::as_str)));
+    nested
+        .or_else(|| body.get("message").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+        .map(str::to_string)
+}
+
+/// Whether a rejection is about the model's context window being too small for what was asked.
+enum ContextLimit {
+    /// The message doesn't read as a context-window rejection at all.
+    Unrelated,
+    /// It does, and the token limit it named — where the message gave a parseable number.
+    TooSmall(Option<u64>),
+}
+
+/// Read by what the message says rather than one vendor's exact wording — `OpenAI`, Anthropic and
+/// every local server that copies their shape phrase this sentence a little differently, but all
+/// of them name "context" and a token count.
+fn context_limit(message: &str) -> ContextLimit {
+    let lower = message.to_ascii_lowercase();
+    let names_context = lower.contains("context length")
+        || lower.contains("context window")
+        || lower.contains("context_length_exceeded");
+    if !names_context {
+        return ContextLimit::Unrelated;
+    }
+    let tokens = regex::Regex::new(r"(?i)context (?:length|window)[^0-9]*(\d+)")
+        .expect("a fixed, valid pattern")
+        .captures(message)
+        .and_then(|caps| caps.get(1))
+        .and_then(|m| m.as_str().parse().ok());
+    ContextLimit::TooSmall(tokens)
+}
+
+/// The one line a person reads for a rejected request: specific where the message names a
+/// diagnosable cause and a next move, honest about not knowing either where it doesn't.
+fn http_failure_sentence(provider: &str, status: reqwest::StatusCode, message: Option<&str>) -> String {
+    match message.map_or(ContextLimit::Unrelated, context_limit) {
+        ContextLimit::TooSmall(Some(tokens)) => format!(
+            "this backend can't hold this agent — its model holds {tokens} tokens and this \
+             conversation needs more. Point the agent at a backend with a larger context window, \
+             or trim the conversation."
+        ),
+        ContextLimit::TooSmall(None) => format!(
+            "this backend can't hold this agent — {provider} says its context window is too \
+             small for this conversation. Point the agent at a backend with a larger context \
+             window, or trim the conversation."
+        ),
+        ContextLimit::Unrelated => match message.and_then(|m| m.lines().next()).map(str::trim) {
+            Some(first_line) if !first_line.is_empty() => {
+                format!("{provider} rejected the request ({status}): {first_line}")
+            }
+            _ => format!("{provider} rejected the request ({status})"),
+        },
+    }
 }
 
 /// A response that doesn't have the shape this dialect's own parse expects at all — no
@@ -1597,6 +1735,7 @@ fn provider_shape_error(
         round: run.round,
         max_rounds: run.max_rounds,
         messages,
+        status: None,
         finish_reason: shape_error_finish_reason(provider, resp),
         response_id: shape_error_response_id(provider, resp),
         refusal: None,
@@ -1670,9 +1809,9 @@ fn shape_error_tokens(provider: &str, resp: &Value) -> (Option<u64>, Option<u64>
     }
 }
 
-/// Everything a "the model gave us nothing usable" bug report needs, gathered once so the three
-/// exits that can hit it — mid-loop, wrap-up, and a response that isn't even shaped the way this
-/// dialect expects — don't each show a different subset of it.
+/// Everything a "the model gave us nothing usable" bug report needs, gathered once so the four
+/// exits that can hit it — mid-loop, wrap-up, a response that isn't even shaped the way this
+/// dialect expects, and a non-2xx status — don't each show a different subset of it.
 struct FailureReport {
     provider: &'static str,
     model: String,
@@ -1680,13 +1819,17 @@ struct FailureReport {
     round: u64,
     max_rounds: u64,
     messages: usize,
+    /// The HTTP status, for the one exit that has one and nothing else does: a non-2xx response
+    /// never reaches the other three, which all read a 200 that turned out empty or malformed.
+    status: Option<u16>,
     finish_reason: Option<String>,
     response_id: Option<String>,
     refusal: Option<String>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     /// The raw assistant message (a normal empty reply) or the whole response body (a shape
-    /// error, where there is no message to single out) — whichever the caller actually has.
+    /// error or a non-2xx status, where there is no message to single out) — whichever the
+    /// caller actually has.
     raw: Value,
 }
 
@@ -1706,6 +1849,7 @@ impl FailureReport {
             round: run.round,
             max_rounds: run.max_rounds,
             messages,
+            status: None,
             finish_reason: reply.finish_reason.clone(),
             response_id: reply.response_id.clone(),
             refusal: reply.refusal.clone(),
@@ -1753,6 +1897,9 @@ impl FailureReport {
         let _ = writeln!(out, "provider: {} · model: {}", self.provider, self.model);
         let _ = writeln!(out, "endpoint: {}", self.endpoint);
         let _ = writeln!(out, "round: {} of {}", self.round, self.max_rounds);
+        if let Some(status) = self.status {
+            let _ = writeln!(out, "http status: {status}");
+        }
         let _ = writeln!(
             out,
             "finish reason: {}",
@@ -2499,6 +2646,7 @@ mod tests {
             round: 1,
             max_rounds: 1,
             messages: 3,
+            status: None,
             finish_reason: Some("stop".to_string()),
             response_id: None,
             refusal: None,
@@ -2517,6 +2665,85 @@ mod tests {
             "full {} vs capped {}",
             full.len(),
             capped.len()
+        );
+    }
+
+    #[test]
+    fn a_context_length_rejection_reads_as_a_sentence_with_the_token_count_and_a_next_move() {
+        let body = r#"{"error":{"message":"This models maximum context length is 2048 tokens. However, you requested 2048 output tokens and your prompt contains 50268 characters, please reduce the length of the messages or completion.","type":"BadRequestError"}}"#;
+        let ctx = HttpCtx {
+            provider: "ollama",
+            model: "tiny-local-model",
+            messages: 4,
+            run: &RunCtx::new(1, 1, None),
+            secret: None,
+        };
+        let status = reqwest::StatusCode::BAD_REQUEST;
+        let err = http_status_error(&ctx, "http://localhost:1337/v1/chat/completions", status, body);
+        let text = err.to_string();
+        let sentence = text.split("\n\n```").next().unwrap_or(&text);
+
+        assert!(
+            sentence.contains("its model holds 2048 tokens"),
+            "no token count carried through: {sentence}"
+        );
+        assert!(
+            sentence.contains("Point the agent at a backend with a larger context window"),
+            "no next move offered: {sentence}"
+        );
+        assert!(
+            !sentence.contains("BadRequestError"),
+            "raw provider JSON leaked into the sentence a person reads: {sentence}"
+        );
+        // The full body is still there for whoever needs it — just behind the sentence, in the
+        // fenced block, not instead of one.
+        assert!(text.contains("maximum context length"), "{text}");
+    }
+
+    #[test]
+    fn an_unclassifiable_rejection_degrades_to_an_honest_sentence_rather_than_a_raw_dump() {
+        let body = r#"{"error":"insufficient_quota"}"#;
+        let ctx = HttpCtx {
+            provider: "openai",
+            model: "gpt-x",
+            messages: 1,
+            run: &RunCtx::new(1, 1, None),
+            secret: None,
+        };
+        let err = http_status_error(
+            &ctx,
+            "https://api.openai.com/v1/chat/completions",
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            body,
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains("openai rejected the request (429 Too Many Requests): insufficient_quota"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_body_that_is_not_json_at_all_still_reads_as_a_sentence() {
+        let ctx = HttpCtx {
+            provider: "ollama",
+            model: "tiny-local-model",
+            messages: 1,
+            run: &RunCtx::new(1, 1, None),
+            secret: None,
+        };
+        let err = http_status_error(
+            &ctx,
+            "http://localhost:11434/api/chat",
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+            "the upstream connection reset",
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains(
+                "ollama rejected the request (500 Internal Server Error): the upstream connection reset"
+            ),
+            "{text}"
         );
     }
 
