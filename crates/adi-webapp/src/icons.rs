@@ -131,6 +131,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,
         Route::LiveGraph => Icon::Graph,
+        Route::Settings => Icon::Gear,
         Route::Hive => Icon::Server,
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,

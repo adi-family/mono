@@ -935,6 +935,7 @@ pub(crate) enum Route {
     Dashboards,
     Marketplace,
     LiveGraph,
+    Settings,
     Hive,
     PortsManager,
     Mesh,

@@ -1173,6 +1173,35 @@ textarea.adi-input--composer {
   &--dir &__icon { color: var(--ink-2); }
 }
 
+// ---- link row --------------------------------------------------------------------------------
+// A whole row that leaves for another page rather than acting in place: an icon, a title and one
+// line about where it goes (DESIGN.md §6 "List item", with the icon a tree row carries). Used by
+// the Settings landing page — an index of pages rather than a table or a form.
+.adi-linkrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: var(--r);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--transition);
+
+  &:hover { background: var(--bg-hover); }
+
+  &__icon { flex: none; margin-top: 2px; color: var(--ink-3); }
+
+  &__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+  &__title { font-size: var(--fs-ui-sm); color: var(--ink); }
+
+  &__blurb { font-size: var(--fs-label); color: var(--ink-3); }
+}
+
 // ---- flash (kind via `data-kind`) -------------------------------------------------------------
 // The one-line result under a form: 13px, red or green text, nothing around it.
 .adi-flash {

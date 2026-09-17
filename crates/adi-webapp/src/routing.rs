@@ -93,6 +93,10 @@ pub(crate) enum Route {
     /// The live graph (`/extended/live-graph`) — every agent and conversation on this machine, and
     /// what set each one off, on one canvas.
     LiveGraph,
+    /// The Settings landing page (`/extended/settings`) — an index of the seven pages nested
+    /// under Settings in the explorer, so the ⌘K menu's Settings row opens somewhere real
+    /// rather than dropping onto [`Route::Hive`].
+    Settings,
     Hive,
     PortsManager,
     Mesh,
@@ -113,7 +117,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 22] = [
+    pub(crate) const NAV: [Route; 23] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -129,6 +133,21 @@ impl Route {
         Route::Dashboards,
         Route::Marketplace,
         Route::LiveGraph,
+        Route::Settings,
+        Route::Hive,
+        Route::PortsManager,
+        Route::Mesh,
+        Route::Fleet,
+        Route::LlmBackends,
+        Route::EmbeddingBackends,
+        Route::SharedAssets,
+    ];
+
+    /// The seven pages Settings gathers, in the order the explorer nests them and the Settings
+    /// landing page ([`crate::pages::settings_view`]) lists them. The explorer's own
+    /// `GLOBAL_SCOPES` and the landing page both read off this rather than each writing the
+    /// seven out — one list, the way [`NAV`] is for the ⌘K menu.
+    pub(crate) const SETTINGS: [Route; 7] = [
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
@@ -166,6 +185,7 @@ impl Route {
             "/dashboards" => Route::Dashboards,
             "/marketplace" => Route::Marketplace,
             "/live-graph" => Route::LiveGraph,
+            "/settings" => Route::Settings,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -199,6 +219,7 @@ impl Route {
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
             Route::LiveGraph => "/extended/live-graph",
+            Route::Settings => "/extended/settings",
             Route::Hive => "/extended/settings/hive",
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
@@ -231,6 +252,7 @@ impl Route {
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
             Route::LiveGraph => "Live graph",
+            Route::Settings => "Settings",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports manager",
             Route::Mesh => "Mesh",
@@ -265,6 +287,7 @@ impl Route {
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
+            Route::Settings => "Hive, ports, mesh, fleet, backends and shared assets",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",

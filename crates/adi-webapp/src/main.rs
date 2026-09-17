@@ -58,7 +58,8 @@ use pages::{
     load_agent_into_form, load_dir, load_store_file, market_view, marketplace_view, mesh_view,
     meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
-    seed_onboarding, shared_assets_view, start_onb_reconfigure, store_file_view, tasks_view,
+    seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure, store_file_view,
+    tasks_view,
     tools_view, triggers_view,
 };
 use routing::{
@@ -1380,6 +1381,7 @@ fn App() -> impl IntoView {
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),
+                        Route::Settings => settings_view(state, route),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
@@ -1541,18 +1543,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::LiveGraph,
         ],
     ),
-    (
-        "Settings",
-        &[
-            Route::Hive,
-            Route::PortsManager,
-            Route::Mesh,
-            Route::Fleet,
-            Route::LlmBackends,
-            Route::EmbeddingBackends,
-            Route::SharedAssets,
-        ],
-    ),
+    ("Settings", &Route::SETTINGS),
 ];
 
 /// The glyph for a top-level scope header.
