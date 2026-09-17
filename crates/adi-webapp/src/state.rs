@@ -13,9 +13,9 @@ use adi_webapp_api::types::{
     KnowledgeNoteDto, KnowledgeNotes,
     KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
     MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState, ToolsState,
-    TranscriptView, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceTerm,
-    WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+    ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState,
+    TestResultDto, ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState, UsedPorts,
+    WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -1729,6 +1729,14 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) probe_model: RwSignal<String>,
     pub(crate) probe_prompt: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    /// Whether a **Test** is in flight — a real, billed request through this backend, run on the
+    /// form as it currently stands. Separate from [`busy`](Self::busy): saving and testing are two
+    /// different requests, and a save must not wait on a test that happens to be running.
+    pub(crate) testing: RwSignal<bool>,
+    /// What the last test found, or `None` before one has run — cleared on every edit and every
+    /// clear, since a verdict about a backend that has since changed under it would be a stale
+    /// claim rather than a fact.
+    pub(crate) test_result: RwSignal<Option<TestResultDto>>,
 }
 
 impl LlmBackendsForm {
@@ -1751,6 +1759,8 @@ impl LlmBackendsForm {
             probe_model: RwSignal::new(String::new()),
             probe_prompt: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
+            testing: RwSignal::new(false),
+            test_result: RwSignal::new(None),
         }
     }
 
@@ -1773,6 +1783,7 @@ impl LlmBackendsForm {
         self.probe_on.set(false);
         self.probe_model.set(String::new());
         self.probe_prompt.set(String::new());
+        self.test_result.set(None);
     }
 
     /// Load one backend into the editor. The computed halves of the DTO — the credential, the live
@@ -1785,6 +1796,7 @@ impl LlmBackendsForm {
     /// the type it arrived with. The schema, not the value, decides — so a dial is never retyped by
     /// a round trip through this form.
     pub(crate) fn edit(self, backend: &LlmBackendDto, declared: &BTreeSet<String>) {
+        self.test_result.set(None);
         self.editing.set(backend.id.clone());
         self.id.set(backend.id.clone());
         self.label.set(backend.label.clone());
@@ -1852,6 +1864,12 @@ pub(crate) struct EmbeddingsConsole {
     /// backends declaring the same model and width; the registry refuses anything else.
     pub(crate) fallbacks: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    /// Whether a **Test** is in flight — see [`LlmBackendsForm::testing`] for why it is its own
+    /// signal rather than reusing [`busy`](Self::busy).
+    pub(crate) testing: RwSignal<bool>,
+    /// What the last test found, or `None` before one has run — cleared on every edit and every
+    /// clear, the same as [`LlmBackendsForm::test_result`].
+    pub(crate) test_result: RwSignal<Option<TestResultDto>>,
 }
 
 impl EmbeddingsConsole {
@@ -1869,6 +1887,8 @@ impl EmbeddingsConsole {
             api_key_env: RwSignal::new(String::new()),
             fallbacks: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
+            testing: RwSignal::new(false),
+            test_result: RwSignal::new(None),
         }
     }
 
@@ -1883,12 +1903,14 @@ impl EmbeddingsConsole {
         self.base_url.set(String::new());
         self.api_key_env.set(String::new());
         self.fallbacks.set(String::new());
+        self.test_result.set(None);
     }
 
     /// Load one backend into the editor. The computed halves of the DTO — whether it is available,
     /// which consumers use it — are deliberately not read: they are facts about the backend, not
     /// fields of it, and a save has nothing to say about either.
     pub(crate) fn edit(self, backend: &EmbeddingBackendDto) {
+        self.test_result.set(None);
         self.editing.set(backend.id.clone());
         self.id.set(backend.id.clone());
         self.label.set(backend.label.clone());

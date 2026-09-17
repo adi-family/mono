@@ -25,8 +25,9 @@ use adi_webapp_api::types::{
     SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
     SetSecret, SetSharedAssets, SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn,
     StarRun, StartMarketplaceApp, StartMarketplaceService, StartResult, StartService, StopResult,
-    TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView,
-    TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
+    TaskRef, TasksState, TestEmbeddingBackend, TestLlmBackend, TestResultDto, ToolRef,
+    ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
     UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
     UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
@@ -117,6 +118,12 @@ pub async fn release_llm_hold(id: String) -> Result<LlmBackendsDto, String> {
     post("/api/llm/holds/release", &LlmBackendRef { id }).await
 }
 
+/// A real, billed request through this backend, right now — the form as it stands, whether or not
+/// it has ever been saved.
+pub async fn test_llm_backend(draft: SaveLlmBackend) -> Result<TestResultDto, String> {
+    post("/api/llm/backends/test", &TestLlmBackend { id: String::new(), draft: Some(draft) }).await
+}
+
 pub async fn release(body: &LeaseRef) -> Result<ReleaseResponse, String> {
     post("/api/ports/release", body).await
 }
@@ -143,6 +150,16 @@ pub async fn save_embedding_settings(
     assignments: BTreeMap<String, String>,
 ) -> Result<EmbeddingBackendsDto, String> {
     post("/api/embeddings/settings", &SaveEmbeddingSettings { assignments }).await
+}
+
+/// Embed one short string through this backend, right now — the form as it stands, whether or not
+/// it has ever been saved.
+pub async fn test_embedding_backend(draft: SaveEmbeddingBackend) -> Result<TestResultDto, String> {
+    post(
+        "/api/embeddings/backends/test",
+        &TestEmbeddingBackend { id: String::new(), draft: Some(draft) },
+    )
+    .await
 }
 
 // Mesh: every endpoint returns the fresh MeshState so the page updates in one round-trip.

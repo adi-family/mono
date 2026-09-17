@@ -25,7 +25,7 @@ use crate::fetch;
 use crate::state::{EmbeddingsConsole, Flash, State};
 use crate::ui::{
     Key, TextField, apply_mutation, confirm, field_hint, flash_view, menu_item, row_actions,
-    rows_or_placeholder, sort_rows,
+    rows_or_placeholder, sort_rows, test_verdict_view,
 };
 
 /// The registry table.
@@ -411,10 +411,18 @@ fn editor_view(state: State, console: EmbeddingsConsole) -> AnyView {
                         prop:disabled=move || console.busy.get() || console.runtime.get().is_empty()>
                         {move || if console.editing.get().is_empty() { "Add backend" } else { "Save backend" }}
                     </button>
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        title="Embeds a real string through this backend, on your own account \u{2014} \
+                               billed like any other call."
+                        prop:disabled=move || console.testing.get() || console.runtime.get().is_empty()
+                        on:click=move |_| run_test(state, console)>
+                        {move || if console.testing.get() { "Testing\u{2026}" } else { "Test" }}
+                    </button>
                     {move || (!console.editing.get().is_empty()).then(|| view! {
                         <button class="adi-btn adi-btn--ghost" type="button"
                             on:click=move |_| console.clear()>"Cancel"</button>
                     })}
+                    {move || (!console.testing.get()).then(|| test_verdict_view(console.test_result.get()))}
                 </div>
             </form>
             {flash_view(state.flash)}
@@ -505,24 +513,25 @@ fn runtime_fields(console: EmbeddingsConsole) -> AnyView {
     }
 }
 
-/// Validate what has been typed and save the whole object. The two refusals here are the ones the
-/// server cannot phrase as well: a backend with no name has no file to live in, and a form with no
-/// runtime chosen has not decided what the rest of it means yet.
-fn submit(state: State, console: EmbeddingsConsole) {
+/// The form as it currently stands, as the wire body a save or a test both send — shared so a
+/// **Test** asks exactly the backend a **Save** would write.
+///
+/// The two refusals here are the ones the server cannot phrase as well: a backend with no name has
+/// no file to live in, and a form with no runtime chosen has not decided what the rest of it means
+/// yet.
+fn body_from_form(console: EmbeddingsConsole) -> Result<SaveEmbeddingBackend, String> {
     let id = console.id.get().trim().to_string();
     if id.is_empty() {
-        state.flash.set(Some(Flash::err("Give the backend a name.".to_string())));
-        return;
+        return Err("Give the backend a name.".to_string());
     }
     let runtime = console.runtime.get().trim().to_string();
     if runtime.is_empty() {
-        state.flash.set(Some(Flash::err("Pick a runtime.".to_string())));
-        return;
+        return Err("Pick a runtime.".to_string());
     }
     // `candle`/`hash` never take a model or width from configuration (`Runtime::fixed_model`), so
     // this form asks for neither and sends blank/zero — the server fills in the one fixed answer.
     let fixed = matches!(runtime.as_str(), "candle" | "hash");
-    let body = SaveEmbeddingBackend {
+    Ok(SaveEmbeddingBackend {
         id: id.clone(),
         label: console.label.get().trim().to_string(),
         runtime,
@@ -541,7 +550,19 @@ fn submit(state: State, console: EmbeddingsConsole) {
             .map(|f| f.trim().to_string())
             .filter(|f| !f.is_empty())
             .collect(),
+    })
+}
+
+/// Validate what has been typed and save the whole object.
+fn submit(state: State, console: EmbeddingsConsole) {
+    let body = match body_from_form(console) {
+        Ok(body) => body,
+        Err(e) => {
+            state.flash.set(Some(Flash::err(e)));
+            return;
+        }
     };
+    let id = body.id.clone();
     let editing = console.editing.get();
     let message = if editing.is_empty() {
         format!("Added the backend {id}.")
@@ -560,6 +581,31 @@ fn submit(state: State, console: EmbeddingsConsole) {
         },
         fetch::save_embedding_backend(body),
     );
+}
+
+/// Embed [`fetch::test_embedding_backend`]'s test string through the form as it currently stands,
+/// right now. Distinct from [`submit`]: nothing here is written, so a blank id (the ordinary state
+/// of a form nobody has named yet) must not be refused the way a save refuses it.
+fn run_test(state: State, console: EmbeddingsConsole) {
+    let mut body = match body_from_form(console) {
+        Ok(body) => body,
+        Err(e) => {
+            state.flash.set(Some(Flash::err(e)));
+            return;
+        }
+    };
+    if body.id.trim().is_empty() {
+        body.id = "test".to_string();
+    }
+    console.test_result.set(None);
+    console.testing.set(true);
+    spawn_local(async move {
+        match fetch::test_embedding_backend(body).await {
+            Ok(result) => console.test_result.set(Some(result)),
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        console.testing.set(false);
+    });
 }
 
 /// Run a registry mutation: store the fresh registry, and flash success or the error. Every

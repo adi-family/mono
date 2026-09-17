@@ -23,12 +23,14 @@ use adi_webapp_api::types::{
 use adi_ui::{Row as TableRow, Table};
 use leptos::prelude::*;
 
+use wasm_bindgen_futures::spawn_local;
+
 use crate::fetch;
 use crate::routing::{Route, go_global};
 use crate::state::{Flash, LlmBackendsForm, State, read_error};
 use crate::ui::{
     Key, TextField, apply_mutation, confirm, field_hint, flash_view, menu_item, row_actions,
-    rows_or_status, sort_rows,
+    rows_or_status, sort_rows, test_verdict_view,
 };
 
 use super::agents::field_applies;
@@ -465,10 +467,18 @@ fn editor_view(state: State, form: LlmBackendsForm) -> AnyView {
                         prop:disabled=move || form.busy.get() || form.runtime.get().is_empty()>
                         {move || if form.editing.get().is_empty() { "Add backend" } else { "Save backend" }}
                     </button>
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        title="Sends a real request through this backend, on your own account — \
+                               billed like any other turn."
+                        prop:disabled=move || form.testing.get() || form.runtime.get().is_empty()
+                        on:click=move |_| run_test(state, form)>
+                        {move || if form.testing.get() { "Testing\u{2026}" } else { "Test" }}
+                    </button>
                     {move || (!form.editing.get().is_empty()).then(|| view! {
                         <button class="adi-btn adi-btn--ghost" type="button"
                             on:click=move |_| form.clear()>"Cancel"</button>
                     })}
+                    {move || (!form.testing.get()).then(|| test_verdict_view(form.test_result.get()))}
                 </div>
             </form>
             {flash_view(state.flash)}
@@ -1144,26 +1154,21 @@ fn default_rule() -> LimitRuleDto {
     }
 }
 
-/// Validate what has been typed and save the whole object. The two refusals here are the ones the
-/// server cannot phrase as well: a backend with no name has no file to live in, and half-typed JSON
-/// is a form still being written rather than a backend to store.
-fn submit(state: State, form: LlmBackendsForm) {
+/// The form as it currently stands, as the wire body a save or a test both send — shared so a
+/// **Test** asks exactly the backend a **Save** would write, never a slightly different reading of
+/// the same boxes.
+///
+/// The two refusals here are the ones the server cannot phrase as well: a backend with no name has
+/// no file to live in, and half-typed JSON is a form still being written rather than a backend to
+/// send anywhere.
+fn body_from_form(state: State, form: LlmBackendsForm) -> Result<SaveLlmBackend, String> {
     let id = form.id.get().trim().to_string();
     if id.is_empty() {
-        state
-            .flash
-            .set(Some(Flash::err("Give the backend a name.".to_string())));
-        return;
+        return Err("Give the backend a name.".to_string());
     }
     let runtime = form.runtime.get().trim().to_string();
     let spec = spec(state);
-    let params = match dial_params(form, spec.as_ref()) {
-        Ok(params) => params,
-        Err(e) => {
-            state.flash.set(Some(Flash::err(e)));
-            return;
-        }
-    };
+    let params = dial_params(form, spec.as_ref())?;
     // Only the login fields this runtime reads are sent. The others are shown as dropped before the
     // click (see `login_view`), and dropping them is the point: a `base_url` left over from an
     // `harness:adi` backend would key this one's holds against a subscription it never calls.
@@ -1185,7 +1190,7 @@ fn submit(state: State, form: LlmBackendsForm) {
     );
     let editing = form.editing.get();
     let renaming = !editing.is_empty() && editing != id;
-    let body = SaveLlmBackend {
+    Ok(SaveLlmBackend {
         id: id.clone(),
         label: form.label.get().trim().to_string(),
         runtime,
@@ -1209,7 +1214,21 @@ fn submit(state: State, form: LlmBackendsForm) {
             prompt: form.probe_prompt.get().trim().to_string(),
         }),
         rename_from: renaming.then(|| editing.clone()),
+    })
+}
+
+/// Validate what has been typed and save the whole object.
+fn submit(state: State, form: LlmBackendsForm) {
+    let body = match body_from_form(state, form) {
+        Ok(body) => body,
+        Err(e) => {
+            state.flash.set(Some(Flash::err(e)));
+            return;
+        }
     };
+    let editing = form.editing.get();
+    let id = body.id.clone();
+    let renaming = !editing.is_empty() && editing != id;
     let message = if renaming {
         format!("Renamed {editing} to {id}, and re-pointed every agent that listed it.")
     } else if editing.is_empty() {
@@ -1231,6 +1250,34 @@ fn submit(state: State, form: LlmBackendsForm) {
         fetch::save_llm_backend(body),
     );
 }
+
+/// Ask the form as it currently stands, right now — a real, billed request through whichever
+/// runtime is chosen. Distinct from [`submit`]: nothing here is written, so the button beside it
+/// says so, and the id doesn't have to be filled in yet the way a save requires it to be a filename.
+fn run_test(state: State, form: LlmBackendsForm) {
+    let mut body = match body_from_form(state, form) {
+        Ok(body) => body,
+        Err(e) => {
+            state.flash.set(Some(Flash::err(e)));
+            return;
+        }
+    };
+    // A test needs no name — it is never written anywhere — so a blank id (the ordinary state of a
+    // form nobody has named yet) must not be refused the way a save refuses it.
+    if body.id.trim().is_empty() {
+        body.id = "test".to_string();
+    }
+    form.test_result.set(None);
+    form.testing.set(true);
+    spawn_local(async move {
+        match fetch::test_llm_backend(body).await {
+            Ok(result) => form.test_result.set(Some(result)),
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        form.testing.set(false);
+    });
+}
+
 
 /// The dials as they go on the wire: the "anything else" box, with every typed control laid over
 /// it.

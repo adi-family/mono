@@ -1,6 +1,6 @@
 //! Shared view helpers, formatters, and the generic mutation runner the pages compose from.
 
-use adi_webapp_api::types::{AgentRunInfo, ProcessUsage, ServicePort, TaskRow};
+use adi_webapp_api::types::{AgentRunInfo, ProcessUsage, ServicePort, TaskRow, TestResultDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -218,6 +218,31 @@ pub(crate) fn flash_view(flash: RwSignal<Option<Flash>>) -> impl IntoView {
             {move || flash.get().map(|f| f.msg).unwrap_or_default()}
         </div>
     }
+}
+
+/// The last on-demand **Test**'s verdict, beside the button that ran it — shared by the LLM and
+/// embedding backend editors, since both send a real request through the form as it stands and
+/// both answer with the same [`TestResultDto`] shape.
+///
+/// Green for an answer (the `adi-status` pill every live-state column on these pages already
+/// uses); plain text otherwise — a rate limit or a failure is a fact about a provider, not a broken
+/// screen, so it does not spend the one red the design system reserves for a down service. Nothing
+/// while a test has never run — the caller decides what "in flight" looks like, since that is a
+/// state of the *button*, not of a result that does not exist yet.
+pub(crate) fn test_verdict_view(result: Option<TestResultDto>) -> impl IntoView {
+    let Some(result) = result else {
+        return ().into_any();
+    };
+    if result.verdict == "ok" {
+        return view! {
+            <span class="adi-status" data-state="online">
+                <span class="adi-status__led"></span>
+                <span>{result.message}</span>
+            </span>
+        }
+        .into_any();
+    }
+    view! { <span class="adi-muted">{result.message}</span> }.into_any()
 }
 
 /// A two-option segmented toggle bound to a `bool` signal: the left button selects `false`, the
