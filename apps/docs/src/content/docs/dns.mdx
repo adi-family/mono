@@ -34,12 +34,23 @@ an admin prompt, once, at setup. Once it's in place, resolving `app.adi` returns
 the front door — and the [[Hive|front door]] takes it from there: matching the hostname to a
 service and proxying the request to whatever port that service actually leased.
 
-## Do it
+On macOS and Windows, `.adi` is the whole point of running ADI on that machine, so the first
+`adi-mono up` installs the route and the front door together — no separate step. A Linux node is
+reached over the mesh instead (`<service>.<node>.n.adi`, resolved on the *viewer's* machine), so
+`adi-mono up` there never touches `:80` or `/etc` on its own; run `adi-mono dns install-route`
+once, by hand, if you also want `.adi` names to resolve on the node itself.
+
+## Do it <Flags>Expert area</Flags>
 
 ```bash
-adi-mono dns status              # is the route installed, is the resolver up
-adi-mono dns enable               # install the route + front-door proxy, if not already
+adi-mono dns status               # is the route installed, is the resolver up
+adi-mono dns enable                # macOS/Windows: install the route + front door on first enable
+adi-mono dns install-route         # Linux: install the route + front-door proxy (one admin prompt)
 ```
+
+`adi-mono status` reflects the difference on Linux: `http://app.adi (127.0.0.1:8000)` once the
+route is installed, `http://127.0.0.1:8000 (.adi not routed)` when it isn't — the panel works
+either way, only the hostname depends on the route.
 
 ## Never stop it by hand <Flags>Enterprise interest</Flags>
 
