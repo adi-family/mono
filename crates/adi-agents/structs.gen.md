@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-129 structs · 35 enums · 5 type aliases across 54 files.
+130 structs · 36 enums · 5 type aliases across 55 files.
 
 ## Index
 
@@ -36,6 +36,7 @@
 - [`src/llm/failover.rs`](#srcllmfailoverrs) — `Decision`, `Failure`
 - [`src/llm/holds.rs`](#srcllmholdsrs) — `HoldKey`, `Hold`, `Holds`
 - [`src/llm/migrate.rs`](#srcllmmigraters) — `Move`, `Skip`, `Plan`
+- [`src/llm/ondemand.rs`](#srcllmondemandrs) — `TestResult`, `TestVerdict`
 - [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
@@ -1717,6 +1718,39 @@ pub struct Plan {
     pub moves: Vec<Move>,
     pub backends: BTreeMap<String, LlmBackendManifest>,
     pub skipped: Vec<Skip>,
+}
+```
+
+---
+
+## `src/llm/ondemand.rs`
+
+### struct `TestResult`
+
+What a test found, and how long it took.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestResult {
+    pub verdict: TestVerdict,
+    pub elapsed_ms: u64,
+}
+```
+
+### enum `TestVerdict`
+
+The outcome, read the same way a probe's is: `classify` decides between a limit worth waiting out and a failure worth showing as-is.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TestVerdict {
+    Answered,
+    RateLimited {
+        reason: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 ```
 

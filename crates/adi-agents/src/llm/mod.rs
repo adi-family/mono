@@ -30,6 +30,8 @@
 //!   backend and puts that backend at the head of its list.
 //! * [`prober`] — the background sweep that finds out a held backend is *back*, so that no chat turn
 //!   ever has to be the thing that discovers it.
+//! * [`ondemand`] — the human-triggered counterpart: a "Test" button or `llm test <id>`, reaching
+//!   every runtime rather than only `harness:adi`, and writing nothing.
 //! * [`settings`] — `llm/settings.toml`, the handful of global switches.
 
 pub mod backend;
@@ -38,6 +40,7 @@ pub mod classify;
 pub mod failover;
 pub mod holds;
 pub mod migrate;
+pub mod ondemand;
 pub mod prober;
 pub mod settings;
 
@@ -52,6 +55,7 @@ pub use classify::{Classification, classify};
 pub use failover::{Decision, Failure, decide};
 pub use holds::{Hold, HoldKey, Holds};
 pub use migrate::{Move, Plan, Skip};
+pub use ondemand::{TestResult, TestVerdict, test_backend, test_manifest};
 pub use prober::{Checked, Prober, Verdict};
 pub use settings::LlmSettings;
 
