@@ -1,10 +1,17 @@
 //! The Hive settings page: every service declared across all projects' and dashboards'
-//! `.adi/hive.yaml` plus the global front-door hive, each with a live running/stopped indicator.
-//! This view is meant to be the one place every hive service is visible, whichever adi-hive
-//! instance actually supervises it.
+//! `.adi/hive.yaml` plus the global front door, each with a live running/stopped indicator. This
+//! view is meant to be the one place every hive service is visible, whichever adi-hive instance
+//! actually supervises it.
+//!
+//! The front-door group is read-only here — see [`FRONT_DOOR_READ_ONLY_REASON`] — because it is
+//! either a hand-managed file this page would be a second, easy-to-forget way to edit, or (the
+//! common case) generated fresh by adi-core on every `up` and every pairing, which would silently
+//! discard whatever this page wrote to it.
 
 use adi_ui::{EmptyRow, Row as TableRow, Table};
-use adi_webapp_api::types::{Dashboard, HiveService, Project, ServiceState};
+use adi_webapp_api::types::{
+    Dashboard, FRONT_DOOR_READ_ONLY_REASON, FrontDoorStatus, HiveService, Project, ServiceState,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -38,6 +45,41 @@ fn reload_hive(state: State) {
             )))),
         }
     });
+}
+
+/// What this page is for — shared between the loading state (before `front_door_hint` has a
+/// status to append) and the loaded one.
+const HIVE_PAGE_SUMMARY: &str = "Every service declared across your projects, dashboards, and \
+    this machine's front door, with what is actually running.";
+
+/// What this page shows, plus this machine's front-door state — matching the wording
+/// `adi-mono status` and the installers already use (`apps/linux/install.sh`), so a person meets
+/// one consistent explanation of ".adi routing" rather than a fourth phrasing of it here.
+///
+/// "Not routed" is the ordinary state of a fresh node (ADI-MONO-59: nothing binds `:80` until the
+/// operator asks), so it reads as a fact rather than a fault — the panel already works over plain
+/// `http://` either way.
+fn front_door_hint(front_door: FrontDoorStatus) -> String {
+    let status = match (front_door.routed, front_door.answering) {
+        (true, true) => {
+            "This machine's front door is running and `.adi` is routed here \u{2014} \
+             http://app.adi works.".to_string()
+        }
+        (true, false) => {
+            "`.adi` is routed here, but nothing is answering behind it \u{2014} \
+             `adi-mono dns grant-network` repairs it.".to_string()
+        }
+        (false, true) => {
+            "This machine's front door is running, but `.adi` is not routed here yet \u{2014} \
+             `adi-mono dns install-route` finishes it.".to_string()
+        }
+        (false, false) => {
+            "This machine's front door is off, which is the normal state until you ask for it: \
+             the panel already works over plain http; `.adi` needs \
+             `adi-mono dns install-route`.".to_string()
+        }
+    };
+    format!("{HIVE_PAGE_SUMMARY} {status}")
 }
 
 /// The Hive page: one table of every declared service, with what it all adds up to in the head.
@@ -77,6 +119,12 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
                     on:click=move |_| reload_hive(state)>"Reload config"</button>
             </div>
             <Table state=state.tables.hive>{move || hive_rows(state, route)}</Table>
+            <p class="adi-hint">
+                {move || hive.get().map_or_else(
+                    || HIVE_PAGE_SUMMARY.to_string(),
+                    |h| front_door_hint(h.front_door),
+                )}
+            </p>
         </section>
     }
     .into_any()
@@ -227,7 +275,16 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if h.services.is_empty() {
-        return view! { <EmptyRow state=table>"No hive services declared in any project or the global hive."</EmptyRow> }.into_any();
+        // Should only be reached before this machine's first `adi-mono up` — after that the front
+        // door alone always declares its own routes (see the hint below the table). Say what the
+        // page is for rather than leave a table with nothing in it and no explanation.
+        return view! {
+            <EmptyRow state=table>
+                "No hive services declared yet \u{2014} they will appear here once a project, a \
+                 dashboard, or this machine's front door declares one. See below."
+            </EmptyRow>
+        }
+        .into_any();
     }
     // A service names its origin by id; the Source cell shows the name path instead, resolved
     // against the projects list (shell data, loaded on every route) and the dashboards listing
@@ -261,15 +318,17 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
 
 /// The one control a row gets: Start or Stop, for a service this panel can actually act on.
 ///
-/// A service with no runner has nothing to start, and a **dashboard's** service is supervised by
-/// its own per-user hive — `/api/hive/start` reads a project's hive.yaml or the front door's, so it
-/// would go looking for a service that is not in either. Both get nothing rather than a button that
-/// fails.
+/// A service with no runner has nothing to start, a **dashboard's** service is supervised by its
+/// own per-user hive — `/api/hive/start` reads a project's hive.yaml or the front door's, so it
+/// would go looking for a service that is not in either — and the **front door** group (no
+/// project, no dashboard) is read-only (see [`FRONT_DOOR_READ_ONLY_REASON`]): the API refuses a
+/// start/stop aimed at it, so offering the button here would just be one more way to hit that
+/// refusal. All three get nothing rather than a button that fails.
 ///
 /// Starting an on-demand service by hand is deliberately allowed, and is not a special case: it
 /// starts the same process a visit would, and its idle window then runs exactly as it would have.
 fn row_action(s: &HiveService, state: State) -> AnyView {
-    if s.run.is_none() || s.dashboard.is_some() {
+    if s.run.is_none() || s.dashboard.is_some() || s.project.is_none() {
         return ().into_any();
     }
     let (project, service) = (s.project.clone(), s.name.clone());
@@ -442,7 +501,10 @@ fn source_cell(s: &HiveService, src: &Source, state: State, route: RwSignal<Rout
             }
             .into_any()
         }
-        (None, None) => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
+        (None, None) => {
+            let title = format!("read-only \u{2014} {FRONT_DOOR_READ_ONLY_REASON}");
+            view! { <span class="adi-chip" title=title>"front-door"</span> }.into_any()
+        }
         (Some(id), None) => {
             let open_id = id.clone();
             let href = project_href(id);
@@ -764,5 +826,47 @@ mod tests {
             names(&ascending),
             "a tie is direction-independent"
         );
+    }
+
+    /// A stock, never-configured Linux box: nothing is granted yet — the normal state per
+    /// ADI-MONO-59, not a fault — and the hint must say so and name the one command that changes
+    /// it, rather than read like an error.
+    #[test]
+    fn an_ungranted_front_door_reads_as_the_normal_state_not_a_fault() {
+        let hint = front_door_hint(FrontDoorStatus {
+            routed: false,
+            answering: false,
+        });
+        assert!(hint.contains("normal state"), "{hint}");
+        assert!(hint.contains("adi-mono dns install-route"), "{hint}");
+    }
+
+    /// The fully-on state names the address that now works, matching what `adi-mono status` and
+    /// the installers already say instead of a fourth phrasing of the same fact.
+    #[test]
+    fn a_running_and_routed_front_door_says_the_adi_address_works() {
+        let hint = front_door_hint(FrontDoorStatus {
+            routed: true,
+            answering: true,
+        });
+        assert!(hint.contains("app.adi"), "{hint}");
+        assert!(!hint.contains("install-route"), "{hint}");
+    }
+
+    /// The two half-states each point at the one command that finishes the job, so a person acting
+    /// on the hint never has to guess which command applies.
+    #[test]
+    fn a_half_granted_front_door_names_the_one_command_that_finishes_it() {
+        let installed_not_routed = front_door_hint(FrontDoorStatus {
+            routed: false,
+            answering: true,
+        });
+        assert!(installed_not_routed.contains("install-route"), "{installed_not_routed}");
+
+        let routed_not_answering = front_door_hint(FrontDoorStatus {
+            routed: true,
+            answering: false,
+        });
+        assert!(routed_not_answering.contains("grant-network"), "{routed_not_answering}");
     }
 }

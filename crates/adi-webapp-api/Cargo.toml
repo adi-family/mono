@@ -16,6 +16,7 @@ default = []
 # and can't target wasm).
 server = [
     "dep:adi-config",
+    "dep:adi-core",
     "dep:adi-osext",
     "dep:adi-ports-manager",
     "dep:adi-mesh",
@@ -73,6 +74,10 @@ serde = { workspace = true }
 adi-dashboards = { workspace = true }
 
 adi-config = { workspace = true, optional = true }
+# `dns::front_door_in_use` — the one place that knows whether the front door this machine
+# actually runs is the hand-managed `hive/hive.yaml` or the generated `dns/hive-frontdoor.yaml`,
+# and `Dns::dns_route_installed`/`front_door_answering` for the Hive settings page's status line.
+adi-core = { workspace = true, optional = true }
 adi-osext = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }

@@ -1479,8 +1479,11 @@ fn is_petname(name: &str) -> bool {
 /// generated config while the running front door kept minting a certificate from the other one,
 /// and `https://<service>.<node>.n.adi` failed on a name the machine believed it had covered.
 ///
-/// Same preference the mesh gateway uses to resolve service labels, for the same reason.
-fn front_door_in_use(store: &adi_config::Config) -> PathBuf {
+/// Same preference the mesh gateway uses to resolve service labels, for the same reason — and
+/// the one the webapp's `/api/hive` reads the front-door group through, so a hand-managed file
+/// and the generated one are never each asked about by a second copy of this rule.
+#[must_use]
+pub fn front_door_in_use(store: &adi_config::Config) -> PathBuf {
     let hand_managed = store.module("hive").raw_path("hive.yaml");
     if hand_managed.is_file() {
         return hand_managed;

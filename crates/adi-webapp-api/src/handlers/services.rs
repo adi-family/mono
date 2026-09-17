@@ -5,8 +5,9 @@ use adi_projects::Projects;
 use serde::Deserialize;
 
 use crate::types::{
-    HiveService, HiveState, NewService, ProcessUsage, ProjectService, ServicePort, ServiceState,
-    StartResult, StartService, StopResult, UsedPort,
+    FRONT_DOOR_READ_ONLY_REASON, FrontDoorStatus, HiveService, HiveState, NewService,
+    ProcessUsage, ProjectService, ServicePort, ServiceState, StartResult, StartService,
+    StopResult, UsedPort,
 };
 
 use super::projects::project_detail;
@@ -269,9 +270,9 @@ fn primary_port(ports: &[ServicePort]) -> Option<u16> {
 }
 
 /// `GET /api/hive` — aggregate every service declared across all projects' `.adi/hive.yaml`
-/// plus the global `~/.adi/mono/hive/hive.yaml`, tagged with a live running flag and what the
-/// running ones cost. `live` is the machine's listening TCP ports with their sampled process
-/// usage (the host does the platform scan and passes it).
+/// plus the global front door, tagged with a live running flag and what the running ones cost.
+/// `live` is the machine's listening TCP ports with their sampled process usage (the host does
+/// the platform scan and passes it).
 #[must_use]
 pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort]) -> Response {
     let mut services = Vec::new();
@@ -279,8 +280,12 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort
     // is looked up in it.
     let demand = DemandPhases::read(store.config());
 
-    // The global front-door hive lives in the `hive` module of the same store the projects use.
-    let global = store.config().module("hive").raw_path("hive.yaml");
+    // The front door this machine actually runs — a hand-managed `hive/hive.yaml` if the operator
+    // wrote one, else the generated `dns/hive-frontdoor.yaml` every install has. adi-core's
+    // `front_door_in_use` is the single definition of that preference (docs/comments.md: two
+    // copies of a precedence rule is how this bug happens again) — the mesh gateway and the
+    // front-door daemon itself both already defer to it.
+    let global = adi_core::dns::front_door_in_use(store.config());
     collect_hive_services(None, &global, live, &demand, &mut services);
 
     match store.list() {
@@ -298,7 +303,15 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort
     // the same — this view is meant to be the one place every service is visible.
     collect_dashboard_services(store.config(), ports, live, &demand, &mut services);
 
-    ok_json(&HiveState { services })
+    let dns = adi_core::Dns::new();
+    let front_door = FrontDoorStatus {
+        routed: dns.dns_route_installed(),
+        answering: dns.front_door_answering(),
+    };
+    ok_json(&HiveState {
+        services,
+        front_door,
+    })
 }
 
 /// Append every dashboard's services, tagged with its dashboard id.
@@ -399,6 +412,17 @@ fn collect_hive_services(
     }
 }
 
+/// Refuse a start/stop aimed at `project: None` — the front-door group, which this panel treats
+/// as read-only (see `FRONT_DOOR_READ_ONLY_REASON`). It is never resolved to a hive.yaml at all:
+/// on a stock install that would have been the hand-managed file, which usually does not exist,
+/// so the request silently 404'd as "no hive.yaml for that target" rather than saying why.
+fn refuse_front_door_write(verb: &str, service: &str) -> Response {
+    error(
+        409,
+        &format!("can't {verb} `{service}` on the front door \u{2014} {FRONT_DOOR_READ_ONLY_REASON}"),
+    )
+}
+
 /// `POST /api/hive/start` — launch a hive service's runner (its `run` command) with the
 /// ports-manager-allocated `PORT` injected, in its working directory. The child is detached (its
 /// own process group) and its output goes to `<workdir>/server.log`; status then reflects the
@@ -414,7 +438,7 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
             (Ok(hive), Ok(dir)) => (hive, Some(dir)),
             (Err(e), _) | (_, Err(e)) => return Response::from(&e),
         },
-        None => (store.config().module("hive").raw_path("hive.yaml"), None),
+        None => return refuse_front_door_write("start", &req.service),
     };
 
     let Ok(raw) = std::fs::read_to_string(&hive_path) else {
@@ -508,7 +532,7 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> Response {
             Ok(hive) => hive,
             Err(e) => return Response::from(&e),
         },
-        None => store.config().module("hive").raw_path("hive.yaml"),
+        None => return refuse_front_door_write("stop", &req.service),
     };
     let Ok(raw) = std::fs::read_to_string(&hive_path) else {
         return error(404, "no hive.yaml for that target");
@@ -954,6 +978,34 @@ fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A store rooted in a temp dir, so a test never reads or writes the real `~/.adi/mono`.
+    fn temp_store(tag: &str) -> Projects {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-services-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Projects::with_config(adi_config::Config::with_root(root))
+    }
+
+    /// `project: None` names the front door, which this panel treats as read-only — start/stop
+    /// must refuse it outright, not resolve it to a `hive/hive.yaml` that, on a stock install,
+    /// is not even there (see `refuse_front_door_write`).
+    #[test]
+    fn starting_or_stopping_the_front_door_is_refused() {
+        let store = temp_store("front-door-refused");
+        let body = br#"{"service":"app"}"#;
+
+        let started = start_service(&store, body);
+        assert_eq!(started.status, 409);
+        assert!(started.body.contains("adi-mono dns"), "{}", started.body);
+
+        let stopped = stop_service(&store, body);
+        assert_eq!(stopped.status, 409);
+        assert!(stopped.body.contains("adi-mono dns"), "{}", stopped.body);
+    }
 
     fn docker(name: Option<&str>) -> HiveDocker {
         HiveDocker {

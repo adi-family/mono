@@ -3723,6 +3723,30 @@ pub struct HiveService {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HiveState {
     pub services: Vec<HiveService>,
+    /// Whether this machine's front door is a real thing right now — the same two questions
+    /// `adi-mono status` and the installers already answer, so the settings page can say the
+    /// same thing they do instead of a fourth wording that can drift from it.
+    #[serde(default)]
+    pub front_door: FrontDoorStatus,
+}
+
+/// Why the front-door group of `GET /api/hive` cannot be created, started, or stopped from this
+/// panel — shown as the group's read-only reason on the page, and returned by any write endpoint
+/// a request aims at it anyway, so the sentence a person reads and the one an API client gets
+/// back never drift apart into two different explanations of the same rule.
+pub const FRONT_DOOR_READ_ONLY_REASON: &str = "this is generated from your DNS/front-door \
+    config and rewritten automatically \u{2014} edit it with `adi-mono dns \u{2026}`, not here";
+
+/// The front door's live install/answering state, as the Hive settings page's empty state and
+/// status line read it — see [`HiveState::front_door`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct FrontDoorStatus {
+    /// `.adi` names resolve on this machine (the DNS route is installed).
+    pub routed: bool,
+    /// Something is actually answering on the front door's bind address. Can be true with
+    /// `routed` false (reachable by IP but no local name for it) or false with `routed` true (the
+    /// route is installed but the daemon behind it is not running).
+    pub answering: bool,
 }
 
 /// One dashboard under `~/.adi/mono/dashboards/<id>/` — a bun-served frontend + backend pair
