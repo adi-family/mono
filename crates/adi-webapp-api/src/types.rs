@@ -4748,6 +4748,34 @@ pub struct SaveLlmSettings {
     pub probe_every: u64,
 }
 
+/// `POST /api/llm/backends/test` — a real, billed request through this backend, right now. Either
+/// a saved backend's `id`, tested as it stands in the store, or `draft`: the form as currently
+/// edited, tested whether or not it has ever been saved — the point of a "Test" button beside a
+/// form is to test the form, not whatever was last written to disk. `draft` wins when both arrive.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TestLlmBackend {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub draft: Option<SaveLlmBackend>,
+}
+
+/// The verdict of an on-demand backend test — the shape `/api/llm/backends/test` and
+/// `/api/embeddings/backends/test` both answer with. A test that fails is still a `200`: the
+/// verdict says so, an HTTP error status would not, and the message carries the provider's own
+/// words rather than a generic failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TestResultDto {
+    /// `ok` · `rate_limited` (LLM backends only) · `failed`.
+    pub verdict: String,
+    pub message: String,
+    pub elapsed_ms: u64,
+    /// The embedded vector's width. Set only by the embeddings test — an LLM backend has no
+    /// equivalent number to report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dimensions: Option<u32>,
+}
+
 // ------------------------------------------------------------ embedding backends
 
 /// One embedding backend definition on the wire — a complete way to turn text into a vector, under
@@ -4851,6 +4879,17 @@ pub struct EmbeddingBackendRef {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaveEmbeddingSettings {
     pub assignments: BTreeMap<String, String>,
+}
+
+/// `POST /api/embeddings/backends/test` — embed one short string through this backend, right now.
+/// Either a saved backend's `id` or `draft`, the same either/or [`TestLlmBackend`] offers and for
+/// the same reason. `draft` wins when both arrive.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TestEmbeddingBackend {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub draft: Option<SaveEmbeddingBackend>,
 }
 
 // ------------------------------------------------------------- llm gateway

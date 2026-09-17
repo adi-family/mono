@@ -21,7 +21,8 @@ use adi_agents::{Agents, Backend, Error as AgentStoreError};
 
 use crate::types::{
     ContextWarningDto, DanglingRowDto, HoldDto, LimitRuleDto, LlmBackendDto, LlmBackendRef,
-    LlmBackendsDto, LlmSettingsDto, ProbeDto, SaveLlmBackend, SaveLlmSettings,
+    LlmBackendsDto, LlmSettingsDto, ProbeDto, SaveLlmBackend, SaveLlmSettings, TestLlmBackend,
+    TestResultDto,
 };
 
 use super::response::{FromBody, Response, error, ok_json};
@@ -131,22 +132,7 @@ pub fn save_llm_backend(store: &Agents, body: &[u8]) -> Response {
         }
     }
 
-    let manifest = LlmBackendManifest {
-        label: req.label.trim().to_string(),
-        runtime: Backend::from(req.runtime.trim()),
-        model: req.model.trim().to_string(),
-        context_tokens: req.context_tokens,
-        settings: blank_to_none(&req.settings),
-        provider: blank_to_none(&req.provider),
-        base_url: blank_to_none(&req.base_url),
-        api_key_env: blank_to_none(&req.api_key_env),
-        params: req.params,
-        limit_rules: req.limit_rules.into_iter().map(limit_rule).collect(),
-        probe: req.probe.map(probe),
-        // The store owns the timestamps.
-        created_at: 0,
-        updated_at: 0,
-    };
+    let manifest = manifest_from(req);
     if let Err(e) = registry.save(&id, manifest) {
         return Response::from(&e);
     }
@@ -237,7 +223,61 @@ pub fn release_llm_hold(store: &Agents, body: &[u8]) -> Response {
     llm_backends(store)
 }
 
+/// `POST /api/llm/backends/test` — a real, billed request through this backend, right now. Either
+/// a saved backend's `id`, tested as it stands in the store, or `draft`: the form as currently
+/// edited, tested whether or not it has ever been saved — the whole reason
+/// [`adi_agents::llm::test_manifest`] takes a manifest rather than an id. Writes nothing: no hold
+/// touched, released or created, whatever the verdict.
+///
+/// Always a `200` with the verdict inside — a failed test is a successful answer to "does this
+/// work", not a broken request.
+#[must_use]
+pub fn test_llm_backend(store: &Agents, body: &[u8]) -> Response {
+    let req = require!(body, TestLlmBackend);
+    let manifest = if let Some(draft) = req.draft {
+        manifest_from(draft)
+    } else {
+        let id = req.id.trim();
+        match LlmBackends::with_config(store.config().clone()).get(id) {
+            Ok(Some(backend)) => backend.manifest,
+            Ok(None) => return error(404, &format!("no backend named {id}")),
+            Err(e) => return Response::from(&e),
+        }
+    };
+    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(&manifest)))
+}
+
 // ------------------------------------------------------------------ mapping
+
+/// A backend definition off the wire — shared by [`save_llm_backend`] (which writes it) and
+/// [`test_llm_backend`] (which never does).
+fn manifest_from(req: SaveLlmBackend) -> LlmBackendManifest {
+    LlmBackendManifest {
+        label: req.label.trim().to_string(),
+        runtime: Backend::from(req.runtime.trim()),
+        model: req.model.trim().to_string(),
+        context_tokens: req.context_tokens,
+        settings: blank_to_none(&req.settings),
+        provider: blank_to_none(&req.provider),
+        base_url: blank_to_none(&req.base_url),
+        api_key_env: blank_to_none(&req.api_key_env),
+        params: req.params,
+        limit_rules: req.limit_rules.into_iter().map(limit_rule).collect(),
+        probe: req.probe.map(probe),
+        // The store owns the timestamps; a draft under test never reaches it at all.
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+fn test_result_dto(result: &adi_agents::llm::TestResult) -> TestResultDto {
+    TestResultDto {
+        verdict: result.verdict.tag().to_string(),
+        message: result.message(),
+        elapsed_ms: result.elapsed_ms,
+        dimensions: None,
+    }
+}
 
 /// Re-point every agent row naming `from` at `to`. Written back through the ordinary save, so the
 /// rows are validated and `adi.agents.saved` fires — a rename is an edit of those agents.
@@ -388,6 +428,16 @@ impl FromBody for LlmBackendRef {
 impl FromBody for SaveLlmSettings {
     const EXPECTED: &'static str =
         "expected JSON body { \"ask_on_switch\": false, \"probe_every\": 300 }";
+}
+
+impl FromBody for TestLlmBackend {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\" } or { \"draft\": { \"runtime\": \"…\", … } }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+            || self.draft.as_ref().is_some_and(|d| !d.runtime.trim().is_empty())
+    }
 }
 
 #[cfg(test)]
@@ -616,5 +666,50 @@ mod tests {
         assert_eq!(save_llm_backend(&store, br#"{"id":"x"}"#).status, 400);
         assert_eq!(save_llm_backend(&store, b"{}").status, 400);
         assert_eq!(delete_llm_backend(&store, br#"{"id":""}"#).status, 400);
+    }
+
+    /// A test is always a `200` carrying a verdict — this backend's `harness:adi` names no
+    /// provider, so it fails locally without ever reaching a network, which is what makes it a
+    /// safe fixture for a unit test.
+    #[test]
+    fn test_by_id_is_a_200_carrying_the_verdict() {
+        let store = scratch();
+        save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
+        let Response { status, body } = test_llm_backend(&store, br#"{"id":"anthropic"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["verdict"], "failed", "{body}");
+        assert!(!v["message"].as_str().unwrap().is_empty(), "{body}");
+    }
+
+    #[test]
+    fn test_by_id_of_an_unknown_backend_is_404() {
+        let store = scratch();
+        assert_eq!(test_llm_backend(&store, br#"{"id":"ghost"}"#).status, 404);
+    }
+
+    /// A draft is tested exactly as sent, whether or not it has ever been saved — and nothing
+    /// about testing it writes a definition into the store.
+    #[test]
+    fn a_draft_is_tested_without_ever_being_saved() {
+        let store = scratch();
+        let Response { status, body } = test_llm_backend(
+            &store,
+            br#"{"draft":{"id":"","runtime":"harness:adi","model":"claude-opus-5"}}"#,
+        );
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["verdict"], "failed", "{body}");
+        assert!(LlmBackends::with_config(store.config().clone()).list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_test_body_naming_neither_an_id_nor_a_draft_is_a_400() {
+        let store = scratch();
+        assert_eq!(test_llm_backend(&store, b"{}").status, 400);
+        assert_eq!(
+            test_llm_backend(&store, br#"{"draft":{"id":"x","runtime":""}}"#).status,
+            400
+        );
     }
 }

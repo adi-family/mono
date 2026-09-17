@@ -810,6 +810,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/llm/backends") => handlers::llm_backends(agents),
         ("POST", "/api/llm/backends/save") => handlers::save_llm_backend(agents, &req.body),
         ("POST", "/api/llm/backends/delete") => handlers::delete_llm_backend(agents, &req.body),
+        // A real, billed request — right now, whichever runtime the backend names. Distinct from
+        // the background prober, and it writes nothing: no hold touched, no hold created.
+        ("POST", "/api/llm/backends/test") => handlers::test_llm_backend(agents, &req.body),
         ("POST", "/api/llm/holds/release") => handlers::release_llm_hold(agents, &req.body),
         ("POST", "/api/llm/settings") => handlers::save_llm_settings(agents, &req.body),
 
@@ -825,6 +828,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("POST", "/api/embeddings/backends/delete") => {
             handlers::delete_embedding_backend(agents, &req.body)
+        }
+        // Embed one short string through this backend, right now — the same distinction from a
+        // save that the LLM test above draws: writes nothing, and a draft never touches the store.
+        ("POST", "/api/embeddings/backends/test") => {
+            handlers::test_embedding_backend(agents, &req.body)
         }
         ("POST", "/api/embeddings/settings") => {
             handlers::save_embedding_settings(agents, &req.body)
