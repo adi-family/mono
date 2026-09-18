@@ -69,14 +69,7 @@ pub(crate) fn run_limit_view(state: State) -> impl IntoView {
         "Runs live now, against the most allowed at once",
         "How many agent runs may be live at once (0 lifts it). Automatic launches — a trigger firing, a queued chat turn — wait for a free slot; you can always run one anyway.",
         load,
-        move |max| {
-            let msg = if max == 0 {
-                "No overall limit — runs start whenever they are asked for.".to_string()
-            } else {
-                format!("At most {max} agent runs at once.")
-            };
-            apply_agents(state, None, msg, fetch::set_run_limit(max, None));
-        },
+        move |max| apply_agents(state, None, fetch::set_run_limit(max, None)),
     )
 }
 
@@ -105,12 +98,7 @@ pub(crate) fn project_run_limit_view(state: State) -> impl IntoView {
         load,
         move |max| {
             let id = project.get_untracked();
-            let msg = if max == 0 {
-                format!("“{id}” is bound only by the overall limit now.")
-            } else {
-                format!("At most {max} runs of “{id}” at once.")
-            };
-            apply_agents(state, None, msg, fetch::set_run_limit(max, Some(id)));
+            apply_agents(state, None, fetch::set_run_limit(max, Some(id)));
         },
     )
 }
@@ -128,12 +116,7 @@ pub(crate) fn auto_title_view(state: State) -> impl IntoView {
                 prop:checked=checked
                 on:change=move |ev| {
                     let enabled = event_target_checked(&ev);
-                    let msg = if enabled {
-                        "New chats will be renamed from a local model's guess.".to_string()
-                    } else {
-                        "New chats will keep the title their opening message gives them.".to_string()
-                    };
-                    apply_agents(state, None, msg, fetch::set_auto_title(enabled));
+                    apply_agents(state, None, fetch::set_auto_title(enabled));
                 } />
             <span class="adi-field__label">"Auto-name new chats"</span>
             {field_hint("Guess a name for a new chat from its opening message, using a local model, once one answers. Off costs nothing — chats keep the title their opening message gives them either way.")}
@@ -264,19 +247,18 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
     .into_any()
 }
 
-/// Run an agents mutation: set the returned list and a success flash, or an error flash; toggles
+/// Run an agents mutation: set the returned list, or flash the error; toggles
 /// `busy` around the request when a form is driving it.
-pub(crate) fn apply_agents<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+pub(crate) fn apply_agents<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<AgentsState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, a| s.agents.set(Some(a)), fut);
+    apply_mutation(state, busy, |s, a| s.agents.set(Some(a)), fut);
 }
 
 /// Launch an interactive (pty) agent straight away — no initial task, since the session is typed
-/// into after it starts. The server supplies the executor-specific success message. `force` is the
-/// human's "run it anyway" past a full concurrency limit. Always this machine — the Agents page has
-/// no node concept (`docs/fleet.md` §13).
+/// into after it starts. `force` is the human's "run it anyway" past a full concurrency limit.
+/// Always this machine — the Agents page has no node concept (`docs/fleet.md` §13).
 pub(crate) fn run_now(state: State, name: String, force: bool) {
     run_now_with(state, None, name, force, None, None, None);
 }
@@ -314,8 +296,10 @@ fn run_now_with(
         .await
         {
             Ok(res) => {
+                // The session appearing in the rail, live, is the report that it started — the
+                // server's own sentence about it (`res.message`) is not shown anywhere.
                 set_source_agents(state, node.as_deref(), res.state);
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -359,8 +343,10 @@ fn launch_agent(
         .await
         {
             Ok(res) => {
+                // Nothing is said about the launch: the live view below opens on the run itself,
+                // which is a better report than a line naming its pid and log file.
                 set_source_agents(state, node.as_deref(), res.state);
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
                 watch.peek.set(None);
                 watch.log.set(String::new());
                 if !res.run_id.is_empty() {
@@ -386,7 +372,6 @@ pub(crate) fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     apply_agents(
         state,
         None,
-        format!("Stopped {name}."),
         fetch::stop_agent(name),
     );
 }
@@ -3485,12 +3470,12 @@ fn start_review(state: State, watch: AgentsWatch) {
         watch.review_busy.set(false);
         match result {
             Ok(started) => {
-                // The dossier's path is worth saying: it is a file on disk that outlives the flash,
-                // and the one way to read the evidence without reading the review.
-                state.flash.set(Some(Flash::ok(format!(
-                    "\u{201C}{}\u{201D} is reviewing it \u{2014} evidence in {}",
-                    started.reviewer, started.dossier
-                ))));
+                // That the review started is said by the screen moving to it. The dossier's
+                // path is not: it is a file on disk that outlives the flash, and the one way to
+                // read the evidence without reading the review.
+                state
+                    .flash
+                    .set(Some(Flash::note(format!("Evidence in {}", started.dossier))));
                 if started.run_id.is_empty() {
                     // An interactive reviewer keeps no run history, so there is no conversation to
                     // select — only its live pane to open.
@@ -6821,7 +6806,7 @@ fn submit_unlock(state: State) {
                 if f.nodes.iter().any(|n| {
                     n.node == asked && !n.locked && n.error.is_none() && n.dashboards.is_empty()
                 }) {
-                    state.flash.set(Some(Flash::ok(format!(
+                    state.flash.set(Some(Flash::note(format!(
                         "{asked} runs no dashboards — it is a viewer, and it stays in the strip \
                          at the top of this column."
                     ))));

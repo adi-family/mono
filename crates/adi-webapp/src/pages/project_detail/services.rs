@@ -329,8 +329,9 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
             env.set(String::new());
             start.set("on-demand".to_string());
             idle_stop.set(String::new());
-            apply_mutation(state, Some(busy), format!("Added service “{nm}”."),
-                |s: State, d: ProjectDetail| s.project_detail.set(Some(d)), fetch::create_service(body));
+            apply_mutation(state, Some(busy),
+                |s: State, d: ProjectDetail| s.project_detail.set(Some(d)),
+                fetch::create_service(body));
         }>
             <TextField id="pservice-name" label="Name" placeholder="api" mono=true
                 hint="the key under services:" value=name />
@@ -472,11 +473,9 @@ fn env_map(text: &str) -> std::collections::BTreeMap<String, String> {
 fn start_service(state: State, project: Option<String>, service: String) {
     spawn_local(async move {
         match fetch::start_service(project.clone(), service.clone()).await {
-            Ok(r) => {
-                let at = r.port.map_or(String::new(), |p| format!(" on :{p}"));
-                state
-                    .flash
-                    .set(Some(Flash::ok(format!("Started {}{at}.", r.service))));
+            Ok(_) => {
+                // The row's status led and its port both follow the reload below.
+                state.flash.set(None);
                 if let Some(id) = project {
                     reload_project(state, id);
                 }
@@ -492,10 +491,8 @@ fn start_service(state: State, project: Option<String>, service: String) {
 fn stop_service(state: State, project: Option<String>, service: String) {
     spawn_local(async move {
         match fetch::stop_service(project.clone(), service.clone()).await {
-            Ok(r) => {
-                state
-                    .flash
-                    .set(Some(Flash::ok(format!("Stopped {}.", r.service))));
+            Ok(_) => {
+                state.flash.set(None);
                 if let Some(id) = project {
                     reload_project(state, id);
                 }

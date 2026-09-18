@@ -90,10 +90,11 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                         Ok(d) => {
                             form.name.set(String::new());
                             form.description.set(String::new());
-                            // The supervisor leases ports and starts both servers on its own
-                            // within a few seconds; say so rather than showing a dead row.
-                            state.flash.set(Some(Flash::ok(format!(
-                                "Created “{}” ({}). Starting — ports appear in a few seconds.",
+                            // Not "created" — the new row says that. What the row cannot say
+                            // is why it is portless: the supervisor leases ports and starts both
+                            // servers on its own, within a few seconds.
+                            state.flash.set(Some(Flash::note(format!(
+                                "“{}” ({}) is starting — ports appear in a few seconds.",
                                 d.name,
                                 short_id(&d.id),
                             ))));
@@ -346,7 +347,9 @@ fn submit_transfer(state: State, form: DashboardsForm) {
                 let message = transferred_message(&done, moving);
                 state.dashboards.set(Some(done.dashboards));
                 close_transfer(form);
-                state.flash.set(Some(Flash::ok(message)));
+                // Kept because it names the node it landed on and the address to open it at —
+                // neither of which this page shows once the row has gone.
+                state.flash.set(Some(Flash::note(message)));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -664,7 +667,7 @@ fn project_cell(state: State, d: &Dashboard) -> AnyView {
         <select class="adi-input adi-dash__proj"
             on:change=move |ev| {
                 let val = event_target_value(&ev);
-                apply_dashboards(state, "Filed dashboard.".to_string(),
+                apply_dashboards(state,
                     fetch::set_dashboard_project(id.clone(), (!val.is_empty()).then_some(val)));
             }>
             <option value="" selected=cur_none>"\u{2014} none \u{2014}"</option>
@@ -716,18 +719,16 @@ fn row_action(
             }
             apply_dashboards(
                 state,
-                format!("Deleted {delete_short}."),
                 fetch::delete_dashboard(delete_id.clone()),
             );
         });
         return row_actions(state, key, start, vec![transfer, delete]);
     }
     if archived {
-        let (restore_id, restore_short) = (id.clone(), short.clone());
+        let restore_id = id.clone();
         let restore = menu_item(state, "Restore", false, move || {
             apply_dashboards(
                 state,
-                format!("Restored {restore_short}."),
                 fetch::unarchive_dashboard(restore_id.clone()),
             );
         });
@@ -740,7 +741,6 @@ fn row_action(
             }
             apply_dashboards(
                 state,
-                format!("Deleted {short}."),
                 fetch::delete_dashboard(id.clone()),
             );
         });
@@ -749,7 +749,6 @@ fn row_action(
         let archive = menu_item(state, "Archive", false, move || {
             apply_dashboards(
                 state,
-                format!("Archived {short}."),
                 fetch::archive_dashboard(id.clone()),
             );
         });
@@ -767,7 +766,8 @@ fn row_action(
 fn start_installed(state: State, id: String) {
     spawn_local(async move {
         match fetch::start_marketplace_app(id).await {
-            Ok(done) => state.flash.set(Some(Flash::ok(done.message))),
+            // The row moving from "not started" to a live one with ports is the report.
+            Ok(_) => state.flash.set(None),
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
         // The supervisor needs a few seconds to lease ports and bring both servers up; the page's
@@ -776,13 +776,13 @@ fn start_installed(state: State, id: String) {
     });
 }
 
-/// Run a dashboards mutation: fold the returned state into the page and flash success, or flash
-/// the error. A thin typed wrapper over [`apply_mutation`], as `apply_projects` is for projects.
-fn apply_dashboards<F>(state: State, ok_msg: String, fut: F)
+/// Run a dashboards mutation: fold the returned state into the page, or flash the error. A thin
+/// typed wrapper over [`apply_mutation`], as `apply_projects` is for projects.
+fn apply_dashboards<F>(state: State, fut: F)
 where
     F: std::future::Future<Output = Result<DashboardsState, String>> + 'static,
 {
-    apply_mutation(state, None, ok_msg, |s, d| s.dashboards.set(Some(d)), fut);
+    apply_mutation(state, None, |s, d| s.dashboards.set(Some(d)), fut);
 }
 
 /// A service cell: the running led plus the loopback port the ports manager leased, or a note when

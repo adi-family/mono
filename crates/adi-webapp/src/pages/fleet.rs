@@ -124,8 +124,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                     return;
                 }
                 form.grant.set(String::new());
-                apply_fleet(state, Some(form.busy), format!("Granted {grant} to {node}."),
-                    fetch::fleet_grant(node, grant));
+                apply_fleet(state, Some(form.busy), fetch::fleet_grant(node, grant));
             }>
                 {node_picker(state, "fleet-grant-node", form.grant_node)}
                 <TextField id="fleet-grant" label="Grant" placeholder=GRANT_PLACEHOLDER
@@ -154,13 +153,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                     return;
                 }
                 let instructions = form.instructions.get();
-                let msg = if instructions.trim().is_empty() {
-                    format!("Cleared {node}'s agent instructions.")
-                } else {
-                    format!("Updated {node}'s agent instructions.")
-                };
-                apply_fleet(state, Some(form.busy), msg,
-                    fetch::fleet_instructions(node, instructions));
+                apply_fleet(state, Some(form.busy), fetch::fleet_instructions(node, instructions));
             }>
                 {node_picker(state, "fleet-instructions-node", form.instructions_node)}
                 <TextField id="fleet-instructions" label="Agent instructions"
@@ -227,7 +220,7 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
     // Both buttons name the name they land on, so neither reads as a generic "OK"/"Dismiss".
     let adopt_label = format!("Adopt \u{201c}{declared}\u{201d}");
     let keep_label = format!("Keep \u{201c}{petname}\u{201d}");
-    let (accept_name, accept_declared) = (petname.clone(), declared.clone());
+    let accept_name = petname.clone();
     let keep_name = petname.clone();
     view! {
         <div class="adi-fleet-change">
@@ -240,7 +233,6 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
                        *.n.adi hostnames move with it."
                 on:click=move |_| {
                     apply_fleet(state, None,
-                        format!("{accept_name} is now {accept_declared}."),
                         fetch::fleet_accept_nickname(accept_name.clone()));
                 }>
                 {adopt_label}
@@ -250,7 +242,6 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
                        already have keeps working."
                 on:click=move |_| {
                     apply_fleet(state, None,
-                        format!("Noted; it is still {keep_name} here."),
                         fetch::fleet_dismiss_nickname(keep_name.clone()));
                 }>
                 {keep_label}
@@ -389,7 +380,6 @@ fn grants_cell(state: State, n: &FleetNode) -> AnyView {
                     <button type="button" title=label.clone() aria-label=label
                         on:click=move |_| {
                             apply_fleet(state, None,
-                                format!("Revoked {grant} from {petname}."),
                                 fetch::fleet_revoke(petname.clone(), grant.clone()));
                         }>
                         <Icon icon=Lucide::X size=IconSize::Sm/>
@@ -463,7 +453,6 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
                 apply_fleet(
                     state,
                     None,
-                    format!("{adopt} is now {declared}."),
                     fetch::fleet_accept_nickname(adopt.clone()),
                 );
             },
@@ -472,7 +461,6 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
             apply_fleet(
                 state,
                 None,
-                format!("Noted; it is still {keep} here."),
                 fetch::fleet_dismiss_nickname(keep.clone()),
             );
         }));
@@ -488,7 +476,6 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
         apply_fleet(
             state,
             None,
-            format!("Unpaired {unpair}."),
             fetch::fleet_unpair(unpair.clone()),
         );
     }));
@@ -510,7 +497,6 @@ fn start_rename(state: State, from: &str) {
     apply_fleet(
         state,
         None,
-        format!("{from} is now {to}."),
         fetch::fleet_rename(from.to_string(), to),
     );
 }
@@ -810,11 +796,12 @@ fn join(state: State, form: FleetForm) {
     spawn_local(async move {
         match fetch::fleet_join(token).await {
             Ok(joined) => {
-                let msg = format!("Joined {}'s fleet as {}.", joined.viewer, joined.petname);
+                // `joined_view` says who this machine paired with and what it is filed as, beside
+                // the password — a flash repeating it would only push that block down.
                 state.fleet.set(Some(joined.fleet.clone()));
                 form.join_token.set(String::new());
                 form.joined.set(Some(joined));
-                state.flash.set(Some(Flash::ok(msg)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -822,12 +809,12 @@ fn join(state: State, form: FleetForm) {
     });
 }
 
-/// Run a fleet mutation: set the returned state and a success flash, or an error flash; toggles
+/// Run a fleet mutation: set the returned state, or flash the error; toggles
 /// `busy` around the request when a form is driving it. A thin typed wrapper over
 /// [`apply_mutation`], as `apply_mesh` is for the mesh endpoints.
-fn apply_fleet<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+fn apply_fleet<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<FleetState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, f| s.fleet.set(Some(f)), fut);
+    apply_mutation(state, busy, |s, f| s.fleet.set(Some(f)), fut);
 }

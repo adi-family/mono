@@ -167,8 +167,10 @@ fn sync_button(state: State, form: MarketplaceForm) -> AnyView {
                 spawn_local(async move {
                     match fetch::sync_marketplace().await {
                         Ok(done) => {
+                            // The refreshed listing is the sync's own summary; a failing source
+                            // is a 502 and lands in the error arm instead.
                             state.marketplace.set(Some(done.state));
-                            state.flash.set(Some(Flash::ok(done.message)));
+                            state.flash.set(None);
                         }
                         Err(e) => state.flash.set(Some(Flash::err(e))),
                     }
@@ -1586,7 +1588,12 @@ fn short_commit(commit: &str) -> String {
 }
 
 /// Run one marketplace action: mark the row busy while it is in flight, fold the returned state
-/// in, and flash the server's own sentence — the one the CLI prints — on success.
+/// in, and note the server's own sentence — the one the CLI prints.
+///
+/// Kept where every other success line was dropped, because these sentences are not "it worked":
+/// they carry the address an install came up on, the commit an update moved between (or that it
+/// was already pinned there, having done nothing), and what else an uninstall took with it — none
+/// of which the listing shows.
 fn run(
     state: State,
     form: MarketplaceForm,
@@ -1599,7 +1606,7 @@ fn run(
         match fut.await {
             Ok(done) => {
                 state.marketplace.set(Some(done.state));
-                state.flash.set(Some(Flash::ok(done.message)));
+                state.flash.set(Some(Flash::note(done.message)));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }

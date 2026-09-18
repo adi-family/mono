@@ -78,8 +78,9 @@ pub(crate) fn triggers_panel(
                 };
                 name.set(String::new());
                 code.set(String::new());
-                apply_mutation(state, Some(busy), format!("Created trigger “{nm}”."),
-                    |s: State, ts: TriggersState| s.triggers.set(Some(ts)), fetch::save_trigger(body));
+                apply_mutation(state, Some(busy),
+                    |s: State, ts: TriggersState| s.triggers.set(Some(ts)),
+                    fetch::save_trigger(body));
             }>
                 <TextField id="ptrigger-name" label="Name" placeholder="deploy-hook" mono=true
                     hint="also the webhook URL segment" value=name />

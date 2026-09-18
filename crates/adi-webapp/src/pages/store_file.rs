@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{Flash, State};
+use crate::state::State;
 use crate::ui::flash_view;
 
 /// The editor page: the file's frame — its path, whether it is saved, Reload and Save — with the
@@ -102,10 +102,9 @@ fn save(state: State) {
     spawn_local(async move {
         match fetch::fs_write(&path, content).await {
             Ok(c) => {
+                // The head's "unsaved changes" turning back to "saved" is the report.
                 store.original.set(c.content);
-                state
-                    .flash
-                    .set(Some(Flash::ok(format!("Saved {}.", c.path))));
+                state.flash.set(None);
                 store.error.set(None);
             }
             Err(e) => store.error.set(Some(e)),

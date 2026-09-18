@@ -449,8 +449,9 @@ fn send_create_workspace(state: State, form: WorkspaceForm, body: NewWorkspace) 
     spawn_local(async move {
         match fetch::create_workspace(body).await {
             Ok(res) => {
+                // The workspace is now a row in the table above the form; nothing else to say.
                 state.workspaces.set(Some(res.state));
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
                 form.name.set(String::new());
                 form.path.set(String::new());
                 form.local.set(false);
@@ -485,9 +486,7 @@ fn submit_hook(state: State, form: NewHookForm) {
         match fetch::create_project_hook(body).await {
             Ok(state_dto) => {
                 state.workspaces.set(Some(state_dto));
-                state.flash.set(Some(Flash::ok(format!(
-                    "Created hook “{name}” — edit it under .adi/hooks in Files."
-                ))));
+                state.flash.set(None);
                 form.name.set(String::new());
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -505,10 +504,10 @@ fn remove_workspace(state: State, name: String) {
     spawn_local(async move {
         match fetch::remove_workspace(id, name.clone()).await {
             Ok(snapshot) => {
+                // The row leaves the table, and the confirm this came through already said the
+                // files stay on disk.
                 state.workspaces.set(Some(snapshot));
-                state.flash.set(Some(Flash::ok(format!(
-                    "Unregistered “{name}” (files left on disk)."
-                ))));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -524,8 +523,9 @@ fn run_hook(state: State, log: HookLogView, name: String) {
     spawn_local(async move {
         match fetch::run_project_hook(id.clone(), name.clone()).await {
             Ok(res) => {
+                // The hook's log opens on the run itself, which reports it better than a line.
                 state.workspaces.set(Some(res.state));
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
                 open_hook_log(state, log, name);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -580,11 +580,10 @@ fn save_hook(state: State, editor: HookEditor) {
     spawn_local(async move {
         match fetch::write_file(&id, &hook_rel_path(&name), &content).await {
             Ok(fc) => {
+                // The editor head's "unsaved changes" turning back to "saved" is the report.
                 editor.original.set(fc.content.clone());
                 editor.buffer.set(fc.content);
-                state
-                    .flash
-                    .set(Some(Flash::ok(format!("Saved hook “{name}”."))));
+                state.flash.set(None);
                 if let Ok(snapshot) = fetch::workspaces(&id).await {
                     state.workspaces.set(Some(snapshot));
                 }

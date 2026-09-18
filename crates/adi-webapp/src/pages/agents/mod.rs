@@ -287,7 +287,7 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 editing.set(Some(nm.clone()));
                 state.current_agent.set(nm.clone());
                 replace_state(&agent_form_path(&nm));
-                apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
+                apply_agents(state, Some(busy), fetch::save_agent(body));
             }>
                 {move || agent_form_sections(state, form)}
 
@@ -779,7 +779,6 @@ fn agent_rows(
                 apply_agents(
                     state,
                     None,
-                    format!("Deleted {del_name}."),
                     fetch::delete_agent(del_name.clone()),
                 );
             }));

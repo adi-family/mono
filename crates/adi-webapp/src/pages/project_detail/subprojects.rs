@@ -57,8 +57,7 @@ pub(crate) fn subprojects_panel(
                     parent: Some(parent.clone()),
                 };
                 name.set(String::new());
-                apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {display}."),
-                    fetch::create_project(body));
+                apply_detail_mutation(state, parent, Some(busy), fetch::create_project(body));
             }>
                 <TextField id="psub-name" label="Name" placeholder="My sub-project" wide=true
                     field_class="adi-field--grow" value=name />

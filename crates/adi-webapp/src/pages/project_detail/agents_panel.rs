@@ -108,7 +108,7 @@ pub(crate) fn agents_panel(
                 };
                 name.set(String::new());
                 system_prompt.set(String::new());
-                apply_mutation(state, Some(busy), format!("Created agent “{nm}”."),
+                apply_mutation(state, Some(busy),
                     |s: State, a: AgentsState| s.agents.set(Some(a)), fetch::save_agent(body));
             }>
                 <TextField id="pagent-name" label="Name" placeholder="athz-solver" mono=true

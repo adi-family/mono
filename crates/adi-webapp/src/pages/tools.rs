@@ -110,7 +110,7 @@ pub(crate) fn tool_create_form(state: State, form: ToolsForm, project: Option<St
                     project,
                 };
                 reset_form(form);
-                apply_mutation(state, Some(form.busy), "Linked tool.".to_string(),
+                apply_mutation(state, Some(form.busy),
                     |s: State, t: ToolsState| s.tools.set(Some(t)), fetch::link_tool(body));
             } else {
                 let name = form.name.get().trim().to_string();
@@ -123,7 +123,7 @@ pub(crate) fn tool_create_form(state: State, form: ToolsForm, project: Option<St
                 let runtime = if runtime.trim().is_empty() { "sh".to_string() } else { runtime };
                 let body = NewTool { name: name.clone(), runtime, description, project, content: None };
                 reset_form(form);
-                apply_mutation(state, Some(form.busy), format!("Created tool “{name}”."),
+                apply_mutation(state, Some(form.busy),
                     |s: State, t: ToolsState| s.tools.set(Some(t)), fetch::create_tool(body));
             }
         }>
@@ -312,7 +312,6 @@ pub(crate) fn tool_actions(
         let mut items = vec![menu_item(state, "Restore", false, move || {
             apply_tools(
                 state,
-                "Restored tool.".to_string(),
                 fetch::unarchive_tool(restore_id.clone()),
             );
         })];
@@ -326,7 +325,6 @@ pub(crate) fn tool_actions(
                 }
                 apply_tools(
                     state,
-                    "Deleted tool.".to_string(),
                     fetch::remove_tool(del_id.clone()),
                 );
             }));
@@ -355,7 +353,6 @@ pub(crate) fn tool_actions(
             menu_item(state, "Archive", false, move || {
                 apply_tools(
                     state,
-                    "Archived tool.".to_string(),
                     fetch::archive_tool(arch_id.clone()),
                 );
             }),
@@ -524,10 +521,9 @@ fn save_tool_script(state: State, editor: ToolEditor, id: String) {
     spawn_local(async move {
         match fetch::write_tool_script(id, content).await {
             Ok(s) => {
+                // The header's own "unsaved changes" turning back to "saved" is the report.
                 editor.original.set(s.content);
-                state
-                    .flash
-                    .set(Some(Flash::ok(format!("Saved {}.", s.path))));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -560,9 +556,9 @@ pub(crate) fn run_tool_now(
                 run.code.set(res.exit_code);
                 run.ok.set(res.ok);
                 state.tools.set(Some(res.state));
-                state.flash.set(Some(if res.ok {
-                    Flash::ok("Tool exited 0.".to_string())
-                } else {
+                // The panel's own status pill already reads "exit 0"; only a failure is worth
+                // a second line, since that is the one somebody may have scrolled away from.
+                state.flash.set((!res.ok).then(|| {
                     Flash::err(format!(
                         "Tool exited {}.",
                         res.exit_code
@@ -581,13 +577,13 @@ pub(crate) fn run_tool_now(
     });
 }
 
-/// Fold a tools mutation's fresh [`ToolsState`] into the page and flash success or the error — a
+/// Fold a tools mutation's fresh [`ToolsState`] into the page, or flash the error — a
 /// thin typed wrapper over [`apply_mutation`], as `apply_dashboards` is for dashboards.
-fn apply_tools<F>(state: State, ok_msg: String, fut: F)
+fn apply_tools<F>(state: State, fut: F)
 where
     F: std::future::Future<Output = Result<ToolsState, String>> + 'static,
 {
-    apply_mutation(state, None, ok_msg, |s, t| s.tools.set(Some(t)), fut);
+    apply_mutation(state, None, |s, t| s.tools.set(Some(t)), fut);
 }
 
 /// Clear the create/link form's inputs after a submit (keeping the mode + project field).

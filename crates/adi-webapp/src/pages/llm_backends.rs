@@ -170,12 +170,7 @@ fn rows_view(state: State, form: LlmBackendsForm) -> AnyView {
             let release = held.then(|| {
                 menu_item(state, "Release the hold", false, move || {
                     let id = release_id.clone();
-                    apply(
-                        state,
-                        None,
-                        format!("Released the hold on {id}."),
-                        fetch::release_llm_hold(id.clone()),
-                    );
+                    apply(state, None, fetch::release_llm_hold(id.clone()));
                 })
             });
             let delete_id = b.id.clone();
@@ -195,12 +190,7 @@ fn rows_view(state: State, form: LlmBackendsForm) -> AnyView {
                 if !confirm(&question) {
                     return;
                 }
-                apply(
-                    state,
-                    None,
-                    format!("Deleted the backend {id}."),
-                    fetch::delete_llm_backend(id.clone()),
-                );
+                apply(state, None, fetch::delete_llm_backend(id.clone()));
             });
             let menu_key = format!("llm-backend:{}", b.id);
             let items = [Some(edit), release, Some(delete)]
@@ -1226,23 +1216,12 @@ fn submit(state: State, form: LlmBackendsForm) {
             return;
         }
     };
-    let editing = form.editing.get();
-    let id = body.id.clone();
-    let renaming = !editing.is_empty() && editing != id;
-    let message = if renaming {
-        format!("Renamed {editing} to {id}, and re-pointed every agent that listed it.")
-    } else if editing.is_empty() {
-        format!("Added the backend {id}.")
-    } else {
-        format!("Saved the backend {id}.")
-    };
     // The form clears itself only on success, and only because the save landed — a failed save
     // must leave what was typed exactly where it was, so it can be fixed rather than retyped.
     let form_to_clear = form;
     apply_mutation(
         state,
         Some(form.busy),
-        message,
         move |s, fresh: LlmBackendsDto| {
             s.llm_backends.set(Some(fresh));
             form_to_clear.clear();
@@ -1367,11 +1346,6 @@ fn settings_view(state: State) -> AnyView {
                             let Some(current) = settings() else { return };
                             let ask = event_target_checked(&ev);
                             apply(state, None,
-                                if ask {
-                                    "Every switch will ask first.".to_string()
-                                } else {
-                                    "A quota limit will switch on its own again.".to_string()
-                                },
                                 fetch::save_llm_settings(SaveLlmSettings {
                                     ask_on_switch: ask,
                                     probe_every: current.probe_every,
@@ -1398,10 +1372,6 @@ fn settings_view(state: State) -> AnyView {
                             let Some(current) = settings() else { return };
                             let every = event_target_value(&ev).parse().unwrap_or(current.probe_every);
                             apply(state, None,
-                                match every {
-                                    0 => "Held backends will not be checked.".to_string(),
-                                    n => format!("Checking held backends every {n}s."),
-                                },
                                 fetch::save_llm_settings(SaveLlmSettings {
                                     ask_on_switch: current.ask_on_switch,
                                     probe_every: every,
@@ -1436,14 +1406,14 @@ fn sweep_options(current: u64) -> Vec<AnyView> {
 
 // ----------------------------------------------------------------- helpers
 
-/// Run a registry mutation: store the fresh registry it answers with, and flash success or the
-/// error. Every endpoint on this page answers with the whole registry, so an edit and the view of
-/// it are one round trip.
-fn apply<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+/// Run a registry mutation: store the fresh registry it answers with, and flash the error if
+/// there was one. Every endpoint on this page answers with the whole registry, so an edit and the
+/// view of it are one round trip — and the redrawn table is what reports the edit landed.
+fn apply<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<LlmBackendsDto, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, b| s.llm_backends.set(Some(b)), fut);
+    apply_mutation(state, busy, |s, b| s.llm_backends.set(Some(b)), fut);
 }
 
 /// Bring the editor into view after **Edit** fills it. The table can be long enough that the form

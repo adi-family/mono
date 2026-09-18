@@ -51,7 +51,7 @@ pub(crate) fn shared_assets_view(state: State) -> AnyView {
                                 prop:value=move || mode_value(s.mode)
                                 on:change=move |ev| {
                                     let mode = mode_from_value(&event_target_value(&ev));
-                                    apply_mutation(state, None, mode_change_message(mode),
+                                    apply_mutation(state, None,
                                         |s, v| s.shared_assets.set(Some(v)),
                                         fetch::set_shared_assets(mode));
                                 }>
@@ -136,22 +136,6 @@ fn mode_hint(mode: SharedAssetsMode) -> &'static str {
              downloading its own copy. Falls back to this instance's own bundle automatically if \
              the CDN can't be reached, so this never breaks the page \u{2014} at worst it costs \
              the round trip the fallback takes."
-        }
-    }
-}
-
-/// The flash message after a successful `POST` — what changed, in the operator's own terms.
-fn mode_change_message(mode: SharedAssetsMode) -> String {
-    match mode {
-        SharedAssetsMode::LocalAlways => {
-            "Now always serving the webapp bundle from this machine.".to_string()
-        }
-        SharedAssetsMode::CdnWhenRemote => {
-            "Now serving the webapp bundle from the CDN, except when the browser looks local."
-                .to_string()
-        }
-        SharedAssetsMode::CdnAlways => {
-            "Now always serving the webapp bundle from the shared-assets CDN.".to_string()
         }
     }
 }

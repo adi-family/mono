@@ -62,9 +62,10 @@ fn save_file(state: State) {
     spawn_local(async move {
         match fetch::write_file(&id, &path, &content).await {
             Ok(fc) => {
+                // The head's "unsaved changes" turning back to "saved" is the report.
                 state.files.original.set(fc.content.clone());
                 state.files.buffer.set(fc.content);
-                state.flash.set(Some(Flash::ok(format!("Saved {path}."))));
+                state.flash.set(None);
                 load_dir(state, id, state.files.dir.get_untracked()).await;
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),

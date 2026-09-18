@@ -78,8 +78,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 name.set(String::new());
                 description.set(String::new());
                 parent.set(String::new());
-                apply_projects(state, Some(busy), format!("Registered project {display}."),
-                    fetch::create_project(body));
+                apply_projects(state, Some(busy), fetch::create_project(body));
             }>
                 <TextField id="proj-name" label="Name" placeholder="My app" value=name />
                 <div class="adi-field">
@@ -212,22 +211,19 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
                 let items = if archived {
                     let del_id = id.clone();
                     let restore = menu_item(state, "Restore", false, move || {
-                        apply_projects(state, None, format!("Restored {id}."),
-                            fetch::unarchive_project(id.clone()));
+                        apply_projects(state, None, fetch::unarchive_project(id.clone()));
                     });
                     let delete = menu_item(state, "Delete", true, move || {
                         if !confirm(&format!(
                             "Permanently delete project {del_id}? This cannot be undone.")) {
                             return;
                         }
-                        apply_projects(state, None, format!("Deleted {del_id}."),
-                            fetch::remove_project(del_id.clone()));
+                        apply_projects(state, None, fetch::remove_project(del_id.clone()));
                     });
                     vec![restore, delete]
                 } else {
                     vec![menu_item(state, "Archive", false, move || {
-                        apply_projects(state, None, format!("Archived {id}."),
-                            fetch::archive_project(id.clone()));
+                        apply_projects(state, None, fetch::archive_project(id.clone()));
                     })]
                 };
                 row_actions(state, key, (), items)
@@ -349,11 +345,11 @@ fn task_counts(tasks: Option<&TasksState>) -> HashMap<String, (usize, usize)> {
     counts
 }
 
-/// Run a projects mutation: set the returned state and a success flash, or an error flash;
+/// Run a projects mutation: set the returned state, or flash the error;
 /// toggles `busy` around the request when a form is driving it.
-fn apply_projects<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+fn apply_projects<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, p| s.projects.set(Some(p)), fut);
+    apply_mutation(state, busy, |s, p| s.projects.set(Some(p)), fut);
 }

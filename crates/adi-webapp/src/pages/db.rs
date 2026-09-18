@@ -313,13 +313,8 @@ fn run_sql(state: State, console: DbConsole, write: bool) {
     spawn_local(async move {
         if write {
             match fetch::db_exec(scope.clone(), sql).await {
-                Ok(result) => {
-                    console.exec.set(Some(result));
-                    state.flash.set(Some(Flash::ok(format!(
-                        "{} row(s) changed.",
-                        result.changes
-                    ))));
-                }
+                // The console's own summary line already reads "N changed, rowid M".
+                Ok(result) => console.exec.set(Some(result)),
                 Err(e) => console.error.set(Some(e)),
             }
         } else {

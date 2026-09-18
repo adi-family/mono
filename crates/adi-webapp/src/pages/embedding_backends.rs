@@ -164,7 +164,6 @@ fn rows_view(state: State, console: EmbeddingsConsole) -> AnyView {
                     state,
                     console,
                     None,
-                    format!("Deleted the backend {id}."),
                     fetch::delete_embedding_backend(id.clone()),
                 );
             });
@@ -349,12 +348,7 @@ fn reassign(
     } else {
         assignments.insert(consumer.to_string(), backend.clone());
     }
-    let message = if backend.is_empty() {
-        format!("{consumer} is now unassigned.")
-    } else {
-        format!("{consumer} now resolves through {backend}.")
-    };
-    apply(state, console, None, message, fetch::save_embedding_settings(assignments));
+    apply(state, console, None, fetch::save_embedding_settings(assignments));
 }
 
 // ------------------------------------------------------------------ editor
@@ -562,19 +556,11 @@ fn submit(state: State, console: EmbeddingsConsole) {
             return;
         }
     };
-    let id = body.id.clone();
-    let editing = console.editing.get();
-    let message = if editing.is_empty() {
-        format!("Added the backend {id}.")
-    } else {
-        format!("Saved the backend {id}.")
-    };
     // The form clears itself only on success — a failed save must leave what was typed exactly
     // where it was, so it can be fixed rather than retyped.
     apply_mutation(
         state,
         Some(console.busy),
-        message,
         move |_s, fresh: EmbeddingBackendsDto| {
             console.backends.set(Some(fresh));
             console.clear();
@@ -608,13 +594,13 @@ fn run_test(state: State, console: EmbeddingsConsole) {
     });
 }
 
-/// Run a registry mutation: store the fresh registry, and flash success or the error. Every
+/// Run a registry mutation: store the fresh registry, and flash the error if there was one. Every
 /// endpoint answers with the whole registry, so an edit and the view of it are one round trip.
-fn apply<F>(state: State, console: EmbeddingsConsole, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+fn apply<F>(state: State, console: EmbeddingsConsole, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<EmbeddingBackendsDto, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, move |_s, fresh| console.backends.set(Some(fresh)), fut);
+    apply_mutation(state, busy, move |_s, fresh| console.backends.set(Some(fresh)), fut);
 }
 
 async fn refresh(console: EmbeddingsConsole) {

@@ -35,10 +35,10 @@ fn reload_hive(state: State) {
     spawn_local(async move {
         match fetch::hive().await {
             Ok(h) => {
+                // Whatever the re-read changed is now in the table; if it changed nothing, there
+                // is nothing to report either.
                 state.hive.set(Some(h));
-                state
-                    .flash
-                    .set(Some(Flash::ok("Reloaded hive config.".to_string())));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(format!(
                 "Couldn't reload hive config: {e}"
@@ -356,17 +356,13 @@ fn row_action(s: &HiveService, state: State) -> AnyView {
 fn act(state: State, project: Option<String>, service: String, start: bool) {
     spawn_local(async move {
         let done = if start {
-            fetch::start_service(project, service.clone())
-                .await
-                .map(|r| format!("Started {}.", r.service))
+            fetch::start_service(project, service.clone()).await.map(|_| ())
         } else {
-            fetch::stop_service(project, service.clone())
-                .await
-                .map(|r| format!("Stopped {}.", r.service))
+            fetch::stop_service(project, service.clone()).await.map(|_| ())
         };
         match done {
-            Ok(message) => {
-                state.flash.set(Some(Flash::ok(message)));
+            Ok(()) => {
+                state.flash.set(None);
                 // The port takes a moment to answer, so this read may still show the old state; the
                 // Reload button and the next visit to the page both settle it.
                 reload_hive_quietly(state);

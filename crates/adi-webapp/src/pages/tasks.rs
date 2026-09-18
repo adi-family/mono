@@ -80,8 +80,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 tag.set(String::new());
                 // Keep the project *and* the directory — several tasks about one place is the
                 // normal case, and retyping the path each time is how one of them gets it wrong.
-                apply_tasks(state, Some(busy), format!("Created task “{t}”."),
-                    fetch::create_task(body));
+                apply_tasks(state, Some(busy), fetch::create_task(body));
             }>
                 <TextField id="task-title" label="Title" placeholder="What needs doing?" wide=true
                     field_class="adi-field--grow" value=title />
@@ -193,13 +192,13 @@ pub(crate) fn fold_button(
     .into_any()
 }
 
-/// Run a task mutation (create, archive, reopen): set the returned tree and a success flash, or an
-/// error flash; toggles `busy` around the request when a form is driving it.
-fn apply_tasks<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+/// Run a task mutation (create, archive, reopen): set the returned tree, or flash the error;
+/// toggles `busy` around the request when a form is driving it.
+fn apply_tasks<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<TasksState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, t| s.tasks.set(Some(t)), fut);
+    apply_mutation(state, busy, |s, t| s.tasks.set(Some(t)), fut);
 }
 
 /// Render a task table body: a loading/empty placeholder, or the tree flattened into rows (a
@@ -247,22 +246,19 @@ fn task_rows(state: State, finished: bool) -> AnyView {
                     let del_id = id.clone();
                     vec![
                         menu_item(state, "Reopen", false, move || {
-                            apply_tasks(state, None, format!("Reopened {id}."),
-                                fetch::reopen_task(id.clone()));
+                            apply_tasks(state, None, fetch::reopen_task(id.clone()));
                         }),
                         menu_item(state, "Delete", true, move || {
                             if !confirm(&format!(
                                 "Permanently delete task {del_id}? This cannot be undone.")) {
                                 return;
                             }
-                            apply_tasks(state, None, format!("Deleted {del_id}."),
-                                fetch::delete_task(del_id.clone()));
+                            apply_tasks(state, None, fetch::delete_task(del_id.clone()));
                         }),
                     ]
                 } else {
                     vec![menu_item(state, "Archive", false, move || {
-                        apply_tasks(state, None, format!("Archived {id}."),
-                            fetch::archive_task(id.clone()));
+                        apply_tasks(state, None, fetch::archive_task(id.clone()));
                     })]
                 };
                 row_actions(state, format!("task:{}", t.id), (), items)

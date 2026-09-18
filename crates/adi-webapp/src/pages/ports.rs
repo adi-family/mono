@@ -79,10 +79,9 @@ pub(crate) fn ports_manager_view(
                 spawn_local(async move {
                     match fetch::reserve(&LeaseRef { service: service.clone(), key: k.clone() }).await {
                         Ok(r) => {
+                            // The lease beside the button (and the new row) is the whole report.
                             reserved.set(format!("{}/{} \u{2192} :{}", r.service, r.key, r.port));
-                            flash.set(Some(Flash::ok(
-                                format!("Reserved port {} for {}/{}.", r.port, r.service, r.key),
-                            )));
+                            flash.set(None);
                             load(state).await;
                         }
                         Err(e) => flash.set(Some(Flash::err(e))),
@@ -152,11 +151,10 @@ fn rows_view(state: State) -> AnyView {
                     let req = LeaseRef { service, key };
                     match fetch::release(&req).await {
                         Ok(r) => {
-                            let msg = match r.freed {
-                                Some(port) => format!("Released port {port}."),
-                                None => "Nothing to release.".to_string(),
-                            };
-                            state.flash.set(Some(Flash::ok(msg)));
+                            // A freed port is reported by the row leaving the table. Freeing
+                            // nothing is not, and looks identical unless it is said.
+                            state.flash.set(r.freed.is_none().then(||
+                                Flash::note("There was no port to release.".to_string())));
                             load(state).await;
                         }
                         Err(e) => state.flash.set(Some(Flash::err(e))),

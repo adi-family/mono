@@ -256,10 +256,9 @@ fn submit_setup(state: State, form: MetaForm) {
     spawn_local(async move {
         match fetch::save_agent(body).await {
             Ok(agents_state) => {
+                // The form closes onto the saved values, which is the report.
                 state.agents.set(Some(agents_state));
-                state
-                    .flash
-                    .set(Some(Flash::ok("Saved your ADI agent.".to_string())));
+                state.flash.set(None);
                 form.editing.set(false);
                 if let Ok(m) = fetch::meta().await {
                     state.meta.set(Some(m));

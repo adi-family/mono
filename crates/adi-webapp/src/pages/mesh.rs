@@ -49,7 +49,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         view! {
                             <button class="adi-btn adi-btn--ghost" type="button" prop:disabled=busy
                                 on:click=move |_| apply_mesh(state, Some(form.busy),
-                                    "Stopped the mesh daemon.".to_string(), fetch::mesh_stop())>
+                                    fetch::mesh_stop())>
                                 "Stop mesh"
                             </button>
                         }.into_any()
@@ -57,7 +57,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         view! {
                             <button class="adi-btn adi-btn--accent" type="button" prop:disabled=busy
                                 on:click=move |_| apply_mesh(state, Some(form.busy),
-                                    "Started the mesh daemon.".to_string(), fetch::mesh_start())>
+                                    fetch::mesh_start())>
                                 "Start mesh"
                             </button>
                         }.into_any()
@@ -94,8 +94,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 ev.prevent_default();
                 if let Some(port) = parse_port(&form.allow_port.get()) {
                     form.allow_port.set(String::new());
-                    apply_mesh(state, Some(form.busy), format!("Exposed port {port} to peers."),
-                        fetch::mesh_allow(port));
+                    apply_mesh(state, Some(form.busy), fetch::mesh_allow(port));
                 }
             }>
                 <TextField id="mesh-allow-port" label="Local port" placeholder="3000" numeric=true
@@ -123,8 +122,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 let peer = form.peer.get().trim().to_string();
                 if !peer.is_empty() {
                     form.peer.set(String::new());
-                    apply_mesh(state, Some(form.busy), "Authorized the peer.".to_string(),
-                        fetch::mesh_allow_peer(peer));
+                    apply_mesh(state, Some(form.busy), fetch::mesh_allow_peer(peer));
                 }
             }>
                 <TextField id="mesh-peer" label="Peer id or ticket" placeholder="An endpoint id or an adimesh: ticket"
@@ -151,7 +149,6 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         form.fwd_peer.set(String::new());
                         form.fwd_port.set(String::new());
                         apply_mesh(state, Some(form.busy),
-                            format!("Forwarding 127.0.0.1:{listen} to the peer's {port}."),
                             fetch::mesh_add_forward(MeshForwardRef { listen, peer, port, name: None }));
                     }
                     _ => {}
@@ -202,8 +199,7 @@ fn mesh_allow_rows(state: State) -> AnyView {
         .into_iter()
         .map(|port| {
             let remove = menu_item(state, "Stop exposing", true, move || {
-                apply_mesh(state, None, format!("Stopped exposing port {port}."),
-                    fetch::mesh_deny(port));
+                apply_mesh(state, None, fetch::mesh_deny(port));
             });
             view! {
                 <TableRow
@@ -246,7 +242,6 @@ fn mesh_peer_rows(state: State) -> AnyView {
                 apply_mesh(
                     state,
                     None,
-                    "Revoked the peer.".to_string(),
                     fetch::mesh_deny_peer(full.clone()),
                 );
             });
@@ -299,7 +294,6 @@ fn mesh_forward_rows(state: State) -> AnyView {
                 apply_mesh(
                     state,
                     None,
-                    format!("Removed the forward on 127.0.0.1:{listen}."),
                     fetch::mesh_remove_forward(listen),
                 );
             });
@@ -334,13 +328,13 @@ fn forward_cell(col: &str, f: &MeshForward) -> AnyView {
     }
 }
 
-/// Run a mesh mutation: set the returned state and a success flash, or an error flash;
+/// Run a mesh mutation: set the returned state, or flash the error;
 /// toggles `busy` around the request when a form is driving it.
-fn apply_mesh<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+fn apply_mesh<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<MeshState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, m| s.mesh.set(Some(m)), fut);
+    apply_mutation(state, busy, |s, m| s.mesh.set(Some(m)), fut);
 }
 
 /// Parse a `1..=65535` port from user input, rejecting blanks and `0`.

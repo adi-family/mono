@@ -227,7 +227,7 @@ fn detail_body(
         view! {
             <button class="adi-btn" on:click=move |_| {
                 apply_detail_mutation(state, toggle_id.clone(), None,
-                    format!("Restored {toggle_id}."), fetch::unarchive_project(toggle_id.clone()));
+                    fetch::unarchive_project(toggle_id.clone()));
             }>"Restore"</button>
         }
         .into_any()
@@ -235,7 +235,7 @@ fn detail_body(
         view! {
             <button class="adi-btn" on:click=move |_| {
                 apply_detail_mutation(state, toggle_id.clone(), None,
-                    format!("Archived {toggle_id}."), fetch::archive_project(toggle_id.clone()));
+                    fetch::archive_project(toggle_id.clone()));
             }>"Archive"</button>
         }
         .into_any()
@@ -252,8 +252,10 @@ fn detail_body(
                     spawn_local(async move {
                         match fetch::remove_project(yes_id.clone()).await {
                             Ok(list) => {
+                                // The screen leaves for a project list the project is no
+                                // longer in — that is the receipt.
                                 state.projects.set(Some(list));
-                                state.flash.set(Some(Flash::ok(format!("Deleted {yes_id}."))));
+                                state.flash.set(None);
                                 go_projects(state, route);
                             }
                             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -397,7 +399,9 @@ fn renamed_flash(report: &ProjectRenamed) -> Flash {
     };
     let msg = format!("{} is now {}{moved}.", report.from, report.id);
     if report.warnings.is_empty() {
-        Flash::ok(msg)
+        // Not a success line: the new id is on screen anyway. What is worth saying is the tail of
+        // things that were re-filed under it, none of which this page shows.
+        Flash::note(msg)
     } else {
         Flash::err(format!("{msg} {}", report.warnings.join(" ")))
     }
@@ -517,15 +521,10 @@ fn parent_link(state: State, route: RwSignal<Route>, parent: Option<String>) -> 
 }
 
 /// Run a detail-page mutation (archive/restore, sub-project create) that returns the fresh
-/// project list, then re-fetch this project's detail so the page reflects the change; flashes
-/// success or error. Toggles `busy` around the request when a form is driving it.
-fn apply_detail_mutation<F>(
-    state: State,
-    id: String,
-    busy: Option<RwSignal<bool>>,
-    ok_msg: String,
-    fut: F,
-) where
+/// project list, then re-fetch this project's detail so the page reflects the change; flashes the
+/// error if there was one. Toggles `busy` around the request when a form is driving it.
+fn apply_detail_mutation<F>(state: State, id: String, busy: Option<RwSignal<bool>>, fut: F)
+where
     F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
 {
     if let Some(busy) = busy {
@@ -538,7 +537,7 @@ fn apply_detail_mutation<F>(
                 if let Ok(d) = fetch::project_detail(&id).await {
                     state.project_detail.set(Some(d));
                 }
-                state.flash.set(Some(Flash::ok(ok_msg)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -554,10 +553,10 @@ fn reload_project(state: State, id: String) {
     spawn_local(async move {
         match fetch::project_detail(&id).await {
             Ok(d) => {
+                // Whatever the re-read of `.adi/hive.yaml` changed is now on the page; if it
+                // changed nothing, there is nothing to report either.
                 state.project_detail.set(Some(d));
-                state
-                    .flash
-                    .set(Some(Flash::ok("Reloaded project config.".to_string())));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(format!(
                 "Couldn't reload project config: {e}"

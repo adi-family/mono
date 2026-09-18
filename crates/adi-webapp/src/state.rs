@@ -2148,6 +2148,13 @@ impl Simulate {
 }
 
 /// A one-line status message under the form; `kind` drives its colour via `data-kind`.
+///
+/// **There is no success flash, on purpose.** A mutation that worked is reported by the screen
+/// changing — the row appears, the list reorders, the live view opens — so a green line repeating
+/// it is noise that nothing ever dismisses (the signal holds its last value until another
+/// mutation writes over it). What remains is the two things the screen cannot say for itself: a
+/// failure, and a [`note`](Flash::note) — an outcome that is not a failure but carries information
+/// the new state does not, such as a row count or why a request did nothing.
 #[derive(Clone)]
 pub(crate) struct Flash {
     pub(crate) kind: &'static str,
@@ -2155,8 +2162,9 @@ pub(crate) struct Flash {
 }
 
 impl Flash {
-    pub(crate) fn ok(msg: String) -> Self {
-        Self { kind: "ok", msg }
+    /// Neutral (`--ink-2`): an outcome worth a sentence, never "it worked".
+    pub(crate) fn note(msg: String) -> Self {
+        Self { kind: "note", msg }
     }
 
     pub(crate) fn err(msg: String) -> Self {

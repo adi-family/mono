@@ -1203,7 +1203,9 @@ textarea.adi-input--composer {
 }
 
 // ---- flash (kind via `data-kind`) -------------------------------------------------------------
-// The one-line result under a form: 13px, red or green text, nothing around it.
+// The one-line result under a form: 13px, nothing around it. Red when something failed, plain
+// `--ink-2` for a `note` — an outcome worth a sentence. There is no green "ok" kind: a mutation
+// that worked is reported by the screen changing, not by a line congratulating it.
 .adi-flash {
   min-height: 16px;
   padding: 8px 0 0;
@@ -1213,7 +1215,6 @@ textarea.adi-input--composer {
   &:empty { padding: 0; min-height: 0; }
 
   &[data-kind="err"] { color: var(--err); }
-  &[data-kind="ok"]  { color: var(--ok); }
 
   // Standing on its own above a page's content: a notice line with a hairline under it.
   &--card {

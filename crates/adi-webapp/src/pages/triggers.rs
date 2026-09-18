@@ -121,8 +121,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     trigger_on: trigger_on.get(),
                 };
                 editing.set(Some(nm.clone()));
-                apply_triggers(state, Some(busy), format!("Saved trigger “{nm}”."),
-                    fetch::save_trigger(body));
+                apply_triggers(state, Some(busy), fetch::save_trigger(body));
             }>
                 <TextField id="trigger-name" label="Name" placeholder="deploy-hook" mono=true
                     hint="also the webhook URL segment" value=name />
@@ -541,7 +540,6 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
                 apply_triggers(
                     state,
                     None,
-                    format!("Deleted {del_name}."),
                     fetch::delete_trigger(del_name.clone()),
                 );
             });
@@ -683,23 +681,23 @@ pub(crate) fn trigger_toggle_item(state: State, t: &TriggerDto) -> AnyView {
     menu_item(state, label, false, move || toggle_trigger(state, &toggle))
 }
 
-/// Run a triggers mutation: set the returned list and a success flash, or an error flash;
+/// Run a triggers mutation: set the returned list, or flash the error;
 /// toggles `busy` around the request when a form is driving it.
-fn apply_triggers<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+fn apply_triggers<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<TriggersState, String>> + 'static,
 {
-    apply_mutation(state, busy, ok_msg, |s, t| s.triggers.set(Some(t)), fut);
+    apply_mutation(state, busy, |s, t| s.triggers.set(Some(t)), fut);
 }
 
-/// Run a trigger's code block once, by hand (the Fire action). The success flash comes from
-/// the server — its message carries the spawned pid.
+/// Run a trigger's code block once, by hand (the Fire action). Says nothing: the row's own Last
+/// run and status follow the fire, which is the report.
 fn fire_trigger(state: State, name: String) {
     spawn_local(async move {
         match fetch::fire_trigger(name).await {
             Ok(res) => {
                 state.triggers.set(Some(res.state));
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -713,7 +711,7 @@ fn restart_trigger(state: State, name: String) {
         match fetch::restart_trigger(name).await {
             Ok(res) => {
                 state.triggers.set(Some(res.state));
-                state.flash.set(Some(Flash::ok(res.message)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -724,7 +722,6 @@ fn restart_trigger(state: State, name: String) {
 /// `created_at`). For a background trigger this is its power switch: the supervisor starts or
 /// stops the process to match.
 fn toggle_trigger(state: State, t: &TriggerDto) {
-    let verb = if t.enabled { "Disabled" } else { "Enabled" };
     let body = SaveTrigger {
         name: t.name.clone(),
         kind: t.kind.clone(),
@@ -741,7 +738,6 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
     apply_triggers(
         state,
         None,
-        format!("{verb} {}.", t.name),
         fetch::save_trigger(body),
     );
 }

@@ -80,7 +80,7 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 tag.set(String::new());
                 details.set(String::new());
                 // The directory stays: a project's tasks usually happen in the same place.
-                apply_mutation(state, Some(busy), format!("Created task “{t}”."),
+                apply_mutation(state, Some(busy),
                     |s: State, ts: TasksState| s.tasks.set(Some(ts)), fetch::create_task(body));
             }>
                 <TextField id="ptask-title" label="Title" placeholder="What needs doing?" wide=true
@@ -168,7 +168,6 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                         apply_mutation(
                             state,
                             None,
-                            format!("Reopened {id}."),
                             store,
                             fetch::reopen_task(id.clone()),
                         );
@@ -178,7 +177,6 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                         apply_mutation(
                             state,
                             None,
-                            format!("Archived {id}."),
                             store,
                             fetch::archive_task(id.clone()),
                         );

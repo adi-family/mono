@@ -373,16 +373,16 @@ fn select_target(ev: &web_sys::FocusEvent) {
     }
 }
 
-/// Run a mutation that returns fresh state `T`, hand the result to `store`, and flash success or
-/// the error; toggles `busy` around the request when a form is driving it. The `apply_*` helpers
-/// are thin typed wrappers over this, differing only in which page-state signal takes the result.
-pub(crate) fn apply_mutation<T, S, F>(
-    state: State,
-    busy: Option<RwSignal<bool>>,
-    ok_msg: String,
-    store: S,
-    fut: F,
-) where
+/// Run a mutation that returns fresh state `T`, hand the result to `store`, and flash the error if
+/// there was one; toggles `busy` around the request when a form is driving it. The `apply_*`
+/// helpers are thin typed wrappers over this, differing only in which page-state signal takes the
+/// result.
+///
+/// Success says nothing: `store` has just replaced the page's data with what the server returned,
+/// and that is the report (see [`Flash`]). It also clears whatever the last failure left on
+/// screen, so a fixed-and-retried form does not keep wearing the error it just cleared.
+pub(crate) fn apply_mutation<T, S, F>(state: State, busy: Option<RwSignal<bool>>, store: S, fut: F)
+where
     S: Fn(State, T) + 'static,
     F: std::future::Future<Output = Result<T, String>> + 'static,
 {
@@ -393,7 +393,7 @@ pub(crate) fn apply_mutation<T, S, F>(
         match fut.await {
             Ok(v) => {
                 store(state, v);
-                state.flash.set(Some(Flash::ok(ok_msg)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }

@@ -265,7 +265,6 @@ fn submit_text(state: State, form: SecretsForm, scoped: Option<String>) {
     apply_mutation(
         state,
         Some(form.busy),
-        format!("Set secret \u{201c}{name}\u{201d}."),
         |s: State, sec: SecretsState| s.secrets.set(Some(sec)),
         fetch::set_secret(body),
     );
@@ -463,7 +462,6 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
             items.push(menu_item(state, "Refresh token", false, move || {
                 apply_secrets(
                     state,
-                    format!("Refreshed \u{201c}{refresh_name}\u{201d}."),
                     fetch::refresh_secret(refresh_project.clone(), refresh_name.clone()),
                 );
             }));
@@ -489,7 +487,6 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
         }
         apply_secrets(
             state,
-            "Deleted secret.".to_string(),
             fetch::remove_secret(del_project.clone(), del_name.clone()),
         );
     }));
@@ -638,14 +635,12 @@ fn handle_oauth_return(state: State) {
         expires_in: params.get("expires_in").and_then(|s| s.parse::<u64>().ok()),
         scope: params.get("scope").filter(|s| !s.is_empty()),
     };
-    let name = pending.name.clone();
     spawn_local(async move {
         match fetch::set_oauth_secret(body).await {
             Ok(sec) => {
+                // The secret is now a row in the table, with its provider and its set date.
                 state.secrets.set(Some(sec));
-                state.flash.set(Some(Flash::ok(format!(
-                    "Stored OAuth secret \u{201c}{name}\u{201d}."
-                ))));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -687,12 +682,12 @@ fn reveal_now(state: State, form: SecretsForm, project: Option<String>, name: St
     });
 }
 
-/// Fold a secrets mutation's fresh [`SecretsState`] into the page and flash success or the error.
-fn apply_secrets<F>(state: State, ok_msg: String, fut: F)
+/// Fold a secrets mutation's fresh [`SecretsState`] into the page, or flash the error.
+fn apply_secrets<F>(state: State, fut: F)
 where
     F: std::future::Future<Output = Result<SecretsState, String>> + 'static,
 {
-    apply_mutation(state, None, ok_msg, |s, sec| s.secrets.set(Some(sec)), fut);
+    apply_mutation(state, None, |s, sec| s.secrets.set(Some(sec)), fut);
 }
 
 /// Clear the create form's inputs after a submit (keeping the project + source + provider).
