@@ -20,6 +20,79 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.17.0 — 2026-09-18
+
+### Added
+
+- **The sessions rail can be grouped by machine.** With several machines merged into one rail, their
+  conversations used to interleave by recency, so finding the one you wanted meant reading every
+  row's meta line to see whose it was. The Sessions head's filter menu now has a **Group by**
+  section: *Activity* — the bands the rail has always drawn, waiting on you, running, awaiting,
+  starred, recent — or *Machine*, one band per source with this machine first and each paired node
+  after it. Inside a machine the order is the same one Activity uses, so what is stopped on you is
+  still the first thing under every heading, and the rows stop repeating the machine's name now that
+  the heading above them says it. **Start a chat with** groups itself the same way — one heading per
+  machine in the list, and the chosen agent's machine named beside it, so two machines running an
+  agent of the same name are no longer told apart by guesswork. Both appear only once you have more
+  than one source ticked; a single machine's panel is unchanged. The choice is remembered.
+
+- **A backend can be tested before you trust it.** Both backend editors have a **Test** button that
+  sends the form exactly as it stands — a draft nobody has saved yet included — and answers inline:
+  a green pill for a real reply, or the provider's own words when it refuses. For an LLM backend the
+  test reaches every runtime a backend can name, vendor CLIs included, rather than the one shape the
+  background sweep knew how to ask; for an embedding backend it embeds one string and checks the
+  width against what the manifest declares, because a wrong width poisons every knowledge base that
+  trusts it instead of failing loudly on its own. It is a real, billed request, and the button says
+  so. From a terminal: `adi-mono llm test <id>` and `adi-mono embeddings test <id>`.
+
+- **The setup wizard reconfigures any agent, not just the first one.** Reconfigure is now a row
+  action on the Agents page, and the wizard opens on whichever agent you picked, names it throughout,
+  and leaves its tools exactly as they were — only the root agent still gets every store tool unioned
+  in. Every pass opens on a welcome screen, and a reconfigure's own has a Cancel back to the chat.
+
+- **Settings has a landing page.** `/extended/settings` lists the seven settings pages — Hive, Ports
+  manager, Mesh, Fleet, LLM backends, Embedding backends, Shared assets — each with its icon and a
+  line saying what it is for, and it has a row in the ⌘K menu. Before this, the seven were reachable
+  only from the explorer, by somebody who already knew they were there.
+
+- **The docs have a concepts layer**: a short page each for projects, agents, tools, tasks, triggers,
+  secrets, the database, ports, DNS and the front door, dashboards, fleet and mesh, with a one-screen
+  map of the whole set in front of them and the sidebar reordered into reading order.
+
+### Changed
+
+- **A band of the sessions rail shows five rows and offers the rest.** A machine that has been
+  working for a week answers with hundreds of conversations, and "Recent 75" meant seventy-five rows
+  to scroll past to reach anything below them. Each band now stops at five with **Show N more** under
+  it — the heading still counts the whole band, so nothing is hidden without the rail saying how
+  much, and nothing is fetched when you press it, since those rows are already loaded. ⌘1…⌘9 follow
+  what is on screen, so opening a band out renumbers the rail. The chats stopped waiting on your
+  answer are the one list that deliberately runs past the cap.
+
+- **Installing adi on Linux is an install, not a fleet-pairing ritual.** `install.sh` no longer wants
+  an invite token: standalone is the default and `--pair TOKEN` joins a fleet when you actually mean
+  to. It prompts only on an interactive run with no flags, links `adi-mono` into `/usr/local/bin`,
+  and ends on the panel's own URL rather than a pointer to a README. The front door is no longer
+  installed or started behind your back — that stays an explicit `dns install-route` — and when
+  something else already holds port 80, the installer now names the occupant and refuses cleanly
+  instead of leaving a service that can only crash-loop.
+
+- **When a model returns nothing usable, the chat says what happened.** An empty or malformed reply,
+  and a request the provider rejected, used to end as raw upstream JSON pasted into the answer, or as
+  nothing at all. Both now read as one sentence you can act on — a context window too small for the
+  agent says exactly that — followed by the provider, the model, the endpoint, the round, the finish
+  reason and the raw body, credentials scrubbed, with the untruncated copy kept beside the session's
+  log for an issue report.
+
+### Fixed
+
+- **The Hive settings page shows the front door again.** A stock install has the generated front-door
+  configuration rather than a hand-written `hive.yaml`, and the page only ever read the hand-written
+  one — so on a fresh machine with no projects or dashboards it was a blank page with nothing saying
+  why. It now resolves the front door the way the rest of the system does, and says plainly that the
+  group is read-only: adi rewrites that file on every start and every pairing, so an edit there would
+  be discarded without a word.
+
 ## 1.16.1 — 2026-09-15
 
 ### Fixed
