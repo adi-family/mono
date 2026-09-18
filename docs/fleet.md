@@ -685,6 +685,16 @@ Concretely:
   **per source** for the same reason liveness is: "starred" is a fact about one machine's own agent
   list, and a name shared by two sources' agents must not let one source's mark keep the other's row
   in view.
+- **The page is a budget for the rail, split between its sources** (`state::rail_source_limit`):
+  `SESSION_PAGE` (100) divided by however many are ticked, so one machine is asked for a hundred
+  sessions and four are asked for twenty-five each. Every selected source's index is watched over
+  the live channel and re-sent on every move, which is the cost paging exists to bound — asking
+  each of four machines for a hundred would page nothing at all. The split is read tracked where
+  the subscriptions are built, so ticking a source on or off re-deals the budget and re-subscribes
+  the rest at their new paths, and **Load more** widens the whole rail's page rather than one
+  machine's. What each machine then *prints* is dealt the same way a band lower: `RAIL_ROWS` (15)
+  between the drawn bands, never below five each (`docs/sessions.md`, "The rail deals one
+  screenful").
 - **`fetch::routed_for`** replaces the old global "current node" (`fetch::node`/`set_node`) with a
   plain function from an explicit source to an address — a thread-local flipped before a request and
   read inside it cannot survive several concurrent fetches for several different sources without one

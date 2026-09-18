@@ -23,7 +23,7 @@ use crate::launcher::{self, Launcher};
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionGroup,
-    SessionMenu, State, refresh_fleet_dashboards,
+    SessionMenu, State, rail_source_limit, refresh_fleet_dashboards,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
@@ -4520,7 +4520,7 @@ fn launched_by_human(r: &AgentRunInfo) -> bool {
 }
 
 /// Cut the *watched* agent's own run list to the page the rail is showing, by the rule the backend
-/// pages the cross-agent index with: the newest [`State::rail_limit`], plus every session that is
+/// pages the cross-agent index with: the newest [`rail_source_limit`], plus every session that is
 /// running, blocked on a person, or starred, whatever its age.
 ///
 /// The three exemptions have to match `newest` in `handlers/agents.rs` exactly. They are the same
@@ -4536,7 +4536,9 @@ fn launched_by_human(r: &AgentRunInfo) -> bool {
 ///
 /// Nothing is re-sorted: the endpoint answers newest first, so position is age.
 fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
-    let limit = state.rail_limit.get();
+    // This agent's own source's share of the rail's page — the same cut its index arrived under,
+    // which is the whole point of doing it twice.
+    let limit = rail_source_limit(state);
     if runs.len() <= limit {
         return runs;
     }
@@ -4888,10 +4890,39 @@ fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
 /// the subscription's path is built from, so pressing this re-subscribes and the next page arrives
 /// on its own. That is also why there is no spinner — the rail keeps every row it had and grows
 /// when the answer lands, rather than emptying while it waits.
+///
+/// **Every selected source is counted, not just this machine** (`docs/fleet.md` §13): the page is a
+/// budget for the rail and it is spent across the sources it is merging
+/// ([`crate::state::rail_source_limit`]), so a node holding older sessions has to be able to say
+/// so — and this machine's index alone would hide the button while a node still had a hundred
+/// behind it.
 fn chat_load_more(state: State) -> Option<AnyView> {
-    let all = state.all_chats.get()?;
-    let shown: usize = all.agents.iter().map(|a| a.runs.len()).sum();
-    let more = all.total.saturating_sub(shown);
+    let mut held = 0usize;
+    let mut total = 0usize;
+    let mut answered = false;
+    let mut count = |all: &AllAgentRuns| {
+        answered = true;
+        held += all.agents.iter().map(|a| a.runs.len()).sum::<usize>();
+        total += all.total;
+    };
+    if state.session_local.get()
+        && let Some(all) = state.all_chats.get()
+    {
+        count(&all);
+    }
+    // Only the ticked nodes: an untick drops the node's entry, but a slow answer for one ticked and
+    // un-ticked in the same second can still land in the map after it went.
+    let nodes = state.session_nodes.get();
+    let node_chats = state.rail_node_chats.get();
+    for (node, all) in &node_chats {
+        if nodes.contains(node) {
+            count(all);
+        }
+    }
+    if !answered {
+        return None;
+    }
+    let more = total.saturating_sub(held);
     if more == 0 {
         return None;
     }
@@ -5267,13 +5298,34 @@ fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
     [waiting, running, awaiting, starred, rest]
 }
 
-/// How many rows a band prints before it stops and offers the rest.
+/// How many rows the rail prints across **all** its bands before they start offering the rest — the
+/// screenful they share out between them.
 ///
-/// Five. A rail is a list you scan, and a machine that has been working for a week answers with
+/// Fifteen. A row is ~54px, so this is a tall window's rail filled and a short one's overflowing by
+/// a row or two — a budget for what the rail *prints*, not a promise that all of it is above the
+/// fold. A rail is a list you scan, and a machine that has been working for a week answers with
 /// hundreds of conversations — one band of 75 is not a list, it is a scroll with four other bands
 /// somewhere below it. The heading still counts the *whole* band, so nothing is hidden quietly, and
 /// the count is what the "Show N more" under it is drawn from.
-const BAND_ROWS: usize = 5;
+const RAIL_ROWS: usize = 15;
+
+/// The fewest rows a band prints, however many bands are sharing [`RAIL_ROWS`].
+///
+/// Five, because below that a band stops being a list of its own: three rows under a machine's name
+/// say only that the machine exists. So a rail with four sources on it is fifteen rows' worth of
+/// budget drawn as twenty — the floor wins, and the rail gets longer rather than emptier.
+const BAND_MIN_ROWS: usize = 5;
+
+/// One band's share of the rail's screenful: [`RAIL_ROWS`] between them, never fewer than
+/// [`BAND_MIN_ROWS`]. One band prints fifteen rows, two print seven each, three print five, and
+/// four print five apiece.
+///
+/// The cap is the same for every band rather than dealt by how many rows each is holding: which
+/// band a row lands in changes as sessions start and stop, and a cap that moved with it would
+/// reshuffle how much of *every* band is on screen each time one run finished.
+fn band_cap(bands: usize) -> usize {
+    (RAIL_ROWS / bands.max(1)).max(BAND_MIN_ROWS)
+}
 
 /// One band of the rail as it is drawn: a heading, every row that belongs under it, and how many of
 /// them it is printing. What the label *says* is the grouping's business — an activity ("Running
@@ -5282,24 +5334,38 @@ const BAND_ROWS: usize = 5;
 struct RailBand {
     label: String,
     /// Every row in the band, capped or not: the heading counts these, and [`chat_inbox`] reads
-    /// them past the cap, because an inbox that stopped at five would leave a question unanswered
-    /// behind a control nobody pressed.
+    /// them past the cap, because an inbox that stopped where the rail does would leave a question
+    /// unanswered behind a control nobody pressed.
     rows: Vec<SessionRow>,
-    /// How many of them are on screen — [`BAND_ROWS`], or all of them once this band has been
+    /// What this band prints before it offers the rest — its share of [`RAIL_ROWS`], which is not
+    /// known until every band is built and the empty ones dropped ([`band_cap`]).
+    cap: usize,
+    /// How many rows are on screen: [`Self::cap`] of them, or all of them once this band has been
     /// opened out ([`State::rail_open_bands`]).
     shown: usize,
 }
 
 impl RailBand {
-    /// A band holding `rows`, printing the first [`BAND_ROWS`] of them — or all of them when `open`
-    /// names it, which is what the "Show N more" under it puts there.
-    fn capped(label: String, rows: Vec<SessionRow>, open: &std::collections::BTreeSet<String>) -> Self {
-        let shown = if open.contains(&label) {
-            rows.len()
+    /// A band holding `rows`, printing nothing yet: what it prints depends on how many bands there
+    /// turn out to be, and that is [`RailBand::cap_at`], after the empty ones are dropped.
+    fn new(label: String, rows: Vec<SessionRow>) -> Self {
+        Self {
+            label,
+            rows,
+            cap: 0,
+            shown: 0,
+        }
+    }
+
+    /// Print the first `cap` rows — or all of them when `open` names this band, which is what the
+    /// "Show N more" under it puts there.
+    fn cap_at(&mut self, cap: usize, open: &std::collections::BTreeSet<String>) {
+        self.cap = cap;
+        self.shown = if open.contains(&self.label) {
+            self.rows.len()
         } else {
-            rows.len().min(BAND_ROWS)
+            self.rows.len().min(cap)
         };
-        Self { label, rows, shown }
     }
 
     /// The rows this band actually draws. What ⌘1…⌘9 count down, because a number on a row nobody
@@ -5310,10 +5376,10 @@ impl RailBand {
     }
 }
 
-/// The rail exactly as it is drawn: the bands in order, their rows in order, each capped at
-/// [`BAND_ROWS`] unless it has been opened out, and the first nine *drawn* rows numbered. The
-/// [`SessionFilter`] rides along, because which of the rail's three emptinesses an empty answer is
-/// depends on which narrowing produced it.
+/// The rail exactly as it is drawn: the bands in order, their rows in order, each capped at its
+/// share of [`RAIL_ROWS`] unless it has been opened out, and the first nine *drawn* rows numbered.
+/// The [`SessionFilter`] rides along, because which of the rail's three emptinesses an empty answer
+/// is depends on which narrowing produced it.
 ///
 /// Empty bands are dropped rather than drawn as a heading over nothing — including, under
 /// [`SessionGroup::Machine`], a source that is ticked but has no sessions to show. A heading with no
@@ -5338,9 +5404,13 @@ fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter
 }
 
 /// The five activity bands arranged the way `group` asks for, empty bands dropped, each capped at
-/// [`BAND_ROWS`] unless `open` names it, and the first [`HOTKEYS`] drawn rows numbered — everything
-/// between [`activity_bands`] and the rail's markup, with no signals in it so it can be tested on
-/// its own.
+/// its share of [`RAIL_ROWS`] unless `open` names it, and the first [`HOTKEYS`] drawn rows numbered
+/// — everything between [`activity_bands`] and the rail's markup, with no signals in it so it can
+/// be tested on its own.
+///
+/// The cap is dealt **after** the empty bands are dropped, which is what makes the rule the
+/// operator's: a heading that isn't drawn takes no share, so one machine on screen prints fifteen
+/// rows of its own rather than a fifth of the rail each for four bands that aren't there.
 fn grouped_bands(
     group: SessionGroup,
     banded: [Vec<SessionRow>; 5],
@@ -5351,7 +5421,7 @@ fn grouped_bands(
             ["Waiting on you", "Running now", "Awaiting", "Starred", "Recent"],
             banded,
         )
-        .map(|(label, rows)| RailBand::capped(label.to_string(), rows, open))
+        .map(|(label, rows)| RailBand::new(label.to_string(), rows))
         .collect(),
         // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
         // machine's own band in the rail's own order: what is stopped on you, then what is running,
@@ -5370,18 +5440,18 @@ fn grouped_bands(
             )
             .into_iter()
             .map(|(node, rows)| {
-                RailBand::capped(
-                    node.unwrap_or_else(|| "This machine".to_string()),
-                    rows,
-                    open,
-                )
+                RailBand::new(node.unwrap_or_else(|| "This machine".to_string()), rows)
             })
             .collect(),
     };
     bands.retain(|b| !b.rows.is_empty());
-    // Drawn rows only, and that is the whole reason the cap is applied before this: ⌘6 has to open
-    // the sixth row a person can see, not the sixth row that exists — which, with a band stopping at
-    // five, is behind a control they have not pressed.
+    let cap = band_cap(bands.len());
+    for band in &mut bands {
+        band.cap_at(cap, open);
+    }
+    // Drawn rows only, and that is the whole reason the cap is dealt before this: ⌘6 has to open
+    // the sixth row a person can see, not the sixth row that exists — which, in a band that stopped
+    // at its share, is behind a control they have not pressed.
     let mut numbered = 0;
     for band in &mut bands {
         for row in band.rows.iter_mut().take(band.shown) {
@@ -5401,7 +5471,7 @@ fn grouped_bands(
 /// Read off [`rail_bands`] rather than [`activity_bands`] so the numbers on these rows are the same
 /// numbers the rail beside them prints, whichever way the rail is grouped.
 ///
-/// **Past [`BAND_ROWS`] deliberately**: the rail caps a band because it is a list to scan, but this
+/// **Past the band's cap deliberately**: the rail caps a band because it is a list to scan, but this
 /// is the inbox, and a question left behind a "Show more" nobody pressed is a run stopped for good.
 /// It keeps its own, longer cap ([`INBOX_ROWS`]) and says how many are behind it. A row past the
 /// rail's cap carries no ⌘ number, which is correct — there is no visible row for that number to
@@ -5473,6 +5543,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         .map(|band| {
             let n = band.rows.len();
             let label = band.label.clone();
+            let cap = band.cap;
             let more = n.saturating_sub(band.shown);
             // Stored, so the closure can hand out a fresh copy on every read instead of moving the
             // one it has.
@@ -5493,7 +5564,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                     >
                         {chat_session_row(state, watch, row, sourced)}
                     </For>
-                    {band_more(state, label, n, more)}
+                    {band_more(state, label, n, cap, more)}
                 </adi_ui::RailGroup>
             }
             .into_any()
@@ -5504,16 +5575,22 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 
 /// The line under a capped band: **Show N more**, or **Show less** once it has been opened out.
 ///
-/// `None` for a band that fits in [`BAND_ROWS`] — which is most of them, most of the time, and a
-/// control that does nothing is worse than no control.
+/// `None` for a band that fits in its share of the rail (`cap`, [`band_cap`]) — which is most of
+/// them, most of the time, and a control that does nothing is worse than no control.
 ///
 /// It says the number rather than "Show all", because the number is the thing worth knowing before
 /// pressing it: the heading already counts the band, and this is the same count minus what is on
 /// screen. Nothing is fetched — every row here is already in hand ([`chat_load_more`] under the
 /// whole rail is the one that asks the backend for more), so opening a band out is instant and
 /// costs nothing but the rail's length.
-fn band_more(state: State, label: String, total: usize, more: usize) -> Option<AnyView> {
-    if total <= BAND_ROWS {
+fn band_more(
+    state: State,
+    label: String,
+    total: usize,
+    cap: usize,
+    more: usize,
+) -> Option<AnyView> {
+    if total <= cap {
         return None;
     }
     let text = if more > 0 {
@@ -5524,7 +5601,7 @@ fn band_more(state: State, label: String, total: usize, more: usize) -> Option<A
     let hint = if more > 0 {
         format!("list this band's other {more} — they are already loaded")
     } else {
-        format!("cut this band back to its first {BAND_ROWS}")
+        format!("cut this band back to its first {cap}")
     };
     Some(
         view! {
@@ -5968,7 +6045,7 @@ async fn settle_session_change(
             {
                 watch.runs.set(runs.runs);
             }
-            let limit = Some(state.rail_limit.get_untracked());
+            let limit = Some(crate::state::rail_source_limit_untracked(state));
             match node {
                 None => {
                     if let Ok(all) = fetch::all_agent_runs(limit).await {
@@ -7147,7 +7224,7 @@ mod tests {
             .collect()
     }
 
-    /// Nothing opened out: every band stops at [`BAND_ROWS`].
+    /// Nothing opened out: every band stops at its share of the rail ([`band_cap`]).
     fn all_capped() -> std::collections::BTreeSet<String> {
         std::collections::BTreeSet::new()
     }
@@ -7214,21 +7291,25 @@ mod tests {
         assert_eq!(by_machine[1].rows[0].hotkey, Some(2));
     }
 
-    /// A band prints its first BAND_ROWS and keeps the rest — the heading still counts the whole of
-    /// it, the numbers stop at what is on screen, and the band it was capped *before* goes on being
-    /// numbered from where the cap left off. Number the rows a band is holding rather than the rows
-    /// it is drawing and \u{2318}6 opens something nobody can see.
+    /// A band of `n` rows, all on the same source — enough of them to be capped.
+    fn rail_rows(n: usize, prefix: &str) -> Vec<SessionRow> {
+        (0..n)
+            .map(|i| rail_row(None, &format!("{prefix}-{i}")))
+            .collect()
+    }
+
+    /// A band prints its share of the rail and keeps the rest — the heading still counts the whole
+    /// of it, the numbers stop at what is on screen, and the band it was capped *before* goes on
+    /// being numbered from where the cap left off. Number the rows a band is holding rather than
+    /// the rows it is drawing and \u{2318}6 opens something nobody can see.
     #[test]
     fn a_band_prints_its_first_rows_and_hands_the_numbers_on_at_the_cap() {
-        let long: Vec<SessionRow> = (0..8)
-            .map(|i| rail_row(None, &format!("recent-{i}")))
-            .collect();
         let banded = [
             Vec::new(),
             vec![rail_row(None, "working")],
             Vec::new(),
             Vec::new(),
-            long,
+            rail_rows(10, "recent"),
         ];
 
         let bands = grouped_bands(SessionGroup::Activity, banded.clone(), &all_capped());
@@ -7236,11 +7317,17 @@ mod tests {
         let [running, recent] = bands.as_slice() else {
             panic!("two bands: {:?}", labels(&bands));
         };
-        assert_eq!(recent.rows.len(), 8, "the band still holds all of them\u{2026}");
-        assert_eq!(recent.shown, BAND_ROWS, "\u{2026}and prints five");
+        assert_eq!(
+            recent.rows.len(),
+            10,
+            "the band still holds all of them\u{2026}"
+        );
+        assert_eq!(recent.shown, 7, "\u{2026}and prints its half of the rail");
         assert_eq!(
             agents_in(recent),
-            ["recent-0", "recent-1", "recent-2", "recent-3", "recent-4"],
+            [
+                "recent-0", "recent-1", "recent-2", "recent-3", "recent-4", "recent-5", "recent-6",
+            ],
         );
         assert_eq!(running.rows[0].hotkey, Some(1));
         assert_eq!(
@@ -7251,6 +7338,8 @@ mod tests {
                 Some(4),
                 Some(5),
                 Some(6),
+                Some(7),
+                Some(8),
                 None,
                 None,
                 None,
@@ -7260,11 +7349,47 @@ mod tests {
 
         let open = std::collections::BTreeSet::from(["Recent".to_string()]);
         let opened = grouped_bands(SessionGroup::Activity, banded, &open);
-        assert_eq!(opened[1].shown, 8, "opened out, the band prints all of it");
+        assert_eq!(opened[1].shown, 10, "opened out, the band prints all of it");
         assert_eq!(
             opened[1].rows[7].hotkey,
             Some(9),
             "and the numbers reach the rows the cap was keeping them from",
+        );
+    }
+
+    /// The rail deals one screenful between the bands it is actually drawing: one machine prints
+    /// fifteen rows, two print seven each, and past three the floor takes over so no band is ever
+    /// cut below five. The operator's rule, and the reason the cap is computed after the empty
+    /// bands are dropped — a heading nobody can see must not take a share of the screen.
+    #[test]
+    fn the_screenful_is_dealt_between_the_bands_and_never_below_the_floor() {
+        // `n` machines, each holding twenty sessions, banded by machine.
+        let by_machine = |n: usize| {
+            let rows: Vec<SessionRow> = (0..n)
+                .flat_map(|m| {
+                    (0..20).map(move |i| rail_row(Some(&format!("node-{m}")), &format!("s{m}-{i}")))
+                })
+                .collect();
+            let bands = grouped_bands(
+                SessionGroup::Machine,
+                [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rows],
+                &all_capped(),
+            );
+            assert_eq!(bands.len(), n, "one band per machine");
+            bands.iter().map(|b| b.shown).collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            by_machine(1),
+            [RAIL_ROWS],
+            "one machine gets the whole rail"
+        );
+        assert_eq!(by_machine(2), [7, 7]);
+        assert_eq!(by_machine(3), [5, 5, 5]);
+        assert_eq!(
+            by_machine(4),
+            [BAND_MIN_ROWS; 4],
+            "the floor wins over the budget: the rail gets longer rather than emptier",
         );
     }
 }

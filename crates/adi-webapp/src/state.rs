@@ -36,7 +36,47 @@ pub(crate) const ROOT_AGENT: &str = "adi-agent";
 /// index reached four hundred sessions on this machine alone, and the rail is watched over the
 /// live channel, so the whole of it was re-sent to every open panel each time any one of them
 /// moved.
+///
+/// **A budget for the rail, not for one machine** — see [`rail_source_limit`].
 pub(crate) const SESSION_PAGE: usize = 100;
+
+/// What **one source** is asked for: the rail's page ([`State::rail_limit`]) divided between the
+/// sources it is merging (`docs/fleet.md` §13) — a hundred sessions from one machine, fifty each
+/// from two, thirty-three each from three.
+///
+/// The page is a budget for the *rail*, because what it costs is paid by the rail: every selected
+/// source's index is watched over the live channel and re-sent to this panel whenever anything on
+/// it moves. Asking each machine for a hundred meant a four-machine fleet paged nothing at all —
+/// four hundred sessions arriving to fill a list nobody scrolls, which is the cost `SESSION_PAGE`
+/// exists to avoid.
+///
+/// An even split rather than a share of each machine's index: the client cannot know which machine
+/// holds the newest hundred without asking all of them for it, and the three kinds that ride free
+/// through the server's own cut — running, blocked on a person, starred (`docs/sessions.md`) —
+/// come back whatever the limit is, so the rows that must not be paged away are not the ones this
+/// divides.
+pub(crate) fn rail_source_limit(s: State) -> usize {
+    source_share(s.rail_limit.get(), rail_sources(s))
+}
+
+/// [`rail_source_limit`], read untracked — for the fetches that run inside a task rather than an
+/// effect ([`refresh_rail_node`], the fallback poll, a row mutation settling).
+pub(crate) fn rail_source_limit_untracked(s: State) -> usize {
+    let sources =
+        usize::from(s.session_local.get_untracked()) + s.session_nodes.get_untracked().len();
+    source_share(s.rail_limit.get_untracked(), sources)
+}
+
+/// How many sources the rail is merging: this machine, when ticked, plus every selected node.
+fn rail_sources(s: State) -> usize {
+    usize::from(s.session_local.get()) + s.session_nodes.get().len()
+}
+
+/// One source's share of `limit`. Never zero: the node menu's floor keeps at least one source
+/// ticked, and `?limit=0` would ask the server for an empty page rather than for nothing.
+fn source_share(limit: usize, sources: usize) -> usize {
+    (limit / sources.max(1)).max(1)
+}
 
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
 /// cheaply through async tasks and event handlers.
@@ -209,8 +249,9 @@ pub(crate) struct State {
     /// One selected node's own `/api/agents/runs/all` — the sessions rail's per-source merge
     /// (`docs/fleet.md` §13). See [`Self::rail_node_agents`] for why this machine is never a key.
     pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
-    /// How many sessions the chat rail has asked the backend for — [`SESSION_PAGE`] to begin with,
-    /// another page each time its **Load more** is pressed.
+    /// How many sessions the chat rail has asked for **in total, across every selected source** —
+    /// [`SESSION_PAGE`] to begin with, another page each time its **Load more** is pressed. What
+    /// one source is asked for is this divided between them ([`rail_source_limit`]).
     ///
     /// The rail is the one place the whole index is expensive: it is watched over the live channel,
     /// so every agent's every session used to be re-sent to every open panel whenever any one of
@@ -2410,7 +2451,7 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
 /// (`main.rs`) for as long as it stays selected and the live channel is down — the same two schedules
 /// [`crate::main`]'s `refresh` keeps for this machine's own copies of the same two reads.
 pub(crate) fn refresh_rail_node(s: State, node: String) {
-    let limit = Some(s.rail_limit.get_untracked());
+    let limit = Some(rail_source_limit_untracked(s));
     wasm_bindgen_futures::spawn_local(async move {
         // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
         // resurrect a row for a source the rail no longer shows.

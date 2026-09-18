@@ -68,7 +68,7 @@ POST /api/agents/runs   (one agent)  GET /api/agents/runs/all[?limit=N]  (every 
         ▼                              ▼
    watch.runs: Vec<AgentRunInfo>     state.all_chats: AllAgentRuns     state.rs:67, 1289
         │  paged() cuts it to           │  already cut; `total` says what was left behind
-        │  state.rail_limit             │
+        │  rail_source_limit()          │
         ╰──────────────╮   ╭───────────╯
                        ▼   ▼
         chat_all_sessions() -> Vec<SessionRow>           actions.rs:4434
@@ -328,8 +328,14 @@ The rail asks for a page; every other reader asks for all of it.
   exactly the row paging must not swallow. The third is the same argument made by hand.
 - **Every agent is still listed**, runs or none: an interactive agent has no runs to begin with
   and still contributes a rail row, and the client reads `caps` off this same listing.
-- **`total`** counts what exists, not what was sent. `total − Σruns` is what the rail's
-  **Load more** prints, and a zero there is what removes the button.
+- **`total`** counts what exists, not what was sent. `total − Σruns`, summed over **every selected
+  source**, is what the rail's **Load more** prints, and a zero there is what removes the button.
+- **`N` is the rail's budget split between its sources**, not a number each machine gets:
+  `state::rail_source_limit` divides `state.rail_limit` (`SESSION_PAGE` = 100) by however many
+  sources are ticked, so one machine is asked for a hundred and four are asked for twenty-five
+  each. The page exists because every selected source's index is watched over the live channel and
+  re-sent on every move; asking each of four machines for a hundred would page nothing at all.
+  Unticking a source re-deals the rest, which re-subscribes each of them at its new path.
 
 `POST /api/agents/runs` is *not* paged — the open conversation has to be findable in it — so the
 client cuts the watched agent's copy itself (`paged`, `actions.rs`) by the same rule. **The three
@@ -394,9 +400,11 @@ Two paths, same shape:
 - **Polling fallback**, when the socket is down: `adi-webapp/src/main.rs:203-250` (`refresh`),
   a 4s tick calling `fetch::all_agent_runs(limit)` (`fetch.rs:398`).
 
-Pressing **Load more** widens `state.rail_limit`, which is read *tracked* where the subscription
-is built — so the effect re-runs, re-subscribes at the wider path, and the next page arrives at
-once rather than at the socket's next tick. **Earlier messages** widens the transcript the same way
+Pressing **Load more** widens `state.rail_limit`, which every source's path is built from through
+`rail_source_limit` — read *tracked* where the subscriptions are built, so the effect re-runs,
+every source re-subscribes at its wider path, and the next page arrives at once rather than at the
+socket's next tick. Ticking a source on or off re-deals the same budget and re-subscribes them all
+for the same reason. **Earlier messages** widens the transcript the same way
 (`watch.turn_limit`, read tracked in `chat_subscriptions`) — and because a topic is keyed by
 `method path\nbody`, a wider page is simply a different topic.
 
@@ -443,7 +451,8 @@ before the rest of the pipeline (filter, sort, band) proceeds unchanged. `Agents
 `SessionRow::node` are what key a row and an action on it to the right source — see §13's
 "Multi-select" for the full reasoning.
 
-Other state that shapes the list: `state.rail_limit` (the page, `SESSION_PAGE` = 100 to start),
+Other state that shapes the list: `state.rail_limit` (the page the whole rail gets, `SESSION_PAGE`
+= 100 to start, divided between the selected sources by `rail_source_limit`),
 `state.starred_only`, `state.show_hidden`, `state.session_menu`, `state.chat_drawer`.
 
 **`starred_only` is about agents, not conversations**, and is the one genuine naming collision in
@@ -479,12 +488,14 @@ chat_rail                               the whole left rail
 │       │                               so an asking run always reaches this partition to be found
 │       ├─ SessionGroup::Machine ⇒      re-deal those five into one band per source, this machine
 │       │                               first (BTreeMap on Option<node>), activity order kept inside
-│       ├─ drop empty bands, cap each at BAND_ROWS (5) unless state.rail_open_bands names it,
+│       ├─ drop empty bands, deal RAIL_ROWS (15) between the survivors — band_cap = max(15/bands,
+│       │                               BAND_MIN_ROWS 5) — unless state.rail_open_bands names one,
 │       │                               then number the first 9 rows *of what is drawn*
 │       ├─ band_more                    "Show N more" / "Show less" — reveals rows already in hand,
 │       │                               unlike chat_load_more below, which asks the backend
 │       └─ For(keyed "node:agent:run_id") -> chat_session_row
-├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
+├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — Σ(total − Σruns)
+│                                        over every selected source, not just this machine
 └─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same
                                          way, excluding a run with pending_question — it is already
                                          shown in the asking band above and must not draw twice
@@ -503,17 +514,21 @@ starred chat that happens to be working is still found under **Running now**, so
 only the ones recency ordering would otherwise have carried off — which is the whole reason to mark
 one.
 
-**A band prints five rows and offers the rest.** `BAND_ROWS` (`actions.rs`) caps every band —
-whichever way the rail is grouped — and `band_more` draws "Show N more" under it, which opens that
-band out (`state.rail_open_bands`, keyed by the band's label, page state) and "Show less" folds it
-back. The heading keeps counting the *whole* band, so a cap never hides a number; what it hides is
-rows, and only ones already in hand. Two "more"s on this rail, deliberately different: this one
-reveals what was fetched, `chat_load_more` under the whole rail asks the backend for the next
-`SESSION_PAGE`. ⌘1…⌘9 are assigned to the rows a band actually prints, so a row behind the cap
-carries no number — and opening the band out renumbers the rail from there down. The one reader that
-deliberately goes past the cap is `chat_inbox`: `RailBand::rows` holds everything and only
-`RailBand::shown` (and `RailBand::drawn`) is capped, because a question left behind a control nobody
-pressed is a run stopped for good.
+**The rail deals one screenful between its bands.** `RAIL_ROWS` (15, `actions.rs`) is what the rail
+prints across all of them, and `band_cap` divides it by however many bands are *drawn* — one band
+prints fifteen rows, two print seven each, three print five, and from four on `BAND_MIN_ROWS` (5)
+takes over and the rail gets longer rather than emptier. The cap is dealt **after** the empty bands
+are dropped, so a heading nobody can see takes no share: merge four machines and each gets five
+rows, look at one and it gets the whole rail. `band_more` draws "Show N more" under a band that was
+cut, which opens it out (`state.rail_open_bands`, keyed by the band's label, page state) and "Show
+less" folds it back. The heading keeps counting the *whole* band, so a cap never hides a number;
+what it hides is rows, and only ones already in hand. Two "more"s on this rail, deliberately
+different: this one reveals what was fetched, `chat_load_more` under the whole rail asks the
+backend for the next `SESSION_PAGE`. ⌘1…⌘9 are assigned to the rows a band actually prints, so a
+row behind the cap carries no number — and opening the band out renumbers the rail from there down.
+The one reader that deliberately goes past the cap is `chat_inbox`: `RailBand::rows` holds
+everything and only `RailBand::shown` (and `RailBand::drawn`) is capped, because a question left
+behind a control nobody pressed is a run stopped for good.
 
 **The bands can be dealt by machine instead** (`SessionGroup`, `state.rs`), from the **Group by**
 half of the head's filter menu: one band per selected source, this machine first and then each ticked
@@ -614,10 +629,10 @@ Work down this list when one is missing:
    run a subagent launched for itself, which is otherwise the majority of what a busy fleet accrues.
    A pending question is the exception here too: a subagent-launched run stopping to ask a person is
    exactly the run an operator has to be able to see and answer, filter or no filter.
-6. Its band is **capped** and it is past the fifth row (`BAND_ROWS`, `grouped_bands`) — the
-   heading still counts it, so "Recent 75" over five rows is the cap rather than a missing session;
-   "Show N more" under the band lists the rest. This one costs no request: the rows are already in
-   the client.
+6. Its band is **capped** and it is past that band's share of the rail (`band_cap`,
+   `grouped_bands`) — five rows where four bands are drawn, fifteen where one is. The heading still
+   counts it, so "Recent 75" over five rows is the cap rather than a missing session; "Show N more"
+   under the band lists the rest. This one costs no request: the rows are already in the client.
 7. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
    A live session is never swept, and neither is a **starred** one.
 8. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.

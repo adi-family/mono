@@ -223,10 +223,11 @@ fn Home() -> impl IntoView {
                 }
             }
             // Every agent's sessions in one round-trip — what the rail lists under "Other agents"
-            // — cut to the page the rail is currently showing. Read untracked because this runs
-            // inside a task rather than an effect: what re-reads it when Load more moves is the
-            // subscription below, which is what asks in the ordinary case anyway.
-            let limit = Some(state.rail_limit.get_untracked());
+            // — cut to this source's share of the page the rail is currently showing. Read
+            // untracked because this runs inside a task rather than an effect: what re-reads it
+            // when Load more moves is the subscription below, which is what asks in the ordinary
+            // case anyway.
+            let limit = Some(state::rail_source_limit_untracked(state));
             if let Ok(c) = fetch::all_agent_runs(limit).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
@@ -286,6 +287,10 @@ fn Home() -> impl IntoView {
         // `chat_subscriptions` reads `watch.node` tracked for the same reason on the open
         // conversation's own watches.
         let nodes = state.session_nodes.get();
+        // What each of them is asked for: the rail's page split between the selected sources, read
+        // *tracked* for the same reason the selection above is — ticking a source on or off
+        // re-deals every other source's share, so each one has to re-subscribe at its new path.
+        let source_limit = Some(state::rail_source_limit(state));
         let mut subs = state::chat_subscriptions(watch);
         // The node menu's own list: which paired nodes this machine holds a password for. Local
         // and cheap — it asks no node anything — so it rides the socket with everything else.
@@ -327,11 +332,11 @@ fn Home() -> impl IntoView {
         // Every agent's sessions — what the rail lists under "Other agents" — and the dashboards
         // rail, which groups by project and so needs the project names.
         //
-        // Only the rail's current page of sessions, and `rail_limit` is read *tracked*: pressing
+        // Only this source's share of the rail's current page, and it is read *tracked*: pressing
         // Load more re-runs this effect, which re-subscribes at the wider path and so asks for the
         // next page immediately rather than at whatever the socket's next tick would have been.
         subs.push(live::Sub::get(
-            fetch::all_runs_path(Some(state.rail_limit.get())),
+            fetch::all_runs_path(source_limit),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -372,7 +377,7 @@ fn Home() -> impl IntoView {
             let for_chats = node.clone();
             subs.push(live::Sub::get_on(
                 Some(node),
-                fetch::all_runs_path(Some(state.rail_limit.get())),
+                fetch::all_runs_path(source_limit),
                 move |c: adi_webapp_api::types::AllAgentRuns| {
                     state.rail_node_chats.update(|m| {
                         if m.get(&for_chats) != Some(&c) {

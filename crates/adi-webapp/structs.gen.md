@@ -269,6 +269,7 @@ One band of the rail as it is drawn: a heading, every row that belongs under it,
 struct RailBand {
     label: String,
     rows: Vec<SessionRow>,
+    cap: usize,
     shown: usize,
 }
 ```
