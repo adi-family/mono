@@ -372,6 +372,15 @@
     font-size: 10px;
     pointer-events: none;
   }
+  // "on laptop", after the chooser, only while several sources are merged. Meta, not title: it
+  // completes the sentence the heading started, and a petname at heading weight would read as a
+  // second thing being named rather than as where the first one is.
+  &__agenton {
+    margin-left: 6px;
+    color: var(--ink-3);
+    font-size: var(--fs-ui);
+    font-weight: 400;
+  }
   &__pickline {
     display: inline-flex;
     align-items: center;

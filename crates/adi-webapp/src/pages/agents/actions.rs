@@ -22,8 +22,8 @@ use crate::fetch;
 use crate::launcher::{self, Launcher};
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
-    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionMenu, State,
-    refresh_fleet_dashboards,
+    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionGroup,
+    SessionMenu, State, refresh_fleet_dashboards,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
@@ -3552,7 +3552,7 @@ fn chat_agent_section(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let run_id = watch.run_id.get()?;
     // The agent's own history when the per-agent poll has filled it, the cross-agent listing
     // otherwise — the same precedence, and the same fallback, as the sessions rail beside this
-    // one (see [`session_bands`]). On the chat screen only the second of the two is fetched,
+    // one (see [`session_rows`]). On the chat screen only the second of the two is fetched,
     // and taking the first alone would leave this section timeless there.
     let run = watch
         .runs
@@ -4328,12 +4328,13 @@ struct PickerOption {
 ///
 /// Options are drawn from every currently-selected source — this machine's own [`State::agents`],
 /// plus one selected node's own slice of [`State::rail_node_agents`] for each node ticked in the
-/// rail's node menu — the same sources [`session_bands`] merges into the rail below, read the same
+/// rail's node menu — the same sources [`session_rows`] merges into the rail below, read the same
 /// way. A remote pty agent is a real option here, not just a rail row: it only ever runs on the
 /// machine that defines it, so starting one *is* starting it there. With only this machine selected
 /// (the common case, and everything this control offered before multi-select existed) the list is
-/// unchanged and carries no source label; ticking anything else besides tags every option with its
-/// source, the same rule the rail's own rows use to decide when to print theirs.
+/// flat and carries no source label; ticking anything else besides **groups the list by machine**,
+/// one `<optgroup>` per source, and names the chosen one's machine beside the control — the same
+/// rule the rail's own rows use to decide when to print theirs.
 ///
 /// The root agent leads (only when it is local — the one the app is set up around), then each
 /// source's own name order, sources in the order the rail merges them; one that is live right now
@@ -4393,35 +4394,55 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
     }
     // The root agent leads — it's the one the app is set up around, and only ever local. A stable
     // sort, so the rest keep the order they arrived in (each source's own name order, sources in
-    // [`session_bands`]'s own merge order) behind it.
+    // [`session_rows`]'s own merge order) behind it.
     options.sort_by_key(|o| !(o.node.is_none() && o.name == ROOT_AGENT));
     let selected_idx = options
         .iter()
         .position(|o| o.node == current_node && o.name == current);
-    // Indexed rather than the agent's own name, because a name is only unique on the machine that
-    // defines it (`docs/fleet.md` §13): two selected sources may star the same name, and a `<select>`
-    // needs one value per option to tell them apart.
-    let rows: Vec<AnyView> = options
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let selected = Some(i) == selected_idx;
-            // An option carries no markup, so the live dot rides in its text — worth spotting in a
-            // collapsed select, which is all you see of the other agents until you open it.
-            let mut label = if o.running {
-                format!("\u{25CF} {}", o.name)
-            } else {
-                o.name.clone()
-            };
-            if multi_source {
-                label = format!(
-                    "{label} \u{2014} {}",
-                    o.node.as_deref().unwrap_or("this machine")
-                );
+    // With several sources merged, the list is grouped by machine rather than run together: the
+    // agents of four machines in one flat column is the list this control was hardest to use as —
+    // every name has to be read to the end to find out whose it is, and two machines' same-named
+    // agents sit next to each other saying nothing about which is which. An `<optgroup>` is the
+    // native form of that heading, so the chooser keeps the platform's own popup and its
+    // type-to-select. One source, and the grouping would be a single heading over everything, so the
+    // list stays flat — which is also every panel that has never been paired with anything.
+    let rows: Vec<AnyView> = if multi_source {
+        // First appearance decides a source's place, so the groups come in the order the rail merges
+        // them (this machine, then each ticked node in name order) — and a source can never head two
+        // groups however the options were ordered.
+        let mut groups: Vec<(Option<String>, Vec<AnyView>)> = Vec::new();
+        for (i, o) in options.iter().enumerate() {
+            let row = picker_option(i, o, Some(i) == selected_idx);
+            match groups.iter_mut().find(|(node, _)| *node == o.node) {
+                Some((_, rows)) => rows.push(row),
+                None => groups.push((o.node.clone(), vec![row])),
             }
-            view! { <option value=i.to_string() selected=selected>{label}</option> }.into_any()
-        })
-        .collect();
+        }
+        groups
+            .into_iter()
+            .map(|(node, rows)| {
+                let label = node.unwrap_or_else(|| "This machine".to_string());
+                view! { <optgroup label=label>{rows}</optgroup> }.into_any()
+            })
+            .collect()
+    } else {
+        options
+            .iter()
+            .enumerate()
+            .map(|(i, o)| picker_option(i, o, Some(i) == selected_idx))
+            .collect()
+    };
+    // A collapsed `<select>` shows the chosen option's own text and never its group's heading, so
+    // grouping alone would take the machine's name off the screen the moment the list closed — on
+    // the one line that says where the message about to be typed is going. It is said beside the
+    // control instead of inside it, which is also the sentence the title was already half of:
+    // "Start a chat with adi-agent on laptop".
+    let on = multi_source.then(|| {
+        let node = selected_idx
+            .and_then(|i| options.get(i))
+            .map_or(current_node.clone(), |o| o.node.clone());
+        format!("on {}", node.as_deref().unwrap_or("this machine"))
+    });
     view! {
         <span class="adi-chome__agentpick">
             <select class="adi-chome__agentsel"
@@ -4443,8 +4464,25 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
                 <adi_ui::Icon icon=adi_ui::Lucide::ChevronDown size=adi_ui::IconSize::Sm/>
             </span>
         </span>
+        {on.map(|on| view! { <span class="adi-chome__agenton">{on}</span> })}
     }
     .into_any()
+}
+
+/// One `<option>` of [`chat_agent_picker`]: an agent's name, and a dot when it is live right now.
+///
+/// `i` is the option's index in the picker's own list rather than the agent's name, because a name is
+/// only unique on the machine that defines it (`docs/fleet.md` §13): two selected sources may star
+/// the same name, and a `<select>` needs one value per option to tell them apart.
+fn picker_option(i: usize, o: &PickerOption, selected: bool) -> AnyView {
+    // An option carries no markup, so the live dot rides in its text — worth spotting in a
+    // collapsed select, which is all you see of the other agents until you open it.
+    let label = if o.running {
+        format!("\u{25CF} {}", o.name)
+    } else {
+        o.name.clone()
+    };
+    view! { <option value=i.to_string() selected=selected>{label}</option> }.into_any()
 }
 
 /// Switch the chat home to another agent, on `node` (`docs/fleet.md` §13) — `None` for this machine,
@@ -4544,9 +4582,14 @@ fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
 /// ✕ on a 264px rail, and a control wide enough to print "Only started by me" would take the room
 /// they need to say anything at all. What it is narrowed to is read from the menu it opens, and
 /// from the accent in the meantime.
+///
+/// The same menu also carries the **grouping** ([`SessionGroup`]), which has no button of its own
+/// for exactly the reason this one is a funnel: there is no room for a second. The accent stays a
+/// statement about the narrowing alone — a grouped rail shows every session it would otherwise show,
+/// and says which way it is grouped in the headings themselves.
 fn chat_session_filter(state: State) -> AnyView {
     let current = state.session_filter.get();
-    let hint = match current {
+    let narrowed = match current {
         SessionFilter::All => "narrow the sessions listed here",
         SessionFilter::Starred => "showing sessions from starred agents only",
         SessionFilter::Mine => {
@@ -4554,12 +4597,17 @@ fn chat_session_filter(state: State) -> AnyView {
              themselves. Sessions from before ADI recorded who started a run are not listed here."
         }
     };
+    // The grouping lives behind this button too, and a preference nothing on screen advertises is
+    // one nobody finds — the headings say how the rail *is* grouped, never that it could be another
+    // way.
+    let hint = format!("{narrowed}\n\nGroup by: {}", state.session_group.get().label());
     view! {
         <button class="adi-chat__head-btn" class:is-on=current != SessionFilter::All type="button"
             title=hint aria-haspopup="menu"
             aria-expanded=move || state.session_filter_menu.get().is_some().to_string()
             on:click=move |ev: web_sys::MouseEvent| open_filter_menu(state, &ev)>
-            <adi_ui::Icon icon=crate::icons::Icon::Filter.lucide() label=hint/>
+            <adi_ui::Icon icon=crate::icons::Icon::Filter.lucide()
+                label="Filter and group the sessions listed here"/>
         </button>
     }
     .into_any()
@@ -4573,6 +4621,9 @@ fn chat_session_filter(state: State) -> AnyView {
 fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
     use wasm_bindgen::JsCast as _;
 
+    // The node menu goes, exactly as [`open_node_menu`] closes this one: both drop from the same
+    // 264px head, and two menus over each other is one of them unreachable.
+    state.session_node_menu.set(None);
     if state.session_filter_menu.get_untracked().is_some() {
         state.session_filter_menu.set(None);
         return;
@@ -4590,7 +4641,13 @@ fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
     state.session_filter_menu.set(Some(at));
 }
 
-/// The filter menu itself: the three narrowings, the current one ticked.
+/// The filter menu itself: the three narrowings, then the two groupings, the current one of each
+/// ticked.
+///
+/// Two sections in one menu because they are the two halves of "what does this rail look like" and
+/// the head has room for one more button, not two — the same reason a Finder window keeps Sort by
+/// and Group by under one control. They do not interact: a narrowing drops rows, a grouping only
+/// decides which heading the surviving ones sit under.
 ///
 /// [`adi_ui::Menu`], like every other menu in the panel — the scrim that makes the next click
 /// anywhere a dismiss is the gesture a person tries first on a menu they opened by accident, and
@@ -4598,6 +4655,7 @@ fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
 fn chat_filter_menu(state: State) -> Option<AnyView> {
     let (x, y) = state.session_filter_menu.get()?;
     let current = state.session_filter.get();
+    let group = state.session_group.get();
     Some(
         view! {
             <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
@@ -4612,6 +4670,18 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
                                 state.session_filter_menu.set(None);
                             })>
                             {f.label()}
+                        </adi_ui::MenuItem>
+                    }
+                }).collect::<Vec<_>>()}
+                <adi_ui::MenuHead>"Group by"</adi_ui::MenuHead>
+                {SessionGroup::ALL.into_iter().map(|g| {
+                    view! {
+                        <adi_ui::MenuItem checked=g == group radio=true title=g.hint()
+                            on_select=Callback::new(move |()| {
+                                crate::state::set_session_group(state, g);
+                                state.session_filter_menu.set(None);
+                            })>
+                            {g.label()}
                         </adi_ui::MenuItem>
                     }
                 }).collect::<Vec<_>>()}
@@ -4880,7 +4950,7 @@ struct SessionRow {
     /// false for a pty row, which has no record to carry a mark.
     starred: bool,
     /// Which number opens this row, counted down the whole rail rather than within its band —
-    /// `None` past the ninth. Filled in by [`session_bands`] once the bands are settled, because
+    /// `None` past the ninth. Filled in by [`grouped_bands`] once the bands are settled, because
     /// until then there is no "third row" to be.
     hotkey: Option<usize>,
 }
@@ -4926,7 +4996,7 @@ fn hotkey_glyph() -> &'static str {
 /// One selected source's own rows, before the merge across sources, the "Mine" filter, the sort and
 /// the bands. This is the per-agent loop [`chat_all_sessions`] used to run once, over one machine's
 /// agents; multi-select (`docs/fleet.md` §13) runs it once per selected source instead of copying it
-/// per source, and [`session_bands`] concatenates the answers before doing anything else.
+/// per source, and [`session_rows`] concatenates the answers before doing anything else.
 ///
 /// `all`/`agents` are that source's own `/api/agents/runs/all` and `/api/agents` — this machine's
 /// [`State::all_chats`]/[`State::agents`] for `node: None`, or one node's slice of
@@ -5042,9 +5112,9 @@ fn source_rows(
     (rows, listed_watched)
 }
 
-/// Every visible session, whichever agent it belongs to, in the five bands the rail reads them in:
-/// blocked on you, then running, then awaiting a wake, then starred, then the rest — each newest
-/// activity first. The [`SessionFilter`] is handed back with them: which of the rail's three
+/// Every visible session, whichever agent it belongs to and whichever source it came from, merged,
+/// narrowed and sorted newest activity first — the rail's rows, before anything decides what heading
+/// they sit under. The [`SessionFilter`] is handed back with them: which of the rail's three
 /// emptinesses an empty answer is depends on which narrowing produced it.
 ///
 /// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
@@ -5057,7 +5127,10 @@ fn source_rows(
 /// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
 /// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
 /// number printed on a row and the row that number opens cannot drift apart.
-fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], SessionFilter) {
+///
+/// The rows only — how they are banded, and which of them carries which number, is
+/// [`grouped_bands`]'s, because that depends on the grouping and this does not.
+fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFilter) {
     let filter = state.session_filter.get();
     let watched = watch.name.get().unwrap_or_default();
     let watched_node = watch.node.get();
@@ -5163,6 +5236,16 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
     // the live pty rows, all stamped "now" — keep the order the index listed them in.
     rows.sort_by(|a, b| b.when.cmp(&a.when));
+    (rows, filter)
+}
+
+/// The five activity bands, in the order the rail reads them: blocked on you, then running, then
+/// awaiting a wake, then starred, then the rest — each keeping the newest-first order it arrived in.
+///
+/// This is the whole of [`SessionGroup::Activity`], and it is also what orders the rows *inside*
+/// each band of [`SessionGroup::Machine`]: grouping by machine changes which heading a row sits
+/// under, never which of them is worth looking at first.
+fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
     // Two bands, as in the playground: what is working right now, then everything else.
     // The counts are what the band heading is for — "how many are going" is the question the
     // rail is scanned for.
@@ -5171,12 +5254,12 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     // merely in progress. This is the whole of the "needs you" inbox: the rail is already the
     // cross-agent index, and a second surface fed by a second request would only be a copy of it
     // that could disagree.
-    let (mut waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows.into_iter().partition(|r| {
+    let (waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows.into_iter().partition(|r| {
         r.run
             .as_ref()
             .is_some_and(|run| run.pending_question.is_some())
     });
-    let (mut running, rows): (Vec<SessionRow>, Vec<SessionRow>) =
+    let (running, rows): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
     // Then the ones that are coming back on their own. A conversation with a wake registered has
     // stopped, so it would otherwise fall into "Recent" and read as finished — which is the one
@@ -5185,7 +5268,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     //
     // Running wins the tie: a run working *and* holding a wake for what it launched is best found
     // where you look for what is working now, and the await is the smaller half of what it is doing.
-    let (mut awaiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
+    let (awaiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
         .into_iter()
         .partition(|r| r.run.as_ref().is_some_and(|run| !run.awaits.is_empty()));
     // Five, and the starred band comes *after* the three live ones rather than at the top. Waiting,
@@ -5194,24 +5277,104 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     // found under "Running now" — that is where you look for it today — so the band collects only
     // the ones the recency ordering would otherwise have carried away, which is the whole reason to
     // mark one.
-    let (mut starred, mut rest): (Vec<SessionRow>, Vec<SessionRow>) =
+    let (starred, rest): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.starred);
-    // Numbered straight down the rail and across the band headings, not restarted per band: ⌘1 is
-    // the row at the very top of the list whatever band it happens to be in today, which is the
-    // only rule a hand can learn. Numbering within bands would move ⌘1 to a different session
-    // every time the last question got answered.
-    for (i, row) in waiting
+    [waiting, running, awaiting, starred, rest]
+}
+
+/// One band of the rail as it is drawn: a heading, and the rows under it. What the label *says* is
+/// the grouping's business — an activity ("Running now") or a machine ("This machine", a node's
+/// petname) — and nothing downstream of [`rail_bands`] can tell which it was.
+struct RailBand {
+    label: String,
+    rows: Vec<SessionRow>,
+}
+
+/// The rail exactly as it is drawn: the bands in order, their rows in order, and the first nine rows
+/// numbered. The [`SessionFilter`] rides along, because which of the rail's three emptinesses an
+/// empty answer is depends on which narrowing produced it.
+///
+/// Empty bands are dropped rather than drawn as a heading over nothing — including, under
+/// [`SessionGroup::Machine`], a source that is ticked but has no sessions to show. A heading with no
+/// rows says "this machine has nothing", which is a claim, and while a newly-ticked node's two
+/// fetches are still in flight it would be a false one.
+///
+/// Numbering runs straight down the drawn rail and across the headings, not restarted per band: ⌘1
+/// is the row at the very top of the list whatever band it happens to be in today, which is the only
+/// rule a hand can learn. It is assigned *after* the grouping has decided the order, so the number
+/// printed on a row and the row that number opens cannot disagree — regrouping the rail renumbers
+/// it.
+fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter) {
+    let (rows, filter) = session_rows(state, watch);
+    (
+        grouped_bands(state.session_group.get(), activity_bands(rows)),
+        filter,
+    )
+}
+
+/// The five activity bands arranged the way `group` asks for, empty bands dropped and the first
+/// [`HOTKEYS`] rows numbered — everything between [`activity_bands`] and the rail's markup, with no
+/// signals in it so it can be tested on its own.
+fn grouped_bands(group: SessionGroup, banded: [Vec<SessionRow>; 5]) -> Vec<RailBand> {
+    let mut bands: Vec<RailBand> = match group {
+        SessionGroup::Activity => std::iter::zip(
+            ["Waiting on you", "Running now", "Awaiting", "Starred", "Recent"],
+            banded,
+        )
+        .map(|(label, rows)| RailBand {
+            label: label.to_string(),
+            rows,
+        })
+        .collect(),
+        // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
+        // machine's own band in the rail's own order: what is stopped on you, then what is running,
+        // then the rest. A `BTreeMap` keyed on the row's own source does the ordering of the bands
+        // for free — `None` sorts before every `Some`, so this machine leads and the nodes follow in
+        // name order, which is the order the node menu lists them in.
+        SessionGroup::Machine => banded
+            .into_iter()
+            .flatten()
+            .fold(
+                std::collections::BTreeMap::<Option<String>, Vec<SessionRow>>::new(),
+                |mut by_source, row| {
+                    by_source.entry(row.node.clone()).or_default().push(row);
+                    by_source
+                },
+            )
+            .into_iter()
+            .map(|(node, rows)| RailBand {
+                label: node.unwrap_or_else(|| "This machine".to_string()),
+                rows,
+            })
+            .collect(),
+    };
+    bands.retain(|b| !b.rows.is_empty());
+    for (i, row) in bands
         .iter_mut()
-        .chain(running.iter_mut())
-        .chain(awaiting.iter_mut())
-        .chain(starred.iter_mut())
-        .chain(rest.iter_mut())
+        .flat_map(|b| b.rows.iter_mut())
         .take(HOTKEYS)
         .enumerate()
     {
         row.hotkey = Some(i + 1);
     }
-    ([waiting, running, awaiting, starred, rest], filter)
+    bands
+}
+
+/// The rows of the drawn rail that have stopped on a question, in the order the rail draws them —
+/// what [`chat_inbox`] puts under the composer.
+///
+/// Read off [`rail_bands`] rather than [`activity_bands`] so the numbers on these rows are the same
+/// numbers the rail beside them prints, whichever way the rail is grouped.
+fn waiting_rows(bands: Vec<RailBand>) -> Vec<SessionRow> {
+    bands
+        .into_iter()
+        .flat_map(|b| b.rows)
+        .filter(|r| {
+            r.run
+                .as_ref()
+                .is_some_and(|run| run.pending_question.is_some())
+        })
+        .collect()
 }
 
 /// Whether any selected source's cross-agent index holds a listable session *before* the filter —
@@ -5230,15 +5393,11 @@ fn any_session(state: State) -> bool {
             .any(|all| has_runs(all))
 }
 
-/// The rail's session list: the five bands, or the one line that says why there are none.
+/// The rail's session list: the bands the grouping produced, or the one line that says why there
+/// are none.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let ([waiting, running, awaiting, kept, rest], filter) = session_bands(state, watch);
-    if waiting.is_empty()
-        && running.is_empty()
-        && awaiting.is_empty()
-        && kept.is_empty()
-        && rest.is_empty()
-    {
+    let (bands, filter) = rail_bands(state, watch);
+    if bands.is_empty() {
         // Which emptiness this is: nothing to show, or nothing left after the filter — said apart,
         // so a narrowed rail never reads as "you have no chats". Each says how to get back.
         //
@@ -5260,20 +5419,20 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         };
         return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
+    // Grouped by machine, the heading over each band is the row's source, so the row stops repeating
+    // it (see [`chat_session_row`]).
+    let sourced = state.session_group.get() != SessionGroup::Machine;
     // Keyed, and that is not tidiness: a row's click handler is bound when the row is
     // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
     // the filter box does — leaves handlers patched onto rows they no longer belong to, and a click
     // opens the session that used to be in that slot. `For` keys by identity, so a row and
     // its handler move together or not at all.
-    //
-    // Both bands are always emitted for the same reason: a band that comes and goes shifts
-    // every slot after it.
-    let band = move |label: &'static str, rows: Vec<SessionRow>| {
-        let n = rows.len();
-        let any = n > 0;
-        let rows = StoredValue::new(rows);
-        view! {
-            <Show when=move || any>
+    bands
+        .into_iter()
+        .map(|RailBand { label, rows }| {
+            let n = rows.len();
+            let rows = StoredValue::new(rows);
+            view! {
                 <adi_ui::RailGroup label=label count=n>
                     <For
                         // Stored, so the closure can hand out a fresh copy on every read
@@ -5289,21 +5448,14 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                         }
                         let:row
                     >
-                        {chat_session_row(state, watch, row)}
+                        {chat_session_row(state, watch, row, sourced)}
                     </For>
                 </adi_ui::RailGroup>
-            </Show>
-        }
+            }
+            .into_any()
+        })
+        .collect::<Vec<_>>()
         .into_any()
-    };
-    vec![
-        band("Waiting on you", waiting),
-        band("Running now", running),
-        band("Awaiting", awaiting),
-        band("Starred", kept),
-        band("Recent", rest),
-    ]
-    .into_any()
 }
 
 /// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
@@ -5312,7 +5464,11 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// doesn't tear the centre pane down and rebuild it. Right-clicking offers to hide or star it, and a
 /// star and a delete ride the row's right edge. The first nine rows also carry the number that opens
 /// them.
-fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
+///
+/// `sourced` is whether the row may name its own machine: false where it already sits under a
+/// heading that does (the machine-grouped rail), true everywhere else, and in both cases it only
+/// ever prints when more than one source is merged.
+fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced: bool) -> AnyView {
     let SessionRow {
         node,
         agent,
@@ -5342,7 +5498,12 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     // always, not only for a remote row, so "local" reads as a fact about the row rather than the
     // absence of one (`docs/fleet.md` §13, multi-select). With one source selected (the common case,
     // and everything this rail showed before multi-select existed) the line is unchanged.
-    let multi_source = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+    //
+    // Not under a heading that already says it, though: a machine named once over six rows and again
+    // on all six is the repetition §7.5 sends into the heading, and it is spent out of the 264px the
+    // task itself has to fit in.
+    let multi_source =
+        sourced && usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
     let origin = multi_source
         .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
         .unwrap_or_default();
@@ -5772,10 +5933,10 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
         };
         // Nothing is claimed unless there really is a row there, so ⌘4 on a three-chat rail stays
         // the browser's to handle rather than being swallowed into a no-op.
-        let Some(row) = session_bands(state, watch)
+        let Some(row) = rail_bands(state, watch)
             .0
             .into_iter()
-            .flatten()
+            .flat_map(|b| b.rows)
             .nth(n - 1)
         else {
             return;
@@ -5814,7 +5975,7 @@ fn open_session(watch: AgentsWatch, node: Option<String>, agent: &str, run_id: &
 /// Unhide — as does the ↩ that rides the row's right edge.
 fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
     // One selected source's own hidden rows, tagged with where they came from — the same per-source
-    // merge `session_bands` runs above, kept separate because this band reads `all_chats` /
+    // merge `session_rows` runs above, kept separate because this band reads `all_chats` /
     // `rail_node_chats` directly rather than through `source_rows` (`docs/fleet.md` §13).
     let starred_only = state.session_filter.get() == SessionFilter::Starred;
     let collect = |node: Option<String>,
@@ -5847,7 +6008,7 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 ar.runs
                     .into_iter()
                     // A pending question already rides the asking band above regardless of `hidden`
-                    // (`session_bands`) — kept out of this one too, or it would draw twice. Hiding a
+                    // (`activity_bands`) — kept out of this one too, or it would draw twice. Hiding a
                     // conversation is "out of my sight"; a question addressed to a person outranks
                     // that, but only for as long as it is unanswered, so it belongs in the live band
                     // and not filed away here.
@@ -6118,7 +6279,7 @@ const INBOX_ROWS: usize = 6;
 /// an *inbox*: those conversations have stopped until a person answers them, and that is the one
 /// thing worth putting in front of the person rather than off to the side of them.
 ///
-/// Drawn from [`session_bands`], the same list the rail is built from, so the two cannot disagree
+/// Drawn from [`rail_bands`], the same list the rail is built from, so the two cannot disagree
 /// about a session; and the rows are the rail's own ([`chat_session_row`]), so a session opens,
 /// stars, deletes and right-clicks here exactly as it does over there.
 ///
@@ -6126,8 +6287,10 @@ const INBOX_ROWS: usize = 6;
 /// keeps the pane to itself. Nothing asking is not news, and a panel saying so every day is how a
 /// panel stops being read on the day it has something to say.
 fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
-    // Only the first band. The other four are the rail's business.
-    let ([waiting, ..], _filtered) = session_bands(state, watch);
+    // Only what is stopped on a person. However the rail beside it is grouped, this is one list
+    // under one heading: it is an inbox, and an inbox split by machine is a set of inboxes to
+    // remember to check.
+    let waiting = waiting_rows(rail_bands(state, watch).0);
     if waiting.is_empty() {
         return None;
     }
@@ -6153,7 +6316,9 @@ fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         }
                         let:row
                     >
-                        {chat_session_row(state, watch, row)}
+                        // Sourced whatever the rail beside it is doing: this band mixes machines
+                        // under one heading of its own, so each row has to name its own.
+                        {chat_session_row(state, watch, row, true)}
                     </For>
                 </adi_ui::RailGroup>
                 {(more > 0).then(|| view! {
@@ -6867,5 +7032,90 @@ mod tests {
             Some(step_anchor(7, 3).as_str()),
             "a call's anchor counts from where the run starts, so the rail's links still land",
         );
+    }
+
+    /// A rail row with no conversation behind it — a pty agent's live session, which is all these
+    /// tests need: [`grouped_bands`] is handed rows that are *already* banded, so nothing here
+    /// depends on what put them in one band rather than another.
+    fn rail_row(node: Option<&str>, agent: &str) -> SessionRow {
+        SessionRow {
+            node: node.map(str::to_string),
+            agent: agent.to_string(),
+            run: None,
+            when: 0,
+            running: false,
+            starred: false,
+            hotkey: None,
+        }
+    }
+
+    fn labels(bands: &[RailBand]) -> Vec<&str> {
+        bands.iter().map(|b| b.label.as_str()).collect()
+    }
+
+    fn agents_in(band: &RailBand) -> Vec<&str> {
+        band.rows.iter().map(|r| r.agent.as_str()).collect()
+    }
+
+    /// Grouping by machine is a *re-deal* of the activity bands, not a re-sort of the rows: each
+    /// machine keeps the rail's own order inside it, so what is stopped on you is still the first
+    /// thing under every heading. Get this wrong by grouping the sorted rows instead and each
+    /// machine's band comes out by recency, which is the one ordering the rail has never used.
+    #[test]
+    fn grouping_by_machine_leads_with_this_machine_and_keeps_the_activity_order_inside_each() {
+        let banded = [
+            vec![rail_row(Some("studio"), "asking")],
+            vec![rail_row(None, "working")],
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rail_row(Some("laptop"), "old-laptop"),
+                rail_row(None, "old-local"),
+                rail_row(Some("studio"), "old-studio"),
+            ],
+        ];
+
+        let bands = grouped_bands(SessionGroup::Machine, banded);
+
+        assert_eq!(
+            labels(&bands),
+            ["This machine", "laptop", "studio"],
+            "this machine leads, then the nodes in name order",
+        );
+        assert_eq!(agents_in(&bands[0]), ["working", "old-local"]);
+        assert_eq!(
+            agents_in(&bands[2]),
+            ["asking", "old-studio"],
+            "the question comes first inside its own machine, not the newest row",
+        );
+    }
+
+    /// Two promises the drawn rail makes whichever way it is grouped: a heading is never drawn over
+    /// nothing (a ticked node still loading would otherwise claim it has no sessions), and ⌘1…⌘9
+    /// count straight down the rail as drawn — so regrouping renumbers rather than leaving a row
+    /// printing the number of the row that used to be in its slot.
+    #[test]
+    fn empty_bands_are_dropped_and_the_first_nine_rows_are_numbered_down_the_drawn_order() {
+        let banded = [
+            vec![rail_row(Some("studio"), "asking")],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![rail_row(None, "old-local")],
+        ];
+
+        let by_activity = grouped_bands(SessionGroup::Activity, banded.clone());
+        assert_eq!(labels(&by_activity), ["Waiting on you", "Recent"]);
+        assert_eq!(by_activity[0].rows[0].hotkey, Some(1));
+        assert_eq!(by_activity[1].rows[0].hotkey, Some(2));
+
+        let by_machine = grouped_bands(SessionGroup::Machine, banded);
+        assert_eq!(labels(&by_machine), ["This machine", "studio"]);
+        assert_eq!(
+            by_machine[0].rows[0].hotkey,
+            Some(1),
+            "the local row is drawn first now, so it is the one \u{2318}1 opens",
+        );
+        assert_eq!(by_machine[1].rows[0].hotkey, Some(2));
     }
 }

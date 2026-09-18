@@ -671,7 +671,7 @@ Concretely:
   that is not open — what Hide, Star and Delete resolve against when clicked straight off the list,
   and what the right-click menu carries forward. A row's own source travels with it from the moment
   it is built; nothing downstream re-derives it from page state.
-- **The merge itself** (`session_bands` → `source_rows`) runs the same per-agent loop
+- **The merge itself** (`session_rows` → `source_rows`) runs the same per-agent loop
   `chat_all_sessions` already used for one machine's agents once per selected source — this
   machine's own `/api/agents` + `/api/agents/runs/all` (kept fresh the way every other page already
   relies on), plus one fetch of each for every ticked node
@@ -720,6 +720,18 @@ produced it. Unticking this machine while it is the only source is therefore a n
 the item's title says why, and the open conversation is *not* closed, since its source never actually
 went away. Unticking the last *node* still tears that node down as any untick does — the floor
 selecting this machine does not make a run on the node just dropped any more reachable.
+
+**A merged rail can be banded by machine rather than by activity** — `SessionGroup` in the head's
+filter menu, under **Group by**, persisted as `adi-session-group` in the same `localStorage` the
+selection lives in. It replaces the activity headings rather than nesting under them (a 264px rail
+has room for one heading ladder), keeps the activity order *inside* each machine so what is stopped
+on you is still at the top of it, and drops the per-row source label, which the heading above the row
+now says. A ticked source with nothing to show draws no heading: while its two fetches are in flight,
+"this machine has nothing" would be a claim that is not yet true. The **agent picker** answers the
+same question the same way — one `<optgroup>` per source, in the order the rail merges them, so two
+machines' same-named agents are told apart by the heading over them rather than by a suffix on every
+line; and because a collapsed `<select>` shows no group heading, the chosen agent's machine is named
+beside the control ("Start a chat with adi-agent on laptop").
 
 The rail's node button reflects the same logic: unchanged (no accent, no label) while this machine
 alone is selected, and once anything else is ticked it takes the accent and prints either the one
@@ -900,7 +912,7 @@ Each item ships with unit tests in the same file.
       a pure function from an explicit source to an address, called at each call site that has one,
       because several concurrent fetches for several sources cannot safely share one flipped
       variable. `live::Sub::get_on`/`post_on` do the same for a subscription.
-- [x] K4 `session_bands` → `source_rows`: the per-agent merge `chat_all_sessions` already did for one
+- [x] K4 `session_rows` → `source_rows`: the per-agent merge `chat_all_sessions` already did for one
       machine's agents, run once per selected source and concatenated — including the ★ filter,
       which is now evaluated against each source's own agent list rather than one shared one.
       `chat_hidden_sessions` merges the Hidden band the same way.
@@ -914,3 +926,8 @@ Each item ships with unit tests in the same file.
 - [x] K7 The selection persists across a reload, in `localStorage` (`adi-session-sources`) — a
       deliberate reversal of J5's "the choice is not stored", now that every row's own label carries
       the fact that rule existed to keep visible.
+- [x] K8 **Group by machine**, in the head's filter menu beside the narrowing (`SessionGroup`,
+      persisted as `adi-session-group`): one rail band per selected source, this machine first, with
+      the five activity bands ordering the rows inside each. The agent picker groups the same way —
+      one `<optgroup>` per source — and names the chosen agent's machine beside the control, since a
+      collapsed `<select>` shows no group heading. Both only once more than one source is selected.

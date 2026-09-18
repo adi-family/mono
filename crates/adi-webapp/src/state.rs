@@ -156,6 +156,14 @@ pub(crate) struct State {
     /// home is re-rendered whenever `/api/meta` moves, and a signal created inside it would take
     /// the open menu with it twice a second.
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
+    /// How the rail's rows are **grouped** — see [`SessionGroup`]. [`SessionGroup::Activity`] by
+    /// default: the five state bands the rail has always drawn.
+    ///
+    /// **Persisted**, unlike the narrowing above it, because it is a preference about the selection
+    /// in [`Self::session_nodes`] — which is itself persisted. An operator who merged four machines
+    /// and grouped the rail by them would otherwise rebuild half of that arrangement on every
+    /// reload, with the half that survived making the half that didn't look broken.
+    pub(crate) session_group: RwSignal<SessionGroup>,
     /// **Which sources** the rail is merging (`docs/fleet.md` §13, multi-select): this machine, when
     /// true, plus every node named in [`Self::session_nodes`]. Together they replace the single
     /// "pointed node" of the first cut of this feature — a row's own actions now resolve their own
@@ -407,6 +415,7 @@ impl State {
             show_hidden: RwSignal::new(false),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
+            session_group: RwSignal::new(load_session_group()),
             session_local: RwSignal::new(sources.local),
             session_nodes: RwSignal::new(sources.nodes),
             session_node_menu: RwSignal::new(None),
@@ -456,6 +465,55 @@ impl SessionFilter {
 
     /// Every option the box offers, in the order it offers them.
     pub(crate) const ALL: [Self; 3] = [Self::All, Self::Starred, Self::Mine];
+}
+
+/// How the chat rail's rows are **grouped** — the second half of the Sessions head's filter menu,
+/// under the narrowing. Grouping and narrowing are separate questions: one decides which sessions
+/// are listed, the other only how the listed ones are arranged.
+///
+/// Like a Finder window's "Group by", picking one *replaces* the headings rather than adding a
+/// second level of them: a 264px rail has room for one heading ladder, and a band inside a band at
+/// the same 12px would read as two bands of the same kind.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionGroup {
+    /// The five state bands: blocked on you, running, awaiting a wake, starred, then the rest. What
+    /// the rail has always drawn, and the right default on the machine most panels open on — one
+    /// source, where grouping by machine would be a single heading over everything.
+    #[default]
+    Activity,
+    /// One band per source (`docs/fleet.md` §13): this machine, then each ticked node. Within a band
+    /// the rows keep the activity order above, so what needs you is still at the top of each
+    /// machine. For the operator who merges several machines and then has to *find* one of them
+    /// again in a list that interleaves all of them by recency.
+    Machine,
+}
+
+impl SessionGroup {
+    /// What the menu item says.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Activity => "Activity",
+            Self::Machine => "Machine",
+        }
+    }
+
+    /// The item's title — what picking it does to the rail.
+    pub(crate) fn hint(self) -> &'static str {
+        match self {
+            Self::Activity => {
+                "band the rail by what each session is doing \u{2014} waiting on you, running, \
+                 awaiting a wake, starred, then the rest"
+            }
+            Self::Machine => {
+                "band the rail by the machine each session is on, this machine first \u{2014} \
+                 within a machine the order is the same one Activity bands by"
+            }
+        }
+    }
+
+    /// Every option the menu offers, in the order it offers them.
+    pub(crate) const ALL: [Self; 2] = [Self::Activity, Self::Machine];
 }
 
 /// A side rail of the chat home, when it is showing as a drawer over the conversation.
@@ -2234,6 +2292,29 @@ fn save_session_sources(local: bool, nodes: &BTreeSet<String>) {
         nodes: nodes.clone(),
     }) {
         let _ = storage.set_item(SESSION_SOURCES_KEY, &raw);
+    }
+}
+
+/// The `localStorage` key the sessions rail's grouping is kept under — see [`State::session_group`]
+/// for why this one is persisted while the narrowing beside it is not.
+const SESSION_GROUP_KEY: &str = "adi-session-group";
+
+/// The saved grouping, or the activity bands on a first run, in private mode, or if the stored value
+/// names a grouping this build no longer has.
+fn load_session_group() -> SessionGroup {
+    crate::ui::storage()
+        .and_then(|s| s.get_item(SESSION_GROUP_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Group the sessions rail one way or the other, and remember it for the next reload.
+pub(crate) fn set_session_group(s: State, group: SessionGroup) {
+    s.session_group.set(group);
+    if let Some(storage) = crate::ui::storage()
+        && let Ok(raw) = serde_json::to_string(&group)
+    {
+        let _ = storage.set_item(SESSION_GROUP_KEY, &raw);
     }
 }
 

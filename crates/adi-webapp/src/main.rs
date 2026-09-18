@@ -905,6 +905,9 @@ fn App() -> impl IntoView {
         show_hidden: RwSignal::new(false),
         session_filter: RwSignal::new(SessionFilter::default()),
         session_filter_menu: RwSignal::new(None),
+        // Nor a grouping to pick: the workbench has no rail to band. The stored preference is the
+        // chat shell's, and is read back there.
+        session_group: RwSignal::new(state::SessionGroup::default()),
         // The workbench shell has no sessions rail and so no node menu: it is always this machine
         // alone, and nothing here ever reads `session_nodes` to say otherwise.
         session_local: RwSignal::new(true),

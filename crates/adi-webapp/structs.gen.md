@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-75 structs · 15 enums · 4 type aliases across 30 files.
+76 structs · 16 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `SessionRef`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -35,7 +35,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -258,6 +258,17 @@ struct SessionRow {
     running: bool,
     starred: bool,
     hotkey: Option<usize>,
+}
+```
+
+### struct `RailBand`
+
+One band of the rail as it is drawn: a heading, and the rows under it. What the label *says* is the grouping's business — an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing downstream of `rail_bands` can tell which it was.
+
+```rust
+struct RailBand {
+    label: String,
+    rows: Vec<SessionRow>,
 }
 ```
 
@@ -1015,6 +1026,7 @@ pub(crate) struct State {
     pub(crate) show_hidden: RwSignal<bool>,
     pub(crate) session_filter: RwSignal<SessionFilter>,
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
+    pub(crate) session_group: RwSignal<SessionGroup>,
     pub(crate) session_local: RwSignal<bool>,
     pub(crate) session_nodes: RwSignal<BTreeSet<String>>,
     pub(crate) session_node_menu: RwSignal<Option<(i32, i32)>>,
@@ -1092,6 +1104,20 @@ pub(crate) enum SessionFilter {
     Starred,
     #[default]
     Mine,
+}
+```
+
+### enum `SessionGroup`
+
+How the chat rail's rows are **grouped** — the second half of the Sessions head's filter menu, under the narrowing. Grouping and narrowing are separate questions: one decides which sessions are listed, the other only how the listed ones are arranged.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SessionGroup {
+    #[default]
+    Activity,
+    Machine,
 }
 ```
 

@@ -36,7 +36,7 @@ subscription is *about* a specific source, and `adi-app`'s `viewer::proxy` forwa
 credential this machine holds for that node. So nothing in this document's pipeline is duplicated or
 conditional; a session is read, listed, replied to and stopped by exactly the code below, on whichever
 machine actually holds it — the client just runs the whole pipeline once per selected source and
-concatenates the answers (`session_bands` → `source_rows`, `actions.rs`) the same way it already
+concatenates the answers (`session_rows` → `source_rows`, `actions.rs`) the same way it already
 merged across agents on one machine. The consequences worth carrying into any refactor here:
 
 - **A `run_id` is only unique on the machine that minted it.** With several sources live at once
@@ -417,9 +417,9 @@ the rail:**
 
 They overlap on purpose: `watch.runs` is refreshed faster and is updated *synchronously* by
 mutations (hide/delete reply with fresh history), so the row of a chat you just deleted leaves
-immediately instead of at the next 3s tick. `chat_all_sessions` (by way of `session_bands` →
-`source_rows`) prefers `watch.runs` for the watched agent *when the watched conversation is on that
-same source*, and falls back to the source's own index otherwise.
+immediately instead of at the next 3s tick. `chat_all_sessions` (by way of `rail_bands` →
+`session_rows` → `source_rows`) prefers `watch.runs` for the watched agent *when the watched
+conversation is on that same source*, and falls back to the source's own index otherwise.
 
 That preference is why paging is done twice. `all_chats` arrives already cut; `watch.runs` is the
 watched agent's *whole* history, so `paged` cuts it client-side — otherwise the agent you are
@@ -436,7 +436,7 @@ the rail's node menu**, kept apart from the pair above rather than folded into t
 
 This machine is never a key in either map — `state.agents`/`state.all_chats` already hold it, kept
 fresh by the poll and the live channel that existed before multi-select did, and a second fetch of
-the same answer under a `None` key would be two clocks telling the same fact. `session_bands` reads
+the same answer under a `None` key would be two clocks telling the same fact. `session_rows` reads
 `state.session_local`/`state.session_nodes` to decide which sources are live, then runs the same
 per-agent merge (`source_rows`) once against each one's pair of signals and concatenates the rows
 before the rest of the pipeline (filter, sort, band) proceeds unchanged. `AgentsWatch::node` and
@@ -462,20 +462,24 @@ index until the socket's next answer narrowed it back.
 ```
 chat_rail                               the whole left rail
 ├─ chat_all_sessions                    visible rows
-│   └─ session_bands                    also what the ⌘1…⌘9 hotkeys read
-│       ├─ source_rows  × selected source  the merge (`docs/fleet.md` §13) — one machine's own
-│       │   │                              agents plus one call per selected node, concatenated
-│       │   ├─ ★ filter, per source        each source's own starred agents, never another's —
-│       │   │                              a run with pending_question is kept regardless
-│       │   ├─ per agent: pty ⇒ one synthetic row (when: now); else
-│       │   │             runs.filter(pending_question.is_some() || !hidden)
-│       │   └─ paged                       the *watched* agent's own list, on its own source only
-│       ├─ "Mine" filter                launched_by == human — a run with pending_question is
-│       │                                kept regardless of who launched it
-│       ├─ sort by last_touch desc      last_touch = max(last_activity, started_at)
-│       ├─ partition ×4                 five bands: asking, running, awaiting, starred, the rest —
+│   └─ rail_bands                       the bands as drawn; also what ⌘1…⌘9 read
+│       ├─ session_rows                 the rows, before anything bands them
+│       │   ├─ source_rows  × selected source  the merge (`docs/fleet.md` §13) — one machine's own
+│       │   │   │                              agents plus one call per selected node, concatenated
+│       │   │   ├─ ★ filter, per source        each source's own starred agents, never another's —
+│       │   │   │                              a run with pending_question is kept regardless
+│       │   │   ├─ per agent: pty ⇒ one synthetic row (when: now); else
+│       │   │   │             runs.filter(pending_question.is_some() || !hidden)
+│       │   │   └─ paged                       the *watched* agent's own list, on its own source only
+│       │   ├─ "Mine" filter            launched_by == human — a run with pending_question is
+│       │   │                            kept regardless of who launched it
+│       │   └─ sort by last_touch desc  last_touch = max(last_activity, started_at)
+│       ├─ activity_bands               five bands: asking, running, awaiting, starred, the rest —
 │       │                               every filter above carries a pending_question escape hatch,
 │       │                               so an asking run always reaches this partition to be found
+│       ├─ SessionGroup::Machine ⇒      re-deal those five into one band per source, this machine
+│       │                               first (BTreeMap on Option<node>), activity order kept inside
+│       ├─ drop empty bands, then number the first 9 rows down the drawn order
 │       └─ For(keyed "node:agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
 └─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same
@@ -495,6 +499,19 @@ are states a conversation is in *now* and will leave on its own; a star is a sta
 starred chat that happens to be working is still found under **Running now**, so the band collects
 only the ones recency ordering would otherwise have carried off — which is the whole reason to mark
 one.
+
+**The bands can be dealt by machine instead** (`SessionGroup`, `state.rs`), from the **Group by**
+half of the head's filter menu: one band per selected source, this machine first and then each ticked
+node in name order, with the five activity bands still deciding the order *inside* each one. It
+replaces the activity headings rather than nesting under them — a 264px rail has room for one
+heading ladder, and a band inside a band at the same 12px reads as two bands of the same kind. Rows
+then stop printing their own source on the meta line, since the heading above them says it
+(`chat_session_row`'s `sourced`); the "Waiting on you" inbox under the composer keeps printing it,
+because that band mixes machines under one heading of its own. A source with nothing to show draws no
+heading at all: "this machine has nothing" is a claim, and while a newly-ticked node's two fetches
+are in flight it would be a false one. Unlike the narrowing beside it the choice is **persisted**
+(`adi-session-group` in `localStorage`), because it is a preference about the selection in
+`session_nodes`, which is itself persisted.
 
 **Awaiting is not an inbox.** It sits below **Running now** because nothing is happening in the
 conversation this second, and above everything else because something is going to: an await is the
@@ -550,13 +567,14 @@ them:
    and deliberately stamps the turn with the log's mtime, not `now`, so committing an old answer
    does not shove that chat back to the top.
 
-## Ordering — decided in four places
+## Ordering — decided in five places
 
 | Where | Key | Note |
 |---|---|---|
 | `sessions_newest` index | `started_at` desc | the store's contract; deliberately *not* activity |
 | `lib.rs:879` | — | preserved, not re-sorted |
-| `actions.rs:4365` (rail) | `last_touch` desc, stable | pty rows stamped `now` sort first |
+| `actions.rs` (rail, `session_rows`) | `last_touch` desc, stable | pty rows stamped `now` sort first |
+| `actions.rs` (rail, `rail_bands`) | band, then the above | activity bands, or one band per machine |
 | `actions.rs:681` (table) | `started_at` desc, user-sortable | disagrees with the rail on purpose |
 
 ## Why a session might not be in the list
