@@ -1614,74 +1614,147 @@ fn AskDemo() -> impl IntoView {
     }
 }
 
-/// The sessions rail, assembled: a live selection across three bands, and the filter box
-/// wired to the one band long enough to need it.
+/// The sessions rail, assembled: two machines merged into one list, a live selection, and the
+/// filter box wired to the band long enough to need it.
+///
+/// **The bands are machines, and the state is on the row.** Banding by state instead —
+/// "Waiting on you", "Running now" — answers *what is happening* and takes away *where*, and a
+/// 264px rail has room for one heading ladder, not two. So the dot and the one word travel with
+/// the row into whichever band it lands in, and the activity order (stopped on you, then running,
+/// then coming back, then the rest) survives as the order *inside* each machine.
 #[component]
 fn SessionsDemo() -> impl IntoView {
-    // The sessions nobody is waiting on: title, the agent that ran it, how long ago, and
-    // how it ended — one of them failed, which is a state and not a note under the title.
-    const DONE: [(&str, &str, &str, SessionState); 5] = [
+    /// One row: title, agent, how long ago, its state, and the word that state says.
+    type Row = (
+        &'static str,
+        &'static str,
+        &'static str,
+        SessionState,
+        &'static str,
+    );
+
+    // This machine, in the rail's own order. Only the rows with something to report carry a
+    // word; the rest of the list is finished conversations and says nothing, which is what
+    // makes a marked row worth looking at.
+    const HERE: [Row; 3] = [
         (
-            "What is on the linear board",
+            "Viacheslav Teremets, 5 Aug",
             "nakityok-lead",
-            "21h",
-            SessionState::Done,
+            "2h",
+            SessionState::Waiting,
+            "your answer",
         ),
         (
-            "You are coordinating ONE feature",
-            "nakityok-lead",
-            "17h",
-            SessionState::Done,
-        ),
-        (
-            "Walk me through the agents",
+            "Walk the linear board",
             "adi-agent",
-            "2d",
-            SessionState::Done,
+            "14m",
+            SessionState::Working,
+            "working",
+        ),
+        (
+            "Nightly index rebuild",
+            "adi-agent",
+            "1h",
+            SessionState::Awaiting,
+            "coming back",
+        ),
+    ];
+
+    // …and the machine ticked beside it. Same order, same marks — the heading is the only
+    // thing that says which machine, and it is there only because there are two.
+    const STUDIO: [Row; 2] = [
+        (
+            "Deep-analysis pass",
+            "bb-finding-writer",
+            "2m",
+            SessionState::Working,
+            "working",
         ),
         (
             "Stop the trigger, please",
             "bb-target-ops",
             "4d",
             SessionState::Error,
+            "failed",
+        ),
+    ];
+
+    // The sessions nobody is waiting on, on this machine: the tail every rail is mostly made of.
+    const DONE: [Row; 4] = [
+        (
+            "What is on the linear board",
+            "nakityok-lead",
+            "21h",
+            SessionState::Done,
+            "",
+        ),
+        (
+            "You are coordinating ONE feature",
+            "nakityok-lead",
+            "17h",
+            SessionState::Done,
+            "",
+        ),
+        (
+            "Walk me through the agents",
+            "adi-agent",
+            "2d",
+            SessionState::Done,
+            "",
         ),
         (
             "Target is Mollie",
             "bb-target-ops",
             "4d",
             SessionState::Done,
+            "",
         ),
     ];
 
     let query = RwSignal::new(String::new());
-    let open = RwSignal::new("linear");
+    let open = RwSignal::new("Walk the linear board");
     // Selection is the caller's state, so it arrives as a signal per row rather than as an
     // index the component keeps.
     let is_open = move |id: &'static str| Signal::derive(move || open.get() == id);
+    let row = move |(title, agent, age, state, alert): Row, shortcut: String| {
+        view! {
+            <SessionItem
+                title=title
+                state=state
+                agent=agent
+                alert=alert
+                age=age
+                shortcut=shortcut
+                selected=is_open(title)
+                on:click=move |_| open.set(title)
+            />
+        }
+    };
 
     let matching = move || {
         let q = query.get().trim().to_lowercase();
         DONE.into_iter()
-            .filter(|(title, agent, _, _)| {
+            .filter(|(title, agent, ..)| {
                 q.is_empty() || title.to_lowercase().contains(&q) || agent.contains(&q)
             })
             .collect::<Vec<_>>()
     };
-    let done = move || {
-        matching()
+    // ⌃1…⌃9 count down the rail as *drawn*, across the headings and never restarted per band —
+    // so filtering the list renumbers it rather than leaving a row wearing the number of the row
+    // that used to be in its slot.
+    let here = move || {
+        HERE.into_iter()
+            .chain(matching())
+            .enumerate()
+            .map(|(i, r)| row(r, format!("\u{2303}{}", i + 1)))
+            .collect::<Vec<_>>()
+    };
+    let studio = move || {
+        let before = HERE.len() + matching().len();
+        STUDIO
             .into_iter()
-            .map(|(title, agent, age, state)| {
-                view! {
-                    <SessionItem
-                        title=title
-                        state=state
-                        agent=agent
-                        age=age
-                        selected=is_open(title)
-                        on:click=move |_| open.set(title)
-                    />
-                }
-            })
+            .enumerate()
+            .map(|(i, r)| row(r, format!("\u{2303}{}", before + i + 1)))
             .collect::<Vec<_>>()
     };
 
@@ -1696,45 +1769,17 @@ fn SessionsDemo() -> impl IntoView {
                 .into_any()
             }
         >
-            // One band for everything live. A session that stopped to ask you something is
-            // still the same conversation you left running, and a band of its own put a
-            // heading between it and the row above for one row's worth of news.
-            <RailGroup label="Running now" count=3>
-                <SessionItem
-                    title="Walk the linear board"
-                    state=SessionState::Working
-                    selected=is_open("linear")
-                    agent="adi-agent"
-                    age="14m"
-                    shortcut="\u{2303}1"
-                    on:click=move |_| open.set("linear")
-                />
-                <SessionItem
-                    title="Viacheslav Teremets, 5 Aug"
-                    state=SessionState::Waiting
-                    selected=is_open("teremets")
-                    agent="nakityok-lead"
-                    alert="agent question"
-                    age="2h"
-                    shortcut="\u{2303}2"
-                    on:click=move |_| open.set("teremets")
-                />
-                <SessionItem
-                    title="Deep-analysis pass"
-                    state=SessionState::Working
-                    selected=is_open("deep")
-                    agent="bb-finding-writer"
-                    age="2m"
-                    shortcut="\u{2303}3"
-                    on:click=move |_| open.set("deep")
-                />
-            </RailGroup>
-
-            <RailGroup label="Done">
-                {done}
+            // No count on this one: the filter box above is wired to its tail, so the number
+            // would be a promise the next keystroke breaks.
+            <RailGroup label="This machine">
+                {here}
                 <Show when=move || matching().is_empty()>
                     <Empty>"Nothing matches."</Empty>
                 </Show>
+            </RailGroup>
+
+            <RailGroup label="studio" count=2>
+                {studio}
             </RailGroup>
         </Rail>
     }
@@ -3012,10 +3057,18 @@ fn Playground() -> impl IntoView {
 
             <Panel title="Sessions" id="sessions">
                 <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "Two machines merged into one rail. The bands are the machines; what each \
+                     session is doing rides on its own row — a 6px dot and one word, amber for \
+                     your turn, orange for a turn in flight, grey for one that is coming back on \
+                     its own. Nothing says \"Waiting on you\" over anything: that heading could \
+                     only ever be drawn instead of the machine's, and most of a rail is finished \
+                     conversations, which say nothing at all."
+                </p>
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
                     "The rail is live: click a row. Scroll it and the title goes with the \
                      rows while the filter box stays — that box binds a signal and does \
                      nothing else, since what a query matches is the caller's to decide, and \
-                     here it is wired to the done band only."
+                     here it is wired to the finished tail of the first band."
                 </p>
                 <div>
                     // A rail fills the height it is given, so the demo has to give it one.
@@ -3030,7 +3083,15 @@ fn Playground() -> impl IntoView {
                     "Every state a row can be in, open and not. The open one is a tone \
                      change; the state is a 6px dot before the title and one word in the \
                      meta line — orange for running, amber for waiting on you, red for \
-                     broken. Nothing washes and nothing moves."
+                     broken, grey for a run that is coming back on its own. Nothing washes \
+                     and nothing moves."
+                </p>
+                <p class="m-0 mb-3 max-w-[64ch] text-small text-ink-3">
+                    "The word is the half that survives grouping: the dot says there is \
+                     something, the word says what, and both travel with the row into whatever \
+                     band the list is drawn in. Which is why the heading here is a label of \
+                     convenience — the last band has none at all, and a band with nothing to \
+                     say draws no heading rather than an empty one."
                 </p>
                 <div>
                     <div class="rounded-lg bg-side px-1.5 pb-3">
@@ -3084,6 +3145,9 @@ fn Playground() -> impl IntoView {
                                 title="Working"
                                 state=SessionState::Working
                                 agent="adi-agent"
+                                // Plain, not orange: the dot is already the row's one accent,
+                                // and two of them would compete for the same glance.
+                                alert="working"
                                 age="14m"
                             />
                             <SessionItem
@@ -3091,6 +3155,7 @@ fn Playground() -> impl IntoView {
                                 state=SessionState::Working
                                 selected=true
                                 agent="adi-agent"
+                                alert="working"
                                 age="14m"
                             />
                         </RailGroup>
@@ -3126,6 +3191,20 @@ fn Playground() -> impl IntoView {
                             <SessionItem title="With a child" agent="adi-agent" age="6h">
                                 <Badge tone=BadgeTone::Warn>"draft"</Badge>
                             </SessionItem>
+                        </RailGroup>
+
+                        // No label: the band groups and spaces its rows exactly as the ones
+                        // above it do, and draws no heading — what a rail with one machine on
+                        // it, or no grouping at all, is made of.
+                        <RailGroup>
+                            <SessionItem
+                                title="A band with no heading"
+                                state=SessionState::Waiting
+                                agent="adi-agent"
+                                alert="your answer"
+                                age="8m"
+                            />
+                            <SessionItem title="…and the row under it" agent="adi-agent" age="9m"/>
                         </RailGroup>
 
                         // The box on its own, for a row a session does not describe. `fill`

@@ -88,6 +88,12 @@ pub fn RailCard(
 /// One labelled band of the rail: a 12px sentence-case heading in `--ink-3`, optionally with
 /// how many rows are under it, and the rows.
 ///
+/// **No label, no heading.** A band is also how a rail groups rows it has nothing to say
+/// about — one machine's worth, or the whole list when the rail is ungrouped — and an empty
+/// `<h3>` there is 26px of nothing between the head and the first row. The band still exists
+/// as a band: same spacing, same column, so a list of one drawn beside a list of three lines
+/// up with them.
+///
 /// ```ignore
 /// <RailGroup label="Running now" count=2>
 ///     <crate::SessionItem title="…" state=SessionState::Working/>
@@ -104,13 +110,16 @@ pub fn RailGroup(
     #[prop(optional, into)] class: String,
     children: Children,
 ) -> impl IntoView {
+    let titled = !label.is_empty();
     view! {
         <section class=merge("flex flex-col", class)>
-            <h3 class="m-0 flex items-baseline justify-between gap-2 px-2 pt-2.5 pb-1 \
-                       text-label font-normal text-ink-3">
-                <span class="truncate">{label}</span>
-                {count.map(|n| view! { <span class="shrink-0 tabular-nums">{n}</span> })}
-            </h3>
+            {titled.then(|| view! {
+                <h3 class="m-0 flex items-baseline justify-between gap-2 px-2 pt-2.5 pb-1 \
+                           text-label font-normal text-ink-3">
+                    <span class="truncate">{label}</span>
+                    {count.map(|n| view! { <span class="shrink-0 tabular-nums">{n}</span> })}
+                </h3>
+            })}
             <div class="flex flex-col gap-px">{children()}</div>
         </section>
     }

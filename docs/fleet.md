@@ -736,13 +736,24 @@ the item's title says why, and the open conversation is *not* closed, since its 
 went away. Unticking the last *node* still tears that node down as any untick does — the floor
 selecting this machine does not make a run on the node just dropped any more reachable.
 
-**A merged rail can be banded by machine rather than by activity** — `SessionGroup` in the head's
+**A merged rail is banded by machine, and that is the default** — `SessionGroup` in the head's
 filter menu, under **Group by**, persisted as `adi-session-group` in the same `localStorage` the
-selection lives in. It replaces the activity headings rather than nesting under them (a 264px rail
-has room for one heading ladder), keeps the activity order *inside* each machine so what is stopped
-on you is still at the top of it, and drops the per-row source label, which the heading above the row
-now says. A ticked source with nothing to show draws no heading: while its two fetches are in flight,
-"this machine has nothing" would be a claim that is not yet true. The **agent picker** answers the
+selection lives in; the other choice is **One list**, every source interleaved by the same order
+with no headings at all. Banding by machine keeps the activity order *inside* each one, so what is
+stopped on you is still at the top of it, and drops the per-row source label, which the heading
+above the row now says. A ticked source with nothing to show draws no heading: while its two
+fetches are in flight, "this machine has nothing" would be a claim that is not yet true. Nor does a
+rail with a **single** source draw one, which is what makes this a safe default on a machine paired
+with nobody — the heading would name the only machine on screen.
+
+**What each session is doing rides on its own row**, not in a heading over it: a 6px dot and one
+word — amber and "your answer" when it is stopped on a person, orange and "working" while a turn is
+in flight, grey and "coming back" when it holds a wake. That is what freed the rail's one heading
+ladder for machines (a 264px rail has room for one, and a band inside a band at the same 12px reads
+as two bands of the same kind): state is a question a row can answer for itself, and "which machine
+is this on" is the one it cannot. See `docs/sessions.md`, "The state is on the row".
+
+The **agent picker** answers the
 same question the same way — one `<optgroup>` per source, in the order the rail merges them, so two
 machines' same-named agents are told apart by the heading over them rather than by a suffix on every
 line; and because a collapsed `<select>` shows no group heading, the chosen agent's machine is named

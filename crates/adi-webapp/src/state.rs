@@ -207,8 +207,8 @@ pub(crate) struct State {
     /// home is re-rendered whenever `/api/meta` moves, and a signal created inside it would take
     /// the open menu with it twice a second.
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
-    /// How the rail's rows are **grouped** — see [`SessionGroup`]. [`SessionGroup::Activity`] by
-    /// default: the five state bands the rail has always drawn.
+    /// How the rail's rows are **grouped** — see [`SessionGroup`]. [`SessionGroup::Machine`] by
+    /// default, which on a machine with nothing paired draws exactly the flat list it always did.
     ///
     /// **Persisted**, unlike the narrowing above it, because it is a preference about the selection
     /// in [`Self::session_nodes`] — which is itself persisted. An operator who merged four machines
@@ -527,18 +527,35 @@ impl SessionFilter {
 /// Like a Finder window's "Group by", picking one *replaces* the headings rather than adding a
 /// second level of them: a 264px rail has room for one heading ladder, and a band inside a band at
 /// the same 12px would read as two bands of the same kind.
+///
+/// **Activity is not one of the choices, and that is the point.** The rail used to band by state —
+/// "Waiting on you", "Running now", "Awaiting" — which answered *what is happening* and took away
+/// *where*: a heading ladder can only be one question deep, so a fleet's rail was five state bands
+/// with every machine shuffled through them. A state now travels with the row it belongs to, as the
+/// dot and the word [`adi_ui::SessionItem`] draws, and so survives whichever way the rail is banded.
+/// The activity *order* is untouched — it is what sorts the rows inside every band
+/// (`activity_bands`), so what is stopped on you is still the first thing under every heading.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SessionGroup {
-    /// The five state bands: blocked on you, running, awaiting a wake, starred, then the rest. What
-    /// the rail has always drawn, and the right default on the machine most panels open on — one
-    /// source, where grouping by machine would be a single heading over everything.
-    #[default]
-    Activity,
+    /// No headings: every session in one list, what needs you first. What a rail with one source
+    /// has always looked like, and what the machine grouping below collapses to anyway when only
+    /// one machine is selected.
+    ///
+    /// `alias = "activity"` so a browser that stored the old state-banded grouping lands here
+    /// rather than on the default — it is the option that kept that one's flat reading order.
+    #[serde(alias = "activity")]
+    Flat,
     /// One band per source (`docs/fleet.md` §13): this machine, then each ticked node. Within a band
-    /// the rows keep the activity order above, so what needs you is still at the top of each
-    /// machine. For the operator who merges several machines and then has to *find* one of them
-    /// again in a list that interleaves all of them by recency.
+    /// the rows keep the activity order, so what needs you is still at the top of each machine. For
+    /// the operator who merges several machines and then has to *find* one of them again in a list
+    /// that interleaves all of them by recency.
+    ///
+    /// **The default**, and harmless on the machine most panels open on: one source is one band, and
+    /// a band whose heading would name the only machine on screen draws no heading at all
+    /// (`grouped_bands`). So this is [`Self::Flat`] until a node is ticked, and the grouping the
+    /// operator wanted from the moment there is a second machine to tell apart.
+    #[default]
     Machine,
 }
 
@@ -546,7 +563,7 @@ impl SessionGroup {
     /// What the menu item says.
     pub(crate) fn label(self) -> &'static str {
         match self {
-            Self::Activity => "Activity",
+            Self::Flat => "One list",
             Self::Machine => "Machine",
         }
     }
@@ -554,19 +571,20 @@ impl SessionGroup {
     /// The item's title — what picking it does to the rail.
     pub(crate) fn hint(self) -> &'static str {
         match self {
-            Self::Activity => {
-                "band the rail by what each session is doing \u{2014} waiting on you, running, \
-                 awaiting a wake, starred, then the rest"
+            Self::Flat => {
+                "every session in one list, whatever machine it is on \u{2014} what is stopped on \
+                 you first, then what is running, then the rest"
             }
             Self::Machine => {
                 "band the rail by the machine each session is on, this machine first \u{2014} \
-                 within a machine the order is the same one Activity bands by"
+                 inside a band the order is the same one, and with a single machine selected \
+                 there is no heading to draw"
             }
         }
     }
 
     /// Every option the menu offers, in the order it offers them.
-    pub(crate) const ALL: [Self; 2] = [Self::Activity, Self::Machine];
+    pub(crate) const ALL: [Self; 2] = [Self::Flat, Self::Machine];
 }
 
 /// A side rail of the chat home, when it is showing as a drawer over the conversation.

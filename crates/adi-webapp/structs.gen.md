@@ -1118,8 +1118,9 @@ How the chat rail's rows are **grouped** — the second half of the Sessions hea
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum SessionGroup {
+    #[serde(alias = "activity")]
+    Flat,
     #[default]
-    Activity,
     Machine,
 }
 ```

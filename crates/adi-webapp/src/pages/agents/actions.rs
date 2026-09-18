@@ -800,7 +800,7 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
 /// a task to completion. Shared by the cross-agent index and one agent's history.
 ///
 /// A conversation holding a registered wake is neither of the two words a stopped run has: it is
-/// not idle, and it is not done. Saying "idle" of one is the same mistake the rail's `Recent` band
+/// not idle, and it is not done. Saying "idle" of one is the same mistake an unmarked rail row
 /// would make — it reads as *nothing more is coming from this*, which is exactly wrong.
 fn run_status(answerable: bool, r: &AgentRunInfo) -> &'static str {
     match (answerable, r.running, r.awaits.is_empty()) {
@@ -5411,18 +5411,25 @@ fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter
 /// The cap is dealt **after** the empty bands are dropped, which is what makes the rule the
 /// operator's: a heading that isn't drawn takes no share, so one machine on screen prints fifteen
 /// rows of its own rather than a fifth of the rail each for four bands that aren't there.
+///
+/// **A band with nothing to say carries no label**, and `adi_ui::RailGroup` then draws no heading:
+/// the flat grouping is one such band, and so is a machine-grouped rail with a single machine on
+/// it. The five activity *partitions* still arrive here in order and are still what orders the rows
+/// — they are simply no longer headings of their own ([`SessionGroup`]); each row says its own state
+/// with a dot and a word instead.
 fn grouped_bands(
     group: SessionGroup,
     banded: [Vec<SessionRow>; 5],
     open: &std::collections::BTreeSet<String>,
 ) -> Vec<RailBand> {
     let mut bands: Vec<RailBand> = match group {
-        SessionGroup::Activity => std::iter::zip(
-            ["Waiting on you", "Running now", "Awaiting", "Starred", "Recent"],
-            banded,
-        )
-        .map(|(label, rows)| RailBand::new(label.to_string(), rows))
-        .collect(),
+        // One band, unlabelled: the activity partitions concatenated back in their own order, which
+        // is the reading order the rail has always had — what is stopped on you, then what is
+        // running, then what is coming back, then the starred, then the rest.
+        SessionGroup::Flat => vec![RailBand::new(
+            String::new(),
+            banded.into_iter().flatten().collect(),
+        )],
         // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
         // machine's own band in the rail's own order: what is stopped on you, then what is running,
         // then the rest. A `BTreeMap` keyed on the row's own source does the ordering of the bands
@@ -5445,6 +5452,12 @@ fn grouped_bands(
             .collect(),
     };
     bands.retain(|b| !b.rows.is_empty());
+    // One machine on screen, so there is nothing to tell it apart *from*: the heading would name
+    // the only source there is, on the rail of the machine you are reading it on. Dropped after the
+    // empty bands, since a ticked node still loading must not make the local band look like company.
+    if let [only] = bands.as_mut_slice() {
+        only.label = String::new();
+    }
     let cap = band_cap(bands.len());
     for band in &mut bands {
         band.cap_at(cap, open);
@@ -5531,7 +5544,8 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
     // Grouped by machine, the heading over each band is the row's source, so the row stops repeating
-    // it (see [`chat_session_row`]).
+    // it (see [`chat_session_row`]). Safe when that grouping draws no heading at all, because the
+    // only rail that happens on is a rail with one source — where the row prints no origin either.
     let sourced = state.session_group.get() != SessionGroup::Machine;
     // Keyed, and that is not tidiness: a row's click handler is bound when the row is
     // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
@@ -5642,9 +5656,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
     let on_this_agent =
         watch.name.get().as_deref() == Some(agent.as_str()) && watch.node.get() == node;
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
-    // What it is waiting on the world for. The row says it with the dot and the band it is under,
-    // and the rest goes in the tooltip — the meta line's parts are all `shrink-0` inside an
-    // `overflow-hidden`, so a third one does not shrink to fit the rail, it clips mid-word.
+    // What it is waiting on the world for. The row says *that* it is with the dot and the word
+    // beside it, and what for goes in the tooltip — the meta line's parts are all `shrink-0` inside
+    // an `overflow-hidden`, so a third one does not shrink to fit the rail, it clips mid-word.
     let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
     // The tooltip is where there is room for the sentence, and it is the same sentence the All
     // chats table hangs on its status cell — two surfaces showing one conversation should not
@@ -5668,7 +5682,10 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
     let origin = multi_source
         .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
         .unwrap_or_default();
-    let (title, sub, run_id) = match run {
+    // The meta line in two parts, because the state's word goes *between* them: the agent's name,
+    // then what the row is doing, then how long ago. A state read after the age — "adi-agent · 11d
+    // ago · your answer" — is a fact about the row filed behind the least interesting thing on it.
+    let (title, sub, tail, run_id) = match run {
         Some(r) => {
             let t = truncate_task(display_message(&r));
             let t = if t.trim().is_empty() {
@@ -5678,7 +5695,8 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
             };
             (
                 t,
-                format!("{agent} \u{00b7} {}{origin}", run_age(when)),
+                agent.clone(),
+                format!("{}{origin}", run_age(when)),
                 r.run_id,
             )
         }
@@ -5689,7 +5707,8 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
                 "No live session"
             }
             .to_string(),
-            format!("{agent} \u{00b7} interactive terminal{origin}"),
+            agent.clone(),
+            format!("interactive terminal{origin}"),
             String::new(),
         ),
     };
@@ -5764,7 +5783,22 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
     } else {
         adi_ui::SessionState::Done
     };
-    let sub = sub.clone();
+    // The state in a word, beside the dot that colours it — because the rail is no longer banded by
+    // state ([`SessionGroup`]) and a dot on its own is a mark to learn rather than a thing to read.
+    // What it wants, not how much of it there is (§6), and one word each: the meta line is 264px
+    // wide with an agent name and an age already in it.
+    //
+    // A finished conversation says nothing. Most of the rail is finished conversations, and a word
+    // on every row is a column, not a signal.
+    let alert = match state_of {
+        adi_ui::SessionState::Waiting => "your answer",
+        adi_ui::SessionState::Working => "working",
+        // Not "awaiting", which names the mechanism; this says the thing the reader needs, which is
+        // that the conversation is not over. What it is actually waiting for is in the tooltip,
+        // where there is room for the sentence (`awaiting_hint`).
+        adi_ui::SessionState::Awaiting => "coming back",
+        adi_ui::SessionState::Done | adi_ui::SessionState::Error => "",
+    };
     // A shortcut nobody can see is a shortcut nobody uses, so the number rides the row it opens.
     // One modifier and one digit, never "⌘1 or Ctrl+1": the row has to stay readable at a glance,
     // and the long form is already in the tooltip.
@@ -5789,13 +5823,8 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
                 title=title.clone()
                 state=state_of
                 agent=sub
-                // The only coloured words in the row, and spent on the one thing a rail is
-                // scanned for. What it wants, not how much of it there is.
-                //
-                // An await gets none, though it is the one state here that could have used one: it
-                // asks for nothing, so there is nothing for the row to say it wants. Its dot is
-                // blue and its band is named, which between them is the whole of the news.
-                alert=if waiting { "your answer" } else { "" }
+                alert=alert
+                age=tail
                 selected=is_sel
                 attr:title=hint
                 on:click=move |_| {
@@ -7276,10 +7305,15 @@ mod tests {
             vec![rail_row(None, "old-local")],
         ];
 
-        let by_activity = grouped_bands(SessionGroup::Activity, banded.clone(), &all_capped());
-        assert_eq!(labels(&by_activity), ["Waiting on you", "Recent"]);
-        assert_eq!(by_activity[0].rows[0].hotkey, Some(1));
-        assert_eq!(by_activity[1].rows[0].hotkey, Some(2));
+        let flat = grouped_bands(SessionGroup::Flat, banded.clone(), &all_capped());
+        assert_eq!(labels(&flat), [""], "one list, and nothing to head it with");
+        assert_eq!(
+            agents_in(&flat[0]),
+            ["asking", "old-local"],
+            "the activity order survives the headings it used to be drawn as",
+        );
+        assert_eq!(flat[0].rows[0].hotkey, Some(1));
+        assert_eq!(flat[0].rows[1].hotkey, Some(2));
 
         let by_machine = grouped_bands(SessionGroup::Machine, banded, &all_capped());
         assert_eq!(labels(&by_machine), ["This machine", "studio"]);
@@ -7291,10 +7325,40 @@ mod tests {
         assert_eq!(by_machine[1].rows[0].hotkey, Some(2));
     }
 
-    /// A band of `n` rows, all on the same source — enough of them to be capped.
-    fn rail_rows(n: usize, prefix: &str) -> Vec<SessionRow> {
+    /// One machine on screen is one band, and it is not headed: the label would name the only
+    /// source there is. The moment a node is ticked both names come back — which is the whole
+    /// reason a single-machine panel can default to grouping by machine and look like it isn't.
+    #[test]
+    fn a_rail_with_one_machine_on_it_draws_no_heading() {
+        let alone = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![rail_row(None, "local-a"), rail_row(None, "local-b")],
+        ];
+        let bands = grouped_bands(SessionGroup::Machine, alone, &all_capped());
+        assert_eq!(labels(&bands), [""]);
+        assert_eq!(agents_in(&bands[0]), ["local-a", "local-b"]);
+
+        let joined = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![rail_row(None, "local-a"), rail_row(Some("studio"), "far")],
+        ];
+        assert_eq!(
+            labels(&grouped_bands(SessionGroup::Machine, joined, &all_capped())),
+            ["This machine", "studio"],
+            "a second source gives the first one something to be told apart from",
+        );
+    }
+
+    /// `n` rows on one source — enough of them to be capped.
+    fn rail_rows(node: Option<&str>, n: usize, prefix: &str) -> Vec<SessionRow> {
         (0..n)
-            .map(|i| rail_row(None, &format!("{prefix}-{i}")))
+            .map(|i| rail_row(node, &format!("{prefix}-{i}")))
             .collect()
     }
 
@@ -7304,34 +7368,28 @@ mod tests {
     /// the rows it is drawing and \u{2318}6 opens something nobody can see.
     #[test]
     fn a_band_prints_its_first_rows_and_hands_the_numbers_on_at_the_cap() {
-        let banded = [
-            Vec::new(),
-            vec![rail_row(None, "working")],
-            Vec::new(),
-            Vec::new(),
-            rail_rows(10, "recent"),
-        ];
+        let mut rest = vec![rail_row(None, "working")];
+        rest.extend(rail_rows(Some("studio"), 10, "far"));
+        let banded = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rest];
 
-        let bands = grouped_bands(SessionGroup::Activity, banded.clone(), &all_capped());
+        let bands = grouped_bands(SessionGroup::Machine, banded.clone(), &all_capped());
 
-        let [running, recent] = bands.as_slice() else {
+        let [local, studio] = bands.as_slice() else {
             panic!("two bands: {:?}", labels(&bands));
         };
         assert_eq!(
-            recent.rows.len(),
+            studio.rows.len(),
             10,
             "the band still holds all of them\u{2026}"
         );
-        assert_eq!(recent.shown, 7, "\u{2026}and prints its half of the rail");
+        assert_eq!(studio.shown, 7, "\u{2026}and prints its half of the rail");
         assert_eq!(
-            agents_in(recent),
-            [
-                "recent-0", "recent-1", "recent-2", "recent-3", "recent-4", "recent-5", "recent-6",
-            ],
+            agents_in(studio),
+            ["far-0", "far-1", "far-2", "far-3", "far-4", "far-5", "far-6"],
         );
-        assert_eq!(running.rows[0].hotkey, Some(1));
+        assert_eq!(local.rows[0].hotkey, Some(1));
         assert_eq!(
-            recent.rows.iter().map(|r| r.hotkey).collect::<Vec<_>>(),
+            studio.rows.iter().map(|r| r.hotkey).collect::<Vec<_>>(),
             [
                 Some(2),
                 Some(3),
@@ -7347,8 +7405,8 @@ mod tests {
             "the three rows past the cap are not on screen, so no number opens them",
         );
 
-        let open = std::collections::BTreeSet::from(["Recent".to_string()]);
-        let opened = grouped_bands(SessionGroup::Activity, banded, &open);
+        let open = std::collections::BTreeSet::from(["studio".to_string()]);
+        let opened = grouped_bands(SessionGroup::Machine, banded, &open);
         assert_eq!(opened[1].shown, 10, "opened out, the band prints all of it");
         assert_eq!(
             opened[1].rows[7].hotkey,

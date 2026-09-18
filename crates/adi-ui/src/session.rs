@@ -14,6 +14,12 @@ use crate::rail::{RailCard, meta_line};
 ///
 /// A state is said with a 6px dot before the title and a word in the meta line — never a
 /// fill, never motion (§8). Only `Waiting` asks for anything; the rest report.
+///
+/// **The row says it, not a heading over the row.** A rail banded by state answers "what is
+/// running" and loses "what is on this machine", and it can only be banded one way at a time;
+/// the dot and the word travel with the row into whatever band it ends up in. So give every
+/// state that is not `Done` its word — with the headings gone, an unexplained grey dot is a
+/// mark a person has to learn rather than read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionState {
     /// Nothing is pending. The default, because a row you forgot to mark should sit quiet
@@ -56,15 +62,21 @@ impl SessionState {
 
     /// Ink for the row's one loud word.
     ///
-    /// A question is amber, a registered wake is plain, and everything else worth saying
-    /// twice is red: amber is the colour of *your turn*, and spending red on a run that merely
-    /// wants an answer would put it in the same voice as one that broke.
+    /// A question is amber, a turn in flight and a registered wake are plain, and a row that
+    /// insists on a word in any other state is red: amber is the colour of *your turn*, and
+    /// spending red on a run that merely wants an answer would put it in the same voice as one
+    /// that broke.
+    ///
+    /// `Working` is plain rather than accent because the orange is already spent, on the dot —
+    /// the word beside it says *what* is happening, and a second orange thing in a 264px row
+    /// would make the one that matters (the dot you scan the list for) harder to find, not
+    /// easier (§3, §8).
     #[must_use]
     pub fn alert_classes(self) -> &'static str {
         match self {
             Self::Waiting => "font-medium text-warn",
-            Self::Awaiting => "text-ink-2",
-            Self::Done | Self::Error | Self::Working => "font-medium text-err",
+            Self::Working | Self::Awaiting => "text-ink-2",
+            Self::Done | Self::Error => "font-medium text-err",
         }
     }
 

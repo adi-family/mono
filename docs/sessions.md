@@ -483,11 +483,14 @@ chat_rail                               the whole left rail
 │       │   ├─ "Mine" filter            launched_by == human — a run with pending_question is
 │       │   │                            kept regardless of who launched it
 │       │   └─ sort by last_touch desc  last_touch = max(last_activity, started_at)
-│       ├─ activity_bands               five bands: asking, running, awaiting, starred, the rest —
+│       ├─ activity_bands               five partitions: asking, running, awaiting, starred, the
+│       │                               rest — the rail's reading ORDER, not headings any more;
 │       │                               every filter above carries a pending_question escape hatch,
 │       │                               so an asking run always reaches this partition to be found
+│       ├─ SessionGroup::Flat ⇒         concatenate the five back into one unlabelled band
 │       ├─ SessionGroup::Machine ⇒      re-deal those five into one band per source, this machine
-│       │                               first (BTreeMap on Option<node>), activity order kept inside
+│       │             (the default)     first (BTreeMap on Option<node>), activity order kept
+│       │                               inside; one source ⇒ one band, and its label is dropped
 │       ├─ drop empty bands, deal RAIL_ROWS (15) between the survivors — band_cap = max(15/bands,
 │       │                               BAND_MIN_ROWS 5) — unless state.rail_open_bands names one,
 │       │                               then number the first 9 rows *of what is drawn*
@@ -508,11 +511,19 @@ ever produces four: `Waiting` when the conversation is asking, `Working` when it
 else `Done` — `Error` is unreachable from this path today. The three live states are tried in that
 order, so a run that is working *and* holding a wake for what it launched is a working run.
 
-**The band order is deliberate and the starred band comes fourth.** Waiting, running and awaiting
-are states a conversation is in *now* and will leave on its own; a star is a standing instruction. A
-starred chat that happens to be working is still found under **Running now**, so the band collects
-only the ones recency ordering would otherwise have carried off — which is the whole reason to mark
-one.
+**The state is on the row, not in a heading over it.** A 6px dot and one word in the meta line,
+between the agent's name and the age: amber + "your answer" when it is stopped on a person, the
+rail's one orange dot + "working" while a turn is in flight, a grey dot + "coming back" when it is
+holding a wake — and nothing at all when it is done, which is most of the rail and the reason a
+marked row is worth looking at. The mark travels with the row into whatever band the rail is drawn
+in, which is what lets the bands be machines (below); a heading can only answer one question, and
+"where is this running" is the one a merged rail cannot answer any other way.
+
+**The activity order is deliberate and the starred partition comes fourth.** Waiting, running and
+awaiting are states a conversation is in *now* and will leave on its own; a star is a standing
+instruction. A starred chat that happens to be working is still sorted with what is working, so the
+partition collects only the ones recency ordering would otherwise have carried off — which is the
+whole reason to mark one.
 
 **The rail deals one screenful between its bands.** `RAIL_ROWS` (15, `actions.rs`) is what the rail
 prints across all of them, and `band_cap` divides it by however many bands are *drawn* — one band
@@ -530,26 +541,39 @@ The one reader that deliberately goes past the cap is `chat_inbox`: `RailBand::r
 everything and only `RailBand::shown` (and `RailBand::drawn`) is capped, because a question left
 behind a control nobody pressed is a run stopped for good.
 
-**The bands can be dealt by machine instead** (`SessionGroup`, `state.rs`), from the **Group by**
-half of the head's filter menu: one band per selected source, this machine first and then each ticked
-node in name order, with the five activity bands still deciding the order *inside* each one. It
-replaces the activity headings rather than nesting under them — a 264px rail has room for one
-heading ladder, and a band inside a band at the same 12px reads as two bands of the same kind. Rows
-then stop printing their own source on the meta line, since the heading above them says it
-(`chat_session_row`'s `sourced`); the "Waiting on you" inbox under the composer keeps printing it,
-because that band mixes machines under one heading of its own. A source with nothing to show draws no
-heading at all: "this machine has nothing" is a claim, and while a newly-ticked node's two fetches
-are in flight it would be a false one. Unlike the narrowing beside it the choice is **persisted**
-(`adi-session-group` in `localStorage`), because it is a preference about the selection in
-`session_nodes`, which is itself persisted.
+**Two groupings, and the default is Machine** (`SessionGroup`, `state.rs`), from the **Group by**
+half of the head's filter menu:
 
-**Awaiting is not an inbox.** It sits below **Running now** because nothing is happening in the
-conversation this second, and above everything else because something is going to: an await is the
-run's own note saying *wake me when…*, and a rail that filed it under **Recent** would say the one
+- **Machine** — one band per selected source, this machine first and then each ticked node in name
+  order, with the five activity partitions deciding the order *inside* each one. Rows then stop
+  printing their own source on the meta line, since the heading above them says it
+  (`chat_session_row`'s `sourced`); the "Waiting on you" inbox under the composer keeps printing
+  it, because that list mixes machines under one heading of its own. A source with nothing to show
+  draws no heading at all: "this machine has nothing" is a claim, and while a newly-ticked node's
+  two fetches are in flight it would be a false one. **One source draws no heading either** — the
+  label would name the only machine on screen, on the panel you are reading it on — which is what
+  makes this a safe default for a machine paired with nobody: it *is* the flat list until a node is
+  ticked.
+- **One list** — every session in one unlabelled band, in the same activity order. What the rail
+  looks like with nothing paired, available as a choice for an operator who wants a merged fleet
+  read by recency rather than by machine.
+
+There is no "Activity" grouping any more, and that is the point: a state now travels with its row
+(above), so banding by it would spend the rail's one heading ladder — a 264px rail has room for one,
+and a band inside a band at the same 12px reads as two bands of the same kind — on the question the
+row already answers, and take away the one it cannot. Unlike the narrowing beside it the choice is
+**persisted** (`adi-session-group` in `localStorage`), because it is a preference about the
+selection in `session_nodes`, which is itself persisted; a browser holding the old `activity` value
+reads as **One list**, the option that kept that grouping's flat reading order.
+
+**Awaiting is not an inbox.** Its rows sort below what is running, because nothing is happening in
+the conversation this second, and above everything else, because something is going to: an await is
+the run's own note saying *wake me when…*, and a rail that read it as finished would say the one
 thing that is false about it. Nobody has to do anything about one, which is why its row does not
-breathe the way a question's does and why its only colour is a blue dot. The listing carries the
-awaits (`AgentRunInfo::awaits`), so the band costs no second request — and `newest()` holds an
-awaiting session through the page cut for the same reason it holds a running one.
+breathe the way a question's does and why it says "coming back" in plain ink rather than in a
+colour. The listing carries the awaits (`AgentRunInfo::awaits`), so the mark costs no second
+request — and `newest()` holds an awaiting session through the page cut for the same reason it
+holds a running one.
 
 Each row carries two controls on its right edge, in separate absolute anchors rather than one flex
 row (both buttons are `position: absolute` against whatever anchor they are given, so a row of them
@@ -590,9 +614,11 @@ them:
 5. Next tick: the server recomputes `/api/agents/runs/all`, the answer differs, the socket pushes
    it, `state.all_chats` is set.
 6. `chat_all_sessions` re-runs: the row is not hidden, its agent passes ★, `last_touch` is now,
-   `running` is true → it lands at the top of the **Running now** band.
-7. When the turn ends, `is_alive` goes false; the row moves to **Recent** — or to **Awaiting**,
-   if the run registered a wake before it stopped (which launching another agent does for it). The answer is committed
+   `running` is true → it sorts to the top of its machine's band, with an orange dot and "working"
+   on it.
+7. When the turn ends, `is_alive` goes false; the mark goes with it and the row sinks into the
+   finished tail — or keeps a grey dot and "coming back", if the run registered a wake before it
+   stopped (which launching another agent does for it). The answer is committed
    to the transcript by `settle` (`lib.rs:1131`) — which happens **when the chat is opened/read**,
    and deliberately stamps the turn with the log's mtime, not `now`, so committing an old answer
    does not shove that chat back to the top.
@@ -604,7 +630,7 @@ them:
 | `sessions_newest` index | `started_at` desc | the store's contract; deliberately *not* activity |
 | `lib.rs:879` | — | preserved, not re-sorted |
 | `actions.rs` (rail, `session_rows`) | `last_touch` desc, stable | pty rows stamped `now` sort first |
-| `actions.rs` (rail, `rail_bands`) | band, then the above | activity bands, or one band per machine |
+| `actions.rs` (rail, `rail_bands`) | activity, then the above | one list, or one band per machine |
 | `actions.rs:681` (table) | `started_at` desc, user-sortable | disagrees with the rail on purpose |
 
 ## Why a session might not be in the list
@@ -615,10 +641,11 @@ Work down this list when one is missing:
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
    session is live or that agent is on screen (`actions.rs:4214`, in `source_rows`).
 3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:4983`,
-   `chat_hidden_sessions`) — **unless** the run holds a `pending_question`, which stays in the
-   asking band ("Waiting on you") instead of the Hidden one: hiding is "out of my
-   sight", but a question addressed to a person outranks that, because it is transient and leaves on
-   its own the moment it's answered, whereas a hidden run holding one would be stuck for good.
+   `chat_hidden_sessions`) — **unless** the run holds a `pending_question`, which stays in the rail
+   proper, marked and at the top of its band, instead of going to the Hidden one: hiding is "out of
+   my sight", but a question addressed to a person outranks that, because it is transient and
+   leaves on its own the moment it's answered, whereas a hidden run holding one would be stuck for
+   good.
 4. **★ is on** and its agent is not starred on *its own source* (`source_rows`, `actions.rs`) — off
    by default, so this only applies once someone has switched it on this page load. Note this is the
    head's *agent* filter, which is a different mark from a conversation's own star, and — since
@@ -630,9 +657,10 @@ Work down this list when one is missing:
    A pending question is the exception here too: a subagent-launched run stopping to ask a person is
    exactly the run an operator has to be able to see and answer, filter or no filter.
 6. Its band is **capped** and it is past that band's share of the rail (`band_cap`,
-   `grouped_bands`) — five rows where four bands are drawn, fifteen where one is. The heading still
-   counts it, so "Recent 75" over five rows is the cap rather than a missing session; "Show N more"
-   under the band lists the rest. This one costs no request: the rows are already in the client.
+   `grouped_bands`) — five rows where four bands are drawn, fifteen where one is. A headed band
+   still counts the whole of it, so "studio 75" over five rows is the cap rather than a missing
+   session; "Show N more" under the band lists the rest. This one costs no request: the rows are
+   already in the client.
 7. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
    A live session is never swept, and neither is a **starred** one.
 8. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
@@ -644,8 +672,8 @@ Work down this list when one is missing:
 
 A run waiting on a person — `AgentRunInfo::pending_question` (`crates/adi-webapp-api/src/types.rs`)
 — is always in the rail, regardless of `SessionFilter` (Mine or Starred), the ★ agent filter, or
-`hidden`, and it appears exactly once: in the "Waiting on you" band, never duplicated into the Hidden
-band. The server side already held it through the page cut (`newest`, `handlers/agents.rs`) alongside
+`hidden`, and it appears exactly once: at the top of its band with the amber dot on it, never
+duplicated into the Hidden band. The server side already held it through the page cut (`newest`, `handlers/agents.rs`) alongside
 a running or awaiting session; `source_rows`, the "Mine" retain, and `chat_hidden_sessions` in
 `actions.rs` are what carry that same exemption through the client's own narrowings, since a
 subagent-launched, unstarred or hidden run can ask a question exactly as well as one a person started
