@@ -1463,25 +1463,18 @@ pub async fn transcribe(engine: &str, mime: &str, audio: &[u8]) -> Result<Transc
 /// Raw bytes for the same reason a dictated clip is raw bytes, plus one of its own: this is the
 /// upload that happens while the message is still being typed, so it has to be as cheap as the
 /// picture itself and not a third larger.
+///
+/// Routed exactly like every other agent call (`docs/fleet.md` §13): `routed_for` prefixes the
+/// request with `/api/node/<node>` for a session on another machine, and that forwarder now
+/// carries this one write with its own type and filename rather than wrapping it in JSON — so the
+/// bytes land on the machine the run is actually on, which is what attaching a file is for.
 pub async fn upload_attachment(
     node: Option<&str>,
     name: &str,
     mime: &str,
     bytes: &[u8],
 ) -> Result<AgentAttachment, String> {
-    // The one agent call that does not follow the conversation to a node (`docs/fleet.md` §13): the
-    // forwarder carries JSON, and this body is raw bytes. Refused outright rather than uploaded
-    // here and referenced there, which would put an id in the node's transcript that names bytes
-    // only this machine holds — a broken picture, or a path to a file that is not on the machine
-    // the run happens on, instead of an error anyone can act on.
-    if let Some(node) = node {
-        return Err(format!(
-            "a file can only be attached to a session on this machine \u{2014} {node} is being \
-             driven through its API, which carries JSON. Open {node}'s own panel to attach one \
-             there."
-        ));
-    }
-    let resp = Request::post("/api/agents/attachment")
+    let resp = Request::post(&routed_for(node, "/api/agents/attachment"))
         .header("content-type", mime)
         // The filename travels in a header because the body is the file. Percent-encoded: a
         // header is Latin-1 by the spec and a screenshot's name is routinely not.

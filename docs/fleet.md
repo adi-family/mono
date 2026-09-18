@@ -634,10 +634,15 @@ Four things worth knowing before changing any of it:
   on another machine. Local stays at `FAST`; multi-select does not change either rate, it only means
   more sources — one at `FAST`, the rest each at their own `SLOW` — ticking in parallel rather than
   one `SLOW` source replacing another.
-- **Pictures are the one thing that does not follow.** Uploading one is a POST whose body is a PNG,
-  which a JSON forwarder cannot carry, so the composer refuses it with a sentence naming the node
-  rather than storing bytes here and putting an id in the node's transcript that names them.
-  *Reading* one does follow, by a different road: `<img src>` points at
+- **Pictures follow too, on their own road through the same forwarder.** Uploading one is a POST
+  whose body is a PNG, which the JSON forwarder cannot carry as JSON — so `viewer::proxy` special-
+  cases exactly this one path, `POST /api/agents/attachment`, and forwards it with its own
+  `Content-Type` and `X-Adi-Filename` instead of wrapping it (`adi-app/src/node.rs`,
+  `post_bytes`). The browser still only ever talks to *this* machine's own origin
+  (`fetch::upload_attachment` routes through `routed_for`, same as every other agent call), so
+  nothing about §5 or the CSRF check in `origin.rs` changes: the forwarded request leaves as a
+  server-to-server call over the mesh, carrying no `Origin` header, which is the shape that check
+  already answers. *Reading* one follows by a different road, and always did: `<img src>` points at
   `http://app.<node>.n.adi/api/agents/attachment/<id>`, which needs nothing new — the front door
   routes it, the gateway attaches the password (§11), and a plain GET has no preflight to fail on.
 
@@ -895,10 +900,12 @@ Each item ships with unit tests in the same file.
       socket), and the petname printed while a node is picked. **Superseded by K1/K5/K6**:
       single-select is gone, replaced by the checklist in §13's "Multi-select".
 - [x] J6 Attachments: reading one goes to `app.<node>.n.adi` directly, uploading one is refused with
-      a sentence naming the node.
-- [ ] J7 A run's images uploaded to a node. Needs a body the forwarder can carry that is not JSON —
-      either a bytes path beside `Response`, or the browser posting at the node's own origin, which
-      is a CORS question and not a routing one.
+      a sentence naming the node. **Superseded by J7**: uploading now follows too.
+- [x] J7 A run's images (and files) uploaded to a node: `viewer::proxy` carries
+      `POST /api/agents/attachment` as its own bytes and type (`node::post_bytes`) instead of
+      wrapping it in JSON, and `fetch::upload_attachment` routes it through `routed_for` like every
+      other agent call rather than refusing outright. The bytes-path option, not the CORS one — the
+      browser still only ever talks to this machine's own origin.
 
 ### K — multi-select: several sources, merged into one rail (§13)
 

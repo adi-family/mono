@@ -137,10 +137,51 @@ pub(crate) async fn post(
         reqwest::Method::POST,
         path,
         auth,
-        Some(payload),
+        Some(Payload {
+            bytes: payload,
+            content_type: "application/json",
+            filename: None,
+        }),
         timeout,
     )
     .await
+}
+
+/// `POST <path>` on a node's control panel, with a body that is not JSON — an attachment's own
+/// bytes and type, and its filename in `X-Adi-Filename` alongside them
+/// (`docs/fleet.md` §13, J7). The one shape besides JSON this module carries: everything else a
+/// node's `/api` takes is JSON, and forcing an attachment through that forwarder would hand the
+/// node a body it cannot parse.
+pub(crate) async fn post_bytes(
+    node: &str,
+    path: &str,
+    auth: &str,
+    content_type: &str,
+    filename: Option<&str>,
+    payload: Vec<u8>,
+    timeout: std::time::Duration,
+) -> Result<String, CallError> {
+    call(
+        node,
+        reqwest::Method::POST,
+        path,
+        auth,
+        Some(Payload {
+            bytes: payload,
+            content_type,
+            filename,
+        }),
+        timeout,
+    )
+    .await
+}
+
+/// One `POST`'s body, carried through [`call`]/[`call_at`] — JSON for every route but an
+/// attachment's own bytes and type for that one ([`post_bytes`]).
+struct Payload<'a> {
+    bytes: Vec<u8>,
+    content_type: &'a str,
+    filename: Option<&'a str>,
 }
 
 /// One request to `app.<node>.n.adi`, at whatever address the local gateway is listening on.
@@ -149,7 +190,7 @@ async fn call(
     method: reqwest::Method,
     path: &str,
     auth: &str,
-    payload: Option<Vec<u8>>,
+    payload: Option<Payload<'_>>,
     timeout: std::time::Duration,
 ) -> Result<String, CallError> {
     call_at(
@@ -177,7 +218,7 @@ async fn call_at(
     method: reqwest::Method,
     path: &str,
     auth: &str,
-    payload: Option<Vec<u8>>,
+    payload: Option<Payload<'_>>,
     timeout: std::time::Duration,
 ) -> Result<String, CallError> {
     let host = format!("{APP_SERVICE}.{node}.{MESH_ZONE}");
@@ -197,9 +238,11 @@ async fn call_at(
         .header(reqwest::header::HOST, &host)
         .header(reqwest::header::AUTHORIZATION, auth);
     if let Some(payload) = payload {
-        request = request
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .body(payload);
+        request = request.header(reqwest::header::CONTENT_TYPE, payload.content_type);
+        if let Some(filename) = payload.filename {
+            request = request.header("x-adi-filename", filename);
+        }
+        request = request.body(payload.bytes);
     }
 
     let response = request
@@ -409,7 +452,11 @@ mod tests {
             reqwest::Method::POST,
             "/api/dashboards/import",
             &basic_auth(None, "hunter2"),
-            Some(b"{}".to_vec()),
+            Some(Payload {
+                bytes: b"{}".to_vec(),
+                content_type: "application/json",
+                filename: None,
+            }),
             CONTROL_TIMEOUT,
         )
         .await
@@ -437,6 +484,53 @@ mod tests {
         );
         assert!(head.contains("content-length: 2"), "{head}");
         assert_eq!(body, "{\"ok\":1}");
+    }
+
+    /// [`post_bytes`] is the one call this module forwards that is not JSON: an attachment's own
+    /// type and filename must reach the node, not the `application/json` every other write sends
+    /// (`docs/fleet.md` §13, J7).
+    #[tokio::test]
+    async fn an_attachments_bytes_carry_their_own_type_and_filename() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let gateway = listener.local_addr().expect("addr");
+        let png = vec![0x89, b'P', b'N', b'G', 0, 1, 2, 3];
+        let server = tokio::spawn(one_request(
+            listener,
+            "200 OK",
+            "application/json",
+            "{\"id\":\"att-1\"}",
+        ));
+
+        let body = call_at(
+            gateway,
+            "laptop-b",
+            reqwest::Method::POST,
+            "/api/agents/attachment",
+            &basic_auth(None, "hunter2"),
+            Some(Payload {
+                bytes: png.clone(),
+                content_type: "image/png",
+                filename: Some("screenshot.png"),
+            }),
+            CONTROL_TIMEOUT,
+        )
+        .await
+        .expect("the node answered");
+
+        let head = server.await.expect("server").to_lowercase();
+        assert!(head.contains("content-type: image/png"), "{head}");
+        assert!(head.contains("x-adi-filename: screenshot.png"), "{head}");
+        assert!(
+            !head.contains("content-type: application/json"),
+            "the raw bytes must not be wrapped as JSON: {head}"
+        );
+        assert!(
+            head.contains(&format!("content-length: {}", png.len())),
+            "{head}"
+        );
+        assert_eq!(body, "{\"id\":\"att-1\"}");
     }
 
     /// A refusal is turned into a message here, not left as a status for the page to guess at —

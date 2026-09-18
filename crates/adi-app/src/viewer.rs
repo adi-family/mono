@@ -284,11 +284,20 @@ pub(crate) fn split_node_path(path: &str) -> Option<(&str, &str)> {
 /// the node* — the mesh grant that let the connection through, and the Basic-auth gate behind it —
 /// and both are the node's to withdraw. **Lock** on the Fleet page is the undo, as before: without
 /// a stored credential this answers `401` and asks for one rather than reaching anything.
+///
+/// **Every write but one goes as JSON, verbatim.** `POST /api/agents/attachment` is the exception:
+/// its body is the picture or file itself, and wrapping it in JSON would cost a base64 third for
+/// nothing the node could even read back — `store_attachment` wants the bytes raw, with their type
+/// in `Content-Type` and their name in `X-Adi-Filename`, the same shape the browser sent this
+/// machine in the first place. So that one path is forwarded with its own type and filename
+/// instead of the constant `application/json` every other write carries (`docs/fleet.md` §13, J7).
 pub(crate) async fn proxy(
     secrets: &Secrets,
     method: &str,
     node: &str,
     path: &str,
+    content_type: Option<&str>,
+    filename: Option<&str>,
     body: &[u8],
 ) -> Response {
     if let Err(response) = node::require_paired(node) {
@@ -309,6 +318,22 @@ pub(crate) async fn proxy(
     // machine, while a write is a person waiting on something they asked for.
     let answered = match method {
         "GET" => node::get(node, path, &auth, LIST_TIMEOUT).await,
+        // An attachment's body is not JSON — the one write this carries with its own type and
+        // filename instead of wrapping it, so a picture reaches the node as the bytes it is
+        // rather than being refused for want of a forwarder that could carry them
+        // (`docs/fleet.md` §13, J7).
+        "POST" if path == "/api/agents/attachment" => {
+            node::post_bytes(
+                node,
+                path,
+                &auth,
+                content_type.unwrap_or("application/octet-stream"),
+                filename,
+                body.to_vec(),
+                CONTROL_TIMEOUT,
+            )
+            .await
+        }
         "POST" => node::post(node, path, &auth, body.to_vec(), CONTROL_TIMEOUT).await,
         other => {
             return handlers::error(

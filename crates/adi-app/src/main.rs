@@ -499,7 +499,18 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
     // of any of them (`docs/fleet.md` §13, [`viewer::proxy`]). Matched on `req.path` and not
     // `route_path`, because the query belongs to the node's router, not to ours.
     if let Some((node, path)) = viewer::split_node_path(&req.path) {
-        return Some(viewer::proxy(&app.secrets, &req.method, node, path, &req.body).await);
+        return Some(
+            viewer::proxy(
+                &app.secrets,
+                &req.method,
+                node,
+                path,
+                req.header("content-type"),
+                req.header("x-adi-filename"),
+                &req.body,
+            )
+            .await,
+        );
     }
     let response = match (req.method.as_str(), req.route_path()) {
         // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async

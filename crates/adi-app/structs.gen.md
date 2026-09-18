@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-16 structs · 1 enum · 2 type aliases across 10 files.
+17 structs · 1 enum · 2 type aliases across 10 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
-- [`src/node.rs`](#srcnoders) — `CallError`
+- [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
 - [`src/origin.rs`](#srcoriginrs) — `Refusal`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
@@ -171,6 +171,18 @@ A failed call to a node, already phrased for the operator and carrying the statu
 pub(crate) struct CallError {
     pub(crate) status: u16,
     pub(crate) message: String,
+}
+```
+
+### struct `Payload`
+
+One `POST`'s body, carried through `call`/`call_at` — JSON for every route but an attachment's own bytes and type for that one (`post_bytes`).
+
+```rust
+struct Payload<'a> {
+    bytes: Vec<u8>,
+    content_type: &'a str,
+    filename: Option<&'a str>,
 }
 ```
 

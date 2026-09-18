@@ -2685,9 +2685,9 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     });
     let attach = crate::attach::attaching(
         state,
-        // Whichever source the picker above this box launches on (`docs/fleet.md` §13) — a picture
-        // still refuses there (the forwarder carries JSON, not bytes: `fetch::upload_attachment`),
-        // but with the node named in the refusal instead of one silently sent to the wrong machine.
+        // Whichever source the picker above this box launches on (`docs/fleet.md` §13) — uploads
+        // there too, `fetch::upload_attachment` routing to that node's own forwarder rather than
+        // this machine's.
         watch.node.get_untracked(),
         watch.input_files,
         takes_images,
