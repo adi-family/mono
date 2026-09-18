@@ -5282,17 +5282,53 @@ fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
     [waiting, running, awaiting, starred, rest]
 }
 
-/// One band of the rail as it is drawn: a heading, and the rows under it. What the label *says* is
-/// the grouping's business — an activity ("Running now") or a machine ("This machine", a node's
-/// petname) — and nothing downstream of [`rail_bands`] can tell which it was.
+/// How many rows a band prints before it stops and offers the rest.
+///
+/// Five. A rail is a list you scan, and a machine that has been working for a week answers with
+/// hundreds of conversations — one band of 75 is not a list, it is a scroll with four other bands
+/// somewhere below it. The heading still counts the *whole* band, so nothing is hidden quietly, and
+/// the count is what the "Show N more" under it is drawn from.
+const BAND_ROWS: usize = 5;
+
+/// One band of the rail as it is drawn: a heading, every row that belongs under it, and how many of
+/// them it is printing. What the label *says* is the grouping's business — an activity ("Running
+/// now") or a machine ("This machine", a node's petname) — and nothing downstream of [`rail_bands`]
+/// can tell which it was.
 struct RailBand {
     label: String,
+    /// Every row in the band, capped or not: the heading counts these, and [`chat_inbox`] reads
+    /// them past the cap, because an inbox that stopped at five would leave a question unanswered
+    /// behind a control nobody pressed.
     rows: Vec<SessionRow>,
+    /// How many of them are on screen — [`BAND_ROWS`], or all of them once this band has been
+    /// opened out ([`State::rail_open_bands`]).
+    shown: usize,
 }
 
-/// The rail exactly as it is drawn: the bands in order, their rows in order, and the first nine rows
-/// numbered. The [`SessionFilter`] rides along, because which of the rail's three emptinesses an
-/// empty answer is depends on which narrowing produced it.
+impl RailBand {
+    /// A band holding `rows`, printing the first [`BAND_ROWS`] of them — or all of them when `open`
+    /// names it, which is what the "Show N more" under it puts there.
+    fn capped(label: String, rows: Vec<SessionRow>, open: &std::collections::BTreeSet<String>) -> Self {
+        let shown = if open.contains(&label) {
+            rows.len()
+        } else {
+            rows.len().min(BAND_ROWS)
+        };
+        Self { label, rows, shown }
+    }
+
+    /// The rows this band actually draws. What ⌘1…⌘9 count down, because a number on a row nobody
+    /// can see is a shortcut to a row nobody can click.
+    fn drawn(self) -> std::iter::Take<std::vec::IntoIter<SessionRow>> {
+        let shown = self.shown;
+        self.rows.into_iter().take(shown)
+    }
+}
+
+/// The rail exactly as it is drawn: the bands in order, their rows in order, each capped at
+/// [`BAND_ROWS`] unless it has been opened out, and the first nine *drawn* rows numbered. The
+/// [`SessionFilter`] rides along, because which of the rail's three emptinesses an empty answer is
+/// depends on which narrowing produced it.
 ///
 /// Empty bands are dropped rather than drawn as a heading over nothing — including, under
 /// [`SessionGroup::Machine`], a source that is ticked but has no sessions to show. A heading with no
@@ -5301,30 +5337,36 @@ struct RailBand {
 ///
 /// Numbering runs straight down the drawn rail and across the headings, not restarted per band: ⌘1
 /// is the row at the very top of the list whatever band it happens to be in today, which is the only
-/// rule a hand can learn. It is assigned *after* the grouping has decided the order, so the number
-/// printed on a row and the row that number opens cannot disagree — regrouping the rail renumbers
-/// it.
+/// rule a hand can learn. It is assigned *after* the grouping and the cap have decided what is on
+/// screen, so the number printed on a row and the row that number opens cannot disagree —
+/// regrouping the rail, or opening a band out, renumbers it.
 fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter) {
     let (rows, filter) = session_rows(state, watch);
     (
-        grouped_bands(state.session_group.get(), activity_bands(rows)),
+        grouped_bands(
+            state.session_group.get(),
+            activity_bands(rows),
+            &state.rail_open_bands.get(),
+        ),
         filter,
     )
 }
 
-/// The five activity bands arranged the way `group` asks for, empty bands dropped and the first
-/// [`HOTKEYS`] rows numbered — everything between [`activity_bands`] and the rail's markup, with no
-/// signals in it so it can be tested on its own.
-fn grouped_bands(group: SessionGroup, banded: [Vec<SessionRow>; 5]) -> Vec<RailBand> {
+/// The five activity bands arranged the way `group` asks for, empty bands dropped, each capped at
+/// [`BAND_ROWS`] unless `open` names it, and the first [`HOTKEYS`] drawn rows numbered — everything
+/// between [`activity_bands`] and the rail's markup, with no signals in it so it can be tested on
+/// its own.
+fn grouped_bands(
+    group: SessionGroup,
+    banded: [Vec<SessionRow>; 5],
+    open: &std::collections::BTreeSet<String>,
+) -> Vec<RailBand> {
     let mut bands: Vec<RailBand> = match group {
         SessionGroup::Activity => std::iter::zip(
             ["Waiting on you", "Running now", "Awaiting", "Starred", "Recent"],
             banded,
         )
-        .map(|(label, rows)| RailBand {
-            label: label.to_string(),
-            rows,
-        })
+        .map(|(label, rows)| RailBand::capped(label.to_string(), rows, open))
         .collect(),
         // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
         // machine's own band in the rail's own order: what is stopped on you, then what is running,
@@ -5342,29 +5384,43 @@ fn grouped_bands(group: SessionGroup, banded: [Vec<SessionRow>; 5]) -> Vec<RailB
                 },
             )
             .into_iter()
-            .map(|(node, rows)| RailBand {
-                label: node.unwrap_or_else(|| "This machine".to_string()),
-                rows,
+            .map(|(node, rows)| {
+                RailBand::capped(
+                    node.unwrap_or_else(|| "This machine".to_string()),
+                    rows,
+                    open,
+                )
             })
             .collect(),
     };
     bands.retain(|b| !b.rows.is_empty());
-    for (i, row) in bands
-        .iter_mut()
-        .flat_map(|b| b.rows.iter_mut())
-        .take(HOTKEYS)
-        .enumerate()
-    {
-        row.hotkey = Some(i + 1);
+    // Drawn rows only, and that is the whole reason the cap is applied before this: ⌘6 has to open
+    // the sixth row a person can see, not the sixth row that exists — which, with a band stopping at
+    // five, is behind a control they have not pressed.
+    let mut numbered = 0;
+    for band in &mut bands {
+        for row in band.rows.iter_mut().take(band.shown) {
+            if numbered == HOTKEYS {
+                return bands;
+            }
+            numbered += 1;
+            row.hotkey = Some(numbered);
+        }
     }
     bands
 }
 
-/// The rows of the drawn rail that have stopped on a question, in the order the rail draws them —
-/// what [`chat_inbox`] puts under the composer.
+/// Every row of the rail that has stopped on a question, in the order the rail bands them — what
+/// [`chat_inbox`] puts under the composer.
 ///
 /// Read off [`rail_bands`] rather than [`activity_bands`] so the numbers on these rows are the same
 /// numbers the rail beside them prints, whichever way the rail is grouped.
+///
+/// **Past [`BAND_ROWS`] deliberately**: the rail caps a band because it is a list to scan, but this
+/// is the inbox, and a question left behind a "Show more" nobody pressed is a run stopped for good.
+/// It keeps its own, longer cap ([`INBOX_ROWS`]) and says how many are behind it. A row past the
+/// rail's cap carries no ⌘ number, which is correct — there is no visible row for that number to
+/// open over there.
 fn waiting_rows(bands: Vec<RailBand>) -> Vec<SessionRow> {
     bands
         .into_iter()
@@ -5429,14 +5485,16 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // its handler move together or not at all.
     bands
         .into_iter()
-        .map(|RailBand { label, rows }| {
-            let n = rows.len();
-            let rows = StoredValue::new(rows);
+        .map(|band| {
+            let n = band.rows.len();
+            let label = band.label.clone();
+            let more = n.saturating_sub(band.shown);
+            // Stored, so the closure can hand out a fresh copy on every read instead of moving the
+            // one it has.
+            let rows = StoredValue::new(band.drawn().collect::<Vec<_>>());
             view! {
-                <adi_ui::RailGroup label=label count=n>
+                <adi_ui::RailGroup label=label.clone() count=n>
                     <For
-                        // Stored, so the closure can hand out a fresh copy on every read
-                        // instead of moving the one it has.
                         each=move || rows.get_value()
                         key=|row: &SessionRow| {
                             format!(
@@ -5450,12 +5508,53 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                     >
                         {chat_session_row(state, watch, row, sourced)}
                     </For>
+                    {band_more(state, label, n, more)}
                 </adi_ui::RailGroup>
             }
             .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// The line under a capped band: **Show N more**, or **Show less** once it has been opened out.
+///
+/// `None` for a band that fits in [`BAND_ROWS`] — which is most of them, most of the time, and a
+/// control that does nothing is worse than no control.
+///
+/// It says the number rather than "Show all", because the number is the thing worth knowing before
+/// pressing it: the heading already counts the band, and this is the same count minus what is on
+/// screen. Nothing is fetched — every row here is already in hand ([`chat_load_more`] under the
+/// whole rail is the one that asks the backend for more), so opening a band out is instant and
+/// costs nothing but the rail's length.
+fn band_more(state: State, label: String, total: usize, more: usize) -> Option<AnyView> {
+    if total <= BAND_ROWS {
+        return None;
+    }
+    let text = if more > 0 {
+        format!("Show {more} more")
+    } else {
+        "Show less".to_string()
+    };
+    let hint = if more > 0 {
+        format!("list this band's other {more} — they are already loaded")
+    } else {
+        format!("cut this band back to its first {BAND_ROWS}")
+    };
+    Some(
+        view! {
+            <button class="adi-chome__bandmore" type="button" title=hint
+                aria-expanded=(more == 0).to_string()
+                on:click=move |_| state.rail_open_bands.update(|open| {
+                    if !open.remove(&label) {
+                        open.insert(label.clone());
+                    }
+                })>
+                {text}
+            </button>
+        }
+        .into_any(),
+    )
 }
 
 /// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
@@ -5936,7 +6035,7 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
         let Some(row) = rail_bands(state, watch)
             .0
             .into_iter()
-            .flat_map(|b| b.rows)
+            .flat_map(RailBand::drawn)
             .nth(n - 1)
         else {
             return;
@@ -7053,8 +7152,19 @@ mod tests {
         bands.iter().map(|b| b.label.as_str()).collect()
     }
 
+    /// What the band *prints*, not what it holds — the cap is the difference, and it is the whole
+    /// subject of one of the tests below.
     fn agents_in(band: &RailBand) -> Vec<&str> {
-        band.rows.iter().map(|r| r.agent.as_str()).collect()
+        band.rows
+            .iter()
+            .take(band.shown)
+            .map(|r| r.agent.as_str())
+            .collect()
+    }
+
+    /// Nothing opened out: every band stops at [`BAND_ROWS`].
+    fn all_capped() -> std::collections::BTreeSet<String> {
+        std::collections::BTreeSet::new()
     }
 
     /// Grouping by machine is a *re-deal* of the activity bands, not a re-sort of the rows: each
@@ -7075,7 +7185,7 @@ mod tests {
             ],
         ];
 
-        let bands = grouped_bands(SessionGroup::Machine, banded);
+        let bands = grouped_bands(SessionGroup::Machine, banded, &all_capped());
 
         assert_eq!(
             labels(&bands),
@@ -7104,12 +7214,12 @@ mod tests {
             vec![rail_row(None, "old-local")],
         ];
 
-        let by_activity = grouped_bands(SessionGroup::Activity, banded.clone());
+        let by_activity = grouped_bands(SessionGroup::Activity, banded.clone(), &all_capped());
         assert_eq!(labels(&by_activity), ["Waiting on you", "Recent"]);
         assert_eq!(by_activity[0].rows[0].hotkey, Some(1));
         assert_eq!(by_activity[1].rows[0].hotkey, Some(2));
 
-        let by_machine = grouped_bands(SessionGroup::Machine, banded);
+        let by_machine = grouped_bands(SessionGroup::Machine, banded, &all_capped());
         assert_eq!(labels(&by_machine), ["This machine", "studio"]);
         assert_eq!(
             by_machine[0].rows[0].hotkey,
@@ -7117,5 +7227,59 @@ mod tests {
             "the local row is drawn first now, so it is the one \u{2318}1 opens",
         );
         assert_eq!(by_machine[1].rows[0].hotkey, Some(2));
+    }
+
+    /// A band prints its first BAND_ROWS and keeps the rest — the heading still counts the whole of
+    /// it, the numbers stop at what is on screen, and the band it was capped *before* goes on being
+    /// numbered from where the cap left off. Number the rows a band is holding rather than the rows
+    /// it is drawing and \u{2318}6 opens something nobody can see.
+    #[test]
+    fn a_band_prints_its_first_rows_and_hands_the_numbers_on_at_the_cap() {
+        let long: Vec<SessionRow> = (0..8)
+            .map(|i| rail_row(None, &format!("recent-{i}")))
+            .collect();
+        let banded = [
+            Vec::new(),
+            vec![rail_row(None, "working")],
+            Vec::new(),
+            Vec::new(),
+            long,
+        ];
+
+        let bands = grouped_bands(SessionGroup::Activity, banded.clone(), &all_capped());
+
+        let [running, recent] = bands.as_slice() else {
+            panic!("two bands: {:?}", labels(&bands));
+        };
+        assert_eq!(recent.rows.len(), 8, "the band still holds all of them\u{2026}");
+        assert_eq!(recent.shown, BAND_ROWS, "\u{2026}and prints five");
+        assert_eq!(
+            agents_in(recent),
+            ["recent-0", "recent-1", "recent-2", "recent-3", "recent-4"],
+        );
+        assert_eq!(running.rows[0].hotkey, Some(1));
+        assert_eq!(
+            recent.rows.iter().map(|r| r.hotkey).collect::<Vec<_>>(),
+            [
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+                Some(6),
+                None,
+                None,
+                None,
+            ],
+            "the three rows past the cap are not on screen, so no number opens them",
+        );
+
+        let open = std::collections::BTreeSet::from(["Recent".to_string()]);
+        let opened = grouped_bands(SessionGroup::Activity, banded, &open);
+        assert_eq!(opened[1].shown, 8, "opened out, the band prints all of it");
+        assert_eq!(
+            opened[1].rows[7].hotkey,
+            Some(9),
+            "and the numbers reach the rows the cap was keeping them from",
+        );
     }
 }

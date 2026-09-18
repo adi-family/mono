@@ -479,7 +479,10 @@ chat_rail                               the whole left rail
 │       │                               so an asking run always reaches this partition to be found
 │       ├─ SessionGroup::Machine ⇒      re-deal those five into one band per source, this machine
 │       │                               first (BTreeMap on Option<node>), activity order kept inside
-│       ├─ drop empty bands, then number the first 9 rows down the drawn order
+│       ├─ drop empty bands, cap each at BAND_ROWS (5) unless state.rail_open_bands names it,
+│       │                               then number the first 9 rows *of what is drawn*
+│       ├─ band_more                    "Show N more" / "Show less" — reveals rows already in hand,
+│       │                               unlike chat_load_more below, which asks the backend
 │       └─ For(keyed "node:agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
 └─ chat_hidden_sessions                 the collapsed Hidden band, merged across sources the same
@@ -499,6 +502,18 @@ are states a conversation is in *now* and will leave on its own; a star is a sta
 starred chat that happens to be working is still found under **Running now**, so the band collects
 only the ones recency ordering would otherwise have carried off — which is the whole reason to mark
 one.
+
+**A band prints five rows and offers the rest.** `BAND_ROWS` (`actions.rs`) caps every band —
+whichever way the rail is grouped — and `band_more` draws "Show N more" under it, which opens that
+band out (`state.rail_open_bands`, keyed by the band's label, page state) and "Show less" folds it
+back. The heading keeps counting the *whole* band, so a cap never hides a number; what it hides is
+rows, and only ones already in hand. Two "more"s on this rail, deliberately different: this one
+reveals what was fetched, `chat_load_more` under the whole rail asks the backend for the next
+`SESSION_PAGE`. ⌘1…⌘9 are assigned to the rows a band actually prints, so a row behind the cap
+carries no number — and opening the band out renumbers the rail from there down. The one reader that
+deliberately goes past the cap is `chat_inbox`: `RailBand::rows` holds everything and only
+`RailBand::shown` (and `RailBand::drawn`) is capped, because a question left behind a control nobody
+pressed is a run stopped for good.
 
 **The bands can be dealt by machine instead** (`SessionGroup`, `state.rs`), from the **Group by**
 half of the head's filter menu: one band per selected source, this machine first and then each ticked
@@ -599,10 +614,14 @@ Work down this list when one is missing:
    run a subagent launched for itself, which is otherwise the majority of what a busy fleet accrues.
    A pending question is the exception here too: a subagent-launched run stopping to ask a person is
    exactly the run an operator has to be able to see and answer, filter or no filter.
-6. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
+6. Its band is **capped** and it is past the fifth row (`BAND_ROWS`, `grouped_bands`) — the
+   heading still counts it, so "Recent 75" over five rows is the cap rather than a missing session;
+   "Show N more" under the band lists the rest. This one costs no request: the rows are already in
+   the client.
+7. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
    A live session is never swept, and neither is a **starred** one.
-7. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
-8. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
+8. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
+9. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
    (`all_agent_runs` iterates `store.list()`), so an agent with rows but no manifest is invisible to
    the UI even though `run_load` still counts it (`SessionStore::agents()`).
 

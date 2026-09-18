@@ -419,6 +419,21 @@
     }
   }
 
+  // "Show 12 more", under the last row a capped band is printing. A label, not a divider: it sits
+  // *inside* a band rather than between two, so it carries no rule of its own — a hairline here
+  // would read as the start of the next band.
+  &__bandmore {
+    display: block;
+    width: 100%;
+    padding: 5px 8px 2px;
+    text-align: left;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+    cursor: pointer;
+
+    &:hover { color: var(--ink-2); }
+  }
+
   // --- a session row the rail draws itself (the Hidden band) ------------------------------------
   // The row wraps two siblings — the strip that opens the chat, and a control laid over its right
   // edge. Siblings rather than nested, because a button may not contain another button. Same

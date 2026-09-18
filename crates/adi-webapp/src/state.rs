@@ -137,6 +137,17 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
+    /// Which of the rail's bands have been asked to print themselves in full, by the label in their
+    /// heading — every other band stops at its first few rows and offers the rest.
+    ///
+    /// Page state, like the band above it: a cap is what makes a rail scannable, so a reload comes
+    /// back to the short list rather than to whatever was opened out looking for one chat.
+    ///
+    /// Keyed by label rather than by index because the bands themselves come and go — a band empties
+    /// and is dropped, the grouping changes and they are relabelled wholesale — and an index would
+    /// then hand one band's expansion to whichever one landed in its slot. A label left behind by a
+    /// band that no longer exists costs nothing.
+    pub(crate) rail_open_bands: RwSignal<BTreeSet<String>>,
     /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::Mine`] by default:
     /// the rail opens on the conversations a person started, because a working fleet starts most of
     /// its own work and the handful you had is otherwise buried under hundreds the machine spawned
@@ -413,6 +424,7 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
+            rail_open_bands: RwSignal::new(BTreeSet::new()),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
             session_group: RwSignal::new(load_session_group()),

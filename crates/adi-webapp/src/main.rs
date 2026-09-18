@@ -903,6 +903,8 @@ fn App() -> impl IntoView {
         row_menu: RwSignal::new(None),
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
+        // No sessions rail on the workbench shell, so no band to open out either.
+        rail_open_bands: RwSignal::new(std::collections::BTreeSet::new()),
         session_filter: RwSignal::new(SessionFilter::default()),
         session_filter_menu: RwSignal::new(None),
         // Nor a grouping to pick: the workbench has no rail to band. The stored preference is the
