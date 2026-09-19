@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.18.0 — 2026-09-19
+
 ### Added
 
 - **A file or picture attached during a chat can now upload to a node, not just this machine.**
