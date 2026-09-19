@@ -20,6 +20,48 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **A file or picture attached during a chat can now upload to a node, not just this machine.**
+  Attaching one while driving an agent on another machine used to be refused outright — the
+  forwarder that carries every other agent call wraps the body as JSON, which a PNG cannot go
+  through — with a sentence naming the node instead of the file landing anywhere. The forwarder
+  now carries that one write with its own `Content-Type` and filename instead of wrapping it, so
+  the bytes reach the node the run is actually on. The browser still only ever talks to this
+  machine's own origin; the request to the node goes server-to-server, over the mesh.
+
+### Changed
+
+- **The sessions rail is grouped by machine, and each row now says its own state.** The "Group by
+  Activity" option from 1.17.0 is gone: a state — amber "your answer" when a conversation is
+  stopped on you, an orange dot and "working" while a turn is in flight, a grey dot and "coming
+  back" when it is holding a wake, nothing at all once it is done — now sits on the row itself,
+  between the agent's name and the age, so a heading no longer has to carry it. Grouping is either
+  **Machine** (the default: one band per selected source, this machine first) or **One list** with
+  no headings at all; a single machine's rail drops its heading too, so an unpaired machine looks
+  exactly as it always did, minus the old activity headings. A browser that had the old Activity
+  preference saved now reads as One list.
+
+- **The sessions rail prints a full screen regardless of how many machines are merged into it, and
+  fetches only what it can show.** Each band used to stop at five rows no matter what else was on
+  screen, so one machine's rail showed five of its seven chats while four merged machines showed
+  twenty; the rail's fifteen rows are now dealt between whichever bands are actually drawn, never
+  below five each, so fewer bands means longer bands rather than a half-empty rail. Fetching
+  changed to match: every source used to be asked for its own hundred sessions, so a four-machine
+  rail pulled four hundred over the live channel for nothing; each ticked source now gets a fair
+  share of that hundred instead, re-dealt whenever a source is ticked or unticked. **Load more**
+  now widens the whole rail's page and counts every selected source's total, so a node with a
+  hundred older sessions no longer hides the button.
+
+- **A mutation that worked is no longer announced twice.** Saving, deleting, granting, starting or
+  stopping something used to change the page and then print a green line under it that nothing
+  ever dismissed — most visibly, launching a chat printed the run's pid and log path over the live
+  conversation view that had just opened for it. That green line is gone; the page changing is the
+  report, and a form's earlier error clears the moment the retried save lands. A handful of
+  outcomes the new state doesn't say for itself still get a plain-ink line — a dashboard waiting on
+  its ports, where a transfer landed, a review's evidence file, a node with no dashboards, what a
+  rename re-filed — but none of them are green any more.
+
 ## 1.17.0 — 2026-09-18
 
 ### Added
