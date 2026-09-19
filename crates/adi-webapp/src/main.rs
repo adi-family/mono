@@ -462,9 +462,7 @@ fn Home() -> impl IntoView {
                     <div class="adi-chome-root">
                         // A reconfigure link that named an agent nobody has — never a blank
                         // wizard, just this, on the chat its dead end lands us on anyway.
-                        {move || state.flash.get().map(|f| view! {
-                            <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
-                        })}
+                        {ui::flash_card(state.flash)}
                         {chat_home_view(state, watch, launcher)}
                     </div>
                 }

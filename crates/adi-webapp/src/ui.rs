@@ -210,13 +210,36 @@ pub(crate) fn fmt_uptime(s: u64) -> String {
     }
 }
 
-/// The one-line status message shown under a form: reads the shared `flash` signal, colouring
-/// itself via `data-kind`.
+/// The one-line failure shown under a form, with the × that takes it down.
 pub(crate) fn flash_view(flash: RwSignal<Option<Flash>>) -> impl IntoView {
+    flash_line("adi-flash", flash)
+}
+
+/// [`flash_view`] in its standing form: the notice above a page's content, with a hairline under
+/// it (§6). For the frames that show the flash before the page rather than inside a form — the
+/// chat home, Mesh, Fleet.
+pub(crate) fn flash_card(flash: RwSignal<Option<Flash>>) -> impl IntoView {
+    flash_line("adi-flash adi-flash--card", flash)
+}
+
+/// Both forms of the failure line. Nothing renders while there is no failure — not an empty box
+/// holding its height, which in the card form would draw its hairline under a page that has
+/// nothing to say.
+///
+/// The × is load-bearing, not decoration: nothing else clears [`Flash`] but the next mutation on
+/// the same page, so without it a failure that has been read and understood stays on screen for
+/// as long as the reader stays there.
+fn flash_line(class: &'static str, flash: RwSignal<Option<Flash>>) -> impl IntoView {
     view! {
-        <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-            {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-        </div>
+        {move || flash.get().map(|f| view! {
+            <div class=class>
+                <span class="adi-flash__msg">{f.msg}</span>
+                <button class="adi-flash__close" type="button" aria-label="Dismiss"
+                    on:click=move |_| flash.set(None)>
+                    <adi_ui::Icon icon=adi_ui::Lucide::X size=adi_ui::IconSize::Sm/>
+                </button>
+            </div>
+        })}
     }
 }
 

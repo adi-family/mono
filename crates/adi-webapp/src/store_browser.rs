@@ -50,7 +50,7 @@ pub(crate) fn store_rail(state: State, route: RwSignal<Route>) -> AnyView {
             {move || store.open.get().then(|| view! {
                 <div class="adi-store__body">
                     {move || store.error.get().map(|e| view! {
-                        <div class="adi-flash" data-kind="err">{e}</div>
+                        <div class="adi-flash">{e}</div>
                     })}
                     // Right-clicking the tree's empty space targets the root, so the first
                     // entry in an empty store is still creatable.

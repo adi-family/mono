@@ -12,10 +12,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{DbConsole, Flash, State, load, read_error};
+use crate::state::{DbConsole, State, load, read_error};
 use crate::ui::{
-    Key, menu_item, placeholder_row, row_actions, rows_or_placeholder, rows_or_status, sort_rows,
-    updated_text,
+    Key, flash_view, menu_item, placeholder_row, row_actions, rows_or_placeholder, rows_or_status,
+    sort_rows, updated_text,
 };
 
 /// The databases table: one row per scope in the store. No action column — a row's control is the
@@ -126,11 +126,11 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
             </div>
 
             {move || console.error.get().map(|e| view! {
-                <div class="adi-flash" data-kind="err">{e}</div>
+                <div class="adi-flash">{e}</div>
             })}
 
             {move || console.rows.get().map(result_table)}
-            {flash_or_nothing(flash)}
+            {flash_view(flash)}
         </section>
     }
     .into_any()
@@ -408,12 +408,3 @@ fn scope_label(console: DbConsole) -> String {
     }
 }
 
-/// The shared flash line, shown under the console like every other page's form.
-fn flash_or_nothing(flash: RwSignal<Option<Flash>>) -> AnyView {
-    view! {
-        <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-            {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-        </div>
-    }
-    .into_any()
-}

@@ -3473,12 +3473,10 @@ fn start_review(state: State, watch: AgentsWatch) {
         watch.review_busy.set(false);
         match result {
             Ok(started) => {
-                // That the review started is said by the screen moving to it. The dossier's
-                // path is not: it is a file on disk that outlives the flash, and the one way to
-                // read the evidence without reading the review.
-                state
-                    .flash
-                    .set(Some(Flash::note(format!("Evidence in {}", started.dossier))));
+                // That the review started is said by the screen moving to it, so nothing is
+                // written here — including the dossier's path, which the reviewer's own task
+                // names anyway, on the conversation this is about to open.
+                state.flash.set(None);
                 if started.run_id.is_empty() {
                     // An interactive reviewer keeps no run history, so there is no conversation to
                     // select — only its live pane to open.
@@ -7465,23 +7463,11 @@ fn submit_unlock(state: State) {
     if node.is_empty() || password.is_empty() {
         return;
     }
-    let asked = node.clone();
     unlock.busy.set(true);
     unlock.error.set(None);
     spawn_local(async move {
         match fetch::unlock_node(node, password).await {
             Ok(f) => {
-                // The password took and the node turned out to serve nothing, so [`app_nodes`]
-                // drops its band: say where it went, rather than letting it vanish under the
-                // password somebody just typed.
-                if f.nodes.iter().any(|n| {
-                    n.node == asked && !n.locked && n.error.is_none() && n.dashboards.is_empty()
-                }) {
-                    state.flash.set(Some(Flash::note(format!(
-                        "{asked} runs no dashboards — it is a viewer, and it stays in the strip \
-                         at the top of this column."
-                    ))));
-                }
                 state.fleet_dashboards.set(Some(f));
                 unlock.close();
             }

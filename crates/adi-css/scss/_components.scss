@@ -1214,27 +1214,44 @@ textarea.adi-input--composer {
   &__blurb { font-size: var(--fs-label); color: var(--ink-3); }
 }
 
-// ---- flash (kind via `data-kind`) -------------------------------------------------------------
-// The one-line result under a form: 13px, nothing around it. Red when something failed, plain
-// `--ink-2` for a `note` — an outcome worth a sentence. There is no green "ok" kind: a mutation
-// that worked is reported by the screen changing, not by a line congratulating it.
+// ---- flash -----------------------------------------------------------------------------------
+// The one-line failure under a form: 13px `--err`, nothing around it, and an × to dismiss it (§6).
+// It has no other kind. A mutation that worked is reported by the screen changing, and an outcome
+// worth a sentence is said where the reader is already looking — so anything drawn here is
+// something that went wrong, which is why the colour is unconditional and the element is absent
+// rather than empty when there is nothing to say.
 .adi-flash {
-  min-height: 16px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   padding: 8px 0 0;
   font-size: var(--fs-small);
-  color: var(--ink-2);
+  color: var(--err);
 
-  &:empty { padding: 0; min-height: 0; }
+  // Under a form the × follows the sentence, because a × at the far edge of a 1100px content
+  // column reads as belonging to the column, not to the line. The card below is the other case.
+  &__msg { min-width: 0; }
 
-  &[data-kind="err"] { color: var(--err); }
+  // The dismiss, on the model of `.adi-advice__hide`: grey, so the red stays the message's.
+  &__close {
+    flex: none;
+    padding: 0 2px;
+    color: var(--ink-3);
+    line-height: 1;
+    cursor: pointer;
 
-  // Standing on its own above a page's content: a notice line with a hairline under it.
+    &:hover { color: var(--ink); }
+  }
+
+  // Standing on its own above a page's content: a notice line with a hairline under it, and its
+  // × at the right end of that line — the same shape as `.adi-advice`, which it sits in place of.
   &--card {
-    min-height: 0;
     padding: 0 0 12px;
     margin-bottom: 16px;
     border-bottom: 1px solid var(--line);
     font-weight: 400;
+
+    .adi-flash__msg { flex: 1; }
   }
 }
 

@@ -367,7 +367,7 @@ fn rename_slug(state: State, route: RwSignal<Route>, id: &str, name: &str) {
         match fetch::rename_project(id, new_id).await {
             Ok(report) => {
                 state.projects.set(Some(report.projects.clone()));
-                state.flash.set(Some(renamed_flash(&report)));
+                state.flash.set(rename_warnings(&report));
                 open_project(state, route, report.id);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -375,9 +375,15 @@ fn rename_slug(state: State, route: RwSignal<Route>, id: &str, name: &str) {
     });
 }
 
-/// What a finished rename says: where the project went, what followed it, and — as an error, since
-/// it needs somebody — anything that did not.
-fn renamed_flash(report: &ProjectRenamed) -> Flash {
+/// What did **not** follow a finished rename — `None` when everything did.
+///
+/// A rename that worked says so by the id on screen, so the tail of things that were re-filed
+/// under it is no longer printed. What is left is the part that needs somebody: an item the server
+/// could not move, named alongside where it was trying to move it.
+fn rename_warnings(report: &ProjectRenamed) -> Option<Flash> {
+    if report.warnings.is_empty() {
+        return None;
+    }
     let counts = [
         ("sub-project", report.subprojects),
         ("tool", report.tools),
@@ -398,13 +404,7 @@ fn renamed_flash(report: &ProjectRenamed) -> Flash {
         format!(" — {} came with it", followed.join(", "))
     };
     let msg = format!("{} is now {}{moved}.", report.from, report.id);
-    if report.warnings.is_empty() {
-        // Not a success line: the new id is on screen anyway. What is worth saying is the tail of
-        // things that were re-filed under it, none of which this page shows.
-        Flash::note(msg)
-    } else {
-        Flash::err(format!("{msg} {}", report.warnings.join(" ")))
-    }
+    Some(Flash::err(format!("{msg} {}", report.warnings.join(" "))))
 }
 
 /// Which projects' items a panel on this page shows: the open project, plus every transitive

@@ -269,7 +269,7 @@ fn traffic_panel(console: LlmConsole) -> AnyView {
             </div>
 
             {move || console.error.get().map(|e| view! {
-                <div class="adi-flash" data-kind="err">{e}</div>
+                <div class="adi-flash">{e}</div>
             })}
             {move || totals_view(console)}
         </section>

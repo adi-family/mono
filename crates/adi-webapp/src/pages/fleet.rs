@@ -53,8 +53,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{Flash, FleetForm, State, read_error_local};
 use crate::ui::{
-    Key, TextField, apply_mutation_local, confirm_local, copy_row, fmt_date, menu_item, prompt,
-    row_actions, rows_or_status, sort_rows, updated_text,
+    Key, TextField, apply_mutation_local, confirm_local, copy_row, flash_card, fmt_date, menu_item,
+    prompt, row_actions, rows_or_status, sort_rows, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -90,9 +90,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
         form.instructions.set(current);
     });
     view! {
-        {move || state.flash.get().map(|f| view! {
-            <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
-        })}
+        {flash_card(state.flash)}
 
         {move || name_changes(state)}
 

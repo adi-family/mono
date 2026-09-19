@@ -44,7 +44,7 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
                 view! {
                 <section class="adi-panel adi-panel--fill">
                     {move || store.error.get().map(|e| view! {
-                        <div class="adi-flash adi-flash--card" data-kind="err">{e}</div>
+                        <div class="adi-flash adi-flash--card">{e}</div>
                     })}
                     <CodeFrame title=path.clone() actions=actions height=CodeHeight::Fill
                         class="min-h-0 flex-1">

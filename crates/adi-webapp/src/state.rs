@@ -2253,28 +2253,25 @@ impl Simulate {
     }
 }
 
-/// A one-line status message under the form; `kind` drives its colour via `data-kind`.
+/// Why the last action failed — one line, and nothing else.
 ///
-/// **There is no success flash, on purpose.** A mutation that worked is reported by the screen
-/// changing — the row appears, the list reorders, the live view opens — so a green line repeating
-/// it is noise that nothing ever dismisses (the signal holds its last value until another
-/// mutation writes over it). What remains is the two things the screen cannot say for itself: a
-/// failure, and a [`note`](Flash::note) — an outcome that is not a failure but carries information
-/// the new state does not, such as a row count or why a request did nothing.
+/// **A flash is a failure, on purpose. There is no success and no note.** A mutation that worked
+/// is reported by the screen changing — the row appears, the list reorders, the live view opens —
+/// so a line repeating it is noise above the very thing it is describing. The neutral `note` went
+/// the same way: an outcome worth a sentence is worth putting where the reader is already looking,
+/// not in the line a failure uses.
+///
+/// That the line means one thing is what lets it be unconditionally red, and what lets
+/// [`crate::ui::flash_view`] hang a dismiss off it — closing a failure you have read loses
+/// nothing, where closing a mixed channel would.
 #[derive(Clone)]
 pub(crate) struct Flash {
-    pub(crate) kind: &'static str,
     pub(crate) msg: String,
 }
 
 impl Flash {
-    /// Neutral (`--ink-2`): an outcome worth a sentence, never "it worked".
-    pub(crate) fn note(msg: String) -> Self {
-        Self { kind: "note", msg }
-    }
-
     pub(crate) fn err(msg: String) -> Self {
-        Self { kind: "err", msg }
+        Self { msg }
     }
 }
 

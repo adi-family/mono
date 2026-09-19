@@ -1587,13 +1587,10 @@ fn short_commit(commit: &str) -> String {
     commit.chars().take(7).collect()
 }
 
-/// Run one marketplace action: mark the row busy while it is in flight, fold the returned state
-/// in, and note the server's own sentence — the one the CLI prints.
-///
-/// Kept where every other success line was dropped, because these sentences are not "it worked":
-/// they carry the address an install came up on, the commit an update moved between (or that it
-/// was already pinned there, having done nothing), and what else an uninstall took with it — none
-/// of which the listing shows.
+/// Run one marketplace action: mark the row busy while it is in flight and fold the returned state
+/// in. The server's own sentence — the one the CLI prints, naming the address an install came up on
+/// or the commit an update moved between — is not drawn: the flash is for failures now, and the
+/// listing is the report that the action landed.
 fn run(
     state: State,
     form: MarketplaceForm,
@@ -1606,7 +1603,7 @@ fn run(
         match fut.await {
             Ok(done) => {
                 state.marketplace.set(Some(done.state));
-                state.flash.set(Some(Flash::note(done.message)));
+                state.flash.set(None);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }

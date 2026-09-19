@@ -87,17 +87,10 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                         project: None,
                     };
                     match fetch::create_dashboard(body).await {
-                        Ok(d) => {
+                        Ok(_) => {
                             form.name.set(String::new());
                             form.description.set(String::new());
-                            // Not "created" — the new row says that. What the row cannot say
-                            // is why it is portless: the supervisor leases ports and starts both
-                            // servers on its own, within a few seconds.
-                            state.flash.set(Some(Flash::note(format!(
-                                "“{}” ({}) is starting — ports appear in a few seconds.",
-                                d.name,
-                                short_id(&d.id),
-                            ))));
+                            state.flash.set(None);
                             load(state).await;
                         }
                         Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -344,12 +337,13 @@ fn submit_transfer(state: State, form: DashboardsForm) {
     spawn_local(async move {
         match fetch::transfer_dashboard(body).await {
             Ok(done) => {
-                let message = transferred_message(&done, moving);
+                let unreachable = unreachable_there(&done);
                 state.dashboards.set(Some(done.dashboards));
                 close_transfer(form);
-                // Kept because it names the node it landed on and the address to open it at —
-                // neither of which this page shows once the row has gone.
-                state.flash.set(Some(Flash::note(message)));
+                // A transfer that landed says so by the dialog closing and the row moving. What
+                // it cannot say is that the copy on the other machine is not openable yet —
+                // that one needs the operator, so it is the one that stays.
+                state.flash.set(unreachable.map(Flash::err));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -357,36 +351,33 @@ fn submit_transfer(state: State, form: DashboardsForm) {
     });
 }
 
-/// What to say once a transfer has landed: where it went, where to open it, and — when the node
-/// would not grant this machine access — why that link does not work yet.
-fn transferred_message(done: &adi_webapp_api::types::DashboardTransferred, moving: bool) -> String {
-    let verb = if moving { "Moved" } else { "Copied" };
+/// Why the dashboard that just landed on `done.node` cannot be opened there — `None` when it can,
+/// which is the case that says itself and needs no line.
+///
+/// Two ways to be unreachable: the node gave it no routable name at all, or it has one and will
+/// refuse this machine until that machine grants the service. Both leave the operator with a
+/// transfer that looks finished and a link that does not work.
+fn unreachable_there(done: &adi_webapp_api::types::DashboardTransferred) -> Option<String> {
     let node = &done.node;
+    let name = &done.dashboard.name;
     let Some(url) = done.url.as_deref() else {
-        return format!(
-            "{verb} \u{201c}{}\u{201d} to {node}. It has no routable name there yet.",
-            done.dashboard.name,
-        );
+        return Some(format!(
+            "\u{201c}{name}\u{201d} is on {node}, but has no routable name there yet.",
+        ));
     };
     if done.granted {
-        format!(
-            "{verb} \u{201c}{}\u{201d} to {node} \u{2014} it is at {url} (starting; give the \
-             node's supervisor a few seconds).",
-            done.dashboard.name,
-        )
-    } else {
-        format!(
-            "{verb} \u{201c}{}\u{201d} to {node}. {url} will refuse until {node} grants this \
-             machine http:{} \u{2014} add it from {node}'s own Fleet page.",
-            done.dashboard.name,
-            // The grant names the host minus its local zone, so it matches what the node parses.
-            done.dashboard
-                .host
-                .as_deref()
-                .and_then(|host| host.trim_end_matches('.').strip_suffix(".adi"))
-                .unwrap_or("<service>"),
-        )
+        return None;
     }
+    Some(format!(
+        "\u{201c}{name}\u{201d} is on {node}, but {url} will refuse until {node} grants this \
+         machine http:{} \u{2014} add it from {node}'s own Fleet page.",
+        // The grant names the host minus its local zone, so it matches what the node parses.
+        done.dashboard
+            .host
+            .as_deref()
+            .and_then(|host| host.trim_end_matches('.').strip_suffix(".adi"))
+            .unwrap_or("<service>"),
+    ))
 }
 
 /// The archive: its own collapsed panel at the foot of the page, with a caret header and a count.

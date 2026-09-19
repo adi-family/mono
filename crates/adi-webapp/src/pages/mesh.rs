@@ -8,8 +8,8 @@ use leptos::prelude::*;
 use crate::fetch;
 use crate::state::{MeshForm, State, read_error_local};
 use crate::ui::{
-    Key, TextField, apply_mutation_local, copy_row, menu_item, row_actions, rows_or_status,
-    sort_rows,
+    Key, TextField, apply_mutation_local, copy_row, flash_card, menu_item, row_actions,
+    rows_or_status, sort_rows,
 };
 
 /// The exposed-ports table: one port per row, with its ⋯ menu. A single named column, so it
@@ -30,9 +30,7 @@ pub(crate) const FORWARD_COLS: &[&str] = &["Name", "Local", "Peer", "Remote", ""
 pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
     let mesh = state.mesh;
     view! {
-        {move || state.flash.get().map(|f| view! {
-            <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
-        })}
+        {flash_card(state.flash)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">

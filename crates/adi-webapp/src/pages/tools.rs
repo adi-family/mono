@@ -431,7 +431,7 @@ pub(crate) fn tool_editor_view(state: State, editor: ToolEditor) -> Option<AnyVi
                         on:click=move |_| editor.close()>"Close"</button>
                 </div>
                 <div class="adi-panel__body">
-                    <div class="adi-flash" data-kind="err">{err}</div>
+                    <div class="adi-flash">{err}</div>
                     <p class="adi-hint">
                         "The tool's script isn't readable. For a linked tool, the target file may have "
                         "moved; re-link it, or restore the file at that path."

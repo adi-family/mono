@@ -1818,12 +1818,11 @@ pub(crate) struct Simulate {
 
 ### struct `Flash`
 
-A one-line status message under the form; `kind` drives its colour via `data-kind`.
+Why the last action failed — one line, and nothing else.
 
 ```rust
 #[derive(Clone)]
 pub(crate) struct Flash {
-    pub(crate) kind: &'static str,
     pub(crate) msg: String,
 }
 ```
