@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **A fresh install no longer starts the mesh daemon on its own.** `adi-app` used to autostart the
+  in-process mesh daemon unconditionally on every boot; `mesh.toml` now carries an `enabled` flag,
+  and a fresh machine resolves it to off, so a new install dials out to no peer and answers no
+  `*.n.adi` host until it's turned on. An install that already looks used — a paired node, an
+  authorized peer, an exposed port, or a forward of its own — resolves to on instead and keeps
+  running exactly as it always did; either way that resolution is written down the first time it
+  runs, so it never re-runs once decided. Joining a fleet turns the mesh on, from the panel's paste
+  field or `adi-mono mesh join`, since asking to join is consent to run it. Turning it on or off by
+  hand: the Mesh page's Start/Stop buttons, or the new `adi-mono mesh enable` / `disable` / `status`
+  (all with `--json`) from a shell.
+
 ## 1.18.0 — 2026-09-19
 
 ### Added
