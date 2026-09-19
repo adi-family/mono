@@ -857,6 +857,14 @@ pub async fn join_on(endpoint: &Endpoint, token: &str) -> anyhow::Result<Joined>
     let viewer = record_viewer(&mut registry, &viewer_key, &accepted)?;
     registry.save_to(&store)?;
 
+    // Asking to join a fleet is consent to run the mesh: a join that appeared to do nothing —
+    // paired, but the mesh still off on the next restart — would be a support question. This is
+    // the one call site both `adi-mono mesh join` (via `join`, above) and the panel's paste field
+    // (via `Daemon::join`, over the daemon's own endpoint) go through, so either path enables it.
+    let mut mesh_cfg = MeshConfig::load_from(&store)?;
+    mesh_cfg.set_enabled(true);
+    mesh_cfg.save_to(&store)?;
+
     Ok(Joined {
         petname: accepted.petname,
         viewer,

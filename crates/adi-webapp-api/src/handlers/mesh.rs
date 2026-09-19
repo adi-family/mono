@@ -100,9 +100,11 @@ fn mesh_snapshot(running: bool) -> Result<MeshState, String> {
         .map_err(|e| format!("reading mesh identity: {e}"))?
         .to_string();
     let cfg = MeshConfig::load().map_err(|e| format!("reading mesh config: {e}"))?;
+    let enabled = cfg.enabled();
     Ok(MeshState {
         id,
         running,
+        enabled,
         ticket: ticket::published(),
         allow: cfg.host.allow,
         authorized_peers: cfg.host.authorized_peers,

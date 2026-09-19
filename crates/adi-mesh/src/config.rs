@@ -9,6 +9,8 @@
 use adi_config::Config;
 use serde::{Deserialize, Serialize};
 
+use crate::fleet::FleetRegistry;
+
 /// The shared-store module this crate owns: `~/.adi/mono/mesh/`.
 pub const MODULE: &str = "mesh";
 
@@ -19,6 +21,15 @@ const CONFIG_FILE: &str = "mesh.toml";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MeshConfig {
+    /// Whether the mesh daemon should run on this machine. `None` means nobody has decided —
+    /// distinct from `Some(false)`, which is an operator's explicit "off" — because the two
+    /// resolve differently: an absent flag is inferred from whether this install already looks
+    /// used ([`MeshConfig::resolved_enabled`]), while an explicit choice always wins and is never
+    /// re-inferred. [`MeshConfig::load`] resolves and persists this the first time it is read, so
+    /// it settles to `Some(_)` on disk after that; a config built by hand (`::default()` in a
+    /// test) keeps it `None` until something resolves it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
     /// What this machine serves to peers.
     pub host: HostConfig,
     /// Local ports this machine forwards to a peer's port.
@@ -95,7 +106,7 @@ impl MeshConfig {
     /// # Errors
     /// Any I/O or TOML error from the underlying store.
     pub fn load() -> anyhow::Result<Self> {
-        Ok(Self::file().load_or_create()?)
+        Self::load_from(&Config::open())
     }
 
     /// Persist the config atomically.
@@ -103,12 +114,84 @@ impl MeshConfig {
     /// # Errors
     /// Any encode or I/O error from the underlying store.
     pub fn save(&self) -> anyhow::Result<()> {
-        Self::file().save(self)?;
+        self.save_to(&Config::open())
+    }
+
+    /// [`load`](Self::load) against an explicit store — for tests and alternate installs.
+    ///
+    /// An absent `enabled` is resolved and written back here, exactly once: the derivation
+    /// ([`resolved_enabled`](Self::resolved_enabled), against this store's own fleet registry)
+    /// runs only while the flag is `None`, so every later read is a plain file read that returns
+    /// whatever was decided the first time — an explicit choice made in between is never
+    /// overwritten, because by then `enabled` is already `Some(_)`.
+    ///
+    /// # Errors
+    /// Any I/O or TOML error from the underlying store, including reading the fleet registry.
+    pub fn load_from(store: &Config) -> anyhow::Result<Self> {
+        let file = Self::file_in(store);
+        let mut config: Self = file.load_or_create()?;
+        if config.enabled.is_none() {
+            let fleet = FleetRegistry::load_from(store)?;
+            config.enabled = Some(config.resolved_enabled(&fleet));
+            file.save(&config)?;
+        }
+        Ok(config)
+    }
+
+    /// [`save`](Self::save) against an explicit store.
+    ///
+    /// # Errors
+    /// Any encode or I/O error from the underlying store.
+    pub fn save_to(&self, store: &Config) -> anyhow::Result<()> {
+        Self::file_in(store).save(self)?;
         Ok(())
     }
 
-    fn file() -> adi_config::ConfigFile<Self> {
-        Config::open().module(MODULE).file(CONFIG_FILE)
+    fn file_in(store: &Config) -> adi_config::ConfigFile<Self> {
+        store.module(MODULE).file(CONFIG_FILE)
+    }
+
+    /// The explicit choice, if one has been made — `None` means nobody has decided yet, which is
+    /// distinct from `Some(false)` (decided off). Used by `mesh status` to say whether the answer
+    /// below came from an operator or from evidence.
+    #[must_use]
+    pub fn enabled_explicit(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    /// Turn the mesh on or off, persisting an explicit choice that always wins over inference
+    /// from here on — what the panel's Start/Stop buttons, `mesh enable`/`disable`, and a
+    /// completed join (asking to join a fleet is consent to run the mesh) all call.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = Some(enabled);
+    }
+
+    /// Whether the mesh should run: the explicit choice if one has been made, else inferred from
+    /// evidence this install already looks used. A fresh install — no explicit choice, an empty
+    /// fleet, nothing exposed or forwarded — stays off; anything already paired or configured
+    /// keeps running. The explicit choice always wins, even over a fleet that looks used, which
+    /// is what lets an operator's own "off" survive being paired with.
+    #[must_use]
+    pub fn resolved_enabled(&self, fleet: &FleetRegistry) -> bool {
+        self.enabled.unwrap_or_else(|| self.looks_used(fleet))
+    }
+
+    /// Evidence this install is already in use, absent an explicit choice: a paired node, or a
+    /// port/peer/forward of this machine's own that only means something with the mesh running.
+    fn looks_used(&self, fleet: &FleetRegistry) -> bool {
+        !fleet.is_empty()
+            || !self.host.allow.is_empty()
+            || !self.host.authorized_peers.is_empty()
+            || !self.forwards.is_empty()
+    }
+
+    /// The resolved on/off state for a caller with no [`FleetRegistry`] at hand — every real
+    /// caller reaches this through [`load`](Self::load), which has already resolved `enabled` to
+    /// `Some(_)`; a config built directly (`::default()` in a test) reads as off, the same
+    /// "absent means off" rule stated for a caller that has nothing to infer from either.
+    #[must_use]
+    pub fn enabled(&self) -> bool {
+        self.enabled.unwrap_or(false)
     }
 
     /// Add `port` to the allow-list; returns `false` if it was already present.
@@ -319,5 +402,108 @@ authorized_peers = ["abc123"]
         )
         .expect("parses");
         assert!(cfg.relays.is_empty());
+    }
+
+    // -- opt-in: whether the mesh should run at all -------------------------------------
+
+    fn paired_fleet() -> crate::fleet::FleetRegistry {
+        let mut fleet = crate::fleet::FleetRegistry::default();
+        fleet
+            .nodes
+            .insert("laptop-b".to_string(), crate::fleet::NodeRecord::default());
+        fleet
+    }
+
+    #[test]
+    fn absent_and_fresh_resolves_off() {
+        let cfg = MeshConfig::default();
+        assert!(
+            !cfg.resolved_enabled(&crate::fleet::FleetRegistry::default()),
+            "a fresh install with no explicit choice must come up off"
+        );
+    }
+
+    #[test]
+    fn absent_and_paired_resolves_on() {
+        let cfg = MeshConfig::default();
+        assert!(
+            cfg.resolved_enabled(&paired_fleet()),
+            "an existing pairing is evidence this install is already in use"
+        );
+    }
+
+    #[test]
+    fn explicit_false_beats_a_paired_fleet() {
+        let mut cfg = MeshConfig::default();
+        cfg.set_enabled(false);
+        assert!(
+            !cfg.resolved_enabled(&paired_fleet()),
+            "an operator's explicit off must survive being paired with — this is the rule that \
+             keeps the operator's own machine off"
+        );
+    }
+
+    #[test]
+    fn explicit_true_beats_a_fresh_fleet() {
+        let mut cfg = MeshConfig::default();
+        cfg.set_enabled(true);
+        assert!(
+            cfg.resolved_enabled(&crate::fleet::FleetRegistry::default()),
+            "an operator's explicit on must not be second-guessed by a fresh fleet"
+        );
+    }
+
+    #[test]
+    fn allowed_ports_authorized_peers_and_forwards_are_also_evidence_of_use() {
+        let mut allow = MeshConfig::default();
+        allow.allow_port(3000);
+        assert!(allow.resolved_enabled(&crate::fleet::FleetRegistry::default()));
+
+        let mut peer = MeshConfig::default();
+        peer.allow_peer("abc123".to_string());
+        assert!(peer.resolved_enabled(&crate::fleet::FleetRegistry::default()));
+
+        let mut fwd = MeshConfig::default();
+        fwd.add_forward(Forward {
+            name: "db".into(),
+            listen: 6000,
+            peer: "def456".into(),
+            port: 5432,
+        });
+        assert!(fwd.resolved_enabled(&crate::fleet::FleetRegistry::default()));
+    }
+
+    #[test]
+    fn load_resolves_and_persists_the_inference_exactly_once() {
+        let dir = std::env::temp_dir().join(format!(
+            "adi-mesh-config-resolve-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = Config::with_root(&dir);
+
+        // Fresh store, nothing paired: the first load infers off and writes it down.
+        let loaded = MeshConfig::load_from(&store).expect("first load");
+        assert_eq!(loaded.enabled_explicit(), Some(false));
+        assert!(!loaded.enabled());
+
+        // Pairing a node afterwards must not flip an already-resolved "off" — the inference ran
+        // once, and an explicit-looking `Some(false)` on disk is now indistinguishable from an
+        // operator's own choice, which is the point: it stays put either way.
+        let mut fleet = FleetRegistry::load_from(&store).expect("fleet");
+        fleet
+            .nodes
+            .insert("laptop-b".to_string(), crate::fleet::NodeRecord::default());
+        fleet.save_to(&store).expect("save fleet");
+
+        let reloaded = MeshConfig::load_from(&store).expect("second load");
+        assert_eq!(
+            reloaded.enabled_explicit(),
+            Some(false),
+            "the resolution already ran and wrote itself down; it does not re-run"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

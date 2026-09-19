@@ -47,6 +47,8 @@ The whole `mesh.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MeshConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
     pub host: HostConfig,
     pub forwards: Vec<Forward>,
     pub relays: Vec<String>,

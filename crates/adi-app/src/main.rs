@@ -363,15 +363,26 @@ async fn main() -> anyhow::Result<()> {
     // control panel connects this costs a wakeup every quarter second and nothing else.
     live::start(Arc::clone(&app));
 
-    // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
-    // (non-blocking, best-effort) so the whole stack is up once the app is — the control
-    // panel's Stop button still stops it for the session.
+    // The mesh daemon runs in-process, so it lives only as long as this app, and it is opt-in:
+    // autostart it (non-blocking, best-effort) only when `mesh.toml`'s `enabled` resolves to on
+    // — an explicit choice, or evidence this install already looks used
+    // (`adi_mesh::config::MeshConfig::resolved_enabled`). A genuinely fresh install comes up with
+    // the mesh down, and stays that way until the operator turns it on from the Mesh page,
+    // `adi-mono mesh enable`, or by joining a fleet. The control panel's Start/Stop buttons act on
+    // the daemon and persist the choice for next time either way.
     {
         let app = Arc::clone(&app);
         tokio::spawn(async move {
-            match app.mesh.start().await {
-                Ok(()) => info!("mesh autostarted"),
-                Err(e) => warn!(error = %e, "mesh autostart failed"),
+            match adi_mesh::config::MeshConfig::load() {
+                Ok(cfg) if cfg.enabled() => match app.mesh.start().await {
+                    Ok(()) => info!("mesh autostarted"),
+                    Err(e) => warn!(error = %e, "mesh autostart failed"),
+                },
+                Ok(_) => info!(
+                    "mesh is off; turn it on from the Mesh page, `adi-mono mesh enable`, or by \
+                     joining a fleet"
+                ),
+                Err(e) => warn!(error = %e, "could not read mesh config; mesh not autostarted"),
             }
         });
     }
@@ -1040,18 +1051,40 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
     }
 }
 
-/// `POST /api/mesh/start` — bring the in-process mesh daemon up, then report fresh state.
+/// `POST /api/mesh/start` — persist `enabled=true`, bring the in-process mesh daemon up, then
+/// report fresh state.
+///
+/// The write happens first and is not undone if the start itself fails: the operator's choice is
+/// "on", and a machine that could not bind this time should still try on its next restart rather
+/// than silently staying off. Persisted, not just acted on for the session, so this machine stays
+/// on after a restart the same way `mesh enable` does from a shell.
 async fn mesh_start(mesh: &MeshCtl) -> Response {
+    if let Err(e) = persist_mesh_enabled(true) {
+        return handlers::error(500, &format!("saving mesh config: {e}"));
+    }
     match mesh.start().await {
         Ok(()) => handlers::mesh(true),
         Err(e) => handlers::error(500, &format!("starting mesh: {e}")),
     }
 }
 
-/// `POST /api/mesh/stop` — stop the in-process mesh daemon, then report fresh state.
+/// `POST /api/mesh/stop` — persist `enabled=false`, stop the in-process mesh daemon, then report
+/// fresh state. See [`mesh_start`] for why the write is unconditional.
 async fn mesh_stop(mesh: &MeshCtl) -> Response {
+    if let Err(e) = persist_mesh_enabled(false) {
+        return handlers::error(500, &format!("saving mesh config: {e}"));
+    }
     mesh.stop().await;
     handlers::mesh(false)
+}
+
+/// Persist an explicit on/off choice to `mesh.toml`. Never called from the shutdown path
+/// ([`MeshCtl::stop`] itself touches no config) — stopping the daemon because the process is
+/// exiting is not an operator decision, and must not be confused with one.
+fn persist_mesh_enabled(enabled: bool) -> anyhow::Result<()> {
+    let mut cfg = adi_mesh::config::MeshConfig::load()?;
+    cfg.set_enabled(enabled);
+    cfg.save()
 }
 
 /// `POST /api/fleet/join` — spend an invite minted on another machine, enrolling this one in its
@@ -1068,6 +1101,11 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
 /// side with `http:app`, which is what the panel's own Grant form hands out, and §5's argument
 /// covers the rest: whatever can reach this panel can already create a dashboard here and run a
 /// task on this machine.
+///
+/// **Joining also turns the mesh on.** `join::join_on` persists `enabled=true` — asking to join a
+/// fleet is consent to run the mesh — and this handler brings the daemon up here too, rather than
+/// leaving it for the app's next restart to notice: a join that appeared to do nothing would be a
+/// support question.
 async fn fleet_join(app: &App, body: &[u8]) -> Response {
     let token = match handlers::fleet_join_token(body, now_secs()) {
         Ok(token) => token,
@@ -1076,6 +1114,11 @@ async fn fleet_join(app: &App, body: &[u8]) -> Response {
     match app.mesh.join(&token).await {
         Ok(joined) => {
             record_front_door(&joined.viewer);
+            // A no-op if the handshake already ran over this daemon's own endpoint
+            // (`MeshCtl::join`'s `Daemon::join` branch); otherwise this is what leaves it up.
+            if let Err(e) = app.mesh.start().await {
+                warn!(error = %e, "mesh daemon did not come up after a join");
+            }
             handlers::fleet_joined(app.projects.config(), &joined)
         }
         // 502 and not 500: what failed is the far side of a handshake — an unreachable viewer, a

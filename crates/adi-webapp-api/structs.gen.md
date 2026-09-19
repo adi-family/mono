@@ -542,6 +542,7 @@ pub struct MeshState {
     pub id: String,
     pub ticket: Option<String>,
     pub running: bool,
+    pub enabled: bool,
     pub allow: Vec<u16>,
     pub authorized_peers: Vec<String>,
     pub forwards: Vec<MeshForward>,

@@ -1143,6 +1143,18 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
+    Enable {
+        #[arg(long)]
+        json: bool,
+    },
+    Disable {
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     Fleet {
         #[arg(long)]
         json: bool,

@@ -21,6 +21,7 @@
 use std::time::Duration;
 
 use adi_core::dns::{Dns, MeshNodeChange};
+use adi_mesh::config::MeshConfig;
 use adi_mesh::fleet::{FleetRegistry, Grant, NodeRecord};
 use adi_mesh::join::{self, Joined};
 use adi_mesh::node::{self, NodeConfig};
@@ -91,6 +92,22 @@ pub(crate) enum MeshCommand {
     Join {
         /// The `adi-invite:…` token printed by `mesh invite` on the viewer.
         token: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Turn the mesh on for this machine — the opt-in a fresh install needs before it dials
+    /// anywhere or answers anything (`mesh.toml`'s `enabled`).
+    Enable {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Turn the mesh off for this machine.
+    Disable {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Whether the mesh is enabled here, and whether a daemon is currently running.
+    Status {
         #[arg(long)]
         json: bool,
     },
@@ -181,6 +198,9 @@ pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
             json,
         } => invite(ttl, qr, no_qr, json),
         MeshCommand::Join { token, json } => join_fleet(&token, json),
+        MeshCommand::Enable { json } => enable_or_disable(true, json),
+        MeshCommand::Disable { json } => enable_or_disable(false, json),
+        MeshCommand::Status { json } => status(json),
         MeshCommand::Fleet { json } | MeshCommand::List { json } => list(json),
         MeshCommand::Rename { from, to } => rename(&from, &to),
         MeshCommand::Unpair { petname } => unpair(&petname),
@@ -310,6 +330,76 @@ fn print_joined(joined: &Joined) {
          verifier is. The browser will ask for it the first time you open"
     );
     println!("  http://app.{}.n.adi/", joined.viewer);
+}
+
+// -- opt-in: turning the mesh on or off -------------------------------------------------------
+
+/// Persist an explicit on/off choice, and say what it does (or doesn't) about a mesh that is
+/// already running here.
+///
+/// This machine's *own* running `adi-app`/`adi-mesh run` does not re-read `mesh.toml` on its own
+/// — it decides once, at its own boot, whether to autostart — so this never starts or stops
+/// anything itself. That is exactly why it is worth saying plainly: an operator who runs `mesh
+/// enable` on a headless node expecting it to dial out immediately needs to be told to restart
+/// it (or use the panel's Start button) instead of waiting on a change that isn't coming.
+fn enable_or_disable(enabled: bool, json: bool) -> Result<(), String> {
+    let mut cfg = MeshConfig::load().map_err(|e| e.to_string())?;
+    cfg.set_enabled(enabled);
+    cfg.save().map_err(|e| e.to_string())?;
+
+    let running = daemon_running();
+    if json {
+        print_json(&serde_json::json!({
+            "enabled": enabled,
+            "daemon_running": running,
+        }));
+        return Ok(());
+    }
+    println!(
+        "Mesh {} on this machine.",
+        if enabled { "enabled" } else { "disabled" }
+    );
+    if running {
+        println!(
+            "A mesh daemon is already running here and won't pick this up on its own — {} it \
+             from the Mesh page, or restart adi-app/adi-mesh, to apply it now.",
+            if enabled { "start" } else { "stop" }
+        );
+    } else {
+        println!("Takes effect the next time adi-app or `adi-mesh run` starts here.");
+    }
+    Ok(())
+}
+
+/// Print whether the mesh is enabled and whether a daemon is currently up.
+fn status(json: bool) -> Result<(), String> {
+    let cfg = MeshConfig::load().map_err(|e| e.to_string())?;
+    let enabled = cfg.enabled();
+    let running = daemon_running();
+
+    if json {
+        print_json(&serde_json::json!({
+            "enabled": enabled,
+            "daemon_running": running,
+        }));
+        return Ok(());
+    }
+    println!("mesh: {}", if enabled { "enabled" } else { "disabled" });
+    println!(
+        "daemon: {}",
+        if running {
+            "running (publishing a ticket)"
+        } else {
+            "not running"
+        }
+    );
+    Ok(())
+}
+
+/// Best-effort: the same signal [`join::mint_invite`] refuses on — a daemon publishes a ticket
+/// only while it is up, in this process or another one on this machine.
+fn daemon_running() -> bool {
+    adi_mesh::ticket::published().is_some()
 }
 
 // -- the registry ----------------------------------------------------------------------------
@@ -645,6 +735,29 @@ mod tests {
         }
         rejects(&["join"]);
         rejects(&["join", "a", "b"]);
+    }
+
+    #[test]
+    fn enable_disable_and_status_take_only_the_json_flag() {
+        assert!(matches!(
+            parse(&["enable"]),
+            MeshCommand::Enable { json: false }
+        ));
+        assert!(matches!(
+            parse(&["enable", "--json"]),
+            MeshCommand::Enable { json: true }
+        ));
+        assert!(matches!(
+            parse(&["disable"]),
+            MeshCommand::Disable { json: false }
+        ));
+        assert!(matches!(
+            parse(&["status", "--json"]),
+            MeshCommand::Status { json: true }
+        ));
+        rejects(&["enable", "extra"]);
+        rejects(&["disable", "extra"]);
+        rejects(&["status", "extra"]);
     }
 
     #[test]

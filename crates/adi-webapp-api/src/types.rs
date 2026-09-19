@@ -207,6 +207,10 @@ pub struct MeshState {
     pub ticket: Option<String>,
     /// Whether the mesh daemon appears to be running (it publishes a ticket while up).
     pub running: bool,
+    /// Whether the mesh is turned on at all — `mesh.toml`'s resolved `enabled` (explicit, or
+    /// inferred from an install that already looks used). Off and not running is deliberate; on
+    /// and not running means something else stopped it (e.g. it failed to autostart).
+    pub enabled: bool,
     /// Local TCP ports this machine exposes to peers.
     pub allow: Vec<u16>,
     /// `EndpointId`s permitted to reach the exposed ports; default-deny, so empty means nobody may.

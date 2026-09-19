@@ -38,8 +38,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <h2 class="adi-panel__title">"This machine"</h2>
                 <span class="adi-status" data-state=move || mesh_state_data(mesh)>
                     <span class="adi-status__led"></span>
-                    <span>{move || mesh.get().map_or_else(|| "\u{2026}".to_string(),
-                        |m| if m.running { "daemon up".to_string() } else { "daemon down".to_string() })}</span>
+                    <span>{move || mesh.get().as_ref().map_or_else(|| "\u{2026}".to_string(), mesh_state_label)}</span>
                 </span>
                 <span class="adi-spacer"></span>
                 {move || {
@@ -65,6 +64,16 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 }}
             </div>
             <div class="adi-panel__body">
+                {move || {
+                    let off = mesh.get().is_some_and(|m| !m.enabled && !m.running);
+                    off.then(|| view! {
+                        <div class="adi-field__note">
+                            "Mesh is off on this machine — it dials out to no peer and nothing here \
+                             is reachable at "<span class="adi-mono">"*.n.adi"</span>" until it's \
+                             turned on. Start it above, or join a fleet."
+                        </div>
+                    })
+                }}
                 <div class="adi-field">
                     <label class="adi-field__label">"Endpoint id"</label>
                     {copy_row(form.id_ref, move || mesh.get().map(|m| m.id).unwrap_or_default())}
@@ -168,11 +177,27 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
 }
 
 /// The `data-state` value for the "This machine" status dot.
+///
+/// `off` has no rule of its own in `_components.scss` (only `online` and `down` do), so it draws
+/// the same neutral grey as `unknown` — deliberate: a mesh that is off is not an error, and
+/// styling it like one would read as broken rather than as the opt-in default it is.
 fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
     match mesh.get() {
         Some(m) if m.running => "online",
+        Some(m) if !m.enabled => "off",
         Some(_) => "down",
         None => "unknown",
+    }
+}
+
+/// The status word beside the dot, once a [`MeshState`] has loaded.
+fn mesh_state_label(m: &MeshState) -> String {
+    if m.running {
+        "daemon up".to_string()
+    } else if m.enabled {
+        "daemon down".to_string()
+    } else {
+        "mesh is off".to_string()
     }
 }
 

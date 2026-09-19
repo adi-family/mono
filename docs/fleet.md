@@ -181,6 +181,19 @@ looking entirely healthy — paired, authorized, reachable, serving nothing. Thi
 a developer machine and total on a real node; it is pinned by
 `gateway::tests::the_route_table_follows_the_front_door_a_node_actually_runs`.
 
+**The mesh daemon is opt-in, not autostarted.** `mesh.toml`'s `enabled` (`adi-mesh/src/config.rs`)
+decides whether `adi-app` brings it up at its own boot: an explicit choice always wins, and absent
+one the answer is inferred from whether this install already looks used — any paired node in
+`fleet.toml`, or an authorized peer, exposed port or forward of its own in `mesh.toml`
+(`MeshConfig::resolved_enabled`) — with a fresh install landing on *off*. The inferred answer is
+written down the first time it is resolved, so the inference runs at most once. Three things flip
+it to explicit `true` and leave the daemon running: the panel's Start button, `adi-mono mesh
+enable`, and completing a join either direction (§8) — asking to join a fleet is consent to run
+the mesh. The panel's Stop button and `adi-mono mesh disable` are the explicit-`false` side of the
+same flag. A node whose mesh is off answers no `*.n.adi` host, and the front door needs no change
+to say so correctly: from its side, a gateway port nothing has bound looks exactly like one that
+was never configured, so it already answers with §3's `MeshUnavailable` page either way.
+
 ## 7. Wire protocol — `adi/mesh/http/1`
 
 One bi-stream is one HTTP connection. Connections to a peer are **pooled**: one iroh
