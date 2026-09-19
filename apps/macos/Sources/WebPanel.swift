@@ -446,6 +446,33 @@ extension WebPanel: WKUIDelegate {
         present(alert) { completionHandler($0 == .alertFirstButtonReturn ? field.stringValue : nil) }
     }
 
+    /// The file picker, for the same reason the three above are here. A page cannot open one by
+    /// itself — `<input type=file>` asks its embedder — and WebKit's answer to a `WKUIDelegate`
+    /// that does not implement this is *nothing at all*: the composer's paperclip opens no window,
+    /// logs no error, and looks like a dead button. Verified against WebKit directly: it asks for
+    /// the panel even though the input behind the paperclip is `display:none`, so nothing on the
+    /// page's side needs changing.
+    func webView(_ webView: WKWebView,
+                 runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.canChooseFiles = true
+        panel.canCreateDirectories = false
+        // No `allowedContentTypes`: the composer sends no `accept` on purpose — a PDF, a CSV or a
+        // log is as attachable as a screenshot — and a filter invented here would grey out the
+        // file the operator opened this panel to send.
+        if let window = webView.window {
+            panel.beginSheetModal(for: window) { response in
+                completionHandler(response == .OK ? panel.urls : nil)
+            }
+        } else {
+            completionHandler(panel.runModal() == .OK ? panel.urls : nil)
+        }
+    }
+
     private func sheet(_ message: String) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = message
