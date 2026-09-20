@@ -6612,32 +6612,62 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
     out
 }
 
-/// One dashboard row in the rail: a link to its running frontend, or a dimmed row when it's down.
+/// One dashboard row in the rail: a link to its running frontend, a link that wakes it when it
+/// is idle-stopped, or a dead row when there is truly nothing to ask.
 ///
-/// The address comes from [`open_url`](crate::pages::dashboards::open_url), the same rule the
-/// Dashboards page uses: the dashboard's own host when it has one, loopback only as the fallback.
-/// A dashboard is one origin now, so a `127.0.0.1:<port>` link bypasses the front door and the
-/// page's `/api` calls stop routing — it renders, and only then falls over.
+/// A running dashboard's address comes from [`open_url`](crate::pages::dashboards::open_url),
+/// the same rule the Dashboards page uses: the dashboard's own host when it has one, loopback
+/// only as the fallback. A dashboard is one origin now, so a `127.0.0.1:<port>` link bypasses
+/// the front door and the page's `/api` calls stop routing — it renders, and only then falls
+/// over.
+///
+/// **A stopped dashboard is not necessarily a dead one.** Dashboards are on-demand by default
+/// (`docs/fleet.md`, [`wake_url`](crate::pages::dashboards::wake_url)), so a quiet one is
+/// idle-stopped and the front door already knows how to answer a request to it with a
+/// self-refreshing holding page while it starts. Hiding that behind a row with nothing to click
+/// only meant nobody ever asked. So a stopped dashboard with a routable host is still a link —
+/// to `wake_url`, not `open_url` — and only its dot says it is not actually up yet
+/// ([`adi_ui::AppState::Idle`]). One with no routable host stays dead: loopback cannot wake a
+/// service on another machine, and a link to a port nothing is listening on is worse than none.
 fn chat_dash_item(d: &Dashboard) -> AnyView {
-    // An address is the whole of "is this up?": `open_url` returns one only for a dashboard
-    // whose frontend is running. With one, the row is a link and opens in its own tab —
-    // a dashboard is its own origin. Without one, it is a dead row with a red dot and
-    // nothing to click.
-    let (state, href) = match crate::pages::dashboards::open_url(d) {
-        Some(href) => (adi_ui::AppState::Live, href),
-        None => (adi_ui::AppState::Offline, String::new()),
-    };
-    view! {
-        <adi_ui::AppItem
-            title=d.name.clone()
-            state=state
-            href=href
-            blank=true
-            // Empty machine: a local dashboard runs right here, and the row says so itself.
-            machine=""
-        />
+    if d.frontend_running {
+        let (state, href) = match crate::pages::dashboards::open_url(d) {
+            Some(href) => (adi_ui::AppState::Live, href),
+            None => (adi_ui::AppState::Offline, String::new()),
+        };
+        return view! {
+            <adi_ui::AppItem
+                title=d.name.clone()
+                state=state
+                href=href
+                blank=true
+                // Empty machine: a local dashboard runs right here, and the row says so itself.
+                machine=""
+            />
+        }
+        .into_any();
     }
-    .into_any()
+    match crate::pages::dashboards::wake_url(d) {
+        Some(href) => view! {
+            <adi_ui::AppItem
+                title=d.name.clone()
+                state=adi_ui::AppState::Idle
+                href=href
+                blank=true
+                machine=""
+                attr:title="not running \u{2014} opening it starts it"
+            />
+        }
+        .into_any(),
+        None => view! {
+            <adi_ui::AppItem
+                title=d.name.clone()
+                state=adi_ui::AppState::Offline
+                machine=""
+            />
+        }
+        .into_any(),
+    }
 }
 
 // ---- the fleet, in the right column ---------------------------------------------------------
@@ -6821,7 +6851,13 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
     let panel_host = node.app_host();
     // …whenever there is an address for it from here. The petname in it is this machine's own
     // (§2), so read through a node it names a third machine and the mesh routes one hop only.
-    let panel = crate::origin::service_url(&panel_host).map(|href| {
+    let panel_href = crate::origin::service_url(&panel_host);
+    // The band's own heading names the node already, so the header doubles as the same link the
+    // "Panel" button beside it offers — one click from the group's title, not just its corner.
+    // `RailGroup`'s `href` is empty (and the heading stays plain text) on the one machine with no
+    // address for this node from here, same as the button.
+    let header_href = panel_href.clone().unwrap_or_default();
+    let panel = panel_href.map(|href| {
         view! {
             <a class="adi-chome__group-act" href=href
                 target="_blank" rel="noreferrer"
@@ -6853,7 +6889,7 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
     let n = node.dashboards.len();
     view! {
         <div class="relative">
-            <adi_ui::RailGroup label=name count=n>{body}</adi_ui::RailGroup>
+            <adi_ui::RailGroup label=name href=header_href count=n>{body}</adi_ui::RailGroup>
             <div class="absolute top-3 right-2.5 flex items-center gap-2">{panel}{action}</div>
         </div>
     }
@@ -6939,29 +6975,49 @@ fn submit_unlock(state: State) {
 /// A fourth, when this panel is itself being read through a node: the address the listing built is
 /// a name from *this* machine's registry, so from over the mesh it points at a third machine and
 /// there is nothing to click.
+///
+/// **Down is not always dead**, either — a dashboard is on-demand by default (`docs/fleet.md`),
+/// so a node's stopped dashboard is idle-stopped exactly as a local one is
+/// ([`chat_dash_item`]). When this machine already holds the grant and the node gave it a
+/// routable address for the dashboard (`d.allowed` and a mapped `d.url`, the same pair the
+/// running case below already reads), the row stays a link — to that same address, which is
+/// what wakes the service on the node's own front door — and only the dot says it is not
+/// actually up. Without the grant, or without a routable address, opening it could only ever
+/// answer *not authorized* or reach nothing, so the row falls back to the same dead "not running
+/// on this node" it always was.
 fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
     let name = d.name.clone();
     let machine = node.to_string();
+    let mapped = d.url.as_deref().and_then(crate::origin::mapped_url);
 
-    // Down on its node: the failure is the node's to fix, so the row stays and says so with
-    // its dot rather than vanishing.
     if !d.running {
-        return view! {
-            <adi_ui::AppItem
-                title=name
-                state=adi_ui::AppState::Offline
-                machine=machine
-                attr:title="not running on this node"
-            />
-        }
-        .into_any();
+        return match (d.allowed, mapped) {
+            (true, Some(href)) => view! {
+                <adi_ui::AppItem
+                    title=name
+                    state=adi_ui::AppState::Idle
+                    machine=machine
+                    href=href
+                    blank=true
+                    attr:title="not running \u{2014} opening it starts it"
+                />
+            }
+            .into_any(),
+            // Not granted, or nothing to route to from here: the failure is the node's (or the
+            // grant's) to fix, so the row stays and says so with its dot rather than vanishing.
+            _ => view! {
+                <adi_ui::AppItem
+                    title=name
+                    state=adi_ui::AppState::Offline
+                    machine=machine
+                    attr:title="not running on this node"
+                />
+            }
+            .into_any(),
+        };
     }
 
-    match (
-        d.allowed,
-        d.url.as_deref().and_then(crate::origin::mapped_url),
-        d.service.clone(),
-    ) {
+    match (d.allowed, mapped, d.service.clone()) {
         // Allowed and up: a link, on its own origin at `<service>.<node>.n.adi` — the only
         // address under which the page's own `/api` calls route.
         (true, Some(href), _) => view! {

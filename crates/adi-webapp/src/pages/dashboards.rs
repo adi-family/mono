@@ -593,6 +593,28 @@ fn routable_host(d: &Dashboard) -> Option<&str> {
     d.host.as_deref().map(str::trim).filter(|h| !h.is_empty())
 }
 
+/// Where a request to *wake* this dashboard would go, whether or not its frontend is running
+/// right now.
+///
+/// A different question from [`open_url`], and deliberately not folded into it: `open_url`
+/// answers "is this up, and where", which the Dashboards page and [`crate::menu`] both rely on
+/// to mean exactly that — starting to answer a stopped dashboard's host there would report it
+/// "up" before anything is. This answers "where would asking for it start it".
+///
+/// A dashboard is on-demand by default (`StartPolicy::default_for`, `adi-hive/src/config.rs`):
+/// the scaffold's generated hive file declares a `proxy.host` and no `start:` key, so a quiet
+/// dashboard is idle-stopped, not broken — hive's front door already answers a request to that
+/// host with a self-refreshing holding page while the service comes up
+/// (`adi-hive/src/proxy.rs`'s `respond_starting`, `adi-hive/src/notfound.rs`'s `starting`).
+/// Requesting the host is what wakes it, so a stopped dashboard with a routable host still has
+/// an address worth linking to. `None` when there is truly nothing to ask — no routable host
+/// means only loopback, and loopback cannot wake a service on another machine, so that fallback
+/// is never offered here (unlike `open_url`, which only ever needs it for a dashboard that is
+/// already running, on this machine, right now).
+pub(crate) fn wake_url(d: &Dashboard) -> Option<String> {
+    routable_host(d).and_then(crate::origin::service_url)
+}
+
 /// The note under a dashboard that was moved to a node: where it went, and a link straight to it
 /// there. Without this the row is simply an archived dashboard, and "why did this stop?" is a
 /// question the page can answer but doesn't.

@@ -102,6 +102,11 @@ pub fn RailCard(
 #[component]
 pub fn RailGroup(
     #[prop(optional, into)] label: String,
+    /// Where the label itself opens — the fleet rail's node bands, which are a band and a link
+    /// to that node's own control panel at once. Left empty (every other caller) the label stays
+    /// plain text, exactly as before.
+    #[prop(optional, into)]
+    href: String,
     /// How many rows are in the band, printed after the label. Left off, the heading is
     /// just the label — which is what a band holding everything else ("Done") wants, since
     /// a count nobody will read is a number that only ever changes.
@@ -111,12 +116,23 @@ pub fn RailGroup(
     children: Children,
 ) -> impl IntoView {
     let titled = !label.is_empty();
+    let linked = !href.is_empty();
     view! {
         <section class=merge("flex flex-col", class)>
             {titled.then(|| view! {
                 <h3 class="m-0 flex items-baseline justify-between gap-2 px-2 pt-2.5 pb-1 \
                            text-label font-normal text-ink-3">
-                    <span class="truncate">{label}</span>
+                    {if linked {
+                        view! {
+                            <a class="truncate hover:text-ink hover:underline"
+                                href=href target="_blank" rel="noreferrer">
+                                {label}
+                            </a>
+                        }
+                        .into_any()
+                    } else {
+                        view! { <span class="truncate">{label}</span> }.into_any()
+                    }}
                     {count.map(|n| view! { <span class="shrink-0 tabular-nums">{n}</span> })}
                 </h3>
             })}

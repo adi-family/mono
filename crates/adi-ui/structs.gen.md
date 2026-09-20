@@ -53,6 +53,7 @@ pub enum AppState {
     Live,
     Offline,
     ViewOnly,
+    Idle,
 }
 ```
 

@@ -11,10 +11,10 @@ use crate::{merge, rail::RailCard};
 
 /// Whether an app is showing you anything right now.
 ///
-/// The three are not degrees of the same thing: `Live` is working, `Offline` is *the
-/// machine* being away rather than the app being wrong, and `ViewOnly` is working perfectly
-/// on someone else's machine, where you are a guest. Only the middle one is a problem, and
-/// only it gets red.
+/// These are not degrees of the same thing: `Live` is working, `Offline` is *the machine*
+/// being away rather than the app being wrong, `ViewOnly` is working perfectly on someone
+/// else's machine, where you are a guest, and `Idle` is up on nobody's say-so — stopped, but
+/// one request away from being `Live`. Only `Offline` is a problem, and only it gets red.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AppState {
     /// Up, and its machine is answering.
@@ -24,6 +24,11 @@ pub enum AppState {
     Offline,
     /// Live, on a machine you can watch but not touch.
     ViewOnly,
+    /// Not running, but on-demand: idle-stopped rather than broken, and a request to its own
+    /// address is what starts it back up. Distinct from `Offline` (which means the machine, not
+    /// just the app, is unreachable) so a row that will simply wake up on the next click is
+    /// never read as one that will not.
+    Idle,
 }
 
 impl AppState {
@@ -40,6 +45,9 @@ impl AppState {
             Self::Live => "bg-ok",
             Self::Offline => "bg-err",
             Self::ViewOnly => "bg-ink-3",
+            // `--warn`, the same semantic amber a stopped-on-a-person session dot uses
+            // (`docs/sessions.md`) — waiting, not broken.
+            Self::Idle => "bg-warn",
         }
     }
 
@@ -51,16 +59,17 @@ impl AppState {
             Self::Live => "Live",
             Self::Offline => "Machine offline",
             Self::ViewOnly => "View only",
+            Self::Idle => "Not running",
         }
     }
 
-    /// Ink for the name. Only a live one is at full strength; the other two are still there,
+    /// Ink for the name. Only a live one is at full strength; the rest are still there,
     /// still readable, and no longer the thing your eye should stop on.
     #[must_use]
     pub fn title_classes(self) -> &'static str {
         match self {
             Self::Live => "text-ink",
-            Self::Offline | Self::ViewOnly => "text-ink-2",
+            Self::Offline | Self::ViewOnly | Self::Idle => "text-ink-2",
         }
     }
 }
