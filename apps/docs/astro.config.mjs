@@ -74,6 +74,7 @@ export default defineConfig({
 			],
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/adi-family/mono' }],
 			sidebar: [
+				{ label: 'Installation', link: '/installation/' },
 				{
 					label: 'Concepts',
 					items: [

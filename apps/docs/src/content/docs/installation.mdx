@@ -1,0 +1,171 @@
+---
+title: Installation
+description: From nothing installed to your own control panel open in a browser — one download, one page, and how to undo any of it.
+---
+
+import Flags from '../../components/Flags.astro';
+
+ADI installs like any other desktop app: download a file, run it, click through a couple of
+prompts. What comes up is a local DNS resolver, a front door, and a control panel in your
+browser — nothing to sign into, nothing running anywhere but this machine.
+
+## Before you start
+
+| Platform | You need |
+| --- | --- |
+| macOS | macOS 13 (Ventura) or later — Apple Silicon or Intel, one file covers both |
+| Linux | Any x86-64 distro. The binaries are statically linked; nothing else to install first |
+| Windows | Windows 10 or 11, x64 |
+
+## Self-hosted, and what actually leaves this machine <Flags>Enterprise interest</Flags>
+
+There's no account and no server behind this: everything above runs as a local process on the
+machine you install it on, and works fully offline except for two things that reach out on
+purpose — checking `https://github.com/adi-family/mono` for a newer release, and whatever an
+[[Agents|agent]] you configure calls out to. An agent talking to Claude, GPT, or any other hosted
+model sends its conversation to that provider over the network, exactly as any other client of
+that API would — ADI itself doesn't phone home, doesn't store anything off this machine, and
+doesn't ask you to log into anything to use it. See [[Secrets]] for how a credential an agent
+uses is stored, and [[Hive]] for why the front door only ever binds loopback addresses.
+
+## Install
+
+### macOS
+
+1. Download **ADI.dmg** from the [latest release](https://github.com/adi-family/mono/releases/latest)
+   — one universal file, notarized by Apple.
+2. Open it, drag **ADI** onto **Applications**, and launch it from there. (Launch it straight off
+   the disk image instead, and ADI's first screen offers to move itself for you.)
+3. Two permission prompts, each once: **Local names** (lets `.adi` addresses resolve on this Mac)
+   and **Network access** (lets ADI answer them on port 80). Each asks for your Mac password.
+4. Flip the **ADI services** switch on, then click **Open control panel**.
+
+<Flags>Expert area</Flags> Before opening it, you can check what you downloaded is what Apple
+actually signed:
+
+```bash
+spctl -a -t open --context context:primary-signature -v ADI.dmg
+# -> accepted, source=Notarized Developer ID
+```
+
+### Linux
+
+1. Download **adi-linux-x64.tar.gz** from the [same release page](https://github.com/adi-family/mono/releases/latest).
+2. ```bash
+   tar -xzf adi-linux-x64.tar.gz
+   cd adi-linux-x64
+   ./install.sh
+   ```
+3. In an interactive terminal it asks a couple of questions (where to put things, whether to
+   fetch [bun](https://bun.sh) for dashboards); run it non-interactively (`ssh node
+   ./install.sh`) and it takes the defaults for both instead. Either way it finishes by printing
+   the control panel's address. No root is needed, and nothing is opened for inbound connections
+   — not even briefly.
+
+On Linux, that address is `http://127.0.0.1:<port>` — the `.adi` route isn't installed for you
+here the way it is on macOS and Windows, because it means binding `:80`, and a routine install
+script has no business fighting whatever your Linux box already runs there. If you want
+`http://app.adi` too, run this once:
+
+```bash
+adi-mono dns install-route
+```
+
+It asks for `sudo` once, checks first that nothing else already answers on `:80`, and prints the
+exact command to run by hand if it can't ask you directly. Skip it, and the panel just stays at
+the loopback address `install.sh` printed — nothing else about ADI is different.
+[[DNS and the front door]] has the full story on why this one step exists only here.
+
+### Windows
+
+1. Download **ADI-Setup-x64.exe** from the [release page](https://github.com/adi-family/mono/releases/latest)
+   — not the `.zip` beside it, which exists only for the auto-updater (see below).
+2. Run it. The installer isn't code-signed yet, so Windows will say "Windows protected your PC"
+   first — click **More info → Run anyway**, then click through. It installs into your own user
+   account, so the install itself raises no administrator prompt. One step inside it does ask for
+   administrator, once: pointing the `.adi` namespace at the local resolver. Say no and everything
+   still works, at `http://127.0.0.1:<port>` — set the domain up later from ADI's tray icon.
+3. Open **ADI** from the Start menu. It starts the platform, opens the control panel, and stays in
+   the notification area by the clock — click the icon any time to reopen the panel, right-click
+   it to start, stop, or quit.
+
+## What a first run starts
+
+However you got here, `adi-mono up` (run for you by the installer, or by ADI itself on launch) is
+what actually starts the platform: the DNS resolver for `.adi`, the front door that proxies
+`*.adi` addresses to whatever's actually running, the control panel, and a background agent that
+checks for updates every few hours. Each is supervised separately — a launchd `LaunchAgent` on
+macOS, a `systemd --user` service on Linux, a Task Scheduler task on Windows — and restarted if it
+dies. None of it needs to be started by hand again; a reboot or a re-login brings all of it back.
+
+## Confirm it's up
+
+```bash
+adi-mono --version
+adi-mono status
+```
+
+`status` prints one line per service. With `.adi` routing on, expect something close to:
+
+```
+DNS — Running · resolves .adi names on this machine (127.0.0.1:15353) [running]
+App — Running · http://app.adi (127.0.0.1:8000) [running]
+```
+
+Without it — Linux before `dns install-route`, or a Windows install where you said no to the
+admin prompt — the second line reads `http://127.0.0.1:8000 (.adi not routed)` instead. The panel
+is exactly as up either way, just not at that hostname yet.
+
+## The panel
+
+Open `http://app.adi` (or the loopback address `status` just printed). What's there is the same
+web app on every platform and every machine: a chat at `/`, a setup step if this is the very
+first run, and the fuller workbench at `/extended`. The top bar carries a version chip — hover it
+for what it last checked, click to check again — and, only once one exists, a button offering the
+next release.
+
+## Updates and removal
+
+**Updating.** ADI polls the published release for a newer version every few hours in the
+background, and the panel's version chip offers a button the moment there's one. Clicking it
+opens the release's changelog and asks before touching anything — **Install** or **Not now** —
+because taking an update restarts every service on the machine. Manually:
+
+```bash
+adi-mono update check   # compare installed vs published, install nothing
+adi-mono update run     # install if newer, restart, roll back if the services don't come back
+```
+
+Two checks run before anything is swapped in: the download's checksum against the published
+manifest, and on macOS the new bundle's code signature against the same check Gatekeeper would
+run. If the services aren't all back within 90 seconds of a swap, ADI restores the previous
+install and restarts onto that instead.
+
+**Removing it.** Every platform separates the *program* from your *data* — projects, agents,
+secrets, the database, every run's transcript — which lives under `~/.adi`
+(`%USERPROFILE%\.adi` on Windows) regardless of what you do to the program:
+
+- **macOS** — flip the services switch off (or `adi-mono disable`), run `adi-mono dns
+  remove-route` to give back the `.adi` route and the port-80 grant, then drag **ADI** from
+  Applications to the Trash.
+- **Linux** — `adi-mono disable` stops and removes the systemd units; `adi-mono dns
+  remove-route` first if you'd run `install-route`; then delete `~/.local/adi` (or wherever
+  `--prefix` put it).
+- **Windows** — **Settings → Apps → ADI → Uninstall**, or `Uninstall ADI.exe` in the install
+  folder. It stops the services, unregisters them, gives back `.adi` (one more administrator
+  prompt), takes ADI off your `PATH`, and removes the install folder.
+
+None of the three touch `~/.adi`. Reinstalling picks your projects and agents straight back up;
+delete that folder yourself, on top of the above, if you want nothing left at all.
+
+## Make something
+
+```bash
+adi-mono projects add hello --description "the first thing I made with ADI"
+```
+
+Open `/projects` in the panel — it's there, with its own task badge, the moment the command
+returns.
+
+[[Projects]] covers what a project actually organizes; [[Agents]] covers how to point one at
+this project to do something in it.
