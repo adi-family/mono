@@ -31,6 +31,15 @@
   background: var(--bg);
 }
 
+// While the panel-wide source picker (`docs/fleet.md` §14) points at a paired node, the frame
+// itself says so on its own hairlines — top and bottom, so it reaches a reader's eye wherever it
+// lands on the screen, not only the picker's own button in the titlebar (ADI-MONO-90). Amber
+// (`--warn`), never the accent orange the update pill spends this screen's one filled orange on.
+.adi-workbench--remote {
+  .adi-titlebar { border-bottom-color: var(--warn); }
+  .adi-statusbar { border-top-color: var(--warn); }
+}
+
 // The top bar: the mark and wordmark, the crumb, and on the right the version and the one
 // update button. On `--bg-side` with a hairline under it, like every bar.
 .adi-titlebar {
@@ -427,6 +436,9 @@
   &[data-state="online"] &__led { background: var(--ok); }
   &[data-state="down"] &__led   { background: var(--err); }
   &[data-state="running"] &__led { background: var(--accent); }
+  // The panel-wide source picker's target (`docs/fleet.md` §14), in the status bar — amber, not
+  // the accent orange the update pill spends this screen's one filled orange on (ADI-MONO-90).
+  &[data-state="remote"] &__led { background: var(--warn); }
 
   &__uptime {
     color: var(--ink-3);

@@ -2299,7 +2299,22 @@ pub(crate) fn note_read(s: State, path: &str, why: Option<String>) {
 }
 
 /// Why the read of `path` last failed, if it did — what a table shows in place of "Loading…".
+///
+/// Looked up under the same key the read itself is filed by. A bare page's read follows the
+/// panel-wide picker (`docs/fleet.md` §14) exactly as `fetch::get`/`Sub::get_on` do, so while it is
+/// pointed at a node the failure this table wants is filed under `/api/node/<node>/api/…` — looking
+/// it up under the bare path here would leave the table on "Loading…" forever instead of showing
+/// the node's own refusal (a lock, a timeout, an unreachable gateway), which is exactly the
+/// "generic read error" ADI-MONO-90 asks not to show. [`read_error_local`] is the plain lookup, for
+/// the handful of pages whose reads never follow the picker at all.
 pub(crate) fn read_error(s: State, path: &str) -> Option<String> {
+    let routed = fetch::routed_for(s.panel_source.get().as_deref(), path);
+    s.read_errors.with(|errors| errors.get(&routed).cloned())
+}
+
+/// [`read_error`], but never following the picker — for `/api/fleet`/`/api/mesh`, whose reads are
+/// always local (`docs/fleet.md` §14's L3) and so are never filed under a node's own key.
+pub(crate) fn read_error_local(s: State, path: &str) -> Option<String> {
     s.read_errors.with(|errors| errors.get(path).cloned())
 }
 
@@ -2310,18 +2325,51 @@ pub(crate) fn read_error(s: State, path: &str) -> Option<String> {
 /// "Loading…" — so an endpoint that could not answer looked identical to one that had not answered
 /// yet, for as long as the tab stayed open. Naming the endpoint here keeps the message with the
 /// table that wanted it.
+///
+/// Filed under the *routed* key — `fetch::routed_for(panel_source, path)`, the same one
+/// [`crate::live::Sub`] files a subscription's failure under — because the fetch this wraps already
+/// followed the picker (`docs/fleet.md` §14) to get its answer: filing the failure under the bare
+/// `path` instead would leave [`read_error`] unable to find it the moment the picker points
+/// anywhere but this machine. [`took_local`] is the plain version, for `load`'s three reads that
+/// never follow the picker at all.
 fn took<T: PartialEq + Send + Sync + 'static>(
     s: State,
     path: &str,
     sig: RwSignal<Option<T>>,
     answer: Result<T, String>,
 ) {
+    took_impl(s, path, sig, answer, true);
+}
+
+/// [`took`], but never following the picker — for `load`'s `/api/fleet`, `/api/fleet/nodes` and
+/// `/api/mesh` reads, one of `docs/fleet.md` §14's L3 exemptions each.
+fn took_local<T: PartialEq + Send + Sync + 'static>(
+    s: State,
+    path: &str,
+    sig: RwSignal<Option<T>>,
+    answer: Result<T, String>,
+) {
+    took_impl(s, path, sig, answer, false);
+}
+
+fn took_impl<T: PartialEq + Send + Sync + 'static>(
+    s: State,
+    path: &str,
+    sig: RwSignal<Option<T>>,
+    answer: Result<T, String>,
+    follow_picker: bool,
+) {
+    let key = if follow_picker {
+        fetch::routed_for(s.panel_source.get_untracked().as_deref(), path)
+    } else {
+        path.to_string()
+    };
     match answer {
         Ok(value) => {
-            note_read(s, path, None);
+            note_read(s, &key, None);
             set_if_changed(sig, value);
         }
-        Err(why) => note_read(s, path, Some(why)),
+        Err(why) => note_read(s, &key, Some(why)),
     }
 }
 
@@ -2974,7 +3022,7 @@ pub(crate) async fn load(s: State) {
     // The panel-wide source picker's own list (`docs/fleet.md` §14) — always local, like the
     // matching subscription in [`subscriptions`], and on every route for the same reason the
     // titlebar that draws it is.
-    took(
+    took_local(
         s,
         "/api/fleet/nodes",
         s.fleet_nodes,
@@ -3093,10 +3141,10 @@ pub(crate) async fn load(s: State) {
         took(s, "/api/ports/used", s.used, fetch::used().await);
     }
     if path == Route::Mesh.path() {
-        took(s, "/api/mesh", s.mesh, fetch::mesh().await);
+        took_local(s, "/api/mesh", s.mesh, fetch::mesh().await);
     }
     if path == Route::Fleet.path() {
-        took(s, "/api/fleet", s.fleet, fetch::fleet().await);
+        took_local(s, "/api/fleet", s.fleet, fetch::fleet().await);
     }
     if path == Route::SharedAssets.path() {
         took(

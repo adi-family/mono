@@ -897,10 +897,49 @@ same list the rail's menu does and there is exactly one source of truth for it e
 **When the pointed node is locked.** The forwarder was already built for this in §13: a request
 through `/api/node/<node>/api/…` without a stored credential answers `401`, and every page's
 ordinary error handling — the same `Result<T, String>` every `fetch::` call already returns — shows
-whatever it already shows for a failed read or write. Nothing about the picker adds a second error
-path: pointing at a node this machine cannot currently reach looks exactly like this machine's own
-backend being briefly unreachable, except that the picker's own button still names the node, so the
-operator is never left asking *which* machine just stopped answering.
+whatever it already shows for a failed read or write. `viewer::proxy`'s own sentence for it —
+`"{node} is locked here — give this machine its password on the Fleet page first"` — is the same one
+the picker's own menu and the sessions rail's node menu already give a locked node, so an operator
+reads the same thing whether they learn it from a menu before picking the node or from a read that
+failed after it was already pointed there.
+
+**A forwarded read's failure has to be findable under the address it actually asked, or it is
+invisible.** `fetch::get`/`post` and `live::Sub::get_on`/`post_on` file a bare, panel-following read's
+failure under its *routed* key — `/api/node/<node>/api/…`, not the bare `/api/…` — because that is
+where the request actually went (`fetch::routed_for`). `state::read_error`, what every table's
+placeholder asks for a load's last failure, now looks a page up under that same routed key rather
+than the bare one it names itself with, so a locked node's `401` or an offline one's timeout reads on
+the table exactly as `viewer::proxy`/`node::unreachable` phrased it — `"{node} is locked here…"`,
+`"{node} did not answer in time"`, `"the mesh gateway is not listening on…"` — instead of leaving the
+table on "Loading…" forever, which is what looking the bare key up while the picker points elsewhere
+used to do. `state::read_error_local` (and `took_local` behind `state::load`'s three exempt reads) is
+the plain lookup, for `/api/fleet`/`/api/mesh`'s own pages, which never follow the picker and so are
+never filed under a node's key. Either way, the picker itself never moves: a read failing is never a
+reason to fall back to "this machine" without saying so.
+
+**A write is loud before it runs, not only after (ADI-MONO-89).** `crate::ui::confirm` and
+`apply_mutation` are the two places (beside `fetch::get`/`post` themselves) that every ordinary page's
+mutation already passes through, so both were taught to read `fetch::panel_source()` rather than every
+one of the ~20 call sites that use them needing an edit each: a destructive confirmation gets the
+node's name stitched onto the front of whatever the page wrote, ahead of the question itself —
+*"This changes laptop-b, not this machine — the panel is pointed at it.\n\nPermanently delete this
+project?"* — and a write that then fails gets the same `"{node}: {message}"` prefix `state.rs`'s own
+sessions-rail errors already use. `apply_mutation_local`/`confirm_local` are the un-annotated pair,
+for the couple of pages (`fleet.rs`, `mesh.rs`) whose every mutation is one of this section's own L3
+exemptions and so never actually reaches whatever the picker points at, and for the sessions rail's
+own per-row confirm (`pages/agents/actions.rs`), which already names its own explicit row source
+(§13's K6) — a source the picker's pointer need not agree with on a mixed rail.
+
+**A panel-wide "you are elsewhere" treatment, beyond the picker's own button (ADI-MONO-90).** Two
+things say it without a reader having to find the titlebar first. The workbench's own frame —
+`adi-workbench--remote`, on `App`'s outer element whenever `State::panel_source` is `Some` — colours
+the titlebar's bottom hairline and the status bar's top one `--warn` (amber), never `--accent`: this
+screen's one filled orange is still the update pill, and amber is the same colour the picker's own
+menu already uses for a locked node's lock icon. And the status bar itself — pinned to the foot of
+the workbench on every route — grows a `.adi-status[data-state="remote"]` entry naming the node, the
+same dot-plus-word shape the backend's own health status already uses, styled the way a forwarded
+rail row already carries its own source on the meta line (§13's K6): plain, not a filled badge,
+readable at a glance without opening anything.
 
 **`State::panel_source` is persisted**, in `localStorage` (`adi-panel-source`), and read back only by
 `App` — the chat shell has no picker and never touches it, so it cannot repoint the rail's own,
@@ -1120,13 +1159,19 @@ Each item ships with unit tests in the same file.
       paired node from `/api/fleet/nodes`, one radio; a locked node listed and disabled with the
       Fleet page named. `/api/fleet/nodes` added to the `App` shell's own `load`/`subscriptions`,
       which previously read it only on the chat home.
-- [ ] L5 Loud on-screen treatment for a **write** while pointed at a node — something beyond the
+- [x] L5 Loud on-screen treatment for a **write** while pointed at a node — something beyond the
       picker's own button naming it, so a mutation fired from deep in a page carries the same
       "you are changing `<node>`" weight a Stop already carries on the sessions rail (ADI-MONO-89).
-      **Worth knowing before starting it:** L2 already makes a bare mutation follow the picker, as a
-      mechanical consequence of `fetch::post` sharing L2's thread-local with `fetch::get` — writing
-      to a pointed node already works today. What is open is making that fact loud enough on screen
-      before an operator commits to it, not making the write itself happen.
-- [ ] L6 A panel-wide "you are looking at `<node>`" treatment beyond the picker's own button —
+      `crate::ui::confirm`/`apply_mutation` — the shared choke points every ordinary page's
+      destructive confirmation and post-write flash already pass through — read
+      `fetch::panel_source()` and stitch the node's name onto the front of the message; the plain
+      `_local` pair opts out `fleet.rs`/`mesh.rs`'s own exempt mutations and the sessions rail's
+      per-row confirm, which already names its own explicit source.
+- [x] L6 A panel-wide "you are looking at `<node>`" treatment beyond the picker's own button —
       something a reader's eye reaches without having to check the titlebar first, the way a
       forwarded rail row already carries its own source on the meta line (§13's K6) (ADI-MONO-90).
+      `adi-workbench--remote` colours the titlebar's and status bar's hairlines `--warn`, and the
+      status bar itself grows a `data-state="remote"` entry naming the node. `state::read_error` was
+      also fixed to look a failure up under its *routed* key rather than the bare one, so a locked or
+      offline node's own refusal — already phrased for the operator by `viewer::proxy`/
+      `node::unreachable` — reaches the table that asked, instead of leaving it on "Loading…" forever.

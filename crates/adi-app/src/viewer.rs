@@ -304,11 +304,15 @@ pub(crate) async fn proxy(
         return response;
     }
     let Some(credential) = credentials(secrets).remove(node) else {
-        // A lock, phrased as one. The client shows the password field it already has for the
-        // dashboards rail rather than reporting the node as broken.
+        // A lock, phrased as one — the same sentence the picker's own menu and the sessions rail's
+        // node menu already give a locked node (`main.rs`, `pages/agents/actions.rs`), so an
+        // operator reads the same thing whether they learn it from the menu before picking the node
+        // or from a read that failed after it was already pointed there (ADI-MONO-90).
         return handlers::error(
             401,
-            &format!("{node} is locked here — give this machine its password first"),
+            &format!(
+                "{node} is locked here — give this machine its password on the Fleet page first"
+            ),
         );
     };
     let auth = credential.auth();

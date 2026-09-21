@@ -386,6 +386,40 @@ where
     S: Fn(State, T) + 'static,
     F: std::future::Future<Output = Result<T, String>> + 'static,
 {
+    apply_mutation_impl(state, busy, store, fut, true);
+}
+
+/// [`apply_mutation`], but never naming the panel-wide picker's node in the flash it leaves behind —
+/// for the couple of pages (`fleet.rs`, `mesh.rs`) whose every mutation is one of `docs/fleet.md`
+/// §14's L3 exemptions (`/api/fleet/*`, `/api/mesh*`) and so never actually reaches whatever the
+/// picker points at, however it is set.
+pub(crate) fn apply_mutation_local<T, S, F>(
+    state: State,
+    busy: Option<RwSignal<bool>>,
+    store: S,
+    fut: F,
+) where
+    S: Fn(State, T) + 'static,
+    F: std::future::Future<Output = Result<T, String>> + 'static,
+{
+    apply_mutation_impl(state, busy, store, fut, false);
+}
+
+/// Shared by [`apply_mutation`] and [`apply_mutation_local`] — the only difference between a bare
+/// mutation and one of the picker's exemptions is whether a failure gets the pointed node's name
+/// stitched onto it (ADI-MONO-89): the plumbing that sends the request already follows the picker
+/// (`fetch::get`/`post`) or doesn't (`fetch::get_local`/`post_local`) on its own, this only decides
+/// what the operator is told afterward.
+fn apply_mutation_impl<T, S, F>(
+    state: State,
+    busy: Option<RwSignal<bool>>,
+    store: S,
+    fut: F,
+    name_node: bool,
+) where
+    S: Fn(State, T) + 'static,
+    F: std::future::Future<Output = Result<T, String>> + 'static,
+{
     if let Some(b) = busy {
         b.set(true);
     }
@@ -395,7 +429,13 @@ where
                 store(state, v);
                 state.flash.set(None);
             }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
+            Err(e) => {
+                let e = match name_node.then(crate::fetch::panel_source).flatten() {
+                    Some(node) => format!("{node}: {e}"),
+                    None => e,
+                };
+                state.flash.set(Some(Flash::err(e)));
+            }
         }
         if let Some(b) = busy {
             b.set(false);
@@ -405,7 +445,26 @@ where
 
 /// A native confirm dialog, returning `true` only when the user accepts. A browser that has no
 /// `confirm` (or denies it) reads as "cancelled", so nothing is destroyed by accident.
+///
+/// Loud about the panel-wide picker (`docs/fleet.md` §14) before a destructive action runs, not
+/// only after (ADI-MONO-89): when it is pointed at a node, that node's name is stitched onto the
+/// message, ahead of what the caller wrote, so an operator reading only the first line still sees
+/// it before pressing OK. [`confirm_local`] is the same dialog without that — for an action that
+/// either never follows the picker at all, or already names its own explicit target.
 pub(crate) fn confirm(message: &str) -> bool {
+    match crate::fetch::panel_source() {
+        Some(node) => confirm_local(&format!(
+            "This changes {node}, not this machine — the panel is pointed at it.\n\n{message}"
+        )),
+        None => confirm_local(message),
+    }
+}
+
+/// [`confirm`], but never naming the panel-wide picker's node — for `fleet.rs`'s own actions
+/// (`/api/fleet/*` is always local, `docs/fleet.md` §14's L3) and for the sessions rail's per-row
+/// actions, which already name their own explicit source on the row (§13's K6) and would be
+/// misnamed by whatever the picker happens to point at instead.
+pub(crate) fn confirm_local(message: &str) -> bool {
     web_sys::window()
         .and_then(|w| w.confirm_with_message(message).ok())
         .unwrap_or(false)

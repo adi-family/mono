@@ -1334,7 +1334,11 @@ fn App() -> impl IntoView {
     });
 
     view! {
-        <div class="adi-workbench">
+        // `--remote` while the panel-wide source picker (`docs/fleet.md` §14) points at a paired
+        // node — the frame's own hairlines say so (amber, never the update pill's accent orange)
+        // so a reader who never looks at the picker's own button still reads it off the chrome
+        // (ADI-MONO-90).
+        <div class="adi-workbench" class:adi-workbench--remote=move || state.panel_source.get().is_some()>
         // The frame's lid: identity on the left, where you are next to it, and the ways out
         // on the right (design/examples/setup-agents-fleet.html, `.bar`).
         <header class="adi-titlebar">
@@ -1468,6 +1472,21 @@ fn App() -> impl IntoView {
                     <span class="adi-status__uptime">{fmt_uptime(h.uptime_secs)}</span>
                 })}
             </span>
+            // Which machine every ordinary read and write is pointed at (`docs/fleet.md` §14) —
+            // carried here the way a forwarded rail row carries its own source (§13's K6), so it
+            // reaches a reader's eye without having to check the titlebar first (ADI-MONO-90).
+            {move || state.panel_source.get().map(|node| {
+                let hint = format!(
+                    "Reading and writing {node} over the mesh, not this machine \u{2014} \
+                     open the picker in the titlebar to point it back"
+                );
+                view! {
+                    <span class="adi-status" data-state="remote" title=hint>
+                        <span class="adi-status__led"></span>
+                        <span>{node}</span>
+                    </span>
+                }
+            })}
             <span class="adi-spacer"></span>
             <span>{move || route.get().title()}</span>
         </footer>

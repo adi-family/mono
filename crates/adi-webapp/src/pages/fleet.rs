@@ -51,10 +51,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{Flash, FleetForm, State, read_error};
+use crate::state::{Flash, FleetForm, State, read_error_local};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, copy_row, fmt_date, menu_item, prompt, row_actions,
-    rows_or_status, sort_rows, updated_text,
+    Key, TextField, apply_mutation_local, confirm_local, copy_row, fmt_date, menu_item, prompt,
+    row_actions, rows_or_status, sort_rows, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -259,7 +259,7 @@ fn node_rows(state: State) -> AnyView {
         table,
         state.fleet.get().map(|v| v.nodes),
         "No nodes paired yet — mint a pairing code below.",
-        read_error(state, "/api/fleet"),
+        read_error_local(state, "/api/fleet"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -467,7 +467,7 @@ fn row_action(state: State, n: &FleetNode) -> AnyView {
     }
     let unpair = petname.clone();
     items.push(menu_item(state, "Unpair", true, move || {
-        if !confirm(&format!(
+        if !confirm_local(&format!(
             "Unpair “{unpair}”? This machine forgets its key, its grants and its password, and \
              every {unpair}.n.adi name stops resolving to it."
         )) {
@@ -811,10 +811,12 @@ fn join(state: State, form: FleetForm) {
 
 /// Run a fleet mutation: set the returned state, or flash the error; toggles
 /// `busy` around the request when a form is driving it. A thin typed wrapper over
-/// [`apply_mutation`], as `apply_mesh` is for the mesh endpoints.
+/// [`apply_mutation_local`], as `apply_mesh` is for the mesh endpoints — every `/api/fleet/*`
+/// endpoint is one of `docs/fleet.md` §14's L3 exemptions, so the flash never names the
+/// panel-wide picker's node: it never reaches whatever that is pointed at.
 fn apply_fleet<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<FleetState, String>> + 'static,
 {
-    apply_mutation(state, busy, |s, f| s.fleet.set(Some(f)), fut);
+    apply_mutation_local(state, busy, |s, f| s.fleet.set(Some(f)), fut);
 }

@@ -459,7 +459,10 @@ fn delete_one_run(
     } else {
         format!("“{}”", title.trim())
     };
-    if !crate::ui::confirm(&format!(
+    // `confirm_local`, not `confirm`: this row already names its own explicit source (§13's K6),
+    // which the panel-wide picker's node (`docs/fleet.md` §14) may not even agree with — a mixed
+    // rail can delete a row from a different machine than the one the titlebar points at.
+    if !crate::ui::confirm_local(&format!(
         "Permanently delete {what}? Its whole transcript goes with it, and this cannot be undone."
     )) {
         return;

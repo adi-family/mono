@@ -1574,7 +1574,13 @@ pub(crate) fn set_panel_source(node: Option<String>) {
     PANEL_SOURCE.with(|slot| *slot.borrow_mut() = node);
 }
 
-fn panel_source() -> Option<String> {
+/// The picker's current target, for a caller outside this file that needs to *name* it rather than
+/// route through it — a destructive confirmation and the flash that follows a write both read this
+/// (`crate::ui::confirm`/`apply_mutation`, `docs/fleet.md` §14/ADI-MONO-89), so an operator sees
+/// which node a bare mutation is about to reach before and after it happens, not only in the
+/// titlebar. Everything inside this file keeps calling the private [`get`]/[`post`], which reach the
+/// same thread-local through [`routed_for`] rather than through this accessor.
+pub(crate) fn panel_source() -> Option<String> {
     PANEL_SOURCE.with(|slot| slot.borrow().clone())
 }
 

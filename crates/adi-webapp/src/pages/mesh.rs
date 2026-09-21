@@ -6,9 +6,10 @@ use adi_webapp_api::types::{MeshForward, MeshForwardRef, MeshState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::state::{MeshForm, State, read_error};
+use crate::state::{MeshForm, State, read_error_local};
 use crate::ui::{
-    Key, TextField, apply_mutation, copy_row, menu_item, row_actions, rows_or_status, sort_rows,
+    Key, TextField, apply_mutation_local, copy_row, menu_item, row_actions, rows_or_status,
+    sort_rows,
 };
 
 /// The exposed-ports table: one port per row, with its ⋯ menu. A single named column, so it
@@ -209,7 +210,7 @@ fn mesh_allow_rows(state: State) -> AnyView {
         table,
         state.mesh.get().map(|v| v.allow),
         "No ports exposed — add one below to let peers reach it.",
-        read_error(state, "/api/mesh"),
+        read_error_local(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -246,7 +247,7 @@ fn mesh_peer_rows(state: State) -> AnyView {
         table,
         state.mesh.get().map(|v| v.authorized_peers),
         "No peer may use the exposed ports. Add a key to allow one.",
-        read_error(state, "/api/mesh"),
+        read_error_local(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -295,7 +296,7 @@ fn mesh_forward_rows(state: State) -> AnyView {
         table,
         state.mesh.get().map(|v| v.forwards),
         "No forwards — add one below to reach a peer's port locally.",
-        read_error(state, "/api/mesh"),
+        read_error_local(state, "/api/mesh"),
     ) {
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
@@ -354,12 +355,14 @@ fn forward_cell(col: &str, f: &MeshForward) -> AnyView {
 }
 
 /// Run a mesh mutation: set the returned state, or flash the error;
-/// toggles `busy` around the request when a form is driving it.
+/// toggles `busy` around the request when a form is driving it. Every `/api/mesh*` endpoint is one
+/// of `docs/fleet.md` §14's L3 exemptions, so [`apply_mutation_local`] — the flash never names the
+/// panel-wide picker's node, since this never reaches whatever it points at.
 fn apply_mesh<F>(state: State, busy: Option<RwSignal<bool>>, fut: F)
 where
     F: std::future::Future<Output = Result<MeshState, String>> + 'static,
 {
-    apply_mutation(state, busy, |s, m| s.mesh.set(Some(m)), fut);
+    apply_mutation_local(state, busy, |s, m| s.mesh.set(Some(m)), fut);
 }
 
 /// Parse a `1..=65535` port from user input, rejecting blanks and `0`.
