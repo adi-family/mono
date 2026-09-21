@@ -620,6 +620,27 @@ so opening the next row in the same call is what keeps the pane from flashing th
 state, and `settle_session_change` only ever overwrites `watch.runs` for the agent that was just
 hidden, which is harmless whether or not that turns out to be the same agent `next` moved to.
 
+**Shift+↑ / Shift+↓ walks the rail without touching anything in it** (`walk_session_rail`,
+`actions.rs`), stepping the centre pane to the conversation drawn just above or below the one
+currently open — the same `drawn_rows` reading order ⌘1…⌘9 and ⌘⌫ walk, so a folded block's rows are
+no more a stop here than they carry a number there. Nothing open in the centre pane opens the top of
+the list on Shift+↓ or the bottom on Shift+↑, since there is no "next" or "previous" to a row that
+isn't there. Unlike ⌘⌫ this walk **never wraps**: hiding removes the row ⌘⌫ was standing on, so every
+row left is downstream of it in a circle with no true end, but Shift+↑ / Shift+↓ leaves every row
+exactly where it was, so the top and the bottom are real ends — Shift+↑ on the first row does
+nothing. Shift+↓ past the last row asks the backend for more instead of stopping: the same Load more
+the rail already draws under the list, fired at the same source(s) it would be — one per-machine
+block's own (`band_load_more`) under the grouped layout, every selected source at once
+(`chat_load_more`) under the flat one. It declines outright, leaving the key for the browser, when
+there is nothing left to load or a page for that source is already on its way
+(`source_loading` — read off the gap between what has been asked for and what has actually landed,
+so it needs no flag of its own to clear). The load is asynchronous, so the step onto whatever it
+brings in is resumed by an effect once the answer lands (`PendingWalk`), worked out then against the
+rail exactly as it reads at that moment rather than the list captured at the keystroke — and only if
+the pane is still standing exactly where the walk left it, so a load that lands after the pane moved
+on some other way does not also move it. Declines untouched, same as ⌘⌫, when the target is a text
+field — Shift+↑ / Shift+↓ there extends a selection and must go on doing that.
+
 **Two groupings, and the default is Machine** (`SessionGroup`, `state.rs`), from the **Group by**
 half of the head's filter menu:
 

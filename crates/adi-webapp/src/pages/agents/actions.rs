@@ -4882,20 +4882,11 @@ fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// The rail's **Load more**, under the last session, for the single-list layout only (one selected
-/// source, or `SessionGroup::Flat`): another [`SESSION_PAGE`] sessions from every selected source at
-/// once, and how many are left behind combined. Several sources under `SessionGroup::Machine` each
-/// carry their own instead ([`band_load_more`]), since each now pages the source its own block draws.
-///
-/// `None` — no button at all — once the index says everything is here, which on a fresh machine is
-/// from the first load. A control that does nothing is worse than no control, and "you have seen
-/// them all" is what its absence says.
-///
-/// It widens the *request*, not a slice of something already in hand: [`bump_source_limit`] is what
-/// the subscription's path is built from, so pressing this re-subscribes every selected source and
-/// the next page arrives on its own. That is also why there is no spinner — the rail keeps every row
-/// it had and grows when the answer lands, rather than emptying while it waits.
-fn chat_load_more(state: State) -> Option<AnyView> {
+/// Held vs total across every currently selected source, combined — this machine's own
+/// [`State::all_chats`] plus every ticked node's [`State::rail_node_chats`]. `None` while none of
+/// them has answered yet, which is the "nothing to say about paging" case both callers below read
+/// the same way.
+fn combined_page_counts(state: State) -> Option<(usize, usize)> {
     let mut held = 0usize;
     let mut total = 0usize;
     let mut answered = false;
@@ -4918,9 +4909,27 @@ fn chat_load_more(state: State) -> Option<AnyView> {
             count(all);
         }
     }
-    if !answered {
-        return None;
-    }
+    answered.then_some((held, total))
+}
+
+/// The rail's **Load more**, under the last session, for the single-list layout only (one selected
+/// source, or `SessionGroup::Flat`): another [`SESSION_PAGE`] sessions from every selected source at
+/// once, and how many are left behind combined. Several sources under `SessionGroup::Machine` each
+/// carry their own instead ([`band_load_more`]), since each now pages the source its own block draws.
+///
+/// `None` — no button at all — once the index says everything is here, which on a fresh machine is
+/// from the first load. A control that does nothing is worse than no control, and "you have seen
+/// them all" is what its absence says.
+///
+/// It widens the *request*, not a slice of something already in hand: [`bump_source_limit`] is what
+/// the subscription's path is built from, so pressing this re-subscribes every selected source and
+/// the next page arrives on its own. That is also why there is no spinner — the rail keeps every row
+/// it had and grows when the answer lands, rather than emptying while it waits.
+///
+/// The held-vs-total tally is [`combined_page_counts`], factored out so [`walk_session_rail`] can
+/// ask the same question before firing the same widening.
+fn chat_load_more(state: State) -> Option<AnyView> {
+    let (held, total) = combined_page_counts(state)?;
     let more = total.saturating_sub(held);
     if more == 0 {
         return None;
@@ -5669,6 +5678,20 @@ fn source_page_counts(state: State, node: Option<&str>) -> Option<(usize, usize)
     Some((held, all.total))
 }
 
+/// Whether a wider page for this source is already on its way — [`bump_source_limit`] asked for more
+/// but the answer carrying it hasn't landed yet.
+///
+/// Read off the same two numbers [`source_page_counts`] draws from, against what is currently
+/// *asked* for ([`source_limit`]): while a fetch is in flight, `held` still reflects the page the
+/// last answer carried, which is narrower than the request now in flight for it. `held` rises to
+/// meet the request (or settles at `total`, if that turns out to be the smaller of the two) the
+/// moment the new page lands, so this reads false again on its own, without any flag to remember to
+/// clear.
+fn source_loading(state: State, node: Option<&str>) -> bool {
+    source_page_counts(state, node)
+        .is_some_and(|(held, total)| held < total && held < source_limit(state, node))
+}
+
 /// One per-machine block's own **Load more**: the mirror of [`chat_load_more`] for a single source,
 /// since each block now pages the source it draws rather than sharing one rail-wide budget.
 fn band_load_more(state: State, node: Option<String>) -> Option<AnyView> {
@@ -6189,25 +6212,82 @@ async fn settle_session_change(
     }
 }
 
-/// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them, and
-/// ⌘⌫ to Hide (or Unhide) the conversation open in the centre pane — the same action as that row's
-/// right-click menu, put a key away because it is the one thing done to a chat most often once it
-/// has been read. Hiding also hands the pane on to the row after it, so the key alone walks a
-/// morning's chats away one at a time — see [`toggle_open_session_hidden`].
+/// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them, ⌘⌫ to
+/// Hide (or Unhide) the conversation open in the centre pane, and Shift+↑ / Shift+↓ to stepping that
+/// pane to the row drawn just above or below it — three bindings on one listener, so a modifier held
+/// wrong for one declines exactly like the others instead of each parsing the event its own way.
 ///
-/// Both read their target when the key is struck, not when the rail was drawn. The rail redraws
+/// ⌘1…⌘9 opens the numbered row outright. ⌘⌫ is the same action as that row's right-click menu, put
+/// on a key because it is the one thing done to a chat most often once it has been read, and hands
+/// the pane on to the row after it so the key alone walks a morning's chats away one at a time — see
+/// [`toggle_open_session_hidden`]. Shift+↑ / Shift+↓ walks the same way without removing anything —
+/// see [`walk_session_rail`] — and that is exactly why it is the one of the three that does not
+/// wrap: ⌘⌫ wraps because hiding takes the row it was on out of the list, leaving every row that
+/// remains downstream of it in a circle with no true end; Shift+↑ / Shift+↓ leaves every row exactly
+/// where it was, so the top and the bottom of the rail are real ends — Shift+↑ on the first row does
+/// nothing, and so does Shift+↓ past the last once there is nothing more the backend can hand over.
+///
+/// All three read their target when the key is struck, not when the rail was drawn. The rail redraws
 /// whenever anything moves, and a list captured at draw time would go on opening whatever *used* to
 /// be third after a run finished and the bands resorted under it — the same trap the keyed `For` in
 /// [`chat_all_sessions`] exists to avoid, arrived at from the other side.
 ///
-/// Ctrl as well as ⌘, and not for symmetry with other platforms: Chrome and Safari spend ⌘1…⌘8 on
-/// "switch to tab N" and never hand them to the page in an ordinary tab. ⌘ is the shortcut in the
-/// installed app, where there are no tabs to switch to; Ctrl is the way in from a browser tab, where
-/// there are. Only one of the two ever needs to work on a given screen. ⌘⌫ carries no such
-/// ambiguity — Backspace is not a tab shortcut anywhere — but answers to both the same way, for one
-/// rule instead of two.
+/// Ctrl as well as ⌘ for the digits and ⌘⌫, and not for symmetry with other platforms: Chrome and
+/// Safari spend ⌘1…⌘8 on "switch to tab N" and never hand them to the page in an ordinary tab. ⌘ is
+/// the shortcut in the installed app, where there are no tabs to switch to; Ctrl is the way in from a
+/// browser tab, where there are. Only one of the two ever needs to work on a given screen. ⌘⌫ carries
+/// no such ambiguity — Backspace is not a tab shortcut anywhere — but answers to both the same way,
+/// for one rule instead of two. Shift+↑ / Shift+↓ needs neither: arrow keys are no browser's tab
+/// shortcut, so the binding is Shift held alone, and ⌘/Ctrl/Alt held alongside it is left to mean
+/// whatever (if anything) it already does.
 fn install_session_hotkeys(state: State, watch: AgentsWatch) {
+    // What a Shift+↓ that had to ask the backend for more is waiting on — see [`PendingWalk`]. This
+    // effect is what resumes the walk once the page it is waiting for lands.
+    let pending_walk: RwSignal<Option<PendingWalk>> = RwSignal::new(None);
+    Effect::new(move |_| {
+        // Tracked: every source a wait could be on, so this fires the moment one of them answers.
+        state.all_chats.get();
+        state.rail_node_chats.get();
+        let Some(pending) = pending_walk.get_untracked() else {
+            return;
+        };
+        if pending
+            .sources
+            .iter()
+            .any(|n| source_loading(state, n.as_deref()))
+        {
+            // Still on its way — this firing was some other update (a poll, a different agent's
+            // message landing), not the page this wait is for.
+            return;
+        }
+        pending_walk.set(None);
+        if watch.node.get_untracked() != pending.node
+            || watch.name.get_untracked().as_deref() != Some(pending.agent.as_str())
+            || watch.run_id.get_untracked() != pending.run_id
+        {
+            // The pane moved on some other way (a click, another hotkey) while the load was in
+            // flight — it is no longer standing on the row this wait was for, so this is not this
+            // effect's move to make.
+            return;
+        }
+        let drawn = drawn_rows(
+            rail_bands(state, watch).0,
+            &state.rail_collapsed_bands.get_untracked(),
+        );
+        let Some(i) = drawn_row_index(&drawn, &pending.node, &pending.agent, &pending.run_id)
+        else {
+            return;
+        };
+        if let Some(row) = walk_step(&drawn, i, true).cloned() {
+            open_rail_row(state, watch, row);
+        }
+    });
+
     let handle = window_event_listener(leptos::ev::keydown, move |ev| {
+        if ev.shift_key() && !ev.meta_key() && !ev.ctrl_key() && !ev.alt_key() {
+            walk_session_rail(state, watch, pending_walk, &ev);
+            return;
+        }
         if !(ev.meta_key() || ev.ctrl_key()) || ev.alt_key() || ev.shift_key() {
             return;
         }
@@ -6239,16 +6319,182 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
             return;
         };
         ev.prevent_default();
-        match row.run {
-            Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
-            // A pty agent's row *is* the agent — there is no run to select, only a screen to point.
-            None => point_watch(watch, row.node, row.agent, true),
-        }
-        // As with a click: on a narrow viewport the rail is a drawer laid over the chat, and the
-        // chat you just picked would open behind the list you picked it from.
-        state.chat_drawer.set(None);
+        open_rail_row(state, watch, row);
     });
     on_cleanup(move || handle.remove());
+}
+
+/// What a Shift+↓ that had to ask the backend for more ([`walk_session_rail`]) is waiting on —
+/// installed once per mount alongside [`install_session_hotkeys`]'s own effect rather than carried
+/// on [`State`], since only one such wait is ever open at a time: a second Shift+↓ before the first
+/// page lands has nowhere else to go but replace it.
+///
+/// `sources` is every source the fired load(s) touched — one, for a per-machine block's own Load
+/// more, or every selected source at once for the combined one — which is what
+/// [`install_session_hotkeys`]'s effect polls with [`source_loading`] to know whether the wait is
+/// over. The rest is the row the walk was standing on when it fired: found again in the rail as it
+/// reads once the answer lands, never in the list captured at the keystroke, and only stepped past
+/// if the pane is still exactly where this left it.
+#[derive(Clone)]
+struct PendingWalk {
+    sources: Vec<Option<String>>,
+    node: Option<String>,
+    agent: String,
+    run_id: Option<String>,
+}
+
+/// Whether a keyboard shortcut would land on text being edited rather than the rail: an `<input>`,
+/// `<textarea>`, or anything `contenteditable`. Both rail hotkeys that could otherwise collide with
+/// ordinary text editing — ⌘⌫ and Shift+↑ / Shift+↓ — decline on this, untouched, rather than steal
+/// the key from whatever is being typed.
+fn event_targets_text_editing(ev: &web_sys::KeyboardEvent) -> bool {
+    use wasm_bindgen::JsCast as _;
+
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .is_some_and(|el| {
+            matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA")
+                || el
+                    .dyn_ref::<web_sys::HtmlElement>()
+                    .is_some_and(web_sys::HtmlElement::is_content_editable)
+        })
+}
+
+/// Which row of `drawn` matches an open conversation's identity — `node`/`agent`/`run_id` exactly as
+/// [`AgentsWatch`] carries them for whatever is open, `run_id: None` for a pty agent's live pane
+/// (which has no run to have one). Kept apart from the DOM and the signals that supply those three
+/// so it, and [`walk_step`], can be exercised without either.
+fn drawn_row_index(
+    drawn: &[SessionRow],
+    node: &Option<String>,
+    agent: &str,
+    run_id: &Option<String>,
+) -> Option<usize> {
+    drawn.iter().position(|r| {
+        &r.node == node
+            && r.agent == agent
+            && r.run.as_ref().map(|run| run.run_id.clone()) == *run_id
+    })
+}
+
+/// Where a walk of `drawn` steps to from row `i`: the next row going forward, the previous one going
+/// back. `None` when there is nowhere to step — past the last row going forward, which is
+/// [`walk_session_rail`]'s cue to ask the backend for more rather than stop, or before the first
+/// going back, which is simply the end: this walk never wraps (see [`install_session_hotkeys`] for
+/// why, unlike ⌘⌫).
+fn walk_step(drawn: &[SessionRow], i: usize, forward: bool) -> Option<&SessionRow> {
+    if forward {
+        drawn.get(i + 1)
+    } else {
+        i.checked_sub(1).and_then(|p| drawn.get(p))
+    }
+}
+
+/// Shift+↓'s and Shift+↑'s own half of [`install_session_hotkeys`]: step the centre pane to the
+/// conversation drawn just below or above the one it has open, in the same reading order ⌘1…⌘9 and
+/// ⌘⌫ walk ([`drawn_rows`]) — a folded machine block's rows are no more a stop on this walk than they
+/// carry a number on those.
+///
+/// Nothing open in the centre pane — or what is open isn't a row this rail is currently drawing, say
+/// filtered out — and Shift+↓ opens the top of the list, Shift+↑ the bottom: there is no "next" or
+/// "previous" to a row that isn't there to have one.
+///
+/// Shift+↑ never goes past the first row (see [`install_session_hotkeys`] for why this walk doesn't
+/// wrap where ⌘⌫ does). Shift+↓ past the last row asks the backend for more instead of stopping: the
+/// same Load more the rail already draws under the list, fired at the same source(s) it would be —
+/// one per-machine block's own ([`band_load_more`]) under the grouped layout, every selected source
+/// at once ([`chat_load_more`]) under the flat one. It declines outright, leaving the key untouched
+/// for the browser, when there is nothing left to load or a page for that source is already on its
+/// way ([`source_loading`]) — a key that does nothing must not also swallow the keystroke.
+///
+/// The load is asynchronous, so the step onto whatever it brings in can't happen here: this only
+/// records what to wait for ([`PendingWalk`]) and fires the same widening the button would
+/// ([`bump_source_limit`]). [`install_session_hotkeys`]'s own effect resumes the walk once the answer
+/// lands, worked out then against the rail exactly as it reads at that moment — not against `drawn`
+/// as this function leaves it, which by then is stale.
+fn walk_session_rail(
+    state: State,
+    watch: AgentsWatch,
+    pending_walk: RwSignal<Option<PendingWalk>>,
+    ev: &web_sys::KeyboardEvent,
+) {
+    let forward = match ev.code().as_str() {
+        "ArrowDown" => true,
+        "ArrowUp" => false,
+        _ => return,
+    };
+    if event_targets_text_editing(ev) {
+        return;
+    }
+
+    let bands = rail_bands(state, watch).0;
+    // One band (a single source, or `SessionGroup::Flat`): the same single-list layout
+    // [`chat_all_sessions`] dispatches on, and so the same "which Load more" question.
+    let single_list = bands.len() == 1;
+    let drawn = drawn_rows(bands, &state.rail_collapsed_bands.get());
+    if drawn.is_empty() {
+        return;
+    }
+
+    let node = watch.node.get_untracked();
+    let agent = watch.name.get_untracked();
+    let run_id = watch.run_id.get_untracked();
+    let current = agent
+        .as_deref()
+        .and_then(|a| drawn_row_index(&drawn, &node, a, &run_id));
+    let Some(i) = current else {
+        ev.prevent_default();
+        let row = if forward {
+            &drawn[0]
+        } else {
+            &drawn[drawn.len() - 1]
+        };
+        open_rail_row(state, watch, row.clone());
+        return;
+    };
+
+    if !forward {
+        let Some(row) = walk_step(&drawn, i, false) else {
+            // No wrapping — see [`install_session_hotkeys`]. Left untouched for the browser.
+            return;
+        };
+        ev.prevent_default();
+        open_rail_row(state, watch, row.clone());
+        return;
+    }
+    if let Some(row) = walk_step(&drawn, i, true).cloned() {
+        ev.prevent_default();
+        open_rail_row(state, watch, row);
+        return;
+    }
+
+    // The last drawn row: try loading more rather than doing nothing, exactly as this block's (or
+    // the combined) Load more would.
+    let mut sources: Vec<Option<String>> = Vec::new();
+    let has_more = if single_list {
+        if state.session_local.get() {
+            sources.push(None);
+        }
+        sources.extend(state.session_nodes.get().into_iter().map(Some));
+        combined_page_counts(state).is_some_and(|(held, total)| held < total)
+    } else {
+        sources.push(drawn[i].node.clone());
+        source_page_counts(state, drawn[i].node.as_deref())
+            .is_some_and(|(held, total)| held < total)
+    };
+    if !has_more || sources.iter().any(|n| source_loading(state, n.as_deref())) {
+        return;
+    }
+    ev.prevent_default();
+    pending_walk.set(Some(PendingWalk {
+        sources: sources.clone(),
+        node: drawn[i].node.clone(),
+        agent: drawn[i].agent.clone(),
+        run_id: drawn[i].run.as_ref().map(|r| r.run_id.clone()),
+    }));
+    for source in sources {
+        bump_source_limit(state, source);
+    }
 }
 
 /// ⌘⌫'s own half of [`install_session_hotkeys`]: hide (or unhide) whichever conversation the centre
@@ -6263,18 +6509,7 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
 /// centre pane with nothing open; and a pty agent's live pane, which is the agent itself and has no
 /// run behind it to hide. Only past all three does it claim the key.
 fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::KeyboardEvent) {
-    use wasm_bindgen::JsCast as _;
-
-    let typing = ev
-        .target()
-        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-        .is_some_and(|el| {
-            matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA")
-                || el
-                    .dyn_ref::<web_sys::HtmlElement>()
-                    .is_some_and(web_sys::HtmlElement::is_content_editable)
-        });
-    if typing {
+    if event_targets_text_editing(ev) {
         return;
     }
 
@@ -6349,12 +6584,20 @@ fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::Ke
     // which case the fresh list it writes is exactly the one `next`'s own view wants too, not a value
     // this clobbers back over.
     if let Some(row) = next {
-        state.chat_drawer.set(None);
-        match row.run {
-            Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
-            // A pty agent's row *is* the agent — there is no run to select, only a screen to point.
-            None => point_watch(watch, row.node, row.agent, true),
-        }
+        open_rail_row(state, watch, row);
+    }
+}
+
+/// Open one rail row exactly as a click on it does — [`open_session`] for a row with a run,
+/// [`point_watch`] for a pty agent's, which has no run to select and only a screen to point at — and
+/// close the narrow-viewport drawer the way every hotkey that hands the pane to a specific row does:
+/// as with a click, the rail there is a drawer laid over the chat, and the chat just picked would
+/// otherwise open behind the list it was picked from.
+fn open_rail_row(state: State, watch: AgentsWatch, row: SessionRow) {
+    state.chat_drawer.set(None);
+    match row.run {
+        Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
+        None => point_watch(watch, row.node, row.agent, true),
     }
 }
 
@@ -7724,6 +7967,72 @@ mod tests {
             drawn.iter().map(|r| r.agent.as_str()).collect::<Vec<_>>(),
             ["studio-a"],
             "the folded block contributes nothing to the walk",
+        );
+    }
+
+    /// [`walk_step`] going forward or back from the middle of the rail: the ordinary case for
+    /// Shift+↓ / Shift+↑, and nothing more than the next or previous slot in `drawn`.
+    #[test]
+    fn walk_step_moves_one_row_either_direction_from_the_middle() {
+        let drawn = rail_rows(None, 3, "s");
+        assert_eq!(
+            walk_step(&drawn, 1, true).map(|r| r.agent.as_str()),
+            Some("s-2")
+        );
+        assert_eq!(
+            walk_step(&drawn, 1, false).map(|r| r.agent.as_str()),
+            Some("s-0")
+        );
+    }
+
+    /// Shift+↑ never wraps: standing on the first row, there is nothing before it.
+    #[test]
+    fn walk_step_back_from_the_first_row_finds_nothing() {
+        let drawn = rail_rows(None, 3, "s");
+        assert!(walk_step(&drawn, 0, false).is_none());
+    }
+
+    /// Shift+↓ from the last row also finds nothing here — [`walk_session_rail`] reads that as its
+    /// cue to ask the backend for more rather than stop, but `walk_step` itself only ever reports
+    /// whether there is a next *drawn* row, never why there isn't.
+    #[test]
+    fn walk_step_forward_from_the_last_row_finds_nothing() {
+        let drawn = rail_rows(None, 3, "s");
+        assert!(walk_step(&drawn, 2, true).is_none());
+    }
+
+    /// A rail of one row is both ends at once: nothing before it, nothing after it either.
+    #[test]
+    fn walk_step_on_a_rail_of_one_row_finds_nothing_either_direction() {
+        let drawn = rail_rows(None, 1, "s");
+        assert!(walk_step(&drawn, 0, true).is_none());
+        assert!(walk_step(&drawn, 0, false).is_none());
+    }
+
+    /// [`drawn_row_index`] finds the row an open conversation's own `node`/`agent`/`run_id` names,
+    /// and tells two different sources' same-named agent apart by `node` — the same identity
+    /// [`toggle_open_session_hidden`]'s own `is_open` checks by hand, factored out here so
+    /// [`walk_session_rail`] and its resuming effect read it once between them.
+    #[test]
+    fn drawn_row_index_finds_the_open_rows_own_source_and_agent() {
+        let drawn = vec![
+            rail_row(None, "same-name"),
+            rail_row(Some("studio"), "same-name"),
+            rail_row(Some("studio"), "other"),
+        ];
+        assert_eq!(
+            drawn_row_index(&drawn, &None, "same-name", &None),
+            Some(0),
+            "this machine's own agent, not the same-named one on studio",
+        );
+        assert_eq!(
+            drawn_row_index(&drawn, &Some("studio".to_string()), "same-name", &None),
+            Some(1),
+        );
+        assert_eq!(
+            drawn_row_index(&drawn, &Some("laptop".to_string()), "same-name", &None),
+            None,
+            "no row on a source that isn't in the rail at all",
         );
     }
 }

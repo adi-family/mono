@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-76 structs · 16 enums · 4 type aliases across 30 files.
+77 structs · 16 enums · 4 type aliases across 30 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`, `PendingWalk`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -286,6 +286,20 @@ struct SessionRef {
     title: String,
     hidden: bool,
     starred: bool,
+}
+```
+
+### struct `PendingWalk`
+
+What a Shift+↓ that had to ask the backend for more (`walk_session_rail`) is waiting on — installed once per mount alongside `install_session_hotkeys`'s own effect rather than carried on `State`, since only one such wait is ever open at a time: a second Shift+↓ before the first page lands has nowhere else to go but replace it.
+
+```rust
+#[derive(Clone)]
+struct PendingWalk {
+    sources: Vec<Option<String>>,
+    node: Option<String>,
+    agent: String,
+    run_id: Option<String>,
 }
 ```
 
