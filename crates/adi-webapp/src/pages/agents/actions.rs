@@ -5945,6 +5945,13 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let (rename_node, rename_agent, rename_id, rename_title) =
         (node.clone(), agent.clone(), run_id.clone(), title.clone());
     let (star_node, star_agent, star_id) = (node.clone(), agent.clone(), run_id.clone());
+    // ⌘⌫ only ever acts on the conversation open in the centre pane (`toggle_open_session_hidden`),
+    // so the hint is only honest when this menu's own row is that one — a right-click elsewhere in
+    // the rail gets Hide with no key beside it, for a key that wouldn't reach it.
+    let hide_hotkey = (watch.name.get().as_deref() == Some(agent.as_str())
+        && watch.node.get() == node
+        && watch.run_id.get().as_deref() == Some(run_id.as_str()))
+    .then(|| format!("{}\u{232b}", hotkey_glyph()));
     Some(
         view! {
             <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
@@ -5960,7 +5967,12 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 ))>{star_label}</adi_ui::MenuItem>
                 <adi_ui::MenuItem on_select=Callback::new(move |()| set_session_hidden(
                     state, watch, node.clone(), agent.clone(), run_id.clone(), !hidden,
-                ))>{hide_label}</adi_ui::MenuItem>
+                ))>
+                    <span class="flex w-full items-center justify-between gap-2">
+                        <span>{hide_label}</span>
+                        {hide_hotkey.map(|k| view! { <adi_ui::Kbd>{k}</adi_ui::Kbd> })}
+                    </span>
+                </adi_ui::MenuItem>
             </adi_ui::Menu>
         }
         .into_any(),
@@ -6097,9 +6109,12 @@ async fn settle_session_change(
     }
 }
 
-/// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them.
+/// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them, and
+/// ⌘⌫ to Hide (or Unhide) the conversation open in the centre pane — the same action as that row's
+/// right-click menu, put a key away because it is the one thing done to a chat most often once it
+/// has been read.
 ///
-/// The row is looked up when the key is struck, not when the rail was drawn. The rail redraws
+/// Both read their target when the key is struck, not when the rail was drawn. The rail redraws
 /// whenever anything moves, and a list captured at draw time would go on opening whatever *used* to
 /// be third after a run finished and the bands resorted under it — the same trap the keyed `For` in
 /// [`chat_all_sessions`] exists to avoid, arrived at from the other side.
@@ -6107,10 +6122,16 @@ async fn settle_session_change(
 /// Ctrl as well as ⌘, and not for symmetry with other platforms: Chrome and Safari spend ⌘1…⌘8 on
 /// "switch to tab N" and never hand them to the page in an ordinary tab. ⌘ is the shortcut in the
 /// installed app, where there are no tabs to switch to; Ctrl is the way in from a browser tab, where
-/// there are. Only one of the two ever needs to work on a given screen.
+/// there are. Only one of the two ever needs to work on a given screen. ⌘⌫ carries no such
+/// ambiguity — Backspace is not a tab shortcut anywhere — but answers to both the same way, for one
+/// rule instead of two.
 fn install_session_hotkeys(state: State, watch: AgentsWatch) {
     let handle = window_event_listener(leptos::ev::keydown, move |ev| {
         if !(ev.meta_key() || ev.ctrl_key()) || ev.alt_key() || ev.shift_key() {
+            return;
+        }
+        if ev.code() == "Backspace" {
+            toggle_open_session_hidden(state, watch, &ev);
             return;
         }
         // `code`, not `key`: with a modifier held, layouts that put a symbol on the number row
@@ -6145,6 +6166,63 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
         state.chat_drawer.set(None);
     });
     on_cleanup(move || handle.remove());
+}
+
+/// ⌘⌫'s own half of [`install_session_hotkeys`]: hide (or unhide) whichever conversation the centre
+/// pane has open, exactly as [`set_session_hidden`] does for the rail's own menu.
+///
+/// Declines, without touching the event, on anything Backspace already means: typing in the
+/// composer, where ⌘⌫ is "delete to the start of the line" on a Mac and must go on meaning that; a
+/// centre pane with nothing open; and a pty agent's live pane, which is the agent itself and has no
+/// run behind it to hide. Only past all three does it claim the key.
+fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::KeyboardEvent) {
+    use wasm_bindgen::JsCast as _;
+
+    let typing = ev
+        .target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .is_some_and(|el| {
+            matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA")
+                || el
+                    .dyn_ref::<web_sys::HtmlElement>()
+                    .is_some_and(web_sys::HtmlElement::is_content_editable)
+        });
+    if typing {
+        return;
+    }
+
+    let Some(agent) = watch.name.get_untracked() else {
+        return;
+    };
+    if watch.interactive.get_untracked() {
+        return;
+    }
+    let Some(run_id) = watch.run_id.get_untracked() else {
+        return;
+    };
+    let node = watch.node.get_untracked();
+
+    ev.prevent_default();
+    // Not `RailBand::drawn`: the open conversation's hidden state has to be read whether or not its
+    // row is past the band's cap — a row hidden behind "Show more" is exactly as hidden or not as
+    // one on screen. Absent altogether (the ordinary case — hiding a run closes the pane that had it
+    // open, so a *visible* run is what is normally found here) it is read as not hidden, matching
+    // the row it would draw as if the rail redrew this instant.
+    let hidden = rail_bands(state, watch)
+        .0
+        .into_iter()
+        .flat_map(|band| band.rows)
+        .find(|row| {
+            row.node == node
+                && row.agent == agent
+                && row.run.as_ref().is_some_and(|r| r.run_id == run_id)
+        })
+        .and_then(|row| row.run)
+        .is_some_and(|r| r.hidden);
+    // Unlike the digit hotkeys, this never touches `state.chat_drawer`: those close it because
+    // opening a different conversation behind a drawer left over from picking it would be a bug —
+    // there is nowhere to navigate to here, only the pane already on screen to hide.
+    set_session_hidden(state, watch, node, agent, run_id, !hidden);
 }
 
 /// Open one session from anywhere in the rail: repoint the whole screen when it belongs to another

@@ -471,7 +471,7 @@ index until the socket's next answer narrowed it back.
 ```
 chat_rail                               the whole left rail
 ├─ chat_all_sessions                    visible rows
-│   └─ rail_bands                       the bands as drawn; also what ⌘1…⌘9 read
+│   └─ rail_bands                       the bands as drawn; also what ⌘1…⌘9 and ⌘⌫ read
 │       ├─ session_rows                 the rows, before anything bands them
 │       │   ├─ source_rows  × selected source  the merge (`docs/fleet.md` §13) — one machine's own
 │       │   │   │                              agents plus one call per selected node, concatenated
@@ -537,6 +537,12 @@ what it hides is rows, and only ones already in hand. Two "more"s on this rail, 
 different: this one reveals what was fetched, `chat_load_more` under the whole rail asks the
 backend for the next `SESSION_PAGE`. ⌘1…⌘9 are assigned to the rows a band actually prints, so a
 row behind the cap carries no number — and opening the band out renumbers the rail from there down.
+⌘⌫ rides alongside them (`install_session_hotkeys`, `actions.rs`): it hides — or, struck again on an
+already-hidden one, unhides — the conversation open in the centre pane, exactly what the row's
+right-click menu's Hide/Unhide does, read from `AgentsWatch` at the moment the key is struck rather
+than from the row a click would have used. It declines untouched when the target is a text field
+(⌘⌫ there means "delete to line start"), when nothing is open, or when the open pane is a pty
+agent's live session, which has no run behind it to hide.
 The one reader that deliberately goes past the cap is `chat_inbox`: `RailBand::rows` holds
 everything and only `RailBand::shown` (and `RailBand::drawn`) is capped, because a question left
 behind a control nobody pressed is a run stopped for good.

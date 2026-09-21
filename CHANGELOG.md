@@ -20,6 +20,14 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **⌘⌫ (or Ctrl+Backspace) hides the open chat.** Struck anywhere on the Agents page but a text
+  field, it puts away whichever conversation is open in the centre pane — the same as the sessions
+  rail's own right-click Hide — and struck again on one already hidden brings it back. The rail's
+  Hide/Unhide item shows the key beside it when it's the conversation on screen. In the composer it
+  still means "delete to the start of the line", as on every other text field.
+
 ## 1.19.0 — 2026-09-21
 
 ### Changed

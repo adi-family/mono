@@ -42,6 +42,7 @@ web-sys = { version = "0.3", features = [
     "Location",
     "History",           # push/replaceState for client-side routing
     "EventTarget",       # popstate listener (back/forward)
+    "Event",             # …and ev.target() on ⌘⌫: don't steal the key from a composer field
     "MouseEvent",        # nav-link click handling, right-click menus on the store tree
     "KeyboardEvent",     # Enter/Escape on the store tree's new-entry input
     "FocusEvent",        # select-all on focus for the copyable id/ticket fields
