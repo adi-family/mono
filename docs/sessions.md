@@ -542,7 +542,18 @@ already-hidden one, unhides — the conversation open in the centre pane, exactl
 right-click menu's Hide/Unhide does, read from `AgentsWatch` at the moment the key is struck rather
 than from the row a click would have used. It declines untouched when the target is a text field
 (⌘⌫ there means "delete to line start"), when nothing is open, or when the open pane is a pty
-agent's live session, which has no run behind it to hide.
+agent's live session, which has no run behind it to hide. On the hide direction only — unhiding
+moves nothing — it also hands the pane on: the row that comes after the one just hidden, in the same
+drawn order across bands that ⌘1…⌘9 walk, wrapping from the last drawn row back to the first, so
+striking the key over and over walks the rail from the top putting each chat away in turn. A drawn
+list of one row (the one being hidden, nothing else visible) has no successor, and the pane goes to
+empty exactly as it always did before this. The successor is worked out from `rail_bands` *before*
+`set_session_hidden` is called, then opened right after it returns rather than after
+`settle_session_change`'s async rail refresh lands — `set_session_hidden` has already run
+`close_run_view` synchronously by then, so opening the next row in the same call is what keeps the
+pane from flashing through the empty state, and `settle_session_change` only ever overwrites
+`watch.runs` for the agent that was just hidden, which is harmless whether or not that turns out to
+be the same agent `next` moved to.
 The one reader that deliberately goes past the cap is `chat_inbox`: `RailBand::rows` holds
 everything and only `RailBand::shown` (and `RailBand::drawn`) is capped, because a question left
 behind a control nobody pressed is a run stopped for good.

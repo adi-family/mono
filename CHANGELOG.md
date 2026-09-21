@@ -22,11 +22,13 @@ extraction script cares about.
 
 ### Added
 
-- **⌘⌫ (or Ctrl+Backspace) hides the open chat.** Struck anywhere on the Agents page but a text
-  field, it puts away whichever conversation is open in the centre pane — the same as the sessions
-  rail's own right-click Hide — and struck again on one already hidden brings it back. The rail's
-  Hide/Unhide item shows the key beside it when it's the conversation on screen. In the composer it
-  still means "delete to the start of the line", as on every other text field.
+- **⌘⌫ (or Ctrl+Backspace) hides the open chat, then moves on to the next one.** Struck anywhere on
+  the Agents page but a text field, it puts away whichever conversation is open in the centre pane —
+  the same as the sessions rail's own right-click Hide — and opens the chat that comes after it in
+  the rail, wrapping back to the top from the last one, so striking it again and again walks the
+  whole list away. Struck again on one already hidden it just brings it back, without moving on.
+  The rail's Hide/Unhide item shows the key beside it when it's the conversation on screen. In the
+  composer it still means "delete to the start of the line", as on every other text field.
 
 ## 1.19.0 — 2026-09-21
 

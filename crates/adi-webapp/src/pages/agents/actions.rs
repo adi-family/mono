@@ -6112,7 +6112,8 @@ async fn settle_session_change(
 /// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them, and
 /// ⌘⌫ to Hide (or Unhide) the conversation open in the centre pane — the same action as that row's
 /// right-click menu, put a key away because it is the one thing done to a chat most often once it
-/// has been read.
+/// has been read. Hiding also hands the pane on to the row after it, so the key alone walks a
+/// morning's chats away one at a time — see [`toggle_open_session_hidden`].
 ///
 /// Both read their target when the key is struck, not when the rail was drawn. The rail redraws
 /// whenever anything moves, and a list captured at draw time would go on opening whatever *used* to
@@ -6169,7 +6170,11 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
 }
 
 /// ⌘⌫'s own half of [`install_session_hotkeys`]: hide (or unhide) whichever conversation the centre
-/// pane has open, exactly as [`set_session_hidden`] does for the rail's own menu.
+/// pane has open, exactly as [`set_session_hidden`] does for the rail's own menu — and, only on the
+/// hide direction, hand the pane on to the row that comes after the one just hidden, in the same
+/// order ⌘1…⌘9 walk, wrapping from the last drawn row back to the first. Struck again on a chat
+/// already hidden it only unhides, same as before this task: nothing moved, so there is nothing to
+/// walk to.
 ///
 /// Declines, without touching the event, on anything Backspace already means: typing in the
 /// composer, where ⌘⌫ is "delete to the start of the line" on a Mac and must go on meaning that; a
@@ -6203,6 +6208,16 @@ fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::Ke
     let node = watch.node.get_untracked();
 
     ev.prevent_default();
+    // Clones, not the originals, so `node`/`agent`/`run_id` are still free to move into
+    // `set_session_hidden` below once this has done comparing.
+    let is_open = {
+        let (node, agent, run_id) = (node.clone(), agent.clone(), run_id.clone());
+        move |row: &SessionRow| {
+            row.node == node
+                && row.agent == agent
+                && row.run.as_ref().is_some_and(|r| r.run_id == run_id)
+        }
+    };
     // Not `RailBand::drawn`: the open conversation's hidden state has to be read whether or not its
     // row is past the band's cap — a row hidden behind "Show more" is exactly as hidden or not as
     // one on screen. Absent altogether (the ordinary case — hiding a run closes the pane that had it
@@ -6212,17 +6227,56 @@ fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::Ke
         .0
         .into_iter()
         .flat_map(|band| band.rows)
-        .find(|row| {
-            row.node == node
-                && row.agent == agent
-                && row.run.as_ref().is_some_and(|r| r.run_id == run_id)
-        })
+        .find(|row| is_open(row))
         .and_then(|row| row.run)
         .is_some_and(|r| r.hidden);
-    // Unlike the digit hotkeys, this never touches `state.chat_drawer`: those close it because
-    // opening a different conversation behind a drawer left over from picking it would be a bug —
-    // there is nowhere to navigate to here, only the pane already on screen to hide.
+
+    // Worked out now, before the hide is issued, from the bands exactly as this strike reads them —
+    // `RailBand::drawn` this time (unlike `hidden` above), because "next" has to be a row ⌘1…⌘9 could
+    // also have opened, never one sitting behind an unopened "Show more" and never the Hidden band,
+    // which isn't part of `rail_bands` at all. Only on the hide direction: unhiding moves nothing, so
+    // there is nothing to hand on to. A drawn list of one — the row about to be hidden and nothing
+    // else visible — has no successor either, which is rule three: the pane goes to empty exactly as
+    // it always has. A row not found among the drawn ones at all (past its band's cap, the same case
+    // `hidden` above reads past) has no defined "next" either, for the same reason: nothing ⌘1…⌘9
+    // could have reached from here to call a successor.
+    let next = (!hidden)
+        .then(|| {
+            let drawn: Vec<SessionRow> = rail_bands(state, watch)
+                .0
+                .into_iter()
+                .flat_map(RailBand::drawn)
+                .collect();
+            let i = drawn.iter().position(is_open)?;
+            (drawn.len() > 1).then(|| drawn[(i + 1) % drawn.len()].clone())
+        })
+        .flatten();
+
+    // Unlike the digit hotkeys, this never touches `state.chat_drawer` on a plain toggle — closing it
+    // there is about not opening a different conversation behind a drawer left over from picking it,
+    // and hiding with nowhere to walk to isn't opening anything. Handing on to `next` below *is*
+    // exactly that "opening a different conversation", so it closes the drawer the same way a digit
+    // hotkey would.
     set_session_hidden(state, watch, node, agent, run_id, !hidden);
+
+    // `set_session_hidden` has, by the time it returns, already run `close_run_view` synchronously
+    // for the chat this pane had open — `settle_session_change`'s rail refresh is the only part still
+    // in flight, on its own `spawn_local`. Opening `next` right here, in the same call, is what keeps
+    // this from flashing through the empty state: the close and this open happen inside one JS turn
+    // with nothing awaited between them, so nothing paints in between. Waiting for the refresh to land
+    // first would only queue this behind a network round trip for no gain — `settle_session_change`
+    // writes `watch.runs` when `watch.name`/`watch.node` still name the *hidden* run's own agent, and
+    // by the time it lands that is true only when `next` turned out to be a row of that same agent, in
+    // which case the fresh list it writes is exactly the one `next`'s own view wants too, not a value
+    // this clobbers back over.
+    if let Some(row) = next {
+        state.chat_drawer.set(None);
+        match row.run {
+            Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
+            // A pty agent's row *is* the agent — there is no run to select, only a screen to point.
+            None => point_watch(watch, row.node, row.agent, true),
+        }
+    }
 }
 
 /// Open one session from anywhere in the rail: repoint the whole screen when it belongs to another
