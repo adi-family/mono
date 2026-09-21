@@ -1,0 +1,108 @@
+---
+title: Sessions
+description: A run's transcript and history, stored on the machine that ran it.
+---
+
+import Flags from '../../components/Flags.astro';
+
+Launch an [[Agents|agent]] and it leaves something behind: everything it said, everything it
+ran, everything you replied. That record is a session.
+
+## One thing, three names
+
+The same object goes by a different name depending on which layer you're looking at it from —
+and all three point at the same row, keyed by the same id:
+
+| Where | What it's called |
+| --- | --- |
+| the store on disk | **session** |
+| the CLI, the agent layer | **run** |
+| the control panel | **conversation**, or just **chat** |
+
+A **conversation** is a session you can talk back into — it has a reply box because something on
+the other end can answer. A one-shot run has the same kind of record with no reply box: it ran
+once and reported back. A `pty:*` run — a raw terminal session — has no record at all; its live
+pane is the whole of it, and it disappears the moment you close it.
+
+## Where it's kept <Flags>Enterprise interest</Flags>
+
+Sessions live under `~/.adi/mono/sessions/` on the machine the agent ran on: transcripts in a
+database, logs in separate files. Reading your own history needs no external service — the
+transcript is a file on your disk, not a record in somebody else's. If that machine goes away, so
+does the record; nothing about keeping it depends on a vendor staying in business. Reading
+another machine's history is the one exception, and it needs a connection to that machine — see
+[[Fleet]].
+
+## The rail
+
+The control panel's left rail lists your sessions: what each is called, how it's going right now,
+when it last said something. From there you can:
+
+- **open** a conversation to read the transcript
+- **reply** into one that's still answerable
+- **stop** a run that's still going
+- **star** one to keep it around, or **hide** one to get it out of the way without deleting it
+
+Starring and hiding are independent — a conversation can be starred and hidden at once. Starring
+means *keep this*: a starred session is never swept for age. Hiding just means *out of my way
+for now*; it still counts, still shows up to `adi-mono agents runs`, and unhiding it puts it right
+back.
+
+## Continuing versus starting fresh
+
+Replying into an open conversation and clicking **Run** again are not the same action. Replying
+continues the same session with its transcript — the agent sees everything said so far. Clicking
+**Run** starts a new session, with no transcript from the previous conversation. Reply to keep
+the agent's context; run again for a clean start. See [[Agents]] for what a run actually is
+underneath either choice.
+
+## Why a session might not be in the list
+
+Work down this list when one you're looking for isn't in the rail:
+
+1. **It's a `pty:*` run.** Terminal sessions have no history — the rail only shows one while it's
+   live, or while that agent is on screen.
+2. **It's hidden.** Turn on **Show hidden** to see it.
+3. **The agent star filter is on.** This narrows the rail to sessions of agents you've starred on
+   the Agents page — a different star from a conversation's own. An unstarred agent's sessions are
+   excluded while it's on.
+4. **The "Mine" filter is on** (it's the default) and a subagent launched that run for itself
+   rather than you launching it by hand. Most of what a busy fleet accrues is exactly this. Turn
+   the filter off to see everything, or wait — a session that stops to ask *you* something always
+   shows regardless.
+5. **It's past its group's share of the rail.** The rail only prints so many rows per group at
+   once; **Show more** reveals the rest — nothing was lost, it just wasn't drawn.
+6. **It aged out.** Each agent keeps its newest 50 sessions; older ones are pruned automatically.
+   A session that's still running, or starred, is never swept, however old.
+7. **Its agent was deleted.** A session outlives the agent definition that made it, but the panel
+   lists sessions per agent — delete the agent and its old sessions stop showing up there, even
+   though the record itself is still on disk.
+
+Sessions waiting on your answer bypass the hidden, Mine, and agent-star filters — they always show,
+marked, at the top. They can still age out or lose their agent like any other session.
+
+## More than one machine <Flags>Expert area</Flags>
+
+Pair another machine and the rail can merge its sessions into your own list — see [[Fleet]]. Once
+more than one machine is in view, a run id is only unique on the machine that minted it: the same
+id can exist on two paired machines at once, meaning two different conversations. The rail keys
+each row by machine *and* id to keep them apart; you shouldn't need to think about this unless
+you're scripting against ids yourself.
+
+## What a run leaves behind <Flags>Expert area</Flags> <Flags>Enterprise interest</Flags>
+
+A finished run carries a verdict: completed, failed, or unknown, plus how long it took and what
+it cost. `adi-mono agents runs` is how you ask for that — across every agent, newest first —
+instead of opening logs one at a time:
+
+```bash
+adi-mono agents runs --since 6h
+```
+
+If the outcome is `unknown`, the summary can't tell you what happened — inspect the log at
+`~/.adi/mono/sessions/<agent>/<id>.log` instead.
+
+## See also
+
+[[Agents]] for what's actually running behind a session. [[Fleet]] for pairing another machine
+into the same rail.

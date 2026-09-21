@@ -80,6 +80,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Projects', link: '/projects/' },
 						{ label: 'Agents', link: '/agents/' },
+						{ label: 'Sessions', link: '/sessions/' },
 						{ label: 'Tools', link: '/tools/' },
 						{ label: 'Tasks', link: '/tasks/' },
 						{ label: 'Triggers', link: '/triggers/' },
