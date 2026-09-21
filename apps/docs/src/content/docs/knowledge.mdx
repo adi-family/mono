@@ -1,0 +1,112 @@
+---
+title: Knowledge
+description: Notes in scoped bases, searched by what they mean rather than which words they used — so you ask the question you actually have.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A knowledge base holds notes — a title, a body of any length, tags — and finds them by what they
+mean, not which words they happen to use. Search "how do I bring the panel back up" and it can
+find a note titled "Restarting the control panel" even though the two share almost no words.
+This is not [[Facts]]: a knowledge note is a memory, written the way you'd write yourself a
+reminder; a fact is a record of one sentence somebody actually said. See that page for when you
+want the second thing instead.
+
+## Why it reaches beyond keyword search
+
+Full-text search finds what a note says. Semantic search finds what a note is *about*, so you
+can ask the question you actually have instead of guessing the words whoever wrote the note
+used. `adi-mono knowledge search --text` still exists — FTS5, no model, no network — for the
+times you know the exact phrase you're hunting for.
+
+## Do it
+
+List: `adi-mono knowledge bases`. Panel: `/knowledge`.
+
+```bash
+adi-mono knowledge base new global/runbooks --description "how this machine is operated"
+
+adi-mono knowledge add global/runbooks -t "Restarting the control panel" \
+    -b "launchctl kickstart -k gui/$(id -u)/family.adi.app.control-panel" --tag ops
+
+adi-mono knowledge search "how do I bring the panel back up"
+```
+
+```
+0.681  global/runbooks    restarting-the-control-panel   Restarting the control panel
+```
+
+`--body` comes from stdin when it's omitted, so a note longer than a shell argument is comfortable
+to write: `cat postmortem.md | adi-mono knowledge add global/runbooks -t "The March outage"`.
+Search without `--base` covers every base you may read at once — one embedded query, put to all
+of them. Name `--base` (repeatable) to narrow it to one or a few.
+
+## Scopes <Flags>Enterprise interest</Flags>
+
+A base id is `<scope>/<name>`; a bare scope means that scope's `default` base. Notes are stored
+locally, in a file under `~/.adi/mono/knowledge/`; the default embedding model runs locally too,
+after its one-time download. The scopes are the same [[Projects|project]] and [[Agents|agent]]
+identities everything else in ADI uses:
+
+| Id | Who reads it | Who writes it |
+| --- | --- | --- |
+| `global/<name>` | everyone | everyone |
+| `project:<id>/<name>` | whoever is working in that project | same |
+| `agent:<name>/<base>` | every agent | that agent alone |
+
+These levels organize what a run reaches by default; they are not a hard sandbox — anything
+running `adi-mono` directly can act as a different identity, and `--root` (below) is a documented
+way through it. Under the normal isolation checks, though, another agent can read
+`agent:reviewer/memory` but cannot write to it.
+
+## An agent's own memory <Flags>Expert area</Flags>
+
+`agent:reviewer/memory` is readable by every other agent but writable only by `reviewer`, so an
+agent that worked out how something actually behaves can leave that behind for the next one to
+find. An [[Agents|agent definition]] gets this base by setting `memory = true`; it's off by
+default.
+
+Writing into *another* agent's memory needs `--root`, which runs as the owner of the whole store
+regardless of who the environment says you are — the one deliberate way through the isolation
+above, for leaving an agent something it should have known:
+
+```bash
+adi-knowledge-root add agent:solver/memory --create \
+    --id frontdoor-502 --tag from-review \
+    -t "The front door 502s on a stale route" \
+    -b "Restart the service; a config reload alone does not pick this up."
+```
+
+## Staying searchable <Flags>Expert area</Flags>
+
+Semantic search needs an embedding model behind every note, and a note written while that model
+was unavailable is stored and full-text searchable but not yet found by meaning — `list` marks
+it with a `*`, and `base status` counts it:
+
+```bash
+adi-mono knowledge base status global/runbooks
+```
+
+```
+notes:     412
+embedded:  0 (412 stale)
+```
+
+```bash
+adi-mono knowledge reembed global/runbooks
+```
+
+```
+global/runbooks: embedded 412 of 412 note(s) into 1174 chunk(s); 0 already current.
+```
+
+`reembed` is the sweep for exactly that gap, and for the day the model changes — every vector
+records which model made it, so switching models invalidates the old ones rather than silently
+mixing two. [[Facts]] uses a different embedding model by default, for reasons specific to that
+design; vectors from the two are never compared against each other.
+
+## See also
+
+[[Facts]] for a record of what was actually said, rather than a note to yourself. [[Agents]] for
+`memory` and the `knowledge` grant list on a definition. [[Projects]] for the scope a
+`project:<id>/<name>` base lives under. [[Database]] for the other place state outlives a run.

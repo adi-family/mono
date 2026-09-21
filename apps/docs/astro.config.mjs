@@ -86,6 +86,8 @@ export default defineConfig({
 						{ label: 'Events', link: '/events/' },
 						{ label: 'Secrets', link: '/secrets/' },
 						{ label: 'Database', link: '/database/' },
+						{ label: 'Knowledge', link: '/knowledge/' },
+						{ label: 'Facts', link: '/facts/' },
 						{ label: 'Hive', link: '/hive/' },
 						{ label: 'Ports', link: '/ports/' },
 						{ label: 'DNS and the front door', link: '/dns/' },

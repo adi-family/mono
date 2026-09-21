@@ -1,0 +1,187 @@
+---
+title: Facts
+description: One plain sentence, recorded as something somebody actually said, checked against what the base already knows, and versioned so anything built on it can tell when it changes.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A fact is not a note. It's one plain sentence — something somebody said — recorded as a
+statement of record: checked against what the base already knows before it's accepted, and
+versioned so anything built on top of it can tell the moment it changes. This is not
+[[Knowledge]]: a knowledge note is a memory you write for yourself, searched by meaning; a fact
+is a record of what was actually said and agreed, filed once and never silently edited. Reach
+for [[Knowledge]] for "things I want to remember" and for this page for "what did we actually
+decide."
+
+## Who said it, who wrote it down
+
+Every fact carries two identities, and they are not the same thing:
+
+- **`--author`** — whose meaning this is. The person who said it.
+- **`--creator`** — who is writing the record. You, or the agent transcribing it.
+
+```bash
+printf '%s\n' \
+    "The company supports all countries except the CIS." \
+    "Within the CIS, the company supports Ukraine." \
+    "We are not sure we can enter the China market." \
+  | adi-mono facts add --author igor --creator agent:chat@1
+```
+
+Igor said these things; `agent:chat@1` is the one recording them. Get the two backwards and
+every fact you write down about something somebody else said gets filed as **your own opinion**
+instead.
+
+## Nothing lands until commit
+
+`add` reads stdin, one fact per line, and stages a transaction — it does not publish anything
+until commit. Each staged fact is ranked against its nearest neighbors already in the base, and
+pairs the classifier flags as close come back for a reviewer to rule on. Two of the three above
+collide:
+
+```
+tx_1a02cbc2914  3 staged, 1 to decide
+
+[p0] 0.886  controversy
+  new   #0   The company supports all countries except the CIS.
+  base  #1   Within the CIS, the company supports Ukraine.
+  why        Contradiction on whether CIS is supported
+
+decide each, then commit:
+  facts tx resolve tx_1a02cbc2914 <p> --verdict coexist|merge|supersede|drop --confirmer <who>
+  facts tx commit tx_1a02cbc2914
+```
+
+`commit` **refuses** while any pair is open. Nothing you staged is visible to search, `list`, or
+anyone else until every open pair has a verdict:
+
+```bash
+adi-mono facts tx resolve tx_1a02cbc2914 0 --verdict coexist --confirmer igor
+adi-mono facts tx commit tx_1a02cbc2914
+```
+
+```
+committed 3 new
+  f_1a02cbfe28e_0  The company supports all countries except the CIS.
+  f_1a02cbfe28e_1  Within the CIS, the company supports Ukraine.
+  f_1a02cbfe28e_2  We are not sure we can enter the China market.
+```
+
+## The four verdicts
+
+| Verdict | What happens to the losing sentence |
+| --- | --- |
+| `coexist` | nothing — both stand. This is a decision, not a skip: you're confirming both are true. |
+| `drop` | the new fact never lands. The base was already right. |
+| `merge --fact "…"` | one sentence, given by you, replaces both. |
+| `supersede --keep <id>` | the winning side's sentence replaces the loser's, in place. |
+
+`merge` and `supersede` never leave two rows. When the losing side is already committed, its row
+is **rewritten in place** with the winning sentence and its version bumps — never deleted, so no
+id ever dangles (more on that below). When both sides of a pair are still staged in the same
+batch, the loser simply never becomes a row.
+
+It never merges on similarity by itself, at any score. The closest pair ever measured against a
+real base still needed a reviewer:
+
+```
+The company supports all countries except the CIS.
+Within the CIS, the company supports Ukraine.
+```
+
+An automatic merge at that similarity would have erased the Ukraine carve-out. A model can find
+the close pairs; only a reviewer can tell a duplicate from a carve-out that looks like one.
+
+## The payoff: `derive`, and finding out what went stale
+
+`derive --from` records a conclusion **linked** to the facts it came from — a plan, a summary, an
+answer — checked against the base the same way a stated fact is. This stages a transaction like
+any other write; resolve its pairs and commit it the same way:
+
+```bash
+adi-mono facts derive --from f_1a02cbfe28e_2 \
+    --fact "Market entry plan: skip China for now." --creator agent:planner@1
+```
+
+Now suppose the source fact reverses:
+
+```bash
+echo "We can support China after all." | adi-mono facts add --author igor --creator agent:chat@1
+# ...resolved as a supersede, keeping the incoming side...
+adi-mono facts tx commit tx_1a02cc00a73
+```
+
+```bash
+adi-mono facts stale
+```
+
+```
+d_1a02cc00a57_0  Market entry plan: skip China for now.
+    out of date because f_1a02cbfe28e_2 changed
+```
+
+Nobody had to remember that the plan depended on that fact. Once you regenerate the plan,
+`refresh <id>` brings its own source references up to its facts' current versions and bumps its
+own — so anything built on *the plan* goes stale in turn.
+
+## A fact stands alone
+
+A fact is read months later by someone without the conversation it came from. Resolve every
+referent, and keep negation **inside** the sentence, where the person actually put it:
+
+```
+Good:  We do not support the CIS.
+       Our audience is founders who cannot afford to hire a team.
+
+Bad:   that direction is fine        (a pointer nobody can resolve later)
+       audience: solo founders       (a field, not a sentence)
+```
+
+## Scopes
+
+A fact base is addressed exactly like a [[Knowledge]] base, by the same scoping code:
+
+| Id | Who reads it | Who writes it |
+| --- | --- | --- |
+| `global/<name>` | everyone | everyone |
+| `project:<id>/<name>` | whoever is working in that project | same |
+| `agent:<name>/<base>` | every agent | that agent alone |
+
+`--base` is stated once, before the verb. Without it, a command uses `$ADI_FACTS_BASE`, falling
+back to `global/default`. `facts add` is the only command that creates a base — every other
+command refuses one that isn't there, rather than answering an empty base for a typo.
+
+## Local, scoped, auditable <Flags>Enterprise interest</Flags>
+
+A fact base is a local SQLite file under `~/.adi/mono/facts/` — nothing about accepting a fact
+requires a network call to a hosted service. Every fact carries who said it (`--author`), who
+recorded it (`--creator`), and every verdict that ever touched it, so a decision isn't a black
+box:
+
+```bash
+adi-mono facts get f_1a02cbfe28e_2@1
+```
+
+```
+f_1a02cbfe28e_2  v2  [fact]
+  We can support China after all.
+  said by igor, written by agent:chat@1
+
+  STALE REFERENCE — written against v1, the fact is now v2.
+
+what changed since:
+  v2   supersede   by igor
+        was: We are not sure we can enter the China market.
+        now: We can support China after all.
+```
+
+A committed fact id is never destroyed — `merge` and `supersede` rewrite in place rather than
+deleting — so a reference written down elsewhere (a plan, a comment, another agent's notes)
+never dangles. What can change underneath it is the *meaning*, and `get` is how you check that a
+fact you're relying on still says what it said when you wrote its id down.
+
+## See also
+
+[[Knowledge]] for a memory searched by meaning instead of a record of what was said. [[Agents]]
+for which identity a run's `--creator` should carry. [[Projects]] for the scope a
+`project:<id>/<name>` base lives under.
