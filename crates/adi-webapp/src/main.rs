@@ -876,6 +876,11 @@ fn App() -> impl IntoView {
         used,
         mesh,
         fleet,
+        // Seeded from storage, unlike the sessions rail's fields below: this is the one shell that
+        // has a picker at all, so this is the one place `docs/fleet.md` §14's persisted pointer is
+        // read back into a signal (`state::load_panel_source`).
+        panel_source: RwSignal::new(state::load_panel_source()),
+        panel_source_menu: RwSignal::new(None),
         projects,
         project_detail,
         current_project,
@@ -1137,6 +1142,15 @@ fn App() -> impl IntoView {
     // every table renders as "Loading…" for as long as the tab is open.
     live::on_read_result(move |path, why| state::note_read(state, path, why));
 
+    // Mirror the panel-wide source picker into `fetch`'s own pointer (`docs/fleet.md` §14) — the
+    // one place `State::panel_source` is read back, per that field's own doc comment. Every bare
+    // `fetch::get`/`fetch::post` a page makes from here on reads this thread-local rather than the
+    // signal directly, which is what lets an ordinary mutation deep in a page module follow the
+    // picker without importing `State` or threading a source through 138 call sites.
+    Effect::new(move |_| {
+        fetch::set_panel_source(state.panel_source.get());
+    });
+
     // Tell the backend what this page is looking at, and re-tell it whenever the page moves — a
     // route change, a different project, another chat or log or terminal opened. Everything the
     // shell used to fetch on a timer now arrives on the socket, and only when it has changed.
@@ -1332,6 +1346,10 @@ fn App() -> impl IntoView {
             </a>
             {move || crumbs(route.get(), state.current_project.get())}
             <span class="adi-spacer"></span>
+            // Which machine every ordinary read and write on this panel is pointed at
+            // (`docs/fleet.md` §14) — ahead of the way out and the version pill, since it governs
+            // what every page beyond this bar is actually showing.
+            {panel_source_picker(state)}
             // The way back out of the control panel. A plain link, since `/` is a different
             // document than the workbench and not an SPA route.
             <a class="adi-btn adi-btn--link" href="/" title="Back to the simple chat view">
@@ -1469,6 +1487,131 @@ fn App() -> impl IntoView {
             )
         })}
     }
+}
+
+/// The panel-wide source picker (`docs/fleet.md` §14): which paired node, or this machine, every
+/// ordinary read and write on the workbench is pointed at. One radio rather than the sessions
+/// rail's checklist (§13, `chat_session_node`) — the workbench keeps exactly one address in mind,
+/// never a merge — and [`state::set_panel_source`] is the only thing that moves it.
+///
+/// Always in the titlebar, on every route and whether or not anything is paired: like the rail's
+/// own node button, a control that only appeared once a fleet existed would be one the operator
+/// has to already know about to go looking for.
+fn panel_source_picker(state: State) -> AnyView {
+    let current = state.panel_source.get();
+    let hint = match &current {
+        None => "Reading and writing this machine. Open this to point the whole panel at a paired \
+             node instead."
+            .to_string(),
+        Some(node) => format!(
+            "Reading and writing {node} over the mesh \u{2014} every ordinary page here, not \
+             only the ones that already named a source of their own. \u{201c}This machine\u{201d} \
+             in this menu points it back."
+        ),
+    };
+    view! {
+        <button class="adi-btn adi-btn--ghost adi-btn--sm" type="button"
+            title=hint.clone() aria-haspopup="menu"
+            aria-expanded=move || state.panel_source_menu.get().is_some().to_string()
+            on:click=move |ev: web_sys::MouseEvent| open_panel_source_menu(state, &ev)>
+            <Icon icon=icons::Icon::Node.lucide() size=IconSize::Sm label=hint.clone()/>
+            {current.map(|node| view! { <span>{node}</span> })}
+        </button>
+        {move || panel_source_menu(state)}
+    }
+    .into_any()
+}
+
+/// Drop the picker's menu from under its button, the way the sessions rail's own node menu does
+/// (`pages/agents/actions.rs`, `open_node_menu`) — anchored to the button's own rect rather than the
+/// pointer, so a second press always closes what the first opened.
+fn open_panel_source_menu(state: State, ev: &web_sys::MouseEvent) {
+    if state.panel_source_menu.get_untracked().is_some() {
+        state.panel_source_menu.set(None);
+        return;
+    }
+    let at = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .map(|el: web_sys::Element| {
+            let r = el.get_bounding_client_rect();
+            (r.left() as i32, r.bottom() as i32 + 4)
+        })
+        .unwrap_or((ev.client_x(), ev.client_y()));
+    state.panel_source_menu.set(Some(at));
+}
+
+/// The picker's menu: this machine, then every paired node, one radio (`docs/fleet.md` §14) —
+/// unlike the sessions rail's checklist (`pages/agents/actions.rs`, `chat_node_menu`), which merges
+/// several sources at once, this points at exactly one, so choosing a node un-chooses whatever was
+/// chosen before.
+///
+/// A locked node is listed and disabled, never dropped — the same reasoning `chat_node_menu`'s own
+/// doc comment gives for the rail's menu: dropping it would say the node is gone when what is true
+/// is that this machine holds no password for it right now, and the Fleet page is where that is
+/// fixed. Unlike the rail, there is no "already selected" exception here to strand a pick past
+/// locking — the picker never disables **This machine**, so a locked, still-pointed-at node is
+/// always one click from being un-pointed rather than one this menu has to keep reachable itself.
+fn panel_source_menu(state: State) -> Option<AnyView> {
+    let (x, y) = state.panel_source_menu.get()?;
+    let current = state.panel_source.get();
+    let fleet = state.fleet_nodes.get();
+    let unpaired = fleet.as_ref().is_some_and(|f| f.nodes.is_empty());
+    let nodes = fleet.map(|f| f.nodes).unwrap_or_default();
+    Some(
+        view! {
+            <adi_ui::Menu at=Some(adi_ui::MenuAt::Point(x, y))
+                on_dismiss=Callback::new(move |()| state.panel_source_menu.set(None))>
+                <adi_ui::MenuHead help=links::FLEET_PANEL_SOURCE
+                    help_label="What pointing the panel at a node does, and what never follows it">
+                    "Point this panel at"
+                </adi_ui::MenuHead>
+                <adi_ui::MenuItem checked=current.is_none() radio=true
+                    title="Read and write this machine, whatever else is paired"
+                    on_select=Callback::new(move |()| {
+                        state::set_panel_source(state, None);
+                        state.panel_source_menu.set(None);
+                    })>
+                    "This machine"
+                </adi_ui::MenuItem>
+                {nodes.into_iter().map(|node| {
+                    let on = current.as_deref() == Some(node.node.as_str());
+                    let name = node.node.clone();
+                    let locked_out = node.locked && !on;
+                    let title = if locked_out {
+                        format!(
+                            "{name} is locked here \u{2014} give this machine its password on \
+                             the Fleet page first"
+                        )
+                    } else {
+                        format!("read and write {name} over the mesh")
+                    };
+                    view! {
+                        <adi_ui::MenuItem checked=on radio=true disabled=locked_out title=title
+                            on_select=Callback::new(move |()| {
+                                state::set_panel_source(state, Some(name.clone()));
+                                state.panel_source_menu.set(None);
+                            })>
+                            {node.node}
+                            {node.locked.then(|| view! {
+                                <adi_ui::MenuTick trailing=true>
+                                    <Icon icon=Lucide::Lock size=IconSize::Sm/>
+                                </adi_ui::MenuTick>
+                            })}
+                        </adi_ui::MenuItem>
+                    }
+                }).collect::<Vec<_>>()}
+                {unpaired.then(|| view! {
+                    <adi_ui::MenuNote>
+                        "No paired nodes yet. Pair one on the "
+                        <adi_ui::MenuLink href=Route::Fleet.path()>"Fleet page"</adi_ui::MenuLink>
+                        " to point the panel at it."
+                    </adi_ui::MenuNote>
+                })}
+            </adi_ui::Menu>
+        }
+        .into_any(),
+    )
 }
 
 /// Where you are, read left to right from the mark: `/ Settings / Fleet`, `/ Projects / api`.

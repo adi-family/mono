@@ -67,18 +67,14 @@ impl Sub {
     }
 
     /// Watch one of the reads that is a `POST` because it carries a subject — an agent name, a
-    /// run id — in its body. Always local; see [`Self::post_on`].
-    pub(crate) fn post<T, B, F>(path: impl Into<String>, body: &B, apply: F) -> Self
-    where
-        T: DeserializeOwned,
-        B: Serialize,
-        F: Fn(T) + 'static,
-    {
-        let body = serde_json::to_string(body).unwrap_or_else(|_| "{}".to_string());
-        Self::new(None, "POST", path.into(), body, apply)
-    }
-
-    /// [`Self::post`], routed at a specific paired node (or this machine, for `None`).
+    /// run id — in its body, routed at a specific paired node (or this machine, for `None`).
+    ///
+    /// No bare, always-local `post` beside [`Self::get`]: every POST-shaped watch this crate has
+    /// ever needed is either an explicit `(source, run_id)` read (§13) or an ordinary panel read
+    /// that follows the source picker (`docs/fleet.md` §14), and both go through `node` here —
+    /// there has been no POST-shaped read yet that belongs on neither. Add one back the day there
+    /// is; until then a function nothing calls is a worse trap than the two extra characters at
+    /// each of today's call sites.
     pub(crate) fn post_on<T, B, F>(
         node: Option<&str>,
         path: impl Into<String>,

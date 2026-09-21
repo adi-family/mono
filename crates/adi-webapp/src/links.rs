@@ -48,3 +48,8 @@ pub(crate) const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
 /// menu's head (`docs/fleet.md` §13).
 pub(crate) const FLEET_SESSIONS: &str =
     doc_section!("fleet.md", "13-driving-a-nodes-sessions-from-here");
+
+/// What pointing the panel-wide source picker at a node does, what never follows it, and why — the
+/// `?` on the picker menu's head (`docs/fleet.md` §14).
+pub(crate) const FLEET_PANEL_SOURCE: &str =
+    doc_section!("fleet.md", "14-pointing-the-whole-panel-at-a-node");

@@ -623,6 +623,14 @@ silently repointing all of it would mean an operator who forgot which node was s
 project on the wrong machine. The node menu is in the sessions rail for the same reason: it is
 scoped to what it actually changes.
 
+**§14 reverses this, on purpose, for the rest of the panel.** The objection above is about a
+*silent* repoint — one an operator has no way to notice. It does not hold against a *loud* one: a
+titlebar control that names the pointed node on every screen answers "which machine am I on" the
+moment somebody looks, which is a stronger guarantee than refusing to move at all. Read the
+paragraph above as scoped to *this section's own control* — the sessions rail's multi-select still
+never reaches past the agent API, and nothing about §14 changes that — rather than as a claim about
+the whole panel, which §14's own picker is what makes no longer true.
+
 **It grants no authority that was not already granted.** Holding a node's password means this panel
 can list it, grant against it and transfer to it; a forwarded `POST /api/agents/run` spends the same
 authority through a different screen. Both halves of §5 are still enforced **on the node** — the
@@ -783,6 +791,124 @@ the Fleet page in that line as a link, since being told where to go and having t
 different things. Every
 row also grows its own origin label on the meta line once more than one source is selected, so
 "which machine is this" never depends on the head button at all by the time a hand reaches for Stop.
+
+---
+
+## 14. Pointing the whole panel at a node
+
+§13 moved one API — an agent's own — onto whichever paired node a row names, one call at a time.
+This section is the opposite kind of move: a control in the titlebar, `State::panel_source`, that
+points the **entire** panel — every ordinary read and every ordinary write, not one agent's worth of
+either — at one paired node instead of this machine.
+
+**This reverses §13's own scope limit, deliberately.** §13 said: *"Only the agent API moves…
+projects, ports, hive, secrets and the store browser do not"* — because an operator who forgot which
+node was selected would otherwise create a project on the wrong machine. That objection is about a
+**silent** repoint, one nobody could see had happened. It does not hold against a **loud** one: a
+titlebar control that names the pointed node on every screen answers "which machine am I on" the
+moment somebody looks, which is a stronger guarantee than refusing to point at all. §13's own
+paragraph is corrected above rather than left standing — it is still true of *that section's own
+control*, the sessions rail's multi-select, which never reaches past the agent API and does not
+change here.
+
+**What follows the picker.** Every *bare* read and write in `fetch.rs` — the ordinary
+`fetch::projects()`, `fetch::create_project(…)`, `fetch::db_query(…)`, and the rest of the roughly
+130 call sites across `src/pages` that are not already routed by an explicit `(source, run_id)` pair
+— follows it. So does every *ordinary* live subscription `state::subscriptions` builds: the project
+tree, the task list, the Hive table, the ports scan, the SQL console, the Secrets page, and
+everything else a route-specific `if` in that function watches.
+
+**The routing rule, and where it lives — this is the part worth reading carefully.** The pointer is
+applied inside `fetch::get`/`fetch::post`, the two private helpers every bare call in the file goes
+through, and nowhere else. `fetch::routed_for(node, path)` itself — §13's K3 invariant — is
+untouched: it stays a pure function from an explicit `Option<&str>` to an address, and
+`fetch::get_on`/`fetch::post_on` (what every agent-scoped call uses) reach it directly rather than
+through `get`/`post`, so an explicit source still means exactly what it names whatever the picker is
+doing. That is the whole of the bare-vs-explicit rule: *naming* a source — a row's own
+`(source, run_id)` — always outranks *pointing* the panel, because naming one is a fact about the
+data already on screen and pointing the panel is a preference about where the rest of it should come
+from. The pointer itself lives in a thread-local (`fetch::PANEL_SOURCE`), mirrored there by one
+effect in `App` over `State::panel_source` — the only place that signal is read back — rather than
+threaded as a parameter through every bare call's every caller: unlike §13's multi-select, the panel
+points at exactly one source at a time, so there is one answer to "where does an ordinary bare call
+go" and no concurrent fetch for a second source that a shared variable could be read by mid-flip.
+
+**Reads and writes are not treated differently.** `fetch::post` follows the picker exactly as
+`fetch::get` does — a mutation a page fires (`fetch::create_project`, `fetch::archive_task`,
+`fetch::set_secret`, anything that is not an explicit agent call) reaches the pointed node's own
+control panel through the same `/api/node/<node>/api/…` forwarder §13 built (`viewer::proxy`),
+spends the credential this machine already holds for it, and is subject to both halves of §5 on the
+node exactly as an agent's `POST /api/agents/run` already was. This is the point of the feature, not
+an incidental consequence of how the plumbing happened to be built: pointing the panel at a node is
+*choosing to drive that machine from here*, and a picker that let you read a node's projects but
+never create one on it would be a picker that lied about what it did.
+
+**A forwarded live subscription is watched at `SLOW`, never `FAST`**, for the reason §13's J4 gives:
+each tick is an authenticated mesh round trip with the relay latency of §9 in front of it, so a page
+pointed at a node updates every three seconds instead of every one. `state::subscriptions` passes the
+picker's target into `Sub::get_on`/`Sub::post_on` explicitly, for every ordinary watch, rather than
+leaning on any implicit routing on the live channel's own side — `Sub::get`/`Sub::post` (bare) never
+consult the picker at all, which is why the routes listed below have to keep using them rather than
+calling `get_on(None, …)`, which would read identically today and silently start following the
+picker the moment somebody "simplified" it later.
+
+**What never follows it, and why each one doesn't:**
+
+- **`/api/health` and the status LED.** The socket the LED reports on is this machine's own; a
+  status light that could be reporting a node's uptime instead, with nothing on screen saying so, is
+  the one thing this feature must never cause.
+- **`/api/fleet` and `/api/fleet/*`, including the picker's own list (`/api/fleet/nodes`).** The
+  registry a picked node's own panel would show is *its* fleet, not this machine's — and the
+  picker's own list would be circular if it could point at itself. Pairing, granting and renaming
+  through this panel always shape what *this* machine can reach, never a node reached through it.
+- **`/api/mesh*`.** A picked node's mesh daemon is configured only by pairing with it directly and
+  driving its own panel at `app.<node>.n.adi` (§3) — there is no sense in which pointing this
+  machine's panel at it means "administer its mesh from here".
+- **The update endpoints and the version pill (`/api/update`, `/api/update/check`,
+  `/api/update/run`).** They name what *this* machine's binary is on and install a release through
+  *this* machine's own updater. Installing a release on a node belongs to that node's own panel, not
+  to a read carried through this one.
+
+Nothing else is exempt — not because every other endpoint happened to be safe to move, but because a
+second, ad hoc list of exemptions maintained by feel is exactly the kind of silent, hard-to-audit
+exception this feature exists to replace with one loud control.
+
+**The picker.** In the titlebar (`crates/adi-webapp/src/main.rs`, `panel_source_picker`), between
+the crumb and the way back to the simple chat view — on every route, whether or not anything is
+paired, for the same reason the sessions rail's own node button always shows (§13's Multi-select): a
+control that only appeared once a fleet existed would be one an operator has to already know about
+to go looking for. **This machine** is always the first item; every paired node from
+`GET /api/fleet/nodes` follows it, one radio rather than a checklist — the panel points at exactly
+one address, never a merge, which is the whole difference between this control and the rail's. A
+locked node is listed and disabled, the same as the rail's own menu and for the same reason: dropping
+it would say the node is gone when what is true is that this machine holds no password for it, and
+the item's title names the Fleet page as where that is fixed. Unlike the rail, the picker keeps no
+"already selected" exception for a node that locks out from under it — **This machine** is never
+disabled, so a locked, still-pointed-at node is always one click from being un-pointed, and there is
+nothing here that needs to stay reachable through a disabled tick the way the rail's persisted
+multi-select does.
+
+`GET /api/fleet/nodes` was, until this section, fetched and watched only by the chat home (`Home` in
+`main.rs`) for its own rail. The workbench shell (`App`) now asks for it too — once in `state::load`,
+and continuously in `state::subscriptions`, both always local (above) — since the picker needs the
+same list the rail's menu does and there is exactly one source of truth for it either way
+(`State::fleet_nodes`, shared by both shells; `Home` still never sets or reads `panel_source` itself).
+
+**When the pointed node is locked.** The forwarder was already built for this in §13: a request
+through `/api/node/<node>/api/…` without a stored credential answers `401`, and every page's
+ordinary error handling — the same `Result<T, String>` every `fetch::` call already returns — shows
+whatever it already shows for a failed read or write. Nothing about the picker adds a second error
+path: pointing at a node this machine cannot currently reach looks exactly like this machine's own
+backend being briefly unreachable, except that the picker's own button still names the node, so the
+operator is never left asking *which* machine just stopped answering.
+
+**`State::panel_source` is persisted**, in `localStorage` (`adi-panel-source`), and read back only by
+`App` — the chat shell has no picker and never touches it, so it cannot repoint the rail's own,
+separate multi-select (`State::session_local`/`State::session_nodes`, §13) by accident. A stored
+pointer naming a node that has since been unpaired, or that this machine no longer holds a password
+for, is not silently dropped back to "this machine": the picker's button keeps printing the name (so
+a reload never quietly moves an operator's writes back to their own machine without saying so), and
+the menu offers a clean way back to it the moment it is opened.
 
 ---
 
@@ -972,3 +1098,35 @@ Each item ships with unit tests in the same file.
       the five activity bands ordering the rows inside each. The agent picker groups the same way —
       one `<optgroup>` per source — and names the chosen agent's machine beside the control, since a
       collapsed `<select>` shows no group heading. Both only once more than one source is selected.
+
+### L — pointing the whole panel at a node (§14)
+
+- [x] L1 `State::panel_source`: a paired node's petname, or `None` for this machine — one pointer
+      for the whole workbench, persisted in `localStorage` (`adi-panel-source`) and read back only
+      by `App`. Never touches the sessions rail's own `session_local`/`session_nodes` (§13).
+- [x] L2 The routing rule: the pointer is applied inside `fetch::get`/`fetch::post` (the bare
+      helpers every non-agent-scoped call in the file goes through) via a thread-local mirrored from
+      `State::panel_source` by one effect in `App`, and nowhere else — `fetch::routed_for`,
+      `fetch::get_on`/`post_on` and every explicit `(source, run_id)` call stay exactly what they
+      were. `state::subscriptions` passes the same pointer into `Sub::get_on`/`Sub::post_on`
+      explicitly for every ordinary watch, floored to `SLOW` like any other forwarded read (§13's
+      J4). Reads and writes are not treated differently: a bare mutation follows the picker exactly
+      as a bare read does.
+- [x] L3 The exemptions: `/api/health`, `/api/fleet` and `/api/fleet/*` (including the picker's own
+      `/api/fleet/nodes`), `/api/mesh*`, and the update endpoints stay local always, called through
+      `fetch::get_local`/`fetch::post_local` and left as plain `Sub::get`/`Sub::post` in
+      `subscriptions`.
+- [x] L4 The picker itself, in the titlebar on every route: **This machine** first, then every
+      paired node from `/api/fleet/nodes`, one radio; a locked node listed and disabled with the
+      Fleet page named. `/api/fleet/nodes` added to the `App` shell's own `load`/`subscriptions`,
+      which previously read it only on the chat home.
+- [ ] L5 Loud on-screen treatment for a **write** while pointed at a node — something beyond the
+      picker's own button naming it, so a mutation fired from deep in a page carries the same
+      "you are changing `<node>`" weight a Stop already carries on the sessions rail (ADI-MONO-89).
+      **Worth knowing before starting it:** L2 already makes a bare mutation follow the picker, as a
+      mechanical consequence of `fetch::post` sharing L2's thread-local with `fetch::get` — writing
+      to a pointed node already works today. What is open is making that fact loud enough on screen
+      before an operator commits to it, not making the write itself happen.
+- [ ] L6 A panel-wide "you are looking at `<node>`" treatment beyond the picker's own button —
+      something a reader's eye reaches without having to check the titlebar first, the way a
+      forwarded rail row already carries its own source on the meta line (§13's K6) (ADI-MONO-90).

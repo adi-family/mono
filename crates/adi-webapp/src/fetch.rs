@@ -1,5 +1,6 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
@@ -37,8 +38,11 @@ use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
+/// This machine's own health and the status LED — never the panel-wide source picker's target
+/// (`docs/fleet.md` §14): the socket the LED reports on is this machine's, whatever the panel is
+/// pointed at.
 pub async fn health() -> Result<Health, String> {
-    get("/api/health").await
+    get_local("/api/health").await
 }
 
 pub async fn ports() -> Result<PortsState, String> {
@@ -67,23 +71,27 @@ pub async fn meta() -> Result<MetaState, String> {
 
 // Auto-update (`docs/adi-update.md`). All three answer the same shape, so the top bar's
 // pill re-renders from whichever call it last made.
+//
+// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the version
+// pill names what *this* machine's binary is on, and installing a release runs against this
+// machine's own updater whatever the picker is pointed at.
 
 /// What is installed, what was last seen published, and whether an install is in flight.
 /// Reads two files on the server; safe to poll.
 pub async fn update_state() -> Result<UpdateState, String> {
-    get("/api/update").await
+    get_local("/api/update").await
 }
 
 /// Go and ask the release manifest. The one call here that leaves the machine, so the pill
 /// makes it only when the server says its record has gone stale.
 pub async fn check_update() -> Result<UpdateState, String> {
-    post("/api/update/check", &()).await
+    post_local("/api/update/check", &()).await
 }
 
 /// Install the published release. Answers as soon as the updater is running — it restarts the
 /// app on its way through, so the socket this reply came over is expected to drop.
 pub async fn run_update() -> Result<UpdateState, String> {
-    post("/api/update/run", &()).await
+    post_local("/api/update/run", &()).await
 }
 
 pub async fn reserve(body: &LeaseRef) -> Result<ReserveResponse, String> {
@@ -163,55 +171,63 @@ pub async fn test_embedding_backend(draft: SaveEmbeddingBackend) -> Result<TestR
 }
 
 // Mesh: every endpoint returns the fresh MeshState so the page updates in one round-trip.
+//
+// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the mesh daemon
+// a picked node runs is *its own*, reached only by pairing with it in the first place — there is no
+// sense in which "point the panel at laptop-b" means "configure laptop-b's mesh from here".
 
 pub async fn mesh() -> Result<MeshState, String> {
-    get("/api/mesh").await
+    get_local("/api/mesh").await
 }
 
 pub async fn mesh_start() -> Result<MeshState, String> {
-    post("/api/mesh/start", &()).await
+    post_local("/api/mesh/start", &()).await
 }
 
 pub async fn mesh_stop() -> Result<MeshState, String> {
-    post("/api/mesh/stop", &()).await
+    post_local("/api/mesh/stop", &()).await
 }
 
 pub async fn mesh_allow(port: u16) -> Result<MeshState, String> {
-    post("/api/mesh/allow", &MeshPortRef { port }).await
+    post_local("/api/mesh/allow", &MeshPortRef { port }).await
 }
 
 pub async fn mesh_deny(port: u16) -> Result<MeshState, String> {
-    post("/api/mesh/deny", &MeshPortRef { port }).await
+    post_local("/api/mesh/deny", &MeshPortRef { port }).await
 }
 
 pub async fn mesh_allow_peer(peer: String) -> Result<MeshState, String> {
-    post("/api/mesh/peers/allow", &MeshPeerRef { peer }).await
+    post_local("/api/mesh/peers/allow", &MeshPeerRef { peer }).await
 }
 
 pub async fn mesh_deny_peer(peer: String) -> Result<MeshState, String> {
-    post("/api/mesh/peers/deny", &MeshPeerRef { peer }).await
+    post_local("/api/mesh/peers/deny", &MeshPeerRef { peer }).await
 }
 
 pub async fn mesh_add_forward(body: MeshForwardRef) -> Result<MeshState, String> {
-    post("/api/mesh/forwards/add", &body).await
+    post_local("/api/mesh/forwards/add", &body).await
 }
 
 pub async fn mesh_remove_forward(listen: u16) -> Result<MeshState, String> {
-    post("/api/mesh/forwards/remove", &MeshListenRef { listen }).await
+    post_local("/api/mesh/forwards/remove", &MeshListenRef { listen }).await
 }
 
 // Fleet: the paired remote nodes. As with mesh, every endpoint answers with the fresh
 // FleetState, so an edit and the view of it are one round-trip.
+//
+// Always local, never the panel-wide source picker's target (`docs/fleet.md` §14): the registry a
+// picked node's own panel would show is *its* fleet, not this machine's, and the whole point of
+// pairing, granting and renaming here is to shape what *this* machine can reach.
 
 pub async fn fleet() -> Result<FleetState, String> {
-    get("/api/fleet").await
+    get_local("/api/fleet").await
 }
 
 /// Mint a pairing invite and get it back drawn as a QR. The one fleet call that does *not* answer
 /// with a `FleetState`: nothing about the registry has changed — a node appears in it only once
 /// somebody spends this.
 pub async fn fleet_invite() -> Result<adi_webapp_api::types::FleetInvite, String> {
-    post("/api/fleet/invite", &()).await
+    post_local("/api/fleet/invite", &()).await
 }
 
 /// Spend an invite minted on another machine. The slowest call on this page by far — it dials that
@@ -219,23 +235,23 @@ pub async fn fleet_invite() -> Result<adi_webapp_api::types::FleetInvite, String
 /// password inside is the single copy either side will ever hold, so what shows it is what has to
 /// let it go.
 pub async fn fleet_join(token: String) -> Result<adi_webapp_api::types::FleetJoined, String> {
-    post("/api/fleet/join", &FleetJoinRef { token }).await
+    post_local("/api/fleet/join", &FleetJoinRef { token }).await
 }
 
 pub async fn fleet_rename(petname: String, to: String) -> Result<FleetState, String> {
-    post("/api/fleet/rename", &FleetRename { petname, to }).await
+    post_local("/api/fleet/rename", &FleetRename { petname, to }).await
 }
 
 pub async fn fleet_unpair(petname: String) -> Result<FleetState, String> {
-    post("/api/fleet/unpair", &FleetRef { petname }).await
+    post_local("/api/fleet/unpair", &FleetRef { petname }).await
 }
 
 pub async fn fleet_grant(petname: String, grant: String) -> Result<FleetState, String> {
-    post("/api/fleet/grants/add", &FleetGrantRef { petname, grant }).await
+    post_local("/api/fleet/grants/add", &FleetGrantRef { petname, grant }).await
 }
 
 pub async fn fleet_revoke(petname: String, grant: String) -> Result<FleetState, String> {
-    post(
+    post_local(
         "/api/fleet/grants/remove",
         &FleetGrantRef { petname, grant },
     )
@@ -248,7 +264,7 @@ pub async fn fleet_instructions(
     petname: String,
     instructions: String,
 ) -> Result<FleetState, String> {
-    post(
+    post_local(
         "/api/fleet/instructions",
         &FleetInstructions {
             petname,
@@ -259,11 +275,11 @@ pub async fn fleet_instructions(
 }
 
 pub async fn fleet_accept_nickname(petname: String) -> Result<FleetState, String> {
-    post("/api/fleet/nickname/accept", &FleetRef { petname }).await
+    post_local("/api/fleet/nickname/accept", &FleetRef { petname }).await
 }
 
 pub async fn fleet_dismiss_nickname(petname: String) -> Result<FleetState, String> {
-    post("/api/fleet/nickname/dismiss", &FleetRef { petname }).await
+    post_local("/api/fleet/nickname/dismiss", &FleetRef { petname }).await
 }
 
 // The fleet's dashboards: what each paired node runs, asked of that node's own control panel over
@@ -272,21 +288,23 @@ pub async fn fleet_dismiss_nickname(petname: String) -> Result<FleetState, Strin
 // the whole fresh listing, the same one-round-trip contract the rest of `/api/fleet` keeps.
 
 pub async fn fleet_dashboards() -> Result<FleetDashboards, String> {
-    get("/api/fleet/dashboards").await
+    get_local("/api/fleet/dashboards").await
 }
 
 /// Which paired nodes this machine holds a password for — the cheap read behind the sessions
-/// rail's node menu (`docs/fleet.md` §13). Local: unlike the listing above it asks no node
-/// anything, so it is polled with the rest of the page rather than on a click.
+/// rail's node menu (`docs/fleet.md` §13) and the panel-wide source picker's own list (§14). Local:
+/// unlike the listing above it asks no node anything, so it is polled with the rest of the page
+/// rather than on a click — and, per §14, it is what the picker offers, so it would be circular for
+/// it to follow the picker's own pointer.
 pub async fn fleet_nodes() -> Result<FleetNodes, String> {
-    get("/api/fleet/nodes").await
+    get_local("/api/fleet/nodes").await
 }
 
 /// Give this machine a node's password, so that node's dashboards can be listed. Checked against
 /// the node before it is stored, so a rejected password comes back as an error here rather than as
 /// a broken row later.
 pub async fn unlock_node(node: String, password: String) -> Result<FleetDashboards, String> {
-    post(
+    post_local(
         "/api/fleet/dashboards/unlock",
         &UnlockNode {
             node,
@@ -299,13 +317,13 @@ pub async fn unlock_node(node: String, password: String) -> Result<FleetDashboar
 
 /// Drop a node's stored password. Nothing on the node changes; this machine just stops asking.
 pub async fn forget_node(petname: String) -> Result<FleetDashboards, String> {
-    post("/api/fleet/dashboards/forget", &FleetRef { petname }).await
+    post_local("/api/fleet/dashboards/forget", &FleetRef { petname }).await
 }
 
 /// Ask a node to let this machine reach one of its services (`http:<service>`), so a listed
 /// dashboard becomes a link that opens rather than one that refuses.
 pub async fn allow_node_service(node: String, service: String) -> Result<FleetDashboards, String> {
-    post(
+    post_local(
         "/api/fleet/dashboards/allow",
         &NodeServiceRef { node, service },
     )
@@ -1527,12 +1545,74 @@ pub(crate) fn routed_for(node: Option<&str>, path: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// The panel-wide source picker (`docs/fleet.md` §14)
+// ---------------------------------------------------------------------------------------
+
+thread_local! {
+    /// The picker's target, mirrored here by `App`'s own effect over `State::panel_source` — see
+    /// [`set_panel_source`]. `None` is this machine, the same meaning `None` carries everywhere
+    /// else in this file.
+    ///
+    /// A thread-local rather than a parameter threaded through [`get`]/[`post`]'s every caller,
+    /// unlike [`routed_for`]'s explicit `node`: the panel points at exactly **one** source at a
+    /// time — there is no multi-select here, unlike §13's rail — so there is one answer to "where
+    /// does an ordinary bare call go" and no concurrent fetch for a second source that a shared
+    /// variable could be read by mid-flip the way K3 ruled out for `routed_for` itself.
+    static PANEL_SOURCE: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Point the panel's *bare* reads and writes at a paired node, or back at this machine (`None`).
+///
+/// Called from nowhere but `App`'s own effect over `State::panel_source` — every other page moves
+/// this only by moving that signal, never by calling this directly, which is what keeps "where is
+/// the panel pointed" one fact rather than two that could disagree. [`get_on`]/[`post_on`] and
+/// [`routed_for`] never consult this at all: an explicit source still means exactly what it names,
+/// whatever the picker is doing (`docs/fleet.md` §14's bare-vs-explicit rule, which is §13's K3
+/// invariant kept rather than layered under a second routing rule).
+pub(crate) fn set_panel_source(node: Option<String>) {
+    PANEL_SOURCE.with(|slot| *slot.borrow_mut() = node);
+}
+
+fn panel_source() -> Option<String> {
+    PANEL_SOURCE.with(|slot| slot.borrow().clone())
+}
+
+/// The ordinary bare `GET` a page makes when it isn't naming a source of its own — follows the
+/// picker (`docs/fleet.md` §14). [`get_local`] is the same call without that, for the handful of
+/// endpoints §14 lists as always local.
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
+    get_at(&routed_for(panel_source().as_deref(), url)).await
+}
+
+/// [`get`], but never following the picker: `/api/health` and the status LED, `/api/fleet` and
+/// `/api/fleet/*` (including the picker's own list), `/api/mesh*`, and the update/version pill
+/// (`docs/fleet.md` §14) all call this instead.
+async fn get_local<T: DeserializeOwned>(url: &str) -> Result<T, String> {
+    get_at(url).await
+}
+
+/// The ordinary bare `POST` a page makes when it isn't naming a source of its own — follows the
+/// picker exactly as [`get`] does, mutation or not: §14 makes no distinction between a read and a
+/// write here, because the picker points the whole panel and not half of it.
+async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
+    post_at(&routed_for(panel_source().as_deref(), url), body).await
+}
+
+/// [`post`], but never following the picker — see [`get_local`].
+async fn post_local<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
+    post_at(url, body).await
+}
+
+/// [`get`]/[`get_local`]/[`get_on`]'s shared plumbing: an address, already resolved, and nothing
+/// else — the one place that actually sends a `GET`.
+async fn get_at<T: DeserializeOwned>(url: &str) -> Result<T, String> {
     let resp = Request::get(url).send().await.map_err(stringify)?;
     finish(resp).await
 }
 
-async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
+/// [`get_at`]'s `POST` counterpart.
+async fn post_at<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
     let resp = Request::post(url)
         .json(body)
         .map_err(stringify)?
@@ -1542,18 +1622,20 @@ async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<
     finish(resp).await
 }
 
-/// [`get`], routed at a specific paired node (or this machine, for `None`).
+/// [`get`], routed at a specific paired node (or this machine, for `None`) — never the picker's
+/// target: an explicit source is what §13's K3 invariant and §14's bare-vs-explicit rule both
+/// protect, so this reaches `get_at` directly rather than through [`get`].
 async fn get_on<T: DeserializeOwned>(node: Option<&str>, path: &str) -> Result<T, String> {
-    get(&routed_for(node, path)).await
+    get_at(&routed_for(node, path)).await
 }
 
-/// [`post`], routed at a specific paired node (or this machine, for `None`).
+/// [`post`], routed at a specific paired node (or this machine, for `None`) — see [`get_on`].
 async fn post_on<B: Serialize, T: DeserializeOwned>(
     node: Option<&str>,
     path: &str,
     body: &B,
 ) -> Result<T, String> {
-    post(&routed_for(node, path), body).await
+    post_at(&routed_for(node, path), body).await
 }
 
 /// Turn a response into `T`, or a message: the API's `{ error }` if present, else the

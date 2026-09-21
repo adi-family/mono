@@ -999,6 +999,8 @@ pub(crate) struct State {
     pub(crate) used: RwSignal<Option<UsedPorts>>,
     pub(crate) mesh: RwSignal<Option<MeshState>>,
     pub(crate) fleet: RwSignal<Option<FleetState>>,
+    pub(crate) panel_source: RwSignal<Option<String>>,
+    pub(crate) panel_source_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) projects: RwSignal<Option<ProjectsState>>,
     pub(crate) project_detail: RwSignal<Option<ProjectDetail>>,
     pub(crate) current_project: RwSignal<String>,

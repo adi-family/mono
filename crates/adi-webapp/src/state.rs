@@ -104,6 +104,32 @@ pub(crate) struct State {
     /// The paired remote nodes (`/api/fleet`), shown on the Fleet page and, in its presence half
     /// alone, as the chat home's presence strip (`active`/`last_seen`, ADI-MONO-11).
     pub(crate) fleet: RwSignal<Option<FleetState>>,
+    /// The panel-wide source picker (`docs/fleet.md` §14): a paired node's petname, or `None` for
+    /// this machine. One pointer for the *whole* workbench — where an ordinary bare read or write
+    /// lands when it names no source of its own — which is a different question from the chat
+    /// rail's own multi-select ([`Self::session_local`]/[`Self::session_nodes`]) and never touches
+    /// it: the rail merges several sources' *sessions* into one list; this points everything else
+    /// at exactly one machine.
+    ///
+    /// **Read back only by [`crate::App`]**, which is the one shell this exists on (the chat shell
+    /// has no picker and never sets or reads it). Its own effect mirrors this into
+    /// `fetch::set_panel_source` — what every bare read and write actually follows — and passes it
+    /// into `subscriptions`'s forwarded watches; no page reads this signal to decide where to send
+    /// a request of its own, which is what keeps "where is the panel pointed" one fact instead of
+    /// two that could disagree.
+    ///
+    /// **Persisted**, the way the rail's sources are ([`SESSION_SOURCES_KEY`]) — a pointer built on
+    /// purpose (most often "drive that node from here for a while") is worth surviving a reload
+    /// more than it is worth forcing a re-point on every visit. A stored node that has since been
+    /// unpaired or locked is still shown — the picker lists it disabled with a way to unpick it,
+    /// never silently falls back — so pointing at nothing reachable is a state on screen, not a
+    /// surprise.
+    pub(crate) panel_source: RwSignal<Option<String>>,
+    /// Where the picker's dropdown is open, in viewport coordinates — `None` while it is closed.
+    /// On [`State`] for the same reason [`Self::session_filter_menu`] is: the titlebar is not
+    /// rebuilt on every poll, but the picker's own click handler is, and a signal made there would
+    /// forget the open menu the next time around.
+    pub(crate) panel_source_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) projects: RwSignal<Option<ProjectsState>>,
     pub(crate) project_detail: RwSignal<Option<ProjectDetail>>,
     pub(crate) current_project: RwSignal<String>,
@@ -438,6 +464,12 @@ impl State {
             used: RwSignal::new(None),
             mesh: RwSignal::new(None),
             fleet: RwSignal::new(None),
+            // This shell (the chat home, the marketplace door, the dashboard embed) has no picker
+            // and never reads either signal — always this machine, never opened. `fresh()` still
+            // has to fill them, since `State` is one shape; `App`'s own literal construction is
+            // what actually seeds `panel_source` from storage.
+            panel_source: RwSignal::new(None),
+            panel_source_menu: RwSignal::new(None),
             projects: RwSignal::new(None),
             project_detail: RwSignal::new(None),
             current_project: RwSignal::new(String::new()),
@@ -2316,6 +2348,46 @@ pub(crate) fn refresh_fleet_dashboards(s: State) {
     });
 }
 
+/// The `localStorage` key the panel-wide source picker's pointer is kept under (`docs/fleet.md`
+/// §14) — see [`State::panel_source`] for why it is persisted.
+const PANEL_SOURCE_KEY: &str = "adi-panel-source";
+
+/// The saved pointer, or this machine on a first run, in private mode, or if the stored value is
+/// not readable JSON (a format this build no longer writes, say). Whatever it names — including a
+/// node this machine no longer holds a password for, or has never heard of — is handed back
+/// unchanged: the picker is what notices that and draws the node disabled, not this.
+///
+/// `pub(crate)` rather than the usual private loader beside a `fresh()` field: unlike the rail's
+/// sources, `App`'s own `State` is a literal, not `State::fresh()`, so seeding `panel_source` from
+/// storage happens at that literal's own call site.
+pub(crate) fn load_panel_source() -> Option<String> {
+    crate::ui::storage()
+        .and_then(|s| s.get_item(PANEL_SOURCE_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn save_panel_source(node: Option<&str>) {
+    let Some(storage) = crate::ui::storage() else {
+        return;
+    };
+    if let Ok(raw) = serde_json::to_string(&node) {
+        let _ = storage.set_item(PANEL_SOURCE_KEY, &raw);
+    }
+}
+
+/// Point the whole panel at a paired node (`Some(petname)`), or back at this machine (`None`), and
+/// remember the choice for the next reload (`docs/fleet.md` §14).
+///
+/// This only ever moves [`State::panel_source`] — it is `App`'s own effect over that signal, not
+/// this function, that mirrors the change into `fetch::set_panel_source` and into
+/// `subscriptions`'s forwarded watches. Calling this from anywhere but the picker itself would
+/// still work, but nothing else in the panel has a reason to: it is the one control this points.
+pub(crate) fn set_panel_source(s: State, node: Option<String>) {
+    save_panel_source(node.as_deref());
+    s.panel_source.set(node);
+}
+
 /// The `localStorage` key the sessions rail's selected sources are kept under (`docs/fleet.md` §13,
 /// multi-select) — see [`Self::session_local`] on [`State`] for why this one, unlike the single-node
 /// pick it replaces, is worth persisting.
@@ -2505,7 +2577,8 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
 /// live path forgets to watch.
 ///
 /// Reads its signals *tracked*, so the effect that calls it re-runs — and re-subscribes — the
-/// moment the page moves: a route change, a different project, another chat opened.
+/// moment the page moves: a route change, a different project, another chat opened, or (§14) the
+/// panel-wide source picker pointed somewhere else.
 pub(crate) fn subscriptions(
     s: State,
     route: Route,
@@ -2514,57 +2587,85 @@ pub(crate) fn subscriptions(
     hook_log: HookLogView,
     term: TermWatch,
 ) -> Vec<Sub> {
+    // Which source every *ordinary* watch below follows (`docs/fleet.md` §14) — read tracked, so
+    // pointing the picker elsewhere re-subscribes this whole list at the new address rather than
+    // leaving it watching the machine that was pointed at when the effect last ran. The handful of
+    // subs still pushed as plain `Sub::get` below are the exceptions §14 lists — always this
+    // machine's own socket, whatever `source` says.
+    let source = s.panel_source.get();
+    let node = source.as_deref();
     let mut subs = vec![
         // Liveness and uptime. Every message is a sign of life, but this is the one that arrives
-        // whether or not anything on the page is changing.
+        // whether or not anything on the page is changing — and it is about *this* machine's own
+        // socket, never the picker's target (§14).
         Sub::get("/api/health", move |health: Health| {
             set_if_changed(s.health, health);
             s.status.set(Status::Online);
         }),
         // The explorer renders the project tree on every route, so the project list is shell data
         // rather than something an individual page opts into.
-        Sub::get("/api/projects", move |p: ProjectsState| {
+        Sub::get_on(node, "/api/projects", move |p: ProjectsState| {
             set_if_changed(s.projects, p);
+        }),
+        // The picker's own list, and cheap for the same reason `fetch::fleet_nodes` is local
+        // (§14): asking no node anything is what makes it safe to watch, and it would be circular
+        // for the menu's contents to follow the pointer the menu itself moves.
+        Sub::get("/api/fleet/nodes", move |n: FleetNodes| {
+            set_if_changed(s.fleet_nodes, n);
         }),
     ];
 
     // Page-specific data, watched only where it's shown.
     if route == Route::Projects {
         // The list shows a per-project open-task count, so it needs the task tree too.
-        subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+        subs.push(Sub::get_on(node, "/api/tasks", move |t: TasksState| {
             set_if_changed(s.tasks, t);
         }));
     }
     if route == Route::ProjectDetail {
         let id = s.current_project.get();
         if !id.is_empty() {
-            subs.push(Sub::get(
+            subs.push(Sub::get_on(
+                node,
                 format!("/api/projects/{id}"),
                 move |d: ProjectDetail| set_if_changed(s.project_detail, d),
             ));
-            subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+            subs.push(Sub::get_on(node, "/api/tasks", move |t: TasksState| {
                 set_if_changed(s.tasks, t);
             }));
-            subs.push(Sub::get("/api/triggers", move |t: TriggersState| {
-                set_if_changed(s.triggers, t);
-            }));
-            subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+            subs.push(Sub::get_on(
+                node,
+                "/api/triggers",
+                move |t: TriggersState| {
+                    set_if_changed(s.triggers, t);
+                },
+            ));
+            subs.push(Sub::get_on(node, "/api/agents", move |a: AgentsState| {
                 set_if_changed(s.agents, a);
             }));
             // The cross-agent "All chats" index above the project's Agents panel.
-            subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
-                set_if_changed(s.all_chats, c);
-            }));
+            subs.push(Sub::get_on(
+                node,
+                "/api/agents/runs/all",
+                move |c: AllAgentRuns| {
+                    set_if_changed(s.all_chats, c);
+                },
+            ));
             // The project's Tools panel lists the tools filed under it (from the shared list).
-            subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+            subs.push(Sub::get_on(node, "/api/tools", move |t: ToolsState| {
                 set_if_changed(s.tools, t);
             }));
             // The project's Secrets panel filters the shared secrets list to this project.
-            subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
-                set_if_changed(s.secrets, sec);
-            }));
+            subs.push(Sub::get_on(
+                node,
+                "/api/secrets",
+                move |sec: SecretsState| {
+                    set_if_changed(s.secrets, sec);
+                },
+            ));
             // The Workspaces panel's snapshot; watching it flips `creating` → `ready` live.
-            subs.push(Sub::post(
+            subs.push(Sub::post_on(
+                node,
                 "/api/projects/workspaces",
                 &WorkspacesRef { id },
                 move |w: WorkspacesState| set_if_changed(s.workspaces, w),
@@ -2572,12 +2673,12 @@ pub(crate) fn subscriptions(
         }
     }
     if route == Route::Tasks {
-        subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+        subs.push(Sub::get_on(node, "/api/tasks", move |t: TasksState| {
             set_if_changed(s.tasks, t);
         }));
     }
     if route == Route::Meta {
-        subs.push(Sub::get("/api/meta", move |m: MetaState| {
+        subs.push(Sub::get_on(node, "/api/meta", move |m: MetaState| {
             set_if_changed(s.meta, m);
         }));
     }
@@ -2585,95 +2686,128 @@ pub(crate) fn subscriptions(
     // draws what set what off.
     if matches!(route, Route::Analytics | Route::LiveGraph) {
         // The whole page is these two listings joined: what is defined, and what it has run.
-        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+        subs.push(Sub::get_on(node, "/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
         }));
-        subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
-            set_if_changed(s.all_chats, c);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/agents/runs/all",
+            move |c: AllAgentRuns| {
+                set_if_changed(s.all_chats, c);
+            },
+        ));
     }
     // The editor page needs the same three: the definitions (its own agent, and the backend
     // schema the form is built from), and the tool/secret checkboxes.
     if matches!(route, Route::Agents | Route::AgentDetail) {
-        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+        subs.push(Sub::get_on(node, "/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
         }));
         // The agent form's per-tool and per-secret checkboxes (metadata only — a secret's value
         // is never fetched here).
-        subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+        subs.push(Sub::get_on(node, "/api/tools", move |t: ToolsState| {
             set_if_changed(s.tools, t);
         }));
-        subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
-            set_if_changed(s.secrets, sec);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/secrets",
+            move |sec: SecretsState| {
+                set_if_changed(s.secrets, sec);
+            },
+        ));
         // …and the LLM backend registry, which the editor's model list names: a row is a backend id,
         // and what the row *shows* — the model behind it, its context, whether it is held right now
         // — is only in the registry.
-        subs.push(Sub::get("/api/llm/backends", move |b: LlmBackendsDto| {
-            set_if_changed(s.llm_backends, b);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/llm/backends",
+            move |b: LlmBackendsDto| {
+                set_if_changed(s.llm_backends, b);
+            },
+        ));
     }
     if route == Route::Tools {
-        subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+        subs.push(Sub::get_on(node, "/api/tools", move |t: ToolsState| {
             set_if_changed(s.tools, t);
         }));
     }
     if route == Route::Secrets {
-        subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
-            set_if_changed(s.secrets, sec);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/secrets",
+            move |sec: SecretsState| {
+                set_if_changed(s.secrets, sec);
+            },
+        ));
     }
     if route == Route::Database {
-        subs.push(Sub::get("/api/db", move |d: DbState| {
+        subs.push(Sub::get_on(node, "/api/db", move |d: DbState| {
             set_if_changed(s.db, d);
         }));
     }
     if route == Route::Triggers {
-        subs.push(Sub::get("/api/triggers", move |t: TriggersState| {
-            set_if_changed(s.triggers, t);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/triggers",
+            move |t: TriggersState| {
+                set_if_changed(s.triggers, t);
+            },
+        ));
     }
     if route == Route::Hive {
-        subs.push(Sub::get("/api/hive", move |h: HiveState| {
+        subs.push(Sub::get_on(node, "/api/hive", move |h: HiveState| {
             set_if_changed(s.hive, h);
         }));
         // The Hive table lists dashboard services too, and names their source — which needs the
         // dashboards' own listing, since a service carries only its dashboard's id.
-        subs.push(Sub::get("/api/dashboards", move |d: DashboardsState| {
-            set_if_changed(s.dashboards, d);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/dashboards",
+            move |d: DashboardsState| {
+                set_if_changed(s.dashboards, d);
+            },
+        ));
     }
     if route == Route::Dashboards {
-        subs.push(Sub::get("/api/dashboards", move |d: DashboardsState| {
-            set_if_changed(s.dashboards, d);
-        }));
-        // The transfer panel's node picker. Every destination a dashboard can be sent to is a
-        // paired node, so the page needs the fleet to offer any of them.
+        subs.push(Sub::get_on(
+            node,
+            "/api/dashboards",
+            move |d: DashboardsState| {
+                set_if_changed(s.dashboards, d);
+            },
+        ));
+        // The transfer panel's node picker: every *paired* node a dashboard can be sent to, which
+        // is this machine's own fleet whatever the panel-wide picker is pointed at (§14's
+        // always-local list, same as the picker's own).
         subs.push(Sub::get("/api/fleet", move |f: FleetState| {
             set_if_changed(s.fleet, f);
         }));
     }
     if route == Route::PortsManager {
         // The registry's leases, and the scan of what is actually listening.
-        subs.push(Sub::get("/api/ports", move |p: PortsState| {
+        subs.push(Sub::get_on(node, "/api/ports", move |p: PortsState| {
             set_if_changed(s.ports, p);
         }));
-        subs.push(Sub::get("/api/ports/used", move |u: UsedPorts| {
+        subs.push(Sub::get_on(node, "/api/ports/used", move |u: UsedPorts| {
             set_if_changed(s.used, u);
         }));
     }
     if route == Route::Mesh {
+        // Always this machine's own mesh daemon (§14) — a picked node's mesh is reached only by
+        // pairing with it, never through this panel's picker.
         subs.push(Sub::get("/api/mesh", move |m: MeshState| {
             set_if_changed(s.mesh, m);
         }));
     }
     if route == Route::Fleet {
+        // Always this machine's own registry (§14), for the same reason `/api/mesh` above is.
         subs.push(Sub::get("/api/fleet", move |f: FleetState| {
             set_if_changed(s.fleet, f);
         }));
     }
     if route == Route::SharedAssets {
-        subs.push(Sub::get(
+        subs.push(Sub::get_on(
+            node,
             "/api/settings/shared-assets",
             move |v: SharedAssetsState| {
                 set_if_changed(s.shared_assets, v);
@@ -2684,35 +2818,45 @@ pub(crate) fn subscriptions(
         // Polled rather than fetched once, because the interesting half of this page is not the
         // registry but the holds on it: a backend goes out and comes back without anyone touching
         // the panel, and the prober's sweep is what changes it.
-        subs.push(Sub::get("/api/llm/backends", move |b: LlmBackendsDto| {
-            set_if_changed(s.llm_backends, b);
-        }));
+        subs.push(Sub::get_on(
+            node,
+            "/api/llm/backends",
+            move |b: LlmBackendsDto| {
+                set_if_changed(s.llm_backends, b);
+            },
+        ));
         // The editor's runtime picker offers exactly the runtimes the agent form offers, and that
         // list is the API's to declare — so it comes from the agent form spec rather than a second
         // copy here that could drift from it.
-        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+        subs.push(Sub::get_on(node, "/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
         }));
     }
 
-    // The views that used to have a poll each: an open chat, an open log, an open terminal.
+    // The views that used to have a poll each: an open chat, an open log, an open terminal. The
+    // chat's own watches are explicit by construction (`chat_subscriptions` reads `watch.node`,
+    // §13) and so never touch the picker; the log and terminal watches below are ordinary panel
+    // reads and follow it like everything else in this function.
     subs.extend(chat_subscriptions(watch));
     if let Some(name) = triggers_log.name.get() {
-        subs.push(Sub::post(
+        subs.push(Sub::post_on(
+            node,
             "/api/triggers/log",
             &TriggerRef { name },
             move |snapshot: TriggerLog| set_if_changed(triggers_log.log, snapshot),
         ));
     }
     if let Some((id, name)) = hook_log.watched.get() {
-        subs.push(Sub::post(
+        subs.push(Sub::post_on(
+            node,
             "/api/projects/hook/log",
             &ProjectHookRef { id, name },
             move |snapshot: ProjectHookLog| set_if_changed(hook_log.log, snapshot),
         ));
     }
     if let Some((id, name)) = term.watched.get() {
-        subs.push(Sub::post(
+        subs.push(Sub::post_on(
+            node,
             "/api/projects/workspaces/terminal/peek",
             &WorkspaceTermRef { id, name },
             move |peek: WorkspaceTerm| set_if_changed(term.peek, peek),
@@ -2827,6 +2971,15 @@ pub(crate) async fn load(s: State) {
     // Every read below goes through `took`, which files a failure against its endpoint instead of
     // dropping it — see [`State::read_errors`] for why an `if let Ok(…)` here was invisible.
     took(s, "/api/projects", s.projects, fetch::projects().await);
+    // The panel-wide source picker's own list (`docs/fleet.md` §14) — always local, like the
+    // matching subscription in [`subscriptions`], and on every route for the same reason the
+    // titlebar that draws it is.
+    took(
+        s,
+        "/api/fleet/nodes",
+        s.fleet_nodes,
+        fetch::fleet_nodes().await,
+    );
 
     // Page-specific data, fetched only where it's shown.
     let path = current_path();
