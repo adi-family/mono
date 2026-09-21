@@ -93,6 +93,7 @@ export default defineConfig({
 						{ label: 'Ports', link: '/ports/' },
 						{ label: 'DNS and the front door', link: '/dns/' },
 						{ label: 'Dashboards', link: '/dashboards/' },
+						{ label: 'Marketplace', link: '/marketplace/' },
 						{ label: 'Fleet', link: '/fleet/' },
 						{ label: 'Mesh', link: '/mesh/' },
 					],

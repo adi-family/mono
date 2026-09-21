@@ -1,0 +1,166 @@
+---
+title: Marketplace
+description: Install things other people built — a bundle of agents, tools, dashboards and more, pinned to a commit, inert until you start it. Publish your own the same way.
+---
+
+import Flags from '../../components/Flags.astro';
+
+A marketplace is a JSON file at a URL someone chose — GitHub raw, a gist, anywhere HTTPS serves
+it. You add it by name and URL. There's no server behind it, no account, no submission queue,
+nobody who approves what goes in it.
+
+What it lists is **bundles** — a named collection of platform elements from one git repository:
+[[Agents|agents]], [[Tools|tools]], [[Dashboards|dashboards]], LLM and embedding backends,
+[[Hive|hive services]], [[Triggers|triggers]], a project scaffold. A bundle can carry all of
+these or just one — a bundle whose only element is a dashboard is what people mean when they say
+"app."
+
+## Why it's built this way
+
+Installing software off the internet is normally a leap of faith: you trust a registry to have
+vetted the thing, or a vendor not to have changed what's behind the link since you looked. The
+marketplace skips that leap by removing the thing you'd have to trust. A bundle entry names a git
+repository and **one commit, in full** — not a branch, not a tag, a 40-character hash. Installing
+clones exactly that commit. Nobody can change what you get by pushing to the branch later; moving
+onto newer code is `marketplace update`, a separate act you take once you've seen what changed.
+
+And installing doesn't run anything. Every element lands inert — a file on disk, a definition the
+store knows about — and stays that way until `marketplace start`, a distinct command, does the one
+job of turning it on. You can install a bundle you found in a random gist and read every file it
+brought before anything of it ever executes.
+
+## Do it
+
+```bash
+adi-mono marketplace add adi https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json
+adi-mono marketplace sync
+adi-mono marketplace apps
+```
+
+`add` takes a name and a URL and writes them to `~/.adi/mono/marketplace/sources.toml`; the
+official marketplace is there by default, under the name `store`. `sync` is the only command that
+touches the network on the listing side — it fetches every source's manifest and caches it under
+`marketplace/cache/<name>.json`. **`install` reads that cache, never the network**: the bundle you
+saw when you last synced is the bundle you get, even if the manifest has since changed. Only the
+repository itself is fetched fresh, at install time, by `git`, against the commit the cached entry
+pins.
+
+```bash
+adi-mono marketplace install adi/crm-suite --new-project "Sales CRM"
+adi-mono marketplace install adi/crm-suite/agents/sales-bot --project sales-crm
+```
+
+Install the whole bundle, or address one element of it with a third path segment —
+`<kind>/<name>`, taken verbatim from the repository. Everything lands inert. Bring it up with:
+
+```bash
+adi-mono marketplace start sales-crm                       # a dashboard, by its id
+adi-mono marketplace start adi/crm-suite/services/queue     # a parked hive service
+```
+
+A dashboard element starts like any dashboard (its id, from `marketplace apps`). A hive service
+lands as a file the supervisor never reads until you start it — starting is what copies its
+definition into the live `hive.yaml`.
+
+## Where an install goes <Flags>Expert area</Flags>
+
+Every install is filed under a **scope**: a project, or the machine's global scope. This isn't
+just organizational — it's what lets you install the same bundle twice. A tool, an LLM backend
+and a project scaffold all have to land under an exact, unrenamed id (a sibling agent's
+`bin_tools` names a tool by that id, and silently renaming it would point that reference at a
+stranger's script instead). Two bundles installed globally collide on those ids and the second is
+refused. Installed into a project each, they don't collide — the install rewrites each copy's own
+internal references to match what actually landed, and the two copies never see each other.
+
+That's why `--project` / `--new-project` is the recommended destination, and why the panel asks
+for one by default. Global is offered and never silently chosen: an agent, a tool or a backend
+installed globally is reachable by everything else on the machine, and a second copy of the same
+bundle can't join it there.
+
+An agent, dashboard, trigger or hive service has no such reference pointing at it, so those mint a
+fresh id on collision the ordinary way (`crm`, `crm-2`) whichever scope you use.
+
+## Update
+
+```bash
+adi-mono marketplace update adi/crm-suite
+adi-mono marketplace update adi/crm-suite --force-element agents/sales-bot
+```
+
+Update is a **fast-forward**, applied per element. An element you haven't touched moves onto the
+new pin. An element whose live copy no longer matches what was last installed — you edited it —
+is left alone and reported, not overwritten; `--force-element <kind>/<name>` overwrites that one
+element anyway, losing your edit. Your own commits on top of an install are never walked over
+without you saying so.
+
+## Uninstall
+
+There's no single "uninstall this bundle" verb. A bundle is spread across the store as ordinary
+agents, tools, dashboards and so on the moment it lands, so removing one goes through whatever
+already owns deletion for that kind — the Dashboards page's Archive → Delete for a dashboard,
+`adi-mono agents delete` for an agent, and so on. `marketplace uninstall <marketplace>/<slug>/<kind>/<name>`
+covers the kinds that don't have their own page-level delete. This is deliberate, not a missing
+feature: a bundle isn't a container you can pull out as a unit, it's a set of ordinary things that
+happen to share where they came from.
+
+## Secrets
+
+A bundle never carries a secret's value — only the *name* of one it needs, the same way a
+hand-written agent or backend already can ([[Secrets]]). Installing reads every secret name the
+bundle's elements declare and checks it against what's actually set on this machine; a missing
+one shows up as a note on the install, not a blocker. Nothing is created, nothing is prompted for,
+and nothing about the run fails silently — an agent missing a secret it wants just runs without
+it, same as if you'd forgotten to attach one by hand.
+
+## Publishing <Flags>Expert area</Flags> <Flags>Enterprise interest</Flags>
+
+A bundle is an ordinary git repository, laid out by kind — every directory optional:
+
+```text
+agents/<name>.toml        # an agent definition
+tools/<name>.{sh,ts}      # a tool script
+dashboards/<name>/        # a dashboard — frontend/index.ts, backend/index.ts
+llm/<name>.toml           # an LLM backend
+embeddings/<name>.toml    # an embedding backend
+services/<name>.yaml      # one hive service
+triggers/<name>.toml      # a trigger definition
+project/config.toml       # the bundle's own project scaffold — at most one
+```
+
+Each file is written in exactly the shape the store already reads elsewhere — an
+`agents/<name>.toml` is the same `AgentManifest` shape you'd hand-write for [[Agents|an agent]],
+a `services/<name>.yaml` the same `ServiceSpec` shape as [[Hive]]. There's no bundle-specific
+schema to learn beyond the directory layout itself. One rule the store enforces on every element,
+not just something to keep in mind: **no Rust source and no compiled binary anywhere in the
+tree** — a `Cargo.toml`, a `.rs` file, or an ELF/Mach-O/PE binary refuses the install outright.
+What the store already knows how to run safely is a script, a config file, or a container it
+merely supervises; a compiled artifact is a ninth thing it has never agreed to execute blind.
+
+Add an entry to your manifest and host it anywhere over HTTPS:
+
+```json
+{
+  "name": "My starter bundles",
+  "bundles": [
+    {
+      "slug": "crm-suite",
+      "name": "CRM suite",
+      "description": "A follow-up agent, its import tool, and the dashboard that watches both.",
+      "repo": "https://github.com/you/crm-suite.git",
+      "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
+      "elements": [
+        { "kind": "agent", "name": "sales-bot", "description": "Drafts the follow-up." },
+        { "kind": "tool", "name": "csv-import", "description": "Loads a contacts export." },
+        { "kind": "dashboard", "name": "crm", "description": "The list itself." }
+      ]
+    }
+  ]
+}
+```
+
+`repo` and `commit` are the two fields that matter: `commit` is a full 40-hex hash, checked with
+`git rev-parse HEAD` after you've pushed. `elements` is an optional preview — what a listing shows
+before anyone's cloned anything — and it's advisory, not binding: what actually installs is read
+off the pinned commit's own tree. Shipping a new version is one line, changing `commit` (and
+`version`, for readers); nothing on anyone else's machine moves until they run `update`
+themselves.
