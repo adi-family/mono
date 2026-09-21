@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.20.0 — 2026-09-21
+
 ### Changed
 
 - **A hidden chat stays out of the sessions rail for good, and Load more works one machine at a
