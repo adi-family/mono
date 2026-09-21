@@ -1,0 +1,160 @@
+---
+title: Events
+description: A local bus of dotted platform topics — something happened, and anything that cares finds out without polling for it.
+---
+
+import Flags from '../../components/Flags.astro';
+
+Something happens — a task is created, a run finishes, an agent asks a question — and the stack
+publishes it as a small, dotted-name fact: `adi.tasks.created`, `adi.agents.run.finished`.
+Anything that cares subscribes to the name instead of checking back every few seconds. That's the
+whole bus: no queue to provision, no broker to run, just a spool directory
+(`~/.adi/mono/events`) one process writes to and another drains.
+
+## Topics and patterns
+
+An event name is a dotted **topic** — letters, digits, `.`, `-`, `_`, nothing else. A subscriber
+writes a **pattern** against it:
+
+- a literal segment matches itself exactly,
+- `*` matches exactly one segment,
+- `**` matches one or more of the remaining segments — the tail.
+
+So `adi.tasks.*` matches `adi.tasks.created` and `adi.tasks.archived`, but not a hypothetical
+`adi.tasks.sub.created` (too many segments); `adi.tasks.**` would catch that too.
+
+Broader patterns match more events, not fewer. Say you want a trigger that pings Slack whenever an agent
+needs a human. `adi.agents.**` looks like the obvious subscription, but it matches *every* agent
+event: a definition being saved, every run starting and stopping, every goal nudge. You'd get
+paged for things nobody needs to see. The pattern that actually says what you mean is
+`adi.agents.question.asked` — the one event that means "a run is stopped, waiting on you."
+
+`*` matches **exactly** one segment, so `adi.agents.*` does *not* mean
+"everything under agents." It matches only the flat, three-segment names — `adi.agents.saved`,
+`adi.agents.deleted` — and silently misses every four-segment one: `adi.agents.run.started`,
+`adi.agents.question.asked`, `adi.agents.goal.set`. If you want the whole family, write
+`adi.agents.**`; if you want everything published, `**` alone matches any name.
+
+## Subscribing
+
+An `event`-kind [[Triggers|trigger]] runs its code block whenever a published name matches one of
+its patterns, with the event name in `$ADI_EVENT` and its body in `$ADI_PAYLOAD` (also written to
+`$ADI_PAYLOAD_FILE`). See [[Triggers]] for how a trigger is defined and run — this page is only
+about what it's reacting to. An agent run can subscribe the same way without a trigger, via
+`Await` — see below.
+
+## Emitting by hand <Flags>Expert area</Flags>
+
+Every real event on the bus is emitted by the stack itself, as a side effect of a mutation that
+already happened — a task store writing a new task, an agent run finishing. You can publish one
+yourself to test a subscription without waiting for the real source:
+
+```bash
+adi-mono events emit adi.test.probe --payload '{"from":"me"}'
+adi-mono events list   # spooled but not yet delivered — normally empty; the dispatcher drains within a second
+```
+
+`--payload` defaults to `{}` and is handed to matching triggers verbatim as `ADI_PAYLOAD`.
+Publishing doesn't require JSON — the bus stores payload as an opaque string and never validates
+it; JSON is convention, not a rule it enforces. A trigger that expects a different shape gets a
+different shape.
+
+Over the HTTP API, `POST /api/events/emit`, **`payload` is a string, not a JSON object.**
+
+```json
+{ "name": "adi.test.probe", "payload": "{\"from\":\"me\"}" }
+```
+
+Send an object there and you get back `400 expected JSON body { "name": "…", "payload"?: "…" }`
+— the field is typed `String` on the server, and the JSON-looking payload you want to send has to
+be encoded into it as text first. The CLI's `--payload` flag takes the same string, which is why
+the shell example above quotes the JSON rather than passing it bare.
+
+## Waiting on an event instead of polling <Flags>Expert area</Flags>
+
+An [[Agents|agent]] run that needs to react to something — a run finishing, a task closing —
+doesn't have to sit in a loop checking. Its `Await` tool registers a wake: a set of event
+patterns, an optional `when` map of payload fields the event must carry (the difference between
+"wake me when a run finishes" and "wake me when *this* run finishes"), and/or a plain timer
+(`after_seconds`, `every_seconds`). The turn ends the moment it registers the await; when a
+matching event is published — or the deadline comes due — a new message arrives in the same
+conversation with the cause and a note the run left for its future self.
+
+A conversation may hold at most 8 pending awaits at once; registering a ninth is a mistake the
+run is told about rather than one that silently drops the oldest.
+
+## What's published
+
+Every built-in event the stack publishes, and its exact payload shape, is one command away — read
+it live rather than trusting a copy of it here:
+
+```bash
+adi-mono events types              # every name, one line each, with a flattened example
+adi-mono events types <name> --schema   # the full JSON Schema for one event
+```
+
+The families, as of this writing:
+
+| Family | Fires on |
+| --- | --- |
+| `adi.tasks.*` | created, updated, completed, archived, reopened, deleted |
+| `adi.agents.*` | an agent definition saved or deleted |
+| `adi.agents.run.*` | a run started, was stopped, finished, or was deleted |
+| `adi.agents.question.*` | a run asked a question / that question was answered |
+| `adi.agents.goal.*` | a goal was set on a conversation, nudged, met, or given up on |
+
+**Read the schema, not the flattened example** — `adi-mono events types` prints one example per
+event with nullable fields collapsed away, so `adi.tasks.created` *looks* like it never carries a
+`project`, `tag`, or `assignee`. The schema says otherwise: those three, plus `parent`, `cwd`, and
+`details`, are real, nullable fields on every task event — exactly the ones a trigger is most
+likely to route on.
+
+```json title="adi.agents.run.finished"
+{
+  "agent": "my-agent",
+  "run_id": "r-1a2b3c",
+  "duration_ms": 23169,
+  "cost_micro_usd": 2137364,
+  "is_error": false,
+  "terminal_reason": "completed",
+  "result_head": "Filed three tasks and left a note on the scope."
+}
+```
+
+## What this promises, and what it doesn't <Flags>Enterprise interest</Flags>
+
+This is a local bus on one machine, not a hosted message queue. Worth being precise about, because
+the two look similar from the outside:
+
+- **No cross-machine delivery.** The spool is a directory under `~/.adi/mono`. Nothing here talks
+  to another host — [[Mesh]] and the [[Hive]] are how machines reach each other; events don't
+  cross that boundary on their own.
+- **No durability guarantee.** The spool caps at 2,000 undelivered records; past that, the oldest
+  are pruned to protect disk, oldest-first, before a restarted dispatcher ever sees them. Normal
+  operation drains the spool within a second — the cap only matters if the app is down while a
+  lot of events pile up.
+- **Publishing is best-effort, not transactional.** A store emits an event as a side effect after
+  its own write already succeeded, and swallows a failure to do so — a spool write failing never
+  fails the task or run it's describing. Events are not a guaranteed record of every change.
+- **No consumer acknowledgment or replay.** A trigger disabled when an event fired never sees it —
+  there's no delivery history for it, or anything else, to catch up on afterward.
+
+If your use case needs guaranteed, replayable, cross-host delivery, this isn't that layer — it's
+the mechanism for same-machine reactions, and it says so honestly rather than implying more.
+
+## Do it
+
+```bash
+adi-mono events types                      # the catalog
+adi-mono events types <name> --schema      # one event's exact payload shape
+adi-mono events emit <name> --payload '…'  # publish by hand
+adi-mono events list                       # what's spooled but undelivered
+```
+
+Panel: `/triggers` to wire a subscription; `GET /api/triggers` returns the live trigger set
+alongside `event_types[]` (name, summary, schema, example) for the same catalog over HTTP.
+
+## See also
+
+[[Triggers]] for how an `event` trigger is defined and run, [[Agents]] for how a run waits on one
+without polling.

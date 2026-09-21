@@ -82,6 +82,7 @@ export default defineConfig({
 						{ label: 'Tools', link: '/tools/' },
 						{ label: 'Tasks', link: '/tasks/' },
 						{ label: 'Triggers', link: '/triggers/' },
+						{ label: 'Events', link: '/events/' },
 						{ label: 'Secrets', link: '/secrets/' },
 						{ label: 'Database', link: '/database/' },
 						{ label: 'Hive', link: '/hive/' },
