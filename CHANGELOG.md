@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **A hidden chat stays out of the sessions rail for good, and Load more works one machine at a
+  time.** Hiding a chat used to still send it to the browser, filtered out on arrival — a paired
+  node running an older build could still show it. Hidden chats are now left out server-side (a
+  question still waiting on you rides free either way, wherever it would already show). The rail's
+  "Show N more" under a long band is gone along with the fixed screenful it used to divide between
+  bands — a band simply draws every chat it holds. With several machines merged, the rail is now
+  one block per machine sharing the column's height equally, each scrolling and paging on its own;
+  click a block's header to fold it to just that line and give its share back to the rest, and
+  again to open it back up.
+
 ### Added
 
 - **⌘⌫ (or Ctrl+Backspace) hides the open chat, then moves on to the next one.** Struck anywhere on

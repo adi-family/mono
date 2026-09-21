@@ -156,6 +156,16 @@ pub fn RailGroup(
 /// head does the moment it would otherwise scroll past — which is why it carries the rail's
 /// own fill: rows pass underneath it.
 ///
+/// **Children sit in a flex column that fills the scroll port's own height** (`flex h-full
+/// min-h-0 flex-col`) — resolvable because that height is itself a flex item's, which flexbox
+/// treats as definite for descendants. Content shorter than the port just leaves the rest of the
+/// column empty, the same background either side; content taller than it overflows visibly and
+/// the scroll port around it still catches the whole of it, exactly as before this wrapper
+/// existed. What it buys a caller that needs it: a child marked `flex-1 min-h-0 overflow-y-auto`
+/// (the sessions rail's per-machine blocks, `docs/sessions.md`) gets a real share of the port's
+/// height to divide and scroll on its own, rather than the auto height a plain block would have
+/// nothing to compute a share *of*.
+///
 /// Filtering is the caller's: the box binds to a signal and nothing else happens, because
 /// only the caller knows whether a query should match a title, an agent, or the transcript.
 ///
@@ -198,7 +208,7 @@ pub fn Rail(
                         <SearchBox value=value placeholder=search_placeholder/>
                     </div>
                 })}
-                <div class="px-2 pb-3">{children()}</div>
+                <div class="flex h-full min-h-0 flex-col px-2 pb-3">{children()}</div>
             </div>
         </aside>
     }

@@ -29,53 +29,47 @@ use crate::ui::TableState;
 /// chat home's agent picker.
 pub(crate) const ROOT_AGENT: &str = "adi-agent";
 
-/// How many sessions the chat rail asks for at a time — the first page, and what **Load more**
-/// adds each press.
+/// How many sessions one source's page starts at — and what pressing that source's own **Load
+/// more** adds each press.
 ///
 /// A hundred, because it is more than anyone scrolls and far less than a fleet accumulates: the
-/// index reached four hundred sessions on this machine alone, and the rail is watched over the
-/// live channel, so the whole of it was re-sent to every open panel each time any one of them
-/// moved.
+/// index reached four hundred sessions on this machine alone, and each selected source is watched
+/// over the live channel, so its whole page is re-sent to every open panel each time anything on
+/// it moves.
 ///
-/// **A budget for the rail, not for one machine** — see [`rail_source_limit`].
+/// **Each source pages itself now**, not a shared rail-wide budget divided between them: the rail
+/// draws one block per source (`SessionGroup::Machine`, two or more selected) and each block
+/// carries its own Load more, so there is no longer one number to split. See [`source_limit`].
 pub(crate) const SESSION_PAGE: usize = 100;
 
-/// What **one source** is asked for: the rail's page ([`State::rail_limit`]) divided between the
-/// sources it is merging (`docs/fleet.md` §13) — a hundred sessions from one machine, fifty each
-/// from two, thirty-three each from three.
-///
-/// The page is a budget for the *rail*, because what it costs is paid by the rail: every selected
-/// source's index is watched over the live channel and re-sent to this panel whenever anything on
-/// it moves. Asking each machine for a hundred meant a four-machine fleet paged nothing at all —
-/// four hundred sessions arriving to fill a list nobody scrolls, which is the cost `SESSION_PAGE`
-/// exists to avoid.
-///
-/// An even split rather than a share of each machine's index: the client cannot know which machine
-/// holds the newest hundred without asking all of them for it, and the three kinds that ride free
-/// through the server's own cut — running, blocked on a person, starred (`docs/sessions.md`) —
-/// come back whatever the limit is, so the rows that must not be paged away are not the ones this
-/// divides.
-pub(crate) fn rail_source_limit(s: State) -> usize {
-    source_share(s.rail_limit.get(), rail_sources(s))
+/// What one source is currently asked for: this machine's own [`State::rail_limit`] for `None`, or
+/// one ticked node's own entry in [`State::rail_node_limits`] — [`SESSION_PAGE`] before that
+/// source's own Load more has ever been pressed, since a source with no entry yet has asked for
+/// exactly one page.
+pub(crate) fn source_limit(s: State, node: Option<&str>) -> usize {
+    match node {
+        None => s.rail_limit.get(),
+        Some(n) => s
+            .rail_node_limits
+            .get()
+            .get(n)
+            .copied()
+            .unwrap_or(SESSION_PAGE),
+    }
 }
 
-/// [`rail_source_limit`], read untracked — for the fetches that run inside a task rather than an
-/// effect ([`refresh_rail_node`], the fallback poll, a row mutation settling).
-pub(crate) fn rail_source_limit_untracked(s: State) -> usize {
-    let sources =
-        usize::from(s.session_local.get_untracked()) + s.session_nodes.get_untracked().len();
-    source_share(s.rail_limit.get_untracked(), sources)
-}
-
-/// How many sources the rail is merging: this machine, when ticked, plus every selected node.
-fn rail_sources(s: State) -> usize {
-    usize::from(s.session_local.get()) + s.session_nodes.get().len()
-}
-
-/// One source's share of `limit`. Never zero: the node menu's floor keeps at least one source
-/// ticked, and `?limit=0` would ask the server for an empty page rather than for nothing.
-fn source_share(limit: usize, sources: usize) -> usize {
-    (limit / sources.max(1)).max(1)
+/// [`source_limit`], read untracked — for the fetches that run inside a task rather than an effect
+/// ([`refresh_rail_node`], the fallback poll, a row mutation settling).
+pub(crate) fn source_limit_untracked(s: State, node: Option<&str>) -> usize {
+    match node {
+        None => s.rail_limit.get_untracked(),
+        Some(n) => s
+            .rail_node_limits
+            .get_untracked()
+            .get(n)
+            .copied()
+            .unwrap_or(SESSION_PAGE),
+    }
 }
 
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
@@ -209,17 +203,19 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
-    /// Which of the rail's bands have been asked to print themselves in full, by the label in their
-    /// heading — every other band stops at its first few rows and offers the rest.
+    /// Which of the rail's per-machine blocks have been collapsed to just their header row, by the
+    /// label in it (`SessionGroup::Machine`, two or more sources selected — see
+    /// `pages::agents::actions::chat_all_sessions`). Empty by default: every block starts expanded,
+    /// and a block missing here is simply one nobody has collapsed.
     ///
-    /// Page state, like the band above it: a cap is what makes a rail scannable, so a reload comes
-    /// back to the short list rather than to whatever was opened out looking for one chat.
+    /// Page state, like the rest of the rail's narrowing signals: a reload comes back to every
+    /// block open rather than to whatever was folded away looking for one chat.
     ///
-    /// Keyed by label rather than by index because the bands themselves come and go — a band empties
+    /// Keyed by label rather than by index because the blocks themselves come and go — one empties
     /// and is dropped, the grouping changes and they are relabelled wholesale — and an index would
-    /// then hand one band's expansion to whichever one landed in its slot. A label left behind by a
-    /// band that no longer exists costs nothing.
-    pub(crate) rail_open_bands: RwSignal<BTreeSet<String>>,
+    /// then hand one block's fold to whichever one landed in its slot. A label left behind by a
+    /// block that no longer exists costs nothing.
+    pub(crate) rail_collapsed_bands: RwSignal<BTreeSet<String>>,
     /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::Mine`] by default:
     /// the rail opens on the conversations a person started, because a working fleet starts most of
     /// its own work and the handful you had is otherwise buried under hundreds the machine spawned
@@ -286,9 +282,9 @@ pub(crate) struct State {
     /// present only for a node that is both selected and has had the Hidden band opened while it
     /// was.
     pub(crate) rail_node_hidden_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
-    /// How many sessions the chat rail has asked for **in total, across every selected source** —
-    /// [`SESSION_PAGE`] to begin with, another page each time its **Load more** is pressed. What
-    /// one source is asked for is this divided between them ([`rail_source_limit`]).
+    /// How many sessions **this machine's own** page has asked for — [`SESSION_PAGE`] to begin
+    /// with, another page each time this source's own **Load more** is pressed. See
+    /// [`source_limit`] and [`Self::rail_node_limits`] for a paired node's own count.
     ///
     /// The rail is the one place the whole index is expensive: it is watched over the live channel,
     /// so every agent's every session used to be re-sent to every open panel whenever any one of
@@ -299,6 +295,11 @@ pub(crate) struct State {
     /// Page state rather than a stored preference, like the rail's other two: a reload comes back
     /// to the first page.
     pub(crate) rail_limit: RwSignal<usize>,
+    /// One selected node's own page size — [`Self::rail_limit`] for a paired node. Absent for a
+    /// source that has never pressed its own Load more, which [`source_limit`] reads as
+    /// [`SESSION_PAGE`]; removed when the node is unticked, so re-selecting it starts at the first
+    /// page again rather than resuming a stale wider one.
+    pub(crate) rail_node_limits: RwSignal<BTreeMap<String, usize>>,
     /// Which side rail is open as a drawer, on a viewport too narrow to seat both beside the chat.
     /// `None` on a wide one, where the rails are always in the layout and this is never read.
     ///
@@ -509,7 +510,7 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
-            rail_open_bands: RwSignal::new(BTreeSet::new()),
+            rail_collapsed_bands: RwSignal::new(BTreeSet::new()),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
             session_group: RwSignal::new(load_session_group()),
@@ -521,6 +522,7 @@ impl State {
             rail_node_chats: RwSignal::new(BTreeMap::new()),
             rail_node_hidden_chats: RwSignal::new(BTreeMap::new()),
             rail_limit: RwSignal::new(SESSION_PAGE),
+            rail_node_limits: RwSignal::new(BTreeMap::new()),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }
@@ -2591,6 +2593,13 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
                 m.remove(node);
             }
         });
+        // Dropped rather than kept, so re-ticking this node starts at the first page again — a
+        // stale wider page from before it was unticked has nothing to do with what it holds now.
+        s.rail_node_limits.update(|m| {
+            if let Some(node) = &node {
+                m.remove(node);
+            }
+        });
         if watch.node.get_untracked() == node {
             watch.close();
         }
@@ -2607,7 +2616,7 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
 /// (`main.rs`) for as long as it stays selected and the live channel is down — the same two schedules
 /// [`crate::main`]'s `refresh` keeps for this machine's own copies of the same two reads.
 pub(crate) fn refresh_rail_node(s: State, node: String) {
-    let limit = Some(rail_source_limit_untracked(s));
+    let limit = Some(source_limit_untracked(s, Some(&node)));
     wasm_bindgen_futures::spawn_local(async move {
         // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
         // resurrect a row for a source the rail no longer shows.

@@ -23,7 +23,7 @@ use crate::launcher::{self, Launcher};
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionGroup,
-    SessionMenu, State, rail_source_limit, refresh_fleet_dashboards,
+    SessionMenu, State, refresh_fleet_dashboards, source_limit,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
@@ -4522,9 +4522,9 @@ fn launched_by_human(r: &AgentRunInfo) -> bool {
     r.launched_by == adi_webapp_api::types::LAUNCHED_BY_HUMAN
 }
 
-/// Cut the *watched* agent's own run list to the page the rail is showing, by the rule the backend
-/// pages the cross-agent index with: the newest [`rail_source_limit`], plus every session that is
-/// running, blocked on a person, or starred, whatever its age.
+/// Cut the *watched* agent's own run list to the page its source's block is showing, by the rule
+/// the backend pages the cross-agent index with: the newest [`source_limit`], plus every session
+/// that is running, blocked on a person, or starred, whatever its age.
 ///
 /// The three exemptions have to match `newest` in `handlers/agents.rs` exactly. They are the same
 /// rule applied to two lists, and a star that survived the server's cut only to be dropped by this
@@ -4535,13 +4535,14 @@ fn launched_by_human(r: &AgentRunInfo) -> bool {
 /// index, because that list moves the instant a chat is deleted or hidden — and that endpoint
 /// answers with the agent's *whole* history. Without this the agent you are actually on would be
 /// the one agent paging did nothing for, which on this machine is the one with nearly every
-/// session. `Load more` widens both, because it widens `rail_limit`.
+/// session. Its own source's `Load more` widens both, because it widens that same source's limit.
 ///
-/// Nothing is re-sorted: the endpoint answers newest first, so position is age.
-fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
-    // This agent's own source's share of the rail's page — the same cut its index arrived under,
-    // which is the whole point of doing it twice.
-    let limit = rail_source_limit(state);
+/// Nothing is re-sorted: the endpoint answers newest first, so position is age. `node` is the
+/// watched agent's own source (`docs/fleet.md` §13) — `None` for this machine.
+fn paged(runs: Vec<AgentRunInfo>, state: State, node: Option<&str>) -> Vec<AgentRunInfo> {
+    // This agent's own source's page — the same cut its index arrived under, which is the whole
+    // point of doing it twice.
+    let limit = source_limit(state, node);
     if runs.len() <= limit {
         return runs;
     }
@@ -4876,29 +4877,24 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
 fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         {chat_all_sessions(state, watch)}
-        {chat_load_more(state)}
         {chat_hidden_sessions(state, watch)}
     }
     .into_any()
 }
 
-/// The rail's **Load more**, under the last session and above the Hidden band: another
-/// [`SESSION_PAGE`] sessions from the backend, and how many are left behind it.
+/// The rail's **Load more**, under the last session, for the single-list layout only (one selected
+/// source, or `SessionGroup::Flat`): another [`SESSION_PAGE`] sessions from every selected source at
+/// once, and how many are left behind combined. Several sources under `SessionGroup::Machine` each
+/// carry their own instead ([`band_load_more`]), since each now pages the source its own block draws.
 ///
 /// `None` — no button at all — once the index says everything is here, which on a fresh machine is
 /// from the first load. A control that does nothing is worse than no control, and "you have seen
 /// them all" is what its absence says.
 ///
-/// It widens the *request*, not a slice of something already in hand: [`State::rail_limit`] is what
-/// the subscription's path is built from, so pressing this re-subscribes and the next page arrives
-/// on its own. That is also why there is no spinner — the rail keeps every row it had and grows
-/// when the answer lands, rather than emptying while it waits.
-///
-/// **Every selected source is counted, not just this machine** (`docs/fleet.md` §13): the page is a
-/// budget for the rail and it is spent across the sources it is merging
-/// ([`crate::state::rail_source_limit`]), so a node holding older sessions has to be able to say
-/// so — and this machine's index alone would hide the button while a node still had a hundred
-/// behind it.
+/// It widens the *request*, not a slice of something already in hand: [`bump_source_limit`] is what
+/// the subscription's path is built from, so pressing this re-subscribes every selected source and
+/// the next page arrives on its own. That is also why there is no spinner — the rail keeps every row
+/// it had and grows when the answer lands, rather than emptying while it waits.
 fn chat_load_more(state: State) -> Option<AnyView> {
     let mut held = 0usize;
     let mut total = 0usize;
@@ -4940,7 +4936,14 @@ fn chat_load_more(state: State) -> Option<AnyView> {
         view! {
             <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
                 title="ask the backend for the next page of sessions"
-                on:click=move |_| state.rail_limit.update(|n| *n += SESSION_PAGE)>{label}</button>
+                on:click=move |_| {
+                    if state.session_local.get_untracked() {
+                        bump_source_limit(state, None);
+                    }
+                    for node in state.session_nodes.get_untracked() {
+                        bump_source_limit(state, Some(node));
+                    }
+                }>{label}</button>
         }
         .into_any(),
     )
@@ -5107,7 +5110,7 @@ fn source_rows(
             if own.is_empty() {
                 ar.runs.clone()
             } else {
-                paged(own, state)
+                paged(own, state, node)
             }
         } else {
             ar.runs.clone()
@@ -5218,7 +5221,7 @@ fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFi
                 hotkey: None,
             });
         } else {
-            let own = paged(watch.runs.get(), state);
+            let own = paged(watch.runs.get(), state, watched_node.as_deref());
             // `own` is `watch.runs`, which is never filtered server-side (see `source_rows`) — so
             // `hidden` is mirrored here for the same reason.
             rows.extend(
@@ -5307,88 +5310,28 @@ fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
     [waiting, running, awaiting, starred, rest]
 }
 
-/// How many rows the rail prints across **all** its bands before they start offering the rest — the
-/// screenful they share out between them.
-///
-/// Fifteen. A row is ~54px, so this is a tall window's rail filled and a short one's overflowing by
-/// a row or two — a budget for what the rail *prints*, not a promise that all of it is above the
-/// fold. A rail is a list you scan, and a machine that has been working for a week answers with
-/// hundreds of conversations — one band of 75 is not a list, it is a scroll with four other bands
-/// somewhere below it. The heading still counts the *whole* band, so nothing is hidden quietly, and
-/// the count is what the "Show N more" under it is drawn from.
-const RAIL_ROWS: usize = 15;
-
-/// The fewest rows a band prints, however many bands are sharing [`RAIL_ROWS`].
-///
-/// Five, because below that a band stops being a list of its own: three rows under a machine's name
-/// say only that the machine exists. So a rail with four sources on it is fifteen rows' worth of
-/// budget drawn as twenty — the floor wins, and the rail gets longer rather than emptier.
-const BAND_MIN_ROWS: usize = 5;
-
-/// One band's share of the rail's screenful: [`RAIL_ROWS`] between them, never fewer than
-/// [`BAND_MIN_ROWS`]. One band prints fifteen rows, two print seven each, three print five, and
-/// four print five apiece.
-///
-/// The cap is the same for every band rather than dealt by how many rows each is holding: which
-/// band a row lands in changes as sessions start and stop, and a cap that moved with it would
-/// reshuffle how much of *every* band is on screen each time one run finished.
-fn band_cap(bands: usize) -> usize {
-    (RAIL_ROWS / bands.max(1)).max(BAND_MIN_ROWS)
-}
-
-/// One band of the rail as it is drawn: a heading, every row that belongs under it, and how many of
-/// them it is printing. What the label *says* is the grouping's business — an activity ("Running
-/// now") or a machine ("This machine", a node's petname) — and nothing downstream of [`rail_bands`]
-/// can tell which it was.
+/// One band of the rail as it is drawn: a heading, every row that belongs under it, and — under
+/// [`SessionGroup::Machine`] with more than one source selected — the source that heading names,
+/// which its own block's Load more addresses. What the label *says* is the grouping's business —
+/// an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing
+/// downstream of [`rail_bands`] can tell which it was.
 struct RailBand {
     label: String,
-    /// Every row in the band, capped or not: the heading counts these, and [`chat_inbox`] reads
-    /// them past the cap, because an inbox that stopped where the rail does would leave a question
-    /// unanswered behind a control nobody pressed.
+    /// This band's own source (`docs/fleet.md` §13) — `None` for this machine. Meaningless when
+    /// the rail draws a single list (one selected source, or [`SessionGroup::Flat`]): that layout
+    /// has one combined Load more for every selected source, not a per-band one, so nothing reads
+    /// this field then.
+    node: Option<String>,
+    /// Every row in the band. A band is no longer capped — it draws all of it, or none of it while
+    /// its block is folded shut (`State::rail_collapsed_bands`) — and [`chat_inbox`] always reads
+    /// every one of these regardless, because a question left where nobody looks is a run stopped
+    /// for good.
     rows: Vec<SessionRow>,
-    /// What this band prints before it offers the rest — its share of [`RAIL_ROWS`], which is not
-    /// known until every band is built and the empty ones dropped ([`band_cap`]).
-    cap: usize,
-    /// How many rows are on screen: [`Self::cap`] of them, or all of them once this band has been
-    /// opened out ([`State::rail_open_bands`]).
-    shown: usize,
 }
 
-impl RailBand {
-    /// A band holding `rows`, printing nothing yet: what it prints depends on how many bands there
-    /// turn out to be, and that is [`RailBand::cap_at`], after the empty ones are dropped.
-    fn new(label: String, rows: Vec<SessionRow>) -> Self {
-        Self {
-            label,
-            rows,
-            cap: 0,
-            shown: 0,
-        }
-    }
-
-    /// Print the first `cap` rows — or all of them when `open` names this band, which is what the
-    /// "Show N more" under it puts there.
-    fn cap_at(&mut self, cap: usize, open: &std::collections::BTreeSet<String>) {
-        self.cap = cap;
-        self.shown = if open.contains(&self.label) {
-            self.rows.len()
-        } else {
-            self.rows.len().min(cap)
-        };
-    }
-
-    /// The rows this band actually draws. What ⌘1…⌘9 count down, because a number on a row nobody
-    /// can see is a shortcut to a row nobody can click.
-    fn drawn(self) -> std::iter::Take<std::vec::IntoIter<SessionRow>> {
-        let shown = self.shown;
-        self.rows.into_iter().take(shown)
-    }
-}
-
-/// The rail exactly as it is drawn: the bands in order, their rows in order, each capped at its
-/// share of [`RAIL_ROWS`] unless it has been opened out, and the first nine *drawn* rows numbered.
-/// The [`SessionFilter`] rides along, because which of the rail's three emptinesses an empty answer
-/// is depends on which narrowing produced it.
+/// The rail exactly as it is drawn: the bands in order, their rows in order, and the first nine
+/// *drawn* rows numbered. The [`SessionFilter`] rides along, because which of the rail's three
+/// emptinesses an empty answer is depends on which narrowing produced it.
 ///
 /// Empty bands are dropped rather than drawn as a heading over nothing — including, under
 /// [`SessionGroup::Machine`], a source that is ticked but has no sessions to show. A heading with no
@@ -5397,48 +5340,50 @@ impl RailBand {
 ///
 /// Numbering runs straight down the drawn rail and across the headings, not restarted per band: ⌘1
 /// is the row at the very top of the list whatever band it happens to be in today, which is the only
-/// rule a hand can learn. It is assigned *after* the grouping and the cap have decided what is on
-/// screen, so the number printed on a row and the row that number opens cannot disagree —
-/// regrouping the rail, or opening a band out, renumbers it.
+/// rule a hand can learn. It is assigned *after* the grouping has decided what is on screen, so the
+/// number printed on a row and the row that number opens cannot disagree — regrouping the rail
+/// renumbers it, and so does folding a block shut or open.
 fn rail_bands(state: State, watch: AgentsWatch) -> (Vec<RailBand>, SessionFilter) {
     let (rows, filter) = session_rows(state, watch);
     (
         grouped_bands(
             state.session_group.get(),
             activity_bands(rows),
-            &state.rail_open_bands.get(),
+            &state.rail_collapsed_bands.get(),
         ),
         filter,
     )
 }
 
-/// The five activity bands arranged the way `group` asks for, empty bands dropped, each capped at
-/// its share of [`RAIL_ROWS`] unless `open` names it, and the first [`HOTKEYS`] drawn rows numbered
-/// — everything between [`activity_bands`] and the rail's markup, with no signals in it so it can
-/// be tested on its own.
-///
-/// The cap is dealt **after** the empty bands are dropped, which is what makes the rule the
-/// operator's: a heading that isn't drawn takes no share, so one machine on screen prints fifteen
-/// rows of its own rather than a fifth of the rail each for four bands that aren't there.
+/// The five activity bands arranged the way `group` asks for, empty bands dropped, and the first
+/// [`HOTKEYS`] drawn rows numbered — everything between [`activity_bands`] and the rail's markup,
+/// with no signals in it so it can be tested on its own.
 ///
 /// **A band with nothing to say carries no label**, and `adi_ui::RailGroup` then draws no heading:
 /// the flat grouping is one such band, and so is a machine-grouped rail with a single machine on
 /// it. The five activity *partitions* still arrive here in order and are still what orders the rows
 /// — they are simply no longer headings of their own ([`SessionGroup`]); each row says its own state
 /// with a dot and a word instead.
+///
+/// `collapsed` names the blocks folded shut (`State::rail_collapsed_bands`, by label): their rows
+/// travel with them into the returned `Vec` unchanged — [`chat_inbox`] and the Hidden-band
+/// bookkeeping have to see them whether or not their block is open — but they carry no ⌘ number,
+/// since a number that opens a row nobody can see is a number wasted. Meaningless with one band on
+/// screen, which has no fold control at all.
 fn grouped_bands(
     group: SessionGroup,
     banded: [Vec<SessionRow>; 5],
-    open: &std::collections::BTreeSet<String>,
+    collapsed: &std::collections::BTreeSet<String>,
 ) -> Vec<RailBand> {
     let mut bands: Vec<RailBand> = match group {
         // One band, unlabelled: the activity partitions concatenated back in their own order, which
         // is the reading order the rail has always had — what is stopped on you, then what is
         // running, then what is coming back, then the starred, then the rest.
-        SessionGroup::Flat => vec![RailBand::new(
-            String::new(),
-            banded.into_iter().flatten().collect(),
-        )],
+        SessionGroup::Flat => vec![RailBand {
+            label: String::new(),
+            node: None,
+            rows: banded.into_iter().flatten().collect(),
+        }],
         // Dealt out of the activity bands rather than off the sorted rows, which is what keeps each
         // machine's own band in the rail's own order: what is stopped on you, then what is running,
         // then the rest. A `BTreeMap` keyed on the row's own source does the ordering of the bands
@@ -5455,8 +5400,10 @@ fn grouped_bands(
                 },
             )
             .into_iter()
-            .map(|(node, rows)| {
-                RailBand::new(node.unwrap_or_else(|| "This machine".to_string()), rows)
+            .map(|(node, rows)| RailBand {
+                label: node.clone().unwrap_or_else(|| "This machine".to_string()),
+                node,
+                rows,
             })
             .collect(),
     };
@@ -5467,16 +5414,12 @@ fn grouped_bands(
     if let [only] = bands.as_mut_slice() {
         only.label = String::new();
     }
-    let cap = band_cap(bands.len());
-    for band in &mut bands {
-        band.cap_at(cap, open);
-    }
-    // Drawn rows only, and that is the whole reason the cap is dealt before this: ⌘6 has to open
-    // the sixth row a person can see, not the sixth row that exists — which, in a band that stopped
-    // at its share, is behind a control they have not pressed.
+    // A block folded shut draws no rows, so nothing in it is reachable by a hotkey — skipped here
+    // whether or not there is more than one band, which costs nothing: a single-band rail is never
+    // named in `collapsed`, since it has no fold control to put it there.
     let mut numbered = 0;
-    for band in &mut bands {
-        for row in band.rows.iter_mut().take(band.shown) {
+    for band in bands.iter_mut().filter(|b| !collapsed.contains(&b.label)) {
+        for row in &mut band.rows {
             if numbered == HOTKEYS {
                 return bands;
             }
@@ -5485,6 +5428,21 @@ fn grouped_bands(
         }
     }
     bands
+}
+
+/// Every row the rail actually draws, in reading order — every row of every band whose block is not
+/// folded shut. What ⌘⌫ walks when it hands the pane on to the chat after the one just hidden; the
+/// first nine of these are also what carry a ⌘ number ([`grouped_bands`]), but this is unbounded —
+/// walking the rail away one hide at a time has to reach every visible row, not only the first nine.
+fn drawn_rows(
+    bands: Vec<RailBand>,
+    collapsed: &std::collections::BTreeSet<String>,
+) -> Vec<SessionRow> {
+    bands
+        .into_iter()
+        .filter(|b| !collapsed.contains(&b.label))
+        .flat_map(|b| b.rows)
+        .collect()
 }
 
 /// Every row of the rail that has stopped on a question, in the order the rail bands them — what
@@ -5531,7 +5489,9 @@ fn any_session(state: State) -> bool {
 }
 
 /// The rail's session list: the bands the grouping produced, or the one line that says why there
-/// are none.
+/// are none. One band draws a single list ([`chat_band_rows`]); more than one draws a column of
+/// equal-height, independently-scrolling, foldable blocks ([`chat_machine_block`]) — see
+/// `docs/sessions.md`'s Layer 6 for the two-layout split this dispatches on.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     let (bands, filter) = rail_bands(state, watch);
     if bands.is_empty() {
@@ -5556,94 +5516,191 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         };
         return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
-    // Grouped by machine, the heading over each band is the row's source, so the row stops repeating
-    // it (see [`chat_session_row`]). Safe when that grouping draws no heading at all, because the
-    // only rail that happens on is a rail with one source — where the row prints no origin either.
-    let sourced = state.session_group.get() != SessionGroup::Machine;
-    // Keyed, and that is not tidiness: a row's click handler is bound when the row is
-    // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
-    // the filter box does — leaves handlers patched onto rows they no longer belong to, and a click
-    // opens the session that used to be in that slot. `For` keys by identity, so a row and
-    // its handler move together or not at all.
-    bands
-        .into_iter()
-        .map(|band| {
-            let n = band.rows.len();
-            let label = band.label.clone();
-            let cap = band.cap;
-            let more = n.saturating_sub(band.shown);
-            // Stored, so the closure can hand out a fresh copy on every read instead of moving the
-            // one it has.
-            let rows = StoredValue::new(band.drawn().collect::<Vec<_>>());
-            view! {
-                <adi_ui::RailGroup label=label.clone() count=n>
-                    <For
-                        each=move || rows.get_value()
-                        key=|row: &SessionRow| {
-                            format!(
-                                "{}:{}:{}",
-                                row.node.as_deref().unwrap_or(""),
-                                row.agent,
-                                row.run.as_ref().map_or("", |r| r.run_id.as_str()),
-                            )
-                        }
-                        let:row
-                    >
-                        {chat_session_row(state, watch, row, sourced)}
-                    </For>
-                    {band_more(state, label, n, cap, more)}
-                </adi_ui::RailGroup>
-            }
-            .into_any()
-        })
-        .collect::<Vec<_>>()
-        .into_any()
+    // One band (a single source, or `SessionGroup::Flat` merging several): a single list filling
+    // the rail, with one combined Load more under it — no blocks, no per-machine heading, nothing
+    // to fold. More than one: `SessionGroup::Machine` with several sources ticked, one block per
+    // source sharing the rail's height equally (`chat_machine_block`).
+    if bands.len() == 1 {
+        let only = bands.into_iter().next().expect("checked len() == 1 above");
+        let sourced = state.session_group.get() != SessionGroup::Machine;
+        return view! {
+            {chat_band_rows(state, watch, only.rows, sourced)}
+            {chat_load_more(state)}
+        }
+        .into_any();
+    }
+    let collapsed = state.rail_collapsed_bands.get();
+    view! {
+        <div class="adi-chome__blocks flex min-h-0 flex-1 flex-col">
+            {bands
+                .into_iter()
+                .map(|band| {
+                    let is_collapsed = collapsed.contains(&band.label);
+                    chat_machine_block(state, watch, band, is_collapsed)
+                })
+                .collect::<Vec<_>>()}
+        </div>
+    }
+    .into_any()
 }
 
-/// The line under a capped band: **Show N more**, or **Show less** once it has been opened out.
+/// One band's rows as a keyed list, with no heading of its own drawn around them — the single-list
+/// layout ([`chat_all_sessions`]) and, without the wrapping [`adi_ui::RailGroup`], one per-machine
+/// block's own scrolling body ([`chat_machine_block`]).
 ///
-/// `None` for a band that fits in its share of the rail (`cap`, [`band_cap`]) — which is most of
-/// them, most of the time, and a control that does nothing is worse than no control.
-///
-/// It says the number rather than "Show all", because the number is the thing worth knowing before
-/// pressing it: the heading already counts the band, and this is the same count minus what is on
-/// screen. Nothing is fetched — every row here is already in hand ([`chat_load_more`] under the
-/// whole rail is the one that asks the backend for more), so opening a band out is instant and
-/// costs nothing but the rail's length.
-fn band_more(
+/// Keyed, and that is not tidiness: a row's click handler is bound when the row is *built*, so a
+/// plain list that is rebuilt with a different shape — which is exactly what the filter box does —
+/// leaves handlers patched onto rows they no longer belong to, and a click opens the session that
+/// used to be in that slot. `For` keys by identity, so a row and its handler move together or not
+/// at all.
+fn chat_session_rows(
     state: State,
-    label: String,
-    total: usize,
-    cap: usize,
-    more: usize,
-) -> Option<AnyView> {
-    if total <= cap {
+    watch: AgentsWatch,
+    rows: Vec<SessionRow>,
+    sourced: bool,
+) -> AnyView {
+    // Stored, so the closure can hand out a fresh copy on every read instead of moving the one it
+    // has.
+    let rows = StoredValue::new(rows);
+    view! {
+        <For
+            each=move || rows.get_value()
+            key=|row: &SessionRow| {
+                format!(
+                    "{}:{}:{}",
+                    row.node.as_deref().unwrap_or(""),
+                    row.agent,
+                    row.run.as_ref().map_or("", |r| r.run_id.as_str()),
+                )
+            }
+            let:row
+        >
+            {chat_session_row(state, watch, row, sourced)}
+        </For>
+    }
+    .into_any()
+}
+
+/// The single-list layout's rows, under an unlabelled [`adi_ui::RailGroup`] for the same `gap-px`
+/// spacing every other band uses — there is nothing to head them with, since a rail with one source
+/// on screen would only be naming itself.
+fn chat_band_rows(
+    state: State,
+    watch: AgentsWatch,
+    rows: Vec<SessionRow>,
+    sourced: bool,
+) -> AnyView {
+    view! {
+        <adi_ui::RailGroup>
+            {chat_session_rows(state, watch, rows, sourced)}
+        </adi_ui::RailGroup>
+    }
+    .into_any()
+}
+
+/// One block of a machine-grouped rail with several sources selected: a header naming the source
+/// and how many sessions it holds, which folds the block to just that header when clicked and back
+/// open again the same way (`State::rail_collapsed_bands`).
+///
+/// **Expanded blocks share the rail's height equally** (`flex-1`) and each scrolls on its own
+/// (`overflow-y-auto`) — collapsing one gives its share back to the ones still open, down to the
+/// last one taking the whole column. A collapsed block is `flex-none`: exactly its header's height,
+/// nothing more.
+///
+/// Rows are never `sourced` here — the block's own header already names the source, so a row
+/// repeating it on every line would be the same fact twice on a narrow column.
+fn chat_machine_block(
+    state: State,
+    watch: AgentsWatch,
+    band: RailBand,
+    is_collapsed: bool,
+) -> AnyView {
+    let RailBand { label, node, rows } = band;
+    let n = rows.len();
+    let toggle_label = label.clone();
+    let chevron = if is_collapsed {
+        adi_ui::Lucide::ChevronRight
+    } else {
+        adi_ui::Lucide::ChevronDown
+    };
+    let hint = if is_collapsed {
+        format!("show {label}'s sessions")
+    } else {
+        format!("fold {label} to its header")
+    };
+    let header = view! {
+        <button class="adi-chome__blockhead" type="button" title=hint
+            aria-expanded=(!is_collapsed).to_string()
+            on:click=move |_| state.rail_collapsed_bands.update(|set| {
+                if !set.remove(&toggle_label) {
+                    set.insert(toggle_label.clone());
+                }
+            })>
+            <adi_ui::Icon icon=chevron size=adi_ui::IconSize::Sm/>
+            <span class="truncate">{label}</span>
+            <span class="adi-chome__blockcount">{n}</span>
+        </button>
+    };
+    if is_collapsed {
+        return view! { <div class="adi-chome__block flex flex-none flex-col">{header}</div> }
+            .into_any();
+    }
+    view! {
+        <div class="adi-chome__block flex min-h-0 flex-1 flex-col">
+            {header}
+            <div class="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
+                {chat_session_rows(state, watch, rows, false)}
+                {band_load_more(state, node)}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// One source's own tally against the whole store — what [`chat_load_more`] reads combined across
+/// every selected source, read here for one of them alone: a per-machine block now pages its own
+/// source, not a rail-wide budget divided between them.
+fn source_page_counts(state: State, node: Option<&str>) -> Option<(usize, usize)> {
+    let all = match node {
+        None => state.all_chats.get(),
+        Some(n) => state.rail_node_chats.get().get(n).cloned(),
+    }?;
+    let held = all.agents.iter().map(|a| a.runs.len()).sum::<usize>();
+    Some((held, all.total))
+}
+
+/// One per-machine block's own **Load more**: the mirror of [`chat_load_more`] for a single source,
+/// since each block now pages the source it draws rather than sharing one rail-wide budget.
+fn band_load_more(state: State, node: Option<String>) -> Option<AnyView> {
+    let (held, total) = source_page_counts(state, node.as_deref())?;
+    let more = total.saturating_sub(held);
+    if more == 0 {
         return None;
     }
-    let text = if more > 0 {
-        format!("Show {more} more")
+    let label = if more <= SESSION_PAGE {
+        format!("Load the last {more}")
     } else {
-        "Show less".to_string()
-    };
-    let hint = if more > 0 {
-        format!("list this band's other {more} — they are already loaded")
-    } else {
-        format!("cut this band back to its first {cap}")
+        format!("Load {SESSION_PAGE} more \u{00b7} {more} older")
     };
     Some(
         view! {
-            <button class="adi-chome__bandmore" type="button" title=hint
-                aria-expanded=(more == 0).to_string()
-                on:click=move |_| state.rail_open_bands.update(|open| {
-                    if !open.remove(&label) {
-                        open.insert(label.clone());
-                    }
-                })>
-                {text}
-            </button>
+            <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
+                title="ask the backend for this source's next page of sessions"
+                on:click=move |_| bump_source_limit(state, node.clone())>{label}</button>
         }
         .into_any(),
     )
+}
+
+/// Widen one source's own page by [`SESSION_PAGE`] — what both [`chat_load_more`] (every selected
+/// source at once) and [`band_load_more`] (one block's own source) press.
+fn bump_source_limit(state: State, node: Option<String>) {
+    match node {
+        None => state.rail_limit.update(|n| *n += SESSION_PAGE),
+        Some(node) => state.rail_node_limits.update(|m| {
+            *m.entry(node).or_insert(SESSION_PAGE) += SESSION_PAGE;
+        }),
+    }
 }
 
 /// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
@@ -6103,16 +6160,14 @@ async fn settle_session_change(
             {
                 watch.runs.set(runs.runs);
             }
-            let limit = Some(crate::state::rail_source_limit_untracked(state));
+            let limit = Some(crate::state::source_limit_untracked(state, node.as_deref()));
             let show_hidden = state.show_hidden.get_untracked();
             match &node {
                 None => {
                     if let Ok(all) = fetch::all_agent_runs_visible(limit).await {
                         state.all_chats.set(Some(all));
                     }
-                    if show_hidden
-                        && let Ok(all) = fetch::hidden_runs().await
-                    {
+                    if show_hidden && let Ok(all) = fetch::hidden_runs().await {
                         state.hidden_chats.set(Some(all));
                     }
                 }
@@ -6122,9 +6177,7 @@ async fn settle_session_change(
                             m.insert(node.clone(), all);
                         });
                     }
-                    if show_hidden
-                        && let Ok(all) = fetch::hidden_runs_on(node).await
-                    {
+                    if show_hidden && let Ok(all) = fetch::hidden_runs_on(node).await {
                         state.rail_node_hidden_chats.update(|m| {
                             m.insert(node.clone(), all);
                         });
@@ -6174,12 +6227,14 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
             return;
         };
         // Nothing is claimed unless there really is a row there, so ⌘4 on a three-chat rail stays
-        // the browser's to handle rather than being swallowed into a no-op.
+        // the browser's to handle rather than being swallowed into a no-op. Found by its number
+        // rather than by position: a row inside a folded-shut block carries no number at all, so
+        // it is never a candidate here even though its row is still in the list.
         let Some(row) = rail_bands(state, watch)
             .0
             .into_iter()
-            .flat_map(RailBand::drawn)
-            .nth(n - 1)
+            .flat_map(|b| b.rows)
+            .find(|r| r.hotkey == Some(n))
         else {
             return;
         };
@@ -6245,35 +6300,32 @@ fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::Ke
                 && row.run.as_ref().is_some_and(|r| r.run_id == run_id)
         }
     };
-    // Not `RailBand::drawn`: the open conversation's hidden state has to be read whether or not its
-    // row is past the band's cap — a row hidden behind "Show more" is exactly as hidden or not as
-    // one on screen. Absent altogether (the ordinary case — hiding a run closes the pane that had it
-    // open, so a *visible* run is what is normally found here) it is read as not hidden, matching
-    // the row it would draw as if the rail redrew this instant.
-    let hidden = rail_bands(state, watch)
-        .0
+    // Read off `watch.runs` — the open conversation's own agent, whole (`docs/sessions.md`) —
+    // rather than off `rail_bands`: since a hidden run leaves the main listing server-side (unless
+    // it is asking a question), a conversation opened hidden from the Hidden band has no row there
+    // at all, and looking it up there would silently read "not hidden" every time, which is exactly
+    // backwards for the strike that is supposed to bring it back. `watch.runs` is never narrowed
+    // this way (`source_rows`), so the open run is always findable in it.
+    let hidden = watch
+        .runs
+        .get_untracked()
         .into_iter()
-        .flat_map(|band| band.rows)
-        .find(|row| is_open(row))
-        .and_then(|row| row.run)
+        .find(|r| r.run_id == run_id)
         .is_some_and(|r| r.hidden);
 
     // Worked out now, before the hide is issued, from the bands exactly as this strike reads them —
-    // `RailBand::drawn` this time (unlike `hidden` above), because "next" has to be a row ⌘1…⌘9 could
-    // also have opened, never one sitting behind an unopened "Show more" and never the Hidden band,
-    // which isn't part of `rail_bands` at all. Only on the hide direction: unhiding moves nothing, so
-    // there is nothing to hand on to. A drawn list of one — the row about to be hidden and nothing
-    // else visible — has no successor either, which is rule three: the pane goes to empty exactly as
-    // it always has. A row not found among the drawn ones at all (past its band's cap, the same case
-    // `hidden` above reads past) has no defined "next" either, for the same reason: nothing ⌘1…⌘9
-    // could have reached from here to call a successor.
+    // every row a folded-shut block is *not* holding ([`drawn_rows`]), because "next" has to be a
+    // row ⌘1…⌘9 could also have opened, never one behind a collapsed block's header and never the
+    // Hidden band, which isn't part of `rail_bands` at all. Only on the hide direction: unhiding
+    // moves nothing, so there is nothing to hand on to. A drawn list of one — the row about to be
+    // hidden and nothing else visible — has no successor either, which is rule three: the pane goes
+    // to empty exactly as it always has.
     let next = (!hidden)
         .then(|| {
-            let drawn: Vec<SessionRow> = rail_bands(state, watch)
-                .0
-                .into_iter()
-                .flat_map(RailBand::drawn)
-                .collect();
+            let drawn = drawn_rows(
+                rail_bands(state, watch).0,
+                &state.rail_collapsed_bands.get_untracked(),
+            );
             let i = drawn.iter().position(is_open)?;
             (drawn.len() > 1).then(|| drawn[(i + 1) % drawn.len()].clone())
         })
@@ -7473,18 +7525,12 @@ mod tests {
         bands.iter().map(|b| b.label.as_str()).collect()
     }
 
-    /// What the band *prints*, not what it holds — the cap is the difference, and it is the whole
-    /// subject of one of the tests below.
     fn agents_in(band: &RailBand) -> Vec<&str> {
-        band.rows
-            .iter()
-            .take(band.shown)
-            .map(|r| r.agent.as_str())
-            .collect()
+        band.rows.iter().map(|r| r.agent.as_str()).collect()
     }
 
-    /// Nothing opened out: every band stops at its share of the rail ([`band_cap`]).
-    fn all_capped() -> std::collections::BTreeSet<String> {
+    /// Nothing folded shut: every block is drawn open.
+    fn nothing_collapsed() -> std::collections::BTreeSet<String> {
         std::collections::BTreeSet::new()
     }
 
@@ -7506,7 +7552,7 @@ mod tests {
             ],
         ];
 
-        let bands = grouped_bands(SessionGroup::Machine, banded, &all_capped());
+        let bands = grouped_bands(SessionGroup::Machine, banded, &nothing_collapsed());
 
         assert_eq!(
             labels(&bands),
@@ -7535,7 +7581,7 @@ mod tests {
             vec![rail_row(None, "old-local")],
         ];
 
-        let flat = grouped_bands(SessionGroup::Flat, banded.clone(), &all_capped());
+        let flat = grouped_bands(SessionGroup::Flat, banded.clone(), &nothing_collapsed());
         assert_eq!(labels(&flat), [""], "one list, and nothing to head it with");
         assert_eq!(
             agents_in(&flat[0]),
@@ -7545,7 +7591,7 @@ mod tests {
         assert_eq!(flat[0].rows[0].hotkey, Some(1));
         assert_eq!(flat[0].rows[1].hotkey, Some(2));
 
-        let by_machine = grouped_bands(SessionGroup::Machine, banded, &all_capped());
+        let by_machine = grouped_bands(SessionGroup::Machine, banded, &nothing_collapsed());
         assert_eq!(labels(&by_machine), ["This machine", "studio"]);
         assert_eq!(
             by_machine[0].rows[0].hotkey,
@@ -7567,7 +7613,7 @@ mod tests {
             Vec::new(),
             vec![rail_row(None, "local-a"), rail_row(None, "local-b")],
         ];
-        let bands = grouped_bands(SessionGroup::Machine, alone, &all_capped());
+        let bands = grouped_bands(SessionGroup::Machine, alone, &nothing_collapsed());
         assert_eq!(labels(&bands), [""]);
         assert_eq!(agents_in(&bands[0]), ["local-a", "local-b"]);
 
@@ -7579,105 +7625,105 @@ mod tests {
             vec![rail_row(None, "local-a"), rail_row(Some("studio"), "far")],
         ];
         assert_eq!(
-            labels(&grouped_bands(SessionGroup::Machine, joined, &all_capped())),
+            labels(&grouped_bands(
+                SessionGroup::Machine,
+                joined,
+                &nothing_collapsed()
+            )),
             ["This machine", "studio"],
             "a second source gives the first one something to be told apart from",
         );
     }
 
-    /// `n` rows on one source — enough of them to be capped.
+    /// `n` rows on one source.
     fn rail_rows(node: Option<&str>, n: usize, prefix: &str) -> Vec<SessionRow> {
         (0..n)
             .map(|i| rail_row(node, &format!("{prefix}-{i}")))
             .collect()
     }
 
-    /// A band prints its share of the rail and keeps the rest — the heading still counts the whole
-    /// of it, the numbers stop at what is on screen, and the band it was capped *before* goes on
-    /// being numbered from where the cap left off. Number the rows a band is holding rather than
-    /// the rows it is drawing and \u{2318}6 opens something nobody can see.
+    /// There is no cap any more: a band with twenty rows draws all twenty, whichever way the rail
+    /// is grouped and however many other bands are sharing the column with it. Numbering still
+    /// stops at nine, because ⌘0 is not a tenth key on any keyboard — but the rows past the ninth
+    /// are drawn, just unnumbered.
     #[test]
-    fn a_band_prints_its_first_rows_and_hands_the_numbers_on_at_the_cap() {
-        let mut rest = vec![rail_row(None, "working")];
-        rest.extend(rail_rows(Some("studio"), 10, "far"));
-        let banded = [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rest];
+    fn a_band_draws_every_row_it_has_however_many_there_are() {
+        let rows = rail_rows(Some("studio"), 20, "s");
+        let bands = grouped_bands(
+            SessionGroup::Machine,
+            [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rows],
+            &nothing_collapsed(),
+        );
+        let [studio] = bands.as_slice() else {
+            panic!("one band: {:?}", labels(&bands));
+        };
+        assert_eq!(studio.rows.len(), 20, "every row, none held back");
+        assert_eq!(
+            studio.rows.iter().filter(|r| r.hotkey.is_some()).count(),
+            HOTKEYS,
+            "numbered stops at nine, but that is the hotkeys, not a cap on what is drawn",
+        );
+        assert!(studio.rows[19].hotkey.is_none());
+    }
 
-        let bands = grouped_bands(SessionGroup::Machine, banded.clone(), &all_capped());
+    /// A block folded shut carries no hotkey numbers — a number that opened a row nobody can see
+    /// would be worse than no number — but numbering picks straight back up in the next block open,
+    /// rather than skipping the folded block's own count of numbers.
+    #[test]
+    fn folding_a_block_shut_skips_its_rows_when_numbering_the_rest() {
+        let banded = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rail_row(None, "local-a"),
+                rail_row(Some("studio"), "studio-a"),
+                rail_row(Some("studio"), "studio-b"),
+            ],
+        ];
+        let folded = std::collections::BTreeSet::from(["This machine".to_string()]);
+        let bands = grouped_bands(SessionGroup::Machine, banded, &folded);
 
         let [local, studio] = bands.as_slice() else {
             panic!("two bands: {:?}", labels(&bands));
         };
-        assert_eq!(
-            studio.rows.len(),
-            10,
-            "the band still holds all of them\u{2026}"
+        assert_eq!(local.rows.len(), 1, "the folded block still holds its row…");
+        assert!(
+            local.rows[0].hotkey.is_none(),
+            "…but it carries no number, since nothing draws it"
         );
-        assert_eq!(studio.shown, 7, "\u{2026}and prints its half of the rail");
         assert_eq!(
-            agents_in(studio),
-            ["far-0", "far-1", "far-2", "far-3", "far-4", "far-5", "far-6"],
+            studio.rows[0].hotkey,
+            Some(1),
+            "numbering starts at the first block actually drawn, not at zero",
         );
-        assert_eq!(local.rows[0].hotkey, Some(1));
-        assert_eq!(
-            studio.rows.iter().map(|r| r.hotkey).collect::<Vec<_>>(),
-            [
-                Some(2),
-                Some(3),
-                Some(4),
-                Some(5),
-                Some(6),
-                Some(7),
-                Some(8),
-                None,
-                None,
-                None,
-            ],
-            "the three rows past the cap are not on screen, so no number opens them",
-        );
-
-        let open = std::collections::BTreeSet::from(["studio".to_string()]);
-        let opened = grouped_bands(SessionGroup::Machine, banded, &open);
-        assert_eq!(opened[1].shown, 10, "opened out, the band prints all of it");
-        assert_eq!(
-            opened[1].rows[7].hotkey,
-            Some(9),
-            "and the numbers reach the rows the cap was keeping them from",
-        );
+        assert_eq!(studio.rows[1].hotkey, Some(2));
     }
 
-    /// The rail deals one screenful between the bands it is actually drawing: one machine prints
-    /// fifteen rows, two print seven each, and past three the floor takes over so no band is ever
-    /// cut below five. The operator's rule, and the reason the cap is computed after the empty
-    /// bands are dropped — a heading nobody can see must not take a share of the screen.
+    /// [`drawn_rows`] is the reading order ⌘⌫ walks: every row of every block that is open, in
+    /// order, and none at all from one folded shut — even though [`grouped_bands`] above keeps that
+    /// block's rows in its own `Vec` regardless, for `chat_inbox` and the Hidden band's bookkeeping.
     #[test]
-    fn the_screenful_is_dealt_between_the_bands_and_never_below_the_floor() {
-        // `n` machines, each holding twenty sessions, banded by machine.
-        let by_machine = |n: usize| {
-            let rows: Vec<SessionRow> = (0..n)
-                .flat_map(|m| {
-                    (0..20).map(move |i| rail_row(Some(&format!("node-{m}")), &format!("s{m}-{i}")))
-                })
-                .collect();
-            let bands = grouped_bands(
-                SessionGroup::Machine,
-                [Vec::new(), Vec::new(), Vec::new(), Vec::new(), rows],
-                &all_capped(),
-            );
-            assert_eq!(bands.len(), n, "one band per machine");
-            bands.iter().map(|b| b.shown).collect::<Vec<_>>()
-        };
+    fn drawn_rows_skips_a_folded_blocks_rows_entirely() {
+        let banded = [
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            vec![
+                rail_row(None, "local-a"),
+                rail_row(Some("studio"), "studio-a"),
+            ],
+        ];
+        let folded = std::collections::BTreeSet::from(["This machine".to_string()]);
+        let bands = grouped_bands(SessionGroup::Machine, banded, &folded);
 
+        let drawn = drawn_rows(bands, &folded);
         assert_eq!(
-            by_machine(1),
-            [RAIL_ROWS],
-            "one machine gets the whole rail"
-        );
-        assert_eq!(by_machine(2), [7, 7]);
-        assert_eq!(by_machine(3), [5, 5, 5]);
-        assert_eq!(
-            by_machine(4),
-            [BAND_MIN_ROWS; 4],
-            "the floor wins over the budget: the rail gets longer rather than emptier",
+            drawn.iter().map(|r| r.agent.as_str()).collect::<Vec<_>>(),
+            ["studio-a"],
+            "the folded block contributes nothing to the walk",
         );
     }
 }

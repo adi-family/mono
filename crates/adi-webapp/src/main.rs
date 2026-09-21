@@ -223,12 +223,11 @@ fn Home() -> impl IntoView {
                 }
             }
             // Every agent's sessions in one round-trip — what the rail lists under "Other agents"
-            // — cut to this source's share of the page the rail is currently showing, and to what
-            // the main list may draw (a hidden run stays out server-side, `docs/sessions.md`).
-            // Read untracked because this runs inside a task rather than an effect: what re-reads
-            // it when Load more moves is the subscription below, which is what asks in the
-            // ordinary case anyway.
-            let limit = Some(state::rail_source_limit_untracked(state));
+            // — cut to this machine's own page, and to what the main list may draw (a hidden run
+            // stays out server-side, `docs/sessions.md`). Read untracked because this runs inside a
+            // task rather than an effect: what re-reads it when Load more moves is the subscription
+            // below, which is what asks in the ordinary case anyway.
+            let limit = Some(state::source_limit_untracked(state, None));
             if let Ok(c) = fetch::all_agent_runs_visible(limit).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
@@ -288,10 +287,10 @@ fn Home() -> impl IntoView {
         // `chat_subscriptions` reads `watch.node` tracked for the same reason on the open
         // conversation's own watches.
         let nodes = state.session_nodes.get();
-        // What each of them is asked for: the rail's page split between the selected sources, read
-        // *tracked* for the same reason the selection above is — ticking a source on or off
-        // re-deals every other source's share, so each one has to re-subscribe at its new path.
-        let source_limit = Some(state::rail_source_limit(state));
+        // This machine's own page, read *tracked*: pressing its own Load more re-runs this effect,
+        // which re-subscribes at the wider path and so asks for the next page immediately rather
+        // than at whatever the socket's next tick would have been.
+        let local_limit = Some(state::source_limit(state, None));
         let mut subs = state::chat_subscriptions(watch);
         // The node menu's own list: which paired nodes this machine holds a password for. Local
         // and cheap — it asks no node anything — so it rides the socket with everything else.
@@ -333,12 +332,10 @@ fn Home() -> impl IntoView {
         // Every agent's sessions — what the rail lists under "Other agents" — and the dashboards
         // rail, which groups by project and so needs the project names.
         //
-        // Only this source's share of the rail's current page, and only what the main list may
-        // draw — a hidden run stays out server-side (`docs/sessions.md`). Read *tracked*: pressing
-        // Load more re-runs this effect, which re-subscribes at the wider path and so asks for the
-        // next page immediately rather than at whatever the socket's next tick would have been.
+        // Only this machine's own page, and only what the main list may draw — a hidden run stays
+        // out server-side (`docs/sessions.md`).
         subs.push(live::Sub::get(
-            fetch::all_visible_runs_path(source_limit),
+            fetch::all_visible_runs_path(local_limit),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -376,10 +373,13 @@ fn Home() -> impl IntoView {
                     });
                 },
             ));
+            // This node's own page, read tracked for the same reason `local_limit` above is —
+            // each source now pages itself, so only its own Load more re-subscribes it.
+            let node_limit = Some(state::source_limit(state, Some(node)));
             let for_chats = node.clone();
             subs.push(live::Sub::get_on(
                 Some(node),
-                fetch::all_visible_runs_path(source_limit),
+                fetch::all_visible_runs_path(node_limit),
                 move |c: adi_webapp_api::types::AllAgentRuns| {
                     state.rail_node_chats.update(|m| {
                         if m.get(&for_chats) != Some(&c) {
@@ -947,8 +947,8 @@ fn App() -> impl IntoView {
         row_menu: RwSignal::new(None),
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
-        // No sessions rail on the workbench shell, so no band to open out either.
-        rail_open_bands: RwSignal::new(std::collections::BTreeSet::new()),
+        // No sessions rail on the workbench shell, so no block to fold either.
+        rail_collapsed_bands: RwSignal::new(std::collections::BTreeSet::new()),
         session_filter: RwSignal::new(SessionFilter::default()),
         session_filter_menu: RwSignal::new(None),
         // Nor a grouping to pick: the workbench has no rail to band. The stored preference is the
@@ -966,6 +966,7 @@ fn App() -> impl IntoView {
         // No sessions rail on the workbench shell either — its "All chats" table reads the whole
         // index, so nothing here pages. The field exists because `State` is one shape.
         rail_limit: RwSignal::new(state::SESSION_PAGE),
+        rail_node_limits: RwSignal::new(BTreeMap::new()),
         chat_drawer: RwSignal::new(None),
         // Each table restores the arrangement its user last left, else its declared columns.
         tables: state::Tables::new(),

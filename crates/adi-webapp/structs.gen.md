@@ -263,14 +263,13 @@ struct SessionRow {
 
 ### struct `RailBand`
 
-One band of the rail as it is drawn: a heading, every row that belongs under it, and how many of them it is printing. What the label *says* is the grouping's business — an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing downstream of `rail_bands` can tell which it was.
+One band of the rail as it is drawn: a heading, every row that belongs under it, and — under `SessionGroup::Machine` with more than one source selected — the source that heading names, which its own block's Load more addresses. What the label *says* is the grouping's business — an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing downstream of `rail_bands` can tell which it was.
 
 ```rust
 struct RailBand {
     label: String,
+    node: Option<String>,
     rows: Vec<SessionRow>,
-    cap: usize,
-    shown: usize,
 }
 ```
 
@@ -1029,7 +1028,7 @@ pub(crate) struct State {
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
     pub(crate) session_menu: RwSignal<Option<SessionMenu>>,
     pub(crate) show_hidden: RwSignal<bool>,
-    pub(crate) rail_open_bands: RwSignal<BTreeSet<String>>,
+    pub(crate) rail_collapsed_bands: RwSignal<BTreeSet<String>>,
     pub(crate) session_filter: RwSignal<SessionFilter>,
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) session_group: RwSignal<SessionGroup>,
@@ -1041,6 +1040,7 @@ pub(crate) struct State {
     pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     pub(crate) rail_node_hidden_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     pub(crate) rail_limit: RwSignal<usize>,
+    pub(crate) rail_node_limits: RwSignal<BTreeMap<String, usize>>,
     pub(crate) chat_drawer: RwSignal<Option<ChatDrawer>>,
     pub(crate) tables: Tables,
 }

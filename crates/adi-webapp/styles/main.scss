@@ -419,19 +419,38 @@
     }
   }
 
-  // "Show 12 more", under the last row a capped band is printing. A label, not a divider: it sits
-  // *inside* a band rather than between two, so it carries no rule of its own — a hairline here
-  // would read as the start of the next band.
-  &__bandmore {
-    display: block;
+  // A per-machine block's own header, when the rail is split one block per source
+  // (`SessionGroup::Machine`, two or more selected): the same look as `&__divider` — it *is* one,
+  // ruling this block off from the one above it — but a flex row rather than a block, since it
+  // also carries the fold chevron and the row count on the same line, and a button rather than a
+  // plain heading, since clicking it folds the block to just this row.
+  &__blockhead {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     width: 100%;
-    padding: 5px 8px 2px;
+    margin-top: 12px;
+    padding: 10px 8px 6px;
+    border-top: 1px solid var(--line);
     text-align: left;
     font-size: var(--fs-label);
     color: var(--ink-3);
     cursor: pointer;
 
     &:hover { color: var(--ink-2); }
+  }
+  // Only the *first* block has nothing above it to be ruled off from — unlike `&__divider`'s own
+  // `:first-child`, which is safe there because a divider is the only thing rendered in its
+  // parent's stacking context: this heading is the first child of *its own block*, always, so the
+  // same selector would strip every block's rule rather than just the top one's.
+  &__blocks > &__block:first-child &__blockhead {
+    margin-top: 0;
+    padding-top: 2px;
+    border-top: none;
+  }
+  &__blockcount {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
   }
 
   // --- a session row the rail draws itself (the Hidden band) ------------------------------------
