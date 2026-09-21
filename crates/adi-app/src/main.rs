@@ -890,10 +890,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
         // `?limit=N` is the chat rail's page — the newest N sessions across every agent. Absent
         // (or unparseable) means the whole index, which is what the pages that read all of it ask
-        // for.
+        // for. `?hidden=false|true` is the rail's own narrowing, moved server-side — see
+        // `handlers::all_agent_runs`; absent means every run, hidden or not, exactly as before that
+        // parameter existed.
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(
             agents,
             req.query_param("limit").and_then(|n| n.parse().ok()),
+            req.query_param("hidden").and_then(|v| v.parse().ok()),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         // The calls behind one folded run of a transcript — what a reader asks for when they open

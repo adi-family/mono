@@ -2353,9 +2353,15 @@ pub struct AgentRunInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub running: bool,
-    /// Whether this session has been hidden from the chat rail (`POST /api/agents/run/hide`). The run
-    /// is listed either way — hiding is a listing preference the client applies, not a filter the
-    /// server does — so a full history view can still show it.
+    /// Whether this session has been hidden from the chat rail (`POST /api/agents/run/hide`).
+    ///
+    /// `POST /api/agents/runs` (one agent, whole) always carries it either way — the open
+    /// conversation, and a workbench that deliberately shows everything, both need the flag rather
+    /// than its absence. `GET /api/agents/runs/all`'s `?hidden=` is what turns it into a filter,
+    /// server-side, for the one reader that must never draw a hidden run: the rail's main listing
+    /// (`?hidden=false`, kept anyway when [`Self::pending_question`] is set) and its Hidden band
+    /// (`?hidden=true`, drops one already surfaced by a pending question). No `?hidden=` at all
+    /// answers whole, exactly as every caller got before this flag existed.
     #[serde(default)]
     pub hidden: bool,
     /// Whether this conversation has been starred (`POST /api/agents/run/star`) — kept deliberately,
@@ -2464,12 +2470,19 @@ pub struct AgentRuns {
 /// its age because those are inboxes rather than history. Every agent is still listed either way,
 /// because an agent with no session left in the window is still one the client has to know the
 /// shape of; it is the runs that are cut.
+///
+/// `?hidden=false` narrows the answer to what the rail's main list may draw — a hidden run stays
+/// out unless it carries a [`AgentRunInfo::pending_question`], which stays wherever it would have
+/// shown regardless; `?hidden=true` answers with the mirror of that (hidden and *not* asking a
+/// question) for the rail's own Hidden band. Leave `hidden` off the request entirely and every run
+/// comes back, exactly as before this parameter existed — what a workbench asks for, and what an
+/// older client that has never heard of `?hidden=` still gets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllAgentRuns {
     pub agents: Vec<AgentRuns>,
-    /// How many sessions exist in all, before any `?limit=` cut — what tells a paged client
-    /// whether asking for more would bring anything back. Equal to the number carried when the
-    /// answer is whole.
+    /// How many sessions exist in all — after the `?hidden=` narrowing, if any, but before the
+    /// `?limit=` cut — what tells a paged client whether asking for more would bring anything
+    /// back. Equal to the number carried when the answer is whole.
     #[serde(default)]
     pub total: usize,
 }

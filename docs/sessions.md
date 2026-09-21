@@ -63,16 +63,17 @@ Agents::runs(agent) -> Vec<RunInfo>                      lib.rs:851
         ▼
 runs_response() -> AgentRuns                             handlers/agents.rs:468
         │                          ╲
-POST /api/agents/runs   (one agent)  GET /api/agents/runs/all[?limit=N]  (every agent)
-        │                            ╲   newest N across agents + every live/asking one
+POST /api/agents/runs   (one agent)  GET /api/agents/runs/all[?limit=N][&hidden=…]  (every agent)
+        │  whole, hidden included    ╲   newest N + every live/asking one, `hidden`-narrowed
         ▼                              ▼
-   watch.runs: Vec<AgentRunInfo>     state.all_chats: AllAgentRuns     state.rs:67, 1289
-        │  paged() cuts it to           │  already cut; `total` says what was left behind
-        │  rail_source_limit()          │
+   watch.runs: Vec<AgentRunInfo>     state.all_chats / state.hidden_chats: AllAgentRuns
+        │  paged() cuts it to           │  already cut and narrowed; `total` says what
+        │  rail_source_limit()          │  was left behind by the cut alone
         ╰──────────────╮   ╭───────────╯
                        ▼   ▼
         chat_all_sessions() -> Vec<SessionRow>           actions.rs:4434
-        │  filter hidden, filter ★, sort by last_touch, partition running
+        │  filter ★, sort by last_touch, partition running — `hidden` is the server's decision
+        │  above; only `watch.runs`'s own un-narrowed copy is still mirrored client-side
         ▼
    adi_ui::RailGroup / SessionItem                       adi-ui/src/rail.rs, session.rs
 ```
@@ -204,7 +205,9 @@ to `SCHEMA` alone reaches new stores and nowhere else, and the first `SELECT` na
 `hidden` and `starred` look like a pair and are not:
 
 - **`hidden`** is purely a listing preference. The store returns hidden sessions like any other —
-  filtering is the view's job — and nothing else in the system reads it.
+  filtering is a *reader's* job, not the store's — and nothing else in the system reads it.
+  `GET /api/agents/runs/all`'s `?hidden=` is where that reader now lives for the rail (Layer 3):
+  the client no longer re-implements the rule, it asks for the view it wants.
 - **`starred`** is a person saying *keep this*. It is read by two things that are not views:
   `prune_old` skips a starred session however old it is (`store/mod.rs`), and the HTTP paging cut
   lets one ride free past the limit (`newest`, `handlers/agents.rs`). A star that the cap swept
@@ -290,7 +293,7 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 | Route | Handler | Answer |
 |---|---|---|
 | `POST /api/agents/runs` | `agent_runs` :190 | `AgentRuns` — one agent's history, whole |
-| `GET /api/agents/runs/all[?limit=N]` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip; `?limit` pages it |
+| `GET /api/agents/runs/all[?limit=N][&hidden=false\|true]` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip; `?limit` pages it, `?hidden` narrows it |
 | `POST /api/agents/run/peek` | `peek_run` :205 | one run's transcript/log snapshot — whole, or a folded page (below) |
 | `POST /api/agents/run/steps` | `run_steps` | the calls behind one folded run |
 | `POST /api/agents/run/hide` | `hide_run` :439 | flips `hidden`, replies with fresh history |
@@ -315,21 +318,46 @@ and the client must fall back to `started_at`.
 one computation — keyed on the **full path**, query included, so two pages of it are two answers
 rather than one shared by mistake.
 
+### Narrowing (`?hidden=`)
+
+The decision that used to be the client's — `runs.filter(pending_question.is_some() || !hidden)` —
+moved here, so the rail no longer re-implements a rule the server can just answer.
+
+- **`?hidden=false`** is the rail's main listing: everything **not** hidden, plus a hidden run that
+  is asking a question nobody has answered (`filter_by_hidden`, `agents.rs`) — the same escape
+  hatch [`newest`] and `source_rows` already carried, moved rather than duplicated. This is what
+  `state.all_chats`/`state.rail_node_chats` hold on the chat home.
+- **`?hidden=true`** is the mirror, for the rail's own Hidden band: hidden runs, minus one already
+  asking a question, which the main listing above already shows and must not draw twice. Fetched
+  into `state.hidden_chats`/`state.rail_node_hidden_chats` **only while the band is open**
+  (`crate::state::refresh_hidden_chats`) — not on the rail's ordinary poll, since a band nobody has
+  opened has nothing worth spending a request on.
+- **Left off entirely**, the answer is whole, hidden runs included — what a workbench
+  (`all_chats_flatten`) asks for, what Analytics and the Agents index still ask for, and what a
+  paired node running a binary from before this parameter existed keeps sending regardless of what
+  a newer client asks it for. No client-side guard papers over that gap: the same "an older
+  server answers whole and the client renders it as given" rule this file already documents for
+  `limit`/`before`/`fold` on `peek_run` applies here too, rather than reintroducing the filter this
+  change exists to remove from the client.
+
 ### Paging (`?limit=N`)
 
 The rail asks for a page; every other reader asks for all of it.
 
 - **The cut** (`newest`, `agents.rs`) is the newest `N` sessions **across every agent**, by
   `max(last_activity, started_at)` — one flat list, as the rail reads it. A per-agent cut would
-  spend the budget on agents nobody has touched in months.
+  spend the budget on agents nobody has touched in months. Applied *after* `?hidden=`, so it counts
+  the population that narrowing actually left rather than the whole store.
 - **Three kinds ride free**: a session that is *running*, *blocked on a person*, or *starred* is
   kept whatever its age and without spending the budget. The first two are the rail's other bands,
   and they are inboxes rather than history — a question asked months ago and never answered is
   exactly the row paging must not swallow. The third is the same argument made by hand.
 - **Every agent is still listed**, runs or none: an interactive agent has no runs to begin with
   and still contributes a rail row, and the client reads `caps` off this same listing.
-- **`total`** counts what exists, not what was sent. `total − Σruns`, summed over **every selected
-  source**, is what the rail's **Load more** prints, and a zero there is what removes the button.
+- **`total`** counts what exists **after `?hidden=`, before `?limit=`** — not what was sent. `total
+  − Σruns`, summed over **every selected source**, is what the rail's **Load more** prints, and a
+  zero there is what removes the button. Narrowed the same way the runs themselves are, so the
+  count and the rows it describes never disagree about what "exists" means.
 - **`N` is the rail's budget split between its sources**, not a number each machine gets:
   `state::rail_source_limit` divides `state.rail_limit` (`SESSION_PAGE` = 100) by however many
   sources are ticked, so one machine is asked for a hundred and four are asked for twenty-five
@@ -420,14 +448,21 @@ the rail:**
 
 | Signal | Source | Scope | Declared |
 |---|---|---|---|
-| `state.all_chats: Option<AllAgentRuns>` | `GET /api/agents/runs/all` | every agent, this machine | `state.rs:67` |
-| `watch.runs: Vec<AgentRunInfo>` | `POST /api/agents/runs` | the agent on screen, its own source | `state.rs:1289` |
+| `state.all_chats: Option<AllAgentRuns>` | `GET /api/agents/runs/all?hidden=false` | every agent, this machine, main-listing only | `state.rs:67` |
+| `watch.runs: Vec<AgentRunInfo>` | `POST /api/agents/runs` | the agent on screen, its own source, whole (hidden included) | `state.rs:1289` |
 
 They overlap on purpose: `watch.runs` is refreshed faster and is updated *synchronously* by
 mutations (hide/delete reply with fresh history), so the row of a chat you just deleted leaves
 immediately instead of at the next 3s tick. `chat_all_sessions` (by way of `rail_bands` →
 `session_rows` → `source_rows`) prefers `watch.runs` for the watched agent *when the watched
-conversation is on that same source*, and falls back to the source's own index otherwise.
+conversation is on that same source*, and falls back to the source's own index otherwise. Because
+`watch.runs` is never `?hidden`-narrowed, `source_rows` still mirrors that one exclusion
+client-side for rows drawn from it — see Layer 3's "Narrowing".
+
+A third signal, `state.hidden_chats: Option<AllAgentRuns>` (`GET …?hidden=true`), backs the rail's
+Hidden band and nothing else. Unlike the two above it is not part of the chat home's ordinary
+subscription set — it exists in that set only while [`State::show_hidden`] is true, so opening the
+band adds it and closing the band drops it, rather than paying for an answer nobody is reading.
 
 That preference is why paging is done twice. `all_chats` arrives already cut; `watch.runs` is the
 watched agent's *whole* history, so `paged` cuts it client-side — otherwise the agent you are
@@ -440,7 +475,8 @@ the rail's node menu**, kept apart from the pair above rather than folded into t
 | Signal | Source | Scope | Declared |
 |---|---|---|---|
 | `state.rail_node_agents: BTreeMap<String, AgentsState>` | one node's `GET /api/agents` | that node's agents, keyed by petname | `state.rs` |
-| `state.rail_node_chats: BTreeMap<String, AllAgentRuns>` | one node's `GET /api/agents/runs/all` | that node's sessions, keyed by petname | `state.rs` |
+| `state.rail_node_chats: BTreeMap<String, AllAgentRuns>` | one node's `GET /api/agents/runs/all?hidden=false` | that node's main listing, keyed by petname | `state.rs` |
+| `state.rail_node_hidden_chats: BTreeMap<String, AllAgentRuns>` | one node's `GET …?hidden=true` | that node's Hidden band, fetched only while it's open | `state.rs` |
 
 This machine is never a key in either map — `state.agents`/`state.all_chats` already hold it, kept
 fresh by the poll and the live channel that existed before multi-select did, and a second fetch of
@@ -628,11 +664,11 @@ them:
    `runner_state`. The log existing is what `has_started()` means (`store/session.rs:78`).
 4. `store.prune_old(...)` (`lib.rs:504`) — *after* the new files exist, so the new run is never
    counted among the old ones.
-5. Next tick: the server recomputes `/api/agents/runs/all`, the answer differs, the socket pushes
-   it, `state.all_chats` is set.
-6. `chat_all_sessions` re-runs: the row is not hidden, its agent passes ★, `last_touch` is now,
-   `running` is true → it sorts to the top of its machine's band, with an orange dot and "working"
-   on it.
+5. Next tick: the server recomputes `/api/agents/runs/all?hidden=false`, the answer differs, the
+   socket pushes it, `state.all_chats` is set.
+6. `chat_all_sessions` re-runs: the row already passed the server's `hidden` narrowing, its agent
+   passes ★, `last_touch` is now, `running` is true → it sorts to the top of its machine's band,
+   with an orange dot and "working" on it.
 7. When the turn ends, `is_alive` goes false; the mark goes with it and the row sinks into the
    finished tail — or keeps a grey dot and "coming back", if the run registered a wake before it
    stopped (which launching another agent does for it). The answer is committed
@@ -657,12 +693,13 @@ Work down this list when one is missing:
 1. Its agent's backend has **no runner** (`Backend::Other`) → `runs()` returns `[]` (`lib.rs:852`).
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
    session is live or that agent is on screen (`actions.rs:4214`, in `source_rows`).
-3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:4983`,
-   `chat_hidden_sessions`) — **unless** the run holds a `pending_question`, which stays in the rail
-   proper, marked and at the top of its band, instead of going to the Hidden one: hiding is "out of
-   my sight", but a question addressed to a person outranks that, because it is transient and
-   leaves on its own the moment it's answered, whereas a hidden run holding one would be stuck for
-   good.
+3. `hidden: true` → left out of `?hidden=false` server-side (`filter_by_hidden`, `handlers/agents.rs`),
+   so out of the main bands and, once the band is opened, in the Hidden one instead
+   (`?hidden=true`, `chat_hidden_sessions`) — **unless** the run holds a `pending_question`, which
+   stays in the rail proper, marked and at the top of its band, instead of going to the Hidden one:
+   hiding is "out of my sight", but a question addressed to a person outranks that, because it is
+   transient and leaves on its own the moment it's answered, whereas a hidden run holding one would
+   be stuck for good.
 4. **★ is on** and its agent is not starred on *its own source* (`source_rows`, `actions.rs`) — off
    by default, so this only applies once someone has switched it on this page load. Note this is the
    head's *agent* filter, which is a different mark from a conversation's own star, and — since
@@ -690,11 +727,12 @@ Work down this list when one is missing:
 A run waiting on a person — `AgentRunInfo::pending_question` (`crates/adi-webapp-api/src/types.rs`)
 — is always in the rail, regardless of `SessionFilter` (Mine or Starred), the ★ agent filter, or
 `hidden`, and it appears exactly once: at the top of its band with the amber dot on it, never
-duplicated into the Hidden band. The server side already held it through the page cut (`newest`, `handlers/agents.rs`) alongside
-a running or awaiting session; `source_rows`, the "Mine" retain, and `chat_hidden_sessions` in
-`actions.rs` are what carry that same exemption through the client's own narrowings, since a
-subagent-launched, unstarred or hidden run can ask a question exactly as well as one a person started
-by hand — and a question nobody can see to answer is a run stuck for good.
+duplicated into the Hidden band. The server side already held it through both the page cut
+(`newest`) and the `hidden` narrowing (`filter_by_hidden`, both `handlers/agents.rs`) alongside a
+running or awaiting session; `source_rows` and the "Mine" retain in `actions.rs` are what carry
+that same exemption through the client's own narrowings (★, "Mine"), since a subagent-launched or
+unstarred run can ask a question exactly as well as one a person started by hand — and a question
+nobody can see to answer is a run stuck for good.
 
 ## Hot spots for a refactor
 

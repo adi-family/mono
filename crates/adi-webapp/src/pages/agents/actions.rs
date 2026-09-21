@@ -4870,9 +4870,9 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// scroll past. The picker above still names the agent "+ New" starts a session on; it no longer
 /// decides what the rail shows.
 ///
-/// A session the user has hidden ([`set_session_hidden`]) is left out of the list and rides only in
-/// the band beneath it. Hiding is a rail preference, so it stops here: the Agents page's history
-/// tables still list everything, which is what a workbench is for.
+/// A session the user has hidden ([`set_session_hidden`]) is left out of the list server-side and
+/// rides only in the band beneath it (`docs/sessions.md`). That narrowing stops at the rail: the
+/// Agents page's history tables still list everything, which is what a workbench is for.
 fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         {chat_all_sessions(state, watch)}
@@ -5112,8 +5112,12 @@ fn source_rows(
         } else {
             ar.runs.clone()
         };
-        // A pending question outranks both the ★ filter and `hidden`: it is a question addressed
-        // to a person, transient by nature, and stuck for good if nobody can see it to answer it.
+        // A pending question outranks both the ★ filter and `hidden`. The `hidden` half of this is
+        // the server's decision now (`docs/sessions.md`) and a no-op for `ar.runs`, which already
+        // arrived as the `?hidden=false` answer — it stays load-bearing only for `own`/`paged`
+        // above, sourced from `POST /api/agents/runs`, which is deliberately never filtered (the
+        // watched agent's own history has to stay whole for its own "Runs" table). ★ is a client
+        // narrowing regardless of source, so it is applied here either way.
         rows.extend(
             runs.into_iter()
                 .filter(|r| r.pending_question.is_some() || (!excluded && !r.hidden))
@@ -5215,6 +5219,8 @@ fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFi
             });
         } else {
             let own = paged(watch.runs.get(), state);
+            // `own` is `watch.runs`, which is never filtered server-side (see `source_rows`) — so
+            // `hidden` is mirrored here for the same reason.
             rows.extend(
                 own.into_iter()
                     .filter(|r| r.pending_question.is_some() || !r.hidden)
@@ -5510,8 +5516,12 @@ fn waiting_rows(bands: Vec<RailBand>) -> Vec<SessionRow> {
 /// Only run records count. A pty agent contributes a row when it is live, and a live one survives
 /// the "mine" filter anyway (nobody records who opened a terminal, so it is never filtered out), so
 /// a rail that is empty despite one cannot exist.
+///
+/// `all_chats`/`rail_node_chats` are already the server's `?hidden=false` answer, so a run present
+/// here already passed that narrowing — checking `hidden` again would wrongly read "nothing" off a
+/// source whose only run is a hidden one still asking a question.
 fn any_session(state: State) -> bool {
-    let has_runs = |all: &AllAgentRuns| all.agents.iter().any(|ar| ar.runs.iter().any(|r| !r.hidden));
+    let has_runs = |all: &AllAgentRuns| all.agents.iter().any(|ar| !ar.runs.is_empty());
     (state.session_local.get() && state.all_chats.get().is_some_and(|all| has_runs(&all)))
         || state
             .rail_node_chats
@@ -6070,11 +6080,15 @@ fn start_rename_session(
 ///
 /// The endpoint replies with that agent's fresh history, so the row settles into its new band at
 /// once instead of at the socket's next tick — and the mutated row's own source's cross-agent index
-/// (the Starred, Recent and Hidden bands' data) is re-fetched for the same reason: this machine's
+/// (the Starred, Recent and main-listing data) is re-fetched for the same reason: this machine's
 /// [`State::all_chats`] for `node: None`, or one node's slice of [`State::rail_node_chats`]
 /// (`docs/fleet.md` §13). Refetching it **at the rail's current page**, not without a limit — an
 /// unlimited answer would widen the rail to the whole index until the socket's next answer narrowed
 /// it back.
+///
+/// The Hidden band's own data is refreshed alongside it, but only when [`State::show_hidden`] says
+/// the band is actually open — a Hide or Unhide moves a row between the two listings, and a band
+/// nobody has opened has nothing to refresh a request would be spent on.
 async fn settle_session_change(
     state: State,
     watch: AgentsWatch,
@@ -6090,16 +6104,29 @@ async fn settle_session_change(
                 watch.runs.set(runs.runs);
             }
             let limit = Some(crate::state::rail_source_limit_untracked(state));
-            match node {
+            let show_hidden = state.show_hidden.get_untracked();
+            match &node {
                 None => {
-                    if let Ok(all) = fetch::all_agent_runs(limit).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible(limit).await {
                         state.all_chats.set(Some(all));
+                    }
+                    if show_hidden
+                        && let Ok(all) = fetch::hidden_runs().await
+                    {
+                        state.hidden_chats.set(Some(all));
                     }
                 }
                 Some(node) => {
-                    if let Ok(all) = fetch::all_agent_runs_on(&node, limit).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible_on(node, limit).await {
                         state.rail_node_chats.update(|m| {
-                            m.insert(node, all);
+                            m.insert(node.clone(), all);
+                        });
+                    }
+                    if show_hidden
+                        && let Ok(all) = fetch::hidden_runs_on(node).await
+                    {
+                        state.rail_node_hidden_chats.update(|m| {
+                            m.insert(node.clone(), all);
                         });
                     }
                 }
@@ -6292,16 +6319,25 @@ fn open_session(watch: AgentsWatch, node: Option<String>, agent: &str, run_id: &
 }
 
 /// The rail's **Hidden** band: every session put away with Hide, whichever agent it belongs to,
-/// newest first. `None` when nothing is hidden, so a rail no one has hidden anything in never
-/// mentions the idea.
+/// newest first.
 ///
 /// Collapsed behind its own count, because this band is the way *back* to a session rather than
 /// something to read: a click opens the chat as any other row does, and its right-click menu offers
 /// Unhide — as does the ↩ that rides the row's right edge.
-fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
+///
+/// **Its own data, fetched only while it is open** (`docs/sessions.md`): [`State::hidden_chats`] /
+/// [`State::rail_node_hidden_chats`] hold nothing until [`crate::state::refresh_hidden_chats`] asks
+/// for them, which the toggle below does on the way open. So — unlike every other band, which knows
+/// its count whether or not anyone has looked — the control here reads plain **"Hidden"** until
+/// that answer lands, and only then can say how many. The alternative was asking on every poll
+/// purely to keep a number fresh nobody was reading; the trade is one label that briefly says less
+/// than it will.
+fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // One selected source's own hidden rows, tagged with where they came from — the same per-source
-    // merge `session_rows` runs above, kept separate because this band reads `all_chats` /
-    // `rail_node_chats` directly rather than through `source_rows` (`docs/fleet.md` §13).
+    // merge `session_rows` runs above, kept separate because this band reads `hidden_chats` /
+    // `rail_node_hidden_chats` directly rather than through `source_rows` (`docs/fleet.md` §13).
+    // Each already carries exactly this band's population (`?hidden=true`: hidden, minus one
+    // already asking a question in the main list), so nothing is filtered again here beyond ★.
     let starred_only = state.session_filter.get() == SessionFilter::Starred;
     let collect = |node: Option<String>,
                    all: Option<AllAgentRuns>,
@@ -6332,61 +6368,64 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
                 let name = ar.name;
                 ar.runs
                     .into_iter()
-                    // A pending question already rides the asking band above regardless of `hidden`
-                    // (`activity_bands`) — kept out of this one too, or it would draw twice. Hiding a
-                    // conversation is "out of my sight"; a question addressed to a person outranks
-                    // that, but only for as long as it is unanswered, so it belongs in the live band
-                    // and not filed away here.
-                    .filter(|r| r.hidden && r.pending_question.is_none())
                     .map(move |r| (node.clone(), name.clone(), r))
             })
             .collect()
     };
 
+    let open = state.show_hidden.get();
     let mut rows: Vec<(Option<String>, String, AgentRunInfo)> = Vec::new();
     if state.session_local.get() {
-        rows.extend(collect(None, state.all_chats.get(), state.agents.get()));
+        rows.extend(collect(None, state.hidden_chats.get(), state.agents.get()));
     }
-    let node_chats = state.rail_node_chats.get();
+    let node_hidden = state.rail_node_hidden_chats.get();
     let node_agents = state.rail_node_agents.get();
     for node in state.session_nodes.get() {
         rows.extend(collect(
             Some(node.clone()),
-            node_chats.get(&node).cloned(),
+            node_hidden.get(&node).cloned(),
             node_agents.get(&node).cloned(),
         ));
     }
-    if rows.is_empty() {
-        return None;
-    }
     rows.sort_by_key(|(_, _, r)| std::cmp::Reverse(last_touch(r)));
-    let open = state.show_hidden.get();
-    let label = format!("Hidden \u{00b7} {}", rows.len());
+    let label = if open {
+        format!("Hidden \u{00b7} {}", rows.len())
+    } else {
+        "Hidden".to_string()
+    };
     let chevron = if open {
         adi_ui::Lucide::ChevronDown
     } else {
         adi_ui::Lucide::ChevronRight
     };
     let body = open.then(|| {
-        rows.into_iter()
-            .map(|(node, agent, r)| chat_hidden_row(state, watch, node, &agent, &r))
-            .collect::<Vec<_>>()
-    });
-    Some(
-        view! {
-            <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
-                title="sessions hidden from the rail"
-                aria-expanded=open.to_string()
-                on:click=move |_| state.show_hidden.update(|v| *v = !*v)>
-                <span class="inline-flex items-center gap-1.5">
-                    <adi_ui::Icon icon=chevron size=adi_ui::IconSize::Sm/>
-                    {label}
-                </span>
-            </button>
-            {body}
+        if rows.is_empty() {
+            view! { <p class="adi-chome__empty">"Nothing hidden."</p> }.into_any()
+        } else {
+            rows.into_iter()
+                .map(|(node, agent, r)| chat_hidden_row(state, watch, node, &agent, &r))
+                .collect::<Vec<_>>()
+                .into_any()
         }
-        .into_any(),
-    )
+    });
+    view! {
+        <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
+            title="sessions hidden from the rail"
+            aria-expanded=open.to_string()
+            on:click=move |_| state.show_hidden.update(|v| {
+                *v = !*v;
+                if *v {
+                    crate::state::refresh_hidden_chats(state);
+                }
+            })>
+            <span class="inline-flex items-center gap-1.5">
+                <adi_ui::Icon icon=chevron size=adi_ui::IconSize::Sm/>
+                {label}
+            </span>
+        </button>
+        {body}
+    }
+    .into_any()
 }
 
 /// One hidden session: the same strip as any other agent's, dimmed under the Hidden band, with an

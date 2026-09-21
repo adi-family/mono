@@ -627,29 +627,68 @@ pub async fn agent_runs(node: Option<&str>, name: String) -> Result<AgentRuns, S
     post_on(node, "/api/agents/runs", &AgentRef { name }).await
 }
 
-/// Every agent's run history in one call — the data behind the cross-agent "All chats" index.
+/// Every agent's run history in one call — the data behind the cross-agent "All chats" index,
+/// **whole**: a hidden run comes back like any other, which is what a workbench is for.
 ///
-/// `limit` asks for only the newest N sessions across every agent, the page the chat rail opens
-/// on; `None` is the whole history, which is what Analytics and the Agents index read. The answer
-/// carries `total` either way, so a paged caller knows whether there is more behind it.
+/// `limit` asks for only the newest N sessions across every agent; `None`, which is what Analytics
+/// and the Agents index ask for, is the whole history. The answer carries `total` either way, so a
+/// paged caller knows whether there is more behind it.
 pub async fn all_agent_runs(limit: Option<usize>) -> Result<AllAgentRuns, String> {
     get(&all_runs_path(limit)).await
 }
 
-/// [`all_agent_runs`], for one paired node's own sessions — the sessions rail's per-source merge
-/// (`docs/fleet.md` §13, multi-select).
-pub async fn all_agent_runs_on(node: &str, limit: Option<usize>) -> Result<AllAgentRuns, String> {
-    get_on(Some(node), &all_runs_path(limit)).await
-}
-
-/// The `/api/agents/runs/all` request for a given page size — one function, because the live
-/// channel watches this path by string and a subscription that spelled it differently would be a
-/// second topic answering the same question.
+/// The `/api/agents/runs/all` request for a given page size, whole history — one function,
+/// because the live channel watches this path by string and a subscription that spelled it
+/// differently would be a second topic answering the same question.
 pub fn all_runs_path(limit: Option<usize>) -> String {
     match limit {
         Some(n) => format!("/api/agents/runs/all?limit={n}"),
         None => "/api/agents/runs/all".to_string(),
     }
+}
+
+/// The sessions rail's own page: [`all_agent_runs`], narrowed server-side to what the main list may
+/// draw — a hidden run stays out unless it is asking a question nobody has answered
+/// (`docs/sessions.md`).
+pub async fn all_agent_runs_visible(limit: Option<usize>) -> Result<AllAgentRuns, String> {
+    get(&all_visible_runs_path(limit)).await
+}
+
+/// [`all_agent_runs_visible`], for one paired node's own sessions — the sessions rail's per-source
+/// merge (`docs/fleet.md` §13, multi-select).
+pub async fn all_agent_runs_visible_on(
+    node: &str,
+    limit: Option<usize>,
+) -> Result<AllAgentRuns, String> {
+    get_on(Some(node), &all_visible_runs_path(limit)).await
+}
+
+/// The rail's own page of the index — see [`all_agent_runs_visible`]. Its own path function, for
+/// the same reason [`all_runs_path`] has one: the live channel keys a subscription by this string.
+pub fn all_visible_runs_path(limit: Option<usize>) -> String {
+    match limit {
+        Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false"),
+        None => "/api/agents/runs/all?hidden=false".to_string(),
+    }
+}
+
+/// The rail's **Hidden** band, unpaged — every run put away with Hide, minus one already shown
+/// live with a question on it. Fetched only while the band is open, never on the rail's ordinary
+/// poll (`docs/sessions.md`).
+pub async fn hidden_runs() -> Result<AllAgentRuns, String> {
+    get(hidden_runs_path()).await
+}
+
+/// [`hidden_runs`], for one paired node's own sessions.
+pub async fn hidden_runs_on(node: &str) -> Result<AllAgentRuns, String> {
+    get_on(Some(node), hidden_runs_path()).await
+}
+
+/// The Hidden band's own path — never paged, since that band draws every hidden run it has rather
+/// than a screenful of them. A function rather than a bare constant for the same reason
+/// [`all_runs_path`] is one: the live channel keys a subscription by this string.
+pub fn hidden_runs_path() -> &'static str {
+    "/api/agents/runs/all?hidden=true"
 }
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs), from

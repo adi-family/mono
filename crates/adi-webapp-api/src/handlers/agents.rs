@@ -1177,8 +1177,14 @@ pub fn rename_run(store: &Agents, body: &[u8]) -> Response {
 /// is running or blocked on a person, whatever its age — with `total` saying how many there were to
 /// choose from. `None` answers with all of them, which is what the pages that read the whole
 /// history — Analytics, the Agents index — ask for.
+///
+/// `hidden` is the decision that used to be the rail's own, moved here: `Some(false)` for the main
+/// listing (a hidden run stays out unless it is asking a question nobody has answered — see
+/// [`filter_by_hidden`]), `Some(true)` for the Hidden band, fetched only while it is open, and
+/// `None` for everyone else — a workbench, Analytics, an older client that sends no such
+/// parameter — which gets the whole history exactly as it always has.
 #[must_use]
-pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
+pub fn all_agent_runs(store: &Agents, limit: Option<usize>, hidden: Option<bool>) -> Response {
     match store.list() {
         Ok(agents) => {
             // One question query for the whole answer rather than one per agent: the index is
@@ -1190,6 +1196,12 @@ pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
                 .iter()
                 .map(|a| runs_response_with(store, a, &waiting, &awaiting))
                 .collect();
+            if let Some(only_hidden) = hidden {
+                agents = filter_by_hidden(agents, only_hidden);
+            }
+            // Counted after the `hidden` narrowing and before the `limit` cut, so both the rail's
+            // "N older" and the Hidden band's own count describe the population that was actually
+            // asked for, not the whole store.
             let total = agents.iter().map(|a| a.runs.len()).sum();
             if let Some(limit) = limit {
                 agents = newest(agents, limit);
@@ -1198,6 +1210,26 @@ pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
         }
         Err(e) => Response::from(&e),
     }
+}
+
+/// The `?hidden=` narrowing: keep only the runs the mode asks for, per agent.
+///
+/// `only_hidden: false` is the rail's main listing — everything **not** hidden, plus a hidden run
+/// that is asking a question nobody has answered yet, because a question left where nobody looks is
+/// a run stopped for good (`docs/sessions.md`). `only_hidden: true` is the mirror of that for the
+/// Hidden band: hidden runs, minus the ones asking a question, which the main listing above already
+/// carries and must not be drawn twice.
+fn filter_by_hidden(mut agents: Vec<AgentRuns>, only_hidden: bool) -> Vec<AgentRuns> {
+    for a in &mut agents {
+        a.runs.retain(|r| {
+            if only_hidden {
+                r.hidden && r.pending_question.is_none()
+            } else {
+                r.pending_question.is_some() || !r.hidden
+            }
+        });
+    }
+    agents
 }
 
 /// Cut the whole index down to its newest `limit` sessions, counted across agents rather than
@@ -3790,17 +3822,50 @@ mod tests {
                 .expect("open a session");
         }
 
-        let Response { status, body } = all_agent_runs(&store, Some(2));
+        let Response { status, body } = all_agent_runs(&store, Some(2), None);
         assert_eq!(status, 200);
         let page: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(page.total, 5, "what exists, not what was sent");
         assert_eq!(page.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 2);
 
         // And no limit is the whole history, for the pages that read all of it.
-        let Response { body, .. } = all_agent_runs(&store, None);
+        let Response { body, .. } = all_agent_runs(&store, None, None);
         let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(all.total, 5);
         assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);
+    }
+
+    /// A hidden run stays out of `?hidden=false` (the rail's main listing) unless it is asking a
+    /// question nobody has answered — the one case a hidden run must not vanish from view, because
+    /// nothing else shows it. `?hidden=true` (the Hidden band) is the mirror: hidden runs, minus
+    /// that same asking one, which the main listing already carries.
+    #[test]
+    fn hidden_narrows_the_listing_but_never_drops_a_pending_question() {
+        let mut agents = vec![listing("solver", &[300, 200, 100])];
+        agents[0].runs[1].hidden = true; // solver-200
+        agents[0].runs[2].hidden = true; // solver-100, and it is asking
+        agents[0].runs[2].pending_question = Some(AgentAsk {
+            id: "q1".to_string(),
+            asked_at: 1,
+            note: String::new(),
+            questions: Vec::new(),
+            deadline: None,
+            headline: "which branch?".to_string(),
+        });
+
+        let visible = filter_by_hidden(agents.clone(), false);
+        assert_eq!(
+            kept(&visible),
+            ["solver-300", "solver-100"],
+            "hidden and quiet stays out; hidden and asking stays in",
+        );
+
+        let hidden_band = filter_by_hidden(agents, true);
+        assert_eq!(
+            kept(&hidden_band),
+            ["solver-200"],
+            "the asking one is already in the main listing and must not draw twice",
+        );
     }
 
     // ---- fleet sender tagging and owner instructions (ADI-MONO-13) --------------------

@@ -223,12 +223,13 @@ fn Home() -> impl IntoView {
                 }
             }
             // Every agent's sessions in one round-trip — what the rail lists under "Other agents"
-            // — cut to this source's share of the page the rail is currently showing. Read
-            // untracked because this runs inside a task rather than an effect: what re-reads it
-            // when Load more moves is the subscription below, which is what asks in the ordinary
-            // case anyway.
+            // — cut to this source's share of the page the rail is currently showing, and to what
+            // the main list may draw (a hidden run stays out server-side, `docs/sessions.md`).
+            // Read untracked because this runs inside a task rather than an effect: what re-reads
+            // it when Load more moves is the subscription below, which is what asks in the
+            // ordinary case anyway.
             let limit = Some(state::rail_source_limit_untracked(state));
-            if let Ok(c) = fetch::all_agent_runs(limit).await
+            if let Ok(c) = fetch::all_agent_runs_visible(limit).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
                 state.all_chats.set(Some(c));
@@ -332,11 +333,12 @@ fn Home() -> impl IntoView {
         // Every agent's sessions — what the rail lists under "Other agents" — and the dashboards
         // rail, which groups by project and so needs the project names.
         //
-        // Only this source's share of the rail's current page, and it is read *tracked*: pressing
+        // Only this source's share of the rail's current page, and only what the main list may
+        // draw — a hidden run stays out server-side (`docs/sessions.md`). Read *tracked*: pressing
         // Load more re-runs this effect, which re-subscribes at the wider path and so asks for the
         // next page immediately rather than at whatever the socket's next tick would have been.
         subs.push(live::Sub::get(
-            fetch::all_runs_path(source_limit),
+            fetch::all_visible_runs_path(source_limit),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -377,7 +379,7 @@ fn Home() -> impl IntoView {
             let for_chats = node.clone();
             subs.push(live::Sub::get_on(
                 Some(node),
-                fetch::all_runs_path(source_limit),
+                fetch::all_visible_runs_path(source_limit),
                 move |c: adi_webapp_api::types::AllAgentRuns| {
                     state.rail_node_chats.update(|m| {
                         if m.get(&for_chats) != Some(&c) {
@@ -386,6 +388,36 @@ fn Home() -> impl IntoView {
                     });
                 },
             ));
+        }
+        // The rail's **Hidden** band, and only while it is open: unlike every subscription above,
+        // this one must not ride the ordinary poll, so it exists in this list at all only for as
+        // long as `state.show_hidden` says the band is drawn — tracked, so opening or closing it
+        // adds or drops these subs the moment it happens.
+        if state.show_hidden.get() {
+            if state.session_local.get() {
+                subs.push(live::Sub::get(
+                    fetch::hidden_runs_path(),
+                    move |c: adi_webapp_api::types::AllAgentRuns| {
+                        if state.hidden_chats.get_untracked().as_ref() != Some(&c) {
+                            state.hidden_chats.set(Some(c));
+                        }
+                    },
+                ));
+            }
+            for node in &nodes {
+                let for_hidden = node.clone();
+                subs.push(live::Sub::get_on(
+                    Some(node),
+                    fetch::hidden_runs_path(),
+                    move |c: adi_webapp_api::types::AllAgentRuns| {
+                        state.rail_node_hidden_chats.update(|m| {
+                            if m.get(&for_hidden) != Some(&c) {
+                                m.insert(for_hidden.clone(), c);
+                            }
+                        });
+                    },
+                ));
+            }
         }
         live::watch(subs);
     });
@@ -889,6 +921,8 @@ fn App() -> impl IntoView {
         agents,
         current_agent,
         all_chats,
+        // No sessions rail on the workbench shell, so no Hidden band to fetch for either.
+        hidden_chats: RwSignal::new(None),
         tools,
         secrets,
         db,
@@ -928,6 +962,7 @@ fn App() -> impl IntoView {
         fleet_nodes: RwSignal::new(None),
         rail_node_agents: RwSignal::new(BTreeMap::new()),
         rail_node_chats: RwSignal::new(BTreeMap::new()),
+        rail_node_hidden_chats: RwSignal::new(BTreeMap::new()),
         // No sessions rail on the workbench shell either — its "All chats" table reads the whole
         // index, so nothing here pages. The field exists because `State` is one shape.
         rail_limit: RwSignal::new(state::SESSION_PAGE),

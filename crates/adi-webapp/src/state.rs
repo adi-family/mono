@@ -144,8 +144,14 @@ pub(crate) struct State {
     /// definition being written has no name until it is saved.
     pub(crate) current_agent: RwSignal<String>,
     /// Every agent's run history (`/api/agents/runs/all`) — the data behind the cross-agent
-    /// "All chats" index shown above the Agents list and the single-agent live view.
+    /// "All chats" index shown above the Agents list and the single-agent live view, and (on the
+    /// chat home) the sessions rail's own page, narrowed server-side to what the main list may
+    /// draw (`?hidden=false`, `docs/sessions.md`).
     pub(crate) all_chats: RwSignal<Option<AllAgentRuns>>,
+    /// This machine's own `?hidden=true` answer — the rail's **Hidden** band. `None` until the
+    /// band is opened: unlike [`Self::all_chats`] it is never on the ordinary poll, since a band
+    /// nobody has opened has nothing worth spending a request on.
+    pub(crate) hidden_chats: RwSignal<Option<AllAgentRuns>>,
     /// Tool definitions (`/api/tools`), shown on the Tools page and each project's Tools panel.
     pub(crate) tools: RwSignal<Option<ToolsState>>,
     /// Secret metadata across every scope (`/api/secrets`), shown on the Secrets page and each
@@ -272,9 +278,14 @@ pub(crate) struct State {
     /// other page relies on; a second copy under a `None` key would be two clocks telling the same
     /// fact.
     pub(crate) rail_node_agents: RwSignal<BTreeMap<String, AgentsState>>,
-    /// One selected node's own `/api/agents/runs/all` — the sessions rail's per-source merge
-    /// (`docs/fleet.md` §13). See [`Self::rail_node_agents`] for why this machine is never a key.
+    /// One selected node's own `/api/agents/runs/all?hidden=false` — the sessions rail's
+    /// per-source merge (`docs/fleet.md` §13). See [`Self::rail_node_agents`] for why this
+    /// machine is never a key.
     pub(crate) rail_node_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
+    /// One selected node's own `?hidden=true` answer — [`Self::hidden_chats`] for a paired node,
+    /// present only for a node that is both selected and has had the Hidden band opened while it
+    /// was.
+    pub(crate) rail_node_hidden_chats: RwSignal<BTreeMap<String, AllAgentRuns>>,
     /// How many sessions the chat rail has asked for **in total, across every selected source** —
     /// [`SESSION_PAGE`] to begin with, another page each time its **Load more** is pressed. What
     /// one source is asked for is this divided between them ([`rail_source_limit`]).
@@ -478,6 +489,7 @@ impl State {
             agents: RwSignal::new(None),
             current_agent: RwSignal::new(String::new()),
             all_chats: RwSignal::new(None),
+            hidden_chats: RwSignal::new(None),
             tools: RwSignal::new(None),
             secrets: RwSignal::new(None),
             db: RwSignal::new(None),
@@ -507,6 +519,7 @@ impl State {
             fleet_nodes: RwSignal::new(None),
             rail_node_agents: RwSignal::new(BTreeMap::new()),
             rail_node_chats: RwSignal::new(BTreeMap::new()),
+            rail_node_hidden_chats: RwSignal::new(BTreeMap::new()),
             rail_limit: RwSignal::new(SESSION_PAGE),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
@@ -2573,6 +2586,11 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
                 m.remove(node);
             }
         });
+        s.rail_node_hidden_chats.update(|m| {
+            if let Some(node) = &node {
+                m.remove(node);
+            }
+        });
         if watch.node.get_untracked() == node {
             watch.close();
         }
@@ -2606,7 +2624,7 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
             }
             Err(e) => s.flash.set(Some(Flash::err(format!("{node}: {e}")))),
         }
-        if let Ok(c) = fetch::all_agent_runs_on(&node, limit).await
+        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit).await
             && s.session_nodes.get_untracked().contains(&node)
         {
             s.rail_node_chats.update(|m| {
@@ -2614,6 +2632,29 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
             });
         }
     });
+}
+
+/// Fetch every selected source's `?hidden=true` answer and fold it in — the Hidden band's own
+/// eager refresh for the moment it is opened, so it shows something the instant it is clicked
+/// rather than waiting for the live channel's next tick. [`refresh_rail_node`] is the same idea
+/// for a node's ordinary page.
+pub(crate) fn refresh_hidden_chats(s: State) {
+    if s.session_local.get_untracked() {
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(c) = fetch::hidden_runs().await {
+                s.hidden_chats.set(Some(c));
+            }
+        });
+    }
+    for node in s.session_nodes.get_untracked() {
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(c) = fetch::hidden_runs_on(&node).await {
+                s.rail_node_hidden_chats.update(|m| {
+                    m.insert(node, c);
+                });
+            }
+        });
+    }
 }
 
 /// What the live channel should be watching for the page that is open, and where each answer
