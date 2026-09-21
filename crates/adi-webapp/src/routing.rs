@@ -102,6 +102,10 @@ pub(crate) enum Route {
     Mesh,
     /// The paired remote adi nodes — `<service>.<node>.n.adi` (`/settings/fleet`).
     Fleet,
+    /// Service status, the platform power switch, a restart, updates and a diagnostic report —
+    /// the web twin of the mac app's menu-bar window (`/settings/system`). Always about *this*
+    /// machine, never the panel-wide source picker's target (`docs/fleet.md` §14's L3).
+    System,
     /// Whether the webapp bundle is served from the shared-assets CDN instead of this instance's
     /// own `dist/` (`/settings/shared-assets`).
     SharedAssets,
@@ -117,7 +121,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 23] = [
+    pub(crate) const NAV: [Route; 24] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -141,13 +145,14 @@ impl Route {
         Route::LlmBackends,
         Route::EmbeddingBackends,
         Route::SharedAssets,
+        Route::System,
     ];
 
-    /// The seven pages Settings gathers, in the order the explorer nests them and the Settings
+    /// The eight pages Settings gathers, in the order the explorer nests them and the Settings
     /// landing page ([`crate::pages::settings_view`]) lists them. The explorer's own
     /// `GLOBAL_SCOPES` and the landing page both read off this rather than each writing the
-    /// seven out — one list, the way [`NAV`] is for the ⌘K menu.
-    pub(crate) const SETTINGS: [Route; 7] = [
+    /// eight out — one list, the way [`NAV`] is for the ⌘K menu.
+    pub(crate) const SETTINGS: [Route; 8] = [
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
@@ -155,6 +160,7 @@ impl Route {
         Route::LlmBackends,
         Route::EmbeddingBackends,
         Route::SharedAssets,
+        Route::System,
     ];
 
     /// The page for a URL path; `/` and anything unknown resolve to Projects.
@@ -193,6 +199,7 @@ impl Route {
             "/settings/llm-backends" => Route::LlmBackends,
             "/settings/embedding-backends" => Route::EmbeddingBackends,
             "/settings/shared-assets" => Route::SharedAssets,
+            "/settings/system" => Route::System,
             _ => Route::Projects,
         }
     }
@@ -227,6 +234,7 @@ impl Route {
             Route::LlmBackends => "/extended/settings/llm-backends",
             Route::EmbeddingBackends => "/extended/settings/embedding-backends",
             Route::SharedAssets => "/extended/settings/shared-assets",
+            Route::System => "/extended/settings/system",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
         }
@@ -260,6 +268,7 @@ impl Route {
             Route::LlmBackends => "LLM backends",
             Route::EmbeddingBackends => "Embedding backends",
             Route::SharedAssets => "Shared assets",
+            Route::System => "System",
             Route::StoreFile => "File",
         }
     }
@@ -287,7 +296,7 @@ impl Route {
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
-            Route::Settings => "Hive, ports, mesh, fleet, backends and shared assets",
+            Route::Settings => "Hive, ports, mesh, fleet, backends, shared assets and system",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",
@@ -295,6 +304,7 @@ impl Route {
             Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
             Route::EmbeddingBackends => "How indexer, knowledge and facts turn text into a vector",
             Route::SharedAssets => "Serve the webapp bundle from a shared CDN cache",
+            Route::System => "Services, power, restart, updates, diagnostics",
             Route::StoreFile => "One file from the ADI store",
         }
     }

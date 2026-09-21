@@ -943,6 +943,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Restart {
+        #[arg(long)]
+        json: bool,
+    },
     Bun {
         #[arg(long)]
         json: bool,

@@ -4,12 +4,12 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted,
-    AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState, AgentSimTurn,
-    AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
-    DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
-    DbSchema, DbScope, DbState, DbTablesState, DirListing, EmbeddingBackendRef,
-    EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
+    Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef,
+    AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
+    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError,
+    CloseGoal, Dashboard, DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
+    DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
+    DirListing, EmbeddingBackendRef, EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
     FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
     IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
@@ -21,14 +21,14 @@ use adi_webapp_api::types::{
     NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
     RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
-    RunRef, RunSteps, RunTool, SaveAgent, SaveEmbeddingBackend, SaveEmbeddingSettings,
-    SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef,
-    SecretsState, SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit,
-    SetSecret, SetSharedAssets, SharedAssetsMode, SharedAssetsState, SimulateAgent, SimulateTurn,
-    StarRun, StartMarketplaceApp, StartMarketplaceService, StartResult, StartService, StopResult,
-    TaskRef, TasksState, TestEmbeddingBackend, TestLlmBackend, TestResultDto, ToolRef,
-    ToolRunResult, ToolScript, ToolsState, Transcript, TranscriptView, TransferDashboard,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
+    RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
+    SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
+    SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
+    SetSharedAssets, SetSystemPower, SharedAssetsMode, SharedAssetsState, SimulateAgent,
+    SimulateTurn, StarRun, StartMarketplaceApp, StartMarketplaceService, StartResult,
+    StartService, StopResult, SystemStatus, TaskRef, TasksState, TestEmbeddingBackend,
+    TestLlmBackend, TestResultDto, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
+    TranscriptView, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
     UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
     UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
@@ -92,6 +92,38 @@ pub async fn check_update() -> Result<UpdateState, String> {
 /// app on its way through, so the socket this reply came over is expected to drop.
 pub async fn run_update() -> Result<UpdateState, String> {
     post_local("/api/update/run", &()).await
+}
+
+// The System page (`docs/fleet.md` §14's L3): the same exemption as `/api/update/*` above, for
+// the same reason — "restart this machine's own process" and "this machine's own services" can
+// only ever mean the box actually serving the page, whatever the panel-wide picker is pointed at.
+
+/// Live status of every managed service, plus how many agent runs are live right now.
+pub async fn system_status() -> Result<SystemStatus, String> {
+    get_local("/api/system").await
+}
+
+/// Run one action a service offered on its own row (an id + a verb, straight off the `args` field
+/// `system_status` returned) and get the fresh status back.
+pub async fn run_system_action(args: Vec<String>) -> Result<SystemStatus, String> {
+    post_local("/api/system/action", &RunSystemAction { args }).await
+}
+
+/// The platform-wide switch — `adi-mono enable` / `adi-mono disable`. Answers as soon as the
+/// command is handed off; it may restart or stop the very process this reply came from.
+pub async fn set_system_power(on: bool) -> Result<Accepted, String> {
+    post_local("/api/system/power", &SetSystemPower { on }).await
+}
+
+/// Bounce every running service except DNS. Same "answers before it's done" shape as
+/// [`set_system_power`], and for the same reason.
+pub async fn restart_system() -> Result<Accepted, String> {
+    post_local("/api/system/restart", &()).await
+}
+
+/// Collect one diagnostic archive now and say where the page can download it from.
+pub async fn diagnose_system() -> Result<DiagnosticReport, String> {
+    post_local("/api/system/diagnose", &()).await
 }
 
 pub async fn reserve(body: &LeaseRef) -> Result<ReserveResponse, String> {

@@ -2107,6 +2107,36 @@ impl Service for Dns {
         }
         actions
     }
+
+    /// The verbs [`Self::extra_actions`] can offer: `install-route`/`remove-route` (the `route`
+    /// action) and `grant-network` (the repair/refresh actions) — the DNS route and front door
+    /// are never touched by anything but these, deliberately never by the platform-wide restart
+    /// (`crate::Adi::restart`) or a service's own generic toggle alone.
+    fn run(&self, verb: &str) -> Result<(), String> {
+        match verb {
+            "install-route" => {
+                self.install_route();
+                Ok(())
+            }
+            "remove-route" => {
+                self.remove_route();
+                Ok(())
+            }
+            "grant-network" => {
+                self.install_front_door();
+                Ok(())
+            }
+            "enable" => {
+                self.enable();
+                Ok(())
+            }
+            "disable" => {
+                self.disable();
+                Ok(())
+            }
+            other => Err(format!("dns: no such action `{other}`")),
+        }
+    }
 }
 
 /// The install/remove-route action for the current route state.

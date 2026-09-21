@@ -69,6 +69,14 @@ pub(crate) enum Icon {
     Sliders,
     /// The shared-assets CDN.
     Cloud,
+    /// The System page: power, restart, updates, diagnostics.
+    Power,
+    /// Bounce a service, or restart the platform.
+    Restart,
+    /// Report a problem — the diagnostic archive.
+    Bug,
+    /// A link that leaves the panel — an issue tracker, a download.
+    ExternalLink,
 }
 
 impl Icon {
@@ -107,6 +115,10 @@ impl Icon {
             Icon::Filter => Lucide::ListFilter,
             Icon::Sliders => Lucide::SlidersHorizontal,
             Icon::Cloud => Lucide::Cloud,
+            Icon::Power => Lucide::Power,
+            Icon::Restart => Lucide::RefreshCw,
+            Icon::Bug => Lucide::Bug,
+            Icon::ExternalLink => Lucide::ArrowUpRight,
         }
     }
 }
@@ -137,6 +149,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Mesh => Icon::Mesh,
         Route::Fleet => Icon::Node,
         Route::SharedAssets => Icon::Cloud,
+        Route::System => Icon::Power,
         // Reached from the Store rail rather than the explorer, so this icon is a fallback.
         Route::StoreFile => Icon::Doc,
     }

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-77 structs · 16 enums · 4 type aliases across 30 files.
+78 structs · 18 enums · 4 type aliases across 31 files.
 
 ## Index
 
@@ -33,6 +33,7 @@
 - [`src/pages/project_detail/tasks.rs`](#srcpagesproject_detailtasksrs) — `TaskForm`
 - [`src/pages/project_detail/triggers.rs`](#srcpagesproject_detailtriggersrs) — `QuickTriggerForm`
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
+- [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
@@ -82,6 +83,10 @@ pub(crate) enum Icon {
     Filter,
     Sliders,
     Cloud,
+    Power,
+    Restart,
+    Bug,
+    ExternalLink,
 }
 ```
 
@@ -903,6 +908,51 @@ struct PendingOAuth {
 
 ---
 
+## `src/pages/system.rs`
+
+### enum `Outage`
+
+What the page shows instead of the ordinary panels while the platform is between requests nobody here can answer — because the very process serving them was just asked to go away.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outage {
+    ComingBack,
+    TimedOut,
+    Off,
+}
+```
+
+### enum `ReportState`
+
+The diagnostic report row's state — mirrors the mac app's `AppModel.ReportState`.
+
+```rust
+#[derive(Clone)]
+enum ReportState {
+    Idle,
+    Collecting,
+    Ready(DiagnosticReport),
+    Failed,
+}
+```
+
+### struct `SystemWatch`
+
+The System page's own signals — self-contained rather than wired into the global `State`'s poll (`crate::state::load`): nothing else on the panel needs this data, the way nothing else needs the update pill's.
+
+```rust
+#[derive(Clone, Copy)]
+struct SystemWatch {
+    status: RwSignal<Option<SystemStatus>>,
+    busy: RwSignal<bool>,
+    outage: RwSignal<Option<Outage>>,
+    report: RwSignal<ReportState>,
+}
+```
+
+---
+
 ## `src/pages/workspaces.rs`
 
 ### struct `WorkspaceForm`
@@ -967,6 +1017,7 @@ pub(crate) enum Route {
     PortsManager,
     Mesh,
     Fleet,
+    System,
     SharedAssets,
     StoreFile,
 }

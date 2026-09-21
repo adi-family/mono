@@ -1,7 +1,7 @@
-//! The Settings landing page: an index of the seven pages Settings gathers — Hive, Ports manager,
-//! Mesh, Fleet, LLM backends, Embedding backends and Shared assets — so opening Settings from the
-//! ⌘K menu lands on a page of its own rather than dropping onto whichever of the seven happens to
-//! be first.
+//! The Settings landing page: an index of the eight pages Settings gathers — Hive, Ports manager,
+//! Mesh, Fleet, LLM backends, Embedding backends, Shared assets and System — so opening Settings
+//! from the ⌘K menu lands on a page of its own rather than dropping onto whichever of the eight
+//! happens to be first.
 
 use adi_ui::Icon;
 use leptos::prelude::*;

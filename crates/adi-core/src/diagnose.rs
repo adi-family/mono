@@ -230,7 +230,12 @@ fn destination(out: Option<&Path>, name: &str) -> PathBuf {
 /// `~/.adi/mono/reports`, falling back to the temp directory. A store that cannot be written to
 /// is itself a plausible reason someone is running this, so it must not be the thing that stops
 /// them.
-fn reports_dir() -> PathBuf {
+///
+/// Public so a caller that only has a [`Bundle::path`]'s file name — the panel's download route,
+/// which must resolve a name to a file without trusting a client-supplied path — can find the one
+/// directory a report of this build's ever lands in without a second definition of where that is.
+#[must_use]
+pub fn reports_dir() -> PathBuf {
     let module = adi_config::Config::open().module("reports");
     module
         .ensure_dir()

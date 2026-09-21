@@ -74,6 +74,28 @@ pub trait Service {
         Vec::new()
     }
 
+    /// Perform one of this service's actions by verb — `args[1]` of the `Action` a caller read
+    /// off [`Self::report`] (`args[0]`, the service id, is how [`crate::Adi::run_action`] finds
+    /// the service before this is ever called). The universal toggle every service gets; a
+    /// service whose [`Self::extra_actions`] offers more overrides this to also handle its own,
+    /// falling through to this default for `enable`/`disable`.
+    ///
+    /// # Errors
+    /// A verb this service does not recognise.
+    fn run(&self, verb: &str) -> Result<(), String> {
+        match verb {
+            "enable" => {
+                self.enable();
+                Ok(())
+            }
+            "disable" => {
+                self.disable();
+                Ok(())
+            }
+            other => Err(format!("{}: no such action `{other}`", self.id())),
+        }
+    }
+
     // MARK: lifecycle — uniform across services; only the data above differs.
 
     fn enable(&self) {

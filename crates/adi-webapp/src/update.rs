@@ -110,6 +110,15 @@ pub(crate) fn watch() -> UpdateWatch {
 }
 
 impl UpdateWatch {
+    /// The installed version and this host's platform key, once the first answer has landed —
+    /// for anything that wants to name this build without polling `/api/update` a second time
+    /// (the System page's issue draft).
+    pub(crate) fn identity(self) -> Option<(String, String)> {
+        self.state
+            .get_untracked()
+            .map(|u| (u.installed, u.platform))
+    }
+
     /// Ask the release manifest now — what the chip does when clicked.
     fn check(self) {
         if self.busy.get_untracked() {

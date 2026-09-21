@@ -90,6 +90,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Bounce every running service except DNS, so a supervisor picks each one back up from
+    /// whatever is on disk right now — see [`adi_core::Adi::restart`]. This is what the panel's
+    /// own System page hands to a detached process rather than calling in-process: it may be
+    /// restarting the very service this CLI was run from.
+    Restart {
+        /// Emit machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Make sure `bun` — the runtime every dashboard is served by — is installed.
     ///
     /// `up` and `enable` already do this; the verb exists so it can be asked for on its own,
@@ -315,6 +324,7 @@ fn main() {
         Command::Enable => adi.enable(),
         Command::Disable => adi.disable(),
         Command::Status { json } => print_report(&adi.report(), json),
+        Command::Restart { json } => run_restart(adi, json),
         Command::Bun { json } => {
             if !print_bun(&adi_core::bun::ensure(), json) {
                 std::process::exit(1);
@@ -516,6 +526,20 @@ fn run_diagnose(adi: Adi, out: Option<&std::path::Path>, json: bool) {
     }
 }
 
+/// Bounce every running service except DNS and say which ones were kicked.
+fn run_restart(adi: Adi, json: bool) {
+    let restarted = adi.restart();
+    if json {
+        print_json(&serde_json::json!({ "restarted": restarted }));
+        return;
+    }
+    if restarted.is_empty() {
+        println!("Nothing was running to restart.");
+    } else {
+        println!("Restarted: {}", restarted.join(", "));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +568,16 @@ mod tests {
             cli.command,
             Command::Diagnose { out: Some(ref p), json: false } if p.as_os_str() == "/tmp/r.zip"
         ));
+    }
+
+    /// The panel's System page hands this exact argv to a detached process — pinned here so a
+    /// rename of the flag would fail a test rather than only show up as a button that 404s.
+    #[test]
+    fn restart_is_reachable_and_takes_json() {
+        let cli = Cli::try_parse_from(["adi-mono", "restart", "--json"]).expect("parses");
+        assert!(matches!(cli.command, Command::Restart { json: true }));
+        let cli = Cli::try_parse_from(["adi-mono", "restart"]).expect("parses");
+        assert!(matches!(cli.command, Command::Restart { json: false }));
     }
 
     #[test]

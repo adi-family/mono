@@ -11,6 +11,7 @@ use crate::dashboards::Dashboards;
 use crate::diagnose::Diagnose;
 use crate::dns::Dns;
 use crate::install;
+use crate::launchd;
 use crate::service::{Service, ServiceReport};
 use crate::update::{Update, Updater};
 
@@ -235,6 +236,63 @@ impl Adi {
         }
     }
 
+    /// Bounce every *running* service except DNS, so a supervisor picks the service back up from
+    /// whatever binary is on disk right now — the fix for a service left running a stale build
+    /// (this is what actually swaps a running process after an update; see `Update::run`'s own
+    /// `restart_onto`, which this mirrors minus the binary swap). Returns the ids kicked.
+    ///
+    /// DNS is deliberately excluded, always: this is a bulk action, and `.adi` name resolution is
+    /// never something a bulk action gets to take down as a side effect — a repair to the DNS
+    /// service is its own [`Dns`] action, chosen on purpose, not bundled in here.
+    ///
+    /// Each kick is [`launchd::kickstart`], not a disable-then-enable: it asks the platform's own
+    /// supervisor (launchd/systemd/Task Scheduler) to restart a *loaded* unit in place, which is
+    /// the one thing here able to outlive the very process this call is running in — the panel's
+    /// own `app` service among them. A caller running this in-process must have already answered
+    /// whoever asked before calling it.
+    #[must_use]
+    pub fn restart(self) -> Vec<String> {
+        self.services()
+            .into_iter()
+            .filter(|svc| svc.id() != "dns" && svc.is_running())
+            .map(|svc| {
+                launchd::kickstart(&svc.label());
+                svc.id().to_string()
+            })
+            .collect()
+    }
+
+    /// Run one action from a service's own `report().actions` — the button model a GUI built off
+    /// [`Self::report`] triggers by name rather than by a hardcoded list of its own. `args` is
+    /// that action's own `args` field verbatim: `[service_id, verb]`.
+    ///
+    /// **Refuses the `app` service outright.** The control panel (`adi-app`) *is* the `app`
+    /// service, so toggling it from inside a request that same process is answering would tear
+    /// the process down mid-reply (`Service::enable`/`disable` bootout/restart a loaded unit) —
+    /// exactly the hazard [`Self::restart`]'s own doc explains. A caller that needs to affect the
+    /// panel's own process has to do it the way [`Self::restart`] and the platform-wide
+    /// [`Self::enable`]/[`Self::disable`] are meant to be called: from something that outlives
+    /// the request, never from directly inside this method.
+    ///
+    /// # Errors
+    /// An unknown shape, the `app` service, an unknown service, or a verb that service's
+    /// [`Service::run`] does not recognise.
+    pub fn run_action(self, args: &[String]) -> Result<(), String> {
+        let [id, verb] = args else {
+            return Err(format!("expected [service, verb], got {args:?}"));
+        };
+        if id == "app" {
+            return Err(
+                "the app service can't be toggled in place — restart it instead".to_string(),
+            );
+        }
+        self.services()
+            .into_iter()
+            .find(|svc| svc.id() == id)
+            .ok_or_else(|| format!("no such service: {id}"))?
+            .run(verb)
+    }
+
     /// Live state across all services (`adi.status()`).
     #[must_use]
     pub fn report(self) -> Report {
@@ -270,5 +328,36 @@ impl Adi {
             front_door_answering,
             ready: location_durable && dns_route && front_door,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Every case below returns before touching a real service — `run_action` refuses `app` and
+    // an unknown id before calling `Service::run`, so none of these can restart, install or
+    // uninstall anything on the host these tests happen to run on.
+
+    #[test]
+    fn run_action_refuses_a_malformed_shape() {
+        assert!(Adi::new().run_action(&[]).is_err());
+        assert!(Adi::new().run_action(&["dns".to_string()]).is_err());
+    }
+
+    #[test]
+    fn run_action_refuses_the_app_service_in_place() {
+        let err = Adi::new()
+            .run_action(&["app".to_string(), "disable".to_string()])
+            .unwrap_err();
+        assert!(err.contains("restart"), "{err}");
+    }
+
+    #[test]
+    fn run_action_refuses_an_unknown_service() {
+        let err = Adi::new()
+            .run_action(&["ghost".to_string(), "enable".to_string()])
+            .unwrap_err();
+        assert!(err.contains("no such service"), "{err}");
     }
 }

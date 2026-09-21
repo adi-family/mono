@@ -57,8 +57,8 @@ use pages::{
     market_view, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
     poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
     reset_chat_home, secrets_view, seed_onboarding, settings_view, shared_assets_view,
-    start_onb_reconfigure, start_onb_reconfigure_agent, store_file_view, tasks_view, tools_view,
-    triggers_view,
+    start_onb_reconfigure, start_onb_reconfigure_agent, store_file_view, system_view, tasks_view,
+    tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -1487,6 +1487,7 @@ fn App() -> impl IntoView {
                         Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
                         Route::EmbeddingBackends => embedding_backends_view(state, embeddings_console),
                         Route::SharedAssets => shared_assets_view(state),
+                        Route::System => system_view(state, updates),
                     }}
 
                 </div>

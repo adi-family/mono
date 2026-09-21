@@ -223,6 +223,37 @@ pub async fn write_cached(
     Ok(())
 }
 
+/// Write a body the browser should save rather than render — `no-store`, since (unlike an
+/// attachment's immutable id) the address a report was fetched from does not name its content:
+/// asking again after a fresh `POST /api/system/diagnose` would otherwise risk a cached, stale
+/// archive under a name that happens to collide.
+///
+/// # Errors
+/// Fails if the socket write fails.
+pub async fn write_download(
+    stream: &mut TcpStream,
+    content_type: &str,
+    filename: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {len}\r\n\
+         Content-Disposition: attachment; filename=\"{filename}\"\r\n\
+         X-Content-Type-Options: nosniff\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\
+         \r\n",
+        len = body.len(),
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.flush().await?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
 /// Write a JSON response with the given status.
 ///
 /// # Errors

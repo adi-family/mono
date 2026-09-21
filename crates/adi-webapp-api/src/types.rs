@@ -66,6 +66,91 @@ pub struct UpdateState {
     pub installing: bool,
 }
 
+/// `GET /api/system` — the System page's whole read: `adi-core`'s own `Report`, mirrored field
+/// for field (`crates/adi-core/src/commands.rs`) rather than shared with it, since this crate
+/// compiles for wasm without `adi-core` at all; plus what the page needs beside it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemStatus {
+    pub any_running: bool,
+    pub services: Vec<SystemService>,
+    pub setup: SystemSetup,
+    /// Agent runs live on this machine right now — read for the restart/power confirm dialogs, so
+    /// the number of runs about to die is in front of whoever is about to press the button rather
+    /// than something they'd have to go check on another page first.
+    pub live_runs: u32,
+}
+
+/// One managed service's live state plus its own actions — mirrors `adi_core::ServiceReport`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemService {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub running: bool,
+    pub detail: String,
+    pub actions: Vec<SystemAction>,
+}
+
+/// One button a service offers — mirrors `adi_core::Action`. `args` is the `[service_id, verb]`
+/// pair [`crate::handlers::run_system_action`] expects back verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemAction {
+    pub id: String,
+    pub title: String,
+    pub args: Vec<String>,
+}
+
+/// What still stands between this install and being usable — mirrors `adi_core::SetupReport`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemSetup {
+    pub location_durable: bool,
+    pub dns_route: bool,
+    pub front_door: bool,
+    pub front_door_answering: bool,
+    pub ready: bool,
+}
+
+/// `POST /api/system/action` — one action from a [`SystemService`]'s own `actions`, run in place.
+/// Never how the `app` service (the panel itself) is toggled or restarted — see
+/// [`crate::handlers::run_system_action`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunSystemAction {
+    pub args: Vec<String>,
+}
+
+/// `POST /api/system/power` — the platform-wide switch (`adi-mono enable` / `adi-mono disable`),
+/// the same command the toggle in `apps/macos` runs. Spelled as a plain flag rather than an enum
+/// with one variant per direction: there are exactly two directions and a bare bool is what the
+/// page's own switch already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSystemPower {
+    pub on: bool,
+}
+
+/// The answer to a mutation that only needs to say it was accepted — `/api/system/power` and
+/// `/api/system/restart` both hand the actual work to a detached process and have nothing more
+/// to report than "it's under way"; the page learns how it went by polling `/api/health`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accepted {
+    pub ok: bool,
+}
+
+/// `POST /api/system/diagnose` — one archive of this machine's ADI state, and the collector's own
+/// reading of what looks wrong. Mirrors `adi_core::diagnose::Bundle`, less the server-local
+/// filesystem path (meaningless to a browser) and plus the URL the page offers it for download at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiagnosticReport {
+    /// `GET` this to download the archive — served in `adi-app` by resolving the file name
+    /// through [`crate::handlers::diagnose_download_path`], since a JSON [`crate::handlers::Response`]
+    /// can't carry bytes.
+    pub download_url: String,
+    /// The archive's own file name, for the download link's label and the issue draft.
+    pub file_name: String,
+    pub bytes: u64,
+    pub files: Vec<String>,
+    pub findings: Vec<String>,
+}
+
 /// How the shared-assets setting decides whether a request gets the CDN or this instance's own
 /// copy of the webapp bundle — [`SharedAssetsState::mode`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

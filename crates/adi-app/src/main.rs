@@ -473,6 +473,14 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
         return serve_attachment(&mut stream, &app.agents, id).await;
     }
 
+    // A diagnostic archive `POST /api/system/diagnose` wrote, offered back as a download — the
+    // one `/api/system` route whose answer is bytes rather than JSON, same reason as above.
+    if req.method == "GET"
+        && let Some(name) = req.route_path().strip_prefix("/api/system/diagnose/download/")
+    {
+        return serve_diagnose_download(&mut stream, name).await;
+    }
+
     // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
     // Inside `/api` an unknown path is a 404 from the router, not the app shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
@@ -596,6 +604,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/projects",
     "/api/secrets",
     "/api/settings/shared-assets",
+    "/api/system",
     "/api/tasks",
     "/api/tools",
     "/api/triggers",
@@ -687,6 +696,16 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/update") => handlers::update_state(),
         ("POST", "/api/update/check") => handlers::check_update(),
         ("POST", "/api/update/run") => handlers::run_update(),
+        // The System page (`docs/fleet.md` §14's L3 exemptions — always local, never the
+        // panel-wide picker): live service status, one action off a service's own row, the
+        // platform power switch, a bounce for what's running, and a diagnostic report. Power and
+        // restart hand off to a detached `adi-mono` for the same reason `/api/update/run` does —
+        // see `adi_webapp_api::handlers::system`'s module header.
+        ("GET", "/api/system") => handlers::system_status(agents),
+        ("POST", "/api/system/action") => handlers::run_system_action(agents, &req.body),
+        ("POST", "/api/system/power") => handlers::run_system_power(&req.body),
+        ("POST", "/api/system/restart") => handlers::restart_system(),
+        ("POST", "/api/system/diagnose") => handlers::diagnose_system(),
         // Shared assets (`crate::shared_assets`): whether the webapp bundle is fetched from the
         // R2 CDN instead of served from this instance. The setting only; the rewrite it drives
         // happens in `serve_embedded`, not here.
@@ -1283,6 +1302,19 @@ async fn serve_attachment(stream: &mut TcpStream, agents: &Agents, id: &str) -> 
         ("application/octet-stream".to_string(), "attachment")
     };
     http::write_cached(stream, &media_type, disposition, &bytes).await
+}
+
+/// Serve a diagnostic archive `adi-mono diagnose` wrote, as a download. `name` is resolved
+/// against the reports directory by [`handlers::diagnose_download_path`] — never a raw path off
+/// the request — so this can only ever read a file that collector itself wrote.
+async fn serve_diagnose_download(stream: &mut TcpStream, name: &str) -> anyhow::Result<()> {
+    let Some(path) = handlers::diagnose_download_path(name) else {
+        return http::write_json(stream, 404, r#"{"ok":false,"error":"no such report"}"#).await;
+    };
+    let Ok(bytes) = tokio::fs::read(&path).await else {
+        return http::write_json(stream, 404, r#"{"ok":false,"error":"no such report"}"#).await;
+    };
+    http::write_download(stream, "application/octet-stream", name, &bytes).await
 }
 
 /// The types an attachment may be served back **as itself**, for a browser to draw in a tab.

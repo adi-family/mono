@@ -209,7 +209,11 @@ fn installing(module: &adi_config::Module) -> Option<Installing> {
 /// The CLI to hand the install to: `$ADI_MONO_BIN`, else [`mono_beside_us`]. The same
 /// resolution `adi-core` uses for the scheduled updater agent, so the button and the
 /// background run reach the same binary.
-fn mono_bin() -> PathBuf {
+///
+/// `pub(crate)`: [`super::system`]'s power/restart mutations spawn the same CLI, detached, for
+/// the same reason this one does (see that module's header) — one resolution rather than a
+/// second copy that could point the two at different binaries.
+pub(crate) fn mono_bin() -> PathBuf {
     match std::env::var_os("ADI_MONO_BIN").filter(|p| !p.is_empty()) {
         Some(path) => PathBuf::from(path),
         None => mono_beside_us(),

@@ -1152,9 +1152,10 @@ Each item ships with unit tests in the same file.
       J4). Reads and writes are not treated differently: a bare mutation follows the picker exactly
       as a bare read does.
 - [x] L3 The exemptions: `/api/health`, `/api/fleet` and `/api/fleet/*` (including the picker's own
-      `/api/fleet/nodes`), `/api/mesh*`, and the update endpoints stay local always, called through
-      `fetch::get_local`/`fetch::post_local` and left as plain `Sub::get`/`Sub::post` in
-      `subscriptions`.
+      `/api/fleet/nodes`), `/api/mesh*`, the update endpoints, and `/api/system*` (the System
+      page's service status, power switch, restart and diagnostics — task t105) stay local always,
+      called through `fetch::get_local`/`fetch::post_local` and left as plain `Sub::get`/`Sub::post`
+      in `subscriptions`.
 - [x] L4 The picker itself, in the titlebar on every route: **This machine** first, then every
       paired node from `/api/fleet/nodes`, one radio; a locked node listed and disabled with the
       Fleet page named. `/api/fleet/nodes` added to the `App` shell's own `load`/`subscriptions`,
@@ -1175,3 +1176,11 @@ Each item ships with unit tests in the same file.
       also fixed to look a failure up under its *routed* key rather than the bare one, so a locked or
       offline node's own refusal — already phrased for the operator by `viewer::proxy`/
       `node::unreachable` — reaches the table that asked, instead of leaving it on "Loading…" forever.
+- [x] L7 The System page (task t105) is the sharpest case L3 protects against: every one of its
+      mutations acts on the literal machine serving the page — restarting or powering off a node
+      reached through the picker would either do nothing to the box the operator meant, or (worse)
+      restart *this* machine while the operator thought they were pointed elsewhere. Its own confirm
+      dialogs therefore go through `crate::ui::confirm_local`, never the picker-naming `confirm` L5
+      built, and the page itself shows a standing note — not just a confirm-time one — whenever
+      `state.panel_source` is set, so the always-local behaviour is visible before anyone reaches for
+      a button at all.
