@@ -30,6 +30,14 @@ extraction script cares about.
   The rail's Hide/Unhide item shows the key beside it when it's the conversation on screen. In the
   composer it still means "delete to the start of the line", as on every other text field.
 
+### Fixed
+
+- **The sessions rail's head no longer scrolls away.** "Sessions", the source picker, the filter
+  and the New button used to move with the list under them, so on a fleet with enough chats to fill
+  the rail, scrolling down took the New button and the filters out of reach until you scrolled back
+  to the top. The head now stays put and only the list of chats scrolls under it — on a narrow
+  viewport, where the same column is a drawer, the head is pinned there too.
+
 ## 1.19.0 — 2026-09-21
 
 ### Changed

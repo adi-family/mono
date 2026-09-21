@@ -141,18 +141,20 @@ pub fn RailGroup(
     }
 }
 
-/// The rail itself: a title, the filter box, and the scrolling column of [`RailGroup`]s
-/// under them.
+/// The rail itself: a pinned head (title + actions) and the scrolling column of
+/// [`RailGroup`]s under it.
 ///
 /// A panel, not a card: flush, with no surface, no border and no radius of its own. The pane
 /// it sits in draws the `--bg-side` ground and the hairline where it meets the transcript
 /// (§2.5); the rail only lays its rows out. It fills the height it is given, so give it a
 /// parent with a height — and a surface.
 ///
-/// **The title scrolls away and the filter box does not.** Everything is inside one scroll
-/// port, and the filter is `sticky` at its top: scroll the list and the title goes with the
-/// rows, leaving the one control you reach for while scrolling pinned over them. Which is
-/// why it carries the rail's own fill — rows pass underneath it.
+/// **The head never scrolls.** It sits outside the scroll port, so the title and whatever a
+/// caller puts beside it — a filter, a source picker, the button that starts something new —
+/// stay reachable however long the list under them gets. The search box, if there is one,
+/// scrolls with the list but is itself `sticky` at the top of it, pinning to the same edge the
+/// head does the moment it would otherwise scroll past — which is why it carries the rail's
+/// own fill: rows pass underneath it.
 ///
 /// Filtering is the caller's: the box binds to a signal and nothing else happens, because
 /// only the caller knows whether a query should match a title, an agent, or the transcript.
@@ -184,13 +186,13 @@ pub fn Rail(
 
     view! {
         <aside class=merge("flex h-full min-h-0 flex-col text-ink", class)>
+            {has_head.then(|| view! {
+                <header class="flex flex-none items-center gap-1.5 px-3 pt-3.5 pb-1.5">
+                    <h2 class="m-0 mr-auto text-[15px] font-semibold text-ink">{title}</h2>
+                    <div class="flex items-center gap-1">{actions.map(|a| a.run())}</div>
+                </header>
+            })}
             <div class="min-h-0 flex-1 overflow-y-auto">
-                {has_head.then(|| view! {
-                    <header class="flex items-center gap-1.5 px-3 pt-3.5 pb-1.5">
-                        <h2 class="m-0 mr-auto text-[15px] font-semibold text-ink">{title}</h2>
-                        <div class="flex items-center gap-1">{actions.map(|a| a.run())}</div>
-                    </header>
-                })}
                 {search.map(|value| view! {
                     <div class="sticky top-0 z-10 bg-side px-3 pt-1.5 pb-2">
                         <SearchBox value=value placeholder=search_placeholder/>
