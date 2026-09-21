@@ -98,7 +98,10 @@ export default defineConfig({
 				},
 				{
 					label: 'Reference',
-					items: [{ label: 'Shared assets', link: '/shared-assets/' }],
+					items: [
+						{ label: 'The adi-mono CLI', link: '/cli/' },
+						{ label: 'Shared assets', link: '/shared-assets/' },
+					],
 				},
 			],
 		}),

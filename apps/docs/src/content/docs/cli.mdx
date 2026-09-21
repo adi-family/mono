@@ -1,0 +1,104 @@
+---
+title: The adi-mono CLI
+description: One binary, `adi-mono <area> <command>` — the shape every area shares, a map of which area does what, and the traps worth knowing before you hit them.
+---
+
+import Flags from '../../components/Flags.astro';
+
+One binary, one shape: `adi-mono <area> <command>`. `adi-mono tasks list`, `adi-mono secrets read
+GITHUB_TOKEN`, `adi-mono agents run my-agent` — same pattern throughout. `--help` is the
+authority at every level and this page never repeats what it already says — run `adi-mono <area>
+--help` for what an area can do, `adi-mono <area> <command> --help` for one command's exact
+flags. A subcommand list gets stale the moment a release adds one; asking the binary in front of
+you never does.
+
+An agent's `PATH` also carries a shorter shim per area — `adi-tasks list`, `adi-secrets read
+GITHUB_TOKEN` — but only for the areas that agent's own [[Tools|tool]] grants include. Both forms
+run the same code.
+
+## Headless access <Flags>Enterprise interest</Flags>
+
+Every capability behind the control panel is also `adi-mono <area> <command>` or a plain
+`/api/*` call — a script, a cron job, or another machine's agent can drive all of it without a
+browser open. A handful of areas ([[Hive]], [[Ports]], [[Dashboards]]) skip the CLI and go
+straight from panel to `/api/*`, covered below — headless still means both surfaces, just not
+always the same one.
+
+## What's where
+
+| Area | For | Concept |
+| --- | --- | --- |
+| `dns` | Install and check the `.adi` DNS route and front door | [[DNS and the front door]] |
+| `projects` | Register, rename, archive project workspaces | [[Projects]] |
+| `tasks` | The task tree: create, edit, complete, archive | [[Tasks]] |
+| `tools` | Own or link a script an agent runs as a CLI | [[Tools]] |
+| `secrets` | Encrypted key-values injected into agent runs | [[Secrets]] |
+| `db` | Run SQL against the shared SQLite store | [[Database]] |
+| `agents` | Agent definitions, runs, questions, goals-per-run limits | [[Agents]] |
+| `llm` | LLM backend registry: credentials, holds, probing | — |
+| `embeddings` | Embedding backend registry for indexer/knowledge/facts | — |
+| `goals` | Set and close the goal a conversation is working toward | — |
+| `triggers` | Background code blocks fired by webhooks, events, or a schedule | [[Triggers]] |
+| `knowledge` | Scoped, embedded notes searched by meaning | [[Knowledge]] |
+| `facts` | Plain-sentence facts and the staleness graph built on them | [[Facts]] |
+| `indexer` | Index a project's source, search it by meaning or shape | — |
+| `mesh` | Pair remote machines, grant them reach to services | [[Fleet]] |
+| `marketplace` | Install and update apps from a manifest source | — |
+| `events` | Publish platform events, inspect the undelivered spool | [[Events]] |
+| `update` | Check for, and install, a new app bundle | — |
+
+`llm`, `embeddings`, `goals`, `indexer`, `marketplace`, and `update` don't have a concept page
+yet — their own `--help` is the full reference for now.
+
+`mesh` is worth a second look: the command's own summary calls it "fleet commands" — pairing and
+grants are the [[Fleet]] concept, even though the binary groups them under the network layer's
+name. Raw port exposure and peer-to-peer forwarding, the other half of [[Mesh]], has no CLI at
+all — panel only (`/settings/mesh`).
+
+Three concept pages have **no CLI area at all**, by design: [[Hive]] and [[Ports]] are managed
+from the panel and `/api/hive` / `/api/ports`; [[Dashboards]] the same, via `/api/dashboards/*`.
+If you went looking for `adi-mono hive` or `adi-mono ports`, that's why it isn't there.
+
+## Conventions
+
+**Reading versus changing.** A command named `list`, `show`, or `status` only reads — safe to run
+as often as you like. A command that changes something is named for the change: `save`, `set`,
+`add`, `edit`, `rm`/`delete`, `enable`/`disable`. The naming holds across every area, so once you
+know it for one you know it for all of them — though a handful of read-only commands go by other
+names too (`secrets read`, `events types`), and `--help` says which is which for anything you're
+not sure of.
+
+**`--json`.** Where a command offers it, it's structured and stable across releases — script
+against it rather than the human-readable table, which is free to reflow. Not every command has
+it; check `--help` for the one you're calling rather than assuming.
+
+**`--flavor <ID>`.** Every command takes it. Omit it and the command addresses the real install —
+`release`, the default when neither `--flavor` nor `ADI_FLAVOR` is set. Pass `--flavor dev` (or
+`ADI_FLAVOR=dev` in the environment) to act on a dev install instead — nothing infers this from
+context, so which install a command means is always explicit rather than guessed at.
+
+## Traps <Flags>Expert area</Flags>
+
+**Never type plain `adi`.** A machine that ran an earlier generation of this stack may still
+carry a binary by that name, and it answers a *different* command set — most of what's on this
+page fails against it with `Unknown command`, which reads as a missing feature rather than the
+wrong program. Worse, some names overlap: that binary has its own `hive`, and telling it to bring
+services down stops things you didn't mean to touch. The binary this page documents is always
+`adi-mono`.
+
+**Secrets: three verbs, two return different things.** `adi-mono secrets read NAME` prints the
+raw decrypted value and nothing else — the one to pipe into a script (`TOKEN=$(adi-mono secrets
+read GITHUB_TOKEN)`). `secrets get NAME` prints metadata by default, and only prints the value if
+you pass `--reveal`. `secrets list` never shows a value, under any flag — see [[Secrets]] for why.
+Reach for `read` when you want the value; `get --reveal` is for a human checking one by eye.
+
+**`secrets set` help mismatch.** Its own `--help` description says the value "comes from
+`--value`, or from stdin" — but the actual signature is `secrets set NAME [VALUE]`, a positional
+argument. `adi-mono secrets set FOO --value bar` fails with `unexpected argument '--value'
+found`; `adi-mono secrets set FOO bar` is what the binary actually accepts. Verified against
+`adi-mono` 1.18.0 — worth a rerun of `--help` on your own install before trusting this paragraph
+over it.
+
+**`events emit`'s payload is a string, not a JSON object**, both on the CLI and over
+`POST /api/events/emit` — send an object to the API and you get `400`. See
+[[Events#Emitting by hand]] for the exact shape and why.
