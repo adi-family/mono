@@ -1,0 +1,74 @@
+---
+title: Models and backends
+description: What runs an agent's turn, what makes knowledge search work, and what picking either one costs you to set up.
+---
+
+import Flags from '../../components/Flags.astro';
+
+"Model" means two different things here: a **text generation** backend runs an agent's turn —
+reads the conversation, writes the reply. An **embedding** backend turns a note into a vector so
+[[Knowledge]] can search it by meaning. They're configured separately, billed separately, and a
+problem with one never explains the other.
+
+## Text generation <Flags>Expert area</Flags>
+
+An [[Agents|agent]]'s backend says which CLI or engine answers its turns — see
+[[Agents#Backends]] for the full list. Model selection and credentials depend on the backend:
+
+- **`pty:claude`, `process:claude`, `harness:claude-sdk`** all run the `claude` CLI, so the model
+  comes from that CLI's own login — whatever subscription is signed into `claude` on this
+  machine, or the [[Secrets|secret]] carrying `CLAUDE_CODE_OAUTH_TOKEN` for a run that isn't your
+  own terminal. You hold no separate key for these; billing runs on the account already logged
+  in. `pty:codex` / `process:codex` are the same shape for Codex, against a ChatGPT login or
+  `OPENAI_API_KEY`.
+- **`harness:adi`** is ADI's own multi-provider agent loop, and it needs a credential of its
+  own: a **backend** — a named runtime, model, and where the key comes from — is what you define
+  to point an agent at GLM, Kimi, a second Anthropic account, or anything else `harness:adi`
+  can reach.
+
+An agent can list backends in failover order for usage limits or outages. `adi-mono llm backends`
+lists them; `adi-mono llm test <id>` tests one. The panel's `/extended/settings/llm-backends`
+shows the same list with live hold state.
+
+### Where a key lives
+
+A `harness:adi` backend's credential is a [[Secrets|secret]] — encrypted at rest, injected only
+into the runs it's attached to, never returned by listing. A backend definition names which
+secret to read; it never holds the raw value itself.
+
+## Embeddings <Flags>Expert area</Flags>
+
+An embedding turns a note's text into a vector so it can be found by what it *means*, not which
+words it happened to use — this is the machinery behind [[Knowledge]] search. `adi-mono
+embeddings backends` and `adi-mono embeddings test <id>` mirror the text-generation commands,
+without holds or background probing.
+
+Three consumers each use one backend: the code indexer, [[Knowledge]], and [[Facts]]. Point a
+consumer at a different backend and its already-written notes don't move with it — a note
+embedded under one model doesn't rank against a query embedded by another, so a base still finds
+nothing useful by meaning until [[Knowledge#Staying searchable|reembed]] catches it up. That's
+the same sweep that finds a note written while the old backend was unreachable in the first
+place.
+
+## Local versus hosted <Flags>Enterprise interest</Flags>
+
+Embeddings can run entirely on this machine. `candle` builds and runs a real model in-process,
+no network call after its one-time download; `hash` is a deterministic stub with no model at
+all. Ollama is local too, provided the server it talks to is actually on `127.0.0.1` — it's
+still an HTTP call, so pointing it at a remote host makes it hosted like any other. An
+`openai`-runtime backend always calls a hosted `/v1/embeddings` endpoint over the network, on
+whichever account owns the key.
+
+Nothing in the backend list above runs model weights on your machine. `pty:claude` /
+`process:claude` / `harness:claude-sdk` call Anthropic's API over the network on your own
+subscription; `harness:adi` calls whichever provider its backend names, on your own key. ADI
+itself — the store, the scheduler, the agent loop — runs entirely locally, but the turn it
+launches leaves the machine, under your account, subject to that provider's own terms and
+retention. If every token has to stay on-premises, Ollama covers the embeddings half; nothing
+here covers text generation the same way today.
+
+## See also
+
+[[Agents]] for the backend list and what a definition looks like. [[Secrets]] for how a
+credential actually reaches a run. [[Knowledge]] for what gets embedded, and why a stale base
+needs `reembed`.

@@ -35,8 +35,8 @@ always the same one.
 | `secrets` | Encrypted key-values injected into agent runs | [[Secrets]] |
 | `db` | Run SQL against the shared SQLite store | [[Database]] |
 | `agents` | Agent definitions, runs, questions, goals-per-run limits | [[Agents]] |
-| `llm` | LLM backend registry: credentials, holds, probing | — |
-| `embeddings` | Embedding backend registry for indexer/knowledge/facts | — |
+| `llm` | LLM backend registry: credentials, holds, probing | [[Models and backends]] |
+| `embeddings` | Embedding backend registry for indexer/knowledge/facts | [[Models and backends]] |
 | `goals` | Set and close the goal a conversation is working toward | — |
 | `triggers` | Background code blocks fired by webhooks, events, or a schedule | [[Triggers]] |
 | `knowledge` | Scoped, embedded notes searched by meaning | [[Knowledge]] |
@@ -47,8 +47,8 @@ always the same one.
 | `events` | Publish platform events, inspect the undelivered spool | [[Events]] |
 | `update` | Check for, and install, a new app bundle | — |
 
-`llm`, `embeddings`, `goals`, `indexer`, `marketplace`, and `update` don't have a concept page
-yet — their own `--help` is the full reference for now.
+`goals`, `indexer`, `marketplace`, and `update` don't have a concept page yet — their own
+`--help` is the full reference for now.
 
 `mesh` is worth a second look: the command's own summary calls it "fleet commands" — pairing and
 grants are the [[Fleet]] concept, even though the binary groups them under the network layer's
