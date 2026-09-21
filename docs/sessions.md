@@ -608,28 +608,37 @@ opened hidden from the Hidden band has no row there at all, and the lookup would
 (`POST /api/agents/runs`), where the open run is always findable by its `run_id`. It declines
 untouched when the target is a text field (⌘⌫ there means "delete to line start"), when nothing is
 open, or when the open pane is a pty agent's live session, which has no run behind it to hide. On
-the hide direction only — unhiding moves nothing — it also hands the pane on: the row that comes
-after the one just hidden, in the same order ⌘1…⌘9 walk minus whatever is folded shut
-([`drawn_rows`]), wrapping from the last drawn row back to the first, so striking the key over and
-over walks the rail from the top putting each chat away in turn. A drawn list of one row (the one
-being hidden, nothing else visible) has no successor, and the pane goes to empty exactly as it
-always did before this. The successor is worked out from `rail_bands` *before* `set_session_hidden`
-is called, then opened right after it returns rather than after `settle_session_change`'s async
-rail refresh lands — `set_session_hidden` has already run `close_run_view` synchronously by then,
-so opening the next row in the same call is what keeps the pane from flashing through the empty
-state, and `settle_session_change` only ever overwrites `watch.runs` for the agent that was just
-hidden, which is harmless whether or not that turns out to be the same agent `next` moved to.
+the hide direction only — unhiding moves nothing — it also hands the pane on, in the same order
+⌘1…⌘9 and Shift+↑ / Shift+↓ walk minus whatever is folded shut ([`drawn_rows`]): not the last drawn
+row, the row below the one just hidden, same as always. The last drawn row, up to the row above it
+instead — "one block higher" — the same step (`walk_step`) Shift+↑ takes standing there; and, if
+that row's own block can still fetch more, also the same Load more Shift+↓'s own load-more would
+fire, handing off once that page lands to whatever it brings in — the exact resumed walk
+(`PendingWalk`, `install_session_hotkeys`'s effect) Shift+↓'s load-more resumes, anchored on the
+row just stepped up to rather than the row just hidden, since that row (not the hidden one) is what
+the pane is actually standing on by the time the load fires and the resumed walk's own guard can
+find again. **No wrapping**: ⌘⌫ used to wrap from the last drawn row back to the first: it no longer
+does, because a row that is about to be hidden was never going to be stood on again, so there was
+nothing left making the rail a circle for this key rather than the line Shift+↑ / Shift+↓ already
+treat it as — the two now agree about both ends. A drawn list of one row (the one being hidden,
+nothing else visible) has no row above it any more than it has one below it, and the pane goes to
+empty exactly as it always did before this. The row handed on to is worked out from `rail_bands`
+*before* `set_session_hidden` is called, then opened right after it returns rather than after
+`settle_session_change`'s async rail refresh lands — `set_session_hidden` has already run
+`close_run_view` synchronously by then, so opening it in the same call is what keeps the pane from
+flashing through the empty state, and `settle_session_change` only ever overwrites `watch.runs` for
+the agent that was just hidden, which is harmless whether or not that turns out to be the same
+agent the pane moved to.
 
 **Shift+↑ / Shift+↓ walks the rail without touching anything in it** (`walk_session_rail`,
 `actions.rs`), stepping the centre pane to the conversation drawn just above or below the one
 currently open — the same `drawn_rows` reading order ⌘1…⌘9 and ⌘⌫ walk, so a folded block's rows are
 no more a stop here than they carry a number there. Nothing open in the centre pane opens the top of
 the list on Shift+↓ or the bottom on Shift+↑, since there is no "next" or "previous" to a row that
-isn't there. Unlike ⌘⌫ this walk **never wraps**: hiding removes the row ⌘⌫ was standing on, so every
-row left is downstream of it in a circle with no true end, but Shift+↑ / Shift+↓ leaves every row
-exactly where it was, so the top and the bottom are real ends — Shift+↑ on the first row does
-nothing. Shift+↓ past the last row asks the backend for more instead of stopping: the same Load more
-the rail already draws under the list, fired at the same source(s) it would be — one per-machine
+isn't there. This walk **never wraps**, same as ⌘⌫'s: Shift+↑ / Shift+↓ leaves every row exactly
+where it was, so the top and the bottom are real ends — Shift+↑ on the first row does nothing.
+Shift+↓ past the last row asks the backend for more instead of stopping: the same Load more the
+rail already draws under the list, fired at the same source(s) it would be — one per-machine
 block's own (`band_load_more`) under the grouped layout, every selected source at once
 (`chat_load_more`) under the flat one. It declines outright, leaving the key for the browser, when
 there is nothing left to load or a page for that source is already on its way

@@ -34,17 +34,19 @@ extraction script cares about.
 
 ### Added
 
-- **⌘⌫ (or Ctrl+Backspace) hides the open chat, then moves on to the next one, and Shift+↑ /
+- **⌘⌫ (or Ctrl+Backspace) hides the open chat, then moves on to another one, and Shift+↑ /
   Shift+↓ step through the rail without hiding anything.** Struck anywhere on the Agents page but a
   text field, ⌘⌫ puts away whichever conversation is open in the centre pane — the same as the
-  sessions rail's own right-click Hide — and opens the chat that comes after it in the rail, wrapping
-  back to the top from the last one, so striking it again and again walks the whole list away.
+  sessions rail's own right-click Hide — and moves on to another chat rather than leaving the pane
+  empty: ordinarily the one drawn just after it, or, when the one just hidden was the last chat in
+  the rail, the one drawn just before it instead — asking the rail for its next page first, the same
+  a Load more click would, and landing on whatever that brings in when there was more to have.
   Struck again on one already hidden it just brings it back, without moving on. The rail's
   Hide/Unhide item shows the key beside it when it's the conversation on screen. In the composer it
   still means "delete to the start of the line", as on every other text field. Shift+↑ / Shift+↓
-  step the centre pane to the chat drawn just above or below the one open, in the same order; unlike
-  ⌘⌫ they never wrap, so Shift+↑ on the first chat does nothing — but Shift+↓ on the last one asks
-  for the rail's next page instead of stopping, and lands on the chat it brings in once it arrives.
+  step the centre pane to the chat drawn just above or below the one open, in the same order; neither
+  key wraps, so Shift+↑ on the first chat does nothing — but Shift+↓ on the last one asks for the
+  rail's next page instead of stopping, and lands on the chat it brings in once it arrives.
 
 ### Fixed
 

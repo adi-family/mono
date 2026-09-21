@@ -5440,7 +5440,7 @@ fn grouped_bands(
 }
 
 /// Every row the rail actually draws, in reading order — every row of every band whose block is not
-/// folded shut. What ⌘⌫ walks when it hands the pane on to the chat after the one just hidden; the
+/// folded shut. What ⌘⌫ and Shift+↑ / Shift+↓ walk when they hand the pane on to another row; the
 /// first nine of these are also what carry a ⌘ number ([`grouped_bands`]), but this is unbounded —
 /// walking the rail away one hide at a time has to reach every visible row, not only the first nine.
 fn drawn_rows(
@@ -6219,13 +6219,14 @@ async fn settle_session_change(
 ///
 /// ⌘1…⌘9 opens the numbered row outright. ⌘⌫ is the same action as that row's right-click menu, put
 /// on a key because it is the one thing done to a chat most often once it has been read, and hands
-/// the pane on to the row after it so the key alone walks a morning's chats away one at a time — see
+/// the pane on so the key alone walks a morning's chats away one at a time — see
 /// [`toggle_open_session_hidden`]. Shift+↑ / Shift+↓ walks the same way without removing anything —
-/// see [`walk_session_rail`] — and that is exactly why it is the one of the three that does not
-/// wrap: ⌘⌫ wraps because hiding takes the row it was on out of the list, leaving every row that
-/// remains downstream of it in a circle with no true end; Shift+↑ / Shift+↓ leaves every row exactly
-/// where it was, so the top and the bottom of the rail are real ends — Shift+↑ on the first row does
-/// nothing, and so does Shift+↓ past the last once there is nothing more the backend can hand over.
+/// see [`walk_session_rail`]. Neither wraps: both treat the rail as a line with two real ends, not a
+/// circle — Shift+↑ on the first row does nothing, and ⌘⌫ hiding the last drawn row moves *up*
+/// rather than back to the top. The one asymmetry left is what a real end does about more the
+/// backend could still hand over: Shift+↓ past the last row asks for it outright and stops only once
+/// there truly is none; ⌘⌫ on the last row asks too, but has already moved up by the time that answer
+/// can land, and only steps back down onto what it brings in if it does.
 ///
 /// All three read their target when the key is struck, not when the rail was drawn. The rail redraws
 /// whenever anything moves, and a list captured at draw time would go on opening whatever *used* to
@@ -6292,7 +6293,7 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
             return;
         }
         if ev.code() == "Backspace" {
-            toggle_open_session_hidden(state, watch, &ev);
+            toggle_open_session_hidden(state, watch, pending_walk, &ev);
             return;
         }
         // `code`, not `key`: with a modifier held, layouts that put a symbol on the number row
@@ -6378,16 +6379,45 @@ fn drawn_row_index(
 }
 
 /// Where a walk of `drawn` steps to from row `i`: the next row going forward, the previous one going
-/// back. `None` when there is nowhere to step — past the last row going forward, which is
-/// [`walk_session_rail`]'s cue to ask the backend for more rather than stop, or before the first
-/// going back, which is simply the end: this walk never wraps (see [`install_session_hotkeys`] for
-/// why, unlike ⌘⌫).
+/// back. Shared by [`walk_session_rail`]'s Shift+↑ / Shift+↓ and [`toggle_open_session_hidden`]'s
+/// ⌘⌫, which reads it both ways from the same row — forward to know whether there is a row to hand
+/// on to without asking the backend, back for the row it steps up to when there is not. `None` when
+/// there is nowhere to step — past the last row going forward, which is [`walk_session_rail`]'s and
+/// [`toggle_open_session_hidden`]'s shared cue to ask the backend for more rather than stop, or
+/// before the first going back, which is simply the end: this walk never wraps, in either caller.
 fn walk_step(drawn: &[SessionRow], i: usize, forward: bool) -> Option<&SessionRow> {
     if forward {
         drawn.get(i + 1)
     } else {
         i.checked_sub(1).and_then(|p| drawn.get(p))
     }
+}
+
+/// Sources to widen for a rail block's Load more, and whether there is anything for them to widen
+/// into: the question [`walk_session_rail`]'s Shift+↓ asks before firing one, factored out so
+/// [`toggle_open_session_hidden`]'s own last-row case asks it exactly the same way rather than
+/// re-deriving it beside it. `single_list` picks which Load more this is, same as both callers work
+/// it out — every selected source at once ([`chat_load_more`]'s, under the flat layout) or one
+/// block's own ([`band_load_more`]'s, under the grouped layout, `node` naming which). `None` when
+/// there is nothing left to load for it, or a page for it is already on its way
+/// ([`source_loading`]) — a load that would not do anything must not be fired.
+fn rail_load_more_sources(
+    state: State,
+    single_list: bool,
+    node: &Option<String>,
+) -> Option<Vec<Option<String>>> {
+    let mut sources: Vec<Option<String>> = Vec::new();
+    let has_more = if single_list {
+        if state.session_local.get() {
+            sources.push(None);
+        }
+        sources.extend(state.session_nodes.get().into_iter().map(Some));
+        combined_page_counts(state).is_some_and(|(held, total)| held < total)
+    } else {
+        sources.push(node.clone());
+        source_page_counts(state, node.as_deref()).is_some_and(|(held, total)| held < total)
+    };
+    (has_more && !sources.iter().any(|n| source_loading(state, n.as_deref()))).then_some(sources)
 }
 
 /// Shift+↓'s and Shift+↑'s own half of [`install_session_hotkeys`]: step the centre pane to the
@@ -6399,8 +6429,8 @@ fn walk_step(drawn: &[SessionRow], i: usize, forward: bool) -> Option<&SessionRo
 /// filtered out — and Shift+↓ opens the top of the list, Shift+↑ the bottom: there is no "next" or
 /// "previous" to a row that isn't there to have one.
 ///
-/// Shift+↑ never goes past the first row (see [`install_session_hotkeys`] for why this walk doesn't
-/// wrap where ⌘⌫ does). Shift+↓ past the last row asks the backend for more instead of stopping: the
+/// Shift+↑ never goes past the first row — see [`install_session_hotkeys`] for why neither this walk
+/// nor ⌘⌫'s wraps. Shift+↓ past the last row asks the backend for more instead of stopping: the
 /// same Load more the rail already draws under the list, fired at the same source(s) it would be —
 /// one per-machine block's own ([`band_load_more`]) under the grouped layout, every selected source
 /// at once ([`chat_load_more`]) under the flat one. It declines outright, leaving the key untouched
@@ -6470,21 +6500,9 @@ fn walk_session_rail(
 
     // The last drawn row: try loading more rather than doing nothing, exactly as this block's (or
     // the combined) Load more would.
-    let mut sources: Vec<Option<String>> = Vec::new();
-    let has_more = if single_list {
-        if state.session_local.get() {
-            sources.push(None);
-        }
-        sources.extend(state.session_nodes.get().into_iter().map(Some));
-        combined_page_counts(state).is_some_and(|(held, total)| held < total)
-    } else {
-        sources.push(drawn[i].node.clone());
-        source_page_counts(state, drawn[i].node.as_deref())
-            .is_some_and(|(held, total)| held < total)
-    };
-    if !has_more || sources.iter().any(|n| source_loading(state, n.as_deref())) {
+    let Some(sources) = rail_load_more_sources(state, single_list, &drawn[i].node) else {
         return;
-    }
+    };
     ev.prevent_default();
     pending_walk.set(Some(PendingWalk {
         sources: sources.clone(),
@@ -6499,16 +6517,36 @@ fn walk_session_rail(
 
 /// ⌘⌫'s own half of [`install_session_hotkeys`]: hide (or unhide) whichever conversation the centre
 /// pane has open, exactly as [`set_session_hidden`] does for the rail's own menu — and, only on the
-/// hide direction, hand the pane on to the row that comes after the one just hidden, in the same
-/// order ⌘1…⌘9 walk, wrapping from the last drawn row back to the first. Struck again on a chat
+/// hide direction, hand the pane on so hiding never leaves it stranded. Struck again on a chat
 /// already hidden it only unhides, same as before this task: nothing moved, so there is nothing to
 /// walk to.
+///
+/// Where it hands on to agrees with Shift+↑ / Shift+↓ about both ends of the rail now, rather than
+/// wrapping the way an earlier version of this did: the row just hidden was never going to be stood
+/// on again, so there is nothing left that made this walk a circle and [`walk_session_rail`]'s a
+/// line — the two keys might as well agree about where a walk actually stops. Not the last drawn
+/// row: the row below it, the same order ⌘1…⌘9 and Shift+↓ walk. The last drawn row: up to the row
+/// above it instead — "one block higher" — the same step [`walk_step`] gives Shift+↑ standing
+/// there, and, if that row's own block can still fetch more ([`rail_load_more_sources`]), also the
+/// same load Shift+↓ would fire from it, handing off once that page lands to whatever it brings in
+/// — the same resumed walk ([`PendingWalk`], [`install_session_hotkeys`]'s own effect) Shift+↓'s
+/// load-more resumes, anchored on the row just stepped up to rather than the row just hidden: that
+/// row, not the hidden one, is what the pane is actually standing on by the time the load is fired,
+/// and the resumed walk's own guard only ever steps it further from wherever it is actually still
+/// standing. Nothing left to load, or a page already on its way, and the row above it is where this
+/// stays. A drawn list of one — the row about to be hidden, nothing else visible — has no row above
+/// it either, which is rule five: the pane goes to empty exactly as it always has.
 ///
 /// Declines, without touching the event, on anything Backspace already means: typing in the
 /// composer, where ⌘⌫ is "delete to the start of the line" on a Mac and must go on meaning that; a
 /// centre pane with nothing open; and a pty agent's live pane, which is the agent itself and has no
 /// run behind it to hide. Only past all three does it claim the key.
-fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::KeyboardEvent) {
+fn toggle_open_session_hidden(
+    state: State,
+    watch: AgentsWatch,
+    pending_walk: RwSignal<Option<PendingWalk>>,
+    ev: &web_sys::KeyboardEvent,
+) {
     if event_targets_text_editing(ev) {
         return;
     }
@@ -6552,17 +6590,39 @@ fn toggle_open_session_hidden(state: State, watch: AgentsWatch, ev: &web_sys::Ke
     // every row a folded-shut block is *not* holding ([`drawn_rows`]), because "next" has to be a
     // row ⌘1…⌘9 could also have opened, never one behind a collapsed block's header and never the
     // Hidden band, which isn't part of `rail_bands` at all. Only on the hide direction: unhiding
-    // moves nothing, so there is nothing to hand on to. A drawn list of one — the row about to be
-    // hidden and nothing else visible — has no successor either, which is rule three: the pane goes
-    // to empty exactly as it always has.
+    // moves nothing, so there is nothing to hand on to.
     let next = (!hidden)
         .then(|| {
-            let drawn = drawn_rows(
-                rail_bands(state, watch).0,
-                &state.rail_collapsed_bands.get_untracked(),
-            );
+            let bands = rail_bands(state, watch).0;
+            let single_list = bands.len() == 1;
+            let drawn = drawn_rows(bands, &state.rail_collapsed_bands.get_untracked());
             let i = drawn.iter().position(is_open)?;
-            (drawn.len() > 1).then(|| drawn[(i + 1) % drawn.len()].clone())
+            if let Some(row) = walk_step(&drawn, i, true) {
+                // Not the last drawn row: step down, no different from before this task.
+                return Some(row.clone());
+            }
+            // The last drawn row: up to the row above it — rule three's "one block higher", the
+            // same [`walk_step`] backward. A drawn list of one has no row above it either (`i`
+            // is both ends of it at once), which is rule five: the pane goes to empty exactly as
+            // it always has.
+            let up = walk_step(&drawn, i, false)?.clone();
+            // If this row's own block can still fetch more, ask for it — the exact widening
+            // Shift+↓'s load-more would fire — and hand the walk off to whatever it brings in
+            // once it lands. Anchored on `up`, not the row just hidden: `up` is what the pane
+            // actually opens below, so it is what is still standing there when the load is
+            // fired, and the only identity the resumed walk's own guard can find again.
+            if let Some(sources) = rail_load_more_sources(state, single_list, &drawn[i].node) {
+                pending_walk.set(Some(PendingWalk {
+                    sources: sources.clone(),
+                    node: up.node.clone(),
+                    agent: up.agent.clone(),
+                    run_id: up.run.as_ref().map(|r| r.run_id.clone()),
+                }));
+                for source in sources {
+                    bump_source_limit(state, source);
+                }
+            }
+            Some(up)
         })
         .flatten();
 
@@ -8001,12 +8061,63 @@ mod tests {
         assert!(walk_step(&drawn, 2, true).is_none());
     }
 
-    /// A rail of one row is both ends at once: nothing before it, nothing after it either.
+    /// A rail of one row is both ends at once: nothing before it, nothing after it either. Also
+    /// [`toggle_open_session_hidden`]'s rule five: hiding the only drawn row has no row above it to
+    /// step up to any more than it has one below it, so the pane goes to empty exactly as it did
+    /// before this task.
     #[test]
     fn walk_step_on_a_rail_of_one_row_finds_nothing_either_direction() {
         let drawn = rail_rows(None, 1, "s");
         assert!(walk_step(&drawn, 0, true).is_none());
         assert!(walk_step(&drawn, 0, false).is_none());
+    }
+
+    /// [`toggle_open_session_hidden`]'s rule three — hiding the last drawn row when there is nothing
+    /// left to load for it (or a page for it is already on its way) steps *up* instead, "one block
+    /// higher" — is the exact same [`walk_step`] going backward that Shift+↑ would take standing on
+    /// that row, reused rather than reimplemented.
+    #[test]
+    fn walk_step_back_from_the_last_row_finds_the_predecessor() {
+        let drawn = rail_rows(None, 4, "s");
+        assert_eq!(
+            walk_step(&drawn, 3, false).map(|r| r.agent.as_str()),
+            Some("s-2"),
+        );
+    }
+
+    /// Rule two's load-available case, worked all the way through: ⌘⌫ opens the row above the one
+    /// just hidden — the same predecessor the exhausted case above lands on — and anchors
+    /// [`PendingWalk`] there rather than on the row just hidden, since the hidden row has left no row
+    /// of its own in `drawn` to be found again by. Once the page lands and the rail redraws with
+    /// fresh rows appended where the hidden one used to be, [`drawn_row_index`] still finds the
+    /// predecessor at its own identity, and [`walk_step`] forward from it reaches the row that just
+    /// landed rather than nothing — the same resumed-walk step [`install_session_hotkeys`]'s effect
+    /// already takes for Shift+↓'s own load-more, unmodified for this caller.
+    #[test]
+    fn drawn_row_index_finds_the_predecessor_again_once_a_load_more_lands() {
+        let before = rail_rows(None, 3, "s");
+        let last = before.len() - 1;
+        assert!(
+            walk_step(&before, last, true).is_none(),
+            "the last row — no successor without asking the backend first",
+        );
+        let predecessor = walk_step(&before, last, false)
+            .cloned()
+            .expect("a rail of three has a row above its last");
+        assert_eq!(predecessor.agent, "s-1");
+
+        // `s-2` — the last row — hidden, then a page landing with two fresh rows after it.
+        let mut after = before[..last].to_vec();
+        after.extend(rail_rows(None, 2, "new"));
+
+        let found = drawn_row_index(&after, &predecessor.node, &predecessor.agent, &None)
+            .expect("the predecessor is still exactly where it was");
+        assert_eq!(
+            walk_step(&after, found, true).map(|r| r.agent.as_str()),
+            Some("new-0"),
+            "the resumed walk steps off the predecessor onto whatever the load brought in, not \
+             back onto the row that was hidden",
+        );
     }
 
     /// [`drawn_row_index`] finds the row an open conversation's own `node`/`agent`/`run_id` names,
