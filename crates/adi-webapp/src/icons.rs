@@ -35,6 +35,8 @@ pub(crate) enum Icon {
     Box,
     /// The live graph — nodes and the links between them, as against `Mesh`'s machines.
     Graph,
+    /// The UI elements gallery — the components a screen is assembled from.
+    Elements,
     /// Workspaces.
     Layers,
     File,
@@ -97,6 +99,7 @@ impl Icon {
             Icon::Node => Lucide::Monitor,
             Icon::Box => Lucide::Store,
             Icon::Graph => Lucide::Waypoints,
+            Icon::Elements => Lucide::LayoutGrid,
             Icon::Layers => Lucide::Layers,
             Icon::File => Lucide::File,
             Icon::Doc => Lucide::FileText,
@@ -143,6 +146,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,
         Route::LiveGraph => Icon::Graph,
+        Route::Elements => Icon::Elements,
         Route::Settings => Icon::Gear,
         Route::Hive => Icon::Server,
         Route::PortsManager => Icon::Plug,

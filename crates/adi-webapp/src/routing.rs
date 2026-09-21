@@ -93,6 +93,9 @@ pub(crate) enum Route {
     /// The live graph (`/extended/live-graph`) — every agent and conversation on this machine, and
     /// what set each one off, on one canvas.
     LiveGraph,
+    /// The UI elements gallery (`/extended/ui`) — every element in `design/elements`, live, with
+    /// the markup for each. The page is one custom element; see [`crate::pages::elements_view`].
+    Elements,
     /// The Settings landing page (`/extended/settings`) — an index of the seven pages nested
     /// under Settings in the explorer, so the ⌘K menu's Settings row opens somewhere real
     /// rather than dropping onto [`Route::Hive`].
@@ -121,7 +124,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 24] = [
+    pub(crate) const NAV: [Route; 25] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -137,6 +140,7 @@ impl Route {
         Route::Dashboards,
         Route::Marketplace,
         Route::LiveGraph,
+        Route::Elements,
         Route::Settings,
         Route::Hive,
         Route::PortsManager,
@@ -191,6 +195,7 @@ impl Route {
             "/dashboards" => Route::Dashboards,
             "/marketplace" => Route::Marketplace,
             "/live-graph" => Route::LiveGraph,
+            "/ui" => Route::Elements,
             "/settings" => Route::Settings,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
@@ -226,6 +231,7 @@ impl Route {
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
             Route::LiveGraph => "/extended/live-graph",
+            Route::Elements => "/extended/ui",
             Route::Settings => "/extended/settings",
             Route::Hive => "/extended/settings/hive",
             Route::PortsManager => "/extended/settings/ports-manager",
@@ -260,6 +266,7 @@ impl Route {
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
             Route::LiveGraph => "Live graph",
+            Route::Elements => "UI elements",
             Route::Settings => "Settings",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports manager",
@@ -296,6 +303,7 @@ impl Route {
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
+            Route::Elements => "Buttons, tables, fields — every component, live, with its markup",
             Route::Settings => "Hive, ports, mesh, fleet, backends, shared assets and system",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",

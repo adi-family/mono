@@ -91,6 +91,10 @@ stays within the 80%-diameter safe zone.
 - Targets `wasm32-unknown-unknown`; **excluded from the workspace's `default-members`**, so
   a bare `cargo build`/`cargo test` skips it. Build with Trunk (or
   `cargo … -p adi-webapp --target wasm32-unknown-unknown`).
-- No npm, and the UI itself is Rust end to end. The only JavaScript is the PWA plumbing
-  above — a service worker and the `beforeinstallprompt` bootstrap, neither of which can live
-  in wasm.
+- No npm. The panel's own screens are Rust end to end; the JavaScript that ships beside them is
+  the PWA plumbing above — a service worker and the `beforeinstallprompt` bootstrap, neither of
+  which can live in wasm — and [`design/elements`](../../design/elements), the design system as
+  custom elements. That directory is copied into `dist/` verbatim and loaded as one ES module
+  from `index.html`, so every `<adi-*>` tag is available on every page of the panel, including
+  inside a Leptos `view!`. The gallery of them is [`/extended/ui`](./src/pages/elements.rs),
+  which is one tag and nothing else.

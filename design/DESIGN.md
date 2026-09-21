@@ -6,6 +6,7 @@ Files in this folder:
 
 - `DESIGN.md` — this file: logic, rules, how to make decisions.
 - `tokens.css` — every color, font, radius, spacing value as CSS variables. Import it. Never hardcode a hex.
+- `elements/` — this document as custom elements: `<adi-button>`, `<adi-table>`, `<adi-status>`. Plain JavaScript, no framework, no build step. Its gallery is a page of the control panel, `/extended/ui`.
 - `reference/design-system.html` — the visual brandbook: tokens, type scale, components rendered live.
 - `examples/chat.html` — the main session screen (3 panels, transcript). The canonical example.
 - `examples/setup-agents-fleet.html` — a form, a table page, a settings page. Three pages, one switcher at top (switcher is for review only).

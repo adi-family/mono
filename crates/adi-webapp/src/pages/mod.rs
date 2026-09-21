@@ -5,6 +5,7 @@ mod agents;
 mod analytics;
 pub(crate) mod dashboards;
 mod db;
+mod elements;
 mod embedding_backends;
 mod facts;
 pub(crate) mod fleet;
@@ -79,6 +80,7 @@ pub(crate) use agents::{
 pub(crate) use analytics::analytics_view;
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
+pub(crate) use elements::elements_view;
 pub(crate) use embedding_backends::embedding_backends_view;
 pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;

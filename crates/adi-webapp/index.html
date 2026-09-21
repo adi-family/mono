@@ -33,11 +33,20 @@
 <link data-trunk rel="scss" href="styles/main.scss" />
 <!-- adi-ui's @font-face rules resolve against the dist root, so the files have to land there. -->
 <link data-trunk rel="copy-dir" href="../adi-ui/fonts" />
+<!-- The design system as custom elements (`design/elements`), copied verbatim so the module
+     graph keeps the relative imports it was written with. Loaded below as one ES module. -->
+<link data-trunk rel="copy-dir" href="../../design/elements" />
 <!-- Copied verbatim (no content hash) so the manifest, the worker and the icons keep the
      stable URLs the browser and the manifest above expect. -->
 <link data-trunk rel="copy-file" href="manifest.webmanifest" />
 <link data-trunk rel="copy-file" href="sw.js" />
 <link data-trunk rel="copy-dir" href="assets" />
+
+<!-- adi-elements: the design system as custom elements. A module, so it is deferred by
+     definition and the tags upgrade whenever they appear — including the ones Leptos renders
+     later, which is how `<adi-gallery>` on /extended/ui works without any bridge at all.
+     Available on every page of the panel, not just that one. -->
+<script type="module" src="/elements/adi-elements.js"></script>
 
 <script>
 // PWA bootstrap. Two jobs, both of which have to happen outside the wasm bundle:

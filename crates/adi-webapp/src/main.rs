@@ -51,7 +51,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
-    agents_view, analytics_view, chat_home_view, dashboards_view, database_view,
+    agents_view, analytics_view, chat_home_view, dashboards_view, database_view, elements_view,
     embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, live_graph_view,
     live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir, load_store_file,
     market_view, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
@@ -1477,6 +1477,7 @@ fn App() -> impl IntoView {
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),
+                        Route::Elements => elements_view(),
                         Route::Settings => settings_view(state, route),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
@@ -1778,6 +1779,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Dashboards,
             Route::Marketplace,
             Route::LiveGraph,
+            Route::Elements,
         ],
     ),
     ("Settings", &Route::SETTINGS),
