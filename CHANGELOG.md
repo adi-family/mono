@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.19.0 — 2026-09-21
+
 ### Changed
 
 - **A fresh install no longer starts the mesh daemon on its own.** `adi-app` used to autostart the
