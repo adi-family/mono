@@ -999,6 +999,10 @@ impl Agents {
         }
 
         let mut spec = self.launch_spec(&agent, working_dir);
+        spec.credential = chain
+            .as_ref()
+            .and_then(llm::PinnedChain::current)
+            .map(|row| row.credential.clone());
         // Fail before anything is written down: a mistyped argument should leave no session behind.
         runner.check(&spec)?;
         let store = self.sessions();
@@ -1010,8 +1014,8 @@ impl Agents {
             message,
             launched_by.unwrap_or_default(),
         )?;
-        // Only for an answerable conversation — a one-shot `process` run's task is a line the
-        // caller already wrote deliberately, and a pty's launch message is not a message at all.
+        // Only for an answerable conversation — a one-shot `process:claude` run's task is a line
+        // the caller already wrote deliberately, and a pty's launch message is not a message at all.
         // Off this thread entirely: see [`auto_title::spawn`] for why a launch never waits on it.
         if capabilities(agent.manifest.runtime()).answerable {
             auto_title::spawn(
@@ -1271,6 +1275,19 @@ impl Agents {
             .as_ref()
             .and_then(runner_of)
             .is_some_and(|runner| runner.takes_images())
+    }
+
+    /// The capability profile of **this run**, from the concrete runner recorded on its session.
+    ///
+    /// The agent definition is only the template for the next run and may have changed since this
+    /// one started. A simulated run also records the human runner rather than the engine whose seat
+    /// it occupies, and therefore remains an answerable conversation while accepting no images.
+    #[must_use]
+    pub fn run_capabilities(&self, agent: &str, run_id: &str) -> Option<BackendCapabilities> {
+        self.sessions()
+            .get(agent, run_id)
+            .as_ref()
+            .map(session_capabilities)
     }
 
     /// One stored attachment: what it is, and its bytes. `None` when the id names nothing, or when
@@ -1768,6 +1785,11 @@ impl Agents {
         let as_launched = as_run(agent, record);
         let agent = &*as_launched;
         let mut spec = self.spec_in(agent, session_dir(&self.config, record));
+        spec.credential = record
+            .chain
+            .as_ref()
+            .and_then(llm::PinnedChain::current)
+            .map(|row| row.credential.clone());
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         pin_owner_instructions(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
@@ -1998,6 +2020,7 @@ impl Agents {
         let knowledge_note =
             Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         RunSpec {
+            credential: None,
             cwd,
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
             env,
@@ -2083,6 +2106,7 @@ impl Agents {
             .list(&agent.name)
             .into_iter()
             .map(|record| RunInfo {
+                capabilities: session_capabilities(&record),
                 // From the record just listed: liveness reads the runner's state slot, which is a
                 // column that row already carried — and it is asked of the runner that started
                 // *this* session, which is not always the one the listing was opened with.
@@ -2374,7 +2398,7 @@ impl Agents {
         Ok(stopped)
     }
 
-    /// Delete one run of an agent outright — for a harness backend, a whole conversation: its
+    /// Delete one run of an agent outright — for an answerable backend, a whole conversation: its
     /// transcript, its log, its queue, all of it. A live run is stopped first, so nothing is left
     /// writing into a slot that no longer exists. Returns whether there was a run there to delete;
     /// deleting one that is already gone is not an error, so a repeated click settles quietly.
@@ -3169,6 +3193,16 @@ fn empty_peek() -> Peek {
         attach: String::new(),
         interactive: false,
     }
+}
+
+/// Capabilities belong to the concrete runner stored on the session, not to the mutable agent
+/// definition. Usually that is the stored backend's runner; a simulated conversation records the
+/// human runner instead and must remain answerable whatever engine's seat the person occupies.
+fn session_capabilities(record: &SessionRecord) -> BackendCapabilities {
+    runner_of(record).map_or_else(
+        || capabilities(&record.backend),
+        |runner| progress::runner_capabilities(runner.as_ref()),
+    )
 }
 
 /// Resolve an agent's attached-secret allowlist into `(env-var, value)` pairs for a run. Only the
@@ -4793,6 +4827,7 @@ mod tests {
 
     fn dead_spec() -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: std::env::temp_dir(),
             path: String::new(),
             env: Vec::new(),
@@ -5731,6 +5766,29 @@ mod tests {
         );
     }
 
+    /// Codex is a process runner, but not a one-shot runner: its stored thread makes the same reply
+    /// and queue path available as the harness conversations. Keep the cap full so this exercises
+    /// the gate without launching a vendor CLI from the test.
+    #[test]
+    fn a_process_codex_conversation_accepts_a_reply() {
+        let store = scratch("codex-reply");
+        store.save("codex", spec("process:codex")).expect("save");
+        let conv = seed_conversation(&store, "codex", "process:codex", "/tmp");
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 1,
+                ..RunLimits::default()
+            })
+            .expect("set the limit");
+        seed_live_run(&store, "process:claude", "other");
+
+        assert_eq!(
+            store.reply("codex", &conv, "continue").expect("reply"),
+            Sent::Queued { place: 1 },
+        );
+        assert_eq!(texts(store.sessions().queued("codex", &conv)), ["continue"]);
+    }
+
     /// Settling is a *reader's* act, and it must not read as the conversation having just spoken. An
     /// agent that answered overnight is committed by whoever opens the chat in the morning; stamped
     /// with that instant, every listing sorted by when a session last spoke would move the chat to
@@ -6358,6 +6416,12 @@ mod tests {
             .expect("a simulated run is in the run list");
         assert!(!run.running, "the seat is empty once the turn ends");
         assert!(
+            run.capabilities.answerable,
+            "the stored human runner remains an answerable conversation"
+        );
+        assert!(!run.capabilities.interactive);
+        assert!(!run.capabilities.images);
+        assert!(
             run.outcome
                 .as_ref()
                 .is_some_and(store::RunOutcome::is_reported),
@@ -6407,6 +6471,32 @@ mod tests {
             "the prompt it opened with is still readable",
         );
         assert!(store.stop_run("drifter", run_id).expect("stop"));
+    }
+
+    /// A simulation records the human runner, not the engine whose seat it occupies. In particular,
+    /// putting a person in a one-shot process:claude seat still creates an answerable conversation;
+    /// deriving history capabilities from the backend would hide its reply box.
+    #[test]
+    fn a_simulated_one_shot_backend_keeps_the_human_runners_capabilities() {
+        let store = scratch("sim-capabilities");
+        store.save("human", spec("process:claude")).expect("save");
+        let Launch::Process { run_id, .. } =
+            store.simulate("human", "hold the seat").expect("simulate")
+        else {
+            panic!("a simulation is a headless conversation");
+        };
+        let agent = store.get("human").expect("get").expect("present");
+        let run = store
+            .runs(&agent)
+            .into_iter()
+            .find(|run| run.run_id == run_id)
+            .expect("listed simulation");
+
+        assert!(run.capabilities.answerable);
+        assert!(run.capabilities.history);
+        assert!(!run.capabilities.interactive);
+        assert!(!run.capabilities.images);
+        assert!(store.stop_run("human", &run_id).expect("stop"));
     }
 
     /// `Ask` refuses under an unattended agent, in a simulated run exactly as in a real one —

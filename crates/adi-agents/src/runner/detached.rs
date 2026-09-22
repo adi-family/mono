@@ -7,19 +7,31 @@
 //! the whole point of the [`Runner`] trait: the caller holds a `dyn Runner` and never learns which
 //! engine it got.
 //!
-//! Nothing durable lives here. The child's pid (and, for the Claude CLI, the engine session id it
-//! resumes) go in the session's [state slot](Session::state); the log is the store's file, opened by
-//! path because a spawned child needs a file descriptor. Everything else — the record, the queue,
-//! the transcript — belongs to the store and this module never sees it.
+//! Nothing durable lives here. The child's pid and any vendor thread id it resumes go in the
+//! session's [state slot](Session::state); the log is the store's file, opened by path because a
+//! spawned child needs a file descriptor. Everything else — the record, the queue, the transcript
+//! — belongs to the store and this module never sees it.
 
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+#[cfg(target_os = "macos")]
+use core_foundation::base::{CFType, TCFType as _};
+#[cfg(target_os = "macos")]
+use core_foundation::string::{CFString, CFStringRef};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 use crate::arguments::{
@@ -27,7 +39,8 @@ use crate::arguments::{
 };
 use crate::backend::Backend;
 use crate::backends::detached::Spawned;
-use crate::backends::harness::claude_sdk::Continuation;
+use crate::backends::harness::claude_sdk::Continuation as ClaudeContinuation;
+use crate::backends::process::codex::Continuation as CodexContinuation;
 use crate::backends::{
     adi_events, claude_stream, codex_stream, detached, harness, process, quiet_codex_env,
 };
@@ -72,20 +85,20 @@ impl DetachedRunner {
 
     /// This turn's command line.
     ///
-    /// The continuation is derived here and nowhere else: `harness:claude-sdk` establishes its
-    /// engine session on the first turn (`--session-id`) and resumes it afterwards (`--resume`),
-    /// decided purely from [`Session::has_started`]. No caller ever passes a "fresh or resume"
-    /// flag, which is why [`Continuation`] can stay a private detail of this file.
+    /// The continuation is derived here and nowhere else. `harness:claude-sdk` establishes its
+    /// engine session on the first turn (`--session-id`) and resumes it afterwards (`--resume`).
+    /// `process:codex` opens with `codex exec`, whose `thread.started` event supplies the id used by
+    /// later `codex exec resume` turns. No caller ever passes a "fresh or resume" flag.
     ///
-    /// The other engines have no such pair to derive: a `process:*` run is a one-shot `--print` /
-    /// `exec` that keeps no session, and the adi loop continues by replaying the transcript, so it
-    /// is addressed by agent + conversation id alone.
+    /// `process:claude` has no such pair: it remains a one-shot `--print` run. The adi loop
+    /// continues by replaying the transcript, addressed by agent + conversation id alone.
     fn argv(
         &self,
         spec: &RunSpec,
         session: &dyn Session,
         message: &str,
         session_id: &str,
+        codex_identity: Option<&CodexIdentity>,
     ) -> Result<Vec<String>> {
         match &self.backend {
             Backend::ProcessClaude => {
@@ -112,7 +125,64 @@ impl DetachedRunner {
                 // opening *user* prompt — help there would arrive as a question to answer, and an
                 // agent with no prompt of its own would open by reading a wall of usage text.
                 config.system_prompt = own_prompt(spec, config.system_prompt);
-                Ok(process::codex::argv(&config, message, spec.cwd.to_str()))
+                let state = State::read(session);
+                let identity = codex_identity.expect("the Codex runner computes its identity");
+                let previous_thread = codex_thread(&state, session);
+                let same_credential =
+                    state.codex_credential.as_deref() == Some(identity.credential.as_str());
+                if same_credential
+                    && (state
+                        .codex_auth_context
+                        .as_deref()
+                        .is_some_and(|stored| identity.auth_context.as_deref() != Some(stored))
+                        || identity.auth_context.is_none())
+                    && previous_thread.is_some()
+                {
+                    return Err(Error::Launch(
+                        "cannot safely resume the Codex conversation: its login/session context \
+                         changed or cannot be verified; start a new conversation"
+                            .to_string(),
+                    ));
+                }
+                let cont = if !session_id.trim().is_empty() {
+                    CodexContinuation::Resume {
+                        thread_id: session_id,
+                    }
+                } else if same_credential
+                    && state.codex_auth_context.is_none()
+                    && previous_thread.is_some()
+                {
+                    return Err(Error::Launch(
+                        "cannot safely resume this older Codex conversation: its thread id is not \
+                         bound to a login/session context; start a new conversation"
+                            .to_string(),
+                    ));
+                } else if same_credential {
+                    return Err(Error::Launch(
+                        "cannot resume the Codex conversation: its thread id is missing"
+                            .to_string(),
+                    ));
+                } else if state.codex_credential.is_none()
+                    && (state
+                        .codex_thread_id
+                        .as_deref()
+                        .is_some_and(|id| !id.trim().is_empty())
+                        || previous_thread.is_some())
+                {
+                    return Err(Error::Launch(
+                        "cannot safely resume this older Codex conversation: its thread id is not \
+                         bound to a credential and login/session context; start a new conversation"
+                            .to_string(),
+                    ));
+                } else {
+                    CodexContinuation::First
+                };
+                Ok(process::codex::argv(
+                    &config,
+                    message,
+                    spec.cwd.to_str(),
+                    &cont,
+                ))
             }
             Backend::HarnessClaudeSdk => {
                 let mut config = decode::<HarnessClaudeSdkArguments>(&spec.arguments)?;
@@ -125,9 +195,9 @@ impl DetachedRunner {
                     ),
                 );
                 let cont = if session.has_started() {
-                    Continuation::Resume { session_id }
+                    ClaudeContinuation::Resume { session_id }
                 } else {
-                    Continuation::First { session_id }
+                    ClaudeContinuation::First { session_id }
                 };
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(harness::claude_sdk::argv(
@@ -147,18 +217,49 @@ impl DetachedRunner {
         }
     }
 
-    /// The engine session id this turn runs under: minted once for the Claude CLI and kept in the
-    /// state slot so every later turn resumes the same thread; empty for every other engine, which
-    /// has nothing to resume.
-    fn engine_session_id(&self, state: &State) -> String {
-        if !matches!(self.backend, Backend::HarnessClaudeSdk) {
-            return String::new();
-        }
-        match state.session_id.as_deref().map(str::trim) {
-            // A recorded id is resumable only if a turn actually established it; otherwise this is
-            // still the first turn and the same id is established now.
-            Some(id) if !id.is_empty() => id.to_string(),
-            _ => Uuid::new_v4().to_string(),
+    /// The engine thread id this turn runs under.
+    ///
+    /// Claude's is minted here before its first child starts. Codex chooses its own and announces
+    /// it in the log, so a missing durable copy is recovered from the previous turn before spawning
+    /// truncates that log. Separate state fields keep a failover from handing one engine the other
+    /// engine's id.
+    #[cfg(test)]
+    fn engine_session_id(&self, state: &State, session: &dyn Session, spec: &RunSpec) -> String {
+        let codex_identity =
+            matches!(self.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
+        self.engine_session_id_with_identity(state, session, codex_identity.as_ref())
+    }
+
+    fn engine_session_id_with_identity(
+        &self,
+        state: &State,
+        session: &dyn Session,
+        codex_identity: Option<&CodexIdentity>,
+    ) -> String {
+        match self.backend {
+            Backend::HarnessClaudeSdk => match state.session_id.as_deref().map(str::trim) {
+                // A recorded id is resumable only if a turn actually established it; otherwise
+                // this is still the first turn and the same id is established now.
+                Some(id) if !id.is_empty() => id.to_string(),
+                _ => Uuid::new_v4().to_string(),
+            },
+            Backend::ProcessCodex => {
+                let identity = codex_identity.expect("the Codex runner computes its identity");
+                // A thread lives beside the login that created it. Once a binding is present it
+                // and the CLI state/auth context must both match. A pre-upgrade unbound id cannot
+                // prove which ambient account created it, so it is never handed to a new turn.
+                let binding_matches = state.codex_credential.as_deref()
+                    == Some(identity.credential.as_str())
+                    && state
+                        .codex_auth_context
+                        .as_deref()
+                        .is_some_and(|stored| identity.auth_context.as_deref() == Some(stored));
+                if !binding_matches {
+                    return String::new();
+                }
+                codex_thread(state, session).unwrap_or_default()
+            }
+            _ => String::new(),
         }
     }
 
@@ -217,10 +318,13 @@ impl Runner for DetachedRunner {
 
     fn send(&self, spec: &RunSpec, session: &dyn Session, message: &str) -> Result<()> {
         let mut state = State::read(session);
-        let session_id = self.engine_session_id(&state);
+        let codex_identity =
+            matches!(self.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
+        let session_id =
+            self.engine_session_id_with_identity(&state, session, codex_identity.as_ref());
         // Build the command before spawning anything, so an unrunnable engine or a mistyped
         // argument fails with nothing started and nothing written.
-        let argv = self.argv(spec, session, message, &session_id)?;
+        let argv = self.argv(spec, session, message, &session_id, codex_identity.as_ref())?;
 
         let log = session.log_path();
         let dir = log.parent().unwrap_or_else(|| Path::new("."));
@@ -231,6 +335,8 @@ impl Runner for DetachedRunner {
         // The reaper's half of the state slot, taken before the spawn so the thread has somewhere to
         // write the ending to the moment there is one.
         let writer = session.state_writer();
+        let capture_codex_thread = matches!(self.backend, Backend::ProcessCodex);
+        let reaper_log = log.to_path_buf();
         let child = detached::spawn_child(
             dir,
             slot,
@@ -241,14 +347,34 @@ impl Runner for DetachedRunner {
             &self.run_env(spec),
             move |child| {
                 if let Some(writer) = writer {
-                    forget_child(writer.as_ref(), child);
+                    let discovered_thread_id = capture_codex_thread
+                        .then(|| codex_thread_id(&reaper_log))
+                        .flatten();
+                    forget_child(writer.as_ref(), child, discovered_thread_id);
                 }
             },
         )?;
 
         state.pid = Some(child.pid);
         state.started = child.started;
-        state.session_id = (!session_id.is_empty()).then_some(session_id);
+        match self.backend {
+            Backend::HarnessClaudeSdk if !session_id.is_empty() => {
+                state.session_id = Some(session_id);
+            }
+            Backend::ProcessCodex => {
+                let identity = codex_identity.expect("the Codex runner computes its identity");
+                state.codex_credential = Some(identity.credential);
+                state.codex_auth_context = Some(
+                    identity
+                        .auth_context
+                        .unwrap_or_else(|| CODEX_AUTH_UNVERIFIABLE.to_string()),
+                );
+                // A credential switch deliberately starts a new thread. Drop the old login's id
+                // immediately; the new one is captured from this child's `thread.started` event.
+                state.codex_thread_id = (!session_id.is_empty()).then_some(session_id);
+            }
+            _ => {}
+        }
         session.set_state(state.into_value())
     }
 
@@ -331,13 +457,13 @@ impl Runner for DetachedRunner {
     /// Mirrors what each engine's stream actually carries. Codex reports no reasoning blocks and
     /// the adi loop does not surface the model's thinking, so neither claims `thinking` — a reader
     /// that drew an empty pane for them would be lying about the engine rather than about the turn.
-    /// Only the harness engines. A `process:*` run is a one-shot `--print` / `exec` that establishes
-    /// no session and carries no flag to resume one, so a second send would open a fresh thread with
-    /// no memory of the first — which is exactly the offer this must not make.
+    /// The two harness engines and Codex's headless process. `process:claude` remains a one-shot
+    /// `--print` run; Codex has an explicit `exec resume` path and keeps the generated thread id in
+    /// this runner's state slot.
     fn resumes(&self) -> bool {
         matches!(
             self.backend,
-            Backend::HarnessClaudeSdk | Backend::HarnessAdi
+            Backend::ProcessCodex | Backend::HarnessClaudeSdk | Backend::HarnessAdi
         )
     }
 
@@ -442,8 +568,25 @@ struct State {
     /// See [`DetachedRunner::is_alive`] for what is made of that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     started: Option<u64>,
+    /// Claude's client-minted session id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    /// Codex's generated thread id. Deliberately not shared with Claude's client-minted id: the
+    /// backend pinned to a conversation can change during failover, while this state slot remains.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_thread_id: Option<String>,
+    /// Stable identity of the login beside which [`codex_thread_id`](Self::codex_thread_id) lives.
+    /// Never a secret value; this is the pinned LLM backend's credential key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_credential: Option<String>,
+    /// SHA-256 fingerprint of the Codex CLI's effective state directories and login/account, or an
+    /// explicit `unverifiable` marker when a first turn used an opaque keyring-backed login.
+    ///
+    /// This deliberately stores no API key, access token, or auth-file contents. The digest is a
+    /// guardrail, not a credential: a later turn may resume [`codex_thread_id`](Self::codex_thread_id)
+    /// only when it is still looking at the same Codex state and account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_auth_context: Option<String>,
 }
 
 impl State {
@@ -451,15 +594,6 @@ impl State {
     /// error: it reads as "nothing of mine here", which is exactly what it is.
     fn read(session: &dyn Session) -> Self {
         session
-            .state()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default()
-    }
-
-    /// The same read through an owned handle, for the reaper thread — which outlives every borrowed
-    /// view by construction.
-    fn read_owned(writer: &dyn StateWriter) -> Self {
-        writer
             .state()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default()
@@ -473,21 +607,1238 @@ impl State {
 /// Strike an exited child from the state slot, if it is still the child the slot is describing.
 ///
 /// Called from the reaper thread the moment a child is gone, so a finished run reads as finished
-/// without waiting for anybody to ask. The engine session id stays: it is what a later turn resumes
-/// the same conversation with, and it did not die with the process.
+/// without waiting for anybody to ask. Engine thread ids stay: they are what later turns resume,
+/// and they did not die with the process. Codex's first child generated its id, so that one is
+/// captured from the completed log here before the pid is cleared.
 ///
-/// The guard is the whole subtlety. A harness conversation spawns a fresh child per turn into the
-/// same slot, so by the time this thread wakes up, turn N+1 may already have written its own pid
-/// there — and clearing it would leave a live child that nothing lists and nothing can stop. So the
-/// slot is re-read and only cleared if it still names *this* child.
-fn forget_child(writer: &dyn StateWriter, child: Spawned) {
-    let mut state = State::read_owned(writer);
+/// The guard is the whole subtlety. A resumable headless conversation spawns a fresh child per turn
+/// into the same slot, so by the time this thread wakes up, turn N+1 may already have written its
+/// own pid there — and clearing it would leave a live child that nothing lists and nothing can
+/// stop. The comparison and write are atomic: re-reading and then blindly writing would still let
+/// turn N+1 land in the narrow gap between those operations.
+fn forget_child(writer: &dyn StateWriter, child: Spawned, codex_thread_id: Option<String>) {
+    let Some(observed) = writer.state() else {
+        return;
+    };
+    let Ok(mut state) = serde_json::from_value::<State>(observed.clone()) else {
+        return;
+    };
     if state.pid != Some(child.pid) || state.started != child.started {
         return;
     }
     state.pid = None;
     state.started = None;
-    let _ = writer.set_state(state.into_value());
+    if let Some(thread_id) = codex_thread_id {
+        state.codex_thread_id = Some(thread_id);
+    }
+    let _ = writer.compare_and_set_state(&observed, state.into_value());
+}
+
+/// Read just the beginning of a Codex log, where `thread.started` is emitted. Capping this read is
+/// important: a tool-heavy run can leave a multi-megabyte log, while the id is one of its first
+/// records. The same helper also recovers sessions created by older ADI builds that did not yet
+/// persist the id in the runner state slot.
+fn codex_thread_id(path: &Path) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(MAX_PARSE_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    codex_stream::thread_id(&bytes)
+}
+
+/// The thread id already established by this session, including the log-only form written by ADI
+/// versions from before the state slot kept it explicitly.
+fn codex_thread(state: &State, session: &dyn Session) -> Option<String> {
+    state
+        .codex_thread_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| codex_thread_id(session.log_path()))
+}
+
+/// The ambient Codex CLI login is one credential shared by every unchained process:codex run.
+/// Chained runs carry their already-resolved credential key in the spec instead.
+fn codex_credential(spec: &RunSpec) -> &str {
+    spec.credential
+        .as_deref()
+        .unwrap_or("runtime:process:codex")
+}
+
+/// The two names a Codex thread has to stay under: ADI's logical backend credential and the
+/// concrete CLI state/login context that credential resolved to for this turn.
+struct CodexIdentity {
+    credential: String,
+    auth_context: Option<String>,
+}
+
+impl CodexIdentity {
+    fn of(spec: &RunSpec) -> Self {
+        Self {
+            credential: codex_credential(spec).to_string(),
+            auth_context: codex_auth_context(spec),
+        }
+    }
+}
+
+/// A non-secret, stable fingerprint of where `codex exec resume` will look and who it will run as.
+///
+/// `RunSpec::credential` names the pinned backend row, but an agent edit can change the actual
+/// child environment beneath that same row. In particular `CODEX_HOME`, `CODEX_SQLITE_HOME`, or an
+/// API-key/token variable can point the next turn at another local thread store or another account.
+/// Bind the durable thread id to both. OAuth refreshes do not invalidate a conversation: for a
+/// normal `auth.json` login only the auth mode and stable user + workspace ids feed the digest,
+/// never the rotating access/refresh tokens. Unusual auth files with no stable identity are hashed
+/// whole, which errs on the safe side and asks for a new conversation after they change.
+const CODEX_AUTH_UNVERIFIABLE: &str = "unverifiable:v1";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CodexProviderAuth {
+    /// Codex's own `auth.json` or direct `CODEX_*` credential variables.
+    OpenAi,
+    /// Static config and/or child environment, both of which the fingerprint covers.
+    Bound,
+    /// A command, OS/cloud credential chain, or provider definition ADI cannot identify safely.
+    Unverifiable,
+}
+
+fn codex_auth_context(spec: &RunSpec) -> Option<String> {
+    let managed_preferences = codex_managed_preferences().ok()?;
+    codex_auth_context_with_preferences(spec, managed_preferences)
+}
+
+fn codex_auth_context_with_preferences(
+    spec: &RunSpec,
+    managed_preferences: CodexManagedPreferences,
+) -> Option<String> {
+    if ["OPENAI_FEDERATION_RULE_ID", "OPENAI_IDENTITY_TOKEN_FILE"]
+        .into_iter()
+        .any(|key| effective_env(spec, key).is_some_and(|value| !value.trim().is_empty()))
+    {
+        // Workload identity exchanges a local assertion for remote account/policy state. A stable
+        // rule id or token-file path cannot prove that the exchanged identity stayed the same.
+        return None;
+    }
+    let codex_home = codex_home(spec)?;
+    let config = CodexConfigSnapshot::read(&codex_home, &spec.cwd, managed_preferences);
+    if !config.valid {
+        return None;
+    }
+    let sqlite_home = config
+        .string("sqlite_home")
+        .filter(|value| !value.is_empty())
+        .map(|value| absolute_for_child(spec, value))
+        .or_else(|| {
+            effective_env(spec, "CODEX_SQLITE_HOME")
+                .filter(|value| !value.is_empty())
+                .map(|value| absolute_for_child(spec, &value))
+        })
+        .unwrap_or_else(|| codex_home.clone());
+
+    let provider_auth = config.provider_auth();
+    if provider_auth == CodexProviderAuth::Unverifiable {
+        return None;
+    }
+
+    let mut digest = Sha256::new();
+    hash_part(&mut digest, "domain", b"adi.process-codex.auth-context.v1");
+    hash_part(
+        &mut digest,
+        "codex_home",
+        codex_home.to_string_lossy().as_bytes(),
+    );
+    hash_part(
+        &mut digest,
+        "sqlite_home",
+        sqlite_home.to_string_lossy().as_bytes(),
+    );
+    let codex_version = hash_codex_executable(&mut digest, spec)?;
+    // Provider auth/routing can name arbitrary variables (`env_key`, AWS credentials, local OSS
+    // endpoints, future built-ins). Hash the exact environment the child receives instead of
+    // maintaining another incomplete list. Only the digest is persisted.
+    hash_child_environment(&mut digest, spec);
+    config.hash_into(&mut digest);
+    if provider_auth == CodexProviderAuth::OpenAi {
+        // A keyring/auto/ephemeral login has no stable public account identifier ADI can read.
+        // Even a credential-looking env var can be ignored by a forced login policy.
+        if !config.auth_store_is_file() {
+            return None;
+        }
+        let api_key_present =
+            effective_env(spec, "CODEX_API_KEY").is_some_and(|value| !value.trim().is_empty());
+        let access_token =
+            effective_env(spec, "CODEX_ACCESS_TOKEN").filter(|value| !value.trim().is_empty());
+        if access_token
+            .as_deref()
+            .is_some_and(|token| !direct_codex_access_token_is_resumable(token))
+        {
+            return None;
+        }
+        let direct_auth_present = api_key_present || access_token.is_some();
+        // Bind a file login whenever it exists, even if a direct credential is also present. The
+        // extra binding is conservative; omitting it could let an unused env var hide an account
+        // switch. Workspace plans with remote policy are deliberately not resumable because that
+        // policy is fetched by Codex and cannot be fingerprinted before a turn starts.
+        let auth_file = hash_auth_file(
+            &mut digest,
+            &codex_home.join("auth.json"),
+            codex_v0154_oauth_semantics(&codex_version),
+        );
+        if auth_file.cloud_config_eligible || (!direct_auth_present && !auth_file.present) {
+            return None;
+        }
+    }
+
+    let bytes = digest.finalize();
+    let mut encoded = String::with_capacity(7 + bytes.len() * 2);
+    encoded.push_str("sha256:");
+    for byte in bytes {
+        // Writing into a String cannot fail.
+        write!(&mut encoded, "{byte:02x}").expect("write a digest");
+    }
+    Some(encoded)
+}
+
+/// Every readable local Codex config layer that can affect this run.
+///
+/// Codex layers system, user, profile, project `.codex`, and managed files. Hashing only the user's
+/// `config.toml` would miss a project changing `sqlite_home` or a managed layer changing the allowed
+/// login between turns. Missing files are part of the snapshot too: creating one later is a context
+/// change, not an invisible addition.
+struct CodexConfigSnapshot {
+    layers: Vec<CodexConfigLayer>,
+    valid: bool,
+}
+
+impl CodexConfigSnapshot {
+    fn read(home: &Path, cwd: &Path, managed_preferences: CodexManagedPreferences) -> Self {
+        let mut layers = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        #[cfg(windows)]
+        let program_data = codex_program_data();
+
+        #[cfg(unix)]
+        push_codex_config_layer(
+            &mut layers,
+            &mut seen,
+            PathBuf::from("/etc/codex/config.toml"),
+            true,
+        );
+        #[cfg(windows)]
+        push_codex_config_layer(
+            &mut layers,
+            &mut seen,
+            program_data
+                .join("OpenAI")
+                .join("Codex")
+                .join("config.toml"),
+            true,
+        );
+
+        push_codex_config_layer(&mut layers, &mut seen, home.join("config.toml"), true);
+
+        let ancestors: Vec<&Path> = cwd.ancestors().collect();
+        for ancestor in ancestors.into_iter().rev() {
+            push_codex_config_layer(
+                &mut layers,
+                &mut seen,
+                ancestor.join(".codex").join("config.toml"),
+                false,
+            );
+        }
+        // Legacy managed config and requirements outrank ordinary local layers. Include both the
+        // documented system locations and old CODEX_HOME-adjacent spellings seen in installations.
+        #[cfg(unix)]
+        push_codex_config_layer(
+            &mut layers,
+            &mut seen,
+            PathBuf::from("/etc/codex/managed_config.toml"),
+            true,
+        );
+        #[cfg(unix)]
+        push_codex_config_layer(
+            &mut layers,
+            &mut seen,
+            PathBuf::from("/etc/codex/requirements.toml"),
+            false,
+        );
+        #[cfg(windows)]
+        {
+            let root = program_data.join("OpenAI").join("Codex");
+            push_codex_config_layer(
+                &mut layers,
+                &mut seen,
+                root.join("managed_config.toml"),
+                false,
+            );
+            push_codex_config_layer(
+                &mut layers,
+                &mut seen,
+                root.join("requirements.toml"),
+                false,
+            );
+        }
+        // Keep old CODEX_HOME-adjacent spellings in the digest so creating/removing one invalidates
+        // a binding, but v0.154 does not load either as provider config.
+        for name in ["managed_config.toml", "requirements.toml"] {
+            push_codex_config_layer(&mut layers, &mut seen, home.join(name), false);
+        }
+        push_codex_managed_preference_layer(
+            &mut layers,
+            "config_toml_base64",
+            managed_preferences.config_toml_base64,
+            true,
+        );
+        push_codex_managed_preference_layer(
+            &mut layers,
+            "requirements_toml_base64",
+            managed_preferences.requirements_toml_base64,
+            false,
+        );
+
+        // Whether a project layer is enabled depends on the discovered project root. Bind every
+        // possible marker named by any local layer (plus Codex's `.git` default), so creating or
+        // removing a marker cannot silently activate different auth/state config between turns.
+        let mut markers = BTreeSet::from([".git".to_string(), ".git/HEAD".to_string()]);
+        for marker in layers
+            .iter()
+            .filter_map(|layer| layer.value.as_ref())
+            .filter_map(|value| value.get("project_root_markers"))
+            .filter_map(toml::Value::as_array)
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .filter(|marker| !marker.is_empty())
+        {
+            markers.insert(marker.to_string());
+        }
+        let mut seen_markers = BTreeSet::new();
+        for ancestor in cwd.ancestors() {
+            for marker in &markers {
+                push_codex_marker_state(&mut layers, &mut seen_markers, ancestor.join(marker));
+            }
+        }
+
+        let valid = layers.iter().all(|layer| layer.valid);
+        Self { layers, valid }
+    }
+
+    fn string(&self, key: &str) -> Option<&str> {
+        self.layers
+            .iter()
+            .rev()
+            .filter_map(|layer| layer.value.as_ref())
+            .find_map(|value| value.get(key).and_then(toml::Value::as_str))
+    }
+
+    fn hash_into(&self, digest: &mut Sha256) {
+        for layer in &self.layers {
+            hash_part(
+                digest,
+                "config_path",
+                layer.path.to_string_lossy().as_bytes(),
+            );
+            match &layer.bytes {
+                Some(bytes) => hash_part(digest, "config_bytes", bytes),
+                None => hash_part(digest, "config_bytes", b"<missing>"),
+            }
+        }
+    }
+
+    /// Any opaque auth store anywhere in the local layer stack makes account identity unverifiable.
+    /// This is intentionally stricter than reproducing precedence: a lower layer that Codex ignores
+    /// can cause a false refusal, while treating a keyring-selected account as file-backed can cross
+    /// an account boundary.
+    fn auth_store_is_file(&self) -> bool {
+        self.layers
+            .iter()
+            .filter_map(|layer| layer.value.as_ref())
+            .flat_map(|value| {
+                ["cli_auth_credentials_store", "auth_credentials_store"]
+                    .into_iter()
+                    .filter_map(move |key| value.get(key).and_then(toml::Value::as_str))
+            })
+            .all(|mode| mode == "file")
+    }
+
+    fn provider_auth(&self) -> CodexProviderAuth {
+        let mut providers = BTreeSet::new();
+        for value in self
+            .layers
+            .iter()
+            .filter(|layer| layer.can_select_provider)
+            .filter_map(|layer| layer.value.as_ref())
+        {
+            if let Some(provider) = value
+                .get("model_provider")
+                .and_then(toml::Value::as_str)
+                .filter(|provider| !provider.is_empty())
+            {
+                providers.insert(provider.to_string());
+            }
+            // Legacy profiles live inside config.toml. Considering every selected profile named
+            // by a layer is conservative when precedence is ambiguous: it may refuse a resume,
+            // but cannot mistake a dynamic credential source for a stable one.
+            if let Some(profile) = value
+                .get("profile")
+                .and_then(toml::Value::as_str)
+                .filter(|profile| !profile.is_empty())
+                && let Some(provider) = value
+                    .get("profiles")
+                    .and_then(|profiles| profiles.get(profile))
+                    .and_then(|profile| profile.get("model_provider"))
+                    .and_then(toml::Value::as_str)
+                    .filter(|provider| !provider.is_empty())
+            {
+                providers.insert(provider.to_string());
+            }
+        }
+        if providers.is_empty() {
+            providers.insert("openai".to_string());
+        }
+
+        let mut needs_openai = false;
+        for provider in providers {
+            match provider.as_str() {
+                "openai" => needs_openai = true,
+                "amazon-bedrock" | "amazon-bedrock-runtime" => {
+                    return CodexProviderAuth::Unverifiable;
+                }
+                "ollama" | "lmstudio" => {}
+                _ => {
+                    let definitions = self
+                        .layers
+                        .iter()
+                        .filter(|layer| layer.can_select_provider)
+                        .filter_map(|layer| layer.value.as_ref())
+                        .filter_map(|value| value.get("model_providers"))
+                        .filter_map(|providers| providers.get(&provider))
+                        .collect::<Vec<_>>();
+                    if definitions.is_empty() {
+                        return CodexProviderAuth::Unverifiable;
+                    }
+                    for definition in definitions {
+                        if ["auth", "aws", "gateway_oauth"]
+                            .into_iter()
+                            .any(|key| definition.get(key).is_some())
+                        {
+                            return CodexProviderAuth::Unverifiable;
+                        }
+                        needs_openai |= definition
+                            .get("requires_openai_auth")
+                            .and_then(toml::Value::as_bool)
+                            .unwrap_or(false);
+                    }
+                }
+            }
+        }
+        if needs_openai {
+            CodexProviderAuth::OpenAi
+        } else {
+            CodexProviderAuth::Bound
+        }
+    }
+}
+
+#[derive(Default)]
+struct CodexManagedPreferences {
+    config_toml_base64: Option<String>,
+    requirements_toml_base64: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+fn codex_managed_preferences() -> std::io::Result<CodexManagedPreferences> {
+    Ok(CodexManagedPreferences {
+        config_toml_base64: load_codex_managed_preference("config_toml_base64")?,
+        requirements_toml_base64: load_codex_managed_preference("requirements_toml_base64")?,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn codex_managed_preferences() -> std::io::Result<CodexManagedPreferences> {
+    Ok(CodexManagedPreferences::default())
+}
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // The CoreFoundation API used by Codex itself has no safe std wrapper.
+fn load_codex_managed_preference(key: &str) -> std::io::Result<Option<String>> {
+    use std::ffi::c_void;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> *mut c_void;
+    }
+
+    let value = unsafe {
+        CFPreferencesCopyAppValue(
+            CFString::new(key).as_concrete_TypeRef(),
+            CFString::new("com.openai.codex").as_concrete_TypeRef(),
+        )
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let value = unsafe { CFType::wrap_under_create_rule(value.cast()) };
+    let value = value.downcast_into::<CFString>().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("com.openai.codex managed preference {key} was not a string"),
+        )
+    })?;
+    Ok(Some(value.to_string()))
+}
+
+struct CodexConfigLayer {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+    value: Option<toml::Value>,
+    valid: bool,
+    /// Project `.codex/config.toml` is hashed and may configure ordinary settings, but Codex
+    /// explicitly deny-lists provider/profile routing from that layer.
+    can_select_provider: bool,
+}
+
+impl CodexConfigLayer {
+    fn read(path: PathBuf, can_select_provider: bool) -> Self {
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let value = std::str::from_utf8(&bytes)
+                    .ok()
+                    .and_then(|text| toml::from_str(text).ok());
+                Self {
+                    path,
+                    bytes: Some(bytes),
+                    valid: value.is_some(),
+                    value,
+                    can_select_provider,
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self {
+                path,
+                bytes: None,
+                value: None,
+                valid: true,
+                can_select_provider,
+            },
+            Err(_) => Self {
+                path,
+                bytes: None,
+                value: None,
+                valid: false,
+                can_select_provider,
+            },
+        }
+    }
+}
+
+fn push_codex_managed_preference_layer(
+    layers: &mut Vec<CodexConfigLayer>,
+    key: &str,
+    encoded: Option<String>,
+    can_select_provider: bool,
+) {
+    let Some(encoded) = encoded.filter(|value| !value.trim().is_empty()) else {
+        return;
+    };
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok();
+    let value = decoded
+        .as_deref()
+        .and_then(|bytes| std::str::from_utf8(bytes).ok())
+        .and_then(|text| toml::from_str(text).ok());
+    layers.push(CodexConfigLayer {
+        path: PathBuf::from(format!("<com.openai.codex:{key}>")),
+        bytes: Some(encoded.into_bytes()),
+        valid: value.is_some(),
+        value,
+        can_select_provider,
+    });
+}
+
+fn push_codex_marker_state(
+    layers: &mut Vec<CodexConfigLayer>,
+    seen: &mut BTreeSet<PathBuf>,
+    path: PathBuf,
+) {
+    if !seen.insert(path.clone()) {
+        return;
+    }
+    let (bytes, valid) = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_dir() => (b"directory".to_vec(), true),
+        Ok(metadata) if metadata.file_type().is_file() => (b"file".to_vec(), true),
+        Ok(metadata) if metadata.file_type().is_symlink() => (b"symlink".to_vec(), true),
+        Ok(_) => (b"other".to_vec(), true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (b"missing".to_vec(), true),
+        Err(_) => (b"unreadable".to_vec(), false),
+    };
+    layers.push(CodexConfigLayer {
+        path,
+        bytes: Some(bytes),
+        value: None,
+        valid,
+        can_select_provider: false,
+    });
+}
+
+fn push_codex_config_layer(
+    layers: &mut Vec<CodexConfigLayer>,
+    seen: &mut BTreeSet<PathBuf>,
+    path: PathBuf,
+    can_select_provider: bool,
+) {
+    if seen.insert(path.clone()) {
+        layers.push(CodexConfigLayer::read(path, can_select_provider));
+    }
+}
+
+/// Bind a resumable thread to the exact `codex` program this run's PATH resolves.
+///
+/// Loader and auth behavior are CLI-versioned. Hashing PATH text alone misses an in-place package
+/// upgrade, while hashing the canonical executable bytes catches both symlink target changes and
+/// replacements at a stable Homebrew path. The bounded version probe is separate and load-bearing:
+/// an npm `codex.js` launcher dispatches to a platform binary whose bytes can change while the
+/// launcher does not. If either identity cannot be obtained, the first turn may still run, but it
+/// is deliberately not advertised as safely resumable.
+fn hash_codex_executable(digest: &mut Sha256, spec: &RunSpec) -> Option<Vec<u8>> {
+    let Some(path) = resolve_codex_executable(spec) else {
+        return None;
+    };
+    let Ok(mut file) = File::open(&path) else {
+        return None;
+    };
+    let mut executable_digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let Ok(read) = file.read(&mut buffer) else {
+            return None;
+        };
+        if read == 0 {
+            break;
+        }
+        executable_digest.update(&buffer[..read]);
+    }
+    hash_part(digest, "codex_executable_path", &path_bytes(&path));
+    hash_part(
+        digest,
+        "codex_executable_sha256",
+        executable_digest.finalize().as_slice(),
+    );
+    let Some(version) = codex_version_output(&path, spec) else {
+        return None;
+    };
+    hash_part(digest, "codex_version", &version);
+    Some(version)
+}
+
+/// The refresh/cloud-policy ordering below is audited against the 0.154 CLI. A version digest
+/// protects an existing thread across upgrades, but a brand-new thread under a later CLI has no
+/// older digest to compare. Restrict only refreshable ChatGPT auth to the semantics we reproduced;
+/// API-key and statically bound custom-provider sessions remain version-agnostic.
+fn codex_v0154_oauth_semantics(version_output: &[u8]) -> bool {
+    let Ok(output) = std::str::from_utf8(version_output) else {
+        return false;
+    };
+    let mut words = output.split_ascii_whitespace();
+    if words.next() != Some("codex-cli") {
+        return false;
+    }
+    let Some(version) = words.next() else {
+        return false;
+    };
+    if words.next().is_some() {
+        return false;
+    }
+    let core = version.split(['-', '+']).next().unwrap_or_default();
+    let mut parts = core.split('.');
+    matches!(
+        (parts.next(), parts.next(), parts.next(), parts.next()),
+        (Some("0"), Some("154"), Some(patch), None) if patch.parse::<u64>().is_ok()
+    )
+}
+
+/// Ask the resolved launcher which implementation it will actually dispatch to.
+///
+/// The official npm launcher is JavaScript, and the native executable lives in a sibling package,
+/// so launcher bytes alone do not identify the running Codex. Keep the probe bounded in bytes and
+/// time: this runs on a request path and `codex` is user-controlled. A private process group lets a
+/// timeout stop a wrapper and its child together instead of orphaning the native binary.
+fn codex_version_output(path: &Path, spec: &RunSpec) -> Option<Vec<u8>> {
+    const MAX_VERSION_BYTES: u64 = 4 * 1024;
+    // A cold Node/npm launcher can be noticeably slower while the host is compiling or running a
+    // parallel test suite. This is still a hard bound on a user-controlled executable, but leaves
+    // enough headroom that load alone does not turn a valid Codex install into an opaque context.
+    const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
+    const VERSION_POLL: Duration = Duration::from_millis(10);
+
+    let output_path = std::env::temp_dir().join(format!(
+        "adi-codex-version-{}-{}.out",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    let output = File::create(&output_path).ok()?;
+    let mut environment = spec.env.clone();
+    quiet_codex_env(&mut environment);
+    let mut command = Command::new(path);
+    command
+        .arg("--version")
+        .current_dir(&spec.cwd)
+        .envs(environment.iter().map(|(key, value)| (key, value)))
+        .env("PATH", &spec.path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::null());
+    adi_osext::detach_process_group(&mut command);
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(_) => {
+            let _ = std::fs::remove_file(output_path);
+            return None;
+        }
+    };
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < VERSION_TIMEOUT => std::thread::sleep(VERSION_POLL),
+            Ok(None) | Err(_) => {
+                let _ = detached::signal_group(child.id(), "KILL");
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&output_path);
+                return None;
+            }
+        }
+    };
+    if !status.success() {
+        let _ = std::fs::remove_file(&output_path);
+        return None;
+    }
+
+    let mut bytes = Vec::new();
+    let read = File::open(&output_path)
+        .and_then(|file| file.take(MAX_VERSION_BYTES + 1).read_to_end(&mut bytes));
+    let _ = std::fs::remove_file(output_path);
+    if read.is_err() || bytes.is_empty() || bytes.len() as u64 > MAX_VERSION_BYTES {
+        return None;
+    }
+    Some(bytes)
+}
+
+fn resolve_codex_executable(spec: &RunSpec) -> Option<PathBuf> {
+    let mut directories = Vec::new();
+    #[cfg(windows)]
+    directories.push(spec.cwd.clone());
+    directories.extend(std::env::split_paths(&spec.path).map(|directory| {
+        if directory.as_os_str().is_empty() {
+            spec.cwd.clone()
+        } else if directory.is_absolute() {
+            directory
+        } else {
+            spec.cwd.join(directory)
+        }
+    }));
+
+    #[cfg(windows)]
+    let names = ["codex.exe", "codex"];
+    #[cfg(not(windows))]
+    let names = ["codex"];
+    for directory in directories {
+        for &name in &names {
+            let candidate = directory.join(name);
+            if codex_executable_file(&candidate)
+                && let Ok(canonical) = candidate.canonicalize()
+            {
+                return Some(canonical);
+            }
+        }
+    }
+    None
+}
+
+fn codex_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn path_bytes(path: &Path) -> Vec<u8> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        path.as_os_str().as_bytes().to_vec()
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        path.as_os_str()
+            .encode_wide()
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        path.to_string_lossy().as_bytes().to_vec()
+    }
+}
+
+fn hash_child_environment(digest: &mut Sha256, spec: &RunSpec) {
+    let mut env: BTreeMap<String, String> = std::env::vars_os()
+        .map(|(key, value)| {
+            (
+                normalized_env_key(&key.to_string_lossy()),
+                value.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+    let mut overlay = spec.env.clone();
+    quiet_codex_env(&mut overlay);
+    for (key, value) in overlay {
+        env.insert(normalized_env_key(&key), value);
+    }
+    env.insert(normalized_env_key("PATH"), spec.path.clone());
+    for (key, value) in env {
+        hash_part(digest, "env_key", key.as_bytes());
+        hash_part(digest, "env_value", value.as_bytes());
+    }
+}
+
+fn normalized_env_key(key: &str) -> String {
+    if cfg!(windows) {
+        key.to_ascii_uppercase()
+    } else {
+        key.to_string()
+    }
+}
+
+/// What the child will see for one environment key: the last explicit run value wins over the
+/// app server's inherited environment, exactly as `Command::envs` applies it at spawn time.
+fn effective_env(spec: &RunSpec, key: &str) -> Option<String> {
+    let key = normalized_env_key(key);
+    spec.env
+        .iter()
+        .rev()
+        .find(|(candidate, _)| normalized_env_key(candidate) == key)
+        .map(|(_, value)| value.clone())
+        .or_else(|| std::env::var_os(&key).map(|value| value.to_string_lossy().into_owned()))
+}
+
+fn codex_home(spec: &RunSpec) -> Option<PathBuf> {
+    if let Some(home) = effective_env(spec, "CODEX_HOME").filter(|value| !value.is_empty()) {
+        return Some(absolute_for_child(spec, &home));
+    }
+    #[cfg(windows)]
+    let home = windows_known_folder(&windows_sys::Win32::UI::Shell::FOLDERID_Profile)?;
+    #[cfg(unix)]
+    let home = effective_env(spec, "HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .or_else(unix_passwd_home)?;
+    #[cfg(all(not(windows), not(unix)))]
+    let home = adi_config::home();
+    Some(absolute_for_child(spec, &home).join(".codex"))
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)] // Same getpwuid_r fallback used by dirs-sys when HOME is absent or empty.
+fn unix_passwd_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsString};
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let requested = unsafe { libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX) };
+    let capacity = if requested < 0 {
+        512
+    } else {
+        usize::try_from(requested).ok()?.max(512)
+    };
+    let mut buffer = vec![0_u8; capacity];
+    let mut passwd = unsafe { std::mem::zeroed::<libc::passwd>() };
+    let mut result = std::ptr::null_mut();
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &mut passwd,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if status != 0 || result.is_null() || passwd.pw_dir.is_null() {
+        return None;
+    }
+    let bytes = unsafe { CStr::from_ptr(passwd.pw_dir) }.to_bytes();
+    (!bytes.is_empty()).then(|| PathBuf::from(OsString::from_vec(bytes.to_vec())))
+}
+
+/// Codex uses the Windows Known Folder API for machine config and falls back to the documented
+/// literal only when Windows cannot resolve it. In particular `%PROGRAMDATA%` is not consulted.
+#[cfg(windows)]
+fn codex_program_data() -> PathBuf {
+    codex_program_data_or_default(windows_known_folder(
+        &windows_sys::Win32::UI::Shell::FOLDERID_ProgramData,
+    ))
+}
+
+#[cfg(any(windows, test))]
+fn codex_program_data_or_default(known: Option<PathBuf>) -> PathBuf {
+    known
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)] // Mirrors Codex's SHGetKnownFolderPath lookup; the returned buffer is freed.
+fn windows_known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt as _;
+
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::SHGetKnownFolderPath;
+
+    let mut raw = std::ptr::null_mut();
+    let status = unsafe { SHGetKnownFolderPath(id, 0, std::ptr::null_mut(), &mut raw) };
+    if status < 0 || raw.is_null() {
+        if !raw.is_null() {
+            unsafe { CoTaskMemFree(raw.cast()) };
+        }
+        return None;
+    }
+
+    let mut len = 0usize;
+    while len < 32_768 && unsafe { *raw.add(len) } != 0 {
+        len += 1;
+    }
+    let path = (len < 32_768).then(|| {
+        let wide = unsafe { std::slice::from_raw_parts(raw, len) };
+        PathBuf::from(OsString::from_wide(wide))
+    });
+    unsafe { CoTaskMemFree(raw.cast()) };
+    path.filter(|path| !path.as_os_str().is_empty())
+}
+
+fn absolute_for_child(spec: &RunSpec, value: impl AsRef<Path>) -> PathBuf {
+    let path = value.as_ref();
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        spec.cwd.join(path)
+    }
+}
+
+#[derive(Default)]
+struct AuthFileFingerprint {
+    present: bool,
+    cloud_config_eligible: bool,
+}
+
+/// `CODEX_ACCESS_TOKEN` can be either an opaque personal-access token (`at-*`) whose plan is
+/// discovered remotely, or an Agent Identity JWT. Only a JWT with a known non-enterprise plan is
+/// safe to resume: enterprise plans can receive a remote configuration bundle between turns.
+fn direct_codex_access_token_is_resumable(token: &str) -> bool {
+    if token.starts_with("at-") {
+        return false;
+    }
+    jwt_claims(token)
+        .and_then(|claims| {
+            claims
+                .get("plan_type")
+                .and_then(Value::as_str)
+                .filter(|plan| !plan.is_empty())
+                .map(|plan| !cloud_config_eligible_plan(plan))
+        })
+        .unwrap_or(false)
+}
+
+fn hash_auth_file(
+    digest: &mut Sha256,
+    path: &Path,
+    audited_oauth_semantics: bool,
+) -> AuthFileFingerprint {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(_) => return AuthFileFingerprint::default(),
+    };
+    let Ok(auth) = serde_json::from_slice::<Value>(&bytes) else {
+        hash_part(digest, "auth_file_bytes", &bytes);
+        return AuthFileFingerprint {
+            present: true,
+            cloud_config_eligible: false,
+        };
+    };
+    if auth
+        .get("personal_access_token")
+        .and_then(Value::as_str)
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        // Codex intentionally persists PAT login without `auth_mode` and infers this field. Its
+        // plan and cloud-policy eligibility come from a remote whoami request, so local bytes are
+        // not enough to prove that provider policy stayed unchanged between turns.
+        return AuthFileFingerprint {
+            present: true,
+            cloud_config_eligible: true,
+        };
+    }
+    let mode = auth.get("auth_mode").and_then(Value::as_str);
+    let mode_for_hash = mode.unwrap_or("<inferred>");
+    hash_part(digest, "auth_mode", mode_for_hash.as_bytes());
+    let normalized_mode = mode_for_hash
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if matches!(
+        normalized_mode.as_str(),
+        "agentidentity" | "personalaccesstoken"
+    ) || (mode.is_none()
+        && auth
+            .get("agent_identity")
+            .is_some_and(|value| !value.is_null()))
+    {
+        // PAT plans are learned through whoami, and Agent Identity records may be refreshed or
+        // policy-routed remotely. Refuse both rather than claiming their file bytes prove that the
+        // next turn will receive the same provider/policy.
+        return AuthFileFingerprint {
+            present: true,
+            cloud_config_eligible: true,
+        };
+    }
+    let api_key = auth
+        .get("OPENAI_API_KEY")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty());
+    let tokens = auth.get("tokens").filter(|value| !value.is_null());
+    enum SelectedAuth {
+        ApiKey,
+        Chatgpt,
+        Unverifiable,
+    }
+    // Match Codex's resolved mode before looking at credential fields. An explicit ChatGPT mode
+    // wins over a stale API-key field left in the same file; absent mode is inferred only when the
+    // shape names exactly one locally verifiable credential.
+    let selected = match mode.map(|_| normalized_mode.as_str()) {
+        Some("apikey") => SelectedAuth::ApiKey,
+        Some("chatgpt" | "chatgptauthtokens") => SelectedAuth::Chatgpt,
+        Some(_) => SelectedAuth::Unverifiable,
+        None => match (api_key.is_some(), tokens.is_some()) {
+            (true, false) => SelectedAuth::ApiKey,
+            (false, true) => SelectedAuth::Chatgpt,
+            _ => SelectedAuth::Unverifiable,
+        },
+    };
+    match selected {
+        SelectedAuth::ApiKey => {
+            let Some(key) = api_key else {
+                return AuthFileFingerprint {
+                    present: true,
+                    cloud_config_eligible: true,
+                };
+            };
+            hash_part(digest, "auth_file_api_key", key.as_bytes());
+        }
+        SelectedAuth::Chatgpt => {
+            let Some(tokens) = tokens else {
+                return AuthFileFingerprint {
+                    present: true,
+                    cloud_config_eligible: true,
+                };
+            };
+            if !audited_oauth_semantics {
+                return AuthFileFingerprint {
+                    present: true,
+                    cloud_config_eligible: true,
+                };
+            }
+            // Codex can proactively refresh OAuth before it decides whether this account receives
+            // a remote cloud-policy bundle. A locally personal plan is therefore not enough when
+            // the access token is at its refresh boundary: the replacement can describe a newly
+            // managed workspace and alter provider/routing policy before `exec resume` starts.
+            //
+            // Bind the complete auth state as well as the stable identity. This deliberately makes
+            // any token rewrite start a new ADI conversation, closing the gap between this check
+            // and the child loading the same file.
+            hash_part(digest, "auth_file_bytes", &bytes);
+            let proactive_refresh_due = chatgpt_proactive_refresh_due(&auth, tokens);
+            let account = tokens
+                .get("account_id")
+                .and_then(Value::as_str)
+                .filter(|account| !account.is_empty());
+            let claims = tokens
+                .get("id_token")
+                .and_then(Value::as_str)
+                .filter(|token| !token.is_empty())
+                .and_then(chatgpt_id_claims);
+            if let (Some(account), Some(claims)) = (account, claims.as_ref()) {
+                hash_part(digest, "auth_account", account.as_bytes());
+                hash_part(digest, "auth_user", claims.user.as_bytes());
+            } else {
+                // Workspace/account ids are shared by multiple users. Without both halves of the
+                // stable identity, bind the exact file rather than risk a cross-user/workspace resume.
+                hash_part(digest, "auth_file_bytes", &bytes);
+            }
+            return AuthFileFingerprint {
+                present: true,
+                cloud_config_eligible: proactive_refresh_due != Some(false)
+                    || claims
+                        .as_ref()
+                        .and_then(|claims| claims.plan.as_deref())
+                        .map(cloud_config_eligible_plan)
+                        .unwrap_or(true),
+            };
+        }
+        SelectedAuth::Unverifiable => {
+            return AuthFileFingerprint {
+                present: true,
+                cloud_config_eligible: true,
+            };
+        }
+    }
+    AuthFileFingerprint {
+        present: true,
+        cloud_config_eligible: false,
+    }
+}
+
+const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_SECONDS: i128 = 5 * 60;
+const CHATGPT_TOKEN_REFRESH_INTERVAL_SECONDS: i128 = 8 * 24 * 60 * 60;
+
+/// Whether v0.154's `AuthManager::auth` will refresh this ChatGPT login before cloud policy is
+/// selected. `None` means the stored shape cannot be matched safely and therefore fails closed.
+///
+/// Codex prefers a parseable access-token `exp`. A malformed JWT or one without `exp` falls back
+/// to the top-level `last_refresh`; an absent timestamp means no proactive refresh. Keep that order
+/// exact, including `<=` at the five-minute expiry boundary and `<` at the eight-day fallback.
+fn chatgpt_proactive_refresh_due(auth: &Value, tokens: &Value) -> Option<bool> {
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?;
+    let now_nanos = i128::from(now.as_secs()) * 1_000_000_000 + i128::from(now.subsec_nanos());
+    chatgpt_proactive_refresh_due_at(auth, tokens, now_nanos)
+}
+
+fn chatgpt_proactive_refresh_due_at(
+    auth: &Value,
+    tokens: &Value,
+    now_unix_nanos: i128,
+) -> Option<bool> {
+    let access_token = tokens.get("access_token")?.as_str()?;
+    if let Ok(Some(expires_at)) = jwt_expiration(access_token) {
+        let refresh_boundary = now_unix_nanos
+            .saturating_add(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_SECONDS * 1_000_000_000);
+        return Some(i128::from(expires_at) * 1_000_000_000 <= refresh_boundary);
+    }
+
+    let Some(last_refresh) = auth.get("last_refresh") else {
+        return Some(false);
+    };
+    if last_refresh.is_null() {
+        return Some(false);
+    }
+    let last_refresh = last_refresh.as_str()?;
+    let last_refresh = OffsetDateTime::parse(last_refresh, &Rfc3339).ok()?;
+    let stale_boundary =
+        now_unix_nanos.saturating_sub(CHATGPT_TOKEN_REFRESH_INTERVAL_SECONDS * 1_000_000_000);
+    Some(last_refresh.unix_timestamp_nanos() < stale_boundary)
+}
+
+/// The expiration parser used by Codex v0.154: exactly three non-empty JWT components, unpadded
+/// URL-safe base64, JSON object, and an optional signed 64-bit `exp` timestamp.
+fn jwt_expiration(token: &str) -> std::result::Result<Option<i64>, ()> {
+    let mut parts = token.split('.');
+    let (_header, payload, _signature) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(header), Some(payload), Some(signature))
+            if !header.is_empty() && !payload.is_empty() && !signature.is_empty() =>
+        {
+            (header, payload, signature)
+        }
+        _ => return Err(()),
+    };
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| ())?;
+    let claims = serde_json::from_slice::<Value>(&decoded).map_err(|_| ())?;
+    match claims.get("exp") {
+        None | Some(Value::Null) => Ok(None),
+        Some(exp) => {
+            let exp = exp.as_i64().ok_or(())?;
+            // Chrono (used by Codex) accepts a wider range than `time`, so rejecting the latter's
+            // narrower outliers only creates a conservative fallback to `last_refresh`.
+            Ok(OffsetDateTime::from_unix_timestamp(exp).ok().map(|_| exp))
+        }
+    }
+}
+
+struct ChatgptIdClaims {
+    user: String,
+    plan: Option<String>,
+}
+
+fn chatgpt_id_claims(id_token: &str) -> Option<ChatgptIdClaims> {
+    let claims = jwt_claims(id_token)?;
+    let openai = claims.get("https://api.openai.com/auth");
+    let user = openai
+        .and_then(|auth| auth.get("chatgpt_user_id"))
+        .or_else(|| openai.and_then(|auth| auth.get("user_id")))
+        .or_else(|| claims.get("https://api.openai.com/auth.chatgpt_user_id"))
+        .or_else(|| claims.get("user_id"))
+        .or_else(|| claims.get("sub"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let plan = openai
+        .and_then(|auth| auth.get("chatgpt_plan_type"))
+        .or_else(|| claims.get("https://api.openai.com/auth.chatgpt_plan_type"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Some(ChatgptIdClaims { user, plan })
+}
+
+fn jwt_claims(token: &str) -> Option<Value> {
+    let payload = token.split('.').nth(1)?;
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(payload))
+        .ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+fn cloud_config_eligible_plan(plan: &str) -> bool {
+    matches!(
+        plan.to_ascii_lowercase().as_str(),
+        "business"
+            | "ent26"
+            | "enterprise_cbp_automation"
+            | "enterprise_cbp_usage_based"
+            | "enterprise"
+            | "hc"
+            | "education"
+            | "edu"
+            | "edu_plus"
+            | "edu_pro"
+    )
+}
+
+/// Length-prefix both the label and value. Environment values cannot contain NUL, but auth JSON
+/// can contain arbitrary bytes, and a fingerprint should not depend on delimiter assumptions.
+fn hash_part(digest: &mut Sha256, label: &str, value: &[u8]) {
+    digest.update((label.len() as u64).to_le_bytes());
+    digest.update(label.as_bytes());
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value);
 }
 
 /// How long after a run's log was last written a process may have started and still be believed to
@@ -644,7 +1995,7 @@ fn wait_for_exit(pid: u32, budget: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use adi_tools::ToolHelp;
     use serde_json::json;
@@ -741,12 +2092,56 @@ mod tests {
             *self.0.lock().unwrap() = Some(value);
             Ok(())
         }
+        fn compare_and_set_state(&self, expected: &Value, value: Value) -> Result<bool> {
+            let mut state = self.0.lock().unwrap();
+            if state.as_ref() != Some(expected) {
+                return Ok(false);
+            }
+            *state = Some(value);
+            Ok(true)
+        }
+    }
+
+    fn test_run_path() -> String {
+        static PATH: OnceLock<String> = OnceLock::new();
+        PATH.get_or_init(|| {
+            let directory =
+                std::env::temp_dir().join(format!("adi-agents-test-codex-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).expect("fake Codex directory");
+            #[cfg(windows)]
+            let executable = directory.join("codex.exe");
+            #[cfg(not(windows))]
+            let executable = directory.join("codex");
+            std::fs::write(&executable, b"#!/bin/sh\necho codex-cli 0.154.0\n")
+                .expect("fake Codex executable");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                let mut permissions = executable
+                    .metadata()
+                    .expect("fake Codex metadata")
+                    .permissions();
+                permissions.set_mode(0o755);
+                std::fs::set_permissions(&executable, permissions)
+                    .expect("make fake Codex executable");
+            }
+            let mut paths = vec![directory];
+            paths.extend(std::env::split_paths(
+                &std::env::var_os("PATH").unwrap_or_default(),
+            ));
+            std::env::join_paths(paths)
+                .expect("test PATH")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .clone()
     }
 
     fn spec(arguments: Value) -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: std::env::temp_dir(),
-            path: "/usr/bin".to_string(),
+            path: test_run_path(),
             env: Vec::new(),
             arguments,
             tools: Vec::new(),
@@ -791,8 +2186,20 @@ mod tests {
         session: &dyn Session,
         message: &str,
     ) -> Vec<String> {
-        DetachedRunner::new(backend)
-            .argv(spec, session, message, "sid-1")
+        let runner = DetachedRunner::new(backend);
+        let codex_identity =
+            matches!(runner.backend, Backend::ProcessCodex).then(|| CodexIdentity::of(spec));
+        let session_id = if matches!(runner.backend, Backend::ProcessCodex) {
+            runner.engine_session_id_with_identity(
+                &State::read(session),
+                session,
+                codex_identity.as_ref(),
+            )
+        } else {
+            "sid-1".to_string()
+        };
+        runner
+            .argv(spec, session, message, &session_id, codex_identity.as_ref())
             .expect("argv")
     }
 
@@ -858,22 +2265,1164 @@ mod tests {
         assert!(!again.iter().any(|arg| arg == "--session-id"));
     }
 
+    #[test]
+    fn a_codex_thread_is_opened_once_and_resumed_after() {
+        let mut spec = spec(json!({ "system_prompt": "Work carefully." }));
+        spec.env
+            .push(("CODEX_API_KEY".into(), "stable-test-login".into()));
+        let first = argv_of(
+            Backend::ProcessCodex,
+            &spec,
+            &FakeSession::new("codex-first"),
+            "go",
+        );
+        assert!(!first.iter().any(|arg| arg == "resume"), "{first:?}");
+        assert_eq!(
+            first.last().map(String::as_str),
+            Some("Work carefully.\n\ngo")
+        );
+
+        let auth_context = codex_auth_context(&spec).expect("explicit key context");
+        let again = argv_of(
+            Backend::ProcessCodex,
+            &spec,
+            &FakeSession::new("codex-again").started().with_state(json!({
+                "codex_thread_id": "sid-1",
+                "codex_credential": "runtime:process:codex",
+                "codex_auth_context": auth_context,
+            })),
+            "and now a test",
+        );
+        let resume = again
+            .iter()
+            .position(|arg| arg == "resume")
+            .expect("a later turn resumes");
+        assert_eq!(again.get(resume + 2).map(String::as_str), Some("sid-1"));
+        assert_eq!(again.last().map(String::as_str), Some("and now a test"));
+        assert!(
+            again.iter().all(|arg| !arg.contains("Work carefully.")),
+            "the opening prompt already lives in the thread: {again:?}"
+        );
+    }
+
+    fn write_codex_auth(home: &Path, account: &str, user: &str, access_token: &str) {
+        write_codex_auth_with_plan(home, account, user, "plus", access_token);
+    }
+
+    fn write_codex_auth_with_plan(
+        home: &Path,
+        account: &str,
+        user: &str,
+        plan: &str,
+        access_token: &str,
+    ) {
+        let claims = serde_json::to_vec(&json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_user_id": user,
+                "chatgpt_plan_type": plan,
+            },
+            "iat": access_token,
+        }))
+        .expect("token claims");
+        let id_token = format!(
+            "e30.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims)
+        );
+        std::fs::create_dir_all(home).expect("Codex home");
+        std::fs::write(
+            home.join("auth.json"),
+            serde_json::to_vec(&json!({
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "account_id": account,
+                    "id_token": id_token,
+                    "access_token": access_token,
+                    "refresh_token": format!("refresh-{access_token}"),
+                }
+            }))
+            .expect("auth json"),
+        )
+        .expect("write auth");
+    }
+
+    /// OAuth refreshes rewrite the credential state that Codex can consume before loading cloud
+    /// policy. Even for the same account that rewrite must change the conversation binding; an
+    /// account switch must continue to do so as well.
+    #[test]
+    fn codex_auth_context_tracks_oauth_token_rewrites_and_account_switches() {
+        let session = FakeSession::new("codex-auth-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        run.env.push((
+            "OPENAI_API_KEY".to_string(),
+            "unrelated-inherited-key".to_string(),
+        ));
+
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let first = codex_auth_context(&run).expect("file login is verifiable");
+        write_codex_auth(&home, "account-a", "user-a", "access-two");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "a token rewrite cannot inherit the pre-refresh cloud-policy decision",
+        );
+
+        write_codex_auth(&home, "account-a", "user-b", "access-three");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "another user in the same workspace may not inherit the first user's thread",
+        );
+        assert!(!first.contains("unrelated-inherited-key"));
+        assert!(!first.contains("account-a"));
+        assert!(!first.contains("access-one"));
+    }
+
+    fn jwt_with_claims(claims: Value) -> String {
+        let payload = serde_json::to_vec(&claims).expect("JWT claims");
+        format!(
+            "e30.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload)
+        )
+    }
+
+    #[test]
+    fn chatgpt_proactive_refresh_matches_v0154_boundaries_and_fallback() {
+        let now = OffsetDateTime::parse("2026-01-09T00:00:00Z", &Rfc3339)
+            .expect("fixed current time")
+            .unix_timestamp_nanos();
+        let auth = |last_refresh: Option<Value>| {
+            let mut auth = json!({});
+            if let Some(last_refresh) = last_refresh {
+                auth["last_refresh"] = last_refresh;
+            }
+            auth
+        };
+        let tokens = |access_token: String| json!({ "access_token": access_token });
+
+        let at_five_minutes = tokens(jwt_with_claims(json!({
+            "exp": now / 1_000_000_000 + 5 * 60,
+        })));
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(&auth(None), &at_five_minutes, now),
+            Some(true),
+            "Codex refreshes at the inclusive five-minute boundary",
+        );
+        let after_five_minutes = tokens(jwt_with_claims(json!({
+            "exp": now / 1_000_000_000 + 5 * 60 + 1,
+        })));
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(&auth(None), &after_five_minutes, now),
+            Some(false),
+        );
+
+        let no_exp = tokens(jwt_with_claims(json!({ "sub": "user-a" })));
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(
+                &auth(Some(json!("2026-01-01T00:00:00Z"))),
+                &no_exp,
+                now,
+            ),
+            Some(false),
+            "exactly eight days old is not stale because Codex uses `<`",
+        );
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(
+                &auth(Some(json!("2025-12-31T23:59:59.999999999Z"))),
+                &no_exp,
+                now,
+            ),
+            Some(true),
+        );
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(
+                &auth(Some(json!("2025-12-31T23:59:59Z"))),
+                &tokens("not-a-jwt".into()),
+                now,
+            ),
+            Some(true),
+            "a malformed access JWT falls back to last_refresh",
+        );
+        assert_eq!(
+            chatgpt_proactive_refresh_due_at(&auth(None), &no_exp, now),
+            Some(false),
+            "missing last_refresh does not trigger Codex's proactive path",
+        );
+    }
+
+    #[test]
+    fn codex_auth_context_refuses_oauth_when_startup_will_refresh() {
+        let session = FakeSession::new("codex-oauth-refresh-due");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        write_codex_auth_with_plan(
+            &home,
+            "account-a",
+            "user-a",
+            "plus",
+            &jwt_with_claims(json!({ "exp": 1 })),
+        );
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "a refresh can change plan and cloud policy before the child resumes",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_oauth_requires_the_audited_cli_line_but_api_keys_do_not() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        assert!(codex_v0154_oauth_semantics(b"codex-cli 0.154.0\n"));
+        assert!(codex_v0154_oauth_semantics(
+            b"codex-cli 0.154.7-preview.1\n"
+        ));
+        assert!(!codex_v0154_oauth_semantics(b"codex-cli 0.155.0\n"));
+
+        let session = FakeSession::new("codex-unaudited-oauth-version");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let executable = bin.join("codex");
+        std::fs::write(&executable, b"#!/bin/sh\necho codex-cli 0.155.0\n")
+            .expect("future Codex executable");
+        let mut permissions = executable.metadata().expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("executable permission");
+        let mut run = spec(json!({}));
+        run.path = bin.to_string_lossy().into_owned();
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        write_codex_auth(&home, "account-a", "user-a", "not-near-expiry");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "future OAuth refresh/cloud-policy ordering has not been audited",
+        );
+
+        std::fs::write(
+            home.join("auth.json"),
+            serde_json::to_vec(&json!({
+                "auth_mode": "apikey",
+                "OPENAI_API_KEY": "stable-key",
+            }))
+            .expect("API-key auth JSON"),
+        )
+        .expect("write API-key auth");
+        assert!(
+            codex_auth_context(&run).is_some(),
+            "static API-key identity does not depend on OAuth refresh semantics",
+        );
+    }
+
+    #[test]
+    fn explicit_chatgpt_mode_ignores_a_stale_api_key_field() {
+        let session = FakeSession::new("codex-chatgpt-mode-wins");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        let add_stale_key = || {
+            let path = home.join("auth.json");
+            let mut auth: Value = serde_json::from_slice(&std::fs::read(&path).expect("read auth"))
+                .expect("auth json");
+            auth["OPENAI_API_KEY"] = json!("same-stale-key");
+            std::fs::write(path, serde_json::to_vec(&auth).expect("auth json"))
+                .expect("write mixed auth");
+        };
+
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        add_stale_key();
+        let first = codex_auth_context(&run).expect("ChatGPT login is verifiable");
+        write_codex_auth(&home, "account-b", "user-b", "access-two");
+        add_stale_key();
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "explicit ChatGPT mode selects tokens even when a stale API-key field remains",
+        );
+    }
+
+    #[test]
+    fn direct_codex_access_tokens_require_a_known_non_enterprise_plan() {
+        let session = FakeSession::new("codex-direct-access-token");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        let token = |plan: &str| {
+            let claims =
+                serde_json::to_vec(&json!({ "plan_type": plan })).expect("agent identity claims");
+            format!(
+                "e30.{}.signature",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims)
+            )
+        };
+
+        run.env.push(("CODEX_ACCESS_TOKEN".into(), token("plus")));
+        assert!(
+            codex_auth_context(&run).is_some(),
+            "a locally inspectable personal-plan Agent Identity token is bound by its digest",
+        );
+
+        run.env.last_mut().expect("access token").1 = token("business");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "enterprise Agent Identity can receive remote config between turns",
+        );
+
+        run.env.last_mut().expect("access token").1 = "at-opaque-personal-token".into();
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "a PAT's plan is only known after a remote whoami request",
+        );
+    }
+
+    #[test]
+    fn opaque_codex_auth_file_modes_are_not_claimed_verifiable() {
+        let session = FakeSession::new("codex-opaque-auth-file");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        std::fs::write(
+            home.join("auth.json"),
+            serde_json::to_vec(&json!({
+                "personal_access_token": "at-opaque",
+            }))
+            .expect("PAT auth json"),
+        )
+        .expect("write PAT auth");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "Codex infers PAT mode from this field even when auth_mode is omitted",
+        );
+
+        std::fs::write(
+            home.join("auth.json"),
+            serde_json::to_vec(&json!({
+                "auth_mode": "agentIdentity",
+                "agent_identity": { "plan_type": "plus", "token": "stable" },
+            }))
+            .expect("Agent Identity auth json"),
+        )
+        .expect("write Agent Identity auth");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "Agent Identity file records may be refreshed or policy-routed remotely",
+        );
+    }
+
+    fn managed_preference(config: &str, requirements: &str) -> CodexManagedPreferences {
+        let encode = |value: &str| {
+            (!value.is_empty())
+                .then(|| base64::engine::general_purpose::STANDARD.encode(value.as_bytes()))
+        };
+        CodexManagedPreferences {
+            config_toml_base64: encode(config),
+            requirements_toml_base64: encode(requirements),
+        }
+    }
+
+    #[test]
+    fn codex_auth_context_tracks_macos_managed_preferences() {
+        let session = FakeSession::new("codex-managed-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+
+        let first = codex_auth_context_with_preferences(
+            &run,
+            managed_preference(
+                "cli_auth_credentials_store = 'file'\nmodel = 'first'\n",
+                "allowed_login_methods = ['chatgpt']\n",
+            ),
+        )
+        .expect("file login under readable managed policy is verifiable");
+        assert_ne!(
+            codex_auth_context_with_preferences(
+                &run,
+                managed_preference(
+                    "cli_auth_credentials_store = 'file'\nmodel = 'second'\n",
+                    "allowed_login_methods = ['chatgpt']\n",
+                ),
+            )
+            .as_deref(),
+            Some(first.as_str()),
+            "a managed config change must invalidate the prior binding",
+        );
+        assert_ne!(
+            codex_auth_context_with_preferences(
+                &run,
+                managed_preference(
+                    "cli_auth_credentials_store = 'file'\nmodel = 'first'\n",
+                    "allowed_login_methods = ['api']\n",
+                ),
+            )
+            .as_deref(),
+            Some(first.as_str()),
+            "a managed requirements change must invalidate the prior binding",
+        );
+        assert_eq!(
+            codex_auth_context_with_preferences(
+                &run,
+                managed_preference("cli_auth_credentials_store = 'keyring'\n", ""),
+            ),
+            None,
+            "an opaque MDM-selected keyring account cannot be verified",
+        );
+    }
+
+    #[test]
+    fn codex_auth_context_tracks_project_root_activation() {
+        let session = FakeSession::new("codex-project-root-context");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".codex")).expect("project config dir");
+        std::fs::write(
+            project.join(".codex/config.toml"),
+            "sqlite_home = 'project-state'\n",
+        )
+        .expect("project config");
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let mut run = spec(json!({}));
+        run.cwd = project.clone();
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        let before = codex_auth_context_with_preferences(&run, CodexManagedPreferences::default())
+            .expect("file login is verifiable");
+        std::fs::create_dir(project.join(".git")).expect("git marker");
+        let directory =
+            codex_auth_context_with_preferences(&run, CodexManagedPreferences::default())
+                .expect("file login is verifiable");
+        assert_ne!(directory, before, "creating a root marker changes context");
+
+        std::fs::write(project.join(".git/HEAD"), "ref: refs/heads/main\n").expect("git HEAD");
+        assert_ne!(
+            codex_auth_context_with_preferences(&run, CodexManagedPreferences::default())
+                .as_deref(),
+            Some(directory.as_str()),
+            "making a .git directory valid changes project discovery",
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_home_honors_windows_case_insensitive_run_environment() {
+        let session = FakeSession::new("codex-windows-env-case");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "Codex_Home".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        assert_eq!(codex_home(&run), Some(home));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn codex_default_home_ignores_conflicting_home_environment() {
+        let profile = windows_known_folder(&windows_sys::Win32::UI::Shell::FOLDERID_Profile)
+            .expect("Windows profile Known Folder");
+        let mut run = spec(json!({}));
+        run.env = vec![
+            ("HOME".into(), r"Z:\decoy-home".into()),
+            ("USERPROFILE".into(), r"Z:\other-decoy".into()),
+        ];
+
+        assert_eq!(codex_home(&run), Some(profile.join(".codex")));
+    }
+
+    #[test]
+    fn windows_program_data_uses_the_known_folder_or_literal_fallback() {
+        assert_eq!(
+            codex_program_data_or_default(Some(PathBuf::from(r"D:\CanonicalProgramData"))),
+            PathBuf::from(r"D:\CanonicalProgramData"),
+        );
+        assert_eq!(
+            codex_program_data_or_default(None),
+            PathBuf::from(r"C:\ProgramData"),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_default_home_ignores_empty_home_and_userprofile() {
+        let expected = unix_passwd_home().expect("passwd home").join(".codex");
+        let mut run = spec(json!({}));
+        run.env = vec![
+            ("HOME".into(), String::new()),
+            ("USERPROFILE".into(), "/tmp/windows-style-decoy".into()),
+        ];
+
+        assert_eq!(codex_home(&run), Some(expected));
+    }
+
+    #[test]
+    fn workload_identity_is_not_claimed_verifiable() {
+        let session = FakeSession::new("codex-workload-identity");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("CODEX_API_KEY".into(), "otherwise-verifiable".into()),
+            ("OPENAI_FEDERATION_RULE_ID".into(), "rule-1".into()),
+        ];
+        assert_eq!(codex_auth_context(&run), None);
+
+        run.env.pop();
+        run.env.push((
+            "OPENAI_IDENTITY_TOKEN_FILE".into(),
+            home.join("assertion.jwt").to_string_lossy().into_owned(),
+        ));
+        assert_eq!(codex_auth_context(&run), None);
+    }
+
+    #[test]
+    fn codex_auth_context_tracks_api_keys_homes_and_configured_sqlite_home() {
+        let session = FakeSession::new("codex-key-context");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("home-a");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        std::fs::write(home.join("config.toml"), "sqlite_home = 'state-a'\n")
+            .expect("Codex config");
+        let mut run = spec(json!({}));
+        run.cwd = root.to_path_buf();
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("CODEX_API_KEY".into(), "sk-alpha".into()),
+            ("CODEX_SQLITE_HOME".into(), "ignored-by-config".into()),
+        ];
+        let first = codex_auth_context(&run).expect("explicit key is verifiable");
+        assert!(
+            !first.contains("sk-alpha"),
+            "the binding stores only a digest"
+        );
+
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "CODEX_API_KEY")
+            .expect("key")
+            .1 = "sk-beta".into();
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(first.as_str()));
+
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "CODEX_API_KEY")
+            .expect("key")
+            .1 = "sk-alpha".into();
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "CODEX_SQLITE_HOME")
+            .expect("sqlite home")
+            .1 = "still-ignored".into();
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "the complete child environment is conservatively bound even when config currently takes precedence",
+        );
+
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "CODEX_SQLITE_HOME")
+            .expect("sqlite home")
+            .1 = "ignored-by-config".into();
+
+        std::fs::write(home.join("config.toml"), "sqlite_home = 'state-b'\n")
+            .expect("change Codex config");
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(first.as_str()));
+
+        let other_home = root.join("home-b");
+        std::fs::create_dir_all(&other_home).expect("other Codex home");
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "CODEX_HOME")
+            .expect("Codex home")
+            .1 = other_home.to_string_lossy().into_owned();
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(first.as_str()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_context_tracks_in_place_cli_replacements() {
+        let session = FakeSession::new("codex-executable-context");
+        let root = session.log.parent().expect("scratch");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let executable = bin.join("codex");
+        std::fs::write(&executable, b"#!/bin/sh\necho codex-build-one\n")
+            .expect("first executable");
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut permissions = executable.metadata().expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("executable permission");
+        let mut run = spec(json!({}));
+        run.path = bin.to_string_lossy().into_owned();
+        let home = root.join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("CODEX_API_KEY".into(), "stable-login".into()),
+        ];
+
+        let first = codex_auth_context(&run).expect("first executable is identifiable");
+        std::fs::write(&executable, b"#!/bin/sh\necho codex-build-two\n")
+            .expect("replace executable in place");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "a replacement at the same path cannot inherit the old CLI's thread binding",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_auth_context_tracks_the_binary_behind_a_stable_launcher() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let session = FakeSession::new("codex-dispatched-version-context");
+        let root = session.log.parent().expect("scratch");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let launcher = bin.join("codex");
+        let helper = bin.join("codex-native");
+        std::fs::write(
+            &launcher,
+            format!("#!/bin/sh\nexec '{}' \"$@\"\n", helper.display()),
+        )
+        .expect("stable launcher");
+        std::fs::write(&helper, b"#!/bin/sh\necho codex-cli 0.154.0\n").expect("first helper");
+        for executable in [&launcher, &helper] {
+            let mut permissions = executable.metadata().expect("metadata").permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(executable, permissions).expect("executable permission");
+        }
+        let mut run = spec(json!({}));
+        run.path = bin.to_string_lossy().into_owned();
+        let home = root.join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("CODEX_API_KEY".into(), "stable-login".into()),
+        ];
+
+        let first = codex_auth_context(&run).expect("first dispatched version");
+        std::fs::write(&helper, b"#!/bin/sh\necho codex-cli 0.155.0\n")
+            .expect("replace dispatched implementation");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "a stable npm-style launcher cannot hide a vendor binary upgrade",
+        );
+    }
+
+    #[test]
+    fn codex_auth_context_tracks_project_layers_and_unlisted_provider_environment() {
+        let session = FakeSession::new("codex-project-context");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        let project = root.join("project");
+        std::fs::create_dir_all(home.as_path()).expect("Codex home");
+        std::fs::create_dir_all(project.join(".codex")).expect("project config dir");
+        let mut run = spec(json!({}));
+        run.cwd = project.clone();
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("CODEX_API_KEY".into(), "stable-login".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "aws-alpha".into()),
+        ];
+        let first = codex_auth_context(&run).expect("direct key is verifiable");
+
+        std::fs::write(
+            project.join(".codex/config.toml"),
+            "sqlite_home = '/tmp/codex-project-state'\n",
+        )
+        .expect("project config");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "creating a project layer changes the bound context",
+        );
+
+        std::fs::remove_file(project.join(".codex/config.toml")).expect("remove project config");
+        run.env
+            .iter_mut()
+            .find(|(key, _)| key == "AWS_SECRET_ACCESS_KEY")
+            .expect("AWS credential")
+            .1 = "aws-beta".into();
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "provider variables need no hard-coded allowlist",
+        );
+        assert!(!first.contains("aws-alpha"));
+    }
+
+    #[test]
+    fn project_config_cannot_hide_the_active_openai_login() {
+        let session = FakeSession::new("codex-project-provider-denylist");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        let project = root.join("project");
+        std::fs::create_dir_all(project.join(".codex")).expect("project config dir");
+        std::fs::write(
+            project.join(".codex/config.toml"),
+            "model_provider = 'ollama'\n",
+        )
+        .expect("project config");
+        let mut run = spec(json!({}));
+        run.cwd = project;
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let first = codex_auth_context(&run).expect("default OpenAI login is verifiable");
+        write_codex_auth(&home, "account-b", "user-b", "access-two");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "Codex deny-lists model_provider in project config, so it cannot suppress auth binding",
+        );
+    }
+
+    #[test]
+    fn requirements_and_ignored_home_files_cannot_hide_the_openai_login() {
+        let session = FakeSession::new("codex-ignored-provider-layers");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        for name in ["managed_config.toml", "requirements.toml"] {
+            std::fs::write(home.join(name), "model_provider = 'ollama'\n")
+                .expect("ignored compatibility layer");
+        }
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let home_first =
+            codex_auth_context_with_preferences(&run, CodexManagedPreferences::default())
+                .expect("default OpenAI login is verifiable");
+        write_codex_auth(&home, "account-b", "user-b", "access-two");
+        assert_ne!(
+            codex_auth_context_with_preferences(&run, CodexManagedPreferences::default())
+                .as_deref(),
+            Some(home_first.as_str()),
+            "CODEX_HOME compatibility files are not active provider layers in Codex v0.154",
+        );
+
+        std::fs::remove_file(home.join("managed_config.toml")).expect("remove compatibility file");
+        std::fs::remove_file(home.join("requirements.toml")).expect("remove requirements file");
+        let requirements = managed_preference("", "model_provider = 'ollama'\n");
+        let managed_first = codex_auth_context_with_preferences(&run, requirements)
+            .expect("requirements do not replace provider config");
+        write_codex_auth(&home, "account-c", "user-c", "access-three");
+        assert_ne!(
+            codex_auth_context_with_preferences(
+                &run,
+                managed_preference("", "model_provider = 'ollama'\n"),
+            )
+            .as_deref(),
+            Some(managed_first.as_str()),
+            "managed requirements are policy input, not an active provider selector",
+        );
+    }
+
+    #[test]
+    fn legacy_profile_name_does_not_load_a_profile_v2_file() {
+        let session = FakeSession::new("codex-profile-v2-not-selected");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        std::fs::write(
+            home.join("config.toml"),
+            "profile = 'foo'\n[profiles.foo]\nmodel = 'gpt-5'\n",
+        )
+        .expect("legacy profile config");
+        std::fs::write(home.join("foo.config.toml"), "model_provider = 'ollama'\n")
+            .expect("unselected profile-v2 config");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let first = codex_auth_context(&run).expect("default OpenAI login is verifiable");
+        write_codex_auth(&home, "account-b", "user-b", "access-two");
+        assert_ne!(
+            codex_auth_context(&run).as_deref(),
+            Some(first.as_str()),
+            "top-level profile selects [profiles.foo], not foo.config.toml without CLI --profile",
+        );
+    }
+
+    #[test]
+    fn a_keyring_codex_login_is_not_claimed_verifiable() {
+        let session = FakeSession::new("codex-keyring-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        std::fs::write(
+            home.join("config.toml"),
+            "cli_auth_credentials_store = 'keyring'\n",
+        )
+        .expect("Codex config");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        assert_eq!(codex_auth_context(&run), None);
+
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let opaque = FakeSession::new("codex-keyring-resume")
+            .started()
+            .with_state(json!({
+                "codex_thread_id": "opaque-thread",
+                "codex_credential": "runtime:process:codex",
+                "codex_auth_context": CODEX_AUTH_UNVERIFIABLE,
+            }));
+        let identity = CodexIdentity::of(&run);
+        assert!(matches!(
+            runner.argv(&run, &opaque, "continue", "", Some(&identity)),
+            Err(Error::Launch(message)) if message.contains("cannot be verified")
+        ));
+
+        run.env
+            .push(("CODEX_API_KEY".into(), "explicit-key".into()));
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "a forced keyring login may ignore even a credential-looking environment variable",
+        );
+    }
+
+    #[test]
+    fn a_custom_codex_provider_binds_its_configured_credential_env() {
+        let session = FakeSession::new("codex-provider-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        std::fs::write(
+            home.join("config.toml"),
+            "model_provider = 'private'\n\
+             [model_providers.private]\n\
+             base_url = 'https://models.example.test/v1'\n\
+             env_key = 'MY_PROVIDER_KEY'\n",
+        )
+        .expect("Codex config");
+        let mut run = spec(json!({}));
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("MY_PROVIDER_KEY".into(), "provider-alpha".into()),
+        ];
+        let first = codex_auth_context(&run).expect("selected provider key is verifiable");
+        run.env[1].1 = "provider-beta".into();
+        assert_ne!(codex_auth_context(&run).as_deref(), Some(first.as_str()));
+        assert!(!first.contains("provider-alpha"));
+    }
+
+    #[test]
+    fn dynamic_non_openai_providers_cannot_borrow_a_stale_auth_file() {
+        let session = FakeSession::new("codex-dynamic-provider-context");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        std::fs::create_dir_all(&home).expect("Codex home");
+        write_codex_auth(&home, "account-a", "user-a", "access-one");
+        let mut run = spec(json!({}));
+        run.env = vec![
+            ("CODEX_HOME".into(), home.to_string_lossy().into_owned()),
+            ("AWS_PROFILE".into(), "account-a".into()),
+        ];
+
+        std::fs::write(
+            home.join("config.toml"),
+            "model_provider = 'amazon-bedrock'\n",
+        )
+        .expect("Bedrock config");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "AWS's file/SSO/default credential chain is not identified by OpenAI auth.json",
+        );
+        run.env[1].1 = "account-b".into();
+        assert_eq!(codex_auth_context(&run), None);
+
+        std::fs::write(
+            home.join("config.toml"),
+            "model_provider = 'private'\n\
+             [model_providers.private]\n\
+             base_url = 'https://models.example.test/v1'\n\
+             [model_providers.private.auth]\n\
+             command = 'credential-helper'\n",
+        )
+        .expect("command-auth config");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "dynamic command output cannot be fingerprinted before Codex invokes it",
+        );
+    }
+
+    #[test]
+    fn cloud_managed_chatgpt_plans_are_not_claimed_verifiable() {
+        let session = FakeSession::new("codex-cloud-policy-context");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+
+        write_codex_auth_with_plan(&home, "workspace-a", "user-a", "business", "access-one");
+        assert_eq!(
+            codex_auth_context(&run),
+            None,
+            "remote enterprise config can change between turns without a local-file signal",
+        );
+
+        write_codex_auth(&home, "workspace-a", "user-a", "access-two");
+        assert!(
+            codex_auth_context(&run).is_some(),
+            "personal plans do not load the enterprise cloud-config bundle",
+        );
+    }
+
+    #[test]
+    fn a_codex_thread_refuses_the_same_credential_after_auth_context_drift() {
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let mut first = spec(json!({}));
+        first.credential = Some("openai-a".into());
+        first.env.push(("CODEX_API_KEY".into(), "sk-first".into()));
+        let first_identity = CodexIdentity::of(&first);
+        let stored_context = first_identity.auth_context.expect("explicit key context");
+        let state = State {
+            codex_thread_id: Some("thread-a".into()),
+            codex_credential: Some("openai-a".into()),
+            codex_auth_context: Some(stored_context),
+            ..State::default()
+        };
+        let serialized = serde_json::to_string(&state).expect("state json");
+        assert!(
+            !serialized.contains("sk-first"),
+            "no credential is persisted"
+        );
+        let session = FakeSession::new("codex-auth-drift")
+            .started()
+            .with_state(state.into_value());
+
+        let mut changed = first.clone();
+        changed.env[0].1 = "sk-second".into();
+        assert!(
+            runner
+                .engine_session_id(&State::read(&session), &session, &changed)
+                .is_empty(),
+            "the old thread id is not handed to the changed login",
+        );
+        let changed_identity = CodexIdentity::of(&changed);
+        assert!(matches!(
+            runner.argv(
+                &changed,
+                &session,
+                "continue",
+                "",
+                Some(&changed_identity),
+            ),
+            Err(Error::Launch(message)) if message.contains("changed or cannot be verified")
+        ));
+    }
+
+    #[test]
+    fn a_pinned_legacy_codex_thread_without_auth_context_fails_closed() {
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let mut run = spec(json!({}));
+        run.credential = Some("openai-a".into());
+        run.env.push(("CODEX_API_KEY".into(), "sk-current".into()));
+        let session = FakeSession::new("codex-auth-unbound")
+            .started()
+            .with_state(json!({
+                "codex_thread_id": "thread-a",
+                "codex_credential": "openai-a",
+            }));
+        let identity = CodexIdentity::of(&run);
+        assert!(matches!(
+            runner.argv(&run, &session, "continue", "", Some(&identity)),
+            Err(Error::Launch(message)) if message.contains("not bound to a login/session context")
+        ));
+    }
+
+    #[test]
+    fn a_started_codex_conversation_without_a_thread_id_is_not_silently_reopened() {
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let session = FakeSession::new("codex-missing")
+            .started()
+            .with_state(json!({ "codex_credential": "runtime:process:codex" }));
+        let run = spec(json!({}));
+        let identity = CodexIdentity::of(&run);
+        assert!(matches!(
+            runner.argv(&run, &session, "again", "", Some(&identity)),
+            Err(Error::Launch(message)) if message.contains("thread id is missing")
+        ));
+    }
+
+    #[test]
+    fn codex_opens_fresh_when_a_conversation_first_reaches_it_by_failover() {
+        let mut run = spec(json!({ "system_prompt": "Codex opening" }));
+        run.credential = Some("openai-a".to_string());
+        let session = FakeSession::new("claude-to-codex")
+            .started()
+            .with_state(json!({ "session_id": "claude-thread" }));
+
+        let argv = argv_of(Backend::ProcessCodex, &run, &session, "try here");
+        assert!(!argv.iter().any(|arg| arg == "resume"), "{argv:?}");
+        assert_eq!(
+            argv.last().map(String::as_str),
+            Some("Codex opening\n\ntry here")
+        );
+    }
+
+    #[test]
+    fn a_codex_thread_is_never_reused_on_another_credential() {
+        let mut run = spec(json!({}));
+        run.credential = Some("openai-b".to_string());
+        let session = FakeSession::new("codex-credential-switch")
+            .started()
+            .with_state(json!({
+                "codex_thread_id": "belongs-to-a",
+                "codex_credential": "openai-a",
+            }));
+
+        assert!(
+            DetachedRunner::new(Backend::ProcessCodex)
+                .engine_session_id(&State::read(&session), &session, &run)
+                .is_empty(),
+            "the old login's id is not offered to the new login"
+        );
+        let argv = argv_of(Backend::ProcessCodex, &run, &session, "try b");
+        assert!(!argv.iter().any(|arg| arg == "resume"), "{argv:?}");
+    }
+
     /// An id already in the state slot is the thread to continue; a session that has never run
     /// mints one. Either way the caller said nothing about it.
     #[test]
-    fn the_engine_session_id_comes_from_the_state_slot() {
-        let runner = DetachedRunner::new(Backend::HarnessClaudeSdk);
-        let known = FakeSession::new("known")
-            .started()
-            .with_state(json!({ "pid": 1, "session_id": "kept" }));
-        assert_eq!(runner.engine_session_id(&State::read(&known)), "kept");
+    fn each_engine_session_id_comes_from_its_own_state_slot() {
+        let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
+        let mut run = spec(json!({}));
+        run.env
+            .push(("CODEX_API_KEY".into(), "stable-test-login".into()));
+        let codex_context = codex_auth_context(&run).expect("explicit key context");
+        let known = FakeSession::new("known").started().with_state(json!({
+            "pid": 1,
+            "session_id": "claude-kept",
+            "codex_thread_id": "codex-kept",
+            "codex_credential": "runtime:process:codex",
+            "codex_auth_context": codex_context,
+        }));
+        assert_eq!(
+            claude.engine_session_id(&State::read(&known), &known, &run),
+            "claude-kept"
+        );
+        assert_eq!(
+            DetachedRunner::new(Backend::ProcessCodex).engine_session_id(
+                &State::read(&known),
+                &known,
+                &run,
+            ),
+            "codex-kept"
+        );
 
         let fresh = FakeSession::new("fresh");
-        let minted = runner.engine_session_id(&State::read(&fresh));
+        let minted = claude.engine_session_id(&State::read(&fresh), &fresh, &run);
         assert_eq!(minted.len(), 36, "a v4 uuid: {minted}");
+        assert!(
+            DetachedRunner::new(Backend::ProcessCodex)
+                .engine_session_id(&State::read(&fresh), &fresh, &run)
+                .is_empty(),
+            "Codex generates its own id"
+        );
+
+        let legacy = FakeSession::new("legacy-codex").started();
+        legacy.write_log(
+            r#"{"type":"thread.started","thread_id":"recovered-from-log"}
+{"type":"turn.completed"}
+"#,
+        );
+        assert!(
+            DetachedRunner::new(Backend::ProcessCodex)
+                .engine_session_id(&State::read(&legacy), &legacy, &run)
+                .is_empty(),
+            "a pre-upgrade id cannot prove which ambient account created it",
+        );
+        assert!(matches!(
+            DetachedRunner::new(Backend::ProcessCodex).argv(
+                &run,
+                &legacy,
+                "continue",
+                "",
+                Some(&CodexIdentity::of(&run)),
+            ),
+            Err(Error::Launch(message)) if message.contains("credential and login/session context")
+        ));
+
+        let mut pinned = run.clone();
+        pinned.credential = Some("openai-a".to_string());
+        assert!(
+            DetachedRunner::new(Backend::ProcessCodex)
+                .engine_session_id(&State::read(&legacy), &legacy, &pinned)
+                .is_empty(),
+            "an unbound legacy id is never handed to a pinned credential"
+        );
+        assert!(matches!(
+            DetachedRunner::new(Backend::ProcessCodex).argv(
+                &pinned,
+                &legacy,
+                "continue",
+                "",
+                Some(&CodexIdentity::of(&pinned)),
+            ),
+            Err(Error::Launch(message)) if message.contains("credential and login/session context")
+        ));
 
         let adi = DetachedRunner::new(Backend::HarnessAdi);
-        assert!(adi.engine_session_id(&State::read(&fresh)).is_empty());
+        assert!(
+            adi.engine_session_id(&State::read(&fresh), &fresh, &run)
+                .is_empty()
+        );
     }
 
     /// A `working_dir` decides where the child is *spawned* — [`RunSpec::cwd`], resolved once by the
@@ -1094,7 +3643,7 @@ mod tests {
         spec.tools = vec![tool("adi-db")];
         spec.system_prompt = Some("You are an operator.".to_string());
 
-        let argv = runner.argv(&spec, &session, "hi", "").expect("argv");
+        let argv = runner.argv(&spec, &session, "hi", "", None).expect("argv");
         assert_eq!(
             std::path::Path::new(&argv[0])
                 .file_name()
@@ -1544,6 +4093,7 @@ mod tests {
                 pid: 4321,
                 started: Some(111),
             },
+            Some("codex-thread".to_string()),
         );
 
         let state = State::read(&session);
@@ -1553,6 +4103,11 @@ mod tests {
             state.session_id.as_deref(),
             Some("engine-thread"),
             "the conversation outlives the process that was answering it",
+        );
+        assert_eq!(
+            state.codex_thread_id.as_deref(),
+            Some("codex-thread"),
+            "Codex's generated id is captured before the child is forgotten",
         );
     }
 
@@ -1576,11 +4131,16 @@ mod tests {
                 pid: 4321,
                 started: Some(111),
             },
+            Some("stale-thread".to_string()),
         );
 
         let state = State::read(&session);
         assert_eq!(state.pid, Some(999), "the turn in flight is left alone");
         assert_eq!(state.started, Some(222));
+        assert_eq!(
+            state.codex_thread_id, None,
+            "an old reaper cannot replace the live turn's thread"
+        );
 
         // A pid that matches but an incarnation that does not is still somebody else's ending.
         forget_child(
@@ -1589,8 +4149,74 @@ mod tests {
                 pid: 999,
                 started: Some(111),
             },
+            None,
         );
         assert_eq!(State::read(&session).pid, Some(999));
+    }
+
+    /// The newer turn can also start *after* the old reaper read its state but before that reaper
+    /// writes. This is the race a read/check/write guard cannot close: the store must compare and
+    /// replace atomically.
+    #[test]
+    fn an_ending_cannot_clear_a_turn_started_between_its_read_and_write() {
+        struct ReplacedAfterRead {
+            state: Arc<Mutex<Option<Value>>>,
+            replacement: Value,
+        }
+
+        impl StateWriter for ReplacedAfterRead {
+            fn state(&self) -> Option<Value> {
+                let mut state = self.state.lock().unwrap();
+                let observed = state.clone();
+                *state = Some(self.replacement.clone());
+                observed
+            }
+
+            fn set_state(&self, value: Value) -> Result<()> {
+                *self.state.lock().unwrap() = Some(value);
+                Ok(())
+            }
+
+            fn compare_and_set_state(&self, expected: &Value, value: Value) -> Result<bool> {
+                let mut state = self.state.lock().unwrap();
+                if state.as_ref() != Some(expected) {
+                    return Ok(false);
+                }
+                *state = Some(value);
+                Ok(true)
+            }
+        }
+
+        let old = json!({
+            "pid": 4321,
+            "started": 111,
+            "session_id": "engine-thread",
+        });
+        let newer = json!({
+            "pid": 999,
+            "started": 222,
+            "session_id": "engine-thread",
+        });
+        let shared = Arc::new(Mutex::new(Some(old)));
+        let writer = ReplacedAfterRead {
+            state: Arc::clone(&shared),
+            replacement: newer.clone(),
+        };
+
+        forget_child(
+            &writer,
+            Spawned {
+                pid: 4321,
+                started: Some(111),
+            },
+            Some("stale-thread".to_string()),
+        );
+
+        assert_eq!(
+            *shared.lock().unwrap(),
+            Some(newer),
+            "the old reaper's compare-and-set loses to the newer turn"
+        );
     }
 
     /// Put a real child of `script` behind `session`, as `send` would — the engines' own argv would

@@ -407,4 +407,3 @@ fn scope_label(console: DbConsole) -> String {
         project
     }
 }
-

@@ -18,7 +18,8 @@ This is the single biggest source of confusion in this code path:
 | UI rail | **session** | `SessionRow` |
 
 `run_id` and session id are the same string. A *conversation* is a session whose backend is
-answerable (a harness engine); a one-shot `process:*` run is the same record with no reply box.
+answerable (a harness engine or `process:codex`); a one-shot `process:claude` run is the same record
+with no reply box.
 A pty agent has **no session record at all** — its live pane is the whole of it, and it is
 synthesized as a row only in the client.
 
@@ -302,11 +303,13 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 | `POST /api/agents/run/stop` | `stop_run` :400 | stops, replies with fresh history |
 | `POST /api/agents/run/reply` | `reply_run` :340 | sends/queues a message, replies with a snapshot |
 
-Every one of those goes through `runs_response` (`agents.rs:468`), which is where the per-backend
-capability profile is attached (`agent_caps` → `adi_agents::capabilities`) and where each run's
-`message` is cut to a 300-character title (`title_of`). The whole message is never lost — it is the
-conversation's first turn — and sending all of it made this answer 1.4 MB to fill a rail that shows
-72 characters of each.
+Every one of those goes through `runs_response` (`agents.rs:468`). The envelope gets the current
+agent backend's capability profile (`agent_caps` → `adi_agents::capabilities`), while every history
+row gets the concrete runner capability stored with that run. This matters after an agent is
+repointed: an older Codex conversation remains answerable even if the next run will use a one-shot
+backend. This is also where each run's `message` is cut to a 300-character title (`title_of`). The
+whole message is never lost — it is the conversation's first turn — and sending all of it made this
+answer 1.4 MB to fill a rail that shows 72 characters of each.
 `interactive` and `answerable` on the wire are what decide **chat vs. log** in the client.
 
 DTOs live in `crates/adi-webapp-api/src/types.rs:1049` (`AgentRunInfo`), `:1073` (`AgentRuns`),

@@ -195,6 +195,7 @@ mod tests {
 
     fn spec() -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: std::path::PathBuf::from("/tmp"),
             path: String::new(),
             env: Vec::new(),

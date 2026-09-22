@@ -619,6 +619,33 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Replace the runner's scratch space only while it still equals `expected`.
+    ///
+    /// The comparison belongs in the same SQL statement as the write. A read/check/write sequence
+    /// lets an older child reaper erase the pid a newer turn recorded between its check and write.
+    ///
+    /// # Errors
+    /// Returns database errors. A missing session is reported as a failed comparison, just like a
+    /// session whose state changed concurrently: in either case there is no longer anything for
+    /// this conditional writer to update.
+    pub(crate) fn compare_and_set_runner_state(
+        &self,
+        agent: &str,
+        id: &str,
+        expected: &serde_json::Value,
+        value: serde_json::Value,
+    ) -> Result<bool> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET runner_state = ?3
+                 WHERE agent = ?1 AND id = ?2 AND runner_state = ?4",
+                rusqlite::params![agent, id, value.to_string(), expected.to_string()],
+            )
+            .map_err(|e| db::sql_err("conditionally write runner state to", e))?;
+        Ok(changed > 0)
+    }
+
     /// Delete a session outright: its row, its messages, and every file it owns.
     ///
     /// Returns whether there was a session there to delete, so a double-click on Delete is

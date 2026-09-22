@@ -35,6 +35,27 @@ use serde_json::Value;
 
 use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics, text_of};
 
+/// The durable thread id Codex announces at the start of every JSON run.
+///
+/// Kept separate from [`parse`] because it is runner state, not content to render. The detached
+/// runner reads it after the first child exits and supplies it to `codex exec resume` on the next
+/// turn. Non-event lines are ignored for the same reason they are in [`parse`]: stderr shares this
+/// log and may contain arbitrary startup text.
+pub(crate) fn thread_id(log: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(log).lines().find_map(|line| {
+        let event = serde_json::from_str::<Value>(line.trim()).ok()?;
+        if event.get("type").and_then(Value::as_str) != Some("thread.started") {
+            return None;
+        }
+        event
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(ToString::to_string)
+    })
+}
+
 pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let log_text = String::from_utf8_lossy(log);
     let mut steps: Vec<Step> = Vec::new();
@@ -433,6 +454,10 @@ mod tests {
 
     #[test]
     fn parses_messages_a_patch_and_usage_into_steps_text_and_metrics() {
+        assert_eq!(
+            thread_id(PATCH_TURN.as_bytes()).as_deref(),
+            Some("01a08d8f")
+        );
         let content = parse(PATCH_TURN.as_bytes());
         assert_eq!(content.text, "DONE");
         assert_eq!(
@@ -456,6 +481,19 @@ mod tests {
         // Named, so the run reads as `done` rather than `unknown` — and so `fail_over` leaves a
         // clean answer alone instead of matching it against the backend's limit rules.
         assert_eq!(metrics.terminal_reason.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn thread_id_ignores_chrome_and_unrelated_json() {
+        let log = concat!(
+            "OpenAI Codex\n",
+            r#"{"level":"info","message":"starting"}"#,
+            "\n",
+            r#"{"type":"thread.started","thread_id":" thread-7 "}"#,
+            "\n",
+        );
+        assert_eq!(thread_id(log.as_bytes()).as_deref(), Some("thread-7"));
+        assert_eq!(thread_id(b"nothing useful\n"), None);
     }
 
     /// The whole point of the parser: Codex's stderr shares the log file with its stdout, so the

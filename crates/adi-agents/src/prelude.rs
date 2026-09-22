@@ -288,6 +288,7 @@ mod tests {
 
     fn spec_in(cwd: &Path) -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: cwd.to_path_buf(),
             path: std::env::var("PATH").unwrap_or_default(),
             env: vec![("ADI_PRELUDE_TEST".to_string(), "carried".to_string())],

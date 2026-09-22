@@ -49,6 +49,16 @@ regex = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A Codex thread is local to its CLI state directory and login. Persist only a digest of that
+# context beside the thread id, never an API key/token itself, so a later turn cannot accidentally
+# resume one account's conversation under another.
+sha2 = { workspace = true }
+# Read Codex's layered config so provider auth, state paths, and managed policy are bound to the
+# thread. Raw config and secrets never leave the process; only the resulting digest is persisted.
+toml = { workspace = true }
+# Match Codex's RFC 3339 `last_refresh` parsing when deciding whether its OAuth manager will
+# refresh before cloud-policy selection. Parsing only; wall-clock arithmetic stays in `std`.
+time = { version = "0.3", default-features = false, features = ["parsing"] }
 # A harness conversation mints a fresh session id (v4 UUID) for the Claude CLI to establish on the
 # first turn and resume on every reply.
 uuid = { workspace = true }
@@ -67,10 +77,24 @@ tiktoken-rs = { workspace = true }
 # `adi-core::VERSION` re-exports for the CLI's own `--version`.
 adi-update = { workspace = true }
 
-[dev-dependencies]
-# The registry is TOML on disk (adi-config writes it), so the manifest tests assert against the
-# real encoding rather than trusting that field order and omit-when-default survive unasked.
-toml = { workspace = true }
+[target.'cfg(target_os = "macos")'.dependencies]
+# Codex reads MDM-delivered config through CFPreferences. Thread reuse fingerprints those same
+# values so an administrator changing auth/provider policy cannot cross-resume an old thread.
+core-foundation = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# Match `dirs::home_dir()` under the exact environment handed to Codex, including passwd fallback
+# when an agent explicitly empties HOME.
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+# Codex resolves the Windows profile and ProgramData roots through Known Folders, not inherited
+# HOME/USERPROFILE/PROGRAMDATA variables. Use the same API when binding a thread to its CLI state.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+] }
 
 [lints]
 workspace = true

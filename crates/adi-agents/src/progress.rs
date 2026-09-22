@@ -168,19 +168,27 @@ pub struct BackendCapabilities {
 /// A backend nothing here runs keeps the all-false descriptor.
 #[must_use]
 pub fn capabilities(backend: &Backend) -> BackendCapabilities {
-    let base = BackendCapabilities {
-        interactive: false,
-        history: false,
-        answerable: false,
-        live_text: false,
-        tool_steps: false,
-        thinking: false,
-        metrics: false,
-        images: false,
-    };
     let Some(runner) = crate::runner::runner_for(backend) else {
-        return base;
+        return BackendCapabilities {
+            interactive: false,
+            history: false,
+            answerable: false,
+            live_text: false,
+            tool_steps: false,
+            thinking: false,
+            metrics: false,
+            images: false,
+        };
     };
+    runner_capabilities(runner.as_ref())
+}
+
+/// Capabilities of the concrete runner stored on a session.
+///
+/// Usually that runner is the backend's default. Simulated conversations deliberately record the
+/// human runner instead, so historical-run readers must ask this concrete runner rather than infer
+/// behavior from the backend whose seat it occupies.
+pub(crate) fn runner_capabilities(runner: &dyn crate::runner::Runner) -> BackendCapabilities {
     let interactive = runner.as_terminal().is_some();
     let kinds = runner.emits();
     BackendCapabilities {
@@ -216,8 +224,7 @@ mod tests {
     use super::*;
 
     /// The matrix, spelled out. [`capabilities`] is now *derived* from each backend's runner, and
-    /// this is the check that deriving it did not quietly change what a reader renders: every flag
-    /// below is the value the hand-maintained table returned before the runners existed.
+    /// this is the check that each runner advertises exactly what a reader can render.
     ///
     /// Read as (interactive, history, answerable, live_text, tool_steps, thinking, metrics, images).
     ///
@@ -242,7 +249,7 @@ mod tests {
             ),
             (
                 "process:codex",
-                [false, true, false, true, true, false, true, true],
+                [false, true, true, true, true, false, true, true],
             ),
             (
                 "harness:claude-sdk",

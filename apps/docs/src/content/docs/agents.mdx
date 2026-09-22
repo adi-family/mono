@@ -24,7 +24,8 @@ logs.
 | Backend | What it is |
 | --- | --- |
 | `pty:claude` / `pty:codex` | The CLI in a live terminal session, on your own subscription login |
-| `process:claude` / `process:codex` | The same CLI headless, one `--print` turn |
+| `process:claude` | The Claude CLI headless, one `--print` turn |
+| `process:codex` | The Codex CLI headless, with later replies resuming the same thread |
 | `harness:claude-sdk` | `claude --print` under ADI's own harness — a turn cap, scoped tools |
 | `harness:adi` | ADI's own agent loop, multi-provider — needs a provider API key |
 

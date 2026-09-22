@@ -1552,9 +1552,14 @@ pub(crate) struct AgentsWatch {
     pub(crate) run_id: RwSignal<Option<String>>,
     /// For a headless agent, its run history (newest first), refreshed by the poll.
     pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
-    /// Whether the watched agent's runs are answerable conversations (harness backends): the run
-    /// detail shows a chat transcript + reply box rather than a plain log. Set by the poll.
+    /// Whether the watched agent's runs are answerable conversations: the run detail shows a chat
+    /// transcript + reply box rather than a plain log. This describes the agent's current backend
+    /// and therefore the next run; a selected historical run has its own value below.
     pub(crate) answerable: RwSignal<bool>,
+    /// The selected historical run's answerability. Kept separate from [`Self::answerable`] because
+    /// an agent may have been repointed since this conversation opened. `None` before a row or its
+    /// first snapshot supplies the per-run capability (and for responses from an older server).
+    pub(crate) selected_answerable: RwSignal<Option<bool>>,
     /// The last snapshot received, or `None` before the first one lands.
     pub(crate) peek: RwSignal<Option<AgentPeek>>,
     /// The selected run's log tail, kept apart from `peek` so the inline viewer binds to a plain
@@ -1563,8 +1568,8 @@ pub(crate) struct AgentsWatch {
     pub(crate) log: RwSignal<String>,
     /// Text buffer: the send bar (pty) or the run composer's task (headless).
     pub(crate) input: RwSignal<String>,
-    /// Text buffer for the chat reply box under a selected answerable (harness) conversation —
-    /// kept apart from `input` (the new-conversation composer) so the two don't clobber each other.
+    /// Text buffer for the chat reply box under a selected answerable conversation — kept apart
+    /// from `input` (the new-conversation composer) so the two don't clobber each other.
     pub(crate) reply: RwSignal<String>,
     /// True while an answer to the open conversation's question is in flight, so the card cannot be
     /// sent twice by an impatient second click on a request that is already gone.
@@ -1674,6 +1679,7 @@ impl AgentsWatch {
             run_id: RwSignal::new(None),
             runs: RwSignal::new(Vec::new()),
             answerable: RwSignal::new(false),
+            selected_answerable: RwSignal::new(None),
             peek: RwSignal::new(None),
             log: RwSignal::new(String::new()),
             input: RwSignal::new(String::new()),
@@ -1725,6 +1731,7 @@ impl AgentsWatch {
         self.run_id.set(None);
         self.runs.set(Vec::new());
         self.answerable.set(false);
+        self.selected_answerable.set(None);
         self.peek.set(None);
         self.log.set(String::new());
         self.input.set(String::new());

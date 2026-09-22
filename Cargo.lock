@@ -16,6 +16,8 @@ dependencies = [
  "adi-tools",
  "adi-update",
  "base64 0.22.1",
+ "core-foundation 0.10.1",
+ "libc",
  "regex",
  "reqwest",
  "rusqlite",
@@ -23,10 +25,13 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tiktoken-rs",
+ "time",
  "toml",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

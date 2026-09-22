@@ -189,9 +189,11 @@ pub fn notice(from: &str, to: &str, found: &Classification) -> String {
 ///   *itself on the same credential* — which is the Opus-to-Sonnet fall this design is largely for,
 ///   and where it works exactly right. From anywhere else there is no session on that side to
 ///   resume.
-/// * `process:*` establishes no session at all, so a run on one is a single message with nothing
-///   behind it. Handing it that message again is a complete move — which is why the history check
-///   is skipped when there is no history.
+/// * `process:codex` has the same boundary: it continues with `codex exec resume <thread-id>` and
+///   can change model on the same login, but another credential has no copy of that thread.
+/// * `process:claude` establishes no session at all, so a run on it is a single message with
+///   nothing behind it. Handing it that message again is a complete move — which is why the history
+///   check is skipped when there is no history.
 /// * `pty:*` is a live terminal and ADI keeps no transcript of one. Nothing can be replayed into it
 ///   and nothing replayed out.
 ///
@@ -235,6 +237,7 @@ fn carries_history(from: &Backend, to: &Backend, same_credential: bool) -> bool 
         Backend::HarnessClaudeSdk => {
             matches!(from, Backend::HarnessClaudeSdk) && same_credential
         }
+        Backend::ProcessCodex => matches!(from, Backend::ProcessCodex) && same_credential,
         _ => false,
     }
 }
@@ -491,6 +494,23 @@ mod tests {
             decide(&chain, &quota(), &turn(&free)),
             Decision::Switch { to: 1, .. },
         ));
+
+        let codex_a = manifest("process:codex", "gpt-6-astra", "openai-a", 0);
+        let codex_a_fast = manifest("process:codex", "gpt-5.6-luna", "openai-a", 0);
+        let codex_b = manifest("process:codex", "gpt-6-astra", "openai-b", 0);
+
+        // Codex likewise resumes its own thread while changing models on one login.
+        let chain = chain_of(&[("astra", codex_a.clone()), ("luna", codex_a_fast)]);
+        assert!(matches!(
+            decide(&chain, &quota(), &turn(&free)),
+            Decision::Switch { to: 1, .. },
+        ));
+
+        let chain = chain_of(&[("mine", codex_a), ("theirs", codex_b)]);
+        let Decision::Ask { reason } = decide(&chain, &quota(), &turn(&free)) else {
+            panic!("it refuses a Codex credential that has no copy of the thread");
+        };
+        assert!(reason.contains("theirs"), "{reason}");
     }
 
     /// A pty row is refused in both directions, and refused even on a first turn: there is no

@@ -20,6 +20,14 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **A headless Codex agent is now a conversation, not a one-shot run.** `process:codex` keeps the
+  thread id created by its first answer and resumes that same Codex thread for every reply. The
+  Agents page now opens these runs as chats with a reply box, just like `harness:claude-sdk`.
+  Missing or credential-ambiguous thread state is reported instead of silently starting or resuming
+  a conversation with the wrong memory.
+
 ## 1.20.0 — 2026-09-21
 
 ### Changed

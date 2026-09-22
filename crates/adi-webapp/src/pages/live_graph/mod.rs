@@ -228,7 +228,13 @@ pub(crate) fn live_graph_view(
         // The Agents page is where a conversation opened from a listing lands, so opening one from
         // here means the same thing it means there.
         go_global(state, route, Route::Agents);
-        super::agents::open_conversation(watch, chat.agent, chat.run_id, chat.interactive);
+        super::agents::open_conversation(
+            watch,
+            chat.agent,
+            chat.run_id,
+            chat.interactive,
+            chat.answerable,
+        );
     };
 
     view! {

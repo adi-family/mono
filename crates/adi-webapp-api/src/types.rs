@@ -1519,9 +1519,10 @@ pub struct AgentRef {
 }
 
 /// `POST /api/agents/run` request: the agent to launch and its initial task. The agent is only a
-/// template — each launch is an independent run from those settings, never a continuation. Headless
-/// backends (`process` / `harness`) run one `--print` turn with `message` as the prompt (required
-/// there — see the handler); interactive (pty) backends ignore it and type into the session.
+/// template — each launch starts an independent run from those settings. Headless backends
+/// (`process` / `harness`) use `message` as the opening prompt (required there — see the handler);
+/// answerable runners may continue that new conversation later. Interactive (pty) backends ignore
+/// it and type into the session.
 // Not `Eq`: an override's value is arbitrary JSON, whose float case has no total equality. Nothing
 // compares two launch requests anyway — a launch is made, not diffed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1718,10 +1719,10 @@ pub struct RenameRun {
     pub title: String,
 }
 
-/// `POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations
+/// `POST /api/agents/run/reply` request — say `message` into an answerable agent conversation
 /// (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still
-/// answering — waits in that conversation's queue. Only harness backends keep answerable
-/// conversations; anything else rejects it.
+/// answering — waits in that conversation's queue. The runner capability decides whether a backend
+/// is answerable; anything else rejects it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyToRun {
     pub name: String,
@@ -2419,6 +2420,14 @@ pub const LAUNCHED_BY_HUMAN: &str = "human";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunInfo {
     pub run_id: String,
+    /// This run's own capability profile, derived from the backend pinned to its stored session.
+    ///
+    /// An agent can be repointed after a conversation starts, so the agent-level
+    /// [`AgentRuns::caps`] describes the next run while this describes the historical row. `None`
+    /// is an older server that did not carry per-run capabilities; clients should then fall back
+    /// to the enclosing agent-level profile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<AgentCapabilities>,
     /// Unix milliseconds the run started.
     pub started_at: u64,
     /// Unix milliseconds the run last *said* something — the moment on the last turn of its
@@ -2534,9 +2543,9 @@ pub struct AgentRuns {
     pub name: String,
     #[serde(default)]
     pub interactive: bool,
-    /// Whether these runs are *conversations* you can answer (harness backends) rather than one-shot
-    /// runs — so the client shows a chat transcript + reply box instead of a plain log. Mirrors
-    /// `caps.answerable`, kept for existing callers.
+    /// Whether these runs are *conversations* you can answer rather than one-shot runs — so the
+    /// client shows a chat transcript + reply box instead of a plain log. Mirrors `caps.answerable`,
+    /// kept for existing callers.
     #[serde(default)]
     pub answerable: bool,
     /// The backend's full capability profile — drives which container and progress columns to show.
@@ -2668,9 +2677,9 @@ pub struct AgentPeek {
     /// dropped. Empty for interactive backends (a session, not a run).
     #[serde(default)]
     pub run_id: String,
-    /// Whether this run is an answerable conversation (a harness backend). When true, `turns` carries
-    /// its transcript and the client shows a chat with a reply box rather than the plain `output` log.
-    /// Mirrors `caps.answerable`.
+    /// Whether this run is an answerable conversation. When true, `turns` carries its transcript
+    /// and the client shows a chat with a reply box rather than the plain `output` log. Mirrors
+    /// `caps.answerable`.
     #[serde(default)]
     pub answerable: bool,
     /// Where this conversation runs — the directory pinned to it when it was created and re-used by

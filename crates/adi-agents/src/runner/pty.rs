@@ -324,6 +324,7 @@ mod tests {
 
     fn spec(arguments: Value) -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: std::env::temp_dir(),
             path: "/usr/bin:/bin".to_string(),
             env: Vec::new(),

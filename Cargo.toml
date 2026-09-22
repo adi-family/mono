@@ -101,6 +101,8 @@ adi-webapp-api = { path = "crates/adi-webapp-api" }
 base64 = "0.22"
 chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
+# Read the same macOS managed-preference strings that Codex layers over its local config.
+core-foundation = "0.10"
 # Peer-to-peer QUIC transport with relay-assisted NAT traversal and dial-by-EndpointId
 # discovery; the backbone of adi-mesh.
 iroh = "1"

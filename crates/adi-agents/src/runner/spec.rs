@@ -12,6 +12,12 @@ use adi_tools::ToolHelp;
 /// One run's materialized context.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSpec {
+    /// Stable identity of the credential this turn runs on, never its secret value.
+    ///
+    /// Set from the conversation's pinned LLM-backend row. Runners whose vendor keeps threads
+    /// beside a login use it to ensure a thread created on one login is never resumed on another.
+    /// `None` is the pre-chain / ambient-login case, whose identity is the runtime itself.
+    pub credential: Option<String>,
     /// Where the run starts. Resolved **once, at session creation**, and re-used verbatim for every
     /// later turn — an engine's session store is keyed by the directory it ran in, so re-resolving
     /// mid-conversation makes the session unresumable and puts the files earlier turns wrote out of

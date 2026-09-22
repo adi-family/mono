@@ -1649,7 +1649,7 @@ pub struct AgentRef {
 
 ### struct `RunAgent`
 
-`POST /api/agents/run` request: the agent to launch and its initial task. The agent is only a template — each launch is an independent run from those settings, never a continuation. Headless backends (`process` / `harness`) run one `--print` turn with `message` as the prompt (required there — see the handler); interactive (pty) backends ignore it and type into the session.
+`POST /api/agents/run` request: the agent to launch and its initial task. The agent is only a template — each launch starts an independent run from those settings. Headless backends (`process` / `harness`) use `message` as the opening prompt (required there — see the handler); answerable runners may continue that new conversation later. Interactive (pty) backends ignore it and type into the session.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1794,7 +1794,7 @@ pub struct RenameRun {
 
 ### struct `ReplyToRun`
 
-`POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still answering — waits in that conversation's queue. Only harness backends keep answerable conversations; anything else rejects it.
+`POST /api/agents/run/reply` request — say `message` into an answerable agent conversation (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still answering — waits in that conversation's queue. The runner capability decides whether a backend is answerable; anything else rejects it.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2255,6 +2255,8 @@ One entry in a headless agent's run history: an independent run spawned from the
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunInfo {
     pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caps: Option<AgentCapabilities>,
     pub started_at: u64,
     #[serde(default)]
     pub last_activity: u64,

@@ -175,6 +175,7 @@ pub(crate) struct Chat {
     pub(crate) agent: String,
     pub(crate) run_id: String,
     pub(crate) interactive: bool,
+    pub(crate) answerable: bool,
 }
 
 /// How a node stands in the picture as it is drawn *now* — a fact about where the focus is, not
@@ -325,7 +326,8 @@ pub(crate) fn build(agents: &[AgentDto], chats: &AllAgentRuns, focus: Option<&st
             chat: Some(Chat {
                 agent: entry.name.clone(),
                 run_id: run.run_id.clone(),
-                interactive: entry.interactive,
+                interactive: run.caps.map_or(entry.interactive, |caps| caps.interactive),
+                answerable: run.caps.map_or(entry.answerable, |caps| caps.answerable),
             }),
             role: Role::Plain,
             layer: 0,
@@ -959,6 +961,7 @@ mod tests {
     fn run(id: &str, launched_by: &str) -> AgentRunInfo {
         AgentRunInfo {
             run_id: id.to_string(),
+            caps: None,
             started_at: 1,
             last_activity: 1,
             message: format!("do {id}"),

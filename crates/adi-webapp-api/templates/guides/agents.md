@@ -6,7 +6,8 @@ environment's root agent); everything else is an ordinary definition.
 
 ## Backends (runtimes)
 - `pty:claude` / `pty:codex` — the CLI in a live terminal session (uses your subscription login).
-- `process:claude` / `process:codex` — the same CLI headless, one `--print` turn.
+- `process:claude` — the Claude CLI headless, one `--print` turn.
+- `process:codex` — the Codex CLI headless, with replies resuming the same thread.
 - `harness:claude-sdk` — `claude --print` under ADI's harness (a turn cap + scoped tools).
 - `harness:adi` — ADI's own agent loop, multi-provider (needs a provider API key).
 
@@ -149,6 +150,7 @@ bugbounty = 2             # …and at most 2 of those may be this project's (0 =
   **Agents** panel (that project's).
 
 ## Notes
-- pty backends keep no run history — their live session *is* the run. harness/process backends
-  produce answerable turns you can reply to, and only those can ask you anything: a backend with no
-  thread to continue has nowhere to deliver an answer into.
+- pty backends keep no run history — their live session *is* the run. Harness backends and
+  `process:codex` produce answerable conversations; `process:claude` produces one finished turn.
+  Only an answerable backend can ask you anything: a backend with no thread to continue has nowhere
+  to deliver an answer into.

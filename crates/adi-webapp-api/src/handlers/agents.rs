@@ -238,10 +238,11 @@ pub fn set_auto_title(store: &Agents, body: &[u8]) -> Response {
 }
 
 /// `POST /api/agents/run` — launch an agent in its backend. Pty engines start an interactive
-/// session you type into, so the `message` is optional there. Headless engines (`process` /
-/// `harness`) get one shot: they run a single `--print` turn on `message` as the prompt and exit,
-/// so a task is **required** — launching one with no message would just have it act on a placeholder
-/// and do nothing, so that is rejected (400) rather than silently run.
+/// session you type into, so the `message` is optional there. Headless engines run their first
+/// turn on `message` as the prompt, so a task is **required** — launching one with no message would
+/// just have it act on a placeholder and do nothing, so that is rejected (400) rather than silently
+/// run. Whether later replies continue the thread is a runner capability (`process:codex` and both
+/// harness engines do; `process:claude` does not).
 #[must_use]
 pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, RunAgent);
@@ -255,7 +256,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
     if !interactive && message.is_empty() {
         return error(
             400,
-            "This backend runs headless (one --print turn), so it needs an initial task — enter what it should do before running.",
+            "This backend runs headless, so it needs an initial task — enter what it should do before running.",
         );
     }
     // A pty backend takes no task, so a blank message is its normal launch, not a missing one.
@@ -360,8 +361,8 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
 
 /// `POST /api/agents/run/peek` — a read-only snapshot of one specific run's log (or the pty screen
 /// for an interactive backend). A run that has produced nothing answers with empty output, not 404.
-/// For a harness backend the run is an answerable conversation, so the snapshot also carries its
-/// turn-by-turn transcript (`turns`) and `answerable: true`.
+/// For an answerable backend the snapshot also carries its turn-by-turn transcript (`turns`) and
+/// `answerable: true`.
 ///
 /// # The lazy read
 ///
@@ -384,7 +385,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     };
     let run_id = req.run_id.trim();
     let peek = store.peek_run(&agent, run_id);
-    let caps = agent_caps(&agent);
+    let caps = run_caps(store, &agent, run_id);
     // Any backend that produces turns (conversations, or one-shot runs synthesized as one answered
     // turn) feeds the same progress view; the transcript is empty for the rest (e.g. pty).
     let (turns, total_turns, stats) = transcript_view(store, &agent, run_id, &req.view);
@@ -893,6 +894,7 @@ fn conversation_snapshot(
     view: &TranscriptView,
 ) -> Response {
     let peek = store.peek_run(agent, run_id);
+    let caps = run_caps(store, agent, run_id);
     let (turns, total_turns, stats) = transcript_view(store, agent, run_id, view);
     ok_json(&AgentPeek {
         name: agent.name.clone(),
@@ -901,16 +903,9 @@ fn conversation_snapshot(
         attach: peek.attach,
         interactive: peek.interactive,
         run_id: run_id.to_string(),
-        answerable: true,
+        answerable: caps.answerable,
         cwd: run_dir(store, agent, run_id),
-        // The one capability asked of *this run* rather than of the agent's backend: a simulated
-        // conversation is a person in the model's seat and has nowhere to show a picture, however
-        // capable the engine behind the agent is. Deciding it from the backend would offer a
-        // paperclip that the send then refuses.
-        caps: AgentCapabilities {
-            images: store.run_takes_images(&agent.name, run_id),
-            ..agent_caps(agent)
-        },
+        caps,
         pending_question: store
             .pending_question(&agent.name, run_id)
             .as_ref()
@@ -1403,6 +1398,7 @@ fn runs_response_with(
             .runs(agent)
             .into_iter()
             .map(|r| AgentRunInfo {
+                caps: Some(wire_caps(r.capabilities)),
                 pending_question: waiting.get(&agent.name, &r.run_id),
                 awaits: awaiting.get(&agent.name, &r.run_id),
                 run_id: r.run_id,
@@ -1448,7 +1444,21 @@ fn title_of(message: &str) -> String {
 
 /// The backend's capability profile as a wire [`AgentCapabilities`].
 fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
-    let c = adi_agents::capabilities(agent.manifest.runtime());
+    wire_caps(adi_agents::capabilities(agent.manifest.runtime()))
+}
+
+/// A selected run is governed by the backend pinned to its session, even when the agent has since
+/// been repointed. Unknown/legacy ids fall back to the current manifest, matching the runner's own
+/// peek fallback for the terminal session that has no run id.
+fn run_caps(store: &Agents, agent: &StoredAgent, run_id: &str) -> AgentCapabilities {
+    store
+        .run_capabilities(&agent.name, run_id)
+        .map(wire_caps)
+        .unwrap_or_else(|| agent_caps(agent))
+}
+
+/// The agent layer's capability vocabulary as the wire sees it.
+fn wire_caps(c: adi_agents::BackendCapabilities) -> AgentCapabilities {
     AgentCapabilities {
         interactive: c.interactive,
         history: c.history,
@@ -3106,6 +3116,75 @@ mod tests {
         assert_eq!(crate::types::LAUNCHED_BY_HUMAN, adi_agents::launcher::HUMAN);
     }
 
+    /// Repointing an agent changes the backend for its next run, not the nature of conversations
+    /// already in its history. In particular, an old resumable Codex process must not turn into a
+    /// one-shot Claude process in either the listing or the selected-run snapshot.
+    #[test]
+    fn run_capabilities_come_from_each_stored_session_backend() {
+        let store = scratch("stored-run-caps");
+        assert_eq!(
+            save_agent(
+                &store,
+                br#"{"name":"solver","backend":"process:claude"}"#,
+            )
+            .status,
+            200,
+        );
+        let sessions =
+            adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        let codex = sessions
+            .create(
+                "solver",
+                adi_agents::Backend::ProcessCodex,
+                "/tmp",
+                "continue me",
+            )
+            .expect("create Codex session")
+            .id;
+        let claude = sessions
+            .create(
+                "solver",
+                adi_agents::Backend::ProcessClaude,
+                "/tmp",
+                "one shot",
+            )
+            .expect("create Claude session")
+            .id;
+
+        let listed = agent_runs(&store, br#"{"name":"solver"}"#);
+        assert_eq!(listed.status, 200);
+        let listed: AgentRuns = serde_json::from_str(&listed.body).expect("run listing");
+        assert!(
+            !listed.answerable,
+            "the top-level profile still describes the current agent backend",
+        );
+        let caps_of = |id: &str| {
+            listed
+                .runs
+                .iter()
+                .find(|run| run.run_id == id)
+                .and_then(|run| run.caps)
+                .expect("the run carries its own capabilities")
+        };
+        assert!(caps_of(&codex).answerable);
+        assert!(!caps_of(&claude).answerable);
+
+        let peek = |run_id: &str| {
+            let body = serde_json::json!({ "name": "solver", "run_id": run_id });
+            let response = peek_run(&store, body.to_string().as_bytes());
+            assert_eq!(response.status, 200);
+            serde_json::from_str::<AgentPeek>(&response.body).expect("run peek")
+        };
+        let codex_peek = peek(&codex);
+        assert!(codex_peek.answerable);
+        assert!(codex_peek.caps.answerable);
+        let claude_peek = peek(&claude);
+        assert!(!claude_peek.answerable);
+        assert!(!claude_peek.caps.answerable);
+
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
     /// The run environment is edited by the full agent form alone. Every *other* form — the meta
     /// setup, the project panel — posts a body without these fields, and must not wipe them.
     #[test]
@@ -3696,6 +3775,7 @@ mod tests {
                 .iter()
                 .map(|&at| AgentRunInfo {
                     run_id: format!("{name}-{at}"),
+                    caps: None,
                     started_at: at,
                     last_activity: at,
                     message: String::new(),

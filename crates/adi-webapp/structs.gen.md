@@ -527,6 +527,7 @@ pub(crate) struct Chat {
     pub(crate) agent: String,
     pub(crate) run_id: String,
     pub(crate) interactive: bool,
+    pub(crate) answerable: bool,
 }
 ```
 
@@ -1639,6 +1640,7 @@ pub(crate) struct AgentsWatch {
     pub(crate) run_id: RwSignal<Option<String>>,
     pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
     pub(crate) answerable: RwSignal<bool>,
+    pub(crate) selected_answerable: RwSignal<Option<bool>>,
     pub(crate) peek: RwSignal<Option<AgentPeek>>,
     pub(crate) log: RwSignal<String>,
     pub(crate) input: RwSignal<String>,

@@ -76,4 +76,25 @@ pub trait StateWriter: Send {
     /// # Errors
     /// Returns store write errors, including the session having been deleted meanwhile.
     fn set_state(&self, value: serde_json::Value) -> Result<()>;
+
+    /// Replace the slot only if it still contains the value just read.
+    ///
+    /// A reaper uses this after checking that the recorded child is its own. Keeping the comparison
+    /// and write in one store operation prevents a newer turn from landing between those two steps
+    /// and then being overwritten by the older turn's reaper.
+    ///
+    /// Returns `false` when another writer has changed or removed the slot meanwhile.
+    ///
+    /// # Errors
+    /// Returns store write errors.
+    fn compare_and_set_state(
+        &self,
+        _expected: &serde_json::Value,
+        _value: serde_json::Value,
+    ) -> Result<bool> {
+        // A third-party session store that has not supplied an atomic primitive must fail closed:
+        // leaving a stale child record is harmless (liveness verifies it), while a best-effort
+        // read/write fallback could erase a newer live child's state.
+        Ok(false)
+    }
 }

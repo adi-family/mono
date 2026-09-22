@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-134 structs · 37 enums · 5 type aliases across 55 files.
+140 structs · 39 enums · 5 type aliases across 56 files.
 
 ## Index
 
@@ -23,6 +23,7 @@
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
+- [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
@@ -48,7 +49,7 @@
 - [`src/questions.rs`](#srcquestionsrs) — `Settled`
 - [`src/review.rs`](#srcreviewrs) — `Options`, `Review`, `Evidence`, `History`, `Totals`
 - [`src/run.rs`](#srcrunrs) — `Launch`, `LaunchOptions`, `Sent`, `Peek`, `RunInfo`, `Pane`
-- [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
+- [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `CodexIdentity`, `CodexProviderAuth`, `CodexConfigSnapshot`, `CodexManagedPreferences`, `CodexConfigLayer`, `AuthFileFingerprint`, `ChatgptIdClaims`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
 - [`src/runner/human.rs`](#srcrunnerhumanrs) — `State`, `HumanRunner`
 - [`src/runner/mod.rs`](#srcrunnermodrs) — `RunnerKind`, `ImageDelivery`, `Stopped`
@@ -1080,6 +1081,23 @@ One run's tool surface: what exists, and what it may use without stopping to ask
 pub(crate) struct ToolScope {
     pub(crate) builtins: String,
     pub(crate) allowed: String,
+}
+```
+
+---
+
+## `src/backends/process/codex.rs`
+
+### enum `Continuation`
+
+Whether this turn opens a Codex thread or continues one the first turn established.
+
+```rust
+pub(crate) enum Continuation<'a> {
+    First,
+    Resume {
+        thread_id: &'a str,
+    },
 }
 ```
 
@@ -2408,6 +2426,7 @@ One entry in a headless agent's run history. The agent definition is only a temp
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunInfo {
     pub run_id: String,
+    pub capabilities: crate::BackendCapabilities,
     pub started_at: u64,
     pub last_activity: u64,
     pub message: String,
@@ -2461,6 +2480,86 @@ struct State {
     started: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_credential: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex_auth_context: Option<String>,
+}
+```
+
+### struct `CodexIdentity`
+
+The two names a Codex thread has to stay under: ADI's logical backend credential and the concrete CLI state/login context that credential resolved to for this turn.
+
+```rust
+struct CodexIdentity {
+    credential: String,
+    auth_context: Option<String>,
+}
+```
+
+### enum `CodexProviderAuth`
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CodexProviderAuth {
+    OpenAi,
+    Bound,
+    Unverifiable,
+}
+```
+
+### struct `CodexConfigSnapshot`
+
+Every readable local Codex config layer that can affect this run.
+
+```rust
+struct CodexConfigSnapshot {
+    layers: Vec<CodexConfigLayer>,
+    valid: bool,
+}
+```
+
+### struct `CodexManagedPreferences`
+
+```rust
+#[derive(Default)]
+struct CodexManagedPreferences {
+    config_toml_base64: Option<String>,
+    requirements_toml_base64: Option<String>,
+}
+```
+
+### struct `CodexConfigLayer`
+
+```rust
+struct CodexConfigLayer {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+    value: Option<toml::Value>,
+    valid: bool,
+    can_select_provider: bool,
+}
+```
+
+### struct `AuthFileFingerprint`
+
+```rust
+#[derive(Default)]
+struct AuthFileFingerprint {
+    present: bool,
+    cloud_config_eligible: bool,
+}
+```
+
+### struct `ChatgptIdClaims`
+
+```rust
+struct ChatgptIdClaims {
+    user: String,
+    plan: Option<String>,
 }
 ```
 
@@ -2647,6 +2746,7 @@ One run's materialized context.
 ```rust
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSpec {
+    pub credential: Option<String>,
     pub cwd: PathBuf,
     pub path: String,
     pub env: Vec<(String, String)>,

@@ -150,6 +150,15 @@ impl StateWriter for StoredState {
     fn set_state(&self, value: serde_json::Value) -> Result<()> {
         self.store.set_runner_state(&self.agent, &self.id, value)
     }
+
+    fn compare_and_set_state(
+        &self,
+        expected: &serde_json::Value,
+        value: serde_json::Value,
+    ) -> Result<bool> {
+        self.store
+            .compare_and_set_runner_state(&self.agent, &self.id, expected, value)
+    }
 }
 
 #[cfg(test)]
@@ -206,6 +215,39 @@ mod tests {
         );
         assert_eq!(after.message, "go");
         assert_eq!(after.backend, Backend::HarnessAdi);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    #[test]
+    fn a_state_writer_only_replaces_the_snapshot_it_observed() {
+        let store = scratch("compare-state");
+        let record = store
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        let view = store.session("solver", &record.id);
+        let old = serde_json::json!({ "pid": 11, "started": 100 });
+        let newer = serde_json::json!({ "pid": 22, "started": 200 });
+        view.set_state(old.clone()).expect("write old turn");
+        let writer = view.state_writer().expect("owned state writer");
+
+        view.set_state(newer.clone()).expect("write newer turn");
+        assert!(
+            !writer
+                .compare_and_set_state(&old, serde_json::json!({ "pid": null }))
+                .expect("compare old snapshot"),
+            "a stale snapshot cannot replace the newer turn",
+        );
+        assert_eq!(view.state(), Some(newer.clone()));
+
+        let finished = serde_json::json!({ "session_id": "kept" });
+        assert!(
+            writer
+                .compare_and_set_state(&newer, finished.clone())
+                .expect("compare current snapshot"),
+            "the current snapshot is replaced",
+        );
+        assert_eq!(view.state(), Some(finished));
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

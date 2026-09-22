@@ -235,6 +235,7 @@ mod tests {
 
     fn spec(cwd: &Path) -> RunSpec {
         RunSpec {
+            credential: None,
             cwd: cwd.to_path_buf(),
             path: String::new(),
             env: Vec::new(),

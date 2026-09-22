@@ -33,8 +33,9 @@ mod simulate;
 use actions::apply_agents;
 pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, adopt_run_settings, agent_actions,
-    all_chats_view, auto_title_view, chat_home_view, live_view, open_conversation, poll_watch,
-    project_run_limit_view, reset_chat_home, run_limit_view,
+    all_chats_view, auto_title_view, chat_home_view, live_view, open_conversation,
+    open_run_answerable_untracked, poll_watch, project_run_limit_view, reset_chat_home,
+    run_limit_view,
 };
 // The onboarding wizard renders the same fields from the same schema, so its half of the form
 // lives here rather than as a second copy of these renderers.
@@ -111,12 +112,12 @@ pub(crate) fn agents_view(
         // What the row menu's launch actions do. It belongs with the rows it explains.
         <p class="adi-hint">
             "Run starts a pty backend in an interactive " <code>"adi-agent-<name>"</code>
-            " session you type into. A "<code>"process"</code>" backend is a template: Run… starts \
-             an independent one-shot run from a task you give it — one "<code>"--print"</code>
-            " turn, never continued — and several can run at once. A "<code>"harness"</code>"
-             backend starts an answerable "<strong>"conversation"</strong>": Chat… sends a first \
-             message, the agent answers, and you reply to continue the same thread. Each run keeps \
-             its own log and transcript under "
+            " session you type into. A headless backend starts from a task you give it. "
+            <code>"process:claude"</code>" is an independent one-shot run; "
+            <code>"process:codex"</code>" and the "<code>"harness"</code>
+            " backends start an answerable "<strong>"conversation"</strong>": Chat… sends a first \
+             message, the agent answers, and you reply to continue the same thread. Several can run \
+             at once, and each keeps its own log and transcript under "
             <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
             ", browsable as history in View."
         </p>

@@ -182,8 +182,9 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
     let full = a.at_run_limit;
     let running = a.running;
     let interactive = a.executor == "pty";
-    // Harness backends keep answerable conversations; the run controls read as a chat there.
-    let answerable = a.executor == "harness";
+    // The runner is the authority: Codex is a process backend but keeps a resumable thread, while
+    // process:claude is genuinely one-shot. Executor names cannot express that distinction.
+    let answerable = a.caps.answerable;
     let stop_title = if interactive {
         "kill the session"
     } else if answerable {
@@ -349,6 +350,10 @@ fn launch_agent(
                 state.flash.set(None);
                 watch.peek.set(None);
                 watch.log.set(String::new());
+                // The selected run below is new. Do not let the historical run that was open
+                // before launch decide whether this one's detail is a chat while its first peek is
+                // still in flight.
+                watch.selected_answerable.set(None);
                 if !res.run_id.is_empty() {
                     watch.run_id.set(Some(res.run_id));
                 }
@@ -512,6 +517,7 @@ fn point_watch(watch: AgentsWatch, node: Option<String>, name: String, interacti
     watch.runs.set(Vec::new());
     // Reset until the first history poll reports whether this backend keeps answerable conversations.
     watch.answerable.set(false);
+    watch.selected_answerable.set(None);
     watch.reply.set(String::new());
     watch.interactive.set(interactive);
     watch.node.set(node);
@@ -536,14 +542,15 @@ pub(crate) fn open_watch(
     scroll_top();
 }
 
-/// Select a run of a headless agent to view its log (or, for a harness backend, its conversation).
+/// Select a run of a headless agent to view its log or, for an answerable runner, its conversation.
 /// Clears the previous run's tail and reply draft so nothing bleeds across before the first poll of
 /// the newly selected run lands.
-fn select_run(watch: AgentsWatch, run_id: String) {
+fn select_run(watch: AgentsWatch, run_id: String, answerable: Option<bool>) {
     watch.peek.set(None);
     watch.reset_transcript();
     watch.log.set(String::new());
     watch.reply.set(String::new());
+    watch.selected_answerable.set(answerable);
     watch.run_id.set(Some(run_id));
     poll_watch(watch);
     load_goals(watch);
@@ -570,9 +577,11 @@ fn point_conversation(
     name: String,
     run_id: String,
     interactive: bool,
+    answerable: Option<bool>,
 ) {
     point_watch(watch, node, name, interactive);
     if !run_id.is_empty() {
+        watch.selected_answerable.set(answerable);
         watch.run_id.set(Some(run_id));
         poll_watch(watch);
         load_goals(watch);
@@ -587,8 +596,9 @@ pub(crate) fn open_conversation(
     name: String,
     run_id: String,
     interactive: bool,
+    answerable: bool,
 ) {
-    point_conversation(watch, None, name, run_id, interactive);
+    point_conversation(watch, None, name, run_id, interactive, Some(answerable));
     scroll_top();
 }
 
@@ -597,6 +607,7 @@ pub(crate) fn open_conversation(
 /// run history stays open — this closes only the log, not the whole panel.
 fn close_run_view(watch: AgentsWatch) {
     watch.run_id.set(None);
+    watch.selected_answerable.set(None);
     watch.peek.set(None);
     watch.reset_transcript();
     watch.log.set(String::new());
@@ -671,6 +682,7 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
                 && watch.run_id.get_untracked().as_deref() == Some(peek.run_id.as_str())
                 && watch.node.get_untracked() == node
             {
+                watch.selected_answerable.set(Some(peek.answerable));
                 if watch.log.get_untracked() != peek.output {
                     watch.log.set(peek.output.clone());
                 }
@@ -721,8 +733,9 @@ pub(crate) fn all_chats_view(
 }
 
 /// Flatten every included agent's runs into `(agent, answerable, interactive, run)` tuples, newest
-/// first. `only` (project ids) filters by each agent's project, read from the loaded agents list;
-/// `None` includes them all.
+/// first. Capabilities come from each run when the server carries them; the enclosing agent is the
+/// compatibility fallback for an older server. `only` (project ids) filters by each agent's
+/// project, read from the loaded agents list; `None` includes them all.
 fn all_chats_flatten(
     state: State,
     only: &Option<Vec<String>>,
@@ -748,7 +761,9 @@ fn all_chats_flatten(
             continue;
         }
         for r in ar.runs {
-            rows.push((ar.name.clone(), ar.answerable, ar.interactive, r));
+            let answerable = r.caps.map_or(ar.answerable, |caps| caps.answerable);
+            let interactive = r.caps.map_or(ar.interactive, |caps| caps.interactive);
+            rows.push((ar.name.clone(), answerable, interactive, r));
         }
     }
     // Newest conversation first, across all agents.
@@ -785,7 +800,13 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
             let (name, run_id) = (agent.clone(), r.run_id.clone());
             let open = view! {
                 <button class="adi-btn adi-btn--link"
-                    on:click=move |_| open_conversation(watch, name.clone(), run_id.clone(), interactive)>
+                    on:click=move |_| open_conversation(
+                        watch,
+                        name.clone(),
+                        run_id.clone(),
+                        interactive,
+                        answerable,
+                    )>
                     "Open"
                 </button>
             }
@@ -813,6 +834,52 @@ fn run_status(answerable: bool, r: &AgentRunInfo) -> &'static str {
         (true, false, true) => "idle",
         (false, false, true) => "done",
     }
+}
+
+/// Whether this historical run is a conversation, with an agent-level fallback for responses from
+/// servers old enough not to carry per-run capabilities.
+fn run_answerable(r: &AgentRunInfo, fallback: bool) -> bool {
+    r.caps.map_or(fallback, |caps| caps.answerable)
+}
+
+/// The selected run's own answerability. The snapshot is the freshest authority; until it lands,
+/// use the selected history row, then the current agent profile for an older server.
+fn open_run_answerable(watch: AgentsWatch) -> bool {
+    watch
+        .peek
+        .get()
+        .map(|peek| peek.answerable)
+        .or_else(|| watch.selected_answerable.get())
+        .or_else(|| {
+            let selected = watch.run_id.get()?;
+            watch
+                .runs
+                .get()
+                .into_iter()
+                .find(|run| run.run_id == selected)
+                .and_then(|run| run.caps.map(|caps| caps.answerable))
+        })
+        .unwrap_or_else(|| watch.answerable.get())
+}
+
+/// The event-listener variant of [`open_run_answerable`]: dashboard picks happen outside a
+/// reactive render, but must still target the composer belonging to the selected historical run.
+pub(crate) fn open_run_answerable_untracked(watch: AgentsWatch) -> bool {
+    watch
+        .peek
+        .get_untracked()
+        .map(|peek| peek.answerable)
+        .or_else(|| watch.selected_answerable.get_untracked())
+        .or_else(|| {
+            let selected = watch.run_id.get_untracked()?;
+            watch
+                .runs
+                .get_untracked()
+                .into_iter()
+                .find(|run| run.run_id == selected)
+                .and_then(|run| run.caps.map(|caps| caps.answerable))
+        })
+        .unwrap_or_else(|| watch.answerable.get_untracked())
 }
 
 /// The `data-state` a status word takes on `.adi-status`, which is what colours its dot: the
@@ -975,7 +1042,7 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
         &mut runs,
         table.sort.get(),
         |r, col| match col {
-            "Status" => Key::text(run_status(answerable, r)),
+            "Status" => Key::text(run_status(run_answerable(r, answerable), r)),
             "Conversation" | "Task" => Key::text(display_message(r)),
             _ => Key::num(r.started_at),
         },
@@ -985,7 +1052,8 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
     let mut rows: Vec<AnyView> = Vec::with_capacity(runs.len() + 1);
     for r in &runs {
         let is_selected = selected.as_deref() == Some(r.run_id.as_str());
-        rows.push(run_row(state, watch, r, table, is_selected, answerable));
+        let run_answerable = run_answerable(r, answerable);
+        rows.push(run_row(state, watch, r, table, is_selected, run_answerable));
         // The log / chat opens as a detail row right beneath the run it belongs to.
         if is_selected {
             rows.push(run_detail_row(
@@ -993,7 +1061,7 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
                 watch,
                 r.run_id.clone(),
                 table.layout.get().span(),
-                answerable,
+                run_answerable,
             ));
         }
     }
@@ -2538,7 +2606,7 @@ fn run_row(
             on:click=move |_| if is_selected {
                 close_run_view(watch);
             } else {
-                select_run(watch, view_id.clone());
+                select_run(watch, view_id.clone(), Some(answerable));
             }>{view_label}</button>
     }
     .into_any();
@@ -3482,7 +3550,7 @@ fn start_review(state: State, watch: AgentsWatch) {
                     // select — only its live pane to open.
                     open_watch(watch, node, started.reviewer, true);
                 } else {
-                    open_session(watch, node, &started.reviewer, &started.run_id);
+                    open_session(watch, node, &started.reviewer, &started.run_id, None);
                 }
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -3554,7 +3622,7 @@ fn chat_agent_section(state: State, watch: AgentsWatch) -> Option<AnyView> {
             })
         });
     let peek = watch.peek.get();
-    let answerable = watch.answerable.get();
+    let answerable = open_run_answerable(watch);
     let def = state
         .agents
         .get()
@@ -5744,6 +5812,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
         starred,
         hotkey,
     } = item;
+    let answerable = run
+        .as_ref()
+        .and_then(|run| run.caps.map(|caps| caps.answerable));
     let on_this_agent =
         watch.name.get().as_deref() == Some(agent.as_str()) && watch.node.get() == node;
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
@@ -5922,7 +5993,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
                     if run_id.is_empty() {
                         point_watch(watch, node.clone(), agent.clone(), true);
                     } else {
-                        open_session(watch, node.clone(), &agent, &run_id);
+                        open_session(watch, node.clone(), &agent, &run_id, answerable);
                     }
                     // Picking a session is the drawer's whole purpose, so it gets out of the
                     // way — otherwise the chat you just chose opens behind the list you chose
@@ -6654,7 +6725,13 @@ fn toggle_open_session_hidden(
 fn open_rail_row(state: State, watch: AgentsWatch, row: SessionRow) {
     state.chat_drawer.set(None);
     match row.run {
-        Some(run) => open_session(watch, row.node.clone(), &row.agent, &run.run_id),
+        Some(run) => open_session(
+            watch,
+            row.node.clone(),
+            &row.agent,
+            &run.run_id,
+            run.caps.map(|caps| caps.answerable),
+        ),
         None => point_watch(watch, row.node, row.agent, true),
     }
 }
@@ -6663,11 +6740,24 @@ fn open_rail_row(state: State, watch: AgentsWatch, row: SessionRow) {
 /// agent (or the same-named agent on a different source), or only select the conversation when it is
 /// already the picked one — so a click on a chat of the agent already on screen doesn't tear the
 /// centre pane down and rebuild it. `node` is the row's own source (`docs/fleet.md` §13).
-fn open_session(watch: AgentsWatch, node: Option<String>, agent: &str, run_id: &str) {
+fn open_session(
+    watch: AgentsWatch,
+    node: Option<String>,
+    agent: &str,
+    run_id: &str,
+    answerable: Option<bool>,
+) {
     if watch.name.get_untracked().as_deref() == Some(agent) && watch.node.get_untracked() == node {
-        select_run(watch, run_id.to_string());
+        select_run(watch, run_id.to_string(), answerable);
     } else {
-        point_conversation(watch, node, agent.to_string(), run_id.to_string(), false);
+        point_conversation(
+            watch,
+            node,
+            agent.to_string(),
+            run_id.to_string(),
+            false,
+            answerable,
+        );
     }
 }
 
@@ -6809,13 +6899,20 @@ fn chat_hidden_row(
     };
     let hint = format!("open this hidden chat with {agent}");
     let menu = SessionRef::of(node.clone(), agent, &r.run_id, &title, true, r.starred);
+    let answerable = r.caps.map(|caps| caps.answerable);
     let (open_node, open_name, open_id) = (node.clone(), agent.to_string(), r.run_id.clone());
     let (show_node, show_name, show_id) = (node, agent.to_string(), r.run_id.clone());
     view! {
         <div class="adi-chome__sessionrow">
             <button class="adi-chome__session adi-chome__session--hidden"
                 type="button" title=hint
-                on:click=move |_| open_session(watch, open_node.clone(), &open_name, &open_id)
+                on:click=move |_| open_session(
+                    watch,
+                    open_node.clone(),
+                    &open_name,
+                    &open_id,
+                    answerable,
+                )
                 on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
                 <span class=dot></span>
                 <span class="adi-chome__session-main">
@@ -6955,7 +7052,7 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
                     <div class="adi-chome__feed">
                         // Sourced: the rail under this feed merges several machines, so which one a
                         // conversation is on is a fact the feed has to carry itself.
-                        {feed_view(state, watch, watch.answerable.get(), true)}
+                        {feed_view(state, watch, open_run_answerable(watch), true)}
                     </div>
                 }
                 .into_any(),

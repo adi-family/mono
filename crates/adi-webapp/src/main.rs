@@ -54,11 +54,11 @@ use pages::{
     agents_view, analytics_view, chat_home_view, dashboards_view, database_view, elements_view,
     embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, live_graph_view,
     live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir, load_store_file,
-    market_view, marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
-    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
-    reset_chat_home, secrets_view, seed_onboarding, settings_view, shared_assets_view,
-    start_onb_reconfigure, start_onb_reconfigure_agent, store_file_view, system_view, tasks_view,
-    tools_view, triggers_view,
+    market_view, marketplace_view, mesh_view, meta_view, onboarding_view,
+    open_run_answerable_untracked, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
+    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
+    seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
+    start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -814,7 +814,7 @@ fn receive_picks(watch: AgentsWatch, dashboard: String) {
             // The reply box exists only under an open answerable conversation; anywhere else the
             // composer on screen is the one that starts a new one.
             let composer =
-                if watch.run_id.get_untracked().is_some() && watch.answerable.get_untracked() {
+                if watch.run_id.get_untracked().is_some() && open_run_answerable_untracked(watch) {
                     watch.reply
                 } else {
                     watch.input

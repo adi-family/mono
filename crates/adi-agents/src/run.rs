@@ -128,6 +128,10 @@ pub struct Peek {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunInfo {
     pub run_id: String,
+    /// What this run can do, derived from the backend stored on its session rather than from the
+    /// agent's current definition. An agent may be repointed after a run starts; its old sessions
+    /// keep the capabilities of the engines that actually opened them.
+    pub capabilities: crate::BackendCapabilities,
     /// Unix milliseconds the run started (encoded in, and recovered from, the run id).
     pub started_at: u64,
     /// Unix milliseconds the run last *said* something — the moment on the last turn of its
@@ -188,6 +192,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     }
     runner
         .check(&RunSpec {
+            credential: None,
             cwd: PathBuf::new(),
             path: String::new(),
             env: Vec::new(),
@@ -335,6 +340,7 @@ mod tests {
         let runner = runner_for(manifest.runtime()).expect("harness:adi has a runner");
         assert!(matches!(
             runner.check(&RunSpec {
+                credential: None,
                 cwd: PathBuf::new(),
                 path: String::new(),
                 env: Vec::new(),
