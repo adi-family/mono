@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.21.0 — 2026-09-22
+
 ### Changed
 
 - **A headless Codex agent is now a conversation, not a one-shot run.** `process:codex` keeps the
