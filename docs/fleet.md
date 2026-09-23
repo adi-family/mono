@@ -213,10 +213,24 @@ Reply: one status byte, then the raw HTTP bytes on `Ok`.
 | 0    | `Ok`                  | resolved and connected; HTTP follows                |
 | 1    | `ServiceUnknown`      | no such service label on this node                  |
 | 2    | `NotAuthorized`       | the peer holds no grant for this service            |
-| 3    | `UpstreamUnavailable` | the service is known but nothing is listening       |
+| 3    | `UpstreamUnavailable` | the service is known but nothing is listening, and nobody supervises it on demand |
 
 HTTP-level failures (`401`, `502`) are ordinary HTTP responses on an `Ok` stream. Transport
 failures are the status byte, so the caller can render a precise local error page.
+
+**The node side is demand-aware, the same way the front door is.** A `start: on-demand` service
+that a peer's connect refuses is not automatically `UpstreamUnavailable` — the node carries its
+own `adi_hive::demand::Demand` over the store's `hive/demand.json` and `hive/wake.json`
+(`crates/adi-hive/src/shared.rs`), exactly as a routes-only front door does, and asks it on every
+request. That single ask both stamps the activity that keeps a running service alive while a peer
+on the mesh is using it (closing the other half of the same gap: without it, a dashboard somebody
+has open from another machine was idle-stopped out from under them) and, when the last published
+phase says the service is down, leaves it a wake. A refused connect then waits out the same
+start window the front door does before giving up, and if it is still not answering the peer is
+served `adi_hive::notfound::starting` as an ordinary `503` on the `Ok` stream — `Retry-After` and
+all, and no new wire status: a viewer's node splices the raw bytes either way, so an old build
+needs no update to render it. A service nobody supervises on demand keeps the honest
+`UpstreamUnavailable` refusal above.
 
 The existing raw-TCP forward keeps its own ALPN (`adi/mesh/forward/0`) for ssh, databases and
 anything not HTTP. iroh's `protocol::Router` accepts several ALPNs on one endpoint.

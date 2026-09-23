@@ -95,6 +95,12 @@ impl Daemon {
             None => gateway,
         });
 
+        // The node side's demand awareness: the same tick a routes-only front door runs, picking
+        // up a phase the supervising hive just published or a wake left behind for it
+        // (`crates/adi-hive/src/shared.rs`). Independent of whether the gateway's listener below
+        // ever binds — the node side needs it whether or not this machine calls anyone.
+        tasks.push(tokio::spawn(adi_hive::demand::bridge(gateway.demand())));
+
         let host_cfg = Arc::new(cfg.host.clone());
         tasks.push(tokio::spawn(host::serve(
             endpoint.clone(),

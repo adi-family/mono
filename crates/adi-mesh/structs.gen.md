@@ -275,6 +275,7 @@ pub struct Gateway {
     routes: Snapshot<Routes>,
     pool: Pool<IrohDialer>,
     credentials: Option<Arc<dyn NodeCredentials>>,
+    demand: Arc<Demand>,
 }
 ```
 

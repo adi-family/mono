@@ -50,7 +50,11 @@ const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// Short on purpose. Anything a person is looking at has to answer *something* quickly, and the
 /// holding page refreshes itself — so this window is not "how long a service may take to start",
 /// only "how long is worth waiting rather than saying so".
-const START_WINDOW: Duration = Duration::from_millis(1500);
+///
+/// Public so the mesh gateway's node side waits out the same window before falling back to its
+/// own holding page (`crates/adi-mesh/src/gateway.rs`) — a viewer should not learn to wait longer
+/// or shorter depending on whether the service they opened is local or over the fleet.
+pub const START_WINDOW: Duration = Duration::from_millis(1500);
 
 /// How often the start window retries the upstream.
 const START_RETRY: Duration = Duration::from_millis(50);
@@ -686,7 +690,14 @@ fn extract_target(head: &[u8]) -> Option<String> {
 /// its port needs, and nothing a service that is already up ever waits for (the first attempt wins).
 ///
 /// The error handed back is the last one, so the caller's log line says what actually refused.
-async fn connect_within(upstream: SocketAddr, window: Duration) -> std::io::Result<TcpStream> {
+///
+/// Public because the mesh gateway's node side runs the identical wait before it falls back to
+/// its own holding page — a second copy of this retry loop would be a second window to keep in
+/// step with this one.
+///
+/// # Errors
+/// The last connect error, once `window` has run out.
+pub async fn connect_within(upstream: SocketAddr, window: Duration) -> std::io::Result<TcpStream> {
     let deadline = tokio::time::Instant::now() + window;
     loop {
         match TcpStream::connect(upstream).await {

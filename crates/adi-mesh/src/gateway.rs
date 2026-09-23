@@ -33,6 +33,18 @@
 //! of §5 are enforced on the node, the side that owns the data: the mesh grant is machine-scoped
 //! (any process on a paired laptop can reach us), and the password is what makes it human-scoped.
 //!
+//! **The node side is demand-aware, the same way the front door is.** [`Gateway`] carries its own
+//! [`adi_hive::demand::Demand`], reading and writing the same store-level files
+//! (`crates/adi-hive/src/shared.rs`) a routes-only front door would. `negotiate` asks it on every
+//! request ([`NodeSide::wanted`]), which both stamps the activity that keeps a service running
+//! while a peer on the mesh is using it and, when the phase the supervising hive last published
+//! says the service is down, leaves a wake for it. A connection refused outright gets the same
+//! [`START_WINDOW`] the front door waits out before it gives up —
+//! and if the service still is not answering, the peer is served
+//! [`adi_hive::notfound::starting`] as an ordinary `503` on the `Ok` stream (§4 above), not
+//! [`HttpStatus::UpstreamUnavailable`]. A service nobody supervises on demand keeps that honest
+//! refusal exactly as before.
+//!
 //! **Connections are pooled, streams are not.** QUIC multiplexes streams natively, so one iroh
 //! [`Connection`] per peer with a bi-stream per HTTP connection costs one handshake per peer
 //! rather than one per request — the thing [`crate::client`]'s dial-per-accept gets wrong, and the
@@ -59,8 +71,12 @@ use std::sync::{Mutex as SyncMutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use adi_hive::config::Hive;
+use adi_hive::demand::{Demand, Wanted};
 use adi_hive::notfound::escape;
-use adi_hive::proxy::{Decision, Router as HiveRouter, force_connection_close, is_upgrade_request};
+use adi_hive::proxy::{
+    Decision, Matched, Router as HiveRouter, START_WINDOW, connect_within, force_connection_close,
+    is_upgrade_request,
+};
 use anyhow::Context as _;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointId};
@@ -319,6 +335,15 @@ impl Routes {
         self.router
             .host_is_carved(&format!("{service}.{LOCAL_ZONE}"))
     }
+
+    /// The route a request for `service` at `target` lands on, in the hive's own words — what
+    /// [`Self::resolve`] would connect to, plus what demand needs to name the route
+    /// ([`Matched::route_key`]). `None` for a service this node does not serve.
+    #[must_use]
+    pub fn matched_service(&self, service: &str, target: &str) -> Option<Matched<'_>> {
+        self.router
+            .matched_service(&format!("{service}.{LOCAL_ZONE}"), target)
+    }
 }
 
 /// One paired peer, as the node side needs it for a single connection: what we call it, and the
@@ -357,6 +382,22 @@ pub trait NodeSide: Send + Sync + 'static {
     /// it was called for, which is why [`Gateway`]'s does the write off the runtime and only logs
     /// a failure rather than propagating one.
     fn record_seen(&self, nickname: &str);
+
+    /// What a request for `service` at `target` means for the on-demand policy: stamps the
+    /// activity that keeps a service running while somebody on the mesh is using it, and — when
+    /// the phase the supervising hive last published says it is down — leaves a wake for it
+    /// ([`adi_hive::demand::Demand::wanted`]). [`Wanted::No`] for a service this node does not
+    /// serve, or one nobody supervises on demand.
+    ///
+    /// This is the node side's half of what `adi_hive::proxy::handle` does for a local request:
+    /// the same single call both keeps a busy service up and starts a sleeping one, crossing the
+    /// wake file when [`Wanted::Elsewhere`] names another hive as the supervisor.
+    fn wanted(&self, service: &str, target: &str) -> Wanted;
+
+    /// Ask outright for the service behind `route` to be started: a connect to it just refused,
+    /// which outranks whatever phase was last published — the process another hive thinks it has
+    /// is not answering. A no-op where nothing supervises `route` on demand.
+    fn wake_now(&self, route: &str);
 }
 
 /// The node passwords *this* machine already holds, for the calling side to attach.
@@ -396,6 +437,11 @@ pub struct Gateway {
     /// What this machine may authenticate *as* when it calls a node ([`NodeCredentials`]). `None`
     /// on a gateway nobody gave a store to, which is every gateway that is not the control panel's.
     credentials: Option<Arc<dyn NodeCredentials>>,
+    /// This node's on-demand awareness: store-level files, exactly as a routes-only front door
+    /// reads and writes them (`crates/adi-hive/src/shared.rs`). This process never registers a
+    /// runner, so it is always the routing half of the pair — every answer comes from what
+    /// another hive published, never from an in-process registry of its own.
+    demand: Arc<Demand>,
 }
 
 impl Gateway {
@@ -421,6 +467,10 @@ impl Gateway {
             routes: Snapshot::new(routes),
             pool: Pool::new(IrohDialer { endpoint }),
             credentials: None,
+            demand: Arc::new(Demand::new(
+                Some(adi_hive::shared::state_path()),
+                Some(adi_hive::shared::wake_path()),
+            )),
         }
     }
 
@@ -457,6 +507,15 @@ impl Gateway {
     #[must_use]
     pub fn local_key(&self) -> EndpointId {
         self.local_key
+    }
+
+    /// This gateway's on-demand registry, so `crate::daemon` can drive its bridge task — the
+    /// same tick a routes-only front door runs, so a phase the supervising hive just published,
+    /// or a wake left behind for it, reaches this process within
+    /// [`adi_hive::demand::bridge`]'s tick.
+    #[must_use]
+    pub fn demand(&self) -> Arc<Demand> {
+        Arc::clone(&self.demand)
     }
 }
 
@@ -496,6 +555,19 @@ impl NodeSide for Gateway {
     fn record_seen(&self, nickname: &str) {
         let nickname = nickname.to_string();
         tokio::task::spawn_blocking(move || activity::record_seen(&nickname));
+    }
+
+    fn wanted(&self, service: &str, target: &str) -> Wanted {
+        self.routes
+            .get()
+            .matched_service(service, target)
+            .map_or(Wanted::No, |matched| {
+                self.demand.wanted(matched.service, &matched.route_key())
+            })
+    }
+
+    fn wake_now(&self, route: &str) {
+        self.demand.wake_now(route);
     }
 }
 
@@ -596,10 +668,24 @@ where
         }
     };
 
-    // Connect before answering, so `UpstreamUnavailable` means what the table says it means:
-    // the service is configured but nothing is listening.
-    let mut upstream = match TcpStream::connect(addr).await {
-        Ok(upstream) => upstream,
+    // Every request asks demand about the route it just landed on — the fallback route, since the
+    // real target is not known until the head arrives below. That single ask both stamps the
+    // activity that keeps a running service alive over the mesh and, when the phase the
+    // supervising hive last published says it is down, leaves a wake for it
+    // (`adi_hive::demand::Demand::wanted`) — exactly what `adi_hive::proxy::handle` does for a
+    // local request.
+    let wanted = node.wanted(&service, "/");
+    // `None` means "on demand, and still not up after the start window" — answered with the
+    // holding page below, once the auth gate has run. Otherwise connect before answering at all,
+    // so `UpstreamUnavailable` keeps meaning what the table says it means: a service nobody
+    // supervises on demand is configured but nothing is listening.
+    let upstream = match connect_for(&wanted, addr).await {
+        Ok(upstream) => Some(upstream),
+        Err(e) if wanted.is_on_demand() => {
+            wake_if_elsewhere(node, &wanted);
+            info!(%peer, %service, %addr, "gateway: on-demand service is still starting; holding the page");
+            None
+        }
         Err(e) => {
             warn!(%peer, %service, %addr, error = %e, "gateway: local service not listening");
             protocol::write_http_status(send, HttpStatus::UpstreamUnavailable).await?;
@@ -613,15 +699,28 @@ where
     if !verified.any() {
         debug!(peer = %peer_record.petname, %service, "gateway: 401 — no usable credentials");
         // A `401` is an ordinary HTTP response on an `Ok` stream (`docs/fleet.md` §7): the
-        // transport worked, the human did not authenticate.
+        // transport worked, the human did not authenticate. Checked before the holding page
+        // below too — an unauthenticated peer learns nothing about whether a service is up,
+        // starting, or asleep.
         send.write_all(auth::unauthorized_response(&node.realm()).as_bytes())
             .await?;
         send.flush().await?;
         return Ok(None);
     }
     // Past both gates: admitted (`admit`) and now authenticated. This is the identity that rides
-    // onward in `X-Adi-Fleet-Node`, so "last seen" means exactly what that header claims.
+    // onward in `X-Adi-Fleet-Node`, so "last seen" means exactly what that header claims. It is
+    // recorded whether or not the service below turns out to be up — the visit happened, and
+    // presence is about the peer, not about whether their request could be served this instant.
     node.record_seen(&peer_record.record.nickname);
+
+    let Some(mut upstream) = upstream else {
+        // On demand, and still nothing to splice to after the start window: the visitor gets the
+        // holding page `adi-hive` shows for exactly this over the front door — no wire status for
+        // it (`docs/fleet.md` §7), an ordinary HTTP response on the `Ok` stream already written.
+        let host = header_value(&head, "host").unwrap_or_default();
+        respond_starting(send, &host).await?;
+        return Ok(None);
+    };
 
     // Re-resolve against the real target now that we have it: the first resolution used the
     // host's fallback route, which is the wrong upstream for a service claiming a path prefix.
@@ -629,8 +728,19 @@ where
         && let Some(better) = node.resolve(&service, &target)
         && better != addr
     {
-        match TcpStream::connect(better).await {
+        // Asked again, against the route the real target actually lands on — this is what keeps
+        // a dashboard's `/api` backend alive over the mesh, not only the frontend that owns the
+        // host and was asked above.
+        let wanted = node.wanted(&service, &target);
+        match connect_for(&wanted, better).await {
             Ok(reconnected) => upstream = reconnected,
+            Err(e) if wanted.is_on_demand() => {
+                wake_if_elsewhere(node, &wanted);
+                info!(%service, %better, "gateway: on-demand backend still starting; holding the page");
+                let host = header_value(&head, "host").unwrap_or_default();
+                respond_starting(send, &host).await?;
+                return Ok(None);
+            }
             Err(e) => {
                 warn!(%service, %better, error = %e, "gateway: path-routed upstream not listening");
                 send.write_all(BAD_GATEWAY.as_bytes()).await?;
@@ -790,6 +900,58 @@ const BAD_GATEWAY: &str = "HTTP/1.1 502 Bad Gateway\r\n\
      Connection: close\r\n\
      \r\n\
      502 Bad Gateway: the service is not up.\n";
+
+/// Connect to `addr`, waiting out [`START_WINDOW`] when `wanted` says the service is on demand —
+/// nothing a service that is already up ever waits for, since the first attempt always wins.
+///
+/// # Errors
+/// The last connect error, once the window (if any) has run out.
+async fn connect_for(wanted: &Wanted, addr: SocketAddr) -> std::io::Result<TcpStream> {
+    if wanted.is_on_demand() {
+        connect_within(addr, START_WINDOW).await
+    } else {
+        TcpStream::connect(addr).await
+    }
+}
+
+/// Ask for a start when `wanted` names another hive as the route's supervisor: a connect just
+/// refused, which outranks whatever phase that hive last published. A no-op for [`Wanted::Here`]
+/// (nothing to ask — this hive's own touch already started it) and [`Wanted::No`].
+fn wake_if_elsewhere<N: NodeSide + ?Sized>(node: &N, wanted: &Wanted) {
+    if let Wanted::Elsewhere(route) = wanted {
+        node.wake_now(route);
+    }
+}
+
+/// Serve the holding page in place of a refusal: an on-demand service has not come up within
+/// [`START_WINDOW`]. HTTP-level, exactly like the `401` above it — the transport already said
+/// [`HttpStatus::Ok`] (`docs/fleet.md` §7), so this is an ordinary response on that stream and
+/// no wire status is added for it: a viewer's node splices raw bytes and needs no update at all
+/// to render it.
+///
+/// Reuses [`adi_hive::notfound::starting`] verbatim rather than a second page, so a sleeping
+/// service reads the same whether it was opened locally or over the mesh.
+///
+/// # Errors
+/// Any write error on the stream.
+async fn respond_starting<W: AsyncWrite + Unpin>(send: &mut W, host: &str) -> anyhow::Result<()> {
+    let body = adi_hive::notfound::starting(host);
+    let response = format!(
+        "HTTP/1.1 503 Service Unavailable\r\n\
+         Content-Type: text/html; charset=utf-8\r\n\
+         Content-Length: {len}\r\n\
+         Retry-After: {retry}\r\n\
+         Cache-Control: no-store\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {body}",
+        len = body.len(),
+        retry = adi_hive::notfound::STARTING_REFRESH_SECS,
+    );
+    send.write_all(response.as_bytes()).await?;
+    send.flush().await?;
+    Ok(())
+}
 
 // ---------------------------------------------------------------------------------------
 // C5 — the calling side
@@ -1443,7 +1605,6 @@ mod tests {
 
     use adi_hive::config::{Recreate, Rollout, ServiceProxy, ServiceSpec};
     use base64::Engine as _;
-    use tokio::io::DuplexStream;
 
     use super::*;
     use crate::fleet::Grant;
@@ -1505,6 +1666,16 @@ mod tests {
         /// assert *that* negotiate reports a sighting without touching a real database for it.
         /// `std::sync::Mutex` rather than a `RefCell`: [`NodeSide`] must be `Sync`.
         seen: SyncMutex<Vec<String>>,
+        /// Canned answers for [`NodeSide::wanted`], by `(service, target)`. A pair with no entry
+        /// answers [`Wanted::No`], which is what leaves every test above unaffected by any of
+        /// this: demand only changes an outcome a test opts into with [`Self::with_wanted`].
+        wanted: SyncMutex<HashMap<(String, String), Wanted>>,
+        /// Every `(service, target)` [`NodeSide::wanted`] was actually asked, in order — this is
+        /// what a "successful request stamps activity" test asserts against, since the real
+        /// [`Gateway`] stamps activity inside that same call.
+        asked: SyncMutex<Vec<(String, String)>>,
+        /// Every route [`NodeSide::wake_now`] was called for, in order.
+        woken: SyncMutex<Vec<String>>,
     }
 
     impl StubNode {
@@ -1513,11 +1684,23 @@ mod tests {
                 peers: HashMap::new(),
                 routes,
                 seen: SyncMutex::new(Vec::new()),
+                wanted: SyncMutex::new(HashMap::new()),
+                asked: SyncMutex::new(Vec::new()),
+                woken: SyncMutex::new(Vec::new()),
             }
         }
 
         fn with_peer(mut self, key: EndpointId, peer: Peer) -> Self {
             self.peers.insert(key, peer);
+            self
+        }
+
+        /// Answer [`NodeSide::wanted`] with `wanted` for this exact `(service, target)` pair.
+        fn with_wanted(self, service: &str, target: &str, wanted: Wanted) -> Self {
+            self.wanted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert((service.to_string(), target.to_string()), wanted);
             self
         }
     }
@@ -1544,6 +1727,27 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(nickname.to_string());
+        }
+
+        fn wanted(&self, service: &str, target: &str) -> Wanted {
+            let key = (service.to_string(), target.to_string());
+            self.asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(key.clone());
+            self.wanted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(&key)
+                .cloned()
+                .unwrap_or(Wanted::No)
+        }
+
+        fn wake_now(&self, route: &str) {
+            self.woken
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(route.to_string());
         }
     }
 
@@ -1593,6 +1797,11 @@ mod tests {
 
     /// Drive [`negotiate`] over an in-memory pipe, returning what the node wrote back and the
     /// upstream it handed over (if any).
+    ///
+    /// Shuts down the server's write half once `negotiate` returns, the same way
+    /// [`serve_stream`]'s `send.finish()` does for a real stream, so the client side reads to EOF
+    /// rather than guessing how many bytes a page this size needs in one `read()` — the holding
+    /// page alone is several KB once `design/tokens.css` is inlined into it.
     async fn negotiate_over(
         node: &StubNode,
         peer: EndpointId,
@@ -1611,24 +1820,13 @@ mod tests {
         let upstream = negotiate(peer, node, &mut send, &mut recv)
             .await
             .expect("negotiate");
-        (slurp(&mut client, 1).await, upstream)
-    }
-
-    /// Read what is available, waiting until at least `at_least` bytes have arrived.
-    async fn slurp(stream: &mut DuplexStream, at_least: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut chunk = [0u8; 4096];
-        while out.len() < at_least {
-            let read = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut chunk))
-                .await
-                .expect("a reply within the timeout")
-                .expect("read");
-            if read == 0 {
-                break;
-            }
-            out.extend_from_slice(&chunk[..read]);
-        }
-        out
+        let _ = send.shutdown().await;
+        let mut reply = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut reply))
+            .await
+            .expect("a reply within the timeout")
+            .expect("read");
+        (reply, upstream)
     }
 
     // -- C6: who may reach what -----------------------------------------------------------
@@ -1997,6 +2195,9 @@ mod tests {
         assert!(accepted.is_err(), "the service was never connected to");
     }
 
+    /// The counterpart to the on-demand tests below: a service nobody supervises on demand keeps
+    /// the honest refusal it always had — [`StubNode::wanted`] answers [`Wanted::No`] by default,
+    /// so this is unaffected by any of the demand wiring.
     #[tokio::test]
     async fn a_service_whose_port_is_dead_is_upstream_unavailable() {
         let key = some_key();
@@ -2010,6 +2211,130 @@ mod tests {
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
         assert_eq!(reply, vec![HttpStatus::UpstreamUnavailable as u8]);
         assert!(upstream.is_none());
+    }
+
+    /// The bug this whole change exists for: a dashboard idle-stopped on another fleet machine
+    /// used to show `UpstreamUnavailable` — the mesh's "node refused the request" page — instead
+    /// of the same holding page the front door shows for exactly this locally. This asserts the
+    /// node's own answer: `HttpStatus::Ok` on the transport, then an ordinary `503` carrying
+    /// `adi_hive::notfound::starting` — no new wire status, so an old viewer needs no update.
+    #[tokio::test]
+    async fn an_on_demand_service_that_is_still_starting_gets_the_holding_page_not_a_refusal() {
+        let key = some_key();
+        let port = dead_port().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
+            .with_peer(
+                key,
+                peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+            )
+            .with_wanted("nosh", "/", Wanted::Here);
+
+        let head = get_head("nosh.laptop-b.n.adi", "/", &basic("igor", "hunter2"));
+        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+
+        assert_eq!(reply[0], HttpStatus::Ok as u8, "the transport worked");
+        let text = String::from_utf8_lossy(&reply[1..]).to_string();
+        assert!(
+            text.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "{text}"
+        );
+        assert!(text.contains("Retry-After:"), "{text}");
+        assert!(text.contains("Starting this service for you"), "{text}");
+        assert!(
+            upstream.is_none(),
+            "nothing to splice: the service never came up"
+        );
+        assert_eq!(
+            *node.woken.lock().unwrap_or_else(PoisonError::into_inner),
+            Vec::<String>::new(),
+            "a service this hive supervises itself needs no wake left for another hive"
+        );
+    }
+
+    /// The other half of `Wanted`: a service supervised by a *different* hive gets its wake
+    /// written to the shared file, not started in-process — [`NodeSide::wake_now`] is what
+    /// carries that across a split install (`crates/adi-hive/src/shared.rs`).
+    #[tokio::test]
+    async fn an_on_demand_service_supervised_elsewhere_is_woken_through_the_shared_file() {
+        let key = some_key();
+        let port = dead_port().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
+            .with_peer(
+                key,
+                peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+            )
+            .with_wanted("nosh", "/", Wanted::Elsewhere("nosh.adi".to_string()));
+
+        let head = get_head("nosh.laptop-b.n.adi", "/", &basic("igor", "hunter2"));
+        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+
+        let text = String::from_utf8_lossy(&reply[1..]).to_string();
+        assert!(text.starts_with("HTTP/1.1 503 Service Unavailable\r\n"), "{text}");
+        assert!(upstream.is_none());
+        assert_eq!(
+            *node.woken.lock().unwrap_or_else(PoisonError::into_inner),
+            vec!["nosh.adi".to_string()],
+            "the refused connect outranks whatever phase was last published"
+        );
+    }
+
+    /// The auth gate still runs first even when the service is starting: an unauthenticated peer
+    /// must learn nothing about whether a service is up, starting, or asleep, so it gets the same
+    /// `401` it always did rather than the holding page.
+    #[tokio::test]
+    async fn an_unauthenticated_peer_is_401_even_for_a_starting_on_demand_service() {
+        let key = some_key();
+        let port = dead_port().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
+            .with_peer(
+                key,
+                peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+            )
+            .with_wanted("nosh", "/", Wanted::Here);
+
+        let head = get_head("nosh.laptop-b.n.adi", "/", "");
+        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+
+        assert_eq!(reply[0], HttpStatus::Ok as u8, "the transport worked");
+        let text = String::from_utf8_lossy(&reply[1..]).to_string();
+        assert!(
+            text.starts_with("HTTP/1.1 401"),
+            "the auth gate runs before the holding page: {text}"
+        );
+        assert!(!text.contains("Starting"), "{text}");
+        assert!(upstream.is_none());
+        assert!(
+            node.seen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
+            "an unauthenticated request is never a sighting, on-demand or not"
+        );
+    }
+
+    /// The other half of the bug: a dashboard viewed over the mesh must not be idle-stopped out
+    /// from under the person using it. A successful request has to *ask* demand — that single
+    /// call is what stamps the activity keeping the service alive in the real [`Gateway`].
+    #[tokio::test]
+    async fn a_successful_request_asks_demand_which_is_what_stamps_its_activity() {
+        let key = some_key();
+        let (_listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
+
+        let head = get_head("nosh.laptop-b.n.adi", "/dash", &basic("igor", "hunter2"));
+        let (_, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+        assert!(upstream.is_some(), "the service was up and reachable");
+
+        assert!(
+            node.asked
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&("nosh".to_string(), "/".to_string())),
+            "negotiate must ask demand about the route the request landed on"
+        );
     }
 
     #[tokio::test]

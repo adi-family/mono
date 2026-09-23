@@ -173,9 +173,10 @@ wire_status! {
     /// How a node answered a gateway request. The discriminant is the on-wire byte.
     ///
     /// Only *transport* outcomes live here. HTTP-level failures (a `401` from the node's auth
-    /// gate, a `502` from its front door) are ordinary HTTP responses on an
-    /// [`Ok`](HttpStatus::Ok) stream — keeping them apart is what lets the caller render a
-    /// precise local error page instead of guessing from a status line it never received.
+    /// gate, a `502` from its front door, the `503` holding page an on-demand service gets while
+    /// it starts) are ordinary HTTP responses on an [`Ok`](HttpStatus::Ok) stream — keeping them
+    /// apart is what lets the caller render a precise local error page instead of guessing from a
+    /// status line it never received.
     HttpStatus {
         /// The service resolved and its local upstream is up; HTTP bytes follow.
         Ok = 0 => "ok",
