@@ -135,6 +135,25 @@ pub struct AgentRunDeleted {
     pub run_id: String,
 }
 
+/// `adi.agents.run.reported` — a run handed over an interim report *on purpose*, via the `Report`
+/// tool, without waiting for the run to actually end.
+///
+/// Named by a constant for the same reason [`QUESTION_ASKED`] is: it is published from inside a
+/// turn — the harness loop, or the MCP server serving a Claude/codex engine — and the launcher's
+/// own wake (`adi-cli`'s `agents run`) subscribes to the exact spelling.
+pub const RUN_REPORTED: &str = "adi.agents.run.reported";
+
+/// The payload of [`RUN_REPORTED`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunReported {
+    /// The agent's name.
+    pub agent: String,
+    /// The run that reported in.
+    pub run_id: String,
+    /// The report itself, verbatim.
+    pub report: String,
+}
+
 /// `adi.agents.question.asked` — a run stopped to ask a person something and ended its turn.
 ///
 /// Named by a constant rather than spelled at each site because, unlike every other event here,
@@ -154,6 +173,13 @@ pub struct AgentQuestionAsked {
     pub agent: String,
     /// The conversation blocked on the answer — what an answer must be delivered into.
     pub conv: String,
+    /// The same conversation, spelled the way [`AgentRunFinished`] and [`AgentRunReported`] spell
+    /// it — so a launcher's wake can filter on one field name across all three endings a run may
+    /// report back through, rather than knowing that this one event calls it `conv`. Equal to
+    /// `conv`, always; `#[serde(default)]` only so a payload from before this field existed still
+    /// deserializes.
+    #[serde(default)]
+    pub run_id: String,
     /// The ask's id.
     pub ask: String,
     /// The first question, plus how many came with it — one line, fit to be a notification.
@@ -303,12 +329,26 @@ pub fn event_types() -> Vec<EventType> {
             },
         ),
         EventType::of(
+            RUN_REPORTED,
+            "A run handed over an interim report on purpose, via the Report tool, without waiting \
+             for the run to end.",
+            schema::<AgentRunReported>(),
+            &AgentRunReported {
+                agent: "my-agent".into(),
+                run_id: "r-1a2b3c".into(),
+                report: "Phase 1 done: the migration ran clean on staging. Kicking off phase 2 \
+                         now, in the background."
+                    .into(),
+            },
+        ),
+        EventType::of(
             QUESTION_ASKED,
             "A run stopped to ask a person a question, and is waiting on the answer.",
             schema::<AgentQuestionAsked>(),
             &AgentQuestionAsked {
                 agent: "my-agent".into(),
                 conv: "1750000000000-0001".into(),
+                run_id: "1750000000000-0001".into(),
                 ask: "q-1750000000000-0001".into(),
                 question: "Auth method: session cookies or bearer tokens?".into(),
             },

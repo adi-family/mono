@@ -1363,6 +1363,11 @@ pub struct AgentDto {
     /// Whether this agent has a live pty session or detached process right now.
     #[serde(default)]
     pub running: bool,
+    /// The busiest lifecycle across every run of this agent — see [`RunState`]. `Waiting` when
+    /// nothing is running but at least one run is going to move again on its own (a pending await,
+    /// a queued message, or an unanswered question); `None` from a server too old to know about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RunState>,
     /// Whether a run of *this* agent would be refused right now — the global cap is full, or its
     /// project's is. The client uses it to offer "Run anyway" instead of walking into a 429.
     #[serde(default)]
@@ -2409,6 +2414,26 @@ pub struct AgentCapabilities {
     pub images: bool,
 }
 
+/// The richer lifecycle behind a plain `running` flag (ADI-MONO-101). Mirrors
+/// `adi_agents::RunLifecycle`: `running` only ever answers "is the process behind the *current*
+/// turn alive right now", and a turn ending is not the same as a run ending — a pending await (a
+/// background job is one), a message queued behind the turn that just landed, or an unanswered
+/// question all mean the conversation is going to speak again on its own.
+///
+/// Carried alongside `running` rather than in place of it, so an older client that has never heard
+/// of this still reads exactly what it always did. Absent (`None`) from an older *server* — most
+/// often an older fleet node reached through `/api/node/<node>/api/...` — which a caller must read
+/// as "cannot tell waiting from finished here", not guess at: `running: false` from such a node is
+/// the only thing it ever promised, and treating its absence as `finished` is exactly the bug this
+/// field exists to fix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunState {
+    Running,
+    Waiting,
+    Finished,
+}
+
 /// The value of [`AgentRunInfo::launched_by`] that means a person asked for the run.
 ///
 /// Stated here because the page reads it and cannot link `adi_agents` — the launcher vocabulary is
@@ -2447,6 +2472,10 @@ pub struct AgentRunInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub running: bool,
+    /// The richer lifecycle `running` alone cannot express — see [`RunState`]. `None` from a
+    /// server too old to know about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RunState>,
     /// Whether this session has been hidden from the chat rail (`POST /api/agents/run/hide`).
     ///
     /// `POST /api/agents/runs` (one agent, whole) always carries it either way — the open
@@ -2658,6 +2687,10 @@ pub struct AgentPeek {
     pub name: String,
     /// Whether the agent's pty session is live; `output` is empty when it isn't.
     pub running: bool,
+    /// The richer lifecycle `running` alone cannot express — see [`RunState`]. `None` from a
+    /// server too old to know about it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<RunState>,
     /// The visible pane text (trailing whitespace trimmed).
     ///
     /// **Empty when the caller asked for folded runs** ([`TranscriptView::fold`]): that reader is

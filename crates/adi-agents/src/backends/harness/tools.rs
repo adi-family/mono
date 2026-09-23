@@ -300,6 +300,25 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
             })
         },
     },
+    ToolSpec {
+        name: "Report",
+        description: "Hand whoever launched you an interim report, on purpose, without waiting \
+             for the run itself to end. Reach for this at a natural checkpoint — \"phase 1 done, \
+             here's what's next\" — when a person or another agent started you and will be told \
+             when you finish: this reaches them right now, even while you still have an Await \
+             pending, a background job running, or more work queued. It does not end anything by \
+             itself and it is not a question — nobody is expected to answer it. Keep going, or end \
+             your turn exactly as you would without it.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "text": { "type": "string", "description": "The report itself — what you would tell whoever started you if they asked how it's going." },
+                },
+                "required": ["text"],
+            })
+        },
+    },
 ];
 
 /// How much of a tool's output goes back to the model. A turn replays its whole transcript on every
@@ -402,6 +421,7 @@ pub(crate) fn execute(
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
         "Ask" => ask(input, ctx),
+        "Report" => report(input, ctx),
         other => Err(format!(
             "no tool named {other} — the tools you have are: {}",
             TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
@@ -804,6 +824,7 @@ fn ask(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
         serde_json::to_string(&crate::events::AgentQuestionAsked {
             agent: ctx.agent.to_string(),
             conv: ctx.conv.to_string(),
+            run_id: ctx.conv.to_string(),
             ask: asked.id.clone(),
             question: asked.headline(),
         })
@@ -869,6 +890,30 @@ fn parse_question(value: &Value) -> std::result::Result<crate::store::Question, 
             .and_then(Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+/// Tell whoever launched this run something, on purpose, without waiting for the run to end.
+///
+/// Announced on the bus for the same reason [`ask`] is: this crate has no idea who is watching,
+/// and [`awaits::follow_up`]'s registered wake is what turns it into somebody's notification.
+/// Nothing here touches an await, the queue, or the transcript — a report changes nothing about
+/// whether the conversation is still going, only who has been told about it.
+fn report(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let text = arg_str(input, "text")?;
+    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit(
+        crate::events::RUN_REPORTED,
+        serde_json::to_string(&crate::events::AgentRunReported {
+            agent: ctx.agent.to_string(),
+            run_id: ctx.conv.to_string(),
+            report: text.trim().to_string(),
+        })
+        .unwrap_or_default(),
+    );
+    Ok(
+        "reported — whoever is watching this run (if anyone registered a wake for it) has been \
+         told. Carry on, or end your turn."
+            .to_string(),
+    )
 }
 
 // ---- shared helpers ----------------------------------------------------------------
@@ -1702,5 +1747,39 @@ mod tests {
         )
         .expect_err("too many");
         assert!(err.contains(&MAX_QUESTIONS.to_string()), "{err}");
+    }
+
+    /// ADI-MONO-101's explicit signal: a run can hand over an interim report on purpose, and that
+    /// is announced on the bus exactly like an `Ask` is — under its own name, so a launcher's wake
+    /// can tell it apart from the run actually ending.
+    #[test]
+    fn report_announces_itself_on_the_bus_and_touches_nothing_else() {
+        let chat = Conversation::open("report");
+        let ctx = chat.ctx();
+
+        let reply = report(&json!({ "text": "phase 1 done, starting phase 2" }), &ctx)
+            .expect("reported");
+        assert!(reply.contains("reported"), "{reply}");
+
+        let events = adi_events::Events::with_config(ctx.awaits.config().clone())
+            .drain()
+            .expect("drain");
+        let published = events
+            .iter()
+            .find(|e| e.record.name == crate::events::RUN_REPORTED)
+            .expect("the report was published");
+        let payload: Value =
+            serde_json::from_str(&published.record.payload).expect("payload decodes");
+        assert_eq!(payload["agent"], "watcher");
+        assert_eq!(payload["run_id"], chat.conv);
+        assert_eq!(payload["report"], "phase 1 done, starting phase 2");
+
+        // A report is a side channel: it settles no await, queues nothing, and asks nobody anything.
+        assert!(ctx.awaits.for_conversation("watcher", &chat.conv).is_empty());
+        assert!(
+            ctx.sessions
+                .pending_question("watcher", &chat.conv)
+                .is_none()
+        );
     }
 }

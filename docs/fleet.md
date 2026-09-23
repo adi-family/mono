@@ -788,6 +788,23 @@ ladder for machines (a 264px rail has room for one, and a band inside a band at 
 as two bands of the same kind): state is a question a row can answer for itself, and "which machine
 is this on" is the one it cannot. See `docs/sessions.md`, "The state is on the row".
 
+**"Coming back" is now backed by the store's own answer, not only the row's derivation
+(ADI-MONO-101).** The grey dot has always read the row's own `awaits`; what changed is that
+`adi.agents.run.finished` — and the wake `agents run` registers on a launch — no longer fire the
+moment a turn merely *ends* while an await, a queued message, or an unanswered question is still
+pending. `GET /api/agents`, `POST /api/agents/run/peek` and `POST /api/agents/runs*` now carry that
+distinction explicitly, as `state: "running" | "waiting" | "finished"` beside the plain `running`
+flag they always answered with — additive and `#[serde(default)]`, so an older node reached through
+`/api/node/<node>/api/…` (1.21.0, e.g. `hetzner-nosh`, has none of this) simply omits the field, and
+a caller must read its absence as "cannot tell waiting from finished here" and fall back to
+`running` alone, never guess `finished`. **This machine's own launcher hears the difference without
+polling** (the await it holds fires on the real ending, an explicit `Report`, or a question asked —
+see `guides/agents.md`); **a launcher on another node still cannot** — there is nothing today that
+forwards `adi.agents.run.finished`/`.reported`/`question.asked` across the mesh, so a fleet launch
+is told apart from "still going" only by polling `/api/node/<node>/api/agents/run/peek` (or `/runs`)
+same as before, now at least reading a state that means what it says once it gets there. Filed as a
+follow-up subtask under ADI-MONO-101 rather than half-built here.
+
 The **agent picker** answers the
 same question the same way — one `<optgroup>` per source, in the order the rail merges them, so two
 machines' same-named agents are told apart by the heading over them rather than by a suffix on every

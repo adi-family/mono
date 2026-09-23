@@ -75,8 +75,8 @@ pub use backends::harness::tools::ToolDeclaration;
 pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentGoalClosed, AgentGoalNudged, AgentGoalSet, AgentQuestionAnswered,
-    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunStarted, AgentRunStopped,
-    AgentSaved, event_catalog, event_types,
+    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunReported, AgentRunStarted,
+    AgentRunStopped, AgentSaved, RUN_REPORTED, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
 pub use llm::{
@@ -87,8 +87,8 @@ pub use marker::{Marker, Settled, Woke};
 pub use overrides::RunOverrides;
 pub use progress::{BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities};
 pub use run::{
-    Launch, LaunchOptions, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions,
-    send_keys, session_name,
+    Launch, LaunchOptions, Peek, RunInfo, RunLifecycle, Sent, Turn, capture_pane, is_runnable,
+    running_sessions, send_keys, session_name,
 };
 
 use agent::validate_name;
@@ -277,6 +277,63 @@ fn with_knowledge_tool(bin_tools: &[String], knowledge: &knowledge::RunKnowledge
         out.push(adi_tools::SYS_KNOWLEDGE.to_string());
     }
     out
+}
+
+/// Everything that might bring a stopped run back to life on its own, for every run of one agent at
+/// once — what [`Agents::note_finished`] gates a run's ending on, and what [`RunLifecycle`] reads to
+/// tell "waiting" from "finished". Built once per listing rather than asked per run: nothing is
+/// pending in the overwhelming majority of conversations, and asking per row made that the *empty*
+/// answer the expensive one (the same reasoning `sessions_with_queue` and the webapp's own
+/// `Waiting`/`Awaiting` pay this cost for).
+struct Pending {
+    /// Conversations with a pending [`awaits::Await`] — a background job is one, since
+    /// [`crate::backends::jobs`] registers its wake the same way.
+    awaiting: std::collections::HashSet<String>,
+    /// Conversations with a message queued behind their last turn.
+    queued: std::collections::HashSet<String>,
+    /// Conversations blocked on an unanswered [`store::Ask`].
+    asked: std::collections::HashSet<String>,
+}
+
+impl Pending {
+    fn of(config: &Config, store: &SessionStore, agent: &str) -> Self {
+        Self {
+            awaiting: awaits::Awaits::with_config(config.clone())
+                .list()
+                .into_iter()
+                .filter(|a| a.agent == agent)
+                .map(|a| a.conv)
+                .collect(),
+            queued: store.sessions_with_queue(agent),
+            asked: store
+                .all_pending_questions()
+                .into_iter()
+                .filter(|a| a.agent == agent)
+                .map(|a| a.conv)
+                .collect(),
+        }
+    }
+
+    /// Whether this conversation is going to move again on its own once its turn ends.
+    fn blocks(&self, run_id: &str) -> bool {
+        self.awaiting.contains(run_id) || self.queued.contains(run_id) || self.asked.contains(run_id)
+    }
+
+    /// Whether *anything* of this agent's is going to move again on its own — the one-agent-row
+    /// answer `GET /api/agents` needs without listing every run.
+    fn any(&self) -> bool {
+        !self.awaiting.is_empty() || !self.queued.is_empty() || !self.asked.is_empty()
+    }
+
+    fn state_of(&self, running: bool, run_id: &str) -> RunLifecycle {
+        if running {
+            RunLifecycle::Running
+        } else if self.blocks(run_id) {
+            RunLifecycle::Waiting
+        } else {
+            RunLifecycle::Finished
+        }
+    }
 }
 
 impl Agents {
@@ -2049,6 +2106,16 @@ impl Agents {
             .any(|record| Self::session_is_alive(&store, record))
     }
 
+    /// Whether any run of `agent` has something that will move it again on its own: a pending
+    /// [`awaits::Await`] (a background job is one), a message queued behind its last turn, or a
+    /// question it stopped to ask a person. The richer cousin of [`Self::is_running`] for a caller
+    /// that shows one row per agent rather than per run — `GET /api/agents`, most of all — where
+    /// `running: false` alone cannot tell "genuinely done" from "between turns".
+    #[must_use]
+    pub fn has_pending_wake(&self, agent: &str) -> bool {
+        Pending::of(&self.config, &self.sessions(), agent).any()
+    }
+
     /// A read-only live snapshot of an agent for the live view: a pty screen capture for interactive
     /// backends, or the latest run's log tail for the headless backends.
     #[must_use]
@@ -2078,29 +2145,39 @@ impl Agents {
         }
         let store = self.sessions();
         let mut runs = Self::list_runs(&store, agent, runner.as_ref());
-        // Anything that stopped since the last look gets its ending written down and published,
-        // before the queue below can start a next turn over the top of it.
-        self.note_finished(agent, runner.as_ref(), &mut runs);
-        // Which sessions have anything waiting, in one question rather than one per run. Nothing is
-        // waiting in nearly every poll, and asking each run separately made the *empty* answer the
-        // expensive one.
-        let waiting = store.sessions_with_queue(&agent.name);
+        // Everything that might still bring a stopped run back to life on its own, asked once for
+        // the whole agent rather than once per run below.
+        let mut pending = Pending::of(&self.config, &store, &agent.name);
+        // Anything that stopped since the last look — and has nothing left pending — gets its
+        // ending written down and published, before the queue below can start a next turn over the
+        // top of it. A run still holding an await, a queued message, or an unanswered question is
+        // not finished: it is `runs`' `state` column's job to say so, not this one's to end it.
+        self.note_finished(agent, runner.as_ref(), &mut runs, &pending);
         let idle: Vec<String> = runs
             .iter()
-            .filter(|r| !r.running && waiting.contains(&r.run_id))
+            .filter(|r| !r.running && pending.queued.contains(&r.run_id))
             .map(|r| r.run_id.clone())
             .collect();
         let advanced = idle.iter().fold(false, |any, conv_id| {
             self.advance_queue(agent, conv_id) || any
         });
         if advanced {
-            return Self::list_runs(&store, agent, runner.as_ref());
+            runs = Self::list_runs(&store, agent, runner.as_ref());
+            pending = Pending::of(&self.config, &store, &agent.name);
+        }
+        for run in &mut runs {
+            run.state = pending.state_of(run.running, &run.run_id);
         }
         runs
     }
 
     /// One agent's sessions as run history, newest first — the store's records with each one's
     /// liveness asked of the runner.
+    ///
+    /// `state` is left `Running` here regardless of what `running` says: [`Self::runs`] is the only
+    /// caller with every run's pending awaits, queue and questions in hand at once, and it overwrites
+    /// this placeholder immediately after. A caller reading a `RunInfo` straight out of this function
+    /// has skipped that pass and must not trust `state`.
     fn list_runs(store: &SessionStore, agent: &StoredAgent, runner: &dyn Runner) -> Vec<RunInfo> {
         store
             .list(&agent.name)
@@ -2114,6 +2191,7 @@ impl Agents {
                     .as_deref()
                     .unwrap_or(runner)
                     .is_alive(&store.session_as_listed(&record)),
+                state: RunLifecycle::Running,
                 run_id: record.id,
                 started_at: record.started_at,
                 last_activity: record.last_activity,
@@ -2144,11 +2222,24 @@ impl Agents {
     /// Reading the log to build the outcome is the expensive part, so it happens once per run ever:
     /// the record's own `outcome` gates it, and [`record_outcome`](SessionStore::record_outcome)
     /// settles the race between watchers so the event goes out exactly once.
-    fn note_finished(&self, agent: &StoredAgent, runner: &dyn Runner, runs: &mut [RunInfo]) {
+    ///
+    /// `pending` is the other half of the gate (ADI-MONO-101): a turn ending is not a run ending,
+    /// and a run still holding an await, a queued message, or an unanswered question is going to
+    /// speak again on its own — recording an outcome and publishing `adi.agents.run.finished` for it
+    /// now would tell a launcher the run is done when what actually happened is that its *turn*
+    /// stopped. Skipped here, it is simply looked at again on the next listing, exactly like a run
+    /// that is still genuinely mid-turn.
+    fn note_finished(
+        &self,
+        agent: &StoredAgent,
+        runner: &dyn Runner,
+        runs: &mut [RunInfo],
+        pending: &Pending,
+    ) {
         let store = self.sessions();
         for run in runs
             .iter_mut()
-            .filter(|r| !r.running && r.outcome.is_none())
+            .filter(|r| !r.running && r.outcome.is_none() && !pending.blocks(&r.run_id))
         {
             let session = store.session(&agent.name, &run.run_id);
             let content = live_content(runner, &session, false);
@@ -2349,8 +2440,15 @@ impl Agents {
         let session = store.session(&agent.name, run_id);
         let running = runner.is_alive(&session);
         if let Some(terminal) = runner.as_terminal() {
+            // A pty has no awaits, queue or questions of its own — Await/Ask are served only to a
+            // headless engine's MCP connection — so its lifecycle is exactly what `running` says.
             return Peek {
                 running,
+                state: if running {
+                    RunLifecycle::Running
+                } else {
+                    RunLifecycle::Finished
+                },
                 output: terminal.capture(&session).unwrap_or_default(),
                 attach: String::new(),
                 interactive: true,
@@ -2359,9 +2457,34 @@ impl Agents {
         let log = session.log_path();
         Peek {
             running,
+            state: self.run_lifecycle(&agent.name, run_id, running),
             output: backends::detached::tail_of(log, run::MAX_LOG_TAIL).unwrap_or_default(),
             attach: format!("tail -f {}", log.display()),
             interactive: false,
+        }
+    }
+
+    /// The richer lifecycle behind a single run's `running` flag — see [`RunLifecycle`]. A point
+    /// read rather than the batch [`Pending`] a whole-agent listing builds: `peek_run` answers one
+    /// conversation at a time, so three small store reads here cost less than building (and
+    /// discarding) every other run's awaits, queue and questions to ask about the one that matters.
+    fn run_lifecycle(&self, agent: &str, run_id: &str, running: bool) -> RunLifecycle {
+        if running {
+            return RunLifecycle::Running;
+        }
+        if run_id.is_empty() {
+            return RunLifecycle::Finished;
+        }
+        let store = self.sessions();
+        let blocked = !awaits::Awaits::with_config(self.config.clone())
+            .for_conversation(agent, run_id)
+            .is_empty()
+            || store.queue_len(agent, run_id) > 0
+            || store.pending_question(agent, run_id).is_some();
+        if blocked {
+            RunLifecycle::Waiting
+        } else {
+            RunLifecycle::Finished
         }
     }
 
@@ -3189,6 +3312,7 @@ fn state_str(session: &SessionRef<'_>, key: &str) -> Option<String> {
 fn empty_peek() -> Peek {
     Peek {
         running: false,
+        state: RunLifecycle::Finished,
         output: String::new(),
         attach: String::new(),
         interactive: false,
@@ -6094,6 +6218,126 @@ mod tests {
             !store.delete_run("recon", &second).expect("delete again"),
             "deleting what is already gone settles quietly",
         );
+    }
+
+    /// ADI-MONO-101: a turn ending is not a run ending. A stopped session holding a pending await
+    /// (a background job registers one exactly this way) must not be reported as finished — not in
+    /// its outcome, not on the event bus, and not in the state a listing shows for it — until the
+    /// await actually resolves. The very next listing after it does settles the run for good.
+    #[test]
+    fn a_run_that_stopped_with_a_pending_await_is_waiting_not_finished() {
+        let store = scratch("pending-await");
+        store.save("watcher", spec("process:claude")).expect("save");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::ProcessClaude, "/tmp", "watch the build")
+            .expect("create")
+            .id;
+
+        let pending = awaits::Awaits::with_config(store.config().clone());
+        awaits::register(
+            &pending,
+            "watcher",
+            &conv,
+            &awaits::Request {
+                note: "the build".into(),
+                every_seconds: Some(30),
+                check: Some("true".into()),
+                ..awaits::Request::default()
+            },
+        )
+        .expect("register");
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs.len(), 1);
+        assert!(!runs[0].running);
+        assert_eq!(runs[0].state, RunLifecycle::Waiting);
+        assert!(
+            runs[0].outcome.is_none(),
+            "not settled enough yet to have a verdict"
+        );
+        assert_eq!(store.peek_run(&agent, &conv).state, RunLifecycle::Waiting);
+        assert!(
+            adi_events::Events::with_config(store.config().clone())
+                .drain()
+                .expect("drain")
+                .iter()
+                .all(|e| e.record.name != "adi.agents.run.finished"),
+            "nothing here is really finished yet",
+        );
+
+        let id = pending.for_conversation("watcher", &conv)[0].id.clone();
+        assert!(pending.claim(&id));
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs[0].state, RunLifecycle::Finished);
+        assert!(runs[0].outcome.is_some());
+        assert_eq!(store.peek_run(&agent, &conv).state, RunLifecycle::Finished);
+        assert!(
+            adi_events::Events::with_config(store.config().clone())
+                .drain()
+                .expect("drain")
+                .iter()
+                .any(|e| e.record.name == "adi.agents.run.finished"),
+            "now it really is",
+        );
+    }
+
+    /// The same gate holds for a message queued behind the last turn, and for a run that stopped
+    /// only to ask a person something — both are cases where `!running` looked exactly like "done"
+    /// before this fix. Asked of [`Pending`] directly rather than through [`Agents::runs`]: a queued
+    /// message on an idle session is also what that listing tries to *advance*, which would spawn a
+    /// real engine and defeat the point of this test.
+    #[test]
+    fn a_queued_message_or_an_unanswered_question_also_counts_as_pending() {
+        let store = scratch("pending-queue-and-question");
+        let sessions = store.sessions();
+
+        let queued = sessions
+            .create("watcher", Backend::ProcessClaude, "/tmp", "first task")
+            .expect("create")
+            .id;
+        sessions
+            .enqueue(
+                "watcher",
+                &queued,
+                "second task",
+                &[],
+                &[],
+                QueueMode::Regular,
+            )
+            .expect("enqueue");
+
+        let asked = sessions
+            .create("watcher", Backend::ProcessClaude, "/tmp", "needs a decision")
+            .expect("create")
+            .id;
+        sessions
+            .ask(
+                "watcher",
+                &asked,
+                &store::AskRequest {
+                    note: "which way".into(),
+                    questions: vec![store::Question {
+                        header: String::new(),
+                        question: "in place, or a new table?".into(),
+                        options: Vec::new(),
+                        multi_select: false,
+                    }],
+                    after_seconds: None,
+                    defaults: Vec::new(),
+                },
+            )
+            .expect("ask");
+
+        assert!(store.has_pending_wake("watcher"));
+        let pending = Pending::of(store.config(), &sessions, "watcher");
+        assert!(pending.blocks(&queued), "a queued message is pending");
+        assert!(pending.blocks(&asked), "an unanswered question is pending");
+        assert_eq!(pending.state_of(false, &queued), RunLifecycle::Waiting);
+        assert_eq!(pending.state_of(false, &asked), RunLifecycle::Waiting);
+        assert!(!pending.blocks("some-other-conversation"));
     }
 
     /// A conversation answers from the directory it started in, however the manifest resolves now —

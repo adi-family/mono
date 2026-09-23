@@ -20,7 +20,7 @@ use crate::types::{
     AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
     AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun,
     IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun, ReplyToRun,
-    ReviewRun, RunAgent, RunRef, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
+    ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
     SetRunLimit, SimulateAgent, SimulateTurn, StarRun, TranscriptView, TurnMarker, UnqueueFromRun,
 };
 
@@ -392,6 +392,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
+        state: Some(wire_run_state(peek.state)),
         // A reader asking for folded runs is drawing a transcript, and nothing draws both that and
         // the raw log — so the tail (up to 64 KB of engine output, re-sent every second) is left
         // out of the one answer that has no use for it. Every other caller gets it as before.
@@ -899,6 +900,7 @@ fn conversation_snapshot(
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
+        state: Some(wire_run_state(peek.state)),
         output: peek.output,
         attach: peek.attach,
         interactive: peek.interactive,
@@ -1407,6 +1409,7 @@ fn runs_response_with(
                 message: title_of(&r.message),
                 title: r.title,
                 running: r.running,
+                state: Some(wire_run_state(r.state)),
                 hidden: r.hidden,
                 starred: r.starred,
                 launched_by: r.launched_by,
@@ -1471,6 +1474,15 @@ fn wire_caps(c: adi_agents::BackendCapabilities) -> AgentCapabilities {
         // deliver an answer into, so there is nothing to derive separately.
         asks: c.answerable,
         images: c.images,
+    }
+}
+
+/// The richer lifecycle behind `running` (ADI-MONO-101) as the wire sees it.
+fn wire_run_state(s: adi_agents::RunLifecycle) -> RunState {
+    match s {
+        adi_agents::RunLifecycle::Running => RunState::Running,
+        adi_agents::RunLifecycle::Waiting => RunState::Waiting,
+        adi_agents::RunLifecycle::Finished => RunState::Finished,
     }
 }
 
@@ -1901,6 +1913,7 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
+        state: Some(wire_run_state(peek.state)),
         output: peek.output,
         attach: peek.attach,
         interactive: peek.interactive,
@@ -1945,6 +1958,16 @@ fn agent_dto(
     } else {
         store.is_running(&agent)
     };
+    // The richer lifecycle behind `running` (ADI-MONO-101). A pty session has no awaits, queue or
+    // questions of its own — those are served only to a headless engine — so its state is exactly
+    // what `running` says.
+    let state = if running {
+        RunState::Running
+    } else if executor != "pty" && store.has_pending_wake(&agent.name) {
+        RunState::Waiting
+    } else {
+        RunState::Finished
+    };
     // Whether *this* agent is the one that would be refused: the global cap binds everybody, a
     // project cap only that project's agents.
     let at_run_limit = caps.blocks(agent.manifest.project.as_deref());
@@ -1985,6 +2008,7 @@ fn agent_dto(
         updated_at: m.updated_at,
         runnable,
         running,
+        state: Some(state),
         at_run_limit,
         caps: backend_caps,
     }
@@ -3781,6 +3805,7 @@ mod tests {
                     message: String::new(),
                     title: None,
                     running: false,
+                    state: Some(RunState::Finished),
                     hidden: false,
                     starred: false,
                     launched_by: String::new(),

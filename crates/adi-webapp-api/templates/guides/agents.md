@@ -102,6 +102,13 @@ Two things worth knowing when you write an agent's prompt:
   that must ask but might not be watched should name `after_seconds` and `defaults` instead: the
   question waits that long, then takes its own assumption and carries on.
 
+## Reporting in on purpose
+`Ask` stops for a decision; **`Report`** does not stop anything — it hands whoever launched you an
+interim line on purpose, at a natural checkpoint ("phase 1 done, starting phase 2"), without
+waiting for the run itself to end. Reach for it when a person or another agent is going to be woken
+when you finish (see below) and there is something worth telling them *now*, before that. It
+publishes `adi.agents.run.reported` and changes nothing else — no await, no queue, no question.
+
 ## What became of a run
 A run that ends says so, once, and the verdict is kept — so "did the overnight batch work?" is a
 question you ask the store rather than a stack of logs.
@@ -114,12 +121,26 @@ question you ask the store rather than a stack of logs.
 
 - Each finished run carries its engine's own `terminal_reason` — `completed`, `api_error`,
   `aborted_tools` — plus how long it took, what it cost, and the opening of what it said. The
-  status is flattened to `running` / `failed` / `done` / `unknown` so a filter works without
-  knowing any engine's vocabulary.
-- `adi.agents.run.finished` is published on the bus the moment a run's ending is noticed, carrying
-  the same verdict. Subscribe a trigger to it and a 3am failure reaches you without anything
+  status is flattened to `running` / `waiting` / `failed` / `done` / `unknown` so a filter works
+  without knowing any engine's vocabulary.
+- **A turn ending is not the same as a run ending** (ADI-MONO-101). A run that stopped holding a
+  pending `Await` (a background job registers one the same way), a message queued behind its last
+  turn, or an unanswered `Ask` is `waiting`, not `finished` — it is going to speak again on its own.
+  `running: false` alone cannot tell the two apart; `GET /api/agents`, `POST /api/agents/run/peek`
+  and this command all carry the richer `state` (`running` / `waiting` / `finished`) alongside the
+  plain flag for exactly that reason. `adi.agents.run.finished` is not published, and the run's
+  outcome is not recorded, until it is genuinely `finished` — a run that keeps re-arming an `Await`
+  forever is `waiting` for as long as it does, and that is correct.
+- `adi.agents.run.finished` is published on the bus the moment a run's real ending is noticed,
+  carrying the verdict. Subscribe a trigger to it and a 3am failure reaches you without anything
   polling for one (see `triggers.md`). Note it is a *different* event from `adi.agents.run.stopped`,
   which means somebody stopped it.
+- Launching another agent (`{{cli}} agents run … --wait` aside, which blocks the turn) registers a
+  wake for you automatically — see `awaits.md` / the `Await` tool. That wake fires on any of
+  **three** events: `adi.agents.run.finished` (it really ended), `adi.agents.run.reported` (it told
+  you something on purpose), or `adi.agents.question.asked` (it needs a person, and you should
+  relay the question rather than answer it yourself). The event name carried in the wake says
+  which.
 - The ending is noticed by whoever looks first — the panel's poll, this command, a trigger's child
   — and written down exactly once, so the event does not repeat.
 - `unknown` means the run stopped without leaving anything an engine parser could read. That is the

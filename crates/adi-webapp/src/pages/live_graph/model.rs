@@ -967,6 +967,7 @@ mod tests {
             message: format!("do {id}"),
             title: None,
             running: false,
+            state: None,
             hidden: false,
             starred: false,
             launched_by: launched_by.to_string(),

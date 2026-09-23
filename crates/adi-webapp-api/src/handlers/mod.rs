@@ -631,6 +631,53 @@ mod tests {
         assert_eq!(peek_agent(&store, br#"{"name":"ghost"}"#).status, 404);
     }
 
+    /// ADI-MONO-101: `/api/agents/run/peek`'s `state` tells "waiting" from "finished" where
+    /// `running` alone cannot — a stopped run holding a pending await is not done.
+    #[test]
+    fn peek_run_carries_waiting_then_finished_as_an_await_resolves() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"process:claude"}"#);
+        let sessions = SessionStore::new(store.config().module("sessions").dir());
+        let conv = sessions
+            .create(
+                "solver",
+                Backend::from("process:claude"),
+                "/tmp",
+                "watch it",
+            )
+            .expect("open a session")
+            .id;
+        let pending = adi_agents::awaits::Awaits::with_config(store.config().clone());
+        adi_agents::awaits::register(
+            &pending,
+            "solver",
+            &conv,
+            &adi_agents::awaits::Request {
+                note: "the build".into(),
+                every_seconds: Some(30),
+                check: Some("true".into()),
+                ..adi_agents::awaits::Request::default()
+            },
+        )
+        .expect("register");
+
+        let body = format!(r#"{{"name":"solver","run_id":"{conv}"}}"#);
+        let Response { status, body } = peek_run(&store, body.as_bytes());
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["running"], false);
+        assert_eq!(v["state"], "waiting");
+
+        let id = pending.for_conversation("solver", &conv)[0].id.clone();
+        assert!(pending.claim(&id));
+
+        let body = format!(r#"{{"name":"solver","run_id":"{conv}"}}"#);
+        let Response { status, body } = peek_run(&store, body.as_bytes());
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["state"], "finished");
+    }
+
     #[test]
     fn send_keys_validates_body_and_run_state() {
         let store = temp_agents();

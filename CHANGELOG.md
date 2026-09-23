@@ -20,6 +20,23 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **A run that stopped to wait on something is no longer reported as finished.** A turn ending is
+  not the same as a run ending: a pending `Await` (a background job registers one the same way), a
+  message queued behind the last turn, or an unanswered question all mean the conversation is going
+  to move again on its own. `adi.agents.run.finished` and the wake `agents run` registers for you
+  now wait for the run to actually settle before firing — previously they fired the moment the turn
+  merely ended, so a launcher (an agent that started another, or `agents runs --agent`) could read a
+  run as "done" while a background build it kicked off was still running. `GET /api/agents`,
+  `POST /api/agents/run/peek` and `agents runs` now say so directly with a `state` of `running` /
+  `waiting` / `finished` alongside the existing `running` flag.
+- **A run can hand over an interim report on purpose.** The new `Report` tool lets a run tell
+  whoever launched it something — "phase 1 done, starting phase 2" — without waiting for the run
+  itself to end, or for anything it still has pending. It publishes `adi.agents.run.reported`; the
+  wake `agents run` registers for you fires on it too, alongside the run finishing for real and the
+  run stopping to ask a person something.
+
 ## 1.21.0 — 2026-09-22
 
 ### Changed

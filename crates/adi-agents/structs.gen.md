@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-140 structs · 39 enums · 5 type aliases across 56 files.
+142 structs · 40 enums · 5 type aliases across 56 files.
 
 ## Index
 
@@ -26,10 +26,10 @@
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
-- [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
+- [`src/lib.rs`](#srclibrs) — `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
 - [`src/llm/chain.rs`](#srcllmchainrs) — `AgentBackendEntry`, `StartAt`, `ResolvedBackend`, `ResolvedChain`, `PinnedChain`
@@ -48,7 +48,7 @@
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
 - [`src/questions.rs`](#srcquestionsrs) — `Settled`
 - [`src/review.rs`](#srcreviewrs) — `Options`, `Review`, `Evidence`, `History`, `Totals`
-- [`src/run.rs`](#srcrunrs) — `Launch`, `LaunchOptions`, `Sent`, `Peek`, `RunInfo`, `Pane`
+- [`src/run.rs`](#srcrunrs) — `Launch`, `LaunchOptions`, `Sent`, `RunLifecycle`, `Peek`, `RunInfo`, `Pane`
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `CodexIdentity`, `CodexProviderAuth`, `CodexConfigSnapshot`, `CodexManagedPreferences`, `CodexConfigLayer`, `AuthFileFingerprint`, `ChatgptIdClaims`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
 - [`src/runner/human.rs`](#srcrunnerhumanrs) — `State`, `HumanRunner`
@@ -1248,6 +1248,19 @@ pub struct AgentRunDeleted {
 }
 ```
 
+### struct `AgentRunReported`
+
+The payload of `RUN_REPORTED`.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunReported {
+    pub agent: String,
+    pub run_id: String,
+    pub report: String,
+}
+```
+
 ### struct `AgentQuestionAsked`
 
 The payload of `QUESTION_ASKED`. Carries the headline rather than the whole ask: a subscriber is deciding whether to interrupt somebody, and reads the rest in the app if it does.
@@ -1257,6 +1270,8 @@ The payload of `QUESTION_ASKED`. Carries the headline rather than the whole ask:
 pub struct AgentQuestionAsked {
     pub agent: String,
     pub conv: String,
+    #[serde(default)]
+    pub run_id: String,
     pub ask: String,
     pub question: String,
 }
@@ -1367,6 +1382,18 @@ An on-disk agent registry.
 #[derive(Debug, Clone)]
 pub struct Agents {
     config: Config,
+}
+```
+
+### struct `Pending`
+
+Everything that might bring a stopped run back to life on its own, for every run of one agent at once — what `Agents::note_finished` gates a run's ending on, and what `RunLifecycle` reads to tell "waiting" from "finished". Built once per listing rather than asked per run: nothing is pending in the overwhelming majority of conversations, and asking per row made that the *empty* answer the expensive one (the same reasoning `sessions_with_queue` and the webapp's own `Waiting`/`Awaiting` pay this cost for).
+
+```rust
+struct Pending {
+    awaiting: std::collections::HashSet<String>,
+    queued: std::collections::HashSet<String>,
+    asked: std::collections::HashSet<String>,
 }
 ```
 
@@ -2404,6 +2431,19 @@ pub enum Sent {
 }
 ```
 
+### enum `RunLifecycle`
+
+The externally visible lifecycle of one run — richer than a plain `running` flag, which only ever answers "is the process behind the *current* turn alive right now". A turn ending is not the same as a run ending: a pending `Await` (a background job is one), a message queued behind the turn that just landed, or a question it stopped to ask a person all mean the conversation is going to speak again on its own, without anybody sending it a fresh message. Reading `running: false` as "done" in any of those cases acts on a report that has not been written yet — see ADI-MONO-101.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLifecycle {
+    Running,
+    Waiting,
+    Finished,
+}
+```
+
 ### struct `Peek`
 
 A read-only snapshot of one run for the live view: the visible output (a pty screen capture, or the tail of a detached run's log — which persists after the run ends), whether it is still live, a human attach/tail hint, and whether the backend is interactive (only an interactive one can be typed into).
@@ -2412,6 +2452,7 @@ A read-only snapshot of one run for the live view: the visible output (a pty scr
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Peek {
     pub running: bool,
+    pub state: RunLifecycle,
     pub output: String,
     pub attach: String,
     pub interactive: bool,
@@ -2432,6 +2473,7 @@ pub struct RunInfo {
     pub message: String,
     pub title: Option<String>,
     pub running: bool,
+    pub state: RunLifecycle,
     pub hidden: bool,
     pub starred: bool,
     pub launched_by: String,

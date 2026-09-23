@@ -110,6 +110,23 @@ pub enum Sent {
 /// a headless `--print` run without streaming an unbounded file to the browser each poll.
 pub(crate) const MAX_LOG_TAIL: u64 = 64 * 1024;
 
+/// The externally visible lifecycle of one run — richer than a plain `running` flag, which only
+/// ever answers "is the process behind the *current* turn alive right now". A turn ending is not
+/// the same as a run ending: a pending [`Await`](crate::awaits::Await) (a background job is one), a
+/// message queued behind the turn that just landed, or a question it stopped to ask a person all
+/// mean the conversation is going to speak again on its own, without anybody sending it a fresh
+/// message. Reading `running: false` as "done" in any of those cases acts on a report that has not
+/// been written yet — see ADI-MONO-101.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLifecycle {
+    /// A turn is in flight.
+    Running,
+    /// The turn ended, but the conversation is going to move again on its own.
+    Waiting,
+    /// The turn ended and nothing here will move it again without a fresh message.
+    Finished,
+}
+
 /// A read-only snapshot of one run for the live view: the visible output (a pty screen capture, or the
 /// tail of a detached run's log — which persists after the run ends), whether it is still live, a
 /// human attach/tail hint, and whether the backend is interactive (only an interactive one can be
@@ -117,6 +134,8 @@ pub(crate) const MAX_LOG_TAIL: u64 = 64 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Peek {
     pub running: bool,
+    /// The richer lifecycle `running` alone cannot express — see [`RunLifecycle`].
+    pub state: RunLifecycle,
     pub output: String,
     pub attach: String,
     pub interactive: bool,
@@ -146,6 +165,10 @@ pub struct RunInfo {
     /// any listing. `None` for the overwhelming majority.
     pub title: Option<String>,
     pub running: bool,
+    /// The richer lifecycle `running` alone cannot express — see [`RunLifecycle`]. Set by the
+    /// listing that builds this row ([`crate::Agents::runs`]), which is the one place that has
+    /// every run of the agent's pending awaits, queue and questions in hand at once.
+    pub state: RunLifecycle,
     /// Whether a reader has hidden this session from the chat rail. Purely a listing preference,
     /// kept in the run's metadata so it survives a reload: a hidden run still runs, still keeps its
     /// log and transcript, and is still returned here — it is up to the *view* to leave it out.

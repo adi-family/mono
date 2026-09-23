@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use adi_core::{
     Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Backend, Launch, LaunchOptions,
-    MANIFEST_VERSION, RunInfo, RunOverrides, SecretAttachment, StoredAgent, UNVERSIONED, awaits,
-    launcher, llm::LlmBackends, migrations,
+    MANIFEST_VERSION, RunInfo, RunLifecycle, RunOverrides, SecretAttachment, StoredAgent,
+    UNVERSIONED, awaits, launcher, llm::LlmBackends, migrations,
 };
 use clap::Subcommand;
 
@@ -242,8 +242,10 @@ pub(crate) enum AgentsCommand {
         /// Only this agent's runs.
         #[arg(long)]
         agent: Option<String>,
-        /// `running`, `failed` (the engine called it an error), `done` (finished without one), or
-        /// `unknown` (stopped before an outcome was ever recorded).
+        /// `running`, `waiting` (a turn ended but a pending await, a queued message, or an
+        /// unanswered question means it will move again on its own — see ADI-MONO-101), `failed`
+        /// (the engine called it an error), `done` (finished without one), or `unknown` (stopped
+        /// before an outcome was ever recorded).
         #[arg(long)]
         status: Option<String>,
         /// Only runs started within this window: `90s`, `30m`, `2h`, `7d`.
@@ -1050,8 +1052,11 @@ struct RunRow {
     agent: String,
     run_id: String,
     started_at: u64,
-    /// `running`, `failed`, `done`, or `unknown` — the one word every engine's verdict is
-    /// flattened to, so a filter works without knowing any of their vocabularies.
+    /// `running`, `waiting`, `failed`, `done`, or `unknown` — the one word every engine's verdict
+    /// is flattened to, so a filter works without knowing any of their vocabularies. `waiting`
+    /// (ADI-MONO-101) is a turn that ended but is going to move again on its own: a pending await
+    /// (a background job is one), a queued message, or an unanswered question — none of that is
+    /// `unknown`, which means nobody knows how the run went, not that it hasn't gone yet.
     status: &'static str,
     /// The engine's own word, kept beside `status` because the distinctions are what a reader acts
     /// on: `api_error` and `aborted_tools` are both failures wanting opposite responses.
@@ -1073,15 +1078,16 @@ impl RunRow {
             agent: agent.to_string(),
             run_id: run.run_id,
             started_at: run.started_at,
-            status: match (run.running, &outcome) {
-                (true, _) => "running",
-                (false, Some(o)) if o.is_error => "failed",
-                (false, Some(o)) if o.is_reported() => "done",
-                // Stopped, and nothing is actually known about how: a run from before the store
-                // kept outcomes, or one whose log held no telemetry to parse. Not `done` — that
-                // would be this listing claiming a run worked on the strength of having noticed
-                // it stop.
-                (false, _) => "unknown",
+            status: match (run.state, &outcome) {
+                (RunLifecycle::Running, _) => "running",
+                (RunLifecycle::Waiting, _) => "waiting",
+                (RunLifecycle::Finished, Some(o)) if o.is_error => "failed",
+                (RunLifecycle::Finished, Some(o)) if o.is_reported() => "done",
+                // Stopped, settled, and nothing is actually known about how: a run from before the
+                // store kept outcomes, or one whose log held no telemetry to parse. Not `done` —
+                // that would be this listing claiming a run worked on the strength of having
+                // noticed it stop.
+                (RunLifecycle::Finished, _) => "unknown",
             },
             terminal_reason: outcome.as_ref().and_then(|o| o.terminal_reason.clone()),
             duration_ms: outcome.as_ref().and_then(|o| o.duration_ms),
@@ -1266,8 +1272,17 @@ fn launched_by() -> String {
 /// and poll — which nothing made it do, so mostly it didn't. Here the launch answers with a wake
 /// already registered, and the turn is free to end.
 ///
-/// The filter is what makes it a wake rather than a false alarm: `adi.agents.run.finished` is
-/// published for every run on the machine, and the launcher wants exactly one of them.
+/// Three events, not one (ADI-MONO-101): the run finishing for real, the run choosing to hand back
+/// an interim report on purpose (the `Report` tool), or the run stopping to ask a person something.
+/// A launcher that only heard the first would sit silent through the second, and never relay the
+/// third to whoever actually has to answer it. The event name carried in the wake says which of the
+/// three it was — [`crate::awaits::on_event`] hands it over verbatim — and its payload carries the
+/// rest.
+///
+/// The `when` filter is what makes each one a wake rather than a false alarm: all three of these
+/// event names are published for every run on the machine, and the launcher wants exactly the one
+/// it started. `run_id` is spelled the same way across all three payloads for exactly this reason —
+/// see `AgentQuestionAsked::run_id` in `adi-agents`.
 fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> Option<String> {
     let who = awaits::caller()?;
     let pending = awaits::Awaits::with_config(store.config().clone());
@@ -1276,11 +1291,20 @@ fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> O
         &who,
         &awaits::Request {
             note: format!(
-                "You started agent {agent} (run {run_id}) with:\n\n{message}\n\nThis is that run \
-                 ending — the payload below carries its verdict, and `adi-mono agents runs --agent \
-                 {agent}` has the rest. Pick up whatever you were waiting on it for."
+                "You started agent {agent} (run {run_id}) with:\n\n{message}\n\nThis wake fires on \
+                 any of three things: the run finishing for real, the run sending you an interim \
+                 report on purpose (`adi.agents.run.reported`), or the run stopping to ask a person \
+                 something (`adi.agents.question.asked`). The event name above this note says which \
+                 one happened, and its payload carries the rest. On a question, relay it to whoever \
+                 needs to answer it — `adi-mono agents answer {agent} {run_id} <reply>...` — rather \
+                 than answering it yourself. `adi-mono agents runs --agent {agent}` has the full \
+                 picture either way."
             ),
-            events: vec!["adi.agents.run.finished".to_string()],
+            events: vec![
+                "adi.agents.run.finished".to_string(),
+                "adi.agents.run.reported".to_string(),
+                "adi.agents.question.asked".to_string(),
+            ],
             when: [
                 ("agent".to_string(), agent.to_string()),
                 ("run_id".to_string(), run_id.to_string()),
