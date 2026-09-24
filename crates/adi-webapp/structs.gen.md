@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-78 structs · 18 enums · 4 type aliases across 31 files.
+78 structs · 19 enums · 4 type aliases across 31 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`, `PendingWalk`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -197,6 +197,19 @@ pub(crate) enum Shell {
 ---
 
 ## `src/pages/agents/actions.rs`
+
+### enum `PtyPhase`
+
+Where a pty session's live view is, coarsened from the `AgentPeek` that lands every second: only this three-way phase — not the peek itself — decides which chrome is on screen. A poll that merely lands a longer pane leaves the phase, and so the chrome, untouched; see `pty_pane` for what that buys.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PtyPhase {
+    Connecting,
+    Ended,
+    Running,
+}
+```
 
 ### struct `RunState`
 

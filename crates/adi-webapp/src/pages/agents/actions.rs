@@ -15,6 +15,7 @@ use adi_webapp_api::types::{
     AgentTokenSource, AgentTokens, AgentToolStatus, AgentToolUse, AgentTurn, AgentsState,
     AllAgentRuns, Dashboard, FleetDashboards, FleetNode, NodeDashboard, NodeDashboards, QueueMode,
 };
+use leptos::html;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -950,34 +951,100 @@ fn run_cell(col: &str, r: &AgentRunInfo, answerable: bool) -> AnyView {
     }
 }
 
+/// Where a pty session's live view is, coarsened from the [`AgentPeek`] that lands every second:
+/// only this three-way phase — not the peek itself — decides which chrome is on screen. A poll
+/// that merely lands a longer pane leaves the phase, and so the chrome, untouched; see
+/// [`pty_pane`] for what that buys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PtyPhase {
+    Connecting,
+    Ended,
+    Running,
+}
+
+fn pty_phase(watch: AgentsWatch) -> PtyPhase {
+    match watch.peek.with(|p| p.as_ref().map(|p| p.running)) {
+        None => PtyPhase::Connecting,
+        Some(false) => PtyPhase::Ended,
+        Some(true) => PtyPhase::Running,
+    }
+}
+
 /// The interactive (pty) live view: a 1s-refreshed pane capture with a send bar to type into it.
+///
+/// Reads [`PtyPhase`] rather than the peek directly, so the section is rebuilt only on a real
+/// transition — connecting, ending, starting again — and not on every poll that merely lands a
+/// longer pane. [`pty_pane`] is what the running phase's own `<pre>` leans on to stay that one
+/// element for as long as the session runs.
 fn pty_live_view(state: State, watch: AgentsWatch, name: String) -> AnyView {
-    let peek = watch.peek.get();
-    let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
-    let running = peek.as_ref().is_some_and(|p| p.running);
-    let body = match peek {
-        None => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
-        Some(p) if !p.running => view! {
-            <div class="adi-empty">"The session has ended — run the agent again to restart it."</div>
-        }
-        .into_any(),
-        Some(p) => view! { <pre class="adi-term">{p.output}</pre> }.into_any(),
-    };
+    let phase = Memo::new(move |_| pty_phase(watch));
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">{format!("Live view — {name}")}</h2>
                 <span class="adi-spacer"></span>
-                {(!attach.is_empty()).then(|| view! {
-                    <code class="adi-mono adi-muted">{attach}</code>
-                })}
+                {move || {
+                    let attach = watch.peek.with(|p| p.as_ref().map(|p| p.attach.clone()).unwrap_or_default());
+                    (!attach.is_empty()).then(|| view! {
+                        <code class="adi-mono adi-muted">{attach}</code>
+                    })
+                }}
                 <button class="adi-btn adi-btn--link" on:click=move |_| watch.close()>"Close"</button>
             </div>
-            {body}
-            {running.then(|| send_bar(state, watch))}
+            {move || match phase.get() {
+                PtyPhase::Connecting => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
+                PtyPhase::Ended => view! {
+                    <div class="adi-empty">
+                        "The session has ended — run the agent again to restart it."
+                    </div>
+                }
+                .into_any(),
+                PtyPhase::Running => pty_pane(watch, "adi-term").into_any(),
+            }}
+            {move || (phase.get() == PtyPhase::Running).then(|| send_bar(state, watch))}
         </section>
     }
     .into_any()
+}
+
+/// The running pane itself: one `<pre>`, built once per session and left alone for as long as it
+/// streams — the poll only ever updates its text, in the reactive child below, rather than
+/// replacing the element. That is what keeps the reader's scroll position: a fresh element always
+/// opens at the top, and a `<pre>` rebuilt every second never gave them anywhere else to be.
+///
+/// Follows the bottom rather than fighting it: a reader already pinned there — the default, and
+/// where a fresh session opens — is carried down as the pane grows, exactly like a real terminal.
+/// One who has scrolled up to read is left exactly where they are; `pinned` is read off the
+/// pane's own scroll position on every scroll they make, not remembered from an earlier poll, so
+/// scrolling back down mid-stream re-pins without having to land on the exact last pixel.
+fn pty_pane(watch: AgentsWatch, class: &'static str) -> impl IntoView {
+    let el: NodeRef<html::Pre> = NodeRef::new();
+    let pinned = RwSignal::new(true);
+    let on_scroll = move |_| {
+        if let Some(el) = el.get_untracked() {
+            let gap = el.scroll_height() - el.client_height() - el.scroll_top();
+            pinned.set(gap <= 4);
+        }
+    };
+    Effect::new(move |_| {
+        // Tracked only to rerun this effect on every poll — the text itself is read (and
+        // written to the DOM) by the reactive child below.
+        watch.peek.with(|_| ());
+        let Some(el) = el.get_untracked() else { return };
+        if !pinned.get_untracked() {
+            return;
+        }
+        // A timeout, not scrolled here directly: the text this effect depends on has not
+        // repainted yet at this point in the reactive graph, so `scroll_height` read now would
+        // still describe the pane from before the new output landed.
+        gloo_timers::callback::Timeout::new(0, move || el.set_scroll_top(el.scroll_height()))
+            .forget();
+    });
+    view! {
+        <pre class=class node_ref=el on:scroll=on_scroll>
+            {move || watch.peek.with(|p| p.as_ref().map(|p| p.output.clone()).unwrap_or_default())}
+        </pre>
+    }
 }
 
 /// The headless run panel: a task composer and this agent's run history (newest first, each with
@@ -6982,16 +7049,16 @@ fn chat_center(state: State, watch: AgentsWatch) -> AnyView {
 /// The pty centre: the live pane while a session runs, with the same send bar as the Agents page;
 /// otherwise a Start affordance that launches the session.
 fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
+    // As in `pty_live_view`: the phase, not the peek, decides which chrome is on screen, so the
+    // pane below is rebuilt only when the session actually starts or ends.
+    let phase = Memo::new(move |_| pty_phase(watch));
     view! {
         <div class="adi-chome__chatwrap">
             <div class="adi-chome__chatbody">
-                {move || match watch.peek.get() {
-                    Some(p) if p.running => {
-                        view! { <pre class="adi-term adi-chome__term">{p.output}</pre> }.into_any()
-                    }
-                    other => {
-                        let ended = other.is_some();
-                        let msg = if ended {
+                {move || match phase.get() {
+                    PtyPhase::Running => pty_pane(watch, "adi-term adi-chome__term").into_any(),
+                    ended => {
+                        let msg = if ended == PtyPhase::Ended {
                             "The session has ended."
                         } else {
                             "No live session yet."
@@ -7033,7 +7100,7 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                     }
                 }}
             </div>
-            {move || watch.peek.get().is_some_and(|p| p.running).then(|| send_bar(state, watch))}
+            {move || (phase.get() == PtyPhase::Running).then(|| send_bar(state, watch))}
         </div>
     }
     .into_any()
