@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.22.0 — 2026-09-24
+
 ### Changed
 
 - **A run that stopped to wait on something is no longer reported as finished.** A turn ending is
