@@ -556,6 +556,10 @@ mod tests {
             stored_runtime(&agents, "old").is_none(),
             "which the file itself no longer says"
         );
+        assert_eq!(
+            saved.created_by, "",
+            "a migration stamps the shape, never who created the definition"
+        );
     }
 
     #[test]

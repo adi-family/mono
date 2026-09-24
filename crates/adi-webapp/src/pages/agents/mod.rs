@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use adi_ui::{Icon, IconSize, Lucide, Row as TableRow, Table};
-use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
+use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto, created_by_is_mine};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -24,6 +24,32 @@ use crate::ui::{Key, flash_view, menu_item, row_actions, rows_or_status, sort_ro
 
 /// The Agents page's columns; the trailing blank one holds the running dot and the ⋯ menu.
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
+
+/// How the Agents page's list is narrowed — modelled on the chat rail's own `SessionFilter`
+/// (`pages::agents::actions`), but simpler: there is no third "Starred" state here, because starring
+/// is a per-row exemption from Mine rather than a narrowing of its own (see [`agent_is_mine`]).
+///
+/// Page state, like the rail's: not persisted, so returning to this page always opens on Mine.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum AgentsFilter {
+    /// Every registered definition, whoever created it.
+    All,
+    /// Only definitions this filter counts as a person's own — see [`agent_is_mine`] for exactly
+    /// which, and why it is not simply "created by a person".
+    #[default]
+    Mine,
+}
+
+/// Whether `a` counts as "mine" for [`AgentsFilter::Mine`] — a thin, DTO-typed wrapper over
+/// [`adi_webapp_api::types::created_by_is_mine`], which is the one place this rule is actually
+/// stated (see its doc comment for why an unattributed definition counts as mine here, unlike an
+/// unattributed *session* in the rail's own "started by me" filter). Starring is a second, separate
+/// exemption — callers that need it check `a.starred` alongside this rather than folding it in here,
+/// so a reader can tell "the filter says yes" from "the star overrode it".
+#[must_use]
+pub(crate) fn agent_is_mine(a: &AgentDto) -> bool {
+    created_by_is_mine(&a.created_by)
+}
 
 mod actions;
 mod chain;
@@ -64,6 +90,10 @@ pub(crate) fn agents_view(
     // The run cap's editor is a row that only appears when asked for: the head says the numbers,
     // and "change limit" is the one control that opens the box that sets them.
     let limit_open = RwSignal::new(false);
+    // Mine by default, for the same reason the chat rail opens narrowed: a fleet grows a long tail
+    // of machine-made definitions, and a page listing every one of them buries the handful a person
+    // actually wrote. Page state, not persisted — see [`AgentsFilter`].
+    let agents_filter = RwSignal::new(AgentsFilter::default());
     view! {
         // Above everything, when it is open: taking the model's seat is the whole screen, not a
         // panel beside the list of agents you could take it in.
@@ -93,6 +123,7 @@ pub(crate) fn agents_view(
                 })}
             </span>
             <span class="adi-spacer"></span>
+            {move || agents_filter_toggle(agents_filter)}
             <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             <a class="adi-btn adi-btn--primary" href=agent_form_path("")
                 on:click=move |ev| if spa_nav(&ev) {
@@ -107,7 +138,9 @@ pub(crate) fn agents_view(
         })}
         <div class="adi-agents__limit-row">{auto_title_view(state)}</div>
 
-        <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim, route)}</Table>
+        <Table state=state.tables.agents>
+            {move || agent_rows(state, form, watch, sim, route, agents_filter.get())}
+        </Table>
         {flash_view(state.flash)}
         // What the row menu's launch actions do. It belongs with the rows it explains.
         <p class="adi-hint">
@@ -281,6 +314,9 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     backends: Some(form.llm_rows.get()),
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
+                    // Absent means human — this is the control panel, and somebody is looking at it.
+                    // Only takes effect on a create; the store ignores it on an edit.
+                    created_by: None,
                 };
                 // Optimistic, like `editing` beside it: a create (or a rename) moves this page to
                 // the saved agent's own URL, so a refresh lands back on what is in the form rather
@@ -718,6 +754,33 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
     .into_any()
 }
 
+/// The Agents page's Mine/All toggle, beside the run count in the header.
+///
+/// A plain two-way toggle rather than the rail's dropdown-with-a-menu: there is no grouping to carry
+/// alongside it here, so a button that says what it is narrowed to (and flips it on a click) is the
+/// whole control. Lit while narrowed, the same "a list showing less than everything has to say so"
+/// rule the rail's own filter button follows.
+fn agents_filter_toggle(filter: RwSignal<AgentsFilter>) -> AnyView {
+    let narrowed = filter.get() == AgentsFilter::Mine;
+    let title = if narrowed {
+        "Showing agents you created — a person, or unattributed (every agent from before this was \
+         recorded). Starred agents always show. Click to show every agent, including the ones a \
+         script or another agent made."
+    } else {
+        "Showing every agent. Click to narrow to the ones you created."
+    };
+    view! {
+        <button class="adi-btn adi-btn--ghost" type="button" title=title class:is-on=narrowed
+            on:click=move |_| filter.update(|f| *f = match *f {
+                AgentsFilter::Mine => AgentsFilter::All,
+                AgentsFilter::All => AgentsFilter::Mine,
+            })>
+            {if narrowed { "Mine" } else { "All" }}
+        </button>
+    }
+    .into_any()
+}
+
 /// Render the agents table body: a loading/empty placeholder, or one row per agent. Every action —
 /// the launch controls, Edit, Simulate, Delete — sits in the row's ⋯ menu; the only thing drawn
 /// beside it is a dot on the rows that are running.
@@ -727,6 +790,7 @@ fn agent_rows(
     watch: AgentsWatch,
     sim: Simulate,
     route: RwSignal<Route>,
+    filter: AgentsFilter,
 ) -> AnyView {
     let table = state.tables.agents;
     let mut agents = match rows_or_status(
@@ -738,6 +802,20 @@ fn agent_rows(
         Ok(rows) => rows,
         Err(placeholder) => return placeholder,
     };
+    if filter == AgentsFilter::Mine {
+        // Starred is a second, separate exemption — a machine-made agent somebody starred must not
+        // vanish from the default view just because a script or another agent made it.
+        agents.retain(|a| agent_is_mine(a) || a.starred);
+        if agents.is_empty() {
+            return view! {
+                <adi_ui::EmptyRow state=table>
+                    "No agents you created — everything registered here was made by a script or \
+                     another agent. Switch to All to see them."
+                </adi_ui::EmptyRow>
+            }
+            .into_any();
+        }
+    }
     sort_rows(&mut agents, table.sort.get(), agent_key, |a| {
         Key::text(&a.name)
     });
@@ -837,7 +915,9 @@ pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
 }
 
 /// The name, led by its star: lit on a starred agent, faint on the rest so every name starts on
-/// the same edge.
+/// the same edge. A machine-made definition — one [`agent_is_mine`] would exclude from Mine — also
+/// carries who made it, whether it is on screen because Mine is off or because starring exempted it:
+/// either way, a reader looking at a name Mine wouldn't have shown on its own is owed the reason.
 pub(crate) fn agent_name_cell(a: &AgentDto) -> AnyView {
     let star = if a.starred {
         "adi-agents__star adi-agents__star--on"
@@ -849,9 +929,27 @@ pub(crate) fn agent_name_cell(a: &AgentDto) -> AnyView {
         <span class="adi-agents__name">
             <span class=star title=title><Icon icon=Lucide::Star size=IconSize::Sm/></span>
             {a.name.clone()}
+            {creator_marker(a)}
         </span>
     }
     .into_any()
+}
+
+/// "by <name>" for a machine-made definition, or nothing for one [`agent_is_mine`] counts as mine.
+fn creator_marker(a: &AgentDto) -> Option<AnyView> {
+    if agent_is_mine(a) {
+        return None;
+    }
+    let who = a
+        .created_by
+        .strip_prefix("agent:")
+        .unwrap_or(&a.created_by);
+    Some(
+        view! {
+            <span class="adi-chip" title="who created this definition">{format!("by {who}")}</span>
+        }
+        .into_any(),
+    )
 }
 
 /// The live view's input row, wired to the watched agent's pty session.

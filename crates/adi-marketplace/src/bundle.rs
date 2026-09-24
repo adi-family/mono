@@ -1784,6 +1784,13 @@ fn land_agent(
     );
     manifest.created_at = 0;
     manifest.updated_at = 0;
+    // The publisher's own `created_by`, if the bundle carried one, names *their* creator — not
+    // whoever is installing it here. This id is minted below, so this is a genuine creation on this
+    // machine, and `Agents::save` only takes `created_by` from the manifest it is handed on exactly
+    // that call — an installer running inside a turn is credited the same way `agents save` would
+    // credit it.
+    manifest.created_by = adi_agents::launcher::by_caller()
+        .unwrap_or_else(|| adi_agents::launcher::HUMAN.to_string());
     manifest.project = project.map(str::to_string);
     renames.apply_to_agent(&mut manifest);
     for attachment in &manifest.secrets {
@@ -2712,6 +2719,53 @@ mod tests {
         assert_ne!(agent.manifest.created_at, 111, "stamped fresh, not the repository's own");
         assert!(agent.manifest.created_at > 0);
         let _ = std::fs::remove_dir_all(market.config().root());
+    }
+
+    /// Installing an agent is a genuine creation on this machine, whoever published it — the
+    /// publisher's own `created_by` is dropped exactly like their `created_at`/`updated_at`, and this
+    /// installer's own caller is credited instead.
+    ///
+    /// `$ADI_AGENT` / `$ADI_RUN_ID` are cleared for the call so the test is honest about the
+    /// no-caller case regardless of whether it happens to run inside an agent's own turn — this is
+    /// the one test in this process that touches them.
+    #[test]
+    fn installing_an_agent_credits_the_installer_not_the_publisher() {
+        // SAFETY: see doc comment above — the one test here that touches these two.
+        let agent_env = std::env::var("ADI_AGENT").ok();
+        let conv_env = std::env::var("ADI_RUN_ID").ok();
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("ADI_AGENT");
+            std::env::remove_var("ADI_RUN_ID");
+        }
+
+        let (market, ..) = fixture("created-by", "created-by-bundle", |root| {
+            write_agent(root, "old", "created_by = \"agent:their-machine\"\n");
+        });
+        let installed = unwrap_bundle(install(&market, "adi/created-by-bundle", "", false, &Scope::Global).expect("install"));
+        let id = outcome_of(&installed, Kind::Agent, "old").id.clone().expect("id");
+        let agent = adi_agents::Agents::with_config(market.config().clone())
+            .get(&id)
+            .expect("get")
+            .expect("present");
+        assert_eq!(
+            agent.manifest.created_by,
+            adi_agents::launcher::HUMAN,
+            "the publisher's attribution is dropped, not carried across machines"
+        );
+        let _ = std::fs::remove_dir_all(market.config().root());
+
+        #[allow(unsafe_code)]
+        unsafe {
+            match agent_env {
+                Some(v) => std::env::set_var("ADI_AGENT", v),
+                None => std::env::remove_var("ADI_AGENT"),
+            }
+            match conv_env {
+                Some(v) => std::env::set_var("ADI_RUN_ID", v),
+                None => std::env::remove_var("ADI_RUN_ID"),
+            }
+        }
     }
 
     #[test]

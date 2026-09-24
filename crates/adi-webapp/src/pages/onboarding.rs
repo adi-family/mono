@@ -872,6 +872,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         // Not offered here, so not stated — `None` leaves whatever the agent already has.
         unattended: None,
         rename_from: None,
+        // Absent means human — the wizard is the control panel, and somebody is looking at it.
+        created_by: None,
     };
 
     form.agent.busy.set(true);

@@ -460,7 +460,11 @@ impl Agents {
         self.get(name)?.map(StoredAgent::into_typed).transpose()
     }
 
-    /// Upserts an agent, preserving `created_at` and stamping `updated_at`.
+    /// Upserts an agent, preserving `created_at` and `created_by` and stamping `updated_at`.
+    ///
+    /// `created_by` is taken from `manifest` only when this call is the one that creates the
+    /// definition — an edit's incoming value is ignored, whatever it says, in favour of whatever the
+    /// file already has (see [`agent::AgentManifest::created_by`]).
     ///
     /// # Errors
     /// Returns name, argument, or store errors.
@@ -483,6 +487,17 @@ impl Agents {
             .load()
             .map_or(agent::MANIFEST_VERSION, |existing: StoredAgentManifest| {
                 existing.version
+            });
+        // The same rule as `version`, immediately above, and for the same reason: only a definition
+        // being created for the first time takes what the caller passed, because a save cannot tell
+        // an edit from a resave of stale data, and believing a caller-supplied `created_by` on an
+        // edit would let any save reassign authorship. `file.load()` failing (no file yet) is what
+        // "first time" means here — not whether the loaded value is empty, since an existing
+        // definition legitimately carries `""` (unknown) and a save of it must not fill that in.
+        manifest.created_by = file
+            .load()
+            .map_or(manifest.created_by.clone(), |existing: StoredAgentManifest| {
+                existing.created_by
             });
         // A definition whose runtime is derived does not store it, so whatever the caller is
         // holding — almost always the value `get` derived on the way out — is dropped rather than
@@ -3690,6 +3705,32 @@ mod tests {
         assert_eq!(second.manifest.arguments.temperature, Some(0.2));
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
+    }
+
+    /// The same upsert rule `created_at` gets, and for the same reason ADI-MONO-103 gives it: a
+    /// save cannot tell an edit from a resave of stale data, so only the call that creates the file
+    /// gets to say who did.
+    #[test]
+    fn save_preserves_created_by_and_a_later_resave_cannot_reassign_it() {
+        let store = scratch("created-by");
+        let mut fresh = spec("process:codex");
+        fresh.created_by = launcher::HUMAN.to_string();
+        let first = store.save("a", fresh).expect("create");
+        assert_eq!(first.manifest.created_by, launcher::HUMAN);
+
+        // A later save claiming a different author is ignored — the file already exists.
+        let mut edited = spec("harness:adi");
+        edited.created_by = "agent:adi-agent".to_string();
+        let second = store.save("a", edited).expect("update");
+        assert_eq!(
+            second.manifest.created_by,
+            launcher::HUMAN,
+            "an edit cannot reassign who created the definition"
+        );
+
+        // An agent created with nothing said stays unknown, not `human` by default.
+        let unattributed = store.save("b", spec("process:codex")).expect("create");
+        assert_eq!(unattributed.manifest.created_by, "");
     }
 
     #[test]

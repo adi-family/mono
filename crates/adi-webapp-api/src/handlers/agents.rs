@@ -1813,6 +1813,18 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         unattended: req
             .unattended
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.unattended)),
+        // Only takes effect if this save turns out to create the definition — the store ignores it
+        // on an edit (`Agents::save`) — so it costs nothing to compute even when `stored` says this
+        // is a resave. Absent is a person: this endpoint's caller is the control panel, and somebody
+        // is looking at it. Everything else that creates a definition has its own path (the CLI,
+        // which reads its caller from the environment).
+        created_by: req
+            .created_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|by| !by.is_empty())
+            .unwrap_or(adi_agents::launcher::HUMAN)
+            .to_string(),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -2004,6 +2016,7 @@ fn agent_dto(
         path: m.path,
         env: m.env,
         unattended: m.unattended,
+        created_by: m.created_by,
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,
@@ -3138,6 +3151,54 @@ mod tests {
     #[test]
     fn the_wire_and_the_store_agree_on_what_a_person_is_called() {
         assert_eq!(crate::types::LAUNCHED_BY_HUMAN, adi_agents::launcher::HUMAN);
+    }
+
+    /// Same duplication, same reason, for the Agents page's Mine filter: `created_by_is_mine` is a
+    /// second copy of `adi_agents::launcher::is_mine` because the wasm frontend cannot link that
+    /// crate. If the two ever disagreed, the Agents page would filter differently from what
+    /// `adi-mono agents list` and every native reader agree the store means.
+    #[test]
+    fn the_wire_and_the_store_agree_on_what_mine_means_for_a_definition() {
+        for value in ["human", "", "automation", "agent:reviewer", "agent:"] {
+            assert_eq!(
+                crate::types::created_by_is_mine(value),
+                adi_agents::launcher::is_mine(value),
+                "{value:?}"
+            );
+        }
+    }
+
+    /// `POST /api/agents/save` mirrors `/agents/run`'s own `launched_by`: absent means the control
+    /// panel, and somebody is looking at it. A later save must not be able to reassign it, whatever
+    /// it sends — `Agents::save` is where that rule actually lives, this only proves the handler
+    /// doesn't quietly bypass it.
+    #[test]
+    fn a_save_with_no_created_by_defaults_to_human_and_a_later_save_cannot_change_it() {
+        let store = scratch("created-by-default");
+        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(saved(&store).created_by, adi_agents::launcher::HUMAN);
+
+        let resaved = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
+        });
+        assert_eq!(save_agent(&store, resaved.to_string().as_bytes()).status, 200);
+        assert_eq!(
+            saved(&store).created_by,
+            adi_agents::launcher::HUMAN,
+            "an edit cannot reassign who created the definition"
+        );
+    }
+
+    /// An explicit `created_by` on the *creating* save is honoured — the CLI's and any other
+    /// agent-side caller's whole reason to send one.
+    #[test]
+    fn a_save_with_created_by_stated_on_creation_uses_it() {
+        let store = scratch("created-by-stated");
+        let with = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(saved(&store).created_by, "agent:reviewer");
     }
 
     /// Repointing an agent changes the backend for its next run, not the nature of conversations

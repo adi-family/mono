@@ -4447,6 +4447,11 @@ struct PickerOption {
 /// on screen is always an option whether or not it is starred, so the control can't misreport what
 /// the centre pane is showing; the Agents page is where anything else is reached (and starred).
 ///
+/// No Mine/All toggle of its own (ADI-MONO-103): both of this control's exemptions — starred, and
+/// the agent already on screen — are exactly the two things the Agents page's own Mine filter also
+/// lets through regardless of who created them. Every option offered here already qualifies as
+/// "mine" by construction, so a second filter would have nothing left to narrow.
+///
 /// Options are drawn from every currently-selected source — this machine's own [`State::agents`],
 /// plus one selected node's own slice of [`State::rail_node_agents`] for each node ticked in the
 /// rail's node menu — the same sources [`session_rows`] merges into the rail below, read the same

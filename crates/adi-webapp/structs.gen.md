@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-78 structs · 19 enums · 4 type aliases across 31 files.
+78 structs · 20 enums · 4 type aliases across 32 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -319,6 +320,23 @@ struct PendingWalk {
     node: Option<String>,
     agent: String,
     run_id: Option<String>,
+}
+```
+
+---
+
+## `src/pages/agents/mod.rs`
+
+### enum `AgentsFilter`
+
+How the Agents page's list is narrowed — modelled on the chat rail's own `SessionFilter` (`pages::agents::actions`), but simpler: there is no third "Starred" state here, because starring is a per-row exemption from Mine rather than a narrowing of its own (see `agent_is_mine`).
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum AgentsFilter {
+    All,
+    #[default]
+    Mine,
 }
 ```
 

@@ -134,6 +134,8 @@ pub struct AgentManifest<Args> {
     pub env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub created_by: String,
     pub created_at: u64,
     pub updated_at: u64,
 }

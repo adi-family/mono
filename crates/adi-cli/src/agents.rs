@@ -615,6 +615,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     old.map(|m| m.knowledge.clone()),
                 ),
                 memory: flag(memory, no_memory, old.is_some_and(|m| m.memory)),
+                // Only takes effect if this save is the one that creates the definition — the store
+                // ignores it on an edit (see `Agents::save`) — so it costs nothing to compute here
+                // even when `old` says this is a resave.
+                created_by: created_by_for_save(),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -1189,6 +1193,9 @@ fn print_agent(agent: &StoredAgent) {
     if let Some(project) = &agent.manifest.project {
         println!("  project: {project}");
     }
+    if !agent.manifest.created_by.is_empty() {
+        println!("  created by: {}", agent.manifest.created_by);
+    }
     if let Some(tools) = arguments.tools.filter(|tools| !tools.trim().is_empty()) {
         println!("  commands: {tools}");
     }
@@ -1262,6 +1269,14 @@ fn launched_by() -> String {
         }
         .to_string()
     })
+}
+
+/// Who `agents save` is being typed by, for a definition's `created_by` — simpler than
+/// [`launched_by`] beside it, and deliberately so: a launch distinguishes a person from an
+/// unattended script (`AUTOMATION`), but nothing here ever runs unattended enough to need that
+/// distinction, so the CLI with no `$ADI_AGENT` is always a person saving a definition by hand.
+fn created_by_for_save() -> String {
+    launcher::by_caller().unwrap_or_else(|| launcher::HUMAN.to_string())
 }
 
 /// The wake that reports a launched run back to whoever launched it.
@@ -1487,6 +1502,41 @@ fn await_run(store: &Agents, name: &str, run_id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `$ADI_AGENT` set (a turn) records `agent:<name>`; unset (a person at a terminal, or a script)
+    /// records `human` — the simpler of the two rules `created_by_for_save` exists to state, next to
+    /// `launched_by` which also weighs whether anyone is watching.
+    #[test]
+    fn created_by_for_save_reads_the_caller_a_turn_carries() {
+        // SAFETY: this is the one test in this process that touches `ADI_AGENT` / `ADI_RUN_ID`.
+        let agent = std::env::var("ADI_AGENT").ok();
+        let conv = std::env::var("ADI_RUN_ID").ok();
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("ADI_AGENT", "reviewer");
+            std::env::set_var("ADI_RUN_ID", "conv-1");
+        }
+        assert_eq!(created_by_for_save(), "agent:reviewer");
+
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("ADI_AGENT");
+            std::env::remove_var("ADI_RUN_ID");
+        }
+        assert_eq!(created_by_for_save(), launcher::HUMAN);
+
+        #[allow(unsafe_code)]
+        unsafe {
+            match agent {
+                Some(v) => std::env::set_var("ADI_AGENT", v),
+                None => std::env::remove_var("ADI_AGENT"),
+            }
+            match conv {
+                Some(v) => std::env::set_var("ADI_RUN_ID", v),
+                None => std::env::remove_var("ADI_RUN_ID"),
+            }
+        }
+    }
 
     /// The rule, in the three shapes it comes in. A save is a patch: what the caller did not
     /// mention must survive it.

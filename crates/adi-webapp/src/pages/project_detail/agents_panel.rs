@@ -105,6 +105,8 @@ pub(crate) fn agents_panel(
                     env: None,
                     unattended: None,
                     rename_from: None,
+                    // Absent means human — this is the control panel.
+                    created_by: None,
                 };
                 name.set(String::new());
                 system_prompt.set(String::new());

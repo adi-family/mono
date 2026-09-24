@@ -1521,6 +1521,8 @@ pub struct AgentDto {
     pub path: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub created_by: String,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -1635,6 +1637,8 @@ pub struct SaveAgent {
     pub unattended: Option<bool>,
     #[serde(default)]
     pub rename_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
 }
 ```
 

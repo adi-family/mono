@@ -184,6 +184,18 @@ pub struct AgentManifest<Args> {
     /// unattended run that asks is a run that has quietly stopped without failing.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// Who created this definition, in [`crate::launcher`]'s vocabulary (`human`, `agent:<name>`,
+    /// `automation`) — or `""` for every agent that exists without ever having said, which today is
+    /// every agent: this field has no backfill.
+    ///
+    /// **Written once, on creation, and never revised.** [`Agents::save`](crate::Agents::save) is
+    /// the only place that decides between the two — an existing definition keeps whatever it was
+    /// created with regardless of what a later save carries, the same rule it applies to
+    /// [`version`](Self::version). A caller building a manifest to hand to `save` sets this to what
+    /// it believes the *creation* value should be; whether that belief is even asked for is the
+    /// store's call, not this field's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub created_by: String,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -243,6 +255,7 @@ impl<Args> AgentManifest<Args> {
             path: self.path.clone(),
             env: self.env.clone(),
             unattended: self.unattended,
+            created_by: self.created_by.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

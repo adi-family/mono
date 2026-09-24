@@ -251,6 +251,8 @@ fn submit_setup(state: State, form: MetaForm) {
         env: None,
         unattended: None,
         rename_from: None,
+        // Absent means human — this is the control panel.
+        created_by: None,
     };
     form.busy.set(true);
     spawn_local(async move {

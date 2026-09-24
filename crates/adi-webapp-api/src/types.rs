@@ -1350,6 +1350,11 @@ pub struct AgentDto {
     /// here — it is built from `path` above.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Who created this definition, in `adi_agents::launcher`'s vocabulary (`human`,
+    /// `agent:<name>`, `automation`) — empty for every agent that predates this field, which today
+    /// is every agent (it has no backfill). Read-only: set once at creation and never editable.
+    #[serde(default)]
+    pub created_by: String,
     pub created_at: u64,
     pub updated_at: u64,
     /// Whether this agent runs with nobody watching. It changes one thing: the `Ask` tool refuses,
@@ -1515,6 +1520,16 @@ pub struct SaveAgent {
     /// `name` — for a plain create/update.
     #[serde(default)]
     pub rename_from: Option<String>,
+    /// Who is creating this definition, in `adi_agents::launcher`'s vocabulary — recorded only if
+    /// this save turns out to be the one that *creates* the agent; an edit's value is ignored, the
+    /// store keeps whatever the definition already has (see `Agents::save`).
+    ///
+    /// Absent means `human`, mirroring `launched_by` on `POST /api/agents/run`: this endpoint's
+    /// caller is the control panel, and somebody is looking at it. A caller that is not a person —
+    /// the CLI, another agent's tool — must send its own value rather than leaving a person's name
+    /// on a definition it created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
 }
 
 /// Request body naming an agent — `POST /api/agents/delete`, `/api/agents/stop`, `/api/agents/peek`.
@@ -2440,6 +2455,19 @@ pub enum RunState {
 /// native-only, and this is the one word of it that crosses the wire into a filter. Kept equal to
 /// `adi_agents::launcher::HUMAN` by a test in `handlers::agents`, where both are in scope.
 pub const LAUNCHED_BY_HUMAN: &str = "human";
+
+/// Whether [`AgentDto::created_by`] counts as "mine" for the **Agents page's** Mine filter and the
+/// agent pickers built on it.
+///
+/// Restated here, rather than only on the native side, for the same reason [`LAUNCHED_BY_HUMAN`]
+/// is: the wasm frontend reads this field and cannot link `adi_agents`. Kept in step with
+/// `adi_agents::launcher::is_mine` — the function this mirrors, and the one to read for *why* it
+/// answers differently from a plain `== LAUNCHED_BY_HUMAN` — by a test in `handlers::agents`, where
+/// both are in scope.
+#[must_use]
+pub fn created_by_is_mine(created_by: &str) -> bool {
+    created_by != "automation" && !created_by.starts_with("agent:")
+}
 
 /// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
