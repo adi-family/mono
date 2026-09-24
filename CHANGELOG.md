@@ -44,6 +44,14 @@ extraction script cares about.
   `POST /api/agents/spawn-rule` adds or removes a single rule without touching the rest of an
   agent's definition, for exactly this one-field kind of write.
 
+### Changed
+
+- **`adi-mono agents list` is one line per agent.** Each row is the agent's name, its runtime, its
+  project and a ★ if it is starred — the whole roster fits on a screen instead of running to several
+  hundred lines. The chain, tools, secrets, memory, env, path and tags that every agent used to
+  print here are now only in `adi-mono agents show <name>`, which is unchanged. `--json` still
+  returns every agent's full definition, so scripts reading it are unaffected.
+
 ## 1.22.0 — 2026-09-24
 
 ### Changed

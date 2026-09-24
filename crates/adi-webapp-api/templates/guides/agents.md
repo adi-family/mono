@@ -12,7 +12,8 @@ environment's root agent); everything else is an ordinary definition.
 - `harness:adi` — ADI's own agent loop, multi-provider (needs a provider API key).
 
 ## Do it
-- List: `{{cli}} agents list` or `GET /api/agents`. Panel: `/agents`.
+- List: `{{cli}} agents list` (one line per agent) or `GET /api/agents`; one agent's full
+  definition — chain, tools, secrets, memory, env — with `{{cli}} agents show <name>`. Panel: `/agents`.
 - Create / update: `POST /api/agents/save` — the same call the onboarding and Meta page use.
 - Run: `POST /api/agents/run`; reply into a conversation with `/api/agents/run/reply`; peek at
   a live run with `/api/agents/run/peek`.

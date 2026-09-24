@@ -423,9 +423,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             } else if agents.is_empty() {
                 println!("No agents registered.");
             } else {
-                for agent in &agents {
-                    print_agent(agent);
-                }
+                print_agent_rows(&agents);
             }
         }
         AgentsCommand::Show { name, json } => {
@@ -1214,6 +1212,42 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// Print the roster: one line per agent — star, name, runtime, project.
+///
+/// Everything else a definition carries (chain, tools, secrets, memory, env, …) is `agents show`'s
+/// to print. Repeating it for every agent turned sixty agents into several hundred lines, and the
+/// list is for finding an agent, not reading one.
+fn print_agent_rows(agents: &[StoredAgent]) {
+    let runtimes: Vec<String> = agents
+        .iter()
+        .map(|agent| agent.manifest.runtime().to_string())
+        .collect();
+    let name_width = agents
+        .iter()
+        .map(|a| a.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let runtime_width = runtimes
+        .iter()
+        .map(|r| r.chars().count())
+        .max()
+        .unwrap_or(0);
+    for (agent, runtime) in agents.iter().zip(&runtimes) {
+        let star = if agent.manifest.starred { '★' } else { ' ' };
+        let project = agent.manifest.project.as_deref().unwrap_or_default();
+        let row = format!(
+            "{star} {:name_width$}  {runtime:runtime_width$}  {project}",
+            agent.name
+        );
+        println!("{}", row.trim_end());
+    }
+    println!();
+    println!(
+        "{} agents — `adi-mono agents show <name>` for one agent's details.",
+        agents.len()
+    );
 }
 
 /// Print an agent definition in the compact human CLI format.
