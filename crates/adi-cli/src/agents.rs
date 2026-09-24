@@ -159,6 +159,17 @@ pub(crate) enum AgentsCommand {
         /// Take the agent's own memory away (see `--memory`).
         #[arg(long, conflicts_with = "memory")]
         no_memory: bool,
+        /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`),
+        /// `project:<id>` (every agent filed directly under that project), or `*` (everything).
+        /// Repeatable; comma-separated values are also accepted. Omit every `--can-spawn` to
+        /// leave an existing agent's list alone; pass `--no-can-spawn` to clear it. **Only a
+        /// human may set or change this** — a save made from inside a run drops this field
+        /// outright, whatever it says (see `Agents::save`).
+        #[arg(long = "can-spawn")]
+        can_spawn: Vec<String>,
+        /// Clear the agent's `can_spawn` (see `--can-spawn`).
+        #[arg(long, conflicts_with = "can_spawn")]
+        no_can_spawn: bool,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         /// Overlaid on the agent's existing arguments — what you don't state stays as it was.
         /// Pass `--no-argument` to start from nothing instead.
@@ -268,6 +279,16 @@ pub(crate) enum AgentsCommand {
         /// number, it never lifts it.
         #[arg(long)]
         project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show, or set, whether an `agent:<name>` launch outside the caller's own `can_spawn` is
+    /// actually refused (ADI-MONO-113). `observe` (the default) never refuses one — it only logs
+    /// it and publishes `adi.agents.spawn.refused` — until an operator has seen what switching to
+    /// `enforce` would change and does so on purpose.
+    SpawnPolicy {
+        /// `observe` or `enforce`. Omit to read the current one.
+        policy: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -412,10 +433,18 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 .get(&name)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("no such agent: {name}"))?;
+            // The reverse of everyone else's `can_spawn` — never stored on `agent` itself, so it
+            // is computed here rather than carried on the manifest `print_agent` reads.
+            let spawned_by = store.spawned_by(&agent).map_err(|e| e.to_string())?;
             if json {
-                print_json(&agent);
+                let mut value = serde_json::to_value(&agent).map_err(|e| e.to_string())?;
+                value["spawned_by"] = serde_json::json!(spawned_by);
+                print_json(&value);
             } else {
                 print_agent(&agent);
+                if !spawned_by.is_empty() {
+                    println!("  can be spawned by: {}", spawned_by.join(", "));
+                }
             }
         }
         AgentsCommand::Save {
@@ -452,6 +481,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_knowledge,
             memory,
             no_memory,
+            can_spawn,
+            no_can_spawn,
             arguments: arguments_flags,
             no_argument,
             json,
@@ -615,6 +646,14 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     old.map(|m| m.knowledge.clone()),
                 ),
                 memory: flag(memory, no_memory, old.is_some_and(|m| m.memory)),
+                // Stated wins, omitted keeps — same rule as everything above. The store has the
+                // last word regardless: a save made from inside a run drops this outright, no
+                // matter what is typed here (see `Agents::save`, and the field's own doc).
+                can_spawn: kept(
+                    no_can_spawn,
+                    stated(can_spawn, clean_tags),
+                    old.map(|m| m.can_spawn.clone()),
+                ),
                 // Only takes effect if this save is the one that creates the definition — the store
                 // ignores it on an edit (see `Agents::save`) — so it costs nothing to compute here
                 // even when `old` says this is a resave.
@@ -788,6 +827,21 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 for (id, max) in &limits.projects {
                     println!("  {id}: at most {max} ({} running)", load.in_project(id));
                 }
+            }
+        }
+        AgentsCommand::SpawnPolicy { policy, json } => {
+            let limits = match policy.as_deref() {
+                Some(word) => {
+                    let mut limits = store.limits();
+                    limits.spawn_policy = word.parse()?;
+                    store.set_limits(limits).map_err(|e| e.to_string())?
+                }
+                None => store.limits(),
+            };
+            if json {
+                print_json(&serde_json::json!({ "spawn_policy": limits.spawn_policy.to_string() }));
+            } else {
+                println!("spawn policy: {}", limits.spawn_policy);
             }
         }
         AgentsCommand::Questions { agent, json } => {
@@ -1224,6 +1278,9 @@ fn print_agent(agent: &StoredAgent) {
     }
     if agent.manifest.memory {
         println!("  memory: agent:{}/memory", agent.name);
+    }
+    if !agent.manifest.can_spawn.is_empty() {
+        println!("  can spawn: {}", agent.manifest.can_spawn.join(", "));
     }
     if !agent.manifest.path.is_empty() {
         println!("  path: {}", agent.manifest.path.join(", "));

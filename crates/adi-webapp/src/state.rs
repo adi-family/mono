@@ -1278,6 +1278,15 @@ pub(crate) struct AgentsForm {
     /// Whether the agent keeps a memory of its own — the `agent:<name>/memory` base, which it
     /// alone writes and every other agent may read.
     pub(crate) memory: RwSignal<bool>,
+    /// Which agents this one's runs may launch, comma-separated: an exact name, a glob (`dr-*`),
+    /// `project:<id>`, or `*`. Free text rather than a checkbox picker like `knowledge` — the
+    /// rules name a pattern, not one of a fixed set of existing bases. Server-guarded: a save
+    /// made from inside a run cannot change this, whatever the form sends (see `Agents::save`).
+    pub(crate) can_spawn: RwSignal<String>,
+    /// The agents whose own `can_spawn` would let them launch this one — read-only, refreshed
+    /// from the loaded [`AgentDto::spawned_by`](adi_webapp_api::types::AgentDto::spawned_by) and
+    /// never sent back on a save.
+    pub(crate) spawned_by: RwSignal<Vec<String>>,
     /// The bases the checkbox list offers, fetched once when the form first renders them. Held on
     /// the form rather than in the shell state because a base's counts are a status pass over its
     /// storage — not something the 4s poll should run on every page.
@@ -1332,6 +1341,8 @@ impl AgentsForm {
             bin_tools: RwSignal::new(BTreeSet::new()),
             knowledge: RwSignal::new(BTreeSet::new()),
             memory: RwSignal::new(false),
+            can_spawn: RwSignal::new(String::new()),
+            spawned_by: RwSignal::new(Vec::new()),
             knowledge_bases: RwSignal::new(None),
             secrets: RwSignal::new(BTreeSet::new()),
             prelude: RwSignal::new(String::new()),

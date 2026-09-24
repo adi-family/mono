@@ -242,6 +242,9 @@ fn submit_setup(state: State, form: MetaForm) {
         // checkboxes.
         knowledge: None,
         memory: None,
+        // Same as `knowledge`/`memory` above: no form here offers it, so `None` leaves whatever
+        // the agent already has.
+        can_spawn: None,
         // The backend list is the agent editor's to set — this page is the meta agent's prompt and
         // its tools, so `None` leaves whichever models it answers on alone.
         backends: None,

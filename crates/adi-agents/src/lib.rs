@@ -52,6 +52,7 @@ pub mod questions;
 pub mod review;
 mod run;
 pub mod runner;
+pub mod spawn;
 pub mod store;
 mod tool_help;
 mod workspace;
@@ -76,9 +77,9 @@ pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentGoalClosed, AgentGoalNudged, AgentGoalSet, AgentQuestionAnswered,
     AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunReported, AgentRunStarted,
-    AgentRunStopped, AgentSaved, RUN_REPORTED, event_catalog, event_types,
+    AgentRunStopped, AgentSaved, AgentSpawnRefused, RUN_REPORTED, event_catalog, event_types,
 };
-pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
+pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
     AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
     LlmBackend, LlmBackendManifest, LlmSettings, Probe, ResolvedBackend, ResolvedChain, Resume,
@@ -279,6 +280,21 @@ fn with_knowledge_tool(bin_tools: &[String], knowledge: &knowledge::RunKnowledge
     out
 }
 
+/// The agent's enabled tools, plus the agents CLI when its `can_spawn` names anything — the same
+/// rule [`with_knowledge_tool`] follows, for the same reason: `can_spawn` is the operator saying
+/// this agent's runs may launch others, and there is exactly one way for a run to do that,
+/// `adi-agents` (`sys-agents`) on its `PATH`.
+///
+/// Idempotent, like its sibling: an agent that already has the tool ticked gets its list back
+/// unchanged, in its own order.
+fn with_spawn_tool(bin_tools: &[String], can_spawn: &[String]) -> Vec<String> {
+    let mut out = bin_tools.to_vec();
+    if !can_spawn.is_empty() && !out.iter().any(|id| id == adi_tools::SYS_AGENTS) {
+        out.push(adi_tools::SYS_AGENTS.to_string());
+    }
+    out
+}
+
 /// Everything that might bring a stopped run back to life on its own, for every run of one agent at
 /// once — what [`Agents::note_finished`] gates a run's ending on, and what [`RunLifecycle`] reads to
 /// tell "waiting" from "finished". Built once per listing rather than asked per run: nothing is
@@ -409,6 +425,18 @@ impl Agents {
         Ok(agents)
     }
 
+    /// Every agent whose own `can_spawn` would let it launch `agent` — the reverse of everyone's
+    /// `can_spawn`, computed by walking the whole store rather than kept a second time anywhere
+    /// (see [`AgentManifest::can_spawn`]). Answers a listing's worth of "who can be launched by
+    /// whom", not just one row: a caller building a page of agents should call [`Self::list`] once
+    /// and pass it to [`spawn::spawned_by`] directly rather than one lookup per row.
+    ///
+    /// # Errors
+    /// Returns whatever [`Self::list`] does.
+    pub fn spawned_by(&self, agent: &StoredAgent) -> Result<Vec<String>> {
+        Ok(spawn::spawned_by(&self.list()?, agent))
+    }
+
     /// A definition exactly as the file has it, with nothing derived filled in.
     ///
     /// For the migration runner, which has to know what a file *says* rather than what it means:
@@ -471,7 +499,23 @@ impl Agents {
     pub fn save<Args: serde::Serialize>(
         &self,
         name: &str,
+        manifest: AgentManifest<Args>,
+    ) -> Result<Agent<Args>> {
+        self.save_as(name, manifest, launcher::by_caller())
+    }
+
+    /// [`Self::save`]'s whole body, taking who is calling as a parameter instead of reading
+    /// [`launcher::by_caller`] itself — the one seam that lets the `can_spawn` guard below be
+    /// exercised without mutating the process environment `by_caller` reads, which every other
+    /// test in this module also calls `save`/`launch` through and would otherwise race.
+    ///
+    /// # Errors
+    /// Returns name, argument, or store errors.
+    fn save_as<Args: serde::Serialize>(
+        &self,
+        name: &str,
         mut manifest: AgentManifest<Args>,
+        caller: Option<String>,
     ) -> Result<Agent<Args>> {
         validate_name(name)?;
         let file = self.agent_file(name);
@@ -499,6 +543,16 @@ impl Agents {
             .map_or(manifest.created_by.clone(), |existing: StoredAgentManifest| {
                 existing.created_by
             });
+        // Only a human may set or change `can_spawn`, on *any* agent's definition — including the
+        // one making this very call. `caller` is the same signal `created_by` above is stamped
+        // from at the CLI call site; asking it here instead catches every path at once, the API
+        // included. Without this a run could simply widen its own allowlist, and the enforcement
+        // in `launch_run` would be checking a rule the caller had already rewritten.
+        if caller.is_some() {
+            manifest.can_spawn = file
+                .load()
+                .map_or_else(|_| Vec::new(), |existing: StoredAgentManifest| existing.can_spawn);
+        }
         // A definition whose runtime is derived does not store it, so whatever the caller is
         // holding — almost always the value `get` derived on the way out — is dropped rather than
         // written back. Saving a *derived* field would put a second answer in the file, and the
@@ -567,6 +621,28 @@ impl Agents {
             },
         );
         Ok(())
+    }
+
+    /// Log and publish `adi.agents.spawn.refused` (see [`events::AgentSpawnRefused`]) — called once
+    /// per refusal [`Self::launch_run`] finds, whether or not `spawn_policy` actually stopped it.
+    /// `run_id` is empty for an `enforce`d refusal, which stops the launch before a run exists.
+    fn emit_spawn_refused(&self, caller: &str, target: &str, run_id: &str, enforced: bool) {
+        tracing::warn!(
+            caller,
+            target,
+            run_id,
+            enforced,
+            "agent-to-agent launch outside can_spawn"
+        );
+        self.emit(
+            "adi.agents.spawn.refused",
+            &AgentSpawnRefused {
+                caller: caller.to_string(),
+                target: target.to_string(),
+                run_id: run_id.to_string(),
+                enforced,
+            },
+        );
     }
 
     /// Announce that a question is settled, so whatever told a person about it can say so too.
@@ -1062,6 +1138,32 @@ impl Agents {
         if overrides.is_some() {
             arguments::validate_builtin(&agent.manifest)?;
         }
+        // Checked before the run cap, and never skipped by `force`: `force` overrides a load
+        // throttle, not who a caller is allowed to be (ADI-MONO-113). Only an `agent:<name>`
+        // launch is weighed against anyone's `can_spawn` — a human or an automated trigger is
+        // never refused by it. A caller naming an agent that no longer exists reads as having no
+        // permissions of its own, the same as an empty `can_spawn`.
+        let spawn_refusal = launched_by
+            .and_then(|by| by.strip_prefix(launcher::AGENT_PREFIX))
+            .filter(|caller| {
+                !self.get(caller).ok().flatten().is_some_and(|c| {
+                    spawn::allows(
+                        &c.manifest.can_spawn,
+                        &agent.name,
+                        agent.manifest.project.as_deref(),
+                    )
+                })
+            })
+            .map(str::to_string);
+        if let Some(caller) = &spawn_refusal
+            && self.limits().spawn_policy.is_enforce()
+        {
+            self.emit_spawn_refused(caller, &agent.name, "", true);
+            return Err(Error::SpawnNotAllowed {
+                caller: caller.clone(),
+                target: agent.name.clone(),
+            });
+        }
         if !force && let Some(full) = self.full_cap_for(&agent, &self.limits(), &self.run_load()) {
             return Err(full);
         }
@@ -1086,6 +1188,12 @@ impl Agents {
             message,
             launched_by.unwrap_or_default(),
         )?;
+        // The launch was allowed to proceed above only because `spawn_policy` is still `observe` —
+        // logged and published now that there is a run id to name, so an operator can see what
+        // switching to `enforce` would have stopped before doing it.
+        if let Some(caller) = &spawn_refusal {
+            self.emit_spawn_refused(caller, &agent.name, &record.id, false);
+        }
         // Only for an answerable conversation — a one-shot `process:claude` run's task is a line
         // the caller already wrote deliberately, and a pty's launch message is not a message at all.
         // Off this thread entirely: see [`auto_title::spawn`] for why a launch never waits on it.
@@ -2062,7 +2170,10 @@ impl Agents {
     fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf) -> RunSpec {
         let tools = adi_tools::Tools::with_config(self.config.clone());
         let knowledge = knowledge::resolve(&self.config, agent);
-        let bin_tools = with_knowledge_tool(&agent.manifest.bin_tools, &knowledge);
+        let bin_tools = with_spawn_tool(
+            &with_knowledge_tool(&agent.manifest.bin_tools, &knowledge),
+            &agent.manifest.can_spawn,
+        );
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
         let bin_dir = tools.sync_agent_bin(&agent.name, &bin_tools).ok();
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
@@ -2091,6 +2202,8 @@ impl Agents {
             .filter(|note| !note.trim().is_empty());
         let knowledge_note =
             Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
+        let spawn_note = Some(spawn::block(&agent.manifest.can_spawn))
+            .filter(|note| !note.trim().is_empty());
         RunSpec {
             credential: None,
             cwd,
@@ -2106,6 +2219,7 @@ impl Agents {
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
             knowledge_note,
+            spawn_note,
             // Every run, not only the ones that can be woken: a pre-run block is stamped for all of
             // them, and a section naming all five costs less than one run misreading one of them.
             marker_note: Some(crate::marker::block()),
@@ -3452,6 +3566,24 @@ mod tests {
         assert_eq!(with_knowledge_tool(&already, &some), already);
     }
 
+    /// The same exception, for `can_spawn`: an agent that may launch others gets the CLI that
+    /// launches them.
+    #[test]
+    fn an_agent_with_can_spawn_gets_the_cli_that_launches() {
+        assert_eq!(
+            with_spawn_tool(&["sys-tasks".into()], &[]),
+            vec!["sys-tasks"]
+        );
+
+        assert_eq!(
+            with_spawn_tool(&["sys-tasks".into()], &["b".to_string()]),
+            vec!["sys-tasks", adi_tools::SYS_AGENTS]
+        );
+
+        let already = vec![adi_tools::SYS_AGENTS.to_string(), "sys-tasks".to_string()];
+        assert_eq!(with_spawn_tool(&already, &["b".to_string()]), already);
+    }
+
     /// What a review says an agent can run has to be what it can actually run. System tools were
     /// once counted as enabled whether or not the agent had them, so a review of an agent holding
     /// two of the nine claimed all nine — and a reader chasing why the agent did something the
@@ -3731,6 +3863,51 @@ mod tests {
         // An agent created with nothing said stays unknown, not `human` by default.
         let unattributed = store.save("b", spec("process:codex")).expect("create");
         assert_eq!(unattributed.manifest.created_by, "");
+    }
+
+    /// The rule ADI-MONO-113 exists for: a save made from inside a run may not widen anyone's
+    /// `can_spawn`, its own included — otherwise the enforcement in `launch_run` would be checking
+    /// a list the caller had already rewritten. Goes through [`Agents::save_as`] with an explicit
+    /// caller rather than `ADI_AGENT`/`ADI_RUN_ID`: those are process-wide, and this module's other
+    /// tests call `save` throughout, so mutating them here would race every one of them.
+    #[test]
+    fn a_save_from_inside_a_run_cannot_change_can_spawn() {
+        let store = scratch("can-spawn-guard");
+        let mut human_made = spec("process:codex");
+        human_made.can_spawn = vec!["b".to_string()];
+        store
+            .save_as("a", human_made, None)
+            .expect("create as a human");
+
+        // An edit from inside a run cannot widen its own `can_spawn`…
+        let mut widened = spec("process:codex");
+        widened.can_spawn = vec!["b".to_string(), "c".to_string()];
+        let edited = store.save_as("a", widened, Some("agent:a".to_string()));
+        assert_eq!(
+            edited.expect("update").manifest.can_spawn,
+            vec!["b".to_string()],
+            "an agent-made save must not add to its own can_spawn"
+        );
+
+        // …nor create a brand new definition with one already set.
+        let mut fresh = spec("process:codex");
+        fresh.can_spawn = vec!["*".to_string()];
+        let created = store.save_as("fresh-from-a-run", fresh, Some("agent:a".to_string()));
+        assert!(
+            created.expect("create").manifest.can_spawn.is_empty(),
+            "an agent-made save must not set can_spawn on a definition it is creating either"
+        );
+
+        // A save with nobody calling from inside a run is unrestricted, same as any other field.
+        let mut human_widened = spec("process:codex");
+        human_widened.can_spawn = vec!["b".to_string(), "c".to_string()];
+        let by_a_human = store
+            .save_as("a", human_widened, None)
+            .expect("update as a human");
+        assert_eq!(
+            by_a_human.manifest.can_spawn,
+            vec!["b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -5002,6 +5179,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            spawn_note: None,
             marker_note: None,
         }
     }
@@ -5290,6 +5468,185 @@ mod tests {
             ),
             "the global cap is reported, since it is the one that is full"
         );
+    }
+
+    /// Whether `result` was refused specifically for `caller`'s `can_spawn`, naming `target` —
+    /// the one thing every `can_spawn` test below is really asking.
+    fn is_spawn_refusal(result: &Result<Launch>, caller: &str, target: &str) -> bool {
+        matches!(
+            result,
+            Err(Error::SpawnNotAllowed { caller: c, target: t }) if c == caller && t == target
+        )
+    }
+
+    /// A -> B allowed, A -> C refused, B -> C allowed: `can_spawn` is per-agent, and it is not
+    /// transitive — A reaching C through B is exactly what "not stored a second time" means.
+    ///
+    /// Set up through [`Agents::save_as`] with an explicit `None` caller, not [`Agents::save`]:
+    /// this suite may itself be run from inside an agent's own conversation, in which case
+    /// `ADI_AGENT` is really set on the test process, and `save`'s own `can_spawn` guard (correctly)
+    /// would strip every `can_spawn` this test tries to set up.
+    #[test]
+    fn can_spawn_is_checked_against_the_caller_named_in_launched_by() {
+        let store = scratch("can-spawn-chain");
+        let mut a = spec("harness:adi");
+        a.can_spawn = vec!["b".into()];
+        store.save_as("a", a, None).expect("save a");
+        let mut b = spec("harness:adi");
+        b.can_spawn = vec!["c".into()];
+        store.save_as("b", b, None).expect("save b");
+        store
+            .save_as("c", spec("harness:adi"), None)
+            .expect("save c");
+        store
+            .set_limits(RunLimits {
+                spawn_policy: SpawnPolicy::Enforce,
+                ..RunLimits::default()
+            })
+            .expect("enforce");
+
+        let a_to_b = store.launch(
+            "b",
+            "go",
+            &LaunchOptions {
+                launched_by: Some("agent:a"),
+                ..LaunchOptions::default()
+            },
+        );
+        assert!(
+            !is_spawn_refusal(&a_to_b, "a", "b"),
+            "a may launch b: {a_to_b:?}"
+        );
+
+        let a_to_c = store.launch(
+            "c",
+            "go",
+            &LaunchOptions {
+                launched_by: Some("agent:a"),
+                ..LaunchOptions::default()
+            },
+        );
+        assert!(
+            is_spawn_refusal(&a_to_c, "a", "c"),
+            "a may not launch c: {a_to_c:?}"
+        );
+
+        let b_to_c = store.launch(
+            "c",
+            "go",
+            &LaunchOptions {
+                launched_by: Some("agent:b"),
+                ..LaunchOptions::default()
+            },
+        );
+        assert!(
+            !is_spawn_refusal(&b_to_c, "b", "c"),
+            "b may launch c: {b_to_c:?}"
+        );
+    }
+
+    /// `can_spawn` is checked only against `agent:<name>` launches — a person or an automated
+    /// trigger is never weighed against anyone's list.
+    #[test]
+    fn human_and_automation_launches_are_never_refused_by_can_spawn() {
+        let store = scratch("can-spawn-human");
+        store.save("c", spec("harness:adi")).expect("save c");
+        store
+            .set_limits(RunLimits {
+                spawn_policy: SpawnPolicy::Enforce,
+                ..RunLimits::default()
+            })
+            .expect("enforce");
+
+        for by in [launcher::HUMAN, launcher::AUTOMATION] {
+            let result = store.launch(
+                "c",
+                "go",
+                &LaunchOptions {
+                    launched_by: Some(by),
+                    ..LaunchOptions::default()
+                },
+            );
+            assert!(
+                !matches!(result, Err(Error::SpawnNotAllowed { .. })),
+                "{by} must never be refused by can_spawn: {result:?}"
+            );
+        }
+    }
+
+    /// `force` overrides the run cap, a load throttle — never who a caller is allowed to be.
+    #[test]
+    fn force_does_not_bypass_can_spawn() {
+        let store = scratch("can-spawn-force");
+        store.save("a", spec("harness:adi")).expect("save a");
+        store.save("c", spec("harness:adi")).expect("save c");
+        store
+            .set_limits(RunLimits {
+                spawn_policy: SpawnPolicy::Enforce,
+                ..RunLimits::default()
+            })
+            .expect("enforce");
+
+        let result = store.launch(
+            "c",
+            "go",
+            &LaunchOptions {
+                launched_by: Some("agent:a"),
+                force: true,
+                ..LaunchOptions::default()
+            },
+        );
+        assert!(
+            is_spawn_refusal(&result, "a", "c"),
+            "force must not let a launch c: {result:?}"
+        );
+    }
+
+    /// The rollout default: nothing is refused, but every would-be refusal is logged and published
+    /// so an operator can see what `enforce` would change before switching to it. Uses a real
+    /// [`fake_engine`] rather than the unconfigured `harness:adi` the other `can_spawn` tests use,
+    /// so the launch actually succeeds and the event's `run_id` is a real one.
+    #[test]
+    #[cfg(unix)]
+    fn observe_policy_lets_the_launch_through_and_publishes_the_refusal() {
+        let store = scratch("can-spawn-observe");
+        let (bin, _argv) = fake_engine(&store, "claude");
+        let mut c = spec("process:claude");
+        c.path = vec![bin];
+        store.save("c", c).expect("save c");
+        assert_eq!(
+            store.limits().spawn_policy,
+            SpawnPolicy::Observe,
+            "observe is the default this ships with"
+        );
+
+        let launch = store
+            .launch(
+                "c",
+                "go",
+                &LaunchOptions {
+                    launched_by: Some("agent:a"),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("observe lets the launch through");
+        let Launch::Process { run_id, .. } = launch else {
+            panic!("process:claude is not a terminal");
+        };
+
+        let events = adi_events::Events::with_config(store.config().clone())
+            .drain()
+            .expect("drain");
+        let refusal = events
+            .iter()
+            .find(|e| e.record.name == "adi.agents.spawn.refused")
+            .expect("the refusal was published even though nothing was actually stopped");
+        let payload: serde_json::Value =
+            serde_json::from_str(&refusal.record.payload).expect("json payload");
+        assert_eq!(payload["caller"], "a");
+        assert_eq!(payload["target"], "c");
+        assert_eq!(payload["enforced"], false);
+        assert_eq!(payload["run_id"], run_id);
     }
 
     /// An image's whole life: stored before any message exists, carried by the reply that names it,

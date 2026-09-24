@@ -21,7 +21,8 @@ use crate::types::{
     AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun,
     IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun, ReplyToRun,
     ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
-    SetRunLimit, SimulateAgent, SimulateTurn, StarRun, TranscriptView, TurnMarker, UnqueueFromRun,
+    SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn, StarRun, TranscriptView, TurnMarker,
+    UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -138,17 +139,21 @@ pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreErro
         load: store.run_load(),
     };
     let project_run_limits = caps.rows();
+    // Read once and reused per row for `spawned_by` — the reverse of everyone's `can_spawn` — so a
+    // page of N agents costs one directory read, not N of them (see `Agents::spawned_by`'s own doc).
+    let all = store.list()?;
     Ok(AgentsState {
-        agents: store
-            .list()?
-            .into_iter()
-            .map(|a| agent_dto(store, a, &sessions, &caps))
+        agents: all
+            .iter()
+            .cloned()
+            .map(|a| agent_dto(store, a, &sessions, &caps, &all))
             .collect(),
         form: agent_form_spec(),
         max_concurrent_runs: caps.limits.max_concurrent_runs,
         running_runs: count(caps.load.total()),
         project_run_limits,
         auto_title_enabled: store.auto_title_enabled(),
+        spawn_policy: caps.limits.spawn_policy.to_string(),
     })
 }
 
@@ -213,6 +218,32 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
         }
     };
     if let Err(e) = stored {
+        return Response::from(&e);
+    }
+    match agents_state(store) {
+        Ok(state) => ok_json(&state),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/spawn-policy` — set whether an `agent:<name>` launch outside the caller's own
+/// `can_spawn` is actually refused (ADI-MONO-113). Answers with the fresh state, like every other
+/// setting on this page.
+#[must_use]
+pub fn set_spawn_policy(store: &Agents, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<SetSpawnPolicy>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"spawn_policy\": \"observe\"|\"enforce\" }",
+        );
+    };
+    let policy: adi_agents::SpawnPolicy = match req.spawn_policy.parse() {
+        Ok(policy) => policy,
+        Err(e) => return error(400, &e),
+    };
+    let mut limits = store.limits();
+    limits.spawn_policy = policy;
+    if let Err(e) = store.set_limits(limits) {
         return Response::from(&e);
     }
     match agents_state(store) {
@@ -1767,6 +1798,20 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         memory: req
             .memory
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.memory)),
+        // Which agents this one's runs may launch. Omit-to-keep, as above; send an empty list to
+        // clear. The store (`Agents::save`) has the last word regardless: a save made from inside
+        // a run drops this outright, whatever this request sends.
+        can_spawn: match req.can_spawn {
+            Some(rules) => rules
+                .into_iter()
+                .map(|r| r.trim().to_string())
+                .filter(|r| !r.is_empty())
+                .collect(),
+            None => stored
+                .as_ref()
+                .map(|m| m.can_spawn.clone())
+                .unwrap_or_default(),
+        },
         // The agent's ordered backend list — its whole model configuration. Omit-to-keep, for the
         // strongest version of the reason `secrets` is: an agent whose list was silently cleared
         // has no model at all, and would fail at its next run rather than here.
@@ -1962,6 +2007,7 @@ fn agent_dto(
     agent: StoredAgent,
     sessions: &std::collections::BTreeSet<String>,
     caps: &RunCaps,
+    all: &[StoredAgent],
 ) -> AgentDto {
     let executor = agent.manifest.executor().to_string();
     let runnable = adi_agents::is_runnable(&agent.manifest);
@@ -1983,6 +2029,7 @@ fn agent_dto(
     // Whether *this* agent is the one that would be refused: the global cap binds everybody, a
     // project cap only that project's agents.
     let at_run_limit = caps.blocks(agent.manifest.project.as_deref());
+    let spawned_by = adi_agents::spawn::spawned_by(all, &agent);
     let backend_caps = agent_caps(&agent);
     let m = agent.manifest;
     AgentDto {
@@ -1997,6 +2044,8 @@ fn agent_dto(
         prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,
+        can_spawn: m.can_spawn,
+        spawned_by,
         backends: m
             .backends
             .into_iter()
@@ -2925,10 +2974,12 @@ fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
 }
 
 // Map an agent-store error to an HTTP status: bad name / unrunnable backend / bad key → 400,
-// missing → 404, wrong run state (already / not running) → 409, run cap full → 429, else 500.
+// missing → 404, wrong run state (already / not running) → 409, run cap full → 429,
+// can_spawn refusal → 403, else 500.
 impl From<&AgentStoreError> for Response {
     fn from(e: &AgentStoreError) -> Self {
         let status = match e {
+            AgentStoreError::SpawnNotAllowed { .. } => 403,
             AgentStoreError::TooManyRunning { .. } => 429,
             AgentStoreError::Arguments(_)
             | AgentStoreError::InvalidName(_)

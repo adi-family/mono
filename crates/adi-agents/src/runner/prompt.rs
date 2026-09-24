@@ -35,7 +35,10 @@ pub fn compose(spec: &RunSpec, stored: Option<String>) -> Option<String> {
         spec,
         with_markers(
             spec,
-            with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))),
+            with_spawn(
+                spec,
+                with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))),
+            ),
         ),
     )
 }
@@ -56,13 +59,14 @@ pub struct Section<'a> {
 
 /// The headings [`compose`] appends, in the order it appends them.
 ///
-/// Here rather than in the three modules that write them because this is the file that knows the
+/// Here rather than in the modules that write them because this is the file that knows the
 /// order — and a reader splitting the prompt back up needs the order, not the individual strings.
 /// They are matched at the start of a line, so a prompt that merely *mentions* `# Your tools` in
 /// prose does not split there.
-const HEADINGS: [(&str, &str); 3] = [
+const HEADINGS: [(&str, &str); 4] = [
     ("where you are", "# Where you are"),
     ("what you know", "# What you know"),
+    ("what you can launch", "# What you can launch"),
     ("your tools", "# Your tools"),
 ];
 
@@ -149,6 +153,16 @@ pub(super) fn with_knowledge(spec: &RunSpec, existing: Option<String>) -> Option
     behind(existing, spec.knowledge_note.as_deref())
 }
 
+/// `existing` with what the run may launch behind it, or `existing` unchanged when its
+/// `can_spawn` is empty.
+///
+/// After knowledge and before the platform's own tags, for the same reason knowledge sits after
+/// location: what a run *knows* and what it may *reach* both belong ahead of the mechanics of the
+/// conversation it is having.
+pub(super) fn with_spawn(spec: &RunSpec, existing: Option<String>) -> Option<String> {
+    behind(existing, spec.spawn_note.as_deref())
+}
+
 /// `existing` with the platform's own message tags behind it, or `existing` unchanged when the
 /// caller had nothing to say about them.
 ///
@@ -205,25 +219,27 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            spawn_note: None,
             marker_note: None,
         }
     }
 
     /// The order is the contract: instructions, then where you are, then what you know, then what
-    /// you can call. A run whose prompt reordered itself between two turns would throw away every
-    /// cached token it had, for no reason the model could see.
+    /// you can launch, then what you can call. A run whose prompt reordered itself between two
+    /// turns would throw away every cached token it had, for no reason the model could see.
     #[test]
     fn the_sections_come_in_one_order() {
         let mut spec = spec();
         spec.system_prompt = Some("You review code.".into());
         spec.workspace_note = Some("# Where you are\n\n/tmp".into());
         spec.knowledge_note = Some("# What you know\n\nnothing".into());
+        spec.spawn_note = Some("# What you can launch\n\nYou may launch: `b`.".into());
         spec.tool_help = Some("# Your tools\n\nBash".into());
 
         assert_eq!(
             compose(&spec, None).expect("a prompt"),
             "You review code.\n\n# Where you are\n\n/tmp\n\n# What you know\n\nnothing\n\n\
-             # Your tools\n\nBash",
+             # What you can launch\n\nYou may launch: `b`.\n\n# Your tools\n\nBash",
         );
     }
 
@@ -266,6 +282,20 @@ mod tests {
         );
     }
 
+    /// An agent whose `can_spawn` is empty gets no section for it at all — a run that may launch
+    /// nothing should not be handed a paragraph about a feature it does not have.
+    #[test]
+    fn an_agent_with_nothing_to_launch_gets_no_spawn_section() {
+        let mut spec = spec();
+        spec.system_prompt = Some("You review code.".into());
+        spec.tool_help = Some("# Your tools\n\nBash".into());
+
+        assert_eq!(
+            compose(&spec, None).expect("a prompt"),
+            "You review code.\n\n# Your tools\n\nBash",
+        );
+    }
+
     /// The cuts are exact: joined back together the sections are the prompt again. A reader
     /// shown "instructions: 1–240" against a split that lost a newline is being shown the wrong
     /// boundary, and the whole reason to draw one is that it can be trusted.
@@ -275,6 +305,7 @@ mod tests {
         spec.system_prompt = Some("You review code.".into());
         spec.workspace_note = Some("# Where you are\n\n/tmp".into());
         spec.knowledge_note = Some("# What you know\n\nnothing".into());
+        spec.spawn_note = Some("# What you can launch\n\nYou may launch: `b`.".into());
         spec.tool_help = Some("# Your tools\n\nBash".into());
         let prompt = compose(&spec, None).expect("a prompt");
 
@@ -285,6 +316,7 @@ mod tests {
                 "instructions",
                 "where you are",
                 "what you know",
+                "what you can launch",
                 "your tools"
             ],
         );

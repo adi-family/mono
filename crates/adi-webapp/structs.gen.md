@@ -1567,6 +1567,8 @@ pub(crate) struct AgentsForm {
     pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
     pub(crate) knowledge: RwSignal<BTreeSet<String>>,
     pub(crate) memory: RwSignal<bool>,
+    pub(crate) can_spawn: RwSignal<String>,
+    pub(crate) spawned_by: RwSignal<Vec<String>>,
     pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
     pub(crate) prelude: RwSignal<String>,
     pub(crate) path: RwSignal<String>,

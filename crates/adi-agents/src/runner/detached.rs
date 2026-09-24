@@ -2149,6 +2149,7 @@ mod tests {
             system_prompt: None,
             workspace_note: None,
             knowledge_note: None,
+            spawn_note: None,
             marker_note: None,
         }
     }

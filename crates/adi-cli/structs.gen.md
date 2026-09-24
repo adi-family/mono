@@ -113,6 +113,10 @@ pub(crate) enum AgentsCommand {
         memory: bool,
         #[arg(long, conflicts_with = "memory")]
         no_memory: bool,
+        #[arg(long = "can-spawn")]
+        can_spawn: Vec<String>,
+        #[arg(long, conflicts_with = "can_spawn")]
+        no_can_spawn: bool,
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
         #[arg(long)]
@@ -157,6 +161,11 @@ pub(crate) enum AgentsCommand {
         max: Option<u32>,
         #[arg(long)]
         project: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    SpawnPolicy {
+        policy: Option<String>,
         #[arg(long)]
         json: bool,
     },

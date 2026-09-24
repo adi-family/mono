@@ -96,6 +96,8 @@ pub(crate) fn agents_panel(
                     // checkboxes.
                     knowledge: None,
                     memory: None,
+                    // Same as `knowledge`/`memory` above: not offered here, so not stated.
+                    can_spawn: None,
                     // The ordered backend list is the agent editor's; this panel creates an agent
                     // and leaves what it answers on to be set there.
                     backends: None,

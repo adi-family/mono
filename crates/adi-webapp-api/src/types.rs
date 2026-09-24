@@ -1330,6 +1330,17 @@ pub struct AgentDto {
     /// alone writes and every other agent may read.
     #[serde(default)]
     pub memory: bool,
+    /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`), `project:<id>`
+    /// (every agent filed directly under that project), or `*` (everything). Empty means this
+    /// agent's runs may launch no agents. **Only a human may set or change this** — a save made
+    /// from inside a run drops whatever it says here (see `Agents::save`).
+    #[serde(default)]
+    pub can_spawn: Vec<String>,
+    /// The agents whose own `can_spawn` would let them launch *this* one — the reverse of
+    /// [`can_spawn`](Self::can_spawn), read-only and never sent back on a save: it is not stored
+    /// on this agent at all, only computed from everyone else's.
+    #[serde(default)]
+    pub spawned_by: Vec<String>,
     /// The ordered list of LLM backends this agent may answer on — its whole model configuration.
     /// Row 1 is what a new conversation starts on; the rest are what it falls to, in order, when a
     /// backend runs out. Empty means this agent has not been migrated and still answers on
@@ -1405,6 +1416,11 @@ pub struct AgentsState {
     /// answers (`POST /api/agents/auto-title`). On by default.
     #[serde(default)]
     pub auto_title_enabled: bool,
+    /// Whether an `agent:<name>` launch outside the caller's own `can_spawn` is actually refused
+    /// (ADI-MONO-113): `"observe"` (the default) or `"enforce"`. Set with
+    /// `POST /api/agents/spawn-policy`.
+    #[serde(default)]
+    pub spawn_policy: String,
 }
 
 /// One project's slice of the run caps: what it is allowed and what it is using.
@@ -1429,6 +1445,13 @@ pub struct SetRunLimit {
     pub max_concurrent_runs: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+}
+
+/// Request body for `POST /api/agents/spawn-policy` — `"observe"` or `"enforce"`; see
+/// [`AgentsState::spawn_policy`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSpawnPolicy {
+    pub spawn_policy: String,
 }
 
 /// Request body for `POST /api/agents/auto-title` — turn the auto-title guesser on or off. It is
@@ -1488,6 +1511,12 @@ pub struct SaveAgent {
     /// memory away.
     #[serde(default)]
     pub memory: Option<bool>,
+    /// Which agents this one's runs may launch (see [`AgentDto::can_spawn`]). **Omit to keep
+    /// whatever the agent already has**, for the same reason as `bin_tools`; send an empty list
+    /// to clear. The store drops this outright when the save itself was made from inside a run —
+    /// see `Agents::save` — so sending it from a run's own tool changes nothing.
+    #[serde(default)]
+    pub can_spawn: Option<Vec<String>>,
     /// The agent's ordered backend list (see [`AgentDto::backends`]). **Omit to keep whatever the
     /// agent already has**, for the same reason as `bin_tools`; send an empty list to clear it,
     /// which drops the agent back to its legacy `backend` + `arguments`.

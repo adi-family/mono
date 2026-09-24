@@ -162,6 +162,7 @@ mod tests {
                 prelude: Vec::new(),
                 knowledge: Vec::new(),
                 memory: false,
+                can_spawn: Vec::new(),
                 backends: Vec::new(),
                 secrets: Vec::new(),
                 path: Vec::new(),

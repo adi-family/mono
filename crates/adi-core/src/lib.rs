@@ -54,8 +54,8 @@ pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
     Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLifecycle, RunLimits,
-    RunOverrides, SecretAttachment, Sent, StoredAgent, StoredAgentManifest, UNVERSIONED,
-    contains_json_null, event_catalog,
+    RunOverrides, SecretAttachment, Sent, SpawnPolicy, StoredAgent, StoredAgentManifest,
+    UNVERSIONED, contains_json_null, event_catalog,
 };
 
 pub use adi_db::{ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo};

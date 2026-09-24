@@ -139,6 +139,27 @@ pub struct AgentManifest<Args> {
     /// default made for them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    /// Which agents this one's runs may launch, as rules matched against a candidate's name or
+    /// project: an exact name, a glob (`dr-*`), `project:<id>` (every agent filed directly under
+    /// that project), or `*` (everything). Empty means this agent's runs may launch **no** agents
+    /// — the default is silence, not the run of the machine.
+    ///
+    /// Enforced only against `launched_by: agent:<name>` launches — a human or an automated
+    /// trigger is never checked against anyone's `can_spawn` (see
+    /// [`Agents::launch_run`](crate::Agents::launch_run)). "Who can launch *this* agent" is the
+    /// reverse of everyone's list and is never stored a second time — see
+    /// [`spawn::spawned_by`](crate::spawn::spawned_by).
+    ///
+    /// **Only a human may set or change this field.** [`Agents::save`](crate::Agents::save)
+    /// drops whatever a save carries here when the save itself was made from inside a run — the
+    /// same signal [`created_by`](Self::created_by) reads — on any agent, including the one
+    /// making the call. Without that, a run could simply widen its own allowlist.
+    ///
+    /// A plain array, so it is declared ahead of [`backends`](Self::backends) and
+    /// [`secrets`](Self::secrets): the registry is TOML, where a plain array cannot follow an
+    /// array-of-tables.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub can_spawn: Vec<String>,
     /// The ordered list of LLM backends this agent may answer on — its whole model configuration,
     /// and the only one it has.
     ///
@@ -250,6 +271,7 @@ impl<Args> AgentManifest<Args> {
             prelude: self.prelude.clone(),
             knowledge: self.knowledge.clone(),
             memory: self.memory,
+            can_spawn: self.can_spawn.clone(),
             backends: self.backends.clone(),
             secrets: self.secrets.clone(),
             path: self.path.clone(),
@@ -478,6 +500,37 @@ mod tests {
         assert_eq!(back.knowledge, manifest.knowledge);
         assert!(back.memory);
         assert_eq!(back.secrets, manifest.secrets);
+    }
+
+    /// `can_spawn` is a plain array too, and the same TOML rule applies: it has to survive
+    /// alongside `secrets`, an array-of-tables, or the field list has drifted out of order again.
+    #[test]
+    fn can_spawn_round_trips_through_toml_alongside_secrets() {
+        let manifest = StoredAgentManifest {
+            backend: Some("harness:adi".into()),
+            can_spawn: vec!["dr-*".into(), "project:acme".into(), "*".into()],
+            secrets: vec![SecretAttachment {
+                project: None,
+                name: "API_KEY".into(),
+            }],
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&manifest).expect("toml");
+        let back: StoredAgentManifest = toml::from_str(&text).expect("parse back");
+        assert_eq!(back.can_spawn, manifest.can_spawn);
+        assert_eq!(back.secrets, manifest.secrets);
+    }
+
+    /// An agent definition written before `can_spawn` existed still loads, and a save of it does
+    /// not grow a line nobody asked for.
+    #[test]
+    fn an_agent_definition_from_before_can_spawn_still_loads() {
+        let older = "backend = \"harness:adi\"\nstarred = false\ncreated_at = 1\nupdated_at = 2\n";
+        let manifest: StoredAgentManifest = toml::from_str(older).expect("parse");
+        assert!(manifest.can_spawn.is_empty());
+
+        let text = toml::to_string_pretty(&manifest).expect("toml");
+        assert!(!text.contains("can_spawn"), "{text}");
     }
 
     /// Both fields are omit-when-default, so every agent definition written before knowledge

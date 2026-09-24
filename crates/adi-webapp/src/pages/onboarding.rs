@@ -862,6 +862,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         // checkboxes.
         knowledge: None,
         memory: None,
+        // Same as `knowledge`/`memory` above: not offered here, so not stated.
+        can_spawn: None,
         // The wizard stands the agent up on one runtime; the ordered backend list is the agent
         // editor's, and the migration writes the first row from what is saved here.
         backends: None,

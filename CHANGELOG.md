@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **Which agent may launch which is now something the operator decides (ADI-MONO-113).** An agent
+  definition gets a `can_spawn` field — an exact name, a glob (`dr-*`), `project:<id>`, or `*` —
+  naming the agents its own runs may launch; empty (the default) means none. Enforced wherever a
+  launch names `launched_by: agent:<name>` — the CLI, `POST /api/agents/run`, and every tool built
+  on them — and never bypassed by `--force`. Only a human may set or change it, on any agent's
+  definition including the one making the save. `agents show` prints it both ways: what an agent
+  can launch, and (computed, never stored) who can launch it. New `agents spawn-policy` /
+  `POST /api/agents/spawn-policy` switch between `observe` (the default — nothing is refused, but
+  every would-be refusal is logged and published as `adi.agents.spawn.refused`) and `enforce`.
+
 ## 1.22.0 — 2026-09-24
 
 ### Changed

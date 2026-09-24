@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-142 structs · 40 enums · 5 type aliases across 56 files.
+143 structs · 41 enums · 5 type aliases across 56 files.
 
 ## Index
 
@@ -26,11 +26,11 @@
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
-- [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
+- [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
 - [`src/llm/chain.rs`](#srcllmchainrs) — `AgentBackendEntry`, `StartAt`, `ResolvedBackend`, `ResolvedChain`, `PinnedChain`
 - [`src/llm/classify.rs`](#srcllmclassifyrs) — `Classification`
@@ -124,6 +124,8 @@ pub struct AgentManifest<Args> {
     pub knowledge: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub can_spawn: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub backends: Vec<crate::llm::AgentBackendEntry>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1153,6 +1155,10 @@ pub enum Error {
         running: usize,
         limit: u32,
     },
+    SpawnNotAllowed {
+        caller: String,
+        target: String,
+    },
 }
 ```
 
@@ -1235,6 +1241,21 @@ pub struct AgentRunFinished {
     pub cost_micro_usd: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_head: String,
+}
+```
+
+### struct `AgentSpawnRefused`
+
+`adi.agents.spawn.refused` — an `agent:<caller>` launch named a target outside the caller's own `can_spawn` (ADI-MONO-113). Published either way, `enforce` or `observe`: the field says which happened, so a subscriber (or an operator watching before flipping the switch) can tell a launch that was actually stopped from one that only would have been.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentSpawnRefused {
+    pub caller: String,
+    pub target: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
+    pub enforced: bool,
 }
 ```
 
@@ -1454,6 +1475,22 @@ pub struct RunLimits {
     pub max_concurrent_runs: u32,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub projects: BTreeMap<String, u32>,
+    #[serde(default)]
+    pub spawn_policy: SpawnPolicy,
+}
+```
+
+### enum `SpawnPolicy`
+
+The rollout switch for `can_spawn` enforcement (ADI-MONO-113): whether a launch made by one agent on behalf of another, naming a target outside the caller's own `can_spawn`, is actually refused, or only logged and published so an operator can see what enforcing it would have stopped before switching it on.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpawnPolicy {
+    #[default]
+    Observe,
+    Enforce,
 }
 ```
 
@@ -2800,6 +2837,7 @@ pub struct RunSpec {
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
     pub knowledge_note: Option<String>,
+    pub spawn_note: Option<String>,
     pub marker_note: Option<String>,
 }
 ```

@@ -124,6 +124,26 @@ pub struct AgentRunFinished {
     pub result_head: String,
 }
 
+/// `adi.agents.spawn.refused` — an `agent:<caller>` launch named a target outside the caller's own
+/// `can_spawn` (ADI-MONO-113). Published either way, `enforce` or `observe`: the field says which
+/// happened, so a subscriber (or an operator watching before flipping the switch) can tell a
+/// launch that was actually stopped from one that only would have been.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentSpawnRefused {
+    /// The agent that tried to launch another.
+    pub caller: String,
+    /// The agent it tried to launch.
+    pub target: String,
+    /// The caller's own run this launch was attempted from, when the launch got far enough to
+    /// have one — empty for a refusal under `spawn_policy = "enforce"`, which stops the launch
+    /// before a run is created.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
+    /// Whether this refusal actually stopped the launch (`spawn_policy = "enforce"`) or only
+    /// noted it (`"observe"`, the default while this rolls out).
+    pub enforced: bool,
+}
+
 /// `adi.agents.run.deleted` — one run of an agent was deleted outright: it was stopped if still
 /// live, and its log, metadata and any transcript are gone. Distinct from `stopped`, which ends a
 /// run but leaves it in the history to read.
@@ -317,6 +337,17 @@ pub fn event_types() -> Vec<EventType> {
                 duration_ms: Some(23_169),
                 cost_micro_usd: Some(2_137_364),
                 result_head: "Filed three tasks and left a note on the scope.".into(),
+            },
+        ),
+        EventType::of(
+            "adi.agents.spawn.refused",
+            "An agent-to-agent launch named a target outside the caller's own can_spawn.",
+            schema::<AgentSpawnRefused>(),
+            &AgentSpawnRefused {
+                caller: "research-worker".into(),
+                target: "billing-admin".into(),
+                run_id: "r-1a2b3c".into(),
+                enforced: false,
             },
         ),
         EventType::of(

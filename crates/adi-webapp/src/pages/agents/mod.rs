@@ -20,7 +20,9 @@ use crate::routing::{
     spa_nav,
 };
 use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State, read_error};
-use crate::ui::{Key, flash_view, menu_item, row_actions, rows_or_status, sort_rows, updated_text};
+use crate::ui::{
+    Key, field_hint, flash_view, menu_item, row_actions, rows_or_status, sort_rows, updated_text,
+};
 
 /// The Agents page's columns; the trailing blank one holds the running dot and the ⋯ menu.
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
@@ -300,6 +302,16 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // empty — the other forms send `None`, which leaves them as they are.
                     knowledge: Some(form.knowledge.get().into_iter().collect()),
                     memory: Some(form.memory.get()),
+                    // Which agents this one may launch — this is the form that owns it, so it
+                    // states the list even when empty. The store still refuses this outright when
+                    // the save itself comes from inside a run, whatever is sent here.
+                    can_spawn: Some(
+                        form.can_spawn.get()
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
+                    ),
                     // This is the one form that edits the run environment, so it always states it —
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
                     prelude: Some(parsed_prelude(&form.prelude.get())),
@@ -337,6 +349,11 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 <section class="adi-agents__section">
                     <h2 class="adi-agents__h2">"Knowledge"</h2>
                     {move || agent_knowledge_checkboxes(form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Launching other agents"</h2>
+                    {move || agent_spawn_field(form)}
                 </section>
 
                 <section class="adi-agents__section">
@@ -677,6 +694,52 @@ fn base_checkboxes(form: AgentsForm) -> AnyView {
         })
         .collect::<Vec<_>>();
     view! { <div class="adi-agents__checks">{boxes}</div> }.into_any()
+}
+
+/// Which agents this one's runs may launch — a free-text list of rules rather than a checkbox
+/// picker like the knowledge bases above, because a rule names a *pattern* (a glob, `project:<id>`,
+/// or `*`) rather than one of a fixed set of things that already exist. Paired with the read-only
+/// reverse: who can launch *this* agent, which is never edited here — it is computed from
+/// everyone else's `can_spawn`, not stored on this one (see `AgentDto::spawned_by`).
+///
+/// Server-guarded on top of whatever this renders: a save made from inside a run drops `can_spawn`
+/// outright, so this field only ever really moves when a person is looking at it (see
+/// `Agents::save`).
+fn agent_spawn_field(form: AgentsForm) -> AnyView {
+    const WIDE: &str = "flex:1 1 100%; min-width:0; grid-column:1 / -1";
+    view! {
+        <div class="adi-field" style=WIDE>
+            <label class="adi-field__label" for="agent-can-spawn">"Can launch"</label>
+            <input class="adi-input adi-mono" id="agent-can-spawn"
+                placeholder="dr-*, project:acme, reviewer"
+                prop:value=move || form.can_spawn.get()
+                on:input=move |ev| form.can_spawn.set(event_target_value(&ev)) />
+            {field_hint(
+                "Comma-separated: an exact agent name, a glob (dr-*), project:<id> (every agent \
+                 filed directly under that project), or * (everything). Empty means this agent's \
+                 runs may launch no agents. Checked only against an agent-to-agent launch — a \
+                 person or an automated trigger is never refused by it.",
+            )}
+        </div>
+        {move || {
+            let by = form.spawned_by.get();
+            (!by.is_empty()).then(|| view! {
+                <div class="adi-field" style=WIDE>
+                    <span class="adi-field__label">"Can be launched by"</span>
+                    <div class="adi-agents__checks">
+                        {by.into_iter()
+                            .map(|name| view! { <span class="adi-chip">{name}</span> })
+                            .collect::<Vec<_>>()}
+                    </div>
+                    {field_hint(
+                        "Read-only — the reverse of everyone else's \"Can launch\", not a setting \
+                         of its own.",
+                    )}
+                </div>
+            })
+        }}
+    }
+    .into_any()
 }
 
 /// The per-agent secret checkboxes: one toggle per registered secret (across every scope) that

@@ -32,6 +32,11 @@ pub enum Error {
         running: usize,
         limit: u32,
     },
+    /// An `agent:<caller>` launch named a `target` outside the caller's own `can_spawn` — refused
+    /// only when `spawn_policy = "enforce"` (see [`RunLimits::spawn_policy`](crate::RunLimits)).
+    /// Maps to HTTP 403. Unlike [`TooManyRunning`](Self::TooManyRunning), `force` never bypasses
+    /// this: it overrides a load throttle, not who a caller is allowed to be.
+    SpawnNotAllowed { caller: String, target: String },
 }
 
 impl fmt::Display for Error {
@@ -76,6 +81,10 @@ impl fmt::Display for Error {
                 f,
                 "{running} runs of project {project} are already live and its limit is {limit} — stop one, raise the project's limit, or run it anyway"
             ),
+            Self::SpawnNotAllowed { caller, target } => write!(
+                f,
+                "agent {caller} may not launch {target}: {target} is not in {caller}'s can_spawn — a human can add it there"
+            ),
         }
     }
 }
@@ -98,7 +107,8 @@ impl std::error::Error for Error {
             | Self::Process(_)
             | Self::Busy(_)
             | Self::Unsupported(_)
-            | Self::TooManyRunning { .. } => None,
+            | Self::TooManyRunning { .. }
+            | Self::SpawnNotAllowed { .. } => None,
         }
     }
 }

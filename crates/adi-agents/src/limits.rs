@@ -19,9 +19,15 @@
 //! firing `adi-agents run`). A human is never *stopped* by them, only told: a refused launch says
 //! which cap is full, and asking again with `force` runs anyway — see [`Agents::force_run_in`].
 //!
+//! [`SpawnPolicy`] lives in the same file, next to `max_concurrent_runs`, because it is the same
+//! kind of thing: a rollout switch on the one door every launch goes through. Unlike the caps
+//! above, `force` never bypasses it — see `Agents::launch_run`.
+//!
 //! [`Agents::force_run_in`]: crate::Agents::force_run_in
 
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +55,10 @@ pub struct RunLimits {
     /// global cap; an entry never lifts that cap, it only narrows it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub projects: BTreeMap<String, u32>,
+    /// Whether an `agent:<name>` launch outside the caller's own `can_spawn` is actually refused,
+    /// or only noted — see [`SpawnPolicy`].
+    #[serde(default)]
+    pub spawn_policy: SpawnPolicy,
 }
 
 impl Default for RunLimits {
@@ -56,6 +66,62 @@ impl Default for RunLimits {
         Self {
             max_concurrent_runs: DEFAULT_MAX_CONCURRENT_RUNS,
             projects: BTreeMap::new(),
+            spawn_policy: SpawnPolicy::default(),
+        }
+    }
+}
+
+/// The rollout switch for `can_spawn` enforcement (ADI-MONO-113): whether a launch made by one
+/// agent on behalf of another, naming a target outside the caller's own `can_spawn`, is actually
+/// refused, or only logged and published so an operator can see what enforcing it would have
+/// stopped before switching it on.
+///
+/// Read alongside [`RunLimits::max_concurrent_runs`] and stored beside it, in the same
+/// `sessions/settings.toml` — both are throttles on the one door every launch goes through, and
+/// this one starts wide open on purpose: a fleet with `can_spawn` unset on every agent (which is
+/// every agent that exists before this shipped) would otherwise have every agent-to-agent launch
+/// start failing the moment the binary that knows the rule is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpawnPolicy {
+    /// Nothing is refused. Every rule violation is still logged and published as
+    /// `adi.agents.spawn.refused` with `enforced: false`, so an operator can see what switching
+    /// to `enforce` would change before doing it.
+    #[default]
+    Observe,
+    /// A launch outside the caller's `can_spawn` is refused outright — see
+    /// [`Error::SpawnNotAllowed`](crate::Error::SpawnNotAllowed), HTTP 403.
+    Enforce,
+}
+
+impl SpawnPolicy {
+    /// Whether this policy actually blocks a launch outside the caller's `can_spawn`, rather than
+    /// only noting it.
+    #[must_use]
+    pub fn is_enforce(self) -> bool {
+        matches!(self, Self::Enforce)
+    }
+}
+
+impl fmt::Display for SpawnPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Observe => "observe",
+            Self::Enforce => "enforce",
+        })
+    }
+}
+
+impl FromStr for SpawnPolicy {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "observe" => Ok(Self::Observe),
+            "enforce" => Ok(Self::Enforce),
+            other => Err(format!(
+                "spawn policy must be \"observe\" or \"enforce\", got {other:?}"
+            )),
         }
     }
 }
@@ -276,5 +342,38 @@ mod tests {
         assert_eq!(load.in_project("bugbounty"), 3);
         assert_eq!(load.in_project("mono"), 0);
         assert_eq!(load.projects().len(), 1);
+    }
+
+    /// Nothing is refused until an operator says so — a fresh store, and one loaded from a file
+    /// written before this field existed, must both read as `observe`.
+    #[test]
+    fn spawn_policy_defaults_to_observe() {
+        assert_eq!(RunLimits::default().spawn_policy, SpawnPolicy::Observe);
+        let module = scratch("spawn-policy-default");
+        assert_eq!(RunLimits::load(&module).spawn_policy, SpawnPolicy::Observe);
+    }
+
+    #[test]
+    fn spawn_policy_round_trips_through_the_settings_file() {
+        let module = scratch("spawn-policy-round-trip");
+        let mut limits = RunLimits::load(&module);
+        limits.spawn_policy = SpawnPolicy::Enforce;
+        limits.save(&module).expect("save");
+        assert_eq!(RunLimits::load(&module).spawn_policy, SpawnPolicy::Enforce);
+    }
+
+    #[test]
+    fn spawn_policy_parses_its_two_words_and_nothing_else() {
+        assert_eq!("observe".parse(), Ok(SpawnPolicy::Observe));
+        assert_eq!("enforce".parse(), Ok(SpawnPolicy::Enforce));
+        assert!("Observe".parse::<SpawnPolicy>().is_err());
+        assert!("".parse::<SpawnPolicy>().is_err());
+    }
+
+    #[test]
+    fn spawn_policy_display_is_the_word_it_parses_back_from() {
+        for policy in [SpawnPolicy::Observe, SpawnPolicy::Enforce] {
+            assert_eq!(policy.to_string().parse(), Ok(policy));
+        }
     }
 }

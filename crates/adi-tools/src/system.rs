@@ -35,6 +35,13 @@ pub const SYS_KNOWLEDGE_ROOT: &str = "sys-knowledge-root";
 /// implied by any other setting, so an agent has it because somebody said it should.
 pub const SYS_FACTS: &str = "sys-facts";
 
+/// The agents CLI's stable id.
+///
+/// Exported because the agent launch path adds this one shim on its own, the same way it does for
+/// [`SYS_KNOWLEDGE`]: an agent whose `can_spawn` names anything has *asked* to launch other
+/// agents, and a setting it cannot reach would be a setting that does nothing.
+pub const SYS_AGENTS: &str = "sys-agents";
+
 /// One built-in system tool: a stable id, the name agents invoke it by, a one-line description,
 /// and the `adi-mono` subcommand it forwards to.
 pub(crate) struct SystemTool {
@@ -88,7 +95,7 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         subcommand: "tasks",
     },
     SystemTool {
-        id: "sys-agents",
+        id: SYS_AGENTS,
         name: "adi-agents",
         description: "Manage agent definitions and runs (list/add/run/…).",
         subcommand: "agents",

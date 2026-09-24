@@ -74,6 +74,13 @@ pub struct RunSpec {
     /// script the agent writes, but an agent that is never *told* it has a memory does not use
     /// one.
     pub knowledge_note: Option<String>,
+    /// What this run may launch, stated in prose for the prompt — `None` when its `can_spawn` is
+    /// empty, which is most agents.
+    ///
+    /// Travels beside [`knowledge_note`](Self::knowledge_note), for the same reason: a run that is
+    /// never *told* it may launch other agents will not think to, even with `adi-agents` sitting
+    /// right there on its `PATH`.
+    pub spawn_note: Option<String>,
     /// What the tags the platform stamps onto messages mean, stated in prose for the prompt — see
     /// [`crate::marker`].
     ///
