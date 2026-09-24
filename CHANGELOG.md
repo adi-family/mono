@@ -37,6 +37,26 @@ extraction script cares about.
   wake `agents run` registers for you fires on it too, alongside the run finishing for real and the
   run stopping to ask a person something.
 
+### Added
+
+- **Agent definitions now record who created them, and the Agents page — plus its pickers — gets a
+  Mine/All filter.** Each agent's `created_by` is set once, on creation, to human, automation, or
+  `agent:<name>`, and left alone by later edits, the same rule already used for `version`; existing
+  agents are left blank since there's no way to know. Mine (the default) means human or blank
+  rather than only human, since a blank author is what nearly every agent that already exists has —
+  a starred agent stays visible under Mine regardless of who made it, and any row shown despite not
+  being "mine" carries a "by <name>" marker. `agents list`/`agents show` and `GET /api/agents`
+  report the same field.
+
+### Fixed
+
+- **A pty session's live view, a headless chat's transcript, and a workspace terminal or
+  hook/trigger log panel no longer rebuild themselves on every poll.** Each used to reread and
+  redraw its whole pane once a second for as long as the run or log it was watching kept producing
+  output — visibly flashing and resetting scroll to the top while you were reading it. Each now
+  only adds the new output as it lands, and the pane stays pinned to the bottom if you were already
+  there when it arrived; scroll away and it leaves you exactly where you are.
+
 ## 1.21.0 — 2026-09-22
 
 ### Changed
