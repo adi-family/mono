@@ -31,6 +31,18 @@ extraction script cares about.
   can launch, and (computed, never stored) who can launch it. New `agents spawn-policy` /
   `POST /api/agents/spawn-policy` switch between `observe` (the default — nothing is refused, but
   every would-be refusal is logged and published as `adi.agents.spawn.refused`) and `enforce`.
+- **The spawn allowlist gets a panel (ADI-MONO-114).** The Agents page carries an Observe/Enforce
+  switch beside the run counters, and under it a "Would have been refused" list — every recorded
+  agent-to-agent launch whose target does not match the caller's *current* `can_spawn`, derived
+  live from session history rather than stored, so a row disappears the moment it is allowed. Each
+  row has a one-click Allow. Every agent with a non-empty `can_spawn` now carries a small "launches
+  N" (or "launches \*") marker in the list, and the edit page's free-text `can_spawn` box is now a
+  real editor: rules as removable chips, each showing how many currently-registered agents it
+  matches; add one by picking an existing agent or a project, or typing a pattern. "Can be launched
+  by" is now editable from the target's own page too — an exact-name rule can be added or removed
+  there; one reached only through a pattern points at the caller's own page instead. New
+  `POST /api/agents/spawn-rule` adds or removes a single rule without touching the rest of an
+  agent's definition, for exactly this one-field kind of write.
 
 ## 1.22.0 — 2026-09-24
 

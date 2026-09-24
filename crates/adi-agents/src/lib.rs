@@ -116,6 +116,12 @@ const MANIFEST_EXT: &str = "toml";
 /// this reason" from "there was no model — the command could not be spawned".
 const LAUNCH_FAILED: &str = "launch_failed";
 
+/// How far back [`Agents::spawn_refusals`] looks for a launch to weigh against the caller's
+/// current `can_spawn` (ADI-MONO-114) — long enough to catch an agent that only launches another
+/// occasionally, short enough that a refusal nobody has repeated in months does not sit on the
+/// list forever.
+const SPAWN_REFUSAL_WINDOW_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+
 /// How long a stopped run is given to end itself before it is killed.
 ///
 /// Long enough for a vendor CLI to finish the request it is blocked on and write out what it has;
@@ -435,6 +441,96 @@ impl Agents {
     /// Returns whatever [`Self::list`] does.
     pub fn spawned_by(&self, agent: &StoredAgent) -> Result<Vec<String>> {
         Ok(spawn::spawned_by(&self.list()?, agent))
+    }
+
+    /// What enforcing `can_spawn` today would have stopped, going back
+    /// [`SPAWN_REFUSAL_WINDOW_MS`]: every `agent:<name>` launch on record whose target does not
+    /// match that caller's *current* rules, grouped caller → target (ADI-MONO-114).
+    ///
+    /// Derived fresh from the sessions store on every call — the event bus keeps no readable
+    /// history of its own, so this is the only way to answer "what would `enforce` have stopped",
+    /// and it is why a row here covers a launch made long before this shipped exactly as well as
+    /// one made yesterday. It is also why a row disappears the moment its caller's `can_spawn` is
+    /// widened to cover it: the next call re-reads the rule, not a snapshot of the old verdict.
+    ///
+    /// # Errors
+    /// Returns whatever [`Self::list`] does.
+    pub fn spawn_refusals(&self) -> Result<Vec<spawn::Refusal>> {
+        let all = self.list()?;
+        let projects: BTreeMap<&str, Option<&str>> = all
+            .iter()
+            .map(|a| (a.name.as_str(), a.manifest.project.as_deref()))
+            .collect();
+        let sessions = self.sessions();
+        let since = now_ms().saturating_sub(SPAWN_REFUSAL_WINDOW_MS);
+        // Collected before handing to `spawn::refusals` rather than streamed straight through it:
+        // the pure grouping function borrows `caller`/`target` for the whole call, so the strings
+        // it borrows from have to outlive it.
+        let mut launches: Vec<(String, String, Option<String>, u64)> = Vec::new();
+        for target in sessions.agents() {
+            // Newest first (`SessionStore::list`'s own order): once a record is older than the
+            // window, every one behind it is too.
+            for record in sessions.list(&target) {
+                if record.started_at < since {
+                    break;
+                }
+                let Some(caller) = record.launched_by.strip_prefix(launcher::AGENT_PREFIX) else {
+                    continue;
+                };
+                launches.push((
+                    caller.to_string(),
+                    target.clone(),
+                    projects.get(target.as_str()).copied().flatten().map(str::to_string),
+                    record.started_at,
+                ));
+            }
+        }
+        Ok(spawn::refusals(
+            &all,
+            launches
+                .iter()
+                .map(|(caller, target, project, at)| spawn::Launch {
+                    caller,
+                    target,
+                    target_project: project.as_deref(),
+                    at: *at,
+                }),
+        ))
+    }
+
+    /// Add or remove one rule in a named agent's `can_spawn`, leaving everything else on its
+    /// definition untouched (ADI-MONO-114) — what the "would have been refused" list's Allow
+    /// button sends, and what editing "Can be launched by" from a target's own page sends (there,
+    /// `name` is the *caller* the rule is added to, not the page a person is looking at).
+    ///
+    /// Deliberately narrower than [`Self::save`]: that endpoint's request omits-to-keep most
+    /// fields but still states `arguments` outright, so a caller holding only a rule and an agent
+    /// name — never having loaded the rest of the form — would clear it. This reads the agent,
+    /// changes just the one field, and writes the whole manifest back through `save`, which is
+    /// also where the human-only guard on `can_spawn` still applies.
+    ///
+    /// Adding dedups on the exact string; removing drops every rule that equals `rule` exactly — a
+    /// caller reached only through a pattern (`dr-*`, `project:<id>`, `*`) is not removable this
+    /// way, which is why the panel points at the pattern's own page for that case instead.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unknown agent, plus whatever [`Self::save`] returns.
+    pub fn set_can_spawn_rule(&self, name: &str, rule: &str, add: bool) -> Result<Vec<String>> {
+        let rule = rule.trim();
+        let mut manifest = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?
+            .manifest;
+        if add {
+            if !rule.is_empty() && !manifest.can_spawn.iter().any(|r| r == rule) {
+                manifest.can_spawn.push(rule.to_string());
+            }
+        } else {
+            manifest.can_spawn.retain(|r| r != rule);
+        }
+        let can_spawn = manifest.can_spawn.clone();
+        self.save(name, manifest)?;
+        Ok(can_spawn)
     }
 
     /// A definition exactly as the file has it, with nothing derived filled in.
@@ -5647,6 +5743,132 @@ mod tests {
         assert_eq!(payload["target"], "c");
         assert_eq!(payload["enforced"], false);
         assert_eq!(payload["run_id"], run_id);
+    }
+
+    /// The panel's "would have been refused" list, at its simplest: a session on record whose
+    /// caller's *current* `can_spawn` does not cover it. No launch actually has to run — the
+    /// derivation reads the session, not a live process — so this seeds the record straight into
+    /// the sessions store rather than going through [`Agents::launch`].
+    #[test]
+    fn spawn_refusals_surfaces_a_launch_outside_the_callers_current_can_spawn() {
+        let store = scratch("spawn-refusals-basic");
+        store.save("a", spec("harness:adi")).expect("save a");
+        store.save("b", spec("harness:adi")).expect("save b");
+        store
+            .sessions()
+            .create_as("b", Backend::HarnessAdi, None, "/tmp", "go", "agent:a")
+            .expect("seed a session");
+
+        let refusals = store.spawn_refusals().expect("derive");
+        assert_eq!(refusals.len(), 1);
+        assert_eq!(refusals[0].caller, "a");
+        assert_eq!(refusals[0].target, "b");
+        assert_eq!(refusals[0].count, 1);
+    }
+
+    /// The whole reason it is derived rather than stored: allowing a target retires its row on the
+    /// very next read, with nothing to reconcile.
+    #[test]
+    fn allowing_a_target_retires_its_row_on_the_next_read() {
+        let store = scratch("spawn-refusals-allow");
+        store.save("a", spec("harness:adi")).expect("save a");
+        store.save("b", spec("harness:adi")).expect("save b");
+        store
+            .sessions()
+            .create_as("b", Backend::HarnessAdi, None, "/tmp", "go", "agent:a")
+            .expect("seed a session");
+        assert_eq!(store.spawn_refusals().expect("derive").len(), 1);
+
+        store.set_can_spawn_rule("a", "b", true).expect("allow");
+        assert!(store.spawn_refusals().expect("derive").is_empty());
+    }
+
+    /// Only an `agent:<name>` launch can ever become a refusal — the same carve-out
+    /// [`Agents::launch_run`] itself gives a person or an automated trigger.
+    #[test]
+    fn spawn_refusals_ignores_human_automated_and_unattributed_launches() {
+        let store = scratch("spawn-refusals-human");
+        store.save("b", spec("harness:adi")).expect("save b");
+        let sessions = store.sessions();
+        for by in [launcher::HUMAN, launcher::AUTOMATION, ""] {
+            sessions
+                .create_as("b", Backend::HarnessAdi, None, "/tmp", "go", by)
+                .expect("seed");
+        }
+        assert!(store.spawn_refusals().expect("derive").is_empty());
+    }
+
+    /// Adding the same rule twice does not duplicate it — the same dedup [`Self::save`] leaves to
+    /// whoever calls it, done here so the Allow button can click twice without consequence.
+    #[test]
+    fn set_can_spawn_rule_adds_and_dedups() {
+        let store = scratch("spawn-rule-add");
+        store.save("a", spec("harness:adi")).expect("save a");
+        assert_eq!(
+            store.set_can_spawn_rule("a", "b", true).expect("add"),
+            vec!["b".to_string()]
+        );
+        assert_eq!(
+            store.set_can_spawn_rule("a", "b", true).expect("add again"),
+            vec!["b".to_string()],
+            "adding twice does not duplicate"
+        );
+    }
+
+    /// Removing drops only a rule that equals `rule` exactly — a pattern that happens to match the
+    /// same name is left alone, which is what sends the panel to the pattern's own page instead.
+    #[test]
+    fn set_can_spawn_rule_removes_only_an_exact_match() {
+        let store = scratch("spawn-rule-remove");
+        let mut a = spec("harness:adi");
+        a.can_spawn = vec!["dr-*".into(), "b".into()];
+        store.save("a", a).expect("save a");
+
+        assert_eq!(
+            store.set_can_spawn_rule("a", "b", false).expect("remove"),
+            vec!["dr-*".to_string()],
+            "the pattern is untouched"
+        );
+        assert_eq!(
+            store
+                .set_can_spawn_rule("a", "dr-8f3a", false)
+                .expect("no-op remove"),
+            vec!["dr-*".to_string()],
+            "removing by name does not touch a pattern that merely matches it"
+        );
+    }
+
+    /// The reason this is its own method rather than a caller building a `SaveAgent`-shaped
+    /// request with only `can_spawn` stated: every other field on the definition — including ones
+    /// no form the caller is looking at ever loaded — must survive untouched.
+    #[test]
+    fn set_can_spawn_rule_leaves_every_other_field_alone() {
+        let store = scratch("spawn-rule-preserve");
+        let mut agent = spec("harness:adi");
+        agent.tags = vec!["prod".into()];
+        agent.arguments = TestArguments {
+            system_prompt: Some("be careful".into()),
+            ..TestArguments::default()
+        };
+        store.save("a", agent).expect("save a");
+
+        store.set_can_spawn_rule("a", "b", true).expect("add");
+
+        let reloaded = store.get("a").expect("get").expect("still there");
+        assert_eq!(reloaded.manifest.tags, vec!["prod".to_string()]);
+        assert_eq!(
+            reloaded.manifest.arguments.get("system_prompt"),
+            Some(&serde_json::Value::String("be careful".into())),
+        );
+    }
+
+    #[test]
+    fn set_can_spawn_rule_refuses_an_unknown_agent() {
+        let store = scratch("spawn-rule-missing");
+        assert!(matches!(
+            store.set_can_spawn_rule("ghost", "b", true),
+            Err(Error::NotFound(_))
+        ));
     }
 
     /// An image's whole life: stored before any message exists, carried by the reply that names it,

@@ -3301,9 +3301,10 @@ fn as_defined(defined: &str) -> String {
     }
 }
 
-/// A short "N ago" for a run's start time (unix ms), against the browser clock. The panel re-renders
-/// each second (the poll refreshes the run list), so this stays roughly live.
-fn run_age(started_at_ms: u64) -> String {
+/// A short "N ago" for any unix-ms moment, against the browser clock — a run's start time, or
+/// (ADI-MONO-114) the last recorded moment of a `can_spawn` refusal. The panel re-renders every
+/// few seconds (the poll refreshes the underlying list), so this stays roughly live.
+pub(super) fn run_age(started_at_ms: u64) -> String {
     if started_at_ms == 0 {
         return String::new();
     }

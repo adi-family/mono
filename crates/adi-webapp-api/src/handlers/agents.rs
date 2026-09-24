@@ -18,10 +18,11 @@ use crate::types::{
     AgentSetupSecret, AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult,
     AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn, AgentStep, AgentSteps, AgentToken,
     AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun,
-    IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun, ReplyToRun,
-    ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef, SetAutoTitle, SetGoal,
-    SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn, StarRun, TranscriptView, TurnMarker,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CanSpawnRuleDto, CloseGoal, GoalsOf,
+    HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun,
+    ReplyToRun, ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef,
+    SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
+    SpawnRefusalDto, SpawnRuleEdit, SpawnedByDto, StarRun, TranscriptView, TurnMarker,
     UnqueueFromRun,
 };
 
@@ -154,6 +155,16 @@ pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreErro
         project_run_limits,
         auto_title_enabled: store.auto_title_enabled(),
         spawn_policy: caps.limits.spawn_policy.to_string(),
+        spawn_refusals: store
+            .spawn_refusals()?
+            .into_iter()
+            .map(|r| SpawnRefusalDto {
+                caller: r.caller,
+                target: r.target,
+                count: r.count,
+                last_at: r.last_at,
+            })
+            .collect(),
     })
 }
 
@@ -244,6 +255,32 @@ pub fn set_spawn_policy(store: &Agents, body: &[u8]) -> Response {
     let mut limits = store.limits();
     limits.spawn_policy = policy;
     if let Err(e) = store.set_limits(limits) {
+        return Response::from(&e);
+    }
+    match agents_state(store) {
+        Ok(state) => ok_json(&state),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/spawn-rule` — add or remove one exact rule in an agent's `can_spawn`, without
+/// touching anything else on its definition (ADI-MONO-114). What the "would have been refused"
+/// list's Allow button sends, and what editing "Can be launched by" from a target's own page
+/// sends — see [`SpawnRuleEdit`]. Answers with the fresh state, like every other setting on this
+/// page.
+#[must_use]
+pub fn set_spawn_rule(store: &Agents, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<SpawnRuleEdit>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"agent\": ..., \"rule\": ..., \"add\": bool }",
+        );
+    };
+    let rule = req.rule.trim();
+    if rule.is_empty() {
+        return error(400, "rule must not be blank");
+    }
+    if let Err(e) = store.set_can_spawn_rule(req.agent.trim(), rule, req.add) {
         return Response::from(&e);
     }
     match agents_state(store) {
@@ -2029,7 +2066,35 @@ fn agent_dto(
     // Whether *this* agent is the one that would be refused: the global cap binds everybody, a
     // project cap only that project's agents.
     let at_run_limit = caps.blocks(agent.manifest.project.as_deref());
-    let spawned_by = adi_agents::spawn::spawned_by(all, &agent);
+    // Each rule's own match count, against the same `all` every row already reads for
+    // `spawn_refusals` — one more pass over a list already in hand, not a second directory read.
+    let can_spawn = agent
+        .manifest
+        .can_spawn
+        .iter()
+        .map(|rule| CanSpawnRuleDto {
+            rule: rule.clone(),
+            matches: count(
+                all.iter()
+                    .filter(|candidate| {
+                        adi_agents::spawn::allows(
+                            std::slice::from_ref(rule),
+                            &candidate.name,
+                            candidate.manifest.project.as_deref(),
+                        )
+                    })
+                    .count(),
+            ),
+        })
+        .collect();
+    let spawned_by = adi_agents::spawn::spawned_by_via(all, &agent)
+        .into_iter()
+        .map(|e| SpawnedByDto {
+            caller: e.caller,
+            via: e.via,
+            exact: e.exact,
+        })
+        .collect();
     let backend_caps = agent_caps(&agent);
     let m = agent.manifest;
     AgentDto {
@@ -2044,7 +2109,7 @@ fn agent_dto(
         prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,
-        can_spawn: m.can_spawn,
+        can_spawn,
         spawned_by,
         backends: m
             .backends
@@ -3410,6 +3475,146 @@ mod tests {
         let m = saved(&store);
         assert!(m.knowledge.is_empty());
         assert!(!m.memory);
+    }
+
+    /// The reason `POST /api/agents/spawn-rule` exists instead of routing the Allow button through
+    /// `save_agent`: that endpoint states `arguments` outright (it is not omit-to-keep, unlike
+    /// `bin_tools`/`knowledge` above), so a caller holding only a rule would clear the model
+    /// configuration. This adds the rule and confirms `arguments` — and every other field — is
+    /// untouched.
+    #[test]
+    fn set_spawn_rule_adds_a_rule_without_touching_arguments() {
+        let store = scratch("spawn-rule-add");
+        let with = serde_json::json!({
+            "name": "caller", "backend": "pty:claude",
+            "arguments": { "model": "opus" }, "tags": ["prod"],
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+
+        let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": true });
+        let resp = set_spawn_rule(&store, req.to_string().as_bytes());
+        assert_eq!(resp.status, 200);
+
+        let m = store.get("caller").expect("get").expect("agent").manifest;
+        assert_eq!(m.can_spawn, ["b"]);
+        assert_eq!(m.arguments.get("model"), Some(&serde_json::Value::from("opus")));
+        assert_eq!(m.tags, ["prod"]);
+    }
+
+    /// Removing drops only the exact string — a pattern that happens to match the same name stays.
+    #[test]
+    fn set_spawn_rule_removes_only_an_exact_match() {
+        let store = scratch("spawn-rule-remove");
+        let with = serde_json::json!({
+            "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "b"],
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+
+        let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": false });
+        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 200);
+        assert_eq!(
+            store.get("caller").expect("get").expect("agent").manifest.can_spawn,
+            ["dr-*"]
+        );
+    }
+
+    /// `AgentDto::can_spawn` carries each rule's own match count (ADI-MONO-114), computed with
+    /// `adi_agents::spawn::allows` — the same matcher enforcement calls — so a glob's count in the
+    /// editor is never a guess. Two `dr-*` workers and one unrelated agent: the glob matches two.
+    #[test]
+    fn agent_dto_carries_each_can_spawn_rules_current_match_count() {
+        let store = scratch("can-spawn-matches");
+        let with = serde_json::json!({
+            "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "solo"],
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        for name in ["dr-1", "dr-2", "solo", "unrelated"] {
+            assert_eq!(
+                save_agent(
+                    &store,
+                    serde_json::json!({ "name": name, "backend": "pty:claude" })
+                        .to_string()
+                        .as_bytes()
+                )
+                .status,
+                200
+            );
+        }
+
+        let state = agents_state(&store).expect("state");
+        let caller = state.agents.iter().find(|a| a.name == "caller").expect("caller");
+        assert_eq!(
+            caller.can_spawn,
+            vec![
+                CanSpawnRuleDto { rule: "dr-*".into(), matches: 2 },
+                CanSpawnRuleDto { rule: "solo".into(), matches: 1 },
+            ]
+        );
+    }
+
+    /// `AgentDto::spawned_by` tells an exact-name rule (removable from this agent's own page) from
+    /// one reached only through a pattern (which points at the caller's own page instead).
+    #[test]
+    fn agent_dto_marks_which_spawned_by_entries_are_removable_here() {
+        let store = scratch("spawned-by-exact");
+        for (name, can_spawn) in [
+            ("a", serde_json::json!(["target"])),
+            ("d", serde_json::json!(["targ*"])),
+        ] {
+            let with = serde_json::json!({ "name": name, "backend": "pty:claude", "can_spawn": can_spawn });
+            assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        }
+        assert_eq!(
+            save_agent(
+                &store,
+                serde_json::json!({ "name": "target", "backend": "pty:claude" })
+                    .to_string()
+                    .as_bytes()
+            )
+            .status,
+            200
+        );
+
+        let state = agents_state(&store).expect("state");
+        let target = state.agents.iter().find(|a| a.name == "target").expect("target");
+        let mut by = target.spawned_by.clone();
+        by.sort_by(|a, b| a.caller.cmp(&b.caller));
+        assert_eq!(
+            by,
+            vec![
+                SpawnedByDto { caller: "a".into(), via: "target".into(), exact: true },
+                SpawnedByDto { caller: "d".into(), via: "targ*".into(), exact: false },
+            ]
+        );
+    }
+
+    #[test]
+    fn set_spawn_rule_rejects_a_blank_rule() {
+        let store = scratch("spawn-rule-blank");
+        let req = serde_json::json!({ "agent": "caller", "rule": "  ", "add": true });
+        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 400);
+    }
+
+    #[test]
+    fn set_spawn_rule_404s_on_an_unknown_agent() {
+        let store = scratch("spawn-rule-missing");
+        let req = serde_json::json!({ "agent": "ghost", "rule": "b", "add": true });
+        assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 404);
+    }
+
+    /// `GET /api/agents` state carries the "would have been refused" list the panel's Allow button
+    /// reads (ADI-MONO-114) — this crate cannot seed a session directly (`Agents::sessions` is
+    /// crate-private in `adi-agents`, and the grouping itself is covered there:
+    /// `spawn_refusals_surfaces_a_launch_outside_the_callers_current_can_spawn`), so this only
+    /// checks the field threads through and reads empty with nothing on record.
+    #[test]
+    fn agents_state_carries_an_empty_spawn_refusals_list_with_nothing_recorded() {
+        let store = scratch("spawn-refusals-empty");
+        assert_eq!(
+            save_agent(&store, br#"{"name":"caller","backend":"pty:claude"}"#).status,
+            200
+        );
+        assert!(agents_state(&store).expect("state").spawn_refusals.is_empty());
     }
 
     /// `unattended` is omit-to-keep for the same reason `path` and `env` are: only the full agent

@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-294 structs · 16 enums across 10 files.
+298 structs · 16 enums across 10 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/handlers/shared_assets.rs`](#srchandlersshared_assetsrs) — `Settings`
 - [`src/handlers/update.rs`](#srchandlersupdaters) — `Installing`
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
 
 ---
 
@@ -1514,9 +1514,9 @@ pub struct AgentDto {
     #[serde(default)]
     pub memory: bool,
     #[serde(default)]
-    pub can_spawn: Vec<String>,
+    pub can_spawn: Vec<CanSpawnRuleDto>,
     #[serde(default)]
-    pub spawned_by: Vec<String>,
+    pub spawned_by: Vec<SpawnedByDto>,
     #[serde(default)]
     pub backends: Vec<AgentBackendRowDto>,
     #[serde(default)]
@@ -1563,6 +1563,51 @@ pub struct AgentsState {
     pub auto_title_enabled: bool,
     #[serde(default)]
     pub spawn_policy: String,
+    #[serde(default)]
+    pub spawn_refusals: Vec<SpawnRefusalDto>,
+}
+```
+
+### struct `CanSpawnRuleDto`
+
+One rule on `AgentDto::can_spawn`, with how many currently-registered agents it matches right now (ADI-MONO-114) — computed with `adi_agents::spawn::allows`, the same matcher enforcement itself calls, so this count is never a client-side guess.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanSpawnRuleDto {
+    pub rule: String,
+    #[serde(default)]
+    pub matches: u32,
+}
+```
+
+### struct `SpawnedByDto`
+
+One caller allowed to launch a given agent, and which of its own rules is responsible (ADI-MONO-114) — a row of `AgentDto::spawned_by`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnedByDto {
+    pub caller: String,
+    pub via: String,
+    #[serde(default)]
+    pub exact: bool,
+}
+```
+
+### struct `SpawnRefusalDto`
+
+One caller → target pair whose recorded launches do not match the caller's *current* `can_spawn` (ADI-MONO-114) — a row of `AgentsState::spawn_refusals`. The panel's Allow button sends `caller` and `target` straight into `POST /api/agents/spawn-rule`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnRefusalDto {
+    pub caller: String,
+    pub target: String,
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub last_at: u64,
 }
 ```
 
@@ -1602,6 +1647,19 @@ Request body for `POST /api/agents/spawn-policy` — `"observe"` or `"enforce"`;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetSpawnPolicy {
     pub spawn_policy: String,
+}
+```
+
+### struct `SpawnRuleEdit`
+
+Request body for `POST /api/agents/spawn-rule` — add or remove one exact rule in `agent`'s own `can_spawn` (ADI-MONO-114), without touching anything else on its definition. What the "would have been refused" list's Allow button sends (`agent` is the caller there), and what editing "Can be launched by" from a target's own page sends (`agent` is the *caller* the rule is added to there, never the page a person is looking at). Answers with the fresh `AgentsState`, like every other mutation on this page.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnRuleEdit {
+    pub agent: String,
+    pub rule: String,
+    pub add: bool,
 }
 ```
 

@@ -1333,14 +1333,18 @@ pub struct AgentDto {
     /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`), `project:<id>`
     /// (every agent filed directly under that project), or `*` (everything). Empty means this
     /// agent's runs may launch no agents. **Only a human may set or change this** — a save made
-    /// from inside a run drops whatever it says here (see `Agents::save`).
+    /// from inside a run drops whatever it says here (see `Agents::save`). Each rule carries how
+    /// many currently-registered agents it matches right now (ADI-MONO-114), computed with the
+    /// same matcher enforcement uses, so the count an editor reads is never a guess.
     #[serde(default)]
-    pub can_spawn: Vec<String>,
+    pub can_spawn: Vec<CanSpawnRuleDto>,
     /// The agents whose own `can_spawn` would let them launch *this* one — the reverse of
-    /// [`can_spawn`](Self::can_spawn), read-only and never sent back on a save: it is not stored
-    /// on this agent at all, only computed from everyone else's.
+    /// [`can_spawn`](Self::can_spawn), never stored on this agent at all, only computed from
+    /// everyone else's. Editable from this side (ADI-MONO-114) through
+    /// `POST /api/agents/spawn-rule`: an `exact` entry may be removed directly (it names nothing
+    /// but this agent), one reached only through a pattern points at the caller's own page instead.
     #[serde(default)]
-    pub spawned_by: Vec<String>,
+    pub spawned_by: Vec<SpawnedByDto>,
     /// The ordered list of LLM backends this agent may answer on — its whole model configuration.
     /// Row 1 is what a new conversation starts on; the rest are what it falls to, in order, when a
     /// backend runs out. Empty means this agent has not been migrated and still answers on
@@ -1421,6 +1425,53 @@ pub struct AgentsState {
     /// `POST /api/agents/spawn-policy`.
     #[serde(default)]
     pub spawn_policy: String,
+    /// What enforcing `can_spawn` today would have stopped (ADI-MONO-114): every recorded
+    /// `agent:<name>` launch whose target does not match that caller's *current* rules, grouped
+    /// caller → target. Derived fresh on every read, not stored — see `Agents::spawn_refusals`.
+    /// An empty list is the signal that it is safe to switch `spawn_policy` to `enforce`.
+    #[serde(default)]
+    pub spawn_refusals: Vec<SpawnRefusalDto>,
+}
+
+/// One rule on [`AgentDto::can_spawn`], with how many currently-registered agents it matches
+/// right now (ADI-MONO-114) — computed with `adi_agents::spawn::allows`, the same matcher
+/// enforcement itself calls, so this count is never a client-side guess.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanSpawnRuleDto {
+    pub rule: String,
+    #[serde(default)]
+    pub matches: u32,
+}
+
+/// One caller allowed to launch a given agent, and which of its own rules is responsible
+/// (ADI-MONO-114) — a row of [`AgentDto::spawned_by`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnedByDto {
+    pub caller: String,
+    /// The rule on the caller's own `can_spawn` responsible for the match — an exact name, a
+    /// glob, `project:<id>`, or `*`.
+    pub via: String,
+    /// Whether `via` is this agent's exact name — the only shape removable from this agent's own
+    /// page (`POST /api/agents/spawn-rule` with `agent: caller, rule: via, add: false`). A
+    /// pattern/`project:<id>`/`*` match is shown as "via `via`" and points at the caller's own
+    /// page instead.
+    #[serde(default)]
+    pub exact: bool,
+}
+
+/// One caller → target pair whose recorded launches do not match the caller's *current*
+/// `can_spawn` (ADI-MONO-114) — a row of [`AgentsState::spawn_refusals`]. The panel's Allow button
+/// sends `caller` and `target` straight into `POST /api/agents/spawn-rule`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnRefusalDto {
+    pub caller: String,
+    pub target: String,
+    /// How many recorded launches this pair covers.
+    #[serde(default)]
+    pub count: u32,
+    /// The most recent of them, unix milliseconds.
+    #[serde(default)]
+    pub last_at: u64,
 }
 
 /// One project's slice of the run caps: what it is allowed and what it is using.
@@ -1452,6 +1503,24 @@ pub struct SetRunLimit {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetSpawnPolicy {
     pub spawn_policy: String,
+}
+
+/// Request body for `POST /api/agents/spawn-rule` — add or remove one exact rule in `agent`'s own
+/// `can_spawn` (ADI-MONO-114), without touching anything else on its definition. What the
+/// "would have been refused" list's Allow button sends (`agent` is the caller there), and what
+/// editing "Can be launched by" from a target's own page sends (`agent` is the *caller* the rule
+/// is added to there, never the page a person is looking at). Answers with the fresh
+/// [`AgentsState`], like every other mutation on this page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnRuleEdit {
+    /// Whose `can_spawn` to change.
+    pub agent: String,
+    /// The exact rule text — a name, a glob, `project:<id>`, or `*`. Removing matches only this
+    /// exact string; a caller reached through a pattern is not removable this way (see
+    /// `Agents::set_can_spawn_rule`).
+    pub rule: String,
+    /// `true` to add `rule` (a no-op if already present), `false` to remove it.
+    pub add: bool,
 }
 
 /// Request body for `POST /api/agents/auto-title` — turn the auto-title guesser on or off. It is

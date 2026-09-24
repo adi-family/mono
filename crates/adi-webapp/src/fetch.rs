@@ -24,9 +24,10 @@ use adi_webapp_api::types::{
     RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
     SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
     SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
-    SetSharedAssets, SetSystemPower, SharedAssetsMode, SharedAssetsState, SimulateAgent,
-    SimulateTurn, StarRun, StartMarketplaceApp, StartMarketplaceService, StartResult,
-    StartService, StopResult, SystemStatus, TaskRef, TasksState, TestEmbeddingBackend,
+    SetSharedAssets, SetSpawnPolicy, SetSystemPower, SharedAssetsMode, SharedAssetsState,
+    SimulateAgent, SimulateTurn, SpawnRuleEdit, StarRun, StartMarketplaceApp,
+    StartMarketplaceService, StartResult, StartService, StopResult, SystemStatus, TaskRef,
+    TasksState, TestEmbeddingBackend,
     TestLlmBackend, TestResultDto, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
     TranscriptView, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
     UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
@@ -647,6 +648,20 @@ pub async fn set_run_limit(
 /// Turn the auto-title guesser on or off — see `SetAutoTitle`.
 pub async fn set_auto_title(enabled: bool) -> Result<AgentsState, String> {
     post("/api/agents/auto-title", &SetAutoTitle { enabled }).await
+}
+
+/// Set whether an `agent:<name>` launch outside the caller's own `can_spawn` is actually refused
+/// (ADI-MONO-113/114): `"observe"` or `"enforce"`.
+pub async fn set_spawn_policy(spawn_policy: String) -> Result<AgentsState, String> {
+    post("/api/agents/spawn-policy", &SetSpawnPolicy { spawn_policy }).await
+}
+
+/// Add or remove one exact rule in `agent`'s own `can_spawn`, without touching anything else on
+/// its definition (ADI-MONO-114) — what the "would have been refused" list's Allow button sends,
+/// and what editing "Can be launched by" from a target's own page sends (`agent` is the *caller*
+/// the rule is added to there, never the page a person is looking at).
+pub async fn set_spawn_rule(agent: String, rule: String, add: bool) -> Result<AgentsState, String> {
+    post("/api/agents/spawn-rule", &SpawnRuleEdit { agent, rule, add }).await
 }
 
 pub async fn stop_agent(name: String) -> Result<AgentsState, String> {

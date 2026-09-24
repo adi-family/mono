@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-143 structs · 41 enums · 5 type aliases across 56 files.
+146 structs · 41 enums · 5 type aliases across 57 files.
 
 ## Index
 
@@ -56,6 +56,7 @@
 - [`src/runner/prompt.rs`](#srcrunnerpromptrs) — `Section`
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
+- [`src/spawn.rs`](#srcspawnrs) — `SpawnedByEntry`, `Launch`, `Refusal`
 - [`src/store/attachments.rs`](#srcstoreattachmentsrs) — `Attachment`
 - [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
@@ -2839,6 +2840,51 @@ pub struct RunSpec {
     pub knowledge_note: Option<String>,
     pub spawn_note: Option<String>,
     pub marker_note: Option<String>,
+}
+```
+
+---
+
+## `src/spawn.rs`
+
+### struct `SpawnedByEntry`
+
+One caller allowed to launch a given target, and which of its own rules is responsible — an exact name (the only shape a target's own page may remove, since it is the one string that names nothing else), or a pattern/`project:<id>`/`*` the target's page cannot safely narrow.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpawnedByEntry {
+    pub caller: String,
+    pub via: String,
+    pub exact: bool,
+}
+```
+
+### struct `Launch`
+
+One recorded launch naming who asked for it and what they named — the input `refusals` groups by caller and target. Built from a `SessionRecord` whose `launched_by` is `agent:<name>`; a human or automated launch never becomes one of these, exactly as it is never checked by `allows`.
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct Launch<'a> {
+    pub caller: &'a str,
+    pub target: &'a str,
+    pub target_project: Option<&'a str>,
+    pub at: u64,
+}
+```
+
+### struct `Refusal`
+
+One caller → target pair whose recorded launches do not match the caller's *current* `can_spawn` — what switching `spawn_policy` to `enforce` would have stopped, going back however far the caller who built the list looked. Grouped and counted rather than one row per session: a caller that retried the same refused target forty times is one row, not forty.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Refusal {
+    pub caller: String,
+    pub target: String,
+    pub count: u32,
+    pub last_at: u64,
 }
 ```
 

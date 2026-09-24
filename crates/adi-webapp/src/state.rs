@@ -1278,15 +1278,19 @@ pub(crate) struct AgentsForm {
     /// Whether the agent keeps a memory of its own — the `agent:<name>/memory` base, which it
     /// alone writes and every other agent may read.
     pub(crate) memory: RwSignal<bool>,
-    /// Which agents this one's runs may launch, comma-separated: an exact name, a glob (`dr-*`),
-    /// `project:<id>`, or `*`. Free text rather than a checkbox picker like `knowledge` — the
-    /// rules name a pattern, not one of a fixed set of existing bases. Server-guarded: a save
-    /// made from inside a run cannot change this, whatever the form sends (see `Agents::save`).
-    pub(crate) can_spawn: RwSignal<String>,
-    /// The agents whose own `can_spawn` would let them launch this one — read-only, refreshed
-    /// from the loaded [`AgentDto::spawned_by`](adi_webapp_api::types::AgentDto::spawned_by) and
-    /// never sent back on a save.
-    pub(crate) spawned_by: RwSignal<Vec<String>>,
+    /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`), `project:<id>`,
+    /// or `*`. Chips rather than a checkbox picker like `knowledge` — the rules name a pattern,
+    /// not one of a fixed set of existing bases. Server-guarded: a save made from inside a run
+    /// cannot change this, whatever the form sends (see `Agents::save`).
+    pub(crate) can_spawn: RwSignal<Vec<String>>,
+    /// The "add a rule" box under the `can_spawn` chips — held on the form rather than created
+    /// fresh in the render closure (as the backend-chain picker does) because it is free text: a
+    /// picker reset by the next 4s poll loses nothing typed, a text box reset mid-type does.
+    pub(crate) can_spawn_draft: RwSignal<String>,
+    /// The "grant" box under the read-only-turned-editable "Can be launched by" view: the agent
+    /// name being added to *its* `can_spawn` (not this one's) via `POST /api/agents/spawn-rule`.
+    /// Held on the form for the same reason `can_spawn_draft` is.
+    pub(crate) spawn_grant_draft: RwSignal<String>,
     /// The bases the checkbox list offers, fetched once when the form first renders them. Held on
     /// the form rather than in the shell state because a base's counts are a status pass over its
     /// storage — not something the 4s poll should run on every page.
@@ -1341,8 +1345,9 @@ impl AgentsForm {
             bin_tools: RwSignal::new(BTreeSet::new()),
             knowledge: RwSignal::new(BTreeSet::new()),
             memory: RwSignal::new(false),
-            can_spawn: RwSignal::new(String::new()),
-            spawned_by: RwSignal::new(Vec::new()),
+            can_spawn: RwSignal::new(Vec::new()),
+            can_spawn_draft: RwSignal::new(String::new()),
+            spawn_grant_draft: RwSignal::new(String::new()),
             knowledge_bases: RwSignal::new(None),
             secrets: RwSignal::new(BTreeSet::new()),
             prelude: RwSignal::new(String::new()),

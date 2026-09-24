@@ -10,7 +10,9 @@
 use std::collections::BTreeMap;
 
 use adi_ui::{Icon, IconSize, Lucide, Row as TableRow, Table};
-use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto, created_by_is_mine};
+use adi_webapp_api::types::{
+    AgentDto, SaveAgent, SecretDto, SecretRef, SpawnedByDto, ToolDto, created_by_is_mine,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -124,6 +126,7 @@ pub(crate) fn agents_view(
                     }
                 })}
             </span>
+            {spawn_policy_view(state)}
             <span class="adi-spacer"></span>
             {move || agents_filter_toggle(agents_filter)}
             <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
@@ -139,6 +142,16 @@ pub(crate) fn agents_view(
             <div class="adi-agents__limit-row">{run_limit_view(state)}</div>
         })}
         <div class="adi-agents__limit-row">{auto_title_view(state)}</div>
+
+        <div class="adi-agents__refusals-section">
+            <h2 class="adi-agents__h2">"Would have been refused"</h2>
+            <p class="adi-agents__intro">
+                "Agent-to-agent launches on record whose target no longer matches — or never \
+                 matched — the caller's own \"Can launch\". Visible in both modes; an empty list \
+                 is the signal that it is safe to switch to Enforce."
+            </p>
+            {move || spawn_refusals_view(state)}
+        </div>
 
         <Table state=state.tables.agents>
             {move || agent_rows(state, form, watch, sim, route, agents_filter.get())}
@@ -305,13 +318,7 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // Which agents this one may launch — this is the form that owns it, so it
                     // states the list even when empty. The store still refuses this outright when
                     // the save itself comes from inside a run, whatever is sent here.
-                    can_spawn: Some(
-                        form.can_spawn.get()
-                            .split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect(),
-                    ),
+                    can_spawn: Some(form.can_spawn.get()),
                     // This is the one form that edits the run environment, so it always states it —
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
                     prelude: Some(parsed_prelude(&form.prelude.get())),
@@ -353,7 +360,7 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
 
                 <section class="adi-agents__section">
                     <h2 class="adi-agents__h2">"Launching other agents"</h2>
-                    {move || agent_spawn_field(form)}
+                    {move || agent_spawn_field(state, form, route)}
                 </section>
 
                 <section class="adi-agents__section">
@@ -696,50 +703,374 @@ fn base_checkboxes(form: AgentsForm) -> AnyView {
     view! { <div class="adi-agents__checks">{boxes}</div> }.into_any()
 }
 
-/// Which agents this one's runs may launch — a free-text list of rules rather than a checkbox
-/// picker like the knowledge bases above, because a rule names a *pattern* (a glob, `project:<id>`,
-/// or `*`) rather than one of a fixed set of things that already exist. Paired with the read-only
-/// reverse: who can launch *this* agent, which is never edited here — it is computed from
-/// everyone else's `can_spawn`, not stored on this one (see `AgentDto::spawned_by`).
+/// A field that takes the whole row — the same rule `form::WIDE` states for the schema-driven
+/// fields, repeated here because this section is hand-built rather than schema-rendered.
+const SPAWN_FIELD_WIDE: &str = "flex:1 1 100%; min-width:0; grid-column:1 / -1";
+
+/// Which agents this one's runs may launch, as removable chips, plus a picker/free-text box to add
+/// one — a rule names a *pattern* (a glob, `project:<id>`, `*`) or an existing agent's exact name,
+/// never one of a fixed set of things like the knowledge checkboxes above (ADI-MONO-114).
+///
+/// Paired with the editable reverse view: who can launch *this* agent. It is never stored on this
+/// one — it is computed from everyone else's `can_spawn` (`AgentDto::spawned_by`) — so adding or
+/// removing an entry there writes into the *caller's* definition through
+/// `POST /api/agents/spawn-rule`, immediately, rather than waiting on this form's own Save.
 ///
 /// Server-guarded on top of whatever this renders: a save made from inside a run drops `can_spawn`
 /// outright, so this field only ever really moves when a person is looking at it (see
 /// `Agents::save`).
-fn agent_spawn_field(form: AgentsForm) -> AnyView {
-    const WIDE: &str = "flex:1 1 100%; min-width:0; grid-column:1 / -1";
+fn agent_spawn_field(state: State, form: AgentsForm, route: RwSignal<Route>) -> AnyView {
     view! {
-        <div class="adi-field" style=WIDE>
-            <label class="adi-field__label" for="agent-can-spawn">"Can launch"</label>
-            <input class="adi-input adi-mono" id="agent-can-spawn"
-                placeholder="dr-*, project:acme, reviewer"
-                prop:value=move || form.can_spawn.get()
-                on:input=move |ev| form.can_spawn.set(event_target_value(&ev)) />
+        <div class="adi-field" style=SPAWN_FIELD_WIDE>
+            <span class="adi-field__label">"Can launch"</span>
+            {move || agent_can_spawn_chips(state, form)}
+            {move || agent_can_spawn_add(state, form)}
             {field_hint(
-                "Comma-separated: an exact agent name, a glob (dr-*), project:<id> (every agent \
-                 filed directly under that project), or * (everything). Empty means this agent's \
-                 runs may launch no agents. Checked only against an agent-to-agent launch — a \
-                 person or an automated trigger is never refused by it.",
+                "An exact agent name, a glob (dr-*), project:<id> (every agent filed directly \
+                 under that project), or * (everything). Each shows how many currently-registered \
+                 agents it matches right now, so a pattern is never a guess. Empty means this \
+                 agent's runs may launch no agents. Checked only against an agent-to-agent \
+                 launch — a person or an automated trigger is never refused by it.",
             )}
         </div>
-        {move || {
-            let by = form.spawned_by.get();
-            (!by.is_empty()).then(|| view! {
-                <div class="adi-field" style=WIDE>
+        {move || form.editing.get().map(|name| {
+            let name_for_add = name.clone();
+            view! {
+                <div class="adi-field" style=SPAWN_FIELD_WIDE>
                     <span class="adi-field__label">"Can be launched by"</span>
-                    <div class="adi-agents__checks">
-                        {by.into_iter()
-                            .map(|name| view! { <span class="adi-chip">{name}</span> })
-                            .collect::<Vec<_>>()}
-                    </div>
+                    {move || agent_spawned_by_list(state, form, route)}
+                    {move || agent_spawn_grant_add(state, form, name_for_add.clone())}
                     {field_hint(
-                        "Read-only — the reverse of everyone else's \"Can launch\", not a setting \
-                         of its own.",
+                        "Every other agent whose own \"Can launch\" already reaches this one. An \
+                         exact-name rule may be removed here; one reached only through a pattern, \
+                         project:<id>, or * points at the caller's own page instead — narrow or \
+                         remove it there.",
                     )}
                 </div>
-            })
-        }}
+            }
+        })}
     }
     .into_any()
+}
+
+/// The currently-editing agent's own fresh [`AgentDto`], read live off the polled agents list —
+/// `None` for a not-yet-created agent (nothing to look up) or before the first load lands.
+/// Deliberately not cached on the form: the match counts and the reverse view both change from
+/// outside this form (another Allow click, another agent's own save), and a snapshot taken once at
+/// load time would go stale the moment either did.
+fn current_agent_dto(state: State, form: AgentsForm) -> Option<AgentDto> {
+    let name = form.editing.get()?;
+    state
+        .agents
+        .get()?
+        .agents
+        .into_iter()
+        .find(|a| a.name == name)
+}
+
+/// The `can_spawn` chips: the draft rule list this form owns, each carrying the match count from
+/// this agent's last-saved state when it has one — a rule just typed and not yet saved shows none.
+fn agent_can_spawn_chips(state: State, form: AgentsForm) -> AnyView {
+    let rules = form.can_spawn.get();
+    if rules.is_empty() {
+        return view! {
+            <p class="adi-hint">"No rules yet — this agent's runs may launch nothing."</p>
+        }
+        .into_any();
+    }
+    let counts: BTreeMap<String, u32> = current_agent_dto(state, form)
+        .map(|a| a.can_spawn.into_iter().map(|r| (r.rule, r.matches)).collect())
+        .unwrap_or_default();
+    let chips = rules
+        .into_iter()
+        .map(|rule| {
+            let label = match counts.get(&rule) {
+                Some(n) => format!("{rule} \u{2014} {n} agent{}", if *n == 1 { "" } else { "s" }),
+                None => rule.clone(),
+            };
+            let remove = rule.clone();
+            let title = format!("Remove {rule}");
+            view! {
+                <span class="adi-agents__rule-chip">
+                    <span class="adi-mono">{label}</span>
+                    <button type="button" title=title.clone() aria-label=title
+                        on:click=move |_| {
+                            form.can_spawn.update(|rules| rules.retain(|r| r != &remove));
+                        }>
+                        <Icon icon=Lucide::X size=IconSize::Sm/>
+                    </button>
+                </span>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! { <div class="adi-agents__rule-chips">{chips}</div> }.into_any()
+}
+
+/// The box that adds a `can_spawn` rule: free text (so a pattern is always typeable), suggesting
+/// every other registered agent's exact name and every project as `project:<id>` — the two shapes
+/// that name something real, which is what a search/autocomplete offers per ADI-MONO-114. Purely
+/// local: the rule joins the draft list and is only actually saved on the form's own Save.
+fn agent_can_spawn_add(state: State, form: AgentsForm) -> AnyView {
+    let self_name = form.name.get();
+    let taken: std::collections::BTreeSet<String> = form.can_spawn.get().into_iter().collect();
+    let agent_names: Vec<String> = state
+        .agents
+        .get()
+        .map(|s| {
+            s.agents
+                .into_iter()
+                .map(|a| a.name)
+                .filter(|n| *n != self_name && !taken.contains(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    let project_ids: Vec<String> = state
+        .projects
+        .get()
+        .map(|p| {
+            p.projects
+                .into_iter()
+                .filter(|proj| !proj.is_archived())
+                .map(|proj| format!("project:{}", proj.id))
+                .filter(|rule| !taken.contains(rule))
+                .collect()
+        })
+        .unwrap_or_default();
+    view! {
+        <div class="adi-agents__chain-add">
+            <input class="adi-input adi-mono" list="agent-can-spawn-options"
+                aria-label="Add a can_spawn rule" placeholder="dr-*, project:acme, reviewer, *"
+                prop:value=move || form.can_spawn_draft.get()
+                on:input=move |ev| form.can_spawn_draft.set(event_target_value(&ev))
+                on:keydown=move |ev| if ev.key() == "Enter" {
+                    ev.prevent_default();
+                    add_can_spawn_rule(form);
+                } />
+            <datalist id="agent-can-spawn-options">
+                {agent_names.into_iter().map(|n| view! { <option value=n></option> }).collect::<Vec<_>>()}
+                {project_ids.into_iter().map(|p| view! { <option value=p></option> }).collect::<Vec<_>>()}
+                <option value="*"></option>
+            </datalist>
+            <button class="adi-btn" type="button" on:click=move |_| add_can_spawn_rule(form)>
+                "Add"
+            </button>
+        </div>
+    }
+    .into_any()
+}
+
+/// Add the draft box's text to `form.can_spawn` (trimmed, deduped) and clear it.
+fn add_can_spawn_rule(form: AgentsForm) {
+    let rule = form.can_spawn_draft.get_untracked().trim().to_string();
+    if rule.is_empty() {
+        return;
+    }
+    form.can_spawn.update(|rules| {
+        if !rules.iter().any(|r| r == &rule) {
+            rules.push(rule);
+        }
+    });
+    form.can_spawn_draft.set(String::new());
+}
+
+/// The "Can be launched by" rows: one per caller currently reaching this agent, each either
+/// removable in place (an exact-name rule) or a link to the caller's own page (a pattern).
+fn agent_spawned_by_list(state: State, form: AgentsForm, route: RwSignal<Route>) -> AnyView {
+    let entries = current_agent_dto(state, form)
+        .map(|a| a.spawned_by)
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return view! {
+            <p class="adi-hint">"No other agent currently lists this one."</p>
+        }
+        .into_any();
+    }
+    let rows = entries
+        .into_iter()
+        .map(|e| spawned_by_row(state, form, route, e))
+        .collect::<Vec<_>>();
+    view! { <div class="adi-agents__rule-chips">{rows}</div> }.into_any()
+}
+
+/// One caller in the reverse view: an × that removes the exact rule responsible, or — reached only
+/// through a pattern this page cannot safely narrow — a link to the caller's own page instead.
+fn spawned_by_row(
+    state: State,
+    form: AgentsForm,
+    route: RwSignal<Route>,
+    entry: SpawnedByDto,
+) -> AnyView {
+    if entry.exact {
+        let (caller, rule) = (entry.caller.clone(), entry.via.clone());
+        let title = format!("Remove {caller}");
+        view! {
+            <span class="adi-agents__rule-chip">
+                <span class="adi-mono">{entry.caller}</span>
+                <button type="button" title=title.clone() aria-label=title
+                    on:click=move |_| apply_agents(
+                        state,
+                        None,
+                        fetch::set_spawn_rule(caller.clone(), rule.clone(), false),
+                    )>
+                    <Icon icon=Lucide::X size=IconSize::Sm/>
+                </button>
+            </span>
+        }
+        .into_any()
+    } else {
+        let caller = entry.caller.clone();
+        let label = format!("{} \u{2014} via {}", entry.caller, entry.via);
+        let title = format!("Only {} — narrow or remove it there", entry.caller);
+        view! {
+            <a class="adi-chip" href=agent_form_path(&caller) title=title
+                on:click=move |ev| if spa_nav(&ev) {
+                    open_other_agent(state, route, form, &caller);
+                }>
+                {label}
+            </a>
+        }
+        .into_any()
+    }
+}
+
+/// Navigate this same editor onto a different, already-registered agent — what a "via <pattern>"
+/// link in the reverse view does, mirroring what the row menu's own Edit does with the row's DTO
+/// already in hand.
+fn open_other_agent(state: State, route: RwSignal<Route>, form: AgentsForm, name: &str) {
+    let target = state
+        .agents
+        .get()
+        .and_then(|s| s.agents.into_iter().find(|a| a.name == name));
+    open_agent_editor(state, route, form, target.as_ref());
+}
+
+/// The box that grants another agent the right to launch `target` — writes "target" into the
+/// picked agent's own `can_spawn`, immediately, through `POST /api/agents/spawn-rule` (this is a
+/// write to *another* agent's definition, so it cannot wait on this form's own Save).
+fn agent_spawn_grant_add(state: State, form: AgentsForm, target: String) -> AnyView {
+    let already: std::collections::BTreeSet<String> = current_agent_dto(state, form)
+        .map(|a| a.spawned_by.into_iter().map(|e| e.caller).collect())
+        .unwrap_or_default();
+    let candidates: Vec<String> = state
+        .agents
+        .get()
+        .map(|s| {
+            s.agents
+                .into_iter()
+                .map(|a| a.name)
+                .filter(|n| *n != target && !already.contains(n))
+                .collect()
+        })
+        .unwrap_or_default();
+    view! {
+        <div class="adi-agents__chain-add">
+            <input class="adi-input adi-mono" list="agent-spawn-grant-options"
+                aria-label="Agent to allow" placeholder="agent to allow"
+                prop:value=move || form.spawn_grant_draft.get()
+                on:input=move |ev| form.spawn_grant_draft.set(event_target_value(&ev))
+                on:keydown={
+                    let target = target.clone();
+                    move |ev| if ev.key() == "Enter" {
+                        ev.prevent_default();
+                        grant_spawn_rule(state, form, target.clone());
+                    }
+                } />
+            <datalist id="agent-spawn-grant-options">
+                {candidates.into_iter().map(|n| view! { <option value=n></option> }).collect::<Vec<_>>()}
+            </datalist>
+            <button class="adi-btn" type="button"
+                on:click=move |_| grant_spawn_rule(state, form, target.clone())>
+                "Allow"
+            </button>
+        </div>
+    }
+    .into_any()
+}
+
+/// Send the grant box's text as an exact-name rule onto the picked agent's `can_spawn`, and clear
+/// the box.
+fn grant_spawn_rule(state: State, form: AgentsForm, target: String) {
+    let caller = form.spawn_grant_draft.get_untracked().trim().to_string();
+    if caller.is_empty() {
+        return;
+    }
+    form.spawn_grant_draft.set(String::new());
+    apply_agents(state, None, fetch::set_spawn_rule(caller, target, true));
+}
+
+/// The Observe/Enforce switch, beside the run counters: whether an `agent:<name>` launch outside
+/// the caller's own `can_spawn` is actually refused, or only logged (ADI-MONO-113/114). The title
+/// says what each mode means, since the two words alone do not.
+fn spawn_policy_view(state: State) -> AnyView {
+    let agents = state.agents;
+    let policy = move || agents.get().map(|a| a.spawn_policy).unwrap_or_default();
+    view! {
+        <div class="adi-segmented" role="group" aria-label="Spawn policy"
+            title="Observe: nothing is refused — every would-be refusal is only logged and \
+                   listed below. Enforce: a launch outside the caller's Can launch is actually \
+                   refused.">
+            <button class="adi-segmented__option" type="button"
+                aria-pressed=move || (policy() == "observe").to_string()
+                on:click=move |_| apply_agents(
+                    state, None, fetch::set_spawn_policy("observe".to_string()),
+                )>
+                "Observe"
+            </button>
+            <button class="adi-segmented__option" type="button"
+                aria-pressed=move || (policy() == "enforce").to_string()
+                on:click=move |_| apply_agents(
+                    state, None, fetch::set_spawn_policy("enforce".to_string()),
+                )>
+                "Enforce"
+            </button>
+        </div>
+    }
+    .into_any()
+}
+
+/// The "would have been refused" list under the switch: every caller \u{2192} target pair on
+/// record whose target does not match the caller's *current* rules (ADI-MONO-114) — derived by the
+/// server, never stored, so a row disappears as soon as it is allowed. An empty list is the signal
+/// that it is safe to switch to Enforce.
+fn spawn_refusals_view(state: State) -> AnyView {
+    let Some(refusals) = state.agents.get().map(|a| a.spawn_refusals) else {
+        return ().into_any();
+    };
+    if refusals.is_empty() {
+        return view! {
+            <p class="adi-hint">
+                "Nothing recorded would be refused right now \u{2014} it is safe to switch to \
+                 Enforce."
+            </p>
+        }
+        .into_any();
+    }
+    let rows = refusals
+        .into_iter()
+        .map(|r| {
+            let (caller, target) = (r.caller.clone(), r.target.clone());
+            let (caller_allow, target_allow) = (caller.clone(), target.clone());
+            let times = if r.count == 1 { "once".to_string() } else { format!("{} times", r.count) };
+            let when = actions::run_age(r.last_at);
+            view! {
+                <li class="adi-agents__refusal">
+                    <span class="adi-mono">{caller}</span>
+                    <Icon icon=Lucide::ArrowRight size=IconSize::Sm/>
+                    <span class="adi-mono">{target}</span>
+                    <span class="adi-muted">{format!("{times}, last {when}")}</span>
+                    <button class="adi-btn adi-btn--link" type="button"
+                        on:click=move |_| apply_agents(
+                            state,
+                            None,
+                            fetch::set_spawn_rule(caller_allow.clone(), target_allow.clone(), true),
+                        )>
+                        "Allow"
+                    </button>
+                </li>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! { <ul class="adi-agents__refusals">{rows}</ul> }.into_any()
 }
 
 /// The per-agent secret checkboxes: one toggle per registered secret (across every scope) that
@@ -993,6 +1324,7 @@ pub(crate) fn agent_name_cell(a: &AgentDto) -> AnyView {
             <span class=star title=title><Icon icon=Lucide::Star size=IconSize::Sm/></span>
             {a.name.clone()}
             {creator_marker(a)}
+            {spawn_marker(a)}
         </span>
     }
     .into_any()
@@ -1010,6 +1342,27 @@ fn creator_marker(a: &AgentDto) -> Option<AnyView> {
     Some(
         view! {
             <span class="adi-chip" title="who created this definition">{format!("by {who}")}</span>
+        }
+        .into_any(),
+    )
+}
+
+/// "launches N" (or "launches *" when one rule is the wildcard) for an agent with a non-empty
+/// `can_spawn` (ADI-MONO-114), so it is visible which agents launch others without opening each
+/// one's edit page. Nothing for the overwhelming majority, whose `can_spawn` is empty.
+fn spawn_marker(a: &AgentDto) -> Option<AnyView> {
+    if a.can_spawn.is_empty() {
+        return None;
+    }
+    let label = if a.can_spawn.iter().any(|r| r.rule == "*") {
+        "launches *".to_string()
+    } else {
+        format!("launches {}", a.can_spawn.len())
+    };
+    Some(
+        view! {
+            <span class="adi-chip" title="this agent's runs may launch others — see Launching \
+                other agents on its edit page">{label}</span>
         }
         .into_any(),
     )

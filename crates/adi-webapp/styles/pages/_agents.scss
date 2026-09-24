@@ -352,6 +352,67 @@
     margin-top: 8px;
   }
 
+  // A can_spawn rule, or a caller in the editable "Can be launched by" view: a mono pill with its
+  // × inside — the remove action lives in the object (§6), the same shape the fleet page's own
+  // grant pill is (`.adi-fleet-grant`), repeated here rather than shared across two unrelated pages.
+  &__rule-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+  }
+
+  &__rule-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 3px 2px 8px;
+    border-radius: var(--r-pill);
+    background: var(--chip);
+    color: var(--ink-2);
+    font-family: var(--mono);
+    font-size: var(--fs-label);
+    white-space: nowrap;
+
+    > button {
+      display: grid;
+      place-items: center;
+      width: 16px;
+      height: 16px;
+      padding: 0;
+      border-radius: 50%;
+      color: var(--ink-3);
+      cursor: pointer;
+
+      &:hover { color: var(--ink); background: var(--chip-hover); }
+    }
+  }
+
+  // ADI-MONO-114: the "would have been refused" list, above the table.
+  &__refusals-section { margin: 4px 0 24px; }
+
+  &__refusals {
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+  }
+
+  &__refusal {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: var(--fs-ui-sm);
+
+    + .adi-agents__refusal { border-top: 1px solid var(--line); }
+
+    > .adi-muted { margin-left: auto; }
+  }
+
   @media (max-width: 720px) {
     &__grid { grid-template-columns: 1fr; }
     &__meta { white-space: normal; }
