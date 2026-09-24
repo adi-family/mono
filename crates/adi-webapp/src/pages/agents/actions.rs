@@ -7117,6 +7117,14 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
 /// agents to pick between, which one a new chat goes to is both the thing worth saying out loud
 /// and the thing worth being able to change right there.
 fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
+    // As in `pty_phase`: `open_run_answerable` reads `watch.peek`, which a live run's poll
+    // rewrites on essentially every tick (a token, a tool call, a result). Called inline inside
+    // the match below, that read would belong to *this* closure rather than to `feed_view`'s own
+    // memos — so the poll would rebuild this whole match arm, handing `<Chat>` a fresh mount
+    // (and its keyed `<For>` a fresh instance) once a second, instead of updating in place. A
+    // Memo only renotifies when the answer actually flips, which keeps that read out of the
+    // dependencies of the view that rebuilds the feed.
+    let answerable = Memo::new(move |_| open_run_answerable(watch));
     view! {
         <div class="adi-chome__chatwrap">
             {move || match watch.run_id.get() {
@@ -7124,7 +7132,7 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
                     <div class="adi-chome__feed">
                         // Sourced: the rail under this feed merges several machines, so which one a
                         // conversation is on is a fact the feed has to carry itself.
-                        {feed_view(state, watch, open_run_answerable(watch), true)}
+                        {feed_view(state, watch, answerable.get(), true)}
                     </div>
                 }
                 .into_any(),
