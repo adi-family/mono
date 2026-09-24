@@ -15,7 +15,8 @@ use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    Key, TextField, confirm, fmt_date, menu_item, row_actions, rows_or_placeholder, sort_rows,
+    Key, LogPhase, TextField, confirm, fmt_date, log_pane, menu_item, row_actions,
+    rows_or_placeholder, sort_rows,
 };
 
 /// The workspaces table's columns; the trailing blank one holds the row's ⋯ menu.
@@ -695,40 +696,68 @@ pub(crate) fn poll_term(term: TermWatch) {
     });
 }
 
+/// Where a watched workspace terminal's pty session is, coarsened from the `WorkspaceTerm`
+/// snapshot that lands every second: only this three-way phase — not the snapshot itself —
+/// decides which chrome is on screen, so a poll that merely lands a longer pane leaves the
+/// section untouched instead of rebuilding it. The workspace twin of
+/// `pages::agents::actions::PtyPhase`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TermPhase {
+    Connecting,
+    Ended,
+    Running,
+}
+
+fn term_phase(term: TermWatch) -> TermPhase {
+    match term.peek.with(|p| p.as_ref().map(|p| p.running)) {
+        None => TermPhase::Connecting,
+        Some(false) => TermPhase::Ended,
+        Some(true) => TermPhase::Running,
+    }
+}
+
 /// The terminal panel: a 1s-refreshed capture of the workspace's pty pane, with a send bar
 /// to type into the session. Renders nothing while no terminal is being watched. Close only
 /// hides the view (the session lives on); Kill ends the session itself.
+///
+/// Reads [`TermPhase`] rather than the peek directly, so the section is rebuilt only on a real
+/// transition — connecting, ending, starting again — and not on every poll that merely lands a
+/// longer pane; the running phase's own `<pre>` leans on [`log_pane`] to stay that one element
+/// for as long as the session runs.
 pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
     let (_, name) = term.watched.get()?;
-    let peek = term.peek.get();
-    let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
-    let running = peek.as_ref().is_some_and(|p| p.running);
-    let body = match peek {
-        None => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
-        Some(p) if !p.running => view! {
-            <div class="adi-empty">"The session has ended — open the terminal again to restart it."</div>
-        }
-        .into_any(),
-        Some(p) => view! { <pre class="adi-term">{p.output}</pre> }.into_any(),
-    };
+    let phase = Memo::new(move |_| term_phase(term));
     Some(
         view! {
             <section class="adi-panel">
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">{format!("Terminal — {name}")}</h2>
                     <span class="adi-spacer"></span>
-                    {(!attach.is_empty()).then(|| view! {
-                        <span class="adi-mono adi-muted">{attach}</span>
-                    })}
-                    {running.then(|| view! {
+                    {move || {
+                        let attach = term.peek.with(|p| p.as_ref().map(|p| p.attach.clone()).unwrap_or_default());
+                        (!attach.is_empty()).then(|| view! {
+                            <span class="adi-mono adi-muted">{attach}</span>
+                        })
+                    }}
+                    {move || (phase.get() == TermPhase::Running).then(|| view! {
                         <button class="adi-btn adi-btn--link adi-btn--danger" title="kill the session"
                             on:click=move |_| kill_terminal(state, term)>"Kill"</button>
                     })}
                     <button class="adi-btn adi-btn--quiet" title="hide the view — the session keeps running"
                         on:click=move |_| term.close()>"Close"</button>
                 </div>
-                {body}
-                {running.then(|| term_send_bar(state, term))}
+                {move || match phase.get() {
+                    TermPhase::Connecting => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
+                    TermPhase::Ended => view! {
+                        <div class="adi-empty">"The session has ended — open the terminal again to restart it."</div>
+                    }
+                    .into_any(),
+                    TermPhase::Running => log_pane("adi-term", move || {
+                        term.peek.with(|p| p.as_ref().map(|p| p.output.clone()).unwrap_or_default())
+                    })
+                    .into_any(),
+                }}
+                {move || (phase.get() == TermPhase::Running).then(|| term_send_bar(state, term))}
             </section>
         }
         .into_any(),
@@ -812,38 +841,46 @@ pub(crate) fn poll_hook_log(log: HookLogView) {
 
 /// The hook-log panel: the watched hook's last run output, refreshed each second. Renders
 /// nothing while no hook is being watched.
+///
+/// Reads [`LogPhase`] rather than the snapshot directly, so the section is rebuilt only when the
+/// hook goes from no-snapshot-yet to never-ran to having a log, not on every poll that merely
+/// lands more output; the log itself leans on [`log_pane`] to stay one element for as long as
+/// it's open.
 pub(crate) fn hook_log_view(log: HookLogView) -> Option<AnyView> {
     let (_, name) = log.watched.get()?;
-    let snapshot = log.log.get();
-    let status_line = snapshot
-        .as_ref()
-        .map(|s| match (s.status.as_str(), s.exit_code, s.ran_at) {
-            ("running", _, _) => "still running…".to_string(),
-            (_, Some(code), Some(at)) => format!("exit {code} · last run {}", fmt_date(at)),
-            (_, Some(code), None) => format!("exit {code}"),
-            _ => String::new(),
-        })
-        .unwrap_or_default();
-    let body = match snapshot {
-        None => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
-        Some(s) if !s.ran => view! {
-            <div class="adi-empty">"This hook has never run — its log is empty."</div>
-        }
-        .into_any(),
-        Some(s) => view! { <pre class="adi-term">{s.output}</pre> }.into_any(),
-    };
+    let phase = Memo::new(move |_| LogPhase::from_ran(log.log.with(|s| s.as_ref().map(|s| s.ran))));
     Some(
         view! {
             <section class="adi-panel">
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">{format!("Hook log — {name}")}</h2>
                     <span class="adi-spacer"></span>
-                    {(!status_line.is_empty()).then(|| view! {
-                        <span class="adi-updated">{status_line}</span>
-                    })}
+                    {move || {
+                        let status_line = log.log.with(|s| s.as_ref().map(|s| {
+                            match (s.status.as_str(), s.exit_code, s.ran_at) {
+                                ("running", _, _) => "still running…".to_string(),
+                                (_, Some(code), Some(at)) => format!("exit {code} · last run {}", fmt_date(at)),
+                                (_, Some(code), None) => format!("exit {code}"),
+                                _ => String::new(),
+                            }
+                        }).unwrap_or_default());
+                        (!status_line.is_empty()).then(|| view! {
+                            <span class="adi-updated">{status_line}</span>
+                        })
+                    }}
                     <button class="adi-btn adi-btn--quiet" on:click=move |_| log.close()>"Close"</button>
                 </div>
-                {body}
+                {move || match phase.get() {
+                    LogPhase::Loading => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
+                    LogPhase::Empty => view! {
+                        <div class="adi-empty">"This hook has never run — its log is empty."</div>
+                    }
+                    .into_any(),
+                    LogPhase::Ready => log_pane("adi-term", move || {
+                        log.log.with(|s| s.as_ref().map(|s| s.output.clone()).unwrap_or_default())
+                    })
+                    .into_any(),
+                }}
             </section>
         }
         .into_any(),

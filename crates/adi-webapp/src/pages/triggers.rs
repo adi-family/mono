@@ -22,8 +22,8 @@ use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView, read_error};
 use crate::ui::{
-    Key, TextField, apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime, menu_item,
-    row_actions, rows_or_status, sort_rows, updated_text,
+    Key, LogPhase, TextField, apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime,
+    log_pane, menu_item, row_actions, rows_or_status, sort_rows, updated_text,
 };
 
 /// The Triggers page's columns; the trailing blank one holds the row's ⋯ menu.
@@ -770,34 +770,39 @@ pub(crate) fn poll_trigger_log(log: TriggersLogView) {
 /// The log panel: the watched trigger's most recent output, refreshed each second. For a
 /// background trigger that is a running history across restarts; for a webhook it is the last
 /// delivery. Renders nothing while no trigger is being watched.
+///
+/// Reads [`LogPhase`] rather than the snapshot directly, so the section is rebuilt only when the
+/// trigger goes from no-snapshot-yet to never-fired to having a log, not on every poll that
+/// merely lands more output; the log itself leans on [`log_pane`] to stay one element for as
+/// long as it's open.
 pub(crate) fn log_view(log: TriggersLogView) -> Option<AnyView> {
     let name = log.name.get()?;
-    let snapshot = log.log.get();
-    let fired_at = snapshot
-        .as_ref()
-        .and_then(|s| s.fired_at)
-        .map(fmt_date)
-        .unwrap_or_default();
-    let body = match snapshot {
-        None => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
-        Some(s) if !s.fired => view! {
-            <div class="adi-empty">"This trigger has never run — its log is empty."</div>
-        }
-        .into_any(),
-        Some(s) => view! { <pre class="adi-term">{s.output}</pre> }.into_any(),
-    };
+    let phase = Memo::new(move |_| LogPhase::from_ran(log.log.with(|s| s.as_ref().map(|s| s.fired))));
     Some(
         view! {
             <section class="adi-panel">
                 <div class="adi-panel__head">
                     <h2 class="adi-panel__title">{format!("Log — {name}")}</h2>
                     <span class="adi-spacer"></span>
-                    {(!fired_at.is_empty()).then(|| view! {
-                        <span class="adi-updated">{format!("last wrote {fired_at}")}</span>
-                    })}
+                    {move || {
+                        let fired_at = log.log.with(|s| s.as_ref().and_then(|s| s.fired_at)).map(fmt_date).unwrap_or_default();
+                        (!fired_at.is_empty()).then(|| view! {
+                            <span class="adi-updated">{format!("last wrote {fired_at}")}</span>
+                        })
+                    }}
                     <button class="adi-btn adi-btn--quiet" on:click=move |_| log.close()>"Close"</button>
                 </div>
-                {body}
+                {move || match phase.get() {
+                    LogPhase::Loading => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
+                    LogPhase::Empty => view! {
+                        <div class="adi-empty">"This trigger has never run — its log is empty."</div>
+                    }
+                    .into_any(),
+                    LogPhase::Ready => log_pane("adi-term", move || {
+                        log.log.with(|s| s.as_ref().map(|s| s.output.clone()).unwrap_or_default())
+                    })
+                    .into_any(),
+                }}
             </section>
         }
         .into_any(),

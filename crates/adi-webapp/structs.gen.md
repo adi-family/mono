@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-78 structs · 20 enums · 4 type aliases across 32 files.
+78 structs · 22 enums · 4 type aliases across 33 files.
 
 ## Index
 
@@ -35,9 +35,10 @@
 - [`src/pages/project_detail/triggers.rs`](#srcpagesproject_detailtriggersrs) — `QuickTriggerForm`
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
-- [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
+- [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -1015,6 +1016,19 @@ pub(crate) struct NewHookForm {
 }
 ```
 
+### enum `TermPhase`
+
+Where a watched workspace terminal's pty session is, coarsened from the `WorkspaceTerm` snapshot that lands every second: only this three-way phase — not the snapshot itself — decides which chrome is on screen, so a poll that merely lands a longer pane leaves the section untouched instead of rebuilding it. The workspace twin of `pages::agents::actions::PtyPhase`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TermPhase {
+    Connecting,
+    Ended,
+    Running,
+}
+```
+
 ---
 
 ## `src/routing.rs`
@@ -1873,6 +1887,23 @@ struct SessionSources {
     local: bool,
     #[serde(default)]
     nodes: BTreeSet<String>,
+}
+```
+
+---
+
+## `src/ui.rs`
+
+### enum `LogPhase`
+
+The three states a polled log view moves through, coarsened from "is there a snapshot yet, and did the thing ever run" so a poll that only lands more output leaves the phase — and so the chrome around `log_pane` — untouched. Shared by the hook-log and trigger-log panels; the workspace terminal has its own three-way phase (`pages::workspaces::TermPhase`) since a live pty session distinguishes Connecting from Ended, which a plain run log never does.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogPhase {
+    Loading,
+    Empty,
+    Ready,
 }
 ```
 

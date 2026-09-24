@@ -1,6 +1,7 @@
 //! Shared view helpers, formatters, and the generic mutation runner the pages compose from.
 
 use adi_webapp_api::types::{AgentRunInfo, ProcessUsage, ServicePort, TaskRow, TestResultDto};
+use leptos::html;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -106,6 +107,79 @@ fn quick_key(
         <button class="adi-btn adi-btn--ghost adi-mono" type="button"
             title=format!("send {key}")
             on:click=move |_| send(String::new(), key)>{label}</button>
+    }
+}
+
+/// A live pane's `<pre>`, held to one element for as long as `text` streams rather than rebuilt
+/// with the surrounding view — the same fix as `pages::agents::actions::pty_pane` (its twin,
+/// read that doc first), generalised off `AgentsWatch` to any text source so the workspace
+/// terminal and the hook/trigger log panels can share it instead of copying the pattern three
+/// times: `text` is read only inside the reactive child below (and, to know when to re-check the
+/// scroll position, inside the effect that follows it down), never by the caller's own `view!`,
+/// so a poll landing new text updates this element's text node in place instead of remounting it
+/// and resetting its scroll to the top.
+///
+/// Scroll is pinned to the bottom only while the reader was already there — checked off the
+/// pane's own scroll position on every scroll they make, not remembered from an earlier poll —
+/// so a reader who has scrolled up to read earlier output is left exactly where they are.
+pub(crate) fn log_pane(
+    class: &'static str,
+    text: impl Fn() -> String + Clone + Send + 'static,
+) -> impl IntoView {
+    let el: NodeRef<html::Pre> = NodeRef::new();
+    let pinned = RwSignal::new(true);
+    let on_scroll = move |_| {
+        if let Some(el) = el.get_untracked() {
+            let gap = el.scroll_height() - el.client_height() - el.scroll_top();
+            pinned.set(gap <= 4);
+        }
+    };
+    let watched_text = text.clone();
+    Effect::new(move |_| {
+        // Tracked only to rerun this effect on every poll — the text itself is read (and
+        // written to the DOM) by the reactive child below.
+        watched_text();
+        let Some(el) = el.get_untracked() else { return };
+        if !pinned.get_untracked() {
+            return;
+        }
+        // A timeout, not scrolled here directly: the text this effect depends on has not
+        // repainted yet at this point in the reactive graph, so `scroll_height` read now would
+        // still describe the pane from before the new output landed.
+        gloo_timers::callback::Timeout::new(0, move || el.set_scroll_top(el.scroll_height()))
+            .forget();
+    });
+    view! {
+        <pre class=class node_ref=el on:scroll=on_scroll>
+            {move || text()}
+        </pre>
+    }
+}
+
+/// The three states a polled log view moves through, coarsened from "is there a snapshot yet,
+/// and did the thing ever run" so a poll that only lands more output leaves the phase — and so
+/// the chrome around [`log_pane`] — untouched. Shared by the hook-log and trigger-log panels;
+/// the workspace terminal has its own three-way phase (`pages::workspaces::TermPhase`) since a
+/// live pty session distinguishes Connecting from Ended, which a plain run log never does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogPhase {
+    /// No snapshot has landed yet.
+    Loading,
+    /// A snapshot landed, but the thing it logs has never run.
+    Empty,
+    /// A snapshot with a body to show, via [`log_pane`].
+    Ready,
+}
+
+impl LogPhase {
+    /// Derive the phase from "has a snapshot landed" (`None` while it hasn't) crossed with "did
+    /// the thing it logs ever run" (a hook's `ran`, a trigger's `fired`).
+    pub(crate) fn from_ran(ran: Option<bool>) -> Self {
+        match ran {
+            None => Self::Loading,
+            Some(false) => Self::Empty,
+            Some(true) => Self::Ready,
+        }
     }
 }
 
