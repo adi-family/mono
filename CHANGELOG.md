@@ -43,6 +43,13 @@ extraction script cares about.
   there; one reached only through a pattern points at the caller's own page instead. New
   `POST /api/agents/spawn-rule` adds or removes a single rule without touching the rest of an
   agent's definition, for exactly this one-field kind of write.
+- **The panel can show you what it redraws.** `⌘K` → **Show rerenders** outlines every part of the
+  page the moment the DOM changes, fading out over a second: a solid, tinted box where a section
+  was rebuilt, a dashed one where a piece of text or an attribute was updated in place, coloured
+  from blue to red by how often the same element keeps changing. A screen that redraws a whole list
+  on every poll, when only one value moved, is now visible at a glance. Off by default; the choice
+  is remembered per browser, a badge says it is on, and **Hide rerenders** turns it off again. On
+  the control panel and the chat home alike.
 
 ### Changed
 
