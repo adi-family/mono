@@ -90,6 +90,7 @@ pub(crate) enum Icon {
     Restart,
     Bug,
     ExternalLink,
+    Rerenders,
 }
 ```
 

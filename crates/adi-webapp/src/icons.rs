@@ -79,6 +79,8 @@ pub(crate) enum Icon {
     Bug,
     /// A link that leaves the panel — an issue tracker, a download.
     ExternalLink,
+    /// The rerender overlay — watching the page change.
+    Rerenders,
 }
 
 impl Icon {
@@ -122,6 +124,7 @@ impl Icon {
             Icon::Restart => Lucide::RefreshCw,
             Icon::Bug => Lucide::Bug,
             Icon::ExternalLink => Lucide::ArrowUpRight,
+            Icon::Rerenders => Lucide::Eye,
         }
     }
 }

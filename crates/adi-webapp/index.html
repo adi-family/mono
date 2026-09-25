@@ -40,6 +40,7 @@
      stable URLs the browser and the manifest above expect. -->
 <link data-trunk rel="copy-file" href="manifest.webmanifest" />
 <link data-trunk rel="copy-file" href="sw.js" />
+<link data-trunk rel="copy-file" href="rerenders.js" />
 <link data-trunk rel="copy-dir" href="assets" />
 
 <!-- adi-elements: the design system as custom elements. A module, so it is deferred by
@@ -47,6 +48,10 @@
      later, which is how `<adi-gallery>` on /extended/ui works without any bridge at all.
      Available on every page of the panel, not just that one. -->
 <script type="module" src="/elements/adi-elements.js"></script>
+
+<!-- Rerender highlighting, the ⌘K menu's "Show rerenders" (src/rerenders.rs). A plain script in
+     the head, so when it was left on it is watching before the wasm mounts anything. -->
+<script src="/rerenders.js"></script>
 
 <script>
 // PWA bootstrap. Two jobs, both of which have to happen outside the wasm bundle:

@@ -23,6 +23,7 @@ mod native;
 mod origin;
 mod pages;
 mod pwa;
+mod rerenders;
 mod routing;
 mod state;
 mod store_browser;

@@ -23,7 +23,7 @@ use leptos::prelude::*;
 use crate::launcher::Action;
 use crate::routing::{self, Route};
 use crate::state::{FleetForm, State};
-use crate::{icons, origin, pages, pwa, update};
+use crate::{icons, origin, pages, pwa, rerenders, update};
 
 /// The marker the root screen leaves in the URL to say the panel was opened *in order to pair*.
 ///
@@ -173,6 +173,7 @@ pub(crate) fn rows(
             pwa::install,
         ));
     }
+    rows.extend(rerenders::action());
     rows.push(update::action(updates));
     rows
 }
