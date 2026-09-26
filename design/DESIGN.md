@@ -198,6 +198,8 @@ Never: gradients, glows, colored shadows, outlined orange.
 - Four decimal places on money; raw seconds where minutes read better
 - Inventing a new grey. Use the ladder.
 
+One exception, decided by the operator on 2026-09-26: the **new UI's wallpaper** (`crates/adi-webapp/src/new_ui/`) may be a gradient, a soft colour field or an image — presets are the `--wall-*` tokens in `tokens.css`. It covers that background and nothing drawn on it; no other surface may use `--wall-*`.
+
 **Always**
 - Transcript on `--bg`, chrome on `--bg-side`
 - Sidebars in smaller, dimmer type than content

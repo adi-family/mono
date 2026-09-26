@@ -11,11 +11,21 @@
 //!   (with that one row) even though it draws nothing else;
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
+//!
+//! What it draws so far: a wallpaper ([`background`]) and, at `/settings`, the sheet that picks
+//! it ([`settings`]). `/settings` is only a place inside this document — every path that is not
+//! one of `main`'s other doors mounts this screen, and it reads the path itself.
 
-use leptos::prelude::*;
+mod background;
+mod settings;
+
+use leptos::{ev, prelude::*};
 
 use crate::launcher::{self, Action, Launcher};
 use crate::{icons, routing, ui};
+
+/// Where the settings sheet opens.
+const SETTINGS: &str = "/settings";
 
 /// Where the choice is remembered.
 const KEY: &str = "adi-new-ui";
@@ -73,13 +83,34 @@ pub(crate) fn action() -> Action {
     }
 }
 
-/// The new root screen. For now the background and nothing else — the `⌘K` menu is mounted but
-/// draws nothing until pressed, and it offers only the way back out.
+/// The new root screen: the wallpaper, the settings sheet when the path asks for it, and the
+/// `⌘K` menu — which draws nothing until pressed, and always carries the way back out.
 #[component]
 pub(crate) fn NewUi() -> impl IntoView {
     let launcher = Launcher::new();
+    let wall = background::Wallpaper::load();
+    let path = RwSignal::new(routing::current_path());
+
+    // Back and forward move between `/` and `/settings` without a reload, so the browser's own
+    // buttons need telling.
+    let pop = window_event_listener(ev::popstate, move |_| path.set(routing::current_path()));
+    on_cleanup(move || pop.remove());
+
+    let go = move |to: &'static str| {
+        routing::push_state(to);
+        path.set(to.to_owned());
+    };
+
     view! {
-        <div class="adi-new"></div>
-        {launcher::overlay(launcher, || vec![action()])}
+        <div class="adi-new" style=move || wall.css()></div>
+        <Show when=move || path.get() == SETTINGS>
+            <settings::Sheet wall close=move || go("/")/>
+        </Show>
+        {launcher::overlay(launcher, move || {
+            vec![
+                Action::new("Settings", "Background", icons::Icon::Gear, move || go(SETTINGS)),
+                action(),
+            ]
+        })}
     }
 }

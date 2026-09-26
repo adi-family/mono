@@ -90,6 +90,44 @@ code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: var(-
   --fs-label:   12px;    /* field labels, table headers, panel section dividers — --ink-3 */
   --fs-mono:    12.5px;  /* paths, hashes, commands, ids — --code */
 }
+/* ---- Wallpapers — the new UI only -----------------------------------------------------
+   The one exception to §8's "no gradients, no blobs": the new UI's background is a wallpaper the
+   person picks, iOS-style, and these are its presets (`crates/adi-webapp/src/new_ui/background.rs`).
+   Decided by the operator for the new UI, which is leaving the current design behind; nothing
+   else may use them. Soft colour fields over a base, each painted as one `background`. */
+:root {
+  --wall-night:
+    radial-gradient(120% 90% at 15% 0%, #23315C 0%, transparent 60%),
+    radial-gradient(90% 80% at 100% 100%, #3B2250 0%, transparent 65%),
+    #0B0C14;
+  --wall-dusk:
+    radial-gradient(110% 80% at 0% 100%, #F2A36B 0%, transparent 55%),
+    radial-gradient(100% 90% at 100% 0%, #5A3A8C 0%, transparent 60%),
+    linear-gradient(170deg, #2A1B47 0%, #B85A7E 100%);
+  --wall-ocean:
+    radial-gradient(100% 80% at 80% 10%, #3FB6C9 0%, transparent 55%),
+    radial-gradient(120% 90% at 0% 100%, #0F3A7A 0%, transparent 60%),
+    linear-gradient(180deg, #0B2346 0%, #0A1426 100%);
+  --wall-forest:
+    radial-gradient(100% 90% at 20% 0%, #6FA36B 0%, transparent 55%),
+    radial-gradient(110% 80% at 100% 100%, #0F3B35 0%, transparent 60%),
+    linear-gradient(180deg, #1C3A27 0%, #0B1A14 100%);
+  --wall-aurora:
+    radial-gradient(70% 60% at 20% 25%, #1FA38A 0%, transparent 70%),
+    radial-gradient(70% 70% at 80% 30%, #5B3FD1 0%, transparent 70%),
+    radial-gradient(90% 70% at 50% 110%, #0E6BA8 0%, transparent 70%),
+    #07131A;
+  --wall-ember:
+    radial-gradient(110% 80% at 50% 110%, #E07A3F 0%, transparent 60%),
+    radial-gradient(90% 70% at 0% 0%, #6E1F2E 0%, transparent 60%),
+    linear-gradient(180deg, #1A0B0C 0%, #3A1410 100%);
+  --wall-blush:
+    radial-gradient(100% 80% at 0% 0%, #F7D9C4 0%, transparent 60%),
+    radial-gradient(100% 90% at 100% 100%, #B9A2E0 0%, transparent 60%),
+    linear-gradient(160deg, #F3C6CF 0%, #D8B4E2 100%);
+  --wall-graphite: linear-gradient(160deg, #2A2A2A 0%, #141414 55%, #0A0A0A 100%);
+}
+
 .light, [data-theme="light"] {
   --on-accent: #FFFFFF;
   --chip:       rgba(0,0,0,.06);

@@ -78,6 +78,12 @@ web-sys = { version = "0.3", features = [
     "WebSocket",
     "MessageEvent",      # …its inbound messages…
     "CloseEvent",        # …and the close that triggers a reconnect.
+    # The new UI's wallpaper (see `new_ui::background`): an uploaded image, decoded from an
+    # object URL and shrunk on a canvas until it fits in `localStorage`.
+    "File",
+    "FileList",
+    "Url",
+    "HtmlImageElement",
 ] }
 
 serde = { workspace = true }

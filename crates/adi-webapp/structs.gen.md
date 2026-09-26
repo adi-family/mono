@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-79 structs · 23 enums · 5 type aliases across 33 files.
+81 structs · 25 enums · 5 type aliases across 34 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
+- [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Kind`, `Choice`, `Wallpaper`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -194,6 +195,74 @@ pub(crate) enum Shell {
         route: RwSignal<Route>,
         fleet: FleetForm,
     },
+}
+```
+
+---
+
+## `src/new_ui/background.rs`
+
+### enum `Preset`
+
+The wallpapers offered ready-made.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Preset {
+    Night,
+    Dusk,
+    Ocean,
+    Forest,
+    Aurora,
+    Ember,
+    Blush,
+    Graphite,
+}
+```
+
+### enum `Kind`
+
+Which kind of wallpaper is showing.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Kind {
+    #[default]
+    Preset,
+    Color,
+    Gradient,
+    Image,
+}
+```
+
+### struct `Choice`
+
+Everything but the image. Every kind's values are kept, not just the showing one's, so trying a preset and coming back finds the custom colour where it was left.
+
+```rust
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct Choice {
+    pub(super) kind: Kind,
+    pub(super) preset: Preset,
+    pub(super) color: String,
+    pub(super) from: String,
+    pub(super) to: String,
+    pub(super) angle: u16,
+}
+```
+
+### struct `Wallpaper`
+
+The wallpaper's live state, shared by the screen and the settings sheet.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Wallpaper {
+    pub(super) choice: RwSignal<Choice>,
+    pub(super) image: RwSignal<Option<String>>,
 }
 ```
 

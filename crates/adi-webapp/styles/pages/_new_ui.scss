@@ -1,0 +1,163 @@
+// The new UI (`/`, opted into with `?new-ui=1` or the ⌘K menu; `src/new_ui/`).
+//
+// Its background is a wallpaper — the one surface where §8's "no gradients" gives way, by the
+// operator's decision; the presets are `--wall-*` in `design/tokens.css`. The settings sheet over
+// it is ordinary chrome and keeps every other rule.
+
+// The chosen wallpaper arrives as an inline `background`, which overrides this one.
+.adi-new {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+}
+
+// ---- settings sheet (`/settings`) -----------------------------------------------------------
+// A side sheet rather than a page, so the wallpaper it edits stays in view.
+.adi-new-sheet {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(100%, var(--panel-w));
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--bg-side);
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+
+  &__head {
+    flex: none;
+    height: var(--bar-h);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--s2) 0 var(--s4);
+    border-bottom: 1px solid var(--line);
+  }
+
+  &__title {
+    font-size: var(--fs-section);
+    font-weight: 600;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s3);
+    padding: var(--s4);
+
+    & + & { border-top: 1px solid var(--line); }
+  }
+
+  &__label {
+    font-size: var(--fs-label);
+    font-weight: 400;
+    color: var(--ink-3);
+  }
+
+  &__preview {
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    background-position: center;
+    background-size: cover;
+  }
+
+  &__actions {
+    display: flex;
+    gap: var(--s2);
+
+    .is-busy { opacity: .6; pointer-events: none; }
+  }
+
+  &__note {
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+  }
+
+  .adi-segmented { align-self: start; }
+}
+
+// The preset tiles: the wallpaper itself at the screen's own proportions, name beneath.
+.adi-new-walls {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s3) var(--s2);
+}
+
+.adi-new-wall {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-label);
+  color: var(--ink-2);
+  cursor: pointer;
+
+  &__swatch {
+    aspect-ratio: 16 / 10;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    transition: outline-color var(--transition);
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+  }
+
+  &:hover &__swatch { border-color: var(--line-strong); }
+
+  &[aria-pressed="true"] { color: var(--ink); }
+  &[aria-pressed="true"] &__swatch { outline-color: var(--ink); }
+
+  &:focus-visible { outline: none; }
+  &:focus-visible &__swatch { outline-color: var(--focus); }
+}
+
+// A label, then its control: a colour well with the hex beside it, or the angle slider.
+.adi-new-field {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: var(--s3);
+  font-size: var(--fs-ui-sm);
+
+  &__label { color: var(--ink-2); }
+
+  &__value {
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    min-width: 0;
+  }
+
+  &__num {
+    min-width: 4ch;
+    text-align: right;
+    color: var(--ink-2);
+  }
+}
+
+.adi-new-color {
+  appearance: none;
+  width: 32px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+
+  &::-webkit-color-swatch-wrapper { padding: 0; }
+  &::-webkit-color-swatch { border: 0; border-radius: 3px; }
+  &::-moz-color-swatch { border: 0; border-radius: 3px; }
+}
+
+.adi-new-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--ink-2);
+}

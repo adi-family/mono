@@ -21,6 +21,7 @@
 @use "pages/marketplace";
 @use "pages/mesh";
 @use "pages/meta";
+@use "pages/new_ui";
 @use "pages/onboarding";
 @use "pages/ports";
 @use "pages/projects";
@@ -55,13 +56,6 @@
     flex-direction: column;
     gap: 24px;
   }
-}
-
-// ---- the new UI (`/`, opted into with `?new-ui=1` or the ⌘K menu) --------------------------
-// The page surface and nothing else, until the screen is designed onto it (`src/new_ui.rs`).
-.adi-new {
-  min-height: 100dvh;
-  background: var(--bg);
 }
 
 // ---- boot splash (`/`, before we know what to show) ----------------------------------------
