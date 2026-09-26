@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.23.0 — 2026-09-26
+
 ### Added
 
 - **Which agent may launch which is now something the operator decides (ADI-MONO-113).** An agent
