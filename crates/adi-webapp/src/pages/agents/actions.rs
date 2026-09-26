@@ -5752,8 +5752,11 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// on anything less than its click handler's arguments, a row that moved slots would carry the
 /// handler of the session that used to be there — a click opening the wrong chat.
 ///
-/// Which row is open is deliberately *not* in here: [`chat_session_row`] reads it as a signal, so
-/// opening a session patches two rows' fill rather than rebuilding them.
+/// Two things are deliberately *not* in here, and [`chat_session_row`] reads both as signals:
+///
+/// - which row is open, so opening a session patches two rows' fill rather than rebuilding them;
+/// - the row's hotkey, which is its *position* rather than anything about it. Keyed on that, one
+///   chat jumping to the top renumbered — and so rebuilt — every row it jumped over.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct RowFace {
     node: Option<String>,
@@ -5766,9 +5769,19 @@ struct RowFace {
     tail: String,
     alert: &'static str,
     state_of: adi_ui::SessionState,
-    hint: String,
     starred: bool,
-    hotkey: Option<usize>,
+}
+
+/// Which session a rail row is, whatever it currently shows or where it sits: what
+/// [`chat_session_rows`] looks a row's hotkey up by.
+type RowId = (Option<String>, String, String);
+
+fn row_id(row: &SessionRow) -> RowId {
+    (
+        row.node.clone(),
+        row.agent.clone(),
+        row.run.as_ref().map(|r| r.run_id.clone()).unwrap_or_default(),
+    )
 }
 
 impl RowFace {
@@ -5782,7 +5795,7 @@ impl RowFace {
             when,
             running,
             starred,
-            hotkey,
+            hotkey: _,
         } = item;
         let answerable = run
             .as_ref()
@@ -5822,13 +5835,6 @@ impl RowFace {
                 format!("interactive terminal{origin}"),
                 String::new(),
             ),
-        };
-        // The tooltip names both shortcuts, whatever the row prints: whichever of the two the
-        // browser keeps for itself, the other one is the way in. One line and nothing else — what
-        // a waiting conversation is waiting for is the open chat's to say, not a hover's.
-        let hint = match hotkey {
-            Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
-            None => format!("open this session with {agent}"),
         };
         // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
         // one thing the rail exists to answer is which of forty rows needs you — `running: false`
@@ -5872,9 +5878,7 @@ impl RowFace {
             tail,
             alert,
             state_of,
-            hint,
             starred,
-            hotkey,
         }
     }
 }
@@ -5884,13 +5888,24 @@ impl RowFace {
 /// ([`chat_machine_block`]).
 ///
 /// `rows` is read inside the `<For>`, never before it, so the list outlives the rows it is handed:
-/// when they change, `For` diffs them by [`RowFace`] and touches only the rows that differ.
+/// when they change, `For` diffs them by [`RowFace`] and touches only the rows that differ. The
+/// hotkeys go to the rows through a map of their own, so a renumbering patches a digit in place.
 fn chat_session_rows(
     state: State,
     watch: AgentsWatch,
     rows: impl Fn() -> Vec<SessionRow> + Send + Sync + 'static,
     sourced: bool,
 ) -> AnyView {
+    let rows = std::sync::Arc::new(rows);
+    let hotkeys = Memo::new({
+        let rows = rows.clone();
+        move |_| {
+            rows()
+                .iter()
+                .filter_map(|r| r.hotkey.map(|n| (row_id(r), n)))
+                .collect::<HashMap<_, _>>()
+        }
+    });
     view! {
         <For
             each=move || {
@@ -5904,7 +5919,11 @@ fn chat_session_rows(
             key=|face: &RowFace| face.clone()
             let:face
         >
-            {chat_session_row(state, watch, face)}
+            {
+                let id = (face.node.clone(), face.agent.clone(), face.run_id.clone());
+                let hotkey = Memo::new(move |_| hotkeys.with(|m| m.get(&id).copied()));
+                chat_session_row(state, watch, face, hotkey.into())
+            }
         </For>
     }
     .into_any()
@@ -6060,9 +6079,15 @@ fn bump_source_limit(state: State, node: Option<String>) {
 /// star and a delete ride the row's right edge. The first nine rows also carry the number that opens
 /// them.
 ///
-/// Everything it prints comes from `face` ([`RowFace::of`]); the one thing read live is whether it
-/// is the open row, so moving between sessions never rebuilds a row.
-fn chat_session_row(state: State, watch: AgentsWatch, face: RowFace) -> AnyView {
+/// Everything it prints comes from `face` ([`RowFace::of`]); the two things read live are whether
+/// it is the open row and its hotkey, so neither moving between sessions nor a renumbering rebuilds
+/// a row.
+fn chat_session_row(
+    state: State,
+    watch: AgentsWatch,
+    face: RowFace,
+    hotkey: Signal<Option<usize>>,
+) -> AnyView {
     let RowFace {
         node,
         agent,
@@ -6073,10 +6098,18 @@ fn chat_session_row(state: State, watch: AgentsWatch, face: RowFace) -> AnyView 
         tail,
         alert,
         state_of,
-        hint,
         starred,
-        hotkey,
     } = face;
+    // The tooltip names both shortcuts, whatever the row prints: whichever of the two the browser
+    // keeps for itself, the other one is the way in. One line and nothing else — what a waiting
+    // conversation is waiting for is the open chat's to say, not a hover's.
+    let hint = {
+        let agent = agent.clone();
+        move || match hotkey.get() {
+            Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
+            None => format!("open this session with {agent}"),
+        }
+    };
     // A pty session has no run id, so the agent being watched is the whole of "this row is open".
     let is_sel = {
         let (node, agent, run_id) = (node.clone(), agent.clone(), run_id.clone());
@@ -6134,13 +6167,20 @@ fn chat_session_row(state: State, watch: AgentsWatch, face: RowFace) -> AnyView 
     //
     // It fades out under the cursor because the delete control lands in the same corner — and a
     // hand already on the mouse has no use for a keyboard shortcut anyway.
-    let cap = hotkey.map(|n| {
-        view! {
-            <span class="ml-auto transition-opacity group-hover:opacity-0">
-                <adi_ui::Kbd>{format!("{}{n}", hotkey_glyph())}</adi_ui::Kbd>
-            </span>
-        }
-    });
+    //
+    // Drawn on whether there is a number at all; which number is patched into the key's text.
+    let numbered = Memo::new(move |_| hotkey.get().is_some());
+    let cap = move || {
+        numbered.get().then(|| {
+            view! {
+                <span class="ml-auto transition-opacity group-hover:opacity-0">
+                    <adi_ui::Kbd>
+                        {move || hotkey.get().map(|n| format!("{}{n}", hotkey_glyph()))}
+                    </adi_ui::Kbd>
+                </span>
+            }
+        })
+    };
     // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
     // because the row is one hit target and a button inside a button is not a thing a
     // browser will do. It appears on hover, where it cannot be hit by accident.
@@ -7311,7 +7351,10 @@ fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
                     >
                         // Sourced whatever the rail beside it is doing: this band mixes machines
                         // under one heading of its own, so each row has to name its own.
-                        {chat_session_row(state, watch, RowFace::of(row, multi_source))}
+                        {
+                            let hotkey = Signal::stored(row.hotkey);
+                            chat_session_row(state, watch, RowFace::of(row, multi_source), hotkey)
+                        }
                     </For>
                 </adi_ui::RailGroup>
                 {(more > 0).then(|| view! {

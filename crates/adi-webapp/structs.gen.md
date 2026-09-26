@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-79 structs · 23 enums · 4 type aliases across 33 files.
+79 structs · 23 enums · 5 type aliases across 33 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
@@ -327,10 +327,16 @@ struct RowFace {
     tail: String,
     alert: &'static str,
     state_of: adi_ui::SessionState,
-    hint: String,
     starred: bool,
-    hotkey: Option<usize>,
 }
+```
+
+### type `RowId`
+
+Which session a rail row is, whatever it currently shows or where it sits: what `chat_session_rows` looks a row's hotkey up by.
+
+```rust
+type RowId = (Option<String>, String, String);
 ```
 
 ### struct `SessionRef`

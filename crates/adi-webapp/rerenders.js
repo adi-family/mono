@@ -109,7 +109,9 @@
     return n.nodeType === 1 || n.nodeType === 3;
   }
 
-  function record(r) {
+  // `grew` collects every parent something was inserted into during this batch; `shrank`, the
+  // parents that lost a node with nothing put back in the same record.
+  function record(r, grew, shrank) {
     if (r.type === "characterData") {
       note(r.target.parentElement, false);
     } else if (r.type === "attributes") {
@@ -124,13 +126,28 @@
         note(n.nodeType === 1 ? n : r.target, true);
         added = true;
       }
-      // A removal with nothing put back shows up as its parent changing.
-      if (!added && Array.prototype.some.call(r.removedNodes, seen)) note(r.target, true);
+      if (added) grew.add(r.target);
+      else if (Array.prototype.some.call(r.removedNodes, seen)) shrank.push(r);
     }
   }
 
   function observe(records) {
-    for (var i = 0; i < records.length; i++) record(records[i]);
+    var grew = new Set();
+    var shrank = [];
+    for (var i = 0; i < records.length; i++) record(records[i], grew, shrank);
+    // A removal with nothing put back shows up as its parent changing — but only a real one. The
+    // DOM reports a keyed list moving a row, or swapping one row for its redrawn self, as a
+    // removal in one record and an insertion in the next; the inserted row already flashes as
+    // itself, and boxing the whole list for the removal half made one changed row look like a
+    // rebuilt list. So: nothing inserted under that parent this batch, and the node really gone.
+    for (var j = 0; j < shrank.length; j++) {
+      var r = shrank[j];
+      if (grew.has(r.target)) continue;
+      var gone = Array.prototype.some.call(r.removedNodes, function (n) {
+        return seen(n) && !n.isConnected;
+      });
+      if (gone) note(r.target, true);
+    }
     if (pending.size && !frame) frame = requestAnimationFrame(draw);
   }
 
