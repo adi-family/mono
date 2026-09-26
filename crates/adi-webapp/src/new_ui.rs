@@ -23,6 +23,9 @@ const KEY: &str = "adi-new-ui";
 /// The query parameter that sets the choice from a URL.
 const PARAM: &str = "new-ui";
 
+/// A link that turns the new UI on and lands on it — the old chat's door into it.
+pub(crate) const TURN_ON: &str = "/?new-ui=1";
+
 /// Whether this browser has the new UI on. A `?new-ui=` in the address bar wins, is saved, and is
 /// stripped — so a reload afterwards is an ordinary visit that remembers the choice.
 pub(crate) fn enabled() -> bool {

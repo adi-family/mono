@@ -3437,6 +3437,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                         // what is running will be drawn.
                         {chat_market_link()}
                         {chat_graph_link()}
+                        {chat_new_ui_link()}
                         <adi_ui::Rail
                             title="Apps"
                             actions=move || {
@@ -3523,6 +3524,19 @@ fn chat_graph_link() -> impl IntoView {
         "What ran what",
         Route::LiveGraph.path(),
         "Every agent and conversation on this machine, and what started it",
+    )
+}
+
+/// The way into the new UI (`crate::new_ui`). A link that carries the switch in its URL rather
+/// than a button that sets it, so the choice is made by the page it lands on — the same one
+/// `?new-ui=1` typed by hand reaches.
+fn chat_new_ui_link() -> impl IntoView {
+    chat_door(
+        adi_ui::Lucide::Sparkles,
+        "New UI",
+        "Switch to it",
+        crate::new_ui::TURN_ON,
+        "Switch this browser to the new UI \u{2014} \u{2318}K turns it off again",
     )
 }
 
