@@ -20,6 +20,7 @@ mod links;
 mod live;
 mod menu;
 mod native;
+mod new_ui;
 mod origin;
 mod pages;
 mod pwa;
@@ -86,13 +87,16 @@ fn main() {
     //   * `/marketplace`, and `/marketplace/<marketplace>/<slug>` for one app's own page
     //     (see [`Market`]).
     //   * `/extended/…` — the full control panel (the App shell + every workbench route).
-    //   * anything else (notably the bare `/`) — the minimal launcher that just points at it.
+    //   * anything else (notably the bare `/`) — the minimal launcher that just points at it,
+    //     or [`new_ui::NewUi`] on a browser that has opted into the new UI.
     if path.starts_with("/embed/dashboard-agent") {
         mount_to_body(EmbedDashboardAgent);
     } else if routing::is_market_path(&path) {
         mount_to_body(Market);
     } else if path == "/extended" || path.starts_with("/extended/") {
         mount_to_body(App);
+    } else if new_ui::enabled() {
+        mount_to_body(new_ui::NewUi);
     } else {
         mount_to_body(Home);
     }

@@ -57,6 +57,13 @@
   }
 }
 
+// ---- the new UI (`/`, opted into with `?new-ui=1` or the ⌘K menu) --------------------------
+// The page surface and nothing else, until the screen is designed onto it (`src/new_ui.rs`).
+.adi-new {
+  min-height: 100dvh;
+  background: var(--bg);
+}
+
 // ---- boot splash (`/`, before we know what to show) ----------------------------------------
 // Written twice on purpose — once in `index.html` for the pre-wasm frame, once from the app while
 // `/api/meta` is in flight — and both use this block, so the handover between them is a no-op on
