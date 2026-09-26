@@ -3412,7 +3412,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch, l: Launcher) -> A
                         .into_any()
                     }
                 >
-                    {move || chat_rail(state, watch)}
+                    {chat_rail(state, watch)}
                 </adi_ui::Rail>
             </aside>
 
@@ -5013,10 +5013,14 @@ fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// A session the user has hidden ([`set_session_hidden`]) is left out of the list server-side and
 /// rides only in the band beneath it (`docs/sessions.md`). That narrowing stops at the rail: the
 /// Agents page's history tables still list everything, which is what a workbench is for.
+///
+/// Built once, not inside a `move ||`: the session list keeps its own reactive parts inside it
+/// ([`chat_all_sessions`]), and a closure around the whole rail would track every signal they read
+/// and rebuild every row whenever any one session moved.
 fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         {chat_all_sessions(state, watch)}
-        {chat_hidden_sessions(state, watch)}
+        {move || chat_hidden_sessions(state, watch)}
     }
     .into_any()
 }
@@ -5101,8 +5105,9 @@ fn chat_load_more(state: State) -> Option<AnyView> {
 /// carry both which agent it belongs to and which machine that agent is on — there is no group
 /// heading above it to say either (`docs/fleet.md` §13, multi-select).
 ///
-/// `Clone` because the rail lists rows through a keyed `For`, which owns its items.
-#[derive(Clone)]
+/// `Clone` because the rail lists rows through a keyed `For`, which owns its items; `PartialEq` so
+/// the rail's rows can sit behind a `Memo` ([`chat_all_sessions`]).
+#[derive(Clone, PartialEq, Eq)]
 struct SessionRow {
     /// The row's own source — a paired node's petname, or `None` for this machine. Never read off
     /// `state.session_nodes`/`AgentsWatch::node` by a caller acting on a row: this is the one field
@@ -5463,6 +5468,7 @@ fn activity_bands(rows: Vec<SessionRow>) -> [Vec<SessionRow>; 5] {
 /// which its own block's Load more addresses. What the label *says* is the grouping's business —
 /// an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing
 /// downstream of [`rail_bands`] can tell which it was.
+#[derive(Clone, PartialEq, Eq)]
 struct RailBand {
     label: String,
     /// This band's own source (`docs/fleet.md` §13) — `None` for this machine. Meaningless when
@@ -5636,12 +5642,24 @@ fn any_session(state: State) -> bool {
             .any(|all| has_runs(all))
 }
 
-/// The rail's session list: the bands the grouping produced, or the one line that says why there
-/// are none. One band draws a single list ([`chat_band_rows`]); more than one draws a column of
-/// equal-height, independently-scrolling, foldable blocks ([`chat_machine_block`]) — see
-/// `docs/sessions.md`'s Layer 6 for the two-layout split this dispatches on.
-fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let (bands, filter) = rail_bands(state, watch);
+/// Which of the rail's layouts is on screen — everything about the session list *except* its rows.
+///
+/// Split from the rows because the two change at very different rates: a live run moves its row
+/// every second, while the layout moves only when a source is ticked, a block folded or the list
+/// empties. Anything drawn off this is rebuilt on a layout change and never on a row change.
+#[derive(Clone, PartialEq, Eq)]
+enum RailLayout {
+    /// No bands: the one line that says why, and how to get back.
+    Empty(&'static str),
+    /// One band, a single list — `sourced` as [`chat_session_row`] takes it.
+    Single { sourced: bool },
+    /// A block per band: its label, its source, and whether it is folded shut.
+    Blocks(Vec<(String, Option<String>, bool)>),
+}
+
+/// The layout [`rail_bands`] is drawn in. Reads `state.session_group`, `state.rail_collapsed_bands`
+/// and, for an empty rail, the unfiltered index — so it belongs inside the same `Memo` the bands do.
+fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailLayout {
     if bands.is_empty() {
         // Which emptiness this is: nothing to show, or nothing left after the filter — said apart,
         // so a narrowed rail never reads as "you have no chats". Each says how to get back.
@@ -5650,7 +5668,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         // on its first run — and telling someone their sessions were filtered out when they have
         // none is how a person learns nothing. When the unfiltered index is empty too, the plain
         // first-run line wins.
-        let msg = match filter {
+        return RailLayout::Empty(match filter {
             SessionFilter::All => "No chats yet — press New to start one.",
             SessionFilter::Starred => {
                 "No chats from starred agents — star one on the Agents page, or show all sessions."
@@ -5661,87 +5679,249 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                  out, as are sessions from before ADI recorded who started a run. Show all \
                  sessions from the filter box above to see them."
             }
-        };
-        return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
+        });
     }
-    // One band (a single source, or `SessionGroup::Flat` merging several): a single list filling
-    // the rail, with one combined Load more under it — no blocks, no per-machine heading, nothing
-    // to fold. More than one: `SessionGroup::Machine` with several sources ticked, one block per
-    // source sharing the rail's height equally (`chat_machine_block`).
     if bands.len() == 1 {
-        let only = bands.into_iter().next().expect("checked len() == 1 above");
-        let sourced = state.session_group.get() != SessionGroup::Machine;
-        return view! {
-            {chat_band_rows(state, watch, only.rows, sourced)}
-            {chat_load_more(state)}
-        }
-        .into_any();
+        return RailLayout::Single {
+            sourced: state.session_group.get() != SessionGroup::Machine,
+        };
     }
     let collapsed = state.rail_collapsed_bands.get();
-    view! {
-        <div class="adi-chome__blocks flex min-h-0 flex-1 flex-col">
-            {bands
-                .into_iter()
-                .map(|band| {
-                    let is_collapsed = collapsed.contains(&band.label);
-                    chat_machine_block(state, watch, band, is_collapsed)
-                })
-                .collect::<Vec<_>>()}
-        </div>
-    }
+    RailLayout::Blocks(
+        bands
+            .iter()
+            .map(|b| (b.label.clone(), b.node.clone(), collapsed.contains(&b.label)))
+            .collect(),
+    )
+}
+
+/// The rail's session list: the bands the grouping produced, or the one line that says why there
+/// are none. One band draws a single list; more than one draws a column of equal-height,
+/// independently-scrolling, foldable blocks ([`chat_machine_block`]) — see `docs/sessions.md`'s
+/// Layer 6 for the two-layout split this dispatches on.
+///
+/// **A poll must not rebuild the list.** The bands are read through a `Memo`, the layout through a
+/// second one, and only the layout is in the closure that draws the markup; the rows reach their
+/// keyed `<For>` through the first memo, so a session that moved is diffed into place and every
+/// other row's DOM is left alone. Reading [`rail_bands`] in the drawing closure itself — as this
+/// once did — made every live run's tick redraw every row of the rail.
+fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
+    let rail = Memo::new(move |_| rail_bands(state, watch));
+    let layout = Memo::new(move |_| rail.with(|(bands, filter)| rail_layout(state, bands, *filter)));
+    (move || match layout.get() {
+        RailLayout::Empty(msg) => view! { <div class="adi-chome__empty">{msg}</div> }.into_any(),
+        // One band (a single source, or `SessionGroup::Flat` merging several): a single list filling
+        // the rail, with one combined Load more under it — no blocks, no per-machine heading,
+        // nothing to fold. Under an unlabelled `RailGroup` for the same `gap-px` spacing every
+        // other band uses — a rail with one source on screen would only be naming itself.
+        RailLayout::Single { sourced } => view! {
+            <adi_ui::RailGroup>
+                {chat_session_rows(
+                    state,
+                    watch,
+                    move || rail.with(|(bands, _)| {
+                        bands.first().map(|b| b.rows.clone()).unwrap_or_default()
+                    }),
+                    sourced,
+                )}
+            </adi_ui::RailGroup>
+            {move || chat_load_more(state)}
+        }
+        .into_any(),
+        // More than one: `SessionGroup::Machine` with several sources ticked, one block per source
+        // sharing the rail's height equally.
+        RailLayout::Blocks(blocks) => view! {
+            <div class="adi-chome__blocks flex min-h-0 flex-1 flex-col">
+                {blocks
+                    .into_iter()
+                    .map(|(label, node, is_collapsed)| {
+                        chat_machine_block(state, watch, rail, label, node, is_collapsed)
+                    })
+                    .collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    })
     .into_any()
+}
+
+/// A row as the rail draws it: everything [`chat_session_row`] prints or binds, worked out from a
+/// [`SessionRow`] once, and nothing that is reactive on its own.
+///
+/// It is also the row's key in the `<For>`, and that is the point of it. Keyed on the session alone,
+/// a row whose age, state or title moved would keep its stale DOM; keyed on this, a row is rebuilt
+/// exactly when something it shows changed, and a row that did not change is never touched. Keyed
+/// on anything less than its click handler's arguments, a row that moved slots would carry the
+/// handler of the session that used to be there — a click opening the wrong chat.
+///
+/// Which row is open is deliberately *not* in here: [`chat_session_row`] reads it as a signal, so
+/// opening a session patches two rows' fill rather than rebuilding them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RowFace {
+    node: Option<String>,
+    agent: String,
+    /// Empty for a pty agent's live session, which has no run.
+    run_id: String,
+    answerable: Option<bool>,
+    title: String,
+    sub: String,
+    tail: String,
+    alert: &'static str,
+    state_of: adi_ui::SessionState,
+    hint: String,
+    starred: bool,
+    hotkey: Option<usize>,
+}
+
+impl RowFace {
+    /// `multi_source` is whether the row names its own machine: more than one source is merged
+    /// into the list it sits in, and no heading above it already says which.
+    fn of(item: SessionRow, multi_source: bool) -> Self {
+        let SessionRow {
+            node,
+            agent,
+            run,
+            when,
+            running,
+            starred,
+            hotkey,
+        } = item;
+        let answerable = run
+            .as_ref()
+            .and_then(|run| run.caps.map(|caps| caps.answerable));
+        let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
+        // What it is waiting on the world for. The row says *that* it is with the dot and the word
+        // beside it, and what for goes in the tooltip — the meta line's parts are all `shrink-0`
+        // inside an `overflow-hidden`, so a third one does not shrink to fit the rail, it clips
+        // mid-word.
+        let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
+        // The tooltip is where there is room for the sentence, and it is the same sentence the All
+        // chats table hangs on its status cell — two surfaces showing one conversation should not
+        // describe it two ways.
+        let await_hint = run
+            .as_ref()
+            .map(|r| awaiting_hint(&r.awaits))
+            .filter(|hint| !hint.is_empty())
+            .map(|hint| format!("\n\n{hint}"))
+            .unwrap_or_default();
+        // The row's own source, appended to its meta line whenever more than one is on screen at
+        // once — always, not only for a remote row, so "local" reads as a fact about the row rather
+        // than the absence of one (`docs/fleet.md` §13, multi-select). Not under a heading that
+        // already says it, though: a machine named once over six rows and again on all six is the
+        // repetition §7.5 sends into the heading, and it is spent out of the 264px the task itself
+        // has to fit in.
+        let origin = multi_source
+            .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
+            .unwrap_or_default();
+        // The meta line in two parts, because the state's word goes *between* them: the agent's
+        // name, then what the row is doing, then how long ago. A state read after the age —
+        // "adi-agent · 11d ago · your answer" — is a fact about the row filed behind the least
+        // interesting thing on it.
+        let (title, tail, run_id) = match run {
+            Some(r) => {
+                let t = truncate_task(display_message(&r));
+                let t = if t.trim().is_empty() {
+                    "New chat".to_string()
+                } else {
+                    t
+                };
+                (t, format!("{}{origin}", run_age(when)), r.run_id)
+            }
+            None => (
+                if running {
+                    "Live session"
+                } else {
+                    "No live session"
+                }
+                .to_string(),
+                format!("interactive terminal{origin}"),
+                String::new(),
+            ),
+        };
+        // The tooltip names both, whatever the row prints: whichever of the two the browser keeps
+        // for itself, the other one is the way in, and here there is room to say so.
+        let hint = match hotkey {
+            Some(n) => {
+                format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}{await_hint}")
+            }
+            None => format!("open this session with {agent}{await_hint}"),
+        };
+        // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
+        // one thing the rail exists to answer is which of forty rows needs you — `running: false`
+        // alone cannot say it, because finished and blocked-on-you look identical from there.
+        //
+        // Awaiting comes last of the three for the opposite reason: it is the only live state that
+        // asks nothing of anybody, so it yields to both a question and a turn in flight. A run
+        // working and holding a wake for what it launched is a working run.
+        let state_of = if waiting {
+            adi_ui::SessionState::Waiting
+        } else if running {
+            adi_ui::SessionState::Working
+        } else if awaits > 0 {
+            adi_ui::SessionState::Awaiting
+        } else {
+            adi_ui::SessionState::Done
+        };
+        // The state in a word, beside the dot that colours it — because the rail is no longer
+        // banded by state ([`SessionGroup`]) and a dot on its own is a mark to learn rather than a
+        // thing to read. What it wants, not how much of it there is (§6), and one word each: the
+        // meta line is 264px wide with an agent name and an age already in it.
+        //
+        // A finished conversation says nothing. Most of the rail is finished conversations, and a
+        // word on every row is a column, not a signal.
+        let alert = match state_of {
+            adi_ui::SessionState::Waiting => "your answer",
+            adi_ui::SessionState::Working => "working",
+            // Not "awaiting", which names the mechanism; this says the thing the reader needs,
+            // which is that the conversation is not over. What it is actually waiting for is in
+            // the tooltip, where there is room for the sentence (`awaiting_hint`).
+            adi_ui::SessionState::Awaiting => "coming back",
+            adi_ui::SessionState::Done | adi_ui::SessionState::Error => "",
+        };
+        Self {
+            sub: agent.clone(),
+            node,
+            agent,
+            run_id,
+            answerable,
+            title,
+            tail,
+            alert,
+            state_of,
+            hint,
+            starred,
+            hotkey,
+        }
+    }
 }
 
 /// One band's rows as a keyed list, with no heading of its own drawn around them — the single-list
-/// layout ([`chat_all_sessions`]) and, without the wrapping [`adi_ui::RailGroup`], one per-machine
-/// block's own scrolling body ([`chat_machine_block`]).
+/// layout ([`chat_all_sessions`]) and one per-machine block's own scrolling body
+/// ([`chat_machine_block`]).
 ///
-/// Keyed, and that is not tidiness: a row's click handler is bound when the row is *built*, so a
-/// plain list that is rebuilt with a different shape — which is exactly what the filter box does —
-/// leaves handlers patched onto rows they no longer belong to, and a click opens the session that
-/// used to be in that slot. `For` keys by identity, so a row and its handler move together or not
-/// at all.
+/// `rows` is read inside the `<For>`, never before it, so the list outlives the rows it is handed:
+/// when they change, `For` diffs them by [`RowFace`] and touches only the rows that differ.
 fn chat_session_rows(
     state: State,
     watch: AgentsWatch,
-    rows: Vec<SessionRow>,
+    rows: impl Fn() -> Vec<SessionRow> + Send + Sync + 'static,
     sourced: bool,
 ) -> AnyView {
-    // Stored, so the closure can hand out a fresh copy on every read instead of moving the one it
-    // has.
-    let rows = StoredValue::new(rows);
     view! {
         <For
-            each=move || rows.get_value()
-            key=|row: &SessionRow| {
-                format!(
-                    "{}:{}:{}",
-                    row.node.as_deref().unwrap_or(""),
-                    row.agent,
-                    row.run.as_ref().map_or("", |r| r.run_id.as_str()),
-                )
+            each=move || {
+                let multi_source = sourced
+                    && usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
+                rows()
+                    .into_iter()
+                    .map(|row| RowFace::of(row, multi_source))
+                    .collect::<Vec<_>>()
             }
-            let:row
+            key=|face: &RowFace| face.clone()
+            let:face
         >
-            {chat_session_row(state, watch, row, sourced)}
+            {chat_session_row(state, watch, face)}
         </For>
-    }
-    .into_any()
-}
-
-/// The single-list layout's rows, under an unlabelled [`adi_ui::RailGroup`] for the same `gap-px`
-/// spacing every other band uses — there is nothing to head them with, since a rail with one source
-/// on screen would only be naming itself.
-fn chat_band_rows(
-    state: State,
-    watch: AgentsWatch,
-    rows: Vec<SessionRow>,
-    sourced: bool,
-) -> AnyView {
-    view! {
-        <adi_ui::RailGroup>
-            {chat_session_rows(state, watch, rows, sourced)}
-        </adi_ui::RailGroup>
     }
     .into_any()
 }
@@ -5756,15 +5936,39 @@ fn chat_band_rows(
 /// nothing more.
 ///
 /// Rows are never `sourced` here — the block's own header already names the source, so a row
-/// repeating it on every line would be the same fact twice on a narrow column.
+/// repeating it on every line would be the same fact twice on a narrow column. They and the count
+/// are read out of `rail` by label, so a session moving inside the block leaves the block itself be.
 fn chat_machine_block(
     state: State,
     watch: AgentsWatch,
-    band: RailBand,
+    rail: Memo<(Vec<RailBand>, SessionFilter)>,
+    label: String,
+    node: Option<String>,
     is_collapsed: bool,
 ) -> AnyView {
-    let RailBand { label, node, rows } = band;
-    let n = rows.len();
+    let rows_of = {
+        let label = label.clone();
+        move || {
+            rail.with(|(bands, _)| {
+                bands
+                    .iter()
+                    .find(|b| b.label == label)
+                    .map(|b| b.rows.clone())
+                    .unwrap_or_default()
+            })
+        }
+    };
+    let count = {
+        let label = label.clone();
+        move || {
+            rail.with(|(bands, _)| {
+                bands
+                    .iter()
+                    .find(|b| b.label == label)
+                    .map_or(0, |b| b.rows.len())
+            })
+        }
+    };
     let toggle_label = label.clone();
     let chevron = if is_collapsed {
         adi_ui::Lucide::ChevronRight
@@ -5786,7 +5990,7 @@ fn chat_machine_block(
             })>
             <adi_ui::Icon icon=chevron size=adi_ui::IconSize::Sm/>
             <span class="truncate">{label}</span>
-            <span class="adi-chome__blockcount">{n}</span>
+            <span class="adi-chome__blockcount">{count}</span>
         </button>
     };
     if is_collapsed {
@@ -5797,8 +6001,8 @@ fn chat_machine_block(
         <div class="adi-chome__block flex min-h-0 flex-1 flex-col">
             {header}
             <div class="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-                {chat_session_rows(state, watch, rows, false)}
-                {band_load_more(state, node)}
+                {chat_session_rows(state, watch, rows_of, false)}
+                {move || band_load_more(state, node.clone())}
             </div>
         </div>
     }
@@ -5872,92 +6076,33 @@ fn bump_source_limit(state: State, node: Option<String>) {
 /// star and a delete ride the row's right edge. The first nine rows also carry the number that opens
 /// them.
 ///
-/// `sourced` is whether the row may name its own machine: false where it already sits under a
-/// heading that does (the machine-grouped rail), true everywhere else, and in both cases it only
-/// ever prints when more than one source is merged.
-fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced: bool) -> AnyView {
-    let SessionRow {
+/// Everything it prints comes from `face` ([`RowFace::of`]); the one thing read live is whether it
+/// is the open row, so moving between sessions never rebuilds a row.
+fn chat_session_row(state: State, watch: AgentsWatch, face: RowFace) -> AnyView {
+    let RowFace {
         node,
         agent,
-        run,
-        when,
-        running,
+        run_id,
+        answerable,
+        title,
+        sub,
+        tail,
+        alert,
+        state_of,
+        hint,
         starred,
         hotkey,
-    } = item;
-    let answerable = run
-        .as_ref()
-        .and_then(|run| run.caps.map(|caps| caps.answerable));
-    let on_this_agent =
-        watch.name.get().as_deref() == Some(agent.as_str()) && watch.node.get() == node;
-    let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
-    // What it is waiting on the world for. The row says *that* it is with the dot and the word
-    // beside it, and what for goes in the tooltip — the meta line's parts are all `shrink-0` inside
-    // an `overflow-hidden`, so a third one does not shrink to fit the rail, it clips mid-word.
-    let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
-    // The tooltip is where there is room for the sentence, and it is the same sentence the All
-    // chats table hangs on its status cell — two surfaces showing one conversation should not
-    // describe it two ways.
-    let await_hint = run
-        .as_ref()
-        .map(|r| awaiting_hint(&r.awaits))
-        .filter(|hint| !hint.is_empty())
-        .map(|hint| format!("\n\n{hint}"))
-        .unwrap_or_default();
-    // The row's own source, appended to its meta line whenever more than one is on screen at once —
-    // always, not only for a remote row, so "local" reads as a fact about the row rather than the
-    // absence of one (`docs/fleet.md` §13, multi-select). With one source selected (the common case,
-    // and everything this rail showed before multi-select existed) the line is unchanged.
-    //
-    // Not under a heading that already says it, though: a machine named once over six rows and again
-    // on all six is the repetition §7.5 sends into the heading, and it is spent out of the 264px the
-    // task itself has to fit in.
-    let multi_source =
-        sourced && usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
-    let origin = multi_source
-        .then(|| format!(" \u{00b7} {}", node.as_deref().unwrap_or("this machine")))
-        .unwrap_or_default();
-    // The meta line in two parts, because the state's word goes *between* them: the agent's name,
-    // then what the row is doing, then how long ago. A state read after the age — "adi-agent · 11d
-    // ago · your answer" — is a fact about the row filed behind the least interesting thing on it.
-    let (title, sub, tail, run_id) = match run {
-        Some(r) => {
-            let t = truncate_task(display_message(&r));
-            let t = if t.trim().is_empty() {
-                "New chat".to_string()
-            } else {
-                t
-            };
-            (
-                t,
-                agent.clone(),
-                format!("{}{origin}", run_age(when)),
-                r.run_id,
-            )
-        }
-        None => (
-            if running {
-                "Live session"
-            } else {
-                "No live session"
-            }
-            .to_string(),
-            agent.clone(),
-            format!("interactive terminal{origin}"),
-            String::new(),
-        ),
-    };
+    } = face;
     // A pty session has no run id, so the agent being watched is the whole of "this row is open".
-    let is_sel = on_this_agent
-        && (run_id.is_empty() && watch.interactive.get()
-            || !run_id.is_empty() && watch.run_id.get().as_deref() == Some(run_id.as_str()));
-    // The tooltip names both, whatever the row prints: whichever of the two the browser keeps for
-    // itself, the other one is the way in, and here there is room to say so.
-    let hint = match hotkey {
-        Some(n) => {
-            format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}{await_hint}")
-        }
-        None => format!("open this session with {agent}{await_hint}"),
+    let is_sel = {
+        let (node, agent, run_id) = (node.clone(), agent.clone(), run_id.clone());
+        Signal::derive(move || {
+            watch.name.get().as_deref() == Some(agent.as_str())
+                && watch.node.get() == node
+                && (run_id.is_empty() && watch.interactive.get()
+                    || !run_id.is_empty()
+                        && watch.run_id.get().as_deref() == Some(run_id.as_str()))
+        })
     };
     let menu = SessionRef::of(node.clone(), &agent, &run_id, &title, false, starred);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
@@ -5999,41 +6144,6 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
             </button>
         }
     });
-    // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
-    // because the row is one hit target and a button inside a button is not a thing a
-    // browser will do. It appears on hover, where it cannot be hit by accident.
-    // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
-    // one thing the rail exists to answer is which of forty rows needs you — `running: false`
-    // alone cannot say it, because finished and blocked-on-you look identical from there.
-    //
-    // Awaiting comes last of the three for the opposite reason: it is the only live state that asks
-    // nothing of anybody, so it yields to both a question and a turn in flight. A run working and
-    // holding a wake for what it launched is a working run.
-    let state_of = if waiting {
-        adi_ui::SessionState::Waiting
-    } else if running {
-        adi_ui::SessionState::Working
-    } else if awaits > 0 {
-        adi_ui::SessionState::Awaiting
-    } else {
-        adi_ui::SessionState::Done
-    };
-    // The state in a word, beside the dot that colours it — because the rail is no longer banded by
-    // state ([`SessionGroup`]) and a dot on its own is a mark to learn rather than a thing to read.
-    // What it wants, not how much of it there is (§6), and one word each: the meta line is 264px
-    // wide with an agent name and an age already in it.
-    //
-    // A finished conversation says nothing. Most of the rail is finished conversations, and a word
-    // on every row is a column, not a signal.
-    let alert = match state_of {
-        adi_ui::SessionState::Waiting => "your answer",
-        adi_ui::SessionState::Working => "working",
-        // Not "awaiting", which names the mechanism; this says the thing the reader needs, which is
-        // that the conversation is not over. What it is actually waiting for is in the tooltip,
-        // where there is room for the sentence (`awaiting_hint`).
-        adi_ui::SessionState::Awaiting => "coming back",
-        adi_ui::SessionState::Done | adi_ui::SessionState::Error => "",
-    };
     // A shortcut nobody can see is a shortcut nobody uses, so the number rides the row it opens.
     // One modifier and one digit, never "⌘1 or Ctrl+1": the row has to stay readable at a glance,
     // and the long form is already in the tooltip.
@@ -6047,6 +6157,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow, sourced:
             </span>
         }
     });
+    // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
+    // because the row is one hit target and a button inside a button is not a thing a
+    // browser will do. It appears on hover, where it cannot be hit by accident.
     view! {
         // Right-click still offers the row's menu, and it is on the wrapper so it covers
         // the whole row including the delete control's corner.
@@ -7191,6 +7304,7 @@ fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
     }
     let total = waiting.len();
     let more = total.saturating_sub(INBOX_ROWS);
+    let multi_source = usize::from(state.session_local.get()) + state.session_nodes.get().len() > 1;
     // Keyed, for the reason the rail's list is: a click handler is bound when its row is *built*,
     // so a positional rebuild — which is what this list gaining or losing a row is — would leave
     // the handler of the session that used to be in that slot on the one now drawn there.
@@ -7213,7 +7327,7 @@ fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
                     >
                         // Sourced whatever the rail beside it is doing: this band mixes machines
                         // under one heading of its own, so each row has to name its own.
-                        {chat_session_row(state, watch, row, true)}
+                        {chat_session_row(state, watch, RowFace::of(row, multi_source))}
                     </For>
                 </adi_ui::RailGroup>
                 {(more > 0).then(|| view! {

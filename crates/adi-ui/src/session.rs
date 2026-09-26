@@ -20,7 +20,7 @@ use crate::rail::{RailCard, meta_line};
 /// the dot and the word travel with the row into whatever band it ends up in. So give every
 /// state that is not `Done` its word — with the headings gone, an unexplained grey dot is a
 /// mark a person has to learn rather than read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SessionState {
     /// Nothing is pending. The default, because a row you forgot to mark should sit quiet
     /// rather than claim the eye.

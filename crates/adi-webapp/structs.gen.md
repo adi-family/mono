@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-78 structs · 22 enums · 4 type aliases across 33 files.
+79 structs · 23 enums · 4 type aliases across 33 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `SessionRef`, `PendingWalk`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
@@ -271,7 +271,7 @@ struct PickerOption {
 One row of the rail. The list spans every agent *and every selected source*, so a row has to carry both which agent it belongs to and which machine that agent is on — there is no group heading above it to say either (`docs/fleet.md` §13, multi-select).
 
 ```rust
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 struct SessionRow {
     node: Option<String>,
     agent: String,
@@ -288,10 +288,48 @@ struct SessionRow {
 One band of the rail as it is drawn: a heading, every row that belongs under it, and — under `SessionGroup::Machine` with more than one source selected — the source that heading names, which its own block's Load more addresses. What the label *says* is the grouping's business — an activity ("Running now") or a machine ("This machine", a node's petname) — and nothing downstream of `rail_bands` can tell which it was.
 
 ```rust
+#[derive(Clone, PartialEq, Eq)]
 struct RailBand {
     label: String,
     node: Option<String>,
     rows: Vec<SessionRow>,
+}
+```
+
+### enum `RailLayout`
+
+Which of the rail's layouts is on screen — everything about the session list *except* its rows.
+
+```rust
+#[derive(Clone, PartialEq, Eq)]
+enum RailLayout {
+    Empty(&'static str),
+    Single {
+        sourced: bool,
+    },
+    Blocks(Vec<(String, Option<String>, bool)>),
+}
+```
+
+### struct `RowFace`
+
+A row as the rail draws it: everything `chat_session_row` prints or binds, worked out from a `SessionRow` once, and nothing that is reactive on its own.
+
+```rust
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RowFace {
+    node: Option<String>,
+    agent: String,
+    run_id: String,
+    answerable: Option<bool>,
+    title: String,
+    sub: String,
+    tail: String,
+    alert: &'static str,
+    state_of: adi_ui::SessionState,
+    hint: String,
+    starred: bool,
+    hotkey: Option<usize>,
 }
 ```
 

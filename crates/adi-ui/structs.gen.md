@@ -878,7 +878,7 @@ pub struct PathRoot {
 Where a session stands, which is the only thing that decides how its row looks.
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum SessionState {
     #[default]
     Done,
