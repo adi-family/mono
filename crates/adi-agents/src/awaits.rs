@@ -200,6 +200,21 @@ impl Await {
     /// and for anything that lists pending wakes.
     #[must_use]
     pub fn describe(&self) -> String {
+        self.describe_with(|at| format!("in {}s", at.saturating_sub(now_unix())))
+    }
+
+    /// [`describe`](Self::describe) with the deadline as a wall clock — "at 14:05 UTC" — rather
+    /// than a countdown, so the sentence only changes when the await does.
+    ///
+    /// For anything that re-reads it on a poll. The countdown changes every second, so a panel
+    /// polling it sees a changed record on every tick and redraws whatever shows it, however
+    /// still the wake itself is.
+    #[must_use]
+    pub fn describe_stable(&self) -> String {
+        self.describe_with(|at| format!("at {}", crate::llm::holds::clock(at)))
+    }
+
+    fn describe_with(&self, deadline: impl Fn(u64) -> String) -> String {
         let mut parts = Vec::new();
         if !self.events.is_empty() {
             let mut on = format!("on {}", self.events.join(", "));
@@ -214,10 +229,9 @@ impl Await {
             parts.push(on);
         }
         if let Some(at) = self.at {
-            let secs = at.saturating_sub(now_unix());
             parts.push(match self.every {
-                Some(every) => format!("in {secs}s, then every {every}s"),
-                None => format!("in {secs}s"),
+                Some(every) => format!("{}, then every {every}s", deadline(at)),
+                None => deadline(at),
             });
         }
         if parts.is_empty() {
@@ -1379,6 +1393,11 @@ mod tests {
             saved.describe().contains("then every 60s"),
             "{}",
             saved.describe()
+        );
+        let stable = saved.describe_stable();
+        assert!(
+            stable.contains(" UTC, then every 60s") && !stable.contains("in "),
+            "{stable}"
         );
 
         let guarded = register(

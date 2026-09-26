@@ -925,13 +925,12 @@ fn awaiting_hint(awaits: &[AgentAwait]) -> String {
 /// builder knowing about it.
 fn run_cell(col: &str, r: &AgentRunInfo, answerable: bool) -> AnyView {
     match col {
-        // A dot and a word (§6). The wake's sentence rides the tooltip — the same one the rail
-        // hangs on this conversation, so two surfaces never describe one state two ways.
+        // A dot and a word (§6), and no tooltip: what a waiting conversation is waiting for is the
+        // open chat's await bar to say.
         "Status" => {
-            let hint = awaiting_hint(&r.awaits);
             let word = run_status(answerable, r);
             view! {
-                <span class="adi-status" data-state=status_tone(word) title=hint>
+                <span class="adi-status" data-state=status_tone(word)>
                     <span class="adi-status__led"></span>
                     {word}
                 </span>
@@ -2256,8 +2255,7 @@ fn await_row(state: State, watch: AgentsWatch, a: AgentAwait) -> AnyView {
     } else {
         a.note.clone()
     };
-    // Both halves in the tooltip whichever one the row printed — the same sentence the rail and the
-    // All chats table hang on this conversation — and the check verbatim under them. A wake that is
+    // Both halves in the tooltip whichever one the row printed, and the check verbatim under them. A wake that is
     // not firing is nearly always a check that keeps saying "not yet", and the command is the whole
     // of what a person can act on; this is the one place with room to show it.
     let hint = match &a.check {
@@ -5790,20 +5788,7 @@ impl RowFace {
             .as_ref()
             .and_then(|run| run.caps.map(|caps| caps.answerable));
         let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
-        // What it is waiting on the world for. The row says *that* it is with the dot and the word
-        // beside it, and what for goes in the tooltip — the meta line's parts are all `shrink-0`
-        // inside an `overflow-hidden`, so a third one does not shrink to fit the rail, it clips
-        // mid-word.
         let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
-        // The tooltip is where there is room for the sentence, and it is the same sentence the All
-        // chats table hangs on its status cell — two surfaces showing one conversation should not
-        // describe it two ways.
-        let await_hint = run
-            .as_ref()
-            .map(|r| awaiting_hint(&r.awaits))
-            .filter(|hint| !hint.is_empty())
-            .map(|hint| format!("\n\n{hint}"))
-            .unwrap_or_default();
         // The row's own source, appended to its meta line whenever more than one is on screen at
         // once — always, not only for a remote row, so "local" reads as a fact about the row rather
         // than the absence of one (`docs/fleet.md` §13, multi-select). Not under a heading that
@@ -5838,13 +5823,12 @@ impl RowFace {
                 String::new(),
             ),
         };
-        // The tooltip names both, whatever the row prints: whichever of the two the browser keeps
-        // for itself, the other one is the way in, and here there is room to say so.
+        // The tooltip names both shortcuts, whatever the row prints: whichever of the two the
+        // browser keeps for itself, the other one is the way in. One line and nothing else — what
+        // a waiting conversation is waiting for is the open chat's to say, not a hover's.
         let hint = match hotkey {
-            Some(n) => {
-                format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}{await_hint}")
-            }
-            None => format!("open this session with {agent}{await_hint}"),
+            Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
+            None => format!("open this session with {agent}"),
         };
         // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
         // one thing the rail exists to answer is which of forty rows needs you — `running: false`
@@ -5873,8 +5857,8 @@ impl RowFace {
             adi_ui::SessionState::Waiting => "your answer",
             adi_ui::SessionState::Working => "working",
             // Not "awaiting", which names the mechanism; this says the thing the reader needs,
-            // which is that the conversation is not over. What it is actually waiting for is in
-            // the tooltip, where there is room for the sentence (`awaiting_hint`).
+            // which is that the conversation is not over. What it is actually waiting for is the
+            // open chat's await bar to say.
             adi_ui::SessionState::Awaiting => "coming back",
             adi_ui::SessionState::Done | adi_ui::SessionState::Error => "",
         };

@@ -1433,11 +1433,14 @@ fn awaits_of(store: &Agents, agent: &str, run_id: &str) -> Vec<AgentAwait> {
 /// One stored await as the wire sees it. `summary` is rendered here rather than on the client
 /// because [`describe`](adi_agents::awaits::Await::describe) is the store's own sentence for what a
 /// wake is waiting on, and a second copy of it in a browser would be a second copy to keep true.
+///
+/// The stable form, not the countdown: this rides every run record the panel polls, and a summary
+/// that changed each second made every waiting conversation's row redraw on every poll.
 fn agent_await(a: &adi_agents::awaits::Await) -> AgentAwait {
     AgentAwait {
         id: a.id.clone(),
         note: a.note.clone(),
-        summary: a.describe(),
+        summary: a.describe_stable(),
         events: a.events.clone(),
         at: a.at,
         every: a.every,
