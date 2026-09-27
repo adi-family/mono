@@ -61,7 +61,6 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   width: min(100%, var(--panel-w));
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
   background: var(--bg-side);
   border-left: 1px solid var(--line);
   color: var(--ink);
@@ -74,6 +73,12 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
     justify-content: space-between;
     padding: 0 var(--s2) 0 var(--s4);
     border-bottom: 1px solid var(--line);
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   &__title {

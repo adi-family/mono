@@ -59,80 +59,83 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
                     <Icon icon=Lucide::X size=IconSize::Md/>
                 </button>
             </header>
-
-            <section class="adi-new-sheet__section">
-                <h2 class="adi-new-sheet__label">"Background"</h2>
-                <div class="adi-segmented" role="group" aria-label="Appearance">
-                    {Appearance::ALL
-                        .into_iter()
-                        .map(|(a, label)| view! {
-                            <button
-                                class="adi-segmented__option"
-                                type="button"
-                                aria-pressed=move || {
-                                    (wall.choice.get().appearance == a).to_string()
-                                }
-                                on:click=move |_| wall.set(|c| c.appearance = a)
-                            >
-                                {label}
-                            </button>
-                        })
-                        .collect_view()}
-                </div>
-                <div class="adi-new-walls">
-                    {Preset::ALL
-                        .into_iter()
-                        .map(|p| {
-                            let on = move || {
-                                let c = wall.choice.get();
-                                c.kind == Kind::Preset && c.preset == p
-                            };
-                            view! {
+            // Only this scrolls: the header, and the way out in it, stays put however tall
+            // the section below grows.
+            <div class="adi-new-sheet__body">
+                <section class="adi-new-sheet__section">
+                    <h2 class="adi-new-sheet__label">"Background"</h2>
+                    <div class="adi-segmented" role="group" aria-label="Appearance">
+                        {Appearance::ALL
+                            .into_iter()
+                            .map(|(a, label)| view! {
                                 <button
-                                    class="adi-new-wall"
+                                    class="adi-segmented__option"
                                     type="button"
-                                    aria-pressed=move || on().to_string()
-                                    on:click=move |_| {
-                                        tab.set(None);
-                                        wall.set(|c| {
-                                            c.kind = Kind::Preset;
-                                            c.preset = p;
-                                        });
+                                    aria-pressed=move || {
+                                        (wall.choice.get().appearance == a).to_string()
                                     }
+                                    on:click=move |_| wall.set(|c| c.appearance = a)
                                 >
-                                    <span class="adi-new-wall__swatch" style=p.css()></span>
-                                    <span class="adi-new-wall__name">{p.name()}</span>
+                                    {label}
                                 </button>
-                            }
-                        })
-                        .collect_view()}
-                </div>
-            </section>
+                            })
+                            .collect_view()}
+                    </div>
+                    <div class="adi-new-walls">
+                        {Preset::ALL
+                            .into_iter()
+                            .map(|p| {
+                                let on = move || {
+                                    let c = wall.choice.get();
+                                    c.kind == Kind::Preset && c.preset == p
+                                };
+                                view! {
+                                    <button
+                                        class="adi-new-wall"
+                                        type="button"
+                                        aria-pressed=move || on().to_string()
+                                        on:click=move |_| {
+                                            tab.set(None);
+                                            wall.set(|c| {
+                                                c.kind = Kind::Preset;
+                                                c.preset = p;
+                                            });
+                                        }
+                                    >
+                                        <span class="adi-new-wall__swatch" style=p.css()></span>
+                                        <span class="adi-new-wall__name">{p.name()}</span>
+                                    </button>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                </section>
 
-            <section class="adi-new-sheet__section">
-                <h2 class="adi-new-sheet__label">"Custom"</h2>
-                <div class="adi-segmented" role="group" aria-label="Custom background">
-                    {CUSTOM
-                        .into_iter()
-                        .map(|(kind, label)| view! {
-                            <button
-                                class="adi-segmented__option"
-                                type="button"
-                                aria-pressed=move || (tab.get() == Some(kind)).to_string()
-                                on:click=move |_| pick_tab(kind)
-                            >
-                                {label}
-                            </button>
-                        })
-                        .collect_view()}
-                </div>
-                {move || match tab.get() {
-                    Some(Kind::Color) => color_editor(wall).into_any(),
-                    Some(Kind::Gradient) => gradient_editor(wall).into_any(),
-                    Some(Kind::Image) => image_editor(wall).into_any(),
-                    _ => ().into_any(),
-                }}
-            </section>
+                <section class="adi-new-sheet__section">
+                    <h2 class="adi-new-sheet__label">"Custom"</h2>
+                    <div class="adi-segmented" role="group" aria-label="Custom background">
+                        {CUSTOM
+                            .into_iter()
+                            .map(|(kind, label)| view! {
+                                <button
+                                    class="adi-segmented__option"
+                                    type="button"
+                                    aria-pressed=move || (tab.get() == Some(kind)).to_string()
+                                    on:click=move |_| pick_tab(kind)
+                                >
+                                    {label}
+                                </button>
+                            })
+                            .collect_view()}
+                    </div>
+                    {move || match tab.get() {
+                        Some(Kind::Color) => color_editor(wall).into_any(),
+                        Some(Kind::Gradient) => gradient_editor(wall).into_any(),
+                        Some(Kind::Image) => image_editor(wall).into_any(),
+                        _ => ().into_any(),
+                    }}
+                </section>
+            </div>
         </aside>
     }
 }
