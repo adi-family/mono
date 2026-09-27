@@ -7,7 +7,7 @@ use adi_ui::{Icon, IconSize, Lucide};
 use leptos::{ev, prelude::*};
 use wasm_bindgen::JsCast;
 
-use super::background::{Appearance, Kind, Preset, Wallpaper, is_hex};
+use super::background::{Appearance, Kind, MAX_BLUR, Preset, Wallpaper, is_hex};
 
 /// The custom kinds, in the order the segmented control shows them.
 const CUSTOM: [(Kind, &str); 3] = [
@@ -210,6 +210,37 @@ fn color_field(
     }
 }
 
+/// How soft the image is. The preview above it stays sharp: it is the picture as chosen, and a
+/// blur at thumbnail scale would not match what the screen shows anyway.
+fn blur_field(wall: Wallpaper) -> impl IntoView {
+    let blur = move || wall.choice.get().blur;
+    view! {
+        <label class="adi-new-field">
+            <span class="adi-new-field__label">"Blur"</span>
+            <span class="adi-new-field__value">
+                <input
+                    class="adi-new-range"
+                    type="range"
+                    min="0"
+                    max=MAX_BLUR.to_string()
+                    prop:value=move || blur().to_string()
+                    on:input=move |ev| {
+                        if let Ok(b) = event_target_value(&ev).parse::<u8>() {
+                            wall.set(|c| c.blur = b.min(MAX_BLUR));
+                        }
+                    }
+                />
+                <span class="adi-new-field__num">
+                    {move || match blur() {
+                        0 => "Off".to_owned(),
+                        b => format!("{b} px"),
+                    }}
+                </span>
+            </span>
+        </label>
+    }
+}
+
 /// An image from this device, kept on this device.
 fn image_editor(wall: Wallpaper) -> impl IntoView {
     let error = RwSignal::new(None::<&'static str>);
@@ -242,6 +273,7 @@ fn image_editor(wall: Wallpaper) -> impl IntoView {
                 style=format!("background-image: url(\"{url}\")")
             ></span>
         })}
+        {move || wall.image.get().is_some().then(|| blur_field(wall))}
         <div class="adi-new-sheet__actions">
             <label class="adi-btn" class:is-busy=move || busy.get()>
                 <Icon icon=Lucide::Upload size=IconSize::Md/>

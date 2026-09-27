@@ -110,7 +110,14 @@ pub(crate) fn NewUi() -> impl IntoView {
                 class="adi-new"
                 class:adi-new--grain=move || wall.grain()
                 style=move || wall.css()
-            ></div>
+            >
+                <Show when=move || wall.photo().is_some()>
+                    <div
+                        class="adi-new__photo"
+                        style=move || wall.photo().unwrap_or_default()
+                    ></div>
+                </Show>
+            </div>
             <Show when=move || path.get() == SETTINGS>
                 <settings::Sheet wall close=move || go("/")/>
             </Show>

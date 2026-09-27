@@ -28,6 +28,10 @@ const IMAGE_KEY: &str = "adi-new-ui-background-image";
 /// outgrowing the ~5 MB a browser gives one origin.
 const ENCODINGS: [(f64, f64); 3] = [(2560.0, 0.85), (2560.0, 0.7), (1920.0, 0.7)];
 
+/// The strongest blur an image takes, in CSS pixels. Past this a photo is a colour wash, which
+/// a gradient already does better.
+pub(super) const MAX_BLUR: u8 = 40;
+
 /// The wallpapers offered ready-made.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -136,6 +140,8 @@ pub(super) struct Choice {
     pub(super) to: String,
     /// Degrees, as CSS reads a `linear-gradient` angle: 0 runs bottom to top.
     pub(super) angle: u16,
+    /// How far an image is blurred, in CSS pixels; 0 is sharp.
+    pub(super) blur: u8,
 }
 
 impl Default for Choice {
@@ -150,6 +156,7 @@ impl Default for Choice {
             from: "#2A1B47".into(),
             to: "#B85A7E".into(),
             angle: 160,
+            blur: 0,
         }
     }
 }
@@ -232,14 +239,25 @@ impl Wallpaper {
             Kind::Gradient if is_hex(&c.from) && is_hex(&c.to) => {
                 format!("background: {}", eased(c.angle % 360, &c.from, &c.to))
             }
-            Kind::Image => match self.image.get() {
-                Some(url) => {
-                    format!("background: url(\"{url}\") center / cover no-repeat, var(--bg)")
-                }
-                None => c.preset.css(),
-            },
+            // The image itself is [`Self::photo`], a layer of its own so it can be blurred.
+            Kind::Image if self.image.get().is_some() => "background: var(--bg)".into(),
             _ => c.preset.css(),
         }
+    }
+
+    /// The inline style of the image layer, when an image is what is showing.
+    ///
+    /// A blur samples transparency beyond the element's edge, so a blurred layer the size of the
+    /// screen fades to `--bg` all round its border. It is grown past the screen by twice the
+    /// radius, and the screen clips it, so the edge the blur softens is never on screen.
+    pub(super) fn photo(self) -> Option<String> {
+        let c = self.choice.get();
+        let url = self.image.get().filter(|_| c.kind == Kind::Image)?;
+        let blur = c.blur.min(MAX_BLUR);
+        Some(format!(
+            "background-image: url(\"{url}\"); filter: blur({blur}px); inset: -{}px",
+            u16::from(blur) * 2
+        ))
     }
 
     /// Whether the grain goes over it — everything but a photo, which carries its own.

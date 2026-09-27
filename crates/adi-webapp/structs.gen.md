@@ -267,6 +267,7 @@ pub(super) struct Choice {
     pub(super) from: String,
     pub(super) to: String,
     pub(super) angle: u16,
+    pub(super) blur: u8,
 }
 ```
 

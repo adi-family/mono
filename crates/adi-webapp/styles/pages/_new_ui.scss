@@ -26,7 +26,16 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 .adi-new {
   position: fixed;
   inset: 0;
+  overflow: hidden;
   background: var(--bg);
+
+  // The chosen image; its blur and how far it overhangs the screen arrive inline.
+  &__photo {
+    position: absolute;
+    background-position: center;
+    background-size: cover;
+    background-repeat: no-repeat;
+  }
 
   // Grain, faint enough not to read as texture: 8 bits per channel cannot draw a slow gradient
   // across a wide screen without steps, and noise breaks those steps up. Not over a photo, which
