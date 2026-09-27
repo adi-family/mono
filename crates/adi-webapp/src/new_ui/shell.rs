@@ -9,7 +9,8 @@ use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::windows::{Desk, Win};
-use crate::{fetch, live, ui};
+use super::sources::Sources;
+use crate::{live, ui};
 
 const KEY: &str = "adi-new-ui-layout";
 
@@ -20,10 +21,6 @@ pub(super) const TOP_BAR_H: f64 = 28.0;
 /// How often the top bar looks at the time and the connection. Once a second: the socket opens a
 /// moment after the page does, and a slower look would say "not connected" for that long.
 const CLOCK_TICK_MS: u32 = 1_000;
-
-/// How often the paired machines are counted again. A machine coming up is not urgent news, and
-/// every count is a request to the stack.
-const SOURCES_TICK_MS: u32 = 30_000;
 
 /// An edge of the screen.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -108,8 +105,6 @@ pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl Into
     let now = RwSignal::new(clock());
     let stack = RwSignal::new(false);
     let online = RwSignal::new(window().navigator().on_line());
-    // `(active, paired)`, once the fleet has answered.
-    let sources = RwSignal::new(None::<(usize, usize)>);
 
     // The live channel's state is read here, from a timer, and never from the view. The flag in
     // `live` is a signal made on first read and owned by whatever reactive scope is current at
@@ -132,26 +127,13 @@ pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl Into
         std::time::Duration::from_millis(CLOCK_TICK_MS.into()),
     );
 
-    let count = move || {
-        leptos::task::spawn_local(async move {
-            if let Ok(fleet) = fetch::fleet().await {
-                let active = fleet.nodes.iter().filter(|n| n.active).count();
-                sources.set(Some((active, fleet.nodes.len())));
-            }
-        });
-    };
-    count();
-    let recount = set_interval_with_handle(
-        count,
-        std::time::Duration::from_millis(SOURCES_TICK_MS.into()),
-    );
 
     // The browser says when the network comes and goes; asking it on a timer would only lag.
     let went_on = window_event_listener(leptos::ev::online, move |_| online.set(true));
     let went_off = window_event_listener(leptos::ev::offline, move |_| online.set(false));
 
     on_cleanup(move || {
-        for t in [tick, recount].into_iter().flatten() {
+        if let Ok(t) = tick {
             t.clear();
         }
         went_on.remove();
@@ -171,17 +153,7 @@ pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl Into
                 <Mark class="adi-new-top__mark"/>
             </button>
             <span class="adi-new-top__spacer"></span>
-            {move || sources.get().map(|(active, paired)| {
-                let label = format!("{active} of {paired} paired machines active now");
-                view! {
-                    <span class="adi-new-top__status" title=label.clone() aria-label=label>
-                        <Icon icon=Lucide::Network size=IconSize::Sm/>
-                        <span class="adi-new-top__count">
-                            {active}<span class="adi-new-top__of">"/"{paired}</span>
-                        </span>
-                    </span>
-                }
-            })}
+            <Sources light=light/>
             {move || status(
                 stack.get(),
                 (Lucide::Plug, "Connected to the stack"),

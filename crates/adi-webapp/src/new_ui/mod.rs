@@ -13,16 +13,17 @@
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
 //! What it draws so far: a wallpaper ([`background`]), the windows open over it ([`windows`] —
-//! so far only [`settings`], at `/settings`), the top bar and island ([`shell`]), and the `⌘K`
-//! palette ([`palette`]). A window's
-//! address is only a place inside this document: every path that is not one of `main`'s other
-//! doors mounts this screen, and [`windows::Desk`] reads the path itself.
+//! so far only [`settings`], at `/settings`), the top bar and island ([`shell`], with the
+//! paired machines' list in [`sources`]), and the `⌘K` palette ([`palette`]). A window's address
+//! is only a place inside this document: every path that is not one of `main`'s other doors
+//! mounts this screen, and [`windows::Desk`] reads the path itself.
 
 mod about;
 mod background;
 mod palette;
 mod settings;
 mod shell;
+mod sources;
 mod windows;
 
 use adi_ui::Lucide;

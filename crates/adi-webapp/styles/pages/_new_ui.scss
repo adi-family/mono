@@ -488,6 +488,21 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     &.is-off { color: var(--warn); }
   }
 
+  // The count is a button: it opens the list of the machines it counts.
+  &__sources {
+    height: 22px;
+    margin-right: 0;
+    padding: 0 6px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    font: inherit;
+    cursor: pointer;
+
+    &:hover, &.is-open { background: var(--chip-hover); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  }
+
   &__count { font-weight: 500; color: var(--ink); }
   &__of { color: var(--ink-3); font-weight: 400; }
 
@@ -506,6 +521,106 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
   &__time { font-weight: 600; }
   &__date { color: var(--ink-2); }
+}
+
+// ---- top bar drop-down (`sources.rs`) -------------------------------------------------------
+// What a menu-bar extra opens: the palette's floating surface, hung under the item that opened
+// it (`top`/`right` inline). Under the palette (40/41), so `⌘K` still lands on top of it.
+.adi-new-drop-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 38;
+}
+
+.adi-new-drop {
+  position: fixed;
+  z-index: 39;
+  width: 280px;
+  max-height: calc(100vh - #{$top-bar-h} - var(--s8));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--s1);
+  color: var(--ink);
+  font-size: var(--fs-small);
+  background: color-mix(in srgb, var(--bg-side) 72%, transparent);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow-float);
+  outline: none;
+
+  &__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    padding: 6px var(--s2) var(--s1);
+  }
+
+  &__title { font-weight: 600; }
+
+  &__meta {
+    margin-left: auto;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+
+  &__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    overflow-y: auto;
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    height: 28px;
+    padding: 0 var(--s2);
+    border-radius: var(--r-row-float);
+
+    &:hover { background: var(--btn-hover); }
+  }
+
+  &__dot {
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--ink-3);
+
+    &.is-on { background: var(--ok); }
+  }
+
+  &__name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  &__seen {
+    flex: none;
+    margin-left: auto;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+
+  &__empty {
+    margin: 0;
+    padding: var(--s3) var(--s2);
+    color: var(--ink-3);
+  }
+
+  &__note {
+    margin: var(--s1) 0 0;
+    padding: var(--s2) var(--s2) 6px;
+    border-top: 1px solid var(--line);
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
 }
 
 // ---- island ---------------------------------------------------------------------------------
