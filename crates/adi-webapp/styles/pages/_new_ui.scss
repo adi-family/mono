@@ -400,3 +400,144 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
     font: inherit;
   }
 }
+
+// ---- top bar --------------------------------------------------------------------------------
+// iOS's status bar, macOS's menu bar: a thin strip across the top, translucent over the
+// wallpaper. Above the windows (35), as the menu bar is.
+$top-bar-h: 28px;
+
+.adi-new-top {
+  position: fixed;
+  z-index: 35;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: $top-bar-h;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: 0 var(--s4);
+  color: var(--ink);
+  font-size: var(--fs-small);
+  background: color-mix(in srgb, var(--bg-side) 40%, transparent);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  user-select: none;
+
+  &__time { font-weight: 600; }
+  &__date { color: var(--ink-2); }
+  &__spacer { flex: 1; }
+
+  &__status {
+    display: grid;
+    place-items: center;
+    color: var(--ink-2);
+  }
+}
+
+// ---- island ---------------------------------------------------------------------------------
+// A floating dock on the edge the layout names (`data-edge`), clear of the edge by a gap and —
+// on the top edge — of the top bar too.
+$island-gap: var(--s2);
+
+.adi-new-island {
+  position: fixed;
+  z-index: 35;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--bg-side) 72%, transparent);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  box-shadow: var(--shadow-float);
+
+  &[data-edge="bottom"],
+  &[data-edge="top"] {
+    left: 50%;
+    transform: translateX(-50%);
+    flex-direction: row;
+  }
+  &[data-edge="bottom"] { bottom: $island-gap; }
+  &[data-edge="top"] { top: $island-gap; }
+  &[data-edge="top"].under-top-bar { top: calc(#{$top-bar-h} + #{$island-gap}); }
+
+  &[data-edge="left"],
+  &[data-edge="right"] {
+    top: 50%;
+    transform: translateY(-50%);
+    flex-direction: column;
+  }
+  &[data-edge="left"] { left: $island-gap; }
+  &[data-edge="right"] { right: $island-gap; }
+
+  &__item {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 12px;
+    background: var(--chip);
+    color: var(--ink);
+    cursor: pointer;
+    transition: background var(--transition);
+
+    &:hover { background: var(--btn-hover); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+    // An open window's dot, on the side of the item facing the screen's middle.
+    &.is-open::after {
+      content: "";
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--ink-2);
+    }
+  }
+
+  &[data-edge="bottom"] &__item.is-open::after { bottom: -5px; left: calc(50% - 2px); }
+  &[data-edge="top"] &__item.is-open::after { top: -5px; left: calc(50% - 2px); }
+  &[data-edge="left"] &__item.is-open::after { left: -5px; top: calc(50% - 2px); }
+  &[data-edge="right"] &__item.is-open::after { right: -5px; top: calc(50% - 2px); }
+}
+
+// ---- switch ---------------------------------------------------------------------------------
+// iOS's on/off switch. On is ink, not green and not orange: it is a preference, not a state
+// to celebrate.
+.adi-new-switch {
+  position: relative;
+  justify-self: start;
+  width: 36px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: var(--btn-hover);
+  cursor: pointer;
+  transition: background var(--transition);
+
+  &::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--ink);
+    transition: transform var(--transition);
+  }
+
+  &[aria-checked="true"] {
+    background: var(--ink-2);
+
+    &::after { transform: translateX(14px); background: var(--bg); }
+  }
+
+  &:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+}

@@ -13,13 +13,15 @@
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
 //! What it draws so far: a wallpaper ([`background`]), the windows open over it ([`windows`] —
-//! so far only [`settings`], at `/settings`), and the `⌘K` palette ([`palette`]). A window's
+//! so far only [`settings`], at `/settings`), the top bar and island ([`shell`]), and the `⌘K`
+//! palette ([`palette`]). A window's
 //! address is only a place inside this document: every path that is not one of `main`'s other
 //! doors mounts this screen, and [`windows::Desk`] reads the path itself.
 
 mod background;
 mod palette;
 mod settings;
+mod shell;
 mod windows;
 
 use adi_ui::Lucide;
@@ -29,6 +31,7 @@ use crate::launcher::Action;
 use crate::{icons, routing, ui};
 use background::Appearance;
 use palette::Item;
+use shell::{Island, Shell, TopBar};
 use windows::{Desk, Frame, Win};
 
 /// Where the choice is remembered.
@@ -135,12 +138,15 @@ fn is_light(a: Appearance) -> bool {
     }
 }
 
-/// The new root screen: the wallpaper, whichever windows are open on it, and the `⌘K` palette —
+/// The new root screen: the wallpaper, whichever windows are open on it, the top bar and island,
+/// and the `⌘K` palette —
 /// which draws nothing until pressed, and always carries the way back out.
 #[component]
 pub(crate) fn NewUi() -> impl IntoView {
     let wall = background::Wallpaper::load();
     let desk = Desk::load();
+    let shell = Shell::load();
+    let palette_open = RwSignal::new(false);
 
     // Back and forward change the address without a reload; the window it names comes forward.
     let pop = window_event_listener(ev::popstate, move |_| desk.arrive(&routing::current_path()));
@@ -189,13 +195,17 @@ pub(crate) fn NewUi() -> impl IntoView {
                     <Show when=move || desk.is_open(w)>
                         <Frame win=w desk light=light>
                             {match w {
-                                Win::Settings => view! { <settings::Settings wall/> },
+                                Win::Settings => view! { <settings::Settings wall shell/> },
                             }}
                         </Frame>
                     </Show>
                 })
                 .collect_view()}
         </div>
-        <palette::Palette items=move || commands(wall, desk) light=light/>
+        <Show when=move || shell.layout.get().top_bar>
+            <TopBar light=light/>
+        </Show>
+        <Island shell desk palette=palette_open light=light/>
+        <palette::Palette items=move || commands(wall, desk) light=light open=palette_open/>
     }
 }

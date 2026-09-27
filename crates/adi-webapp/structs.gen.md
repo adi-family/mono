@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-83 structs · 27 enums · 5 type aliases across 36 files.
+85 structs · 28 enums · 5 type aliases across 37 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
+- [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -300,6 +301,50 @@ pub(super) struct Item {
     subtitle: &'static str,
     icon: Lucide,
     run: Callback<()>,
+}
+```
+
+---
+
+## `src/new_ui/shell.rs`
+
+### enum `Edge`
+
+An edge of the screen.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Edge {
+    Top,
+    Left,
+    #[default]
+    Bottom,
+    Right,
+}
+```
+
+### struct `Layout`
+
+Where the chrome goes.
+
+```rust
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct Layout {
+    pub(super) island: Edge,
+    pub(super) top_bar: bool,
+}
+```
+
+### struct `Shell`
+
+The layout's live state, shared by the screen and the settings window.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Shell {
+    pub(super) layout: RwSignal<Layout>,
 }
 ```
 

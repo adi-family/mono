@@ -51,13 +51,14 @@ impl Item {
 ///
 /// `items` is called every time the list is drawn, so rows can say what is true right now —
 /// which appearance is not the current one. `light` puts the panel in the light token set
-/// (`.light` in `design/tokens.css`), to sit on a light wallpaper.
+/// (`.light` in `design/tokens.css`), to sit on a light wallpaper. `open` is the caller's, so
+/// something besides `⌘K` — the island's search button — can open it too.
 #[component]
 pub(super) fn Palette(
     items: impl Fn() -> Vec<Item> + Copy + Send + Sync + 'static,
     #[prop(into)] light: Signal<bool>,
+    open: RwSignal<bool>,
 ) -> impl IntoView {
-    let open = RwSignal::new(false);
     let query = RwSignal::new(String::new());
     let cursor = RwSignal::new(0usize);
     let field: NodeRef<html::Input> = NodeRef::new();
@@ -74,15 +75,19 @@ pub(super) fn Palette(
             return;
         }
         ev.prevent_default();
-        if open.get_untracked() {
-            open.set(false);
-        } else {
-            query.set(String::new());
-            cursor.set(0);
-            open.set(true);
-        }
+        open.update(|o| *o = !*o);
     });
     on_cleanup(move || keys.remove());
+
+    // Every opening starts from a clean slate — no filter, first row — however it was opened.
+    Effect::new(move |was: Option<bool>| {
+        let now = open.get();
+        if now && was != Some(true) {
+            query.set(String::new());
+            cursor.set(0);
+        }
+        now
+    });
 
     Effect::new(move |_| {
         if open.get()

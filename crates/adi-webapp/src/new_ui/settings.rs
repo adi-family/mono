@@ -1,13 +1,14 @@
 //! The settings window's contents, at `/settings`. The window itself — title bar, drag, close —
 //! is [`super::windows::Frame`]'s; this is what goes in it.
 //!
-//! Background is its only section for now.
+//! Two sections: the background, and the layout of the chrome over it.
 
 use adi_ui::{Icon, IconSize, Lucide};
 use leptos::{ev, prelude::*};
 use wasm_bindgen::JsCast;
 
 use super::background::{Appearance, Kind, MAX_BLUR, Preset, Wallpaper, is_hex};
+use super::shell::{Edge, Shell};
 
 /// The custom kinds, in the order the segmented control shows them.
 const CUSTOM: [(Kind, &str); 3] = [
@@ -17,7 +18,7 @@ const CUSTOM: [(Kind, &str); 3] = [
 ];
 
 #[component]
-pub(super) fn Settings(wall: Wallpaper) -> impl IntoView {
+pub(super) fn Settings(wall: Wallpaper, shell: Shell) -> impl IntoView {
     // Which custom editor is open. Not the same as what is showing: opening Image before there
     // is one must not swap the wallpaper for nothing.
     let tab = RwSignal::new({
@@ -33,6 +34,7 @@ pub(super) fn Settings(wall: Wallpaper) -> impl IntoView {
     };
 
     view! {
+        {layout_section(shell)}
         <section class="adi-new-win__section">
             <h2 class="adi-new-win__label">"Background"</h2>
             <div class="adi-segmented" role="group" aria-label="Appearance">
@@ -105,6 +107,45 @@ pub(super) fn Settings(wall: Wallpaper) -> impl IntoView {
                 Some(Kind::Image) => image_editor(wall).into_any(),
                 _ => ().into_any(),
             }}
+        </section>
+    }
+}
+
+/// Where the island sits, and whether the top bar is drawn.
+fn layout_section(shell: Shell) -> impl IntoView {
+    let top_bar = move || shell.layout.get().top_bar;
+    view! {
+        <section class="adi-new-win__section">
+            <h2 class="adi-new-win__label">"Layout"</h2>
+            <div class="adi-new-field">
+                <span class="adi-new-field__label">"Island"</span>
+                <div class="adi-segmented" role="group" aria-label="Island position">
+                    {Edge::ALL
+                        .into_iter()
+                        .map(|(e, label)| view! {
+                            <button
+                                class="adi-segmented__option"
+                                type="button"
+                                aria-pressed=move || (shell.layout.get().island == e).to_string()
+                                on:click=move |_| shell.set(|l| l.island = e)
+                            >
+                                {label}
+                            </button>
+                        })
+                        .collect_view()}
+                </div>
+            </div>
+            <div class="adi-new-field">
+                <span class="adi-new-field__label" id="adi-new-top-bar">"Top bar"</span>
+                <button
+                    class="adi-new-switch"
+                    type="button"
+                    role="switch"
+                    aria-labelledby="adi-new-top-bar"
+                    aria-checked=move || top_bar().to_string()
+                    on:click=move |_| shell.set(|l| l.top_bar = !l.top_bar)
+                ></button>
+            </div>
         </section>
     }
 }

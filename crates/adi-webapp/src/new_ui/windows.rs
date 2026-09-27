@@ -23,8 +23,9 @@ const OPEN_KEY: &str = "adi-new-ui-windows";
 const KEEP_VISIBLE: f64 = 96.0;
 const TITLEBAR: f64 = 40.0;
 
-/// The stacking order the windows start from — under the palette, which sits at 40.
-const Z_BASE: usize = 30;
+/// The stacking order the windows start from — under the top bar and the island (35), as a
+/// window slides under macOS's menu bar and dock, and under the palette (40).
+const Z_BASE: usize = 10;
 
 /// A window the new UI can open.
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
