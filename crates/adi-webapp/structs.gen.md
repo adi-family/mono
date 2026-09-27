@@ -377,12 +377,13 @@ pub(super) struct Shell {
 
 ### struct `Target`
 
-A row's menu: which node, and where it was opened.
+A row's menu: which node, where it was opened, and — for a viewer — the grants disconnecting it takes away. `None` is a source, which is disconnected by unpairing.
 
 ```rust
 #[derive(Clone)]
 struct Target {
     node: String,
+    grants: Option<Vec<String>>,
     x: f64,
     y: f64,
 }
@@ -398,6 +399,7 @@ struct Row {
     called: Option<String>,
     tone: &'static str,
     state: String,
+    grants: Option<Vec<String>>,
 }
 ```
 

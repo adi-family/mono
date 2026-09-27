@@ -6,9 +6,11 @@
 //! * **Viewers** — the machines that may read this one: every node granted something here, and
 //!   whether it has lately (`FleetNode::active`, a request in within the last minute).
 //!
-//! Either row disconnects on a right click, or from the `⋯` it shows on hover: that **unpairs** the
-//! node, by the operator's decision — in both lists the same act, since a pairing is one record
-//! that both directions hang off. It asks first, because only a new invite undoes it.
+//! Either row disconnects on a right click, or from the `⋯` it shows on hover — and what that
+//! cuts is the row's own direction, by the operator's decision. A **viewer** loses its grants
+//! here, so it can no longer read this machine but stays paired and stays a source. A **source**
+//! is unpaired outright, since this machine reading it needs nothing but the pairing. Both ask
+//! first: a pairing comes back only with a new invite, and grants only from the fleet settings.
 //!
 //! Two lists because they are two questions. A node can be reachable and never have called in, or
 //! have called in a minute ago and be asleep now; one "active" for both said neither.
@@ -32,10 +34,12 @@ const DROP_GAP: f64 = 4.0;
 /// edge is pulled back onto the screen.
 const MENU_W: f64 = 264.0;
 
-/// A row's menu: which node, and where it was opened.
+/// A row's menu: which node, where it was opened, and — for a viewer — the grants disconnecting
+/// it takes away. `None` is a source, which is disconnected by unpairing.
 #[derive(Clone)]
 struct Target {
     node: String,
+    grants: Option<Vec<String>>,
     x: f64,
     y: f64,
 }
@@ -103,17 +107,23 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         failed.set(None);
     };
 
-    let disconnect = move |node: String| {
+    let disconnect = move |node: String, grants: Option<Vec<String>>| {
         busy.set(true);
         leptos::task::spawn_local(async move {
-            match fetch::fleet_unpair(node.clone()).await {
-                Ok(fleet) => {
-                    nodes.set(Some(fleet.nodes));
+            let done = match grants {
+                Some(grants) => revoke_all(&node, grants).await,
+                None => fetch::fleet_unpair(node.clone()).await.map(|fleet| {
                     reach.update(|r| {
                         if let Some(r) = r {
                             r.remove(&node);
                         }
                     });
+                    fleet
+                }),
+            };
+            match done {
+                Ok(fleet) => {
+                    nodes.set(Some(fleet.nodes));
                     close_menu();
                 }
                 Err(e) => failed.set(Some(e)),
@@ -150,7 +160,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     };
 
     let menu_view = move || {
-        let Target { node, x, y } = menu.get()?;
+        let Target { node, grants, x, y } = menu.get()?;
         let width = window()
             .inner_width()
             .ok()
@@ -159,11 +169,26 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         let left = x.min(width - MENU_W - 8.0).max(8.0);
         let style = format!("left: {left}px; top: {y}px");
         let body = if confirming.get() {
-            let name = node.clone();
+            let (name, taking) = (node.clone(), grants.clone());
+            let question = match &grants {
+                Some(grants) => view! {
+                    <p class="adi-new-menu__text">
+                        "Stop "<strong>{node.clone()}</strong>" viewing this machine? It stays "
+                        "paired, and this machine can still read it. Removes "
+                        {grants.iter().map(|g| view! { <code>{g.clone()}</code>" " }).collect_view()}
+                    </p>
+                }
+                .into_any(),
+                None => view! {
+                    <p class="adi-new-menu__text">
+                        "Disconnect "<strong>{node.clone()}</strong>"? This unpairs it: neither "
+                        "machine can reach the other until you pair them again."
+                    </p>
+                }
+                .into_any(),
+            };
             view! {
-                <p class="adi-new-menu__text">
-                    "Disconnect "<strong>{node.clone()}</strong>"? This unpairs it: neither                     machine can reach the other until you pair them again."
-                </p>
+                {question}
                 {move || failed.get().map(|e| view! { <p class="adi-new-menu__error">{e}</p> })}
                 <div class="adi-new-menu__actions">
                     <button class="adi-new-menu__btn" type="button" on:click=move |_| close_menu()>
@@ -173,7 +198,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         class="adi-new-menu__btn adi-new-menu__btn--danger"
                         type="button"
                         disabled=move || busy.get()
-                        on:click=move |_| disconnect(name.clone())
+                        on:click=move |_| disconnect(name.clone(), taking.clone())
                     >
                         "Disconnect"
                     </button>
@@ -311,6 +336,8 @@ struct Row {
     /// `on`, `warn`, `err` or `off` — the dot's colour.
     tone: &'static str,
     state: String,
+    /// A viewer's grants here, which its Disconnect revokes; `None` on a source.
+    grants: Option<Vec<String>>,
 }
 
 impl Row {
@@ -320,6 +347,7 @@ impl Row {
             called: (n.nickname != n.petname).then(|| format!("Calls itself {}", n.nickname)),
             tone,
             state,
+            grants: None,
         }
     }
 }
@@ -341,18 +369,21 @@ fn section(
                 {rows
                     .into_iter()
                     .map(|r| {
-                        let (on_right, on_more) = (r.name.clone(), r.name.clone());
+                        let target = {
+                            let (node, grants) = (r.name.clone(), r.grants.clone());
+                            move |x, y| Target { node: node.clone(), grants: grants.clone(), x, y }
+                        };
+                        let on_more = target.clone();
                         view! {
                             <li
                                 class="adi-new-drop__row"
                                 title=r.called
                                 on:contextmenu=move |ev: ev::MouseEvent| {
                                     ev.prevent_default();
-                                    menu.set(Some(Target {
-                                        node: on_right.clone(),
-                                        x: f64::from(ev.client_x()),
-                                        y: f64::from(ev.client_y()),
-                                    }));
+                                    menu.set(Some(target(
+                                        f64::from(ev.client_x()),
+                                        f64::from(ev.client_y()),
+                                    )));
                                 }
                             >
                                 <span class="adi-new-drop__dot" data-tone=r.tone></span>
@@ -371,11 +402,7 @@ fn section(
                                             return;
                                         };
                                         let b = el.get_bounding_client_rect();
-                                        menu.set(Some(Target {
-                                            node: on_more.clone(),
-                                            x: b.left(),
-                                            y: b.bottom() + DROP_GAP,
-                                        }));
+                                        menu.set(Some(on_more(b.left(), b.bottom() + DROP_GAP)));
                                     }
                                 >
                                     <Icon icon=Lucide::Ellipsis size=IconSize::Sm/>
@@ -439,10 +466,28 @@ fn viewers(nodes: &[FleetNode], menu: RwSignal<Option<Target>>) -> impl IntoView
         .into_iter()
         .map(|n| {
             let tone = if n.active { "on" } else { "off" };
-            Row::new(n, tone, seen(n.active, n.last_seen, now))
+            Row {
+                grants: Some(n.grants.clone()),
+                ..Row::new(n, tone, seen(n.active, n.last_seen, now))
+            }
         })
         .collect();
     Some(section("Viewers", format!("{connected} connected"), rows, menu))
+}
+
+/// Take every grant a node holds here, one call each; the fleet as the last one left it.
+async fn revoke_all(
+    node: &str,
+    grants: Vec<String>,
+) -> Result<adi_webapp_api::types::FleetState, String> {
+    let mut fleet = None;
+    for grant in grants {
+        fleet = Some(fetch::fleet_revoke(node.to_string(), grant).await?);
+    }
+    match fleet {
+        Some(fleet) => Ok(fleet),
+        None => fetch::fleet().await,
+    }
 }
 
 /// A viewer's state as a person reads it: `Connected now`, `Seen 3d ago`, `Never connected`.
