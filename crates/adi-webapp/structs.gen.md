@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-90 structs · 29 enums · 5 type aliases across 39 files.
+89 structs · 29 enums · 5 type aliases across 39 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/sources.rs`](#srcnew_uisourcesrs) — `Role`, `Target`, `Row`
+- [`src/new_ui/sources.rs`](#srcnew_uisourcesrs) — `Role`, `Target`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -377,7 +377,7 @@ pub(super) struct Shell {
 
 ### enum `Role`
 
-Which list a row is in — which direction its Disconnect cuts.
+One of the two things a pairing can carry — which one a menu item takes away.
 
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -389,33 +389,17 @@ enum Role {
 
 ### struct `Target`
 
-A row's menu: which node, from which list, and where it was opened.
+A row's menu: which device, what it can do now, and where the menu was opened.
 
 ```rust
 #[derive(Clone)]
 struct Target {
     node: String,
-    role: Role,
     grants: Vec<String>,
-    keeps: bool,
+    can_view: bool,
+    viewable: bool,
     x: f64,
     y: f64,
-}
-```
-
-### struct `Row`
-
-One row: a dot for its state, the machine's name, and the state in words.
-
-```rust
-struct Row {
-    name: String,
-    called: Option<String>,
-    tone: &'static str,
-    state: String,
-    role: Role,
-    grants: Vec<String>,
-    keeps: bool,
 }
 ```
 

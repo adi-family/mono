@@ -586,6 +586,45 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     &:hover { background: var(--chip); }
   }
 
+  // A device: its name and reachability on the first line, what it can do on the second.
+  &__row--device {
+    align-items: flex-start;
+    height: auto;
+    padding: 7px var(--s3);
+  }
+  &__row--device &__dot { margin-top: 7px; }
+  &__row--device &__more { top: 7px; }
+
+  &__text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+  }
+
+  &__can {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s1);
+  }
+
+  // §6 tag: sans 12px on a pill of the chip fill.
+  &__tag {
+    padding: 1px var(--s2);
+    border-radius: var(--r-pill);
+    background: var(--chip);
+    font-size: var(--fs-label);
+    color: var(--ink-2);
+    white-space: nowrap;
+  }
+
   &__dot {
     flex: none;
     width: 6px;

@@ -1,19 +1,15 @@
-//! The top bar's paired machines, in both directions, dropped down under a count the way a macOS
-//! menu-bar extra drops its menu.
+//! The top bar's devices: every machine paired with this one, how many answer right now — and, on
+//! a click, each one with what it can do, dropped down under the count the way a macOS menu-bar
+//! extra drops its menu.
 //!
-//! * **Sources** — the machines this one reads from: every paired node it has not dropped
-//!   (`FleetNode::source`), and whether a dial to it connects right now (`GET /api/fleet/reach`).
-//!   The count in the bar is these.
-//! * **Viewers** — the machines that may read this one: every node granted something here, and
-//!   whether it has lately (`FleetNode::active`, a request in within the last minute).
+//! Told from the device's side, by the operator's direction: one row per device, its reachability
+//! (`GET /api/fleet/reach`) on the dot, and under its name, as tags, the two things a pairing can
+//! carry —
+//! **can view this machine** (it holds grants here; `FleetNode::active` says it did within the
+//! last minute) and **viewable from here** (this machine reads it; `FleetNode::source`).
 //!
-//! Either row disconnects on a right click, or from the `⋯` it shows on hover — and what that
-//! cuts is the row's own direction only, by the operator's decision: a dropped **source** is no
-//! longer read from here (and its password is forgotten), a dropped **viewer** loses its grants
-//! here. The pairing goes only when neither direction is left. Both ask first, saying which.
-//!
-//! Two lists because they are two questions. A node can be reachable and never have called in, or
-//! have called in a minute ago and be asleep now; one "active" for both said neither.
+//! Each of those is taken away on its own from the row's menu — a right click, or the `⋯` it shows
+//! on hover. The pairing goes only when neither is left, and the confirmation says when it will.
 
 use adi_ui::{Icon, IconSize, Lucide};
 use std::collections::HashMap;
@@ -34,24 +30,38 @@ const DROP_GAP: f64 = 4.0;
 /// edge is pulled back onto the screen.
 const MENU_W: f64 = 264.0;
 
-/// Which list a row is in — which direction its Disconnect cuts.
+/// One of the two things a pairing can carry — which one a menu item takes away.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Role {
+    /// This machine reads the device.
     Source,
+    /// The device reads this machine.
     Viewer,
 }
 
-/// A row's menu: which node, from which list, and where it was opened.
+/// A row's menu: which device, what it can do now, and where the menu was opened.
 #[derive(Clone)]
 struct Target {
     node: String,
-    role: Role,
-    /// The node's grants here — what dropping it as a viewer takes away.
+    /// Its grants here — what "stop it viewing this machine" takes away.
     grants: Vec<String>,
-    /// Whether the other direction survives the drop; when it does not, the drop unpairs.
-    keeps: bool,
+    can_view: bool,
+    viewable: bool,
     x: f64,
     y: f64,
+}
+
+impl Target {
+    fn new(n: &FleetNode, x: f64, y: f64) -> Self {
+        Self {
+            node: n.petname.clone(),
+            grants: n.grants.clone(),
+            can_view: !n.grants.is_empty(),
+            viewable: n.source,
+            x,
+            y,
+        }
+    }
 }
 
 /// The count in the top bar and the list it opens.
@@ -67,8 +77,9 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     let panel: NodeRef<html::Div> = NodeRef::new();
     let menu = RwSignal::new(None::<Target>);
     let menu_el: NodeRef<html::Div> = NodeRef::new();
-    // The menu's second step — "are you sure" — and what the unpair call last said, if it failed.
-    let confirming = RwSignal::new(false);
+    // The menu's second step — "are you sure", about which of the two — and what the call last
+    // said, if it failed.
+    let confirming = RwSignal::new(None::<Role>);
     let failed = RwSignal::new(None::<String>);
     let busy = RwSignal::new(false);
 
@@ -113,7 +124,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
 
     let close_menu = move || {
         menu.set(None);
-        confirming.set(false);
+        confirming.set(None);
         failed.set(None);
     };
 
@@ -152,29 +163,22 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         open.set(true);
     };
 
-    // `(reachable, sources)`; the first is `None` until the dials are back.
+    // `(reachable, devices)`; the first is `None` until the dials are back.
     let counts = move || {
-        let sources: Vec<String> = nodes.with(|n| {
-            n.as_ref()
-                .map(|n| n.iter().filter(|n| n.source).map(|n| n.petname.clone()).collect())
-        })?;
+        let devices = nodes.with(|n| n.as_ref().map(Vec::len))?;
         let up = reach.with(|r| {
-            r.as_ref().map(|r| {
-                sources
-                    .iter()
-                    .filter(|p| r.get(*p) == Some(&Reach::Reachable))
-                    .count()
-            })
+            r.as_ref()
+                .map(|r| r.values().filter(|r| **r == Reach::Reachable).count())
         });
-        Some((up, sources.len()))
+        Some((up, devices))
     };
 
     let menu_view = move || {
         let Target {
             node,
-            role,
             grants,
-            keeps,
+            can_view,
+            viewable,
             x,
             y,
         } = menu.get()?;
@@ -185,70 +189,91 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
             .unwrap_or_default();
         let left = x.min(width - MENU_W - 8.0).max(8.0);
         let style = format!("left: {left}px; top: {y}px");
-        let body = if confirming.get() {
-            let name = node.clone();
-            let question = match (role, keeps) {
-                (Role::Source, true) => view! {
-                    <p class="adi-new-menu__text">
-                        "Stop reading "<strong>{node.clone()}</strong>"? It stays paired and can "
-                        "still view this machine. This machine forgets its password for it."
-                    </p>
-                }
-                .into_any(),
-                (Role::Viewer, true) => view! {
-                    <p class="adi-new-menu__text">
-                        "Stop "<strong>{node.clone()}</strong>" viewing this machine? It stays "
-                        "paired, and this machine can still read it. Removes "
-                        {grants.iter().map(|g| view! { <code>{g.clone()}</code>" " }).collect_view()}
-                    </p>
-                }
-                .into_any(),
-                (_, false) => {
-                    let other = if role == Role::Source {
-                        "viewing this machine"
-                    } else {
-                        "a source"
-                    };
-                    view! {
+        let body = match confirming.get() {
+            Some(role) => {
+                let name = node.clone();
+                // Whether the other of the two survives; if not, this unpairs.
+                let keeps = match role {
+                    Role::Source => can_view,
+                    Role::Viewer => viewable,
+                };
+                let question = match (role, keeps) {
+                    (Role::Viewer, true) => view! {
                         <p class="adi-new-menu__text">
-                            "Disconnect "<strong>{node.clone()}</strong>"? It is not "{other}
-                            " either, so this unpairs it: only a new invite pairs them again."
+                            "Stop "<strong>{node.clone()}</strong>" viewing this machine? It stays "
+                            "paired and still viewable from here. Removes "
+                            {grants
+                                .iter()
+                                .map(|g| view! { <code>{g.clone()}</code>" " })
+                                .collect_view()}
                         </p>
                     }
-                    .into_any()
+                    .into_any(),
+                    (Role::Source, true) => view! {
+                        <p class="adi-new-menu__text">
+                            "Stop viewing "<strong>{node.clone()}</strong>" from here? It stays "
+                            "paired and can still view this machine. This machine forgets its "
+                            "password for it."
+                        </p>
+                    }
+                    .into_any(),
+                    (_, false) => view! {
+                        <p class="adi-new-menu__text">
+                            "That is the last thing "<strong>{node.clone()}</strong>" is paired "
+                            "for, so this unpairs it: only a new invite pairs them again."
+                        </p>
+                    }
+                    .into_any(),
+                };
+                let verb = if keeps { "Remove" } else { "Unpair" };
+                view! {
+                    {question}
+                    {move || failed.get().map(|e| view! { <p class="adi-new-menu__error">{e}</p> })}
+                    <div class="adi-new-menu__actions">
+                        <button
+                            class="adi-new-menu__btn"
+                            type="button"
+                            on:click=move |_| close_menu()
+                        >
+                            "Cancel"
+                        </button>
+                        <button
+                            class="adi-new-menu__btn adi-new-menu__btn--danger"
+                            type="button"
+                            disabled=move || busy.get()
+                            on:click=move |_| disconnect(name.clone(), role)
+                        >
+                            {verb}
+                        </button>
+                    </div>
                 }
-            };
-            view! {
-                {question}
-                {move || failed.get().map(|e| view! { <p class="adi-new-menu__error">{e}</p> })}
-                <div class="adi-new-menu__actions">
-                    <button class="adi-new-menu__btn" type="button" on:click=move |_| close_menu()>
-                        "Cancel"
-                    </button>
+                .into_any()
+            }
+            None => view! {
+                {can_view.then(|| view! {
                     <button
-                        class="adi-new-menu__btn adi-new-menu__btn--danger"
+                        class="adi-new-menu__item"
                         type="button"
-                        disabled=move || busy.get()
-                        on:click=move |_| disconnect(name.clone(), role)
+                        role="menuitem"
+                        on:click=move |_| confirming.set(Some(Role::Viewer))
                     >
-                        "Disconnect"
+                        <Icon icon=Lucide::EyeOff size=IconSize::Md/>
+                        "Stop it viewing this machine…"
                     </button>
-                </div>
+                })}
+                {viewable.then(|| view! {
+                    <button
+                        class="adi-new-menu__item"
+                        type="button"
+                        role="menuitem"
+                        on:click=move |_| confirming.set(Some(Role::Source))
+                    >
+                        <Icon icon=Lucide::Unplug size=IconSize::Md/>
+                        "Stop viewing it from here…"
+                    </button>
+                })}
             }
-            .into_any()
-        } else {
-            view! {
-                <button
-                    class="adi-new-menu__item"
-                    type="button"
-                    role="menuitem"
-                    on:click=move |_| confirming.set(true)
-                >
-                    <Icon icon=Lucide::Unplug size=IconSize::Md/>
-                    "Disconnect…"
-                </button>
-            }
-            .into_any()
+            .into_any(),
         };
         Some(view! {
             <div
@@ -283,8 +308,8 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     view! {
         {move || counts().map(|(up, paired)| {
             let label = match up {
-                Some(up) => format!("{up} of {paired} sources reachable"),
-                None => format!("Checking {paired} sources"),
+                Some(up) => format!("{up} of {paired} devices reachable"),
+                None => format!("Checking {paired} devices"),
             };
             view! {
                 <button
@@ -330,7 +355,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                     }
                     role="dialog"
                     aria-modal="true"
-                    aria-label="Paired machines"
+                    aria-label="Devices"
                     tabindex="-1"
                     on:keydown=move |ev: ev::KeyboardEvent| {
                         if ev.key() == "Escape" {
@@ -348,8 +373,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         .into_any(),
                         Some(n) => {
                             let r = reach.get();
-                            view! { {sources(&n, r.as_ref(), menu)} {viewers(&n, menu)} }
-                                .into_any()
+                            devices(&n, r.as_ref(), menu).into_any()
                         }
                     }}
                 </div>
@@ -359,120 +383,14 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     }
 }
 
-/// One row: a dot for its state, the machine's name, and the state in words.
-struct Row {
-    name: String,
-    /// The node's own name for itself, when it differs — what it is recognised by over there.
-    called: Option<String>,
-    /// `on`, `warn`, `err` or `off` — the dot's colour.
-    tone: &'static str,
-    state: String,
-    role: Role,
-    grants: Vec<String>,
-    /// Whether the node keeps its other role when dropped from this one — see [`Target::keeps`].
-    keeps: bool,
-}
-
-impl Row {
-    fn new(n: &FleetNode, role: Role, tone: &'static str, state: String) -> Self {
-        Self {
-            name: n.petname.clone(),
-            called: (n.nickname != n.petname).then(|| format!("Calls itself {}", n.nickname)),
-            tone,
-            state,
-            role,
-            grants: n.grants.clone(),
-            keeps: match role {
-                Role::Source => !n.grants.is_empty(),
-                Role::Viewer => n.source,
-            },
-        }
-    }
-}
-
-/// A titled section: its head, a count beside it, and its rows.
-fn section(
-    title: &'static str,
-    meta: String,
-    rows: Vec<Row>,
-    menu: RwSignal<Option<Target>>,
-) -> impl IntoView {
-    view! {
-        <section class="adi-new-drop__section">
-            <div class="adi-new-drop__head">
-                <span class="adi-new-drop__title">{title}</span>
-                <span class="adi-new-drop__meta">{meta}</span>
-            </div>
-            <ul class="adi-new-drop__list">
-                {rows
-                    .into_iter()
-                    .map(|r| {
-                        let target = {
-                            let (node, role, grants, keeps) =
-                                (r.name.clone(), r.role, r.grants.clone(), r.keeps);
-                            move |x, y| Target {
-                                node: node.clone(),
-                                role,
-                                grants: grants.clone(),
-                                keeps,
-                                x,
-                                y,
-                            }
-                        };
-                        let on_more = target.clone();
-                        view! {
-                            <li
-                                class="adi-new-drop__row"
-                                title=r.called
-                                on:contextmenu=move |ev: ev::MouseEvent| {
-                                    ev.prevent_default();
-                                    menu.set(Some(target(
-                                        f64::from(ev.client_x()),
-                                        f64::from(ev.client_y()),
-                                    )));
-                                }
-                            >
-                                <span class="adi-new-drop__dot" data-tone=r.tone></span>
-                                <span class="adi-new-drop__name">{r.name.clone()}</span>
-                                <span class="adi-new-drop__seen">{r.state}</span>
-                                <button
-                                    class="adi-new-drop__more"
-                                    type="button"
-                                    aria-label=format!("{} actions", r.name)
-                                    aria-haspopup="menu"
-                                    on:click=move |ev: ev::MouseEvent| {
-                                        let Some(el) = ev.current_target().and_then(|t| {
-                                            wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(t)
-                                                .ok()
-                                        }) else {
-                                            return;
-                                        };
-                                        let b = el.get_bounding_client_rect();
-                                        menu.set(Some(on_more(b.left(), b.bottom() + DROP_GAP)));
-                                    }
-                                >
-                                    <Icon icon=Lucide::Ellipsis size=IconSize::Sm/>
-                                </button>
-                            </li>
-                        }
-                    })
-                    .collect_view()}
-            </ul>
-        </section>
-    }
-}
-
-/// Every paired node, as something this machine dials: reachable first, then by name.
-fn sources(
+/// Every paired device: reachable first, then refusing, then out of reach, by name within each.
+fn devices(
     nodes: &[FleetNode],
     reach: Option<&HashMap<String, Reach>>,
     menu: RwSignal<Option<Target>>,
 ) -> impl IntoView {
-    let nodes: Vec<&FleetNode> = nodes.iter().filter(|n| n.source).collect();
-    if nodes.is_empty() {
-        return None;
-    }
-    let mut rows: Vec<(u8, Row)> = nodes
+    let now = now_unix();
+    let mut rows: Vec<(u8, &FleetNode, &'static str, &'static str)> = nodes
         .iter()
         .map(|n| {
             let (rank, tone, state) = match reach.and_then(|r| r.get(&n.petname)) {
@@ -482,64 +400,124 @@ fn sources(
                 Some(Reach::MeshOff) => (2, "err", "Mesh is off"),
                 None => (3, "off", "Checking…"),
             };
-            (rank, Row::new(n, Role::Source, tone, state.into()))
+            (rank, n, tone, state)
         })
         .collect();
-    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.petname.cmp(&b.1.petname)));
     let meta = match reach {
         Some(r) => format!(
             "{} of {} reachable",
-            nodes
-                .iter()
-                .filter(|n| r.get(&n.petname) == Some(&Reach::Reachable))
-                .count(),
+            r.values().filter(|r| **r == Reach::Reachable).count(),
             nodes.len()
         ),
         None => "Checking…".into(),
     };
-    Some(section(
-        "Sources",
-        meta,
-        rows.into_iter().map(|(_, r)| r).collect(),
-        menu,
-    ))
-}
-
-/// The nodes granted something here — the ones that can read this machine — by how lately they
-/// did: connected now, then most recently seen, then never.
-fn viewers(nodes: &[FleetNode], menu: RwSignal<Option<Target>>) -> impl IntoView {
-    let mut granted: Vec<&FleetNode> = nodes.iter().filter(|n| !n.grants.is_empty()).collect();
-    if granted.is_empty() {
-        return None;
+    view! {
+        <section class="adi-new-drop__section">
+            <div class="adi-new-drop__head">
+                <span class="adi-new-drop__title">"Devices"</span>
+                <span class="adi-new-drop__meta">{meta}</span>
+            </div>
+            <ul class="adi-new-drop__list">
+                {rows
+                    .into_iter()
+                    .map(|(_, n, tone, state)| row(n, tone, state, now, menu))
+                    .collect_view()}
+            </ul>
+        </section>
     }
-    granted.sort_by(|a, b| {
-        b.active
-            .cmp(&a.active)
-            .then(b.last_seen.cmp(&a.last_seen))
-            .then_with(|| a.petname.cmp(&b.petname))
-    });
-    let now = now_unix();
-    let connected = granted.iter().filter(|n| n.active).count();
-    let rows = granted
-        .into_iter()
-        .map(|n| {
-            let tone = if n.active { "on" } else { "off" };
-            Row::new(n, Role::Viewer, tone, seen(n.active, n.last_seen, now))
-        })
-        .collect();
-    Some(section("Viewers", format!("{connected} connected"), rows, menu))
 }
 
-/// A viewer's state as a person reads it: `Connected now`, `Seen 3d ago`, `Never connected`.
+/// One device: the dot and its reachability, its name, and under it what it can do.
+fn row(
+    n: &FleetNode,
+    tone: &'static str,
+    state: &'static str,
+    now: u64,
+    menu: RwSignal<Option<Target>>,
+) -> impl IntoView {
+    // The node's own name for itself, where it differs — what it is recognised by over there.
+    let called = (n.nickname != n.petname).then(|| format!("Calls itself {}", n.nickname));
+    let can = capabilities(n, now);
+    let (on_right, on_more) = (n.clone(), n.clone());
+    let name = n.petname.clone();
+    view! {
+        <li
+            class="adi-new-drop__row adi-new-drop__row--device"
+            title=called
+            on:contextmenu=move |ev: ev::MouseEvent| {
+                ev.prevent_default();
+                menu.set(Some(Target::new(
+                    &on_right,
+                    f64::from(ev.client_x()),
+                    f64::from(ev.client_y()),
+                )));
+            }
+        >
+            <span class="adi-new-drop__dot" data-tone=tone></span>
+            <span class="adi-new-drop__text">
+                <span class="adi-new-drop__line">
+                    <span class="adi-new-drop__name">{name.clone()}</span>
+                    <span class="adi-new-drop__seen">{state}</span>
+                </span>
+                <span class="adi-new-drop__can">
+                    {can
+                        .into_iter()
+                        .map(|(tag, says)| view! {
+                            <span class="adi-new-drop__tag" title=says>{tag}</span>
+                        })
+                        .collect_view()}
+                </span>
+            </span>
+            <button
+                class="adi-new-drop__more"
+                type="button"
+                aria-label=format!("{name} actions")
+                aria-haspopup="menu"
+                on:click=move |ev: ev::MouseEvent| {
+                    let Some(el) = ev.current_target().and_then(|t| {
+                        wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(t).ok()
+                    }) else {
+                        return;
+                    };
+                    let b = el.get_bounding_client_rect();
+                    menu.set(Some(Target::new(&on_more, b.left(), b.bottom() + DROP_GAP)));
+                }
+            >
+                <Icon icon=Lucide::Ellipsis size=IconSize::Sm/>
+            </button>
+        </li>
+    }
+}
+
+/// What a device can do, as tags — each with the sentence it stands for, shown on hover.
+fn capabilities(n: &FleetNode, now: u64) -> Vec<(String, String)> {
+    let mut can = Vec::new();
+    if !n.grants.is_empty() {
+        can.push((
+            format!("Can view · {}", seen(n.active, n.last_seen, now)),
+            format!("It can view this machine ({})", n.grants.join(", ")),
+        ));
+    }
+    if n.source {
+        can.push((
+            "Viewable".to_string(),
+            "This machine can view it".to_string(),
+        ));
+    }
+    can
+}
+
+/// How lately a device viewed this machine, to follow "Can view ·": `now`, `3d ago`, `never`.
 fn seen(active: bool, last_seen: Option<u64>, now: u64) -> String {
     match (active, last_seen) {
-        (true, _) => "Connected now".into(),
-        (false, None) => "Never connected".into(),
+        (true, _) => "now".into(),
+        (false, None) => "never".into(),
         (false, Some(at)) => match now.saturating_sub(at) {
-            0..=59 => "Seen just now".into(),
-            s if s < 3_600 => format!("Seen {}m ago", s / 60),
-            s if s < 86_400 => format!("Seen {}h ago", s / 3_600),
-            s => format!("Seen {}d ago", s / 86_400),
+            0..=59 => "just now".into(),
+            s if s < 3_600 => format!("{}m ago", s / 60),
+            s if s < 86_400 => format!("{}h ago", s / 3_600),
+            s => format!("{}d ago", s / 86_400),
         },
     }
 }
@@ -555,11 +533,11 @@ mod tests {
     use super::seen;
 
     #[test]
-    fn seen_reads_the_gap_and_trusts_connected_over_it() {
+    fn seen_reads_the_gap_and_trusts_active_over_it() {
         let now = 1_000_000;
-        assert_eq!(seen(true, Some(0), now), "Connected now");
-        assert_eq!(seen(false, None, now), "Never connected");
-        assert_eq!(seen(false, Some(now - 90), now), "Seen 1m ago");
-        assert_eq!(seen(false, Some(now - 3 * 86_400), now), "Seen 3d ago");
+        assert_eq!(seen(true, Some(0), now), "now");
+        assert_eq!(seen(false, None, now), "never");
+        assert_eq!(seen(false, Some(now - 90), now), "1m ago");
+        assert_eq!(seen(false, Some(now - 3 * 86_400), now), "3d ago");
     }
 }
