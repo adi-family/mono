@@ -953,6 +953,8 @@ $island-gap: var(--s2);
     font-size: var(--fs-label);
   }
 
+  // The panel's links underline on hover; a tile is not read as a link.
+  &:hover { text-decoration: none; }
   &:hover &__icon { background: color-mix(in srgb, var(--bg-side) 90%, transparent); }
   &:focus-visible { outline: none; }
   &:focus-visible &__icon { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -966,3 +968,77 @@ $island-gap: var(--s2);
   &.is-ask:disabled { cursor: progress; }
   &.is-refused &__name { color: var(--err); }
 }
+
+// ---- app window (`/apps/<app>`, `browser.rs`) -----------------------------------------------
+// A small browser: a bar with reload, the address and the way out to a tab, over the app framed
+// edge to edge. The page scrolls inside its own frame, never the window's body.
+.adi-new-browser {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  &__empty { padding: var(--s4); }
+
+  &__bar {
+    flex: none;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    padding: 0 var(--s2);
+    border-bottom: 1px solid var(--line);
+  }
+
+  &__btn {
+    flex: none;
+    height: 28px;
+    min-width: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: var(--r);
+    background: none;
+    font: inherit;
+    font-size: var(--fs-small);
+    color: var(--ink-2);
+    text-decoration: none;
+    cursor: pointer;
+
+    &:hover { background: var(--chip-hover); color: var(--ink); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  }
+
+  &__out { padding: 0 var(--s2); }
+
+  // An address is a machine string (§2): mono, in a field that reads like a browser's.
+  &__address {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    line-height: 28px;
+    padding: 0 var(--s3);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    border-radius: var(--r);
+    background: var(--chip);
+    font-family: var(--mono);
+    font-size: var(--fs-label);
+    color: var(--code);
+    text-align: center;
+  }
+
+  &__view {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+  }
+}
+
+// Until resized, the window has no height of its own and an iframe has none to give it.
+.adi-new-win:not(.is-sized) .adi-new-browser__view { flex: none; height: 70vh; }
+.adi-new-win__body:has(> .adi-new-browser) { overflow: hidden; }

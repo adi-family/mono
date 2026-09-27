@@ -3,7 +3,8 @@
 //! name.
 //!
 //! What a tile does follows the old chat's Apps rail (`chat_dash_item`, `chat_node_dash_item`),
-//! through the same helpers:
+//! through the same helpers — except that an app opens in the app window ([`super::browser`])
+//! rather than a tab:
 //!
 //! * here, a running dashboard opens where it answers ([`dashboards::open_url`]); a stopped one
 //!   with a routable host is still a link, to the address that wakes it ([`dashboards::wake_url`]),
@@ -18,8 +19,9 @@
 
 use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
-use leptos::prelude::*;
+use leptos::{ev, prelude::*};
 
+use super::windows::{AppRef, Desk};
 use crate::pages::dashboards;
 use crate::{fetch, origin};
 
@@ -125,7 +127,10 @@ impl Apps {
 struct Tile {
     /// Unique on the screen: the machine (empty for this one) and the app's id.
     key: String,
+    id: String,
     name: String,
+    /// The paired machine it runs on; `None` for this one.
+    machine: Option<String>,
     /// Where pressing it goes, when it goes anywhere.
     href: Option<String>,
     /// The grant to ask for when it is pressed instead: the machine and the service.
@@ -151,7 +156,9 @@ impl Tile {
         };
         Self {
             key: format!(":{}", d.id),
+            id: d.id.clone(),
             name: d.name.clone(),
+            machine: None,
             href,
             ask: None,
             note,
@@ -184,7 +191,9 @@ impl Tile {
         };
         Self {
             key: format!("{node}:{}", d.id),
+            id: d.id.clone(),
             name: d.name.clone(),
+            machine: Some(node.to_string()),
             href,
             ask,
             note,
@@ -194,7 +203,7 @@ impl Tile {
 
 /// The grid. Draws nothing until there is an app, so a machine with none keeps a bare wallpaper.
 #[component]
-pub(super) fn Home(apps: Apps, #[prop(into)] light: Signal<bool>) -> impl IntoView {
+pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
     let sections = Memo::new(move |_| apps.sections());
     view! {
         <Show when=move || sections.with(|s| !s.is_empty())>
@@ -208,7 +217,7 @@ pub(super) fn Home(apps: Apps, #[prop(into)] light: Signal<bool>) -> impl IntoVi
                                 {machine.map(|m| view! {
                                     <h2 class="adi-new-apps__machine">{m}</h2>
                                 })}
-                                {tiles.into_iter().map(|t| tile(apps, t)).collect_view()}
+                                {tiles.into_iter().map(|t| tile(apps, desk, t)).collect_view()}
                             }
                         })
                         .collect_view()
@@ -227,18 +236,41 @@ fn face(icon: Lucide, name: impl IntoView + 'static) -> impl IntoView {
     }
 }
 
-fn tile(apps: Apps, t: Tile) -> AnyView {
+fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
     let Tile {
         key,
+        id,
         name,
+        machine,
         href,
         ask,
         note,
     } = t;
     if let Some(href) = href {
-        // A new tab, as the old rail opens one: an app is somewhere you keep open beside this.
+        let app = AppRef {
+            key: machine.as_ref().map_or_else(|| id.clone(), |m| format!("{m}/{id}")),
+            name: name.clone(),
+            machine,
+            url: href.clone(),
+        };
+        // Opens in the app window. Still a real link to the app underneath, so a modified or
+        // middle click does what it does on any link — a tab of its own — and is left alone.
         return view! {
-            <a class="adi-new-app" href=href target="_blank" rel="noopener" title=note>
+            <a
+                class="adi-new-app"
+                href=href
+                target="_blank"
+                rel="noopener"
+                title=note
+                on:click=move |ev: ev::MouseEvent| {
+                    if ev.button() == 0
+                        && !(ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.alt_key())
+                    {
+                        ev.prevent_default();
+                        desk.open_app(app.clone());
+                    }
+                }
+            >
                 {face(Lucide::LayoutDashboard, name)}
             </a>
         }

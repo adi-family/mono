@@ -12,9 +12,10 @@
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
-//! What it draws so far: a wallpaper ([`background`]), this machine's apps on it as a home screen
+//! What it draws so far: a wallpaper ([`background`]), the apps on it as a home screen
 //! ([`apps`]), the windows open over it ([`windows`] —
-//! [`settings`], [`about`] and one paired device's page, [`device`]), the top bar and island
+//! [`settings`], [`about`], one paired device's page, [`device`], and one app in a small browser,
+//! [`browser`]), the top bar and island
 //! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
 //! `⌘K` palette ([`palette`]). A window's address
 //! is only a place inside this document: every path that is not one of `main`'s other doors
@@ -22,6 +23,7 @@
 
 mod about;
 mod apps;
+mod browser;
 mod background;
 mod device;
 mod fleet;
@@ -203,7 +205,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                     ></div>
                 </Show>
             </div>
-            <apps::Home apps light=light/>
+            <apps::Home apps desk light=light/>
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
             // was half-done inside it.
@@ -217,6 +219,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
                                 Win::About => view! { <about::About/> }.into_any(),
+                                Win::App => view! { <browser::Browser desk/> }.into_any(),
                                 Win::Device => {
                                     view! { <device::Device fleet desk/> }.into_any()
                                 }

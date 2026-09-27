@@ -24,6 +24,13 @@ const DEVICE_KEY: &str = "adi-new-ui-device";
 /// Where the device window's address starts; the device's name follows it.
 const DEVICES: &str = "/devices";
 
+/// Which app the app window shows — the whole [`AppRef`], since its address alone does not say
+/// where the app answers.
+const APP_KEY: &str = "adi-new-ui-app";
+
+/// Where the app window's address starts; the app's [`AppRef::key`] follows it.
+const APPS: &str = "/apps";
+
 /// How much of a window must stay on screen, so a drag can never lose it: this much of its
 /// width, and all of its title bar.
 const KEEP_VISIBLE: f64 = 96.0;
@@ -41,10 +48,21 @@ pub(super) enum Win {
     About,
     /// One paired device's page — which one is [`Desk`]'s to say, so there is one at a time.
     Device,
+    /// One app, framed in a small browser — which one is [`Desk`]'s to say, as with the device.
+    App,
 }
 
 impl Win {
-    pub(super) const ALL: [Self; 3] = [Self::Settings, Self::About, Self::Device];
+    pub(super) const ALL: [Self; 4] = [Self::Settings, Self::About, Self::Device, Self::App];
+
+    /// The windows whose address carries a name after their own path.
+    fn prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Device => Some(DEVICES),
+            Self::App => Some(APPS),
+            Self::Settings | Self::About => None,
+        }
+    }
 
     /// The address that opens it — for the device window, only the start of it.
     fn path(self) -> &'static str {
@@ -52,6 +70,7 @@ impl Win {
             Self::Settings => "/settings",
             Self::About => "/about",
             Self::Device => DEVICES,
+            Self::App => APPS,
         }
     }
 
@@ -60,6 +79,7 @@ impl Win {
             Self::Settings => "Settings",
             Self::About => "About adi",
             Self::Device => "Device",
+            Self::App => "App",
         }
     }
 
@@ -69,15 +89,18 @@ impl Win {
             Self::Settings => "adi-new-ui-window-settings",
             Self::About => "adi-new-ui-window-about",
             Self::Device => "adi-new-ui-window-device",
+            Self::App => "adi-new-ui-window-app",
         }
     }
 
-    /// Its width in CSS pixels. About is a narrow card, as macOS draws its own.
+    /// Its width in CSS pixels. About is a narrow card, as macOS draws its own; an app gets the
+    /// room a page wants.
     fn width(self) -> u16 {
         match self {
             Self::Settings => 480,
             Self::About => 320,
             Self::Device => 420,
+            Self::App => 1024,
         }
     }
 
@@ -87,6 +110,7 @@ impl Win {
             Self::Settings => (380.0, 240.0),
             Self::About => (280.0, 200.0),
             Self::Device => (320.0, 240.0),
+            Self::App => (480.0, 320.0),
         }
     }
 
@@ -96,24 +120,42 @@ impl Win {
             Self::Settings => "adi-new-ui-window-settings-size",
             Self::About => "adi-new-ui-window-about-size",
             Self::Device => "adi-new-ui-window-device-size",
+            Self::App => "adi-new-ui-window-app-size",
         }
     }
 
-    /// The window an address names, and for the device window the device.
+    /// The window an address names, and for the device and app windows the name after it.
     fn from_path(path: &str) -> Option<(Self, Option<String>)> {
         let path = path.trim_end_matches('/');
-        if let Some(name) = path.strip_prefix(DEVICES).and_then(|p| p.strip_prefix('/'))
-            && !name.is_empty()
-        {
-            let name =
-                js_sys::decode_uri_component(name).map_or_else(|_| name.to_string(), String::from);
-            return Some((Self::Device, Some(name)));
+        for w in Self::ALL {
+            if let Some(name) = w
+                .prefix()
+                .and_then(|p| path.strip_prefix(p))
+                .and_then(|p| p.strip_prefix('/'))
+                && !name.is_empty()
+            {
+                let name = js_sys::decode_uri_component(name)
+                    .map_or_else(|_| name.to_string(), String::from);
+                return Some((w, Some(name)));
+            }
         }
         Self::ALL
             .into_iter()
-            .find(|w| *w != Self::Device && w.path() == path)
+            .find(|w| w.prefix().is_none() && w.path() == path)
             .map(|w| (w, None))
     }
+}
+
+/// The app the app window shows: what it is called and where it answers.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct AppRef {
+    /// Its name in the window's address: the app's id, after its machine's name when it runs on
+    /// a paired machine (`laptop/notes`).
+    pub(super) key: String,
+    pub(super) name: String,
+    /// The paired machine it runs on; `None` for this one.
+    pub(super) machine: Option<String>,
+    pub(super) url: String,
 }
 
 /// The open windows and their order.
@@ -123,6 +165,8 @@ pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
     /// The device the device window shows, by the name this machine files it under.
     pub(super) device: RwSignal<Option<String>>,
+    /// The app the app window shows.
+    pub(super) app: RwSignal<Option<AppRef>>,
 }
 
 impl Desk {
@@ -134,9 +178,13 @@ impl Desk {
             .unwrap_or_default();
         stack.dedup();
         let device = ui::storage().and_then(|s| s.get_item(DEVICE_KEY).ok().flatten());
+        let app = ui::storage()
+            .and_then(|s| s.get_item(APP_KEY).ok().flatten())
+            .and_then(|json| serde_json::from_str(&json).ok());
         let desk = Self {
             stack: RwSignal::new(stack),
             device: RwSignal::new(device),
+            app: RwSignal::new(app),
         };
         desk.arrive(&routing::current_path());
         desk
@@ -145,12 +193,30 @@ impl Desk {
     /// The address changed under us — a load, back, forward. Raise what it names; close nothing,
     /// and write no history, because the browser already has.
     pub(super) fn arrive(self, path: &str) {
-        if let Some((w, device)) = Win::from_path(path) {
-            if let Some(d) = device {
+        match Win::from_path(path) {
+            Some((Win::Device, Some(d))) => {
                 self.set_device(d);
+                self.raise(Win::Device);
             }
-            self.raise(w);
+            // An app's address names it but not where it answers, so only the app this window
+            // last showed can be reopened from one — any other is an address to nothing.
+            Some((Win::App, Some(key))) => {
+                if self.app.with_untracked(|a| a.as_ref().is_some_and(|a| a.key == key)) {
+                    self.raise(Win::App);
+                }
+            }
+            Some((w, _)) => self.raise(w),
+            None => {}
         }
+    }
+
+    /// Open the app window on one app — a link followed, like [`Self::open`].
+    pub(super) fn open_app(self, app: AppRef) {
+        if let (Some(s), Ok(json)) = (ui::storage(), serde_json::to_string(&app)) {
+            let _ = s.set_item(APP_KEY, &json);
+        }
+        self.app.set(Some(app));
+        self.open(Win::App);
     }
 
     /// Open the device window on one device — a link followed, like [`Self::open`].
@@ -166,22 +232,40 @@ impl Desk {
         self.device.set(Some(petname));
     }
 
-    /// The title a window's bar shows: the device's name on the device window.
+    /// The title a window's bar shows: the device's name on the device window, the app's (and
+    /// its machine's) on the app window.
     pub(super) fn title(self, w: Win) -> String {
-        match (w, self.device.get()) {
-            (Win::Device, Some(d)) => d,
-            _ => w.title().to_string(),
+        match w {
+            Win::Device => self.device.get(),
+            Win::App => self.app.with(|a| {
+                a.as_ref().map(|a| match &a.machine {
+                    Some(m) => format!("{} — {m}", a.name),
+                    None => a.name.clone(),
+                })
+            }),
+            Win::Settings | Win::About => None,
         }
+        .unwrap_or_else(|| w.title().to_string())
     }
 
     /// The address that names a window as it stands.
     fn address(self, w: Win) -> String {
-        match (w, self.device.get_untracked()) {
-            (Win::Device, Some(d)) => format!(
-                "{DEVICES}/{}",
-                String::from(js_sys::encode_uri_component(&d))
+        let name = match w {
+            Win::Device => self.device.get_untracked(),
+            Win::App => self.app.with_untracked(|a| a.as_ref().map(|a| a.key.clone())),
+            Win::Settings | Win::About => None,
+        };
+        match name {
+            // The key's own `/` is kept, so a paired machine's app reads `/apps/laptop/notes`.
+            Some(n) => format!(
+                "{}/{}",
+                w.path(),
+                n.split('/')
+                    .map(|part| String::from(js_sys::encode_uri_component(part)))
+                    .collect::<Vec<_>>()
+                    .join("/")
             ),
-            _ => w.path().to_string(),
+            None => w.path().to_string(),
         }
     }
 
