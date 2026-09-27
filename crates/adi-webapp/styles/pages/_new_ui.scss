@@ -1,13 +1,13 @@
 // The new UI (`/`, opted into with `?new-ui=1` or the ⌘K menu; `src/new_ui/`).
 //
 // Its background is a wallpaper — the one surface where §8's "no gradients" gives way, by the
-// operator's decision; the presets are `--wall-*` in `design/tokens.css`. The settings sheet over
-// it is ordinary chrome and keeps every other rule.
+// operator's decision; the presets are `--wall-*` in `design/tokens.css`. The settings window and
+// the palette over it float, macOS-style — see `--r-float` and `--shadow-float`.
 
 $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 
 // Point every `--wall-<name>` at its dark or light build. Set on the screen's root rather than on
-// the wallpaper, so the preset tiles in the settings sheet follow the same appearance.
+// the wallpaper, so the preset tiles in the settings window follow the same appearance.
 @mixin walls($mode) {
   @each $w in $walls { --wall-#{$w}: var(--wall-#{$w}-#{$mode}); }
 }
@@ -51,39 +51,85 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   }
 }
 
-// ---- settings sheet (`/settings`) -----------------------------------------------------------
-// A side sheet rather than a page, so the wallpaper it edits stays in view.
-.adi-new-sheet {
+// ---- settings window (`/settings`) ----------------------------------------------------------
+// A macOS window rather than a page or a docked panel, so the wallpaper it edits stays in view
+// and can be moved out from under it. The same floating surface as the palette below.
+.adi-new-win {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(100%, var(--panel-w));
+  z-index: 30;
+  top: 10vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(480px, calc(100vw - var(--s8)));
+  max-height: calc(100dvh - 10vh - var(--s4));
   display: flex;
   flex-direction: column;
-  background: var(--bg-side);
-  border-left: 1px solid var(--line);
+  overflow: hidden;
   color: var(--ink);
+  background: color-mix(in srgb, var(--bg-side) 78%, transparent);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow-float);
 
-  &__head {
+  // Once dragged, the inline `left` / `top` place it and the centring comes off.
+  &.is-placed {
+    transform: none;
+    max-height: calc(100dvh - var(--s4));
+  }
+
+  // The drag handle. Title centred on the window, not on what the lights leave, as macOS does.
+  &__bar {
     flex: none;
-    height: var(--bar-h);
+    position: relative;
+    height: 40px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 0 var(--s2) 0 var(--s4);
+    padding: 0 var(--s3);
     border-bottom: 1px solid var(--line);
+    user-select: none;
+    touch-action: none;
+  }
+
+  &__lights {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: var(--s2);
+  }
+
+  &__light {
+    width: 12px;
+    height: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--light-off);
+
+    &--close {
+      background: var(--light-close);
+      cursor: pointer;
+
+      &:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    }
+  }
+
+  &__title {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: var(--fs-ui-sm);
+    font-weight: 600;
+    color: var(--ink-2);
+    pointer-events: none;
   }
 
   &__body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-  }
-
-  &__title {
-    font-size: var(--fs-section);
-    font-weight: 600;
   }
 
   &__section {
@@ -127,7 +173,7 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 // The preset tiles: the wallpaper itself at the screen's own proportions, name beneath.
 .adi-new-walls {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--s3) var(--s2);
 }
 

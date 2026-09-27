@@ -200,7 +200,7 @@ Never: gradients, glows, colored shadows, outlined orange.
 
 One exception, decided by the operator on 2026-09-26: the **new UI's wallpaper** (`crates/adi-webapp/src/new_ui/`) may be a gradient, a soft colour field or an image — presets are the `--wall-*` tokens in `tokens.css`. It covers that background and nothing drawn on it; no other surface may use `--wall-*`.
 
-A second, on 2026-09-27: the new UI's `⌘K` palette is drawn after Raycast / macOS — translucent with a backdrop blur, 12px corners, a lift shadow (`--r-float`, `--r-row-float`, `--shadow-float`). Those tokens belong to it alone; the old screens' menu keeps the rules above.
+A second, on 2026-09-27: the new UI's floating surfaces — its `⌘K` palette and its settings window — are drawn after Raycast / macOS — translucent with a backdrop blur, 12px corners, a lift shadow, macOS window lights (`--r-float`, `--r-row-float`, `--shadow-float`, `--light-close`, `--light-off`). Those tokens belong to it alone; the old screens' menu keeps the rules above.
 
 **Always**
 - Transcript on `--bg`, chrome on `--bg-side`

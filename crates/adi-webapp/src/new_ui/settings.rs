@@ -1,11 +1,22 @@
-//! The settings sheet, at `/settings`: a side sheet over the screen, so the wallpaper it edits
-//! stays in view and changes as it is picked.
+//! The settings window, at `/settings`: a macOS-style window floating over the screen, so the
+//! wallpaper it edits stays in view and changes as it is picked. Dragged by its title bar, and
+//! put back where it was left — per device, like everything else the new UI remembers.
 //!
 //! Background is its only section for now.
 
 use adi_ui::{Icon, IconSize, Lucide};
-use leptos::{ev, prelude::*};
+use leptos::{ev, html, prelude::*};
 use wasm_bindgen::JsCast;
+
+use crate::ui;
+
+/// Where the window was last dropped, as `x,y` in CSS pixels from the viewport's top left.
+const POS_KEY: &str = "adi-new-ui-settings-window";
+
+/// How much of the window must stay on screen, so a drag can never lose it: this much of its
+/// width, and all of its title bar.
+const KEEP_VISIBLE: f64 = 96.0;
+const TITLEBAR: f64 = 40.0;
 
 use super::background::{Appearance, Kind, MAX_BLUR, Preset, Wallpaper, is_hex};
 
@@ -17,7 +28,13 @@ const CUSTOM: [(Kind, &str); 3] = [
 ];
 
 #[component]
-pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl IntoView {
+pub(super) fn Window(
+    wall: Wallpaper,
+    #[prop(into)] close: Callback<()>,
+    /// Draw in the light token set, to sit on a light wallpaper.
+    #[prop(into)]
+    light: Signal<bool>,
+) -> impl IntoView {
     // Which custom editor is open. Not the same as what is showing: opening Image before there
     // is one must not swap the wallpaper for nothing.
     let tab = RwSignal::new({
@@ -25,8 +42,8 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
         (kind != Kind::Preset).then_some(kind)
     });
 
-    // Escape closes the sheet — unless it is closing the ⌘K menu above it (`adi_ui::Modal`, a
-    // `role="dialog"` that listens for the same key on the same window).
+    // Escape closes the window — unless it is closing the ⌘K palette above it, a modal dialog
+    // that listens for the same key.
     let keys = window_event_listener(ev::keydown, move |ev| {
         let dialog_open = document()
             .query_selector("[role=dialog][aria-modal=true]")
@@ -46,24 +63,97 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
         }
     };
 
+    // `None` until it is first dragged: the stylesheet centres it, which stays centred through
+    // a resize in a way a stored pixel position would not.
+    let pos = RwSignal::new(load_pos());
+    // Where in the window the pointer took hold, while a drag is on.
+    let grip = StoredValue::new(None::<(f64, f64)>);
+    let win: NodeRef<html::Div> = NodeRef::new();
+
+    let on_down = move |ev: ev::PointerEvent| {
+        // The traffic lights sit in the title bar; pressing one is a click, not a drag.
+        let on_button = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|t| t.closest("button").ok().flatten())
+            .is_some();
+        if on_button || ev.button() != 0 {
+            return;
+        }
+        let (Some(win), Some(bar)) = (
+            win.get(),
+            ev.current_target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok()),
+        ) else {
+            return;
+        };
+        let r = win.get_bounding_client_rect();
+        grip.set_value(Some((
+            f64::from(ev.client_x()) - r.left(),
+            f64::from(ev.client_y()) - r.top(),
+        )));
+        pos.set(Some((r.left(), r.top())));
+        // Captured, so a fast drag that outruns the bar keeps moving the window.
+        let _ = bar.set_pointer_capture(ev.pointer_id());
+        ev.prevent_default();
+    };
+    let on_move = move |ev: ev::PointerEvent| {
+        let (Some((gx, gy)), Some(win)) = (grip.get_value(), win.get()) else {
+            return;
+        };
+        let x = f64::from(ev.client_x()) - gx;
+        let y = f64::from(ev.client_y()) - gy;
+        pos.set(Some(clamp(x, y, win.offset_width().into())));
+    };
+    let on_up = move |_: ev::PointerEvent| {
+        if grip.get_value().is_some() {
+            grip.set_value(None);
+            if let (Some(s), Some((x, y))) = (ui::storage(), pos.get_untracked()) {
+                let _ = s.set_item(POS_KEY, &format!("{x:.0},{y:.0}"));
+            }
+        }
+    };
+
     view! {
-        <aside class="adi-new-sheet" aria-label="Settings">
-            <header class="adi-new-sheet__head">
-                <h1 class="adi-new-sheet__title">"Settings"</h1>
-                <button
-                    class="adi-btn adi-btn--icon"
-                    type="button"
-                    aria-label="Close settings"
-                    on:click=move |_| close.run(())
-                >
-                    <Icon icon=Lucide::X size=IconSize::Md/>
-                </button>
+        <div
+            node_ref=win
+            class="adi-new-win"
+            class:light=move || light.get()
+            class:is-placed=move || pos.get().is_some()
+            style=move || {
+                pos.get().map(|(x, y)| format!("left: {x:.0}px; top: {y:.0}px")).unwrap_or_default()
+            }
+            role="dialog"
+            aria-label="Settings"
+        >
+            <header
+                class="adi-new-win__bar"
+                on:pointerdown=on_down
+                on:pointermove=on_move
+                on:pointerup=on_up
+                on:pointercancel=on_up
+            >
+                // macOS's three lights. Only close does anything here — a settings window has
+                // nothing to minimise or zoom — so the other two are drawn disabled, the way
+                // macOS draws them on a window that cannot.
+                <div class="adi-new-win__lights">
+                    <button
+                        class="adi-new-win__light adi-new-win__light--close"
+                        type="button"
+                        aria-label="Close settings"
+                        title="Close"
+                        on:click=move |_| close.run(())
+                    ></button>
+                    <span class="adi-new-win__light" aria-hidden="true"></span>
+                    <span class="adi-new-win__light" aria-hidden="true"></span>
+                </div>
+                <h1 class="adi-new-win__title">"Settings"</h1>
             </header>
-            // Only this scrolls: the header, and the way out in it, stays put however tall
+            // Only this scrolls: the title bar, and the way out in it, stays put however tall
             // the section below grows.
-            <div class="adi-new-sheet__body">
-                <section class="adi-new-sheet__section">
-                    <h2 class="adi-new-sheet__label">"Background"</h2>
+            <div class="adi-new-win__body">
+                <section class="adi-new-win__section">
+                    <h2 class="adi-new-win__label">"Background"</h2>
                     <div class="adi-segmented" role="group" aria-label="Appearance">
                         {Appearance::ALL
                             .into_iter()
@@ -111,8 +201,8 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
                     </div>
                 </section>
 
-                <section class="adi-new-sheet__section">
-                    <h2 class="adi-new-sheet__label">"Custom"</h2>
+                <section class="adi-new-win__section">
+                    <h2 class="adi-new-win__label">"Custom"</h2>
                     <div class="adi-segmented" role="group" aria-label="Custom background">
                         {CUSTOM
                             .into_iter()
@@ -136,8 +226,32 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
                     }}
                 </section>
             </div>
-        </aside>
+        </div>
     }
+}
+
+/// Keep a window of this width with enough of it on screen to take hold of again.
+fn clamp(x: f64, y: f64, width: f64) -> (f64, f64) {
+    let (vw, vh) = viewport();
+    (
+        x.clamp(KEEP_VISIBLE - width, (vw - KEEP_VISIBLE).max(0.0)),
+        y.clamp(0.0, (vh - TITLEBAR).max(0.0)),
+    )
+}
+
+fn viewport() -> (f64, f64) {
+    let w = window();
+    let px = |v: Result<wasm_bindgen::JsValue, _>| v.ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+    (px(w.inner_width()), px(w.inner_height()))
+}
+
+/// The saved position, pulled back on screen — the window may have been left on a larger one.
+fn load_pos() -> Option<(f64, f64)> {
+    let saved = ui::storage()?.get_item(POS_KEY).ok()??;
+    let (x, y) = saved.split_once(',')?;
+    let (x, y) = (x.parse().ok()?, y.parse().ok()?);
+    // The width is not known before the window is drawn; the narrowest it is drawn at stands in.
+    Some(clamp(x, y, KEEP_VISIBLE * 2.0))
 }
 
 /// One solid colour.
@@ -272,12 +386,12 @@ fn image_editor(wall: Wallpaper) -> impl IntoView {
     view! {
         {move || wall.image.get().map(|url| view! {
             <span
-                class="adi-new-sheet__preview"
+                class="adi-new-win__preview"
                 style=format!("background-image: url(\"{url}\")")
             ></span>
         })}
         {move || wall.image.get().is_some().then(|| blur_field(wall))}
-        <div class="adi-new-sheet__actions">
+        <div class="adi-new-win__actions">
             <label class="adi-btn" class:is-busy=move || busy.get()>
                 <Icon icon=Lucide::Upload size=IconSize::Md/>
                 {move || match (busy.get(), wall.image.get().is_some()) {
@@ -300,7 +414,7 @@ fn image_editor(wall: Wallpaper) -> impl IntoView {
                 </button>
             })}
         </div>
-        {move || error.get().map(|e| view! { <p class="adi-new-sheet__note">{e}</p> })}
-        <p class="adi-new-sheet__note">"Kept on this device only."</p>
+        {move || error.get().map(|e| view! { <p class="adi-new-win__note">{e}</p> })}
+        <p class="adi-new-win__note">"Kept on this device only."</p>
     }
 }

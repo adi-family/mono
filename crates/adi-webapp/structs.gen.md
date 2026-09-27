@@ -274,7 +274,7 @@ pub(super) struct Choice {
 
 ### struct `Wallpaper`
 
-The wallpaper's live state, shared by the screen and the settings sheet.
+The wallpaper's live state, shared by the screen and the settings window.
 
 ```rust
 #[derive(Clone, Copy)]

@@ -12,7 +12,7 @@
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
-//! What it draws so far: a wallpaper ([`background`]) and, at `/settings`, the sheet that picks
+//! What it draws so far: a wallpaper ([`background`]) and, at `/settings`, the window that picks
 //! it ([`settings`]). `/settings` is only a place inside this document — every path that is not
 //! one of `main`'s other doors mounts this screen, and it reads the path itself.
 
@@ -28,7 +28,7 @@ use crate::{icons, routing, ui};
 use background::Appearance;
 use palette::Item;
 
-/// Where the settings sheet opens.
+/// Where the settings window opens.
 const SETTINGS: &str = "/settings";
 
 /// Where the choice is remembered.
@@ -138,7 +138,7 @@ fn is_light(a: Appearance) -> bool {
     }
 }
 
-/// The new root screen: the wallpaper, the settings sheet when the path asks for it, and the
+/// The new root screen: the wallpaper, the settings window when the path asks for it, and the
 /// `⌘K` palette — which draws nothing until pressed, and always carries the way back out.
 #[component]
 pub(crate) fn NewUi() -> impl IntoView {
@@ -149,6 +149,9 @@ pub(crate) fn NewUi() -> impl IntoView {
     // buttons need telling.
     let pop = window_event_listener(ev::popstate, move |_| path.set(routing::current_path()));
     on_cleanup(move || pop.remove());
+
+    // The floating surfaces — the palette and the settings window — go light with the wallpaper.
+    let light = Signal::derive(move || is_light(wall.choice.get().appearance));
 
     let go = move |to: &'static str| {
         routing::push_state(to);
@@ -173,12 +176,12 @@ pub(crate) fn NewUi() -> impl IntoView {
                 </Show>
             </div>
             <Show when=move || path.get() == SETTINGS>
-                <settings::Sheet wall close=move || go("/")/>
+                <settings::Window wall close=move || go("/") light=light/>
             </Show>
         </div>
         <palette::Palette
             items=move || commands(wall, go)
-            light=Signal::derive(move || is_light(wall.choice.get().appearance))
+            light=light
         />
     }
 }

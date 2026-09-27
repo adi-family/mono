@@ -71,7 +71,7 @@ impl Preset {
         }
     }
 
-    /// The inline style that paints it — on the screen and on its own tile in the sheet.
+    /// The inline style that paints it — on the screen and on its own tile in the settings window.
     pub(super) fn css(self) -> String {
         let token = match self {
             Self::Night => "night",
@@ -161,7 +161,7 @@ impl Default for Choice {
     }
 }
 
-/// The wallpaper's live state, shared by the screen and the settings sheet.
+/// The wallpaper's live state, shared by the screen and the settings window.
 #[derive(Clone, Copy)]
 pub(super) struct Wallpaper {
     pub(super) choice: RwSignal<Choice>,

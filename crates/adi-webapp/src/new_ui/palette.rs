@@ -138,7 +138,7 @@ pub(super) fn Palette(
                     run(item);
                 }
             }
-            // Stopped here so a window-level Escape — the settings sheet's — does not close
+            // Stopped here so a window-level Escape — the settings window's — does not close
             // what is under the palette along with it.
             "Escape" => {
                 ev.prevent_default();
