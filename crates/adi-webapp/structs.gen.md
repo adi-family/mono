@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-89 structs · 29 enums · 5 type aliases across 40 files.
+90 structs · 29 enums · 5 type aliases across 41 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/about.rs`](#srcnew_uiaboutrs) — `Facts`
+- [`src/new_ui/apps.rs`](#srcnew_uiappsrs) — `Apps`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/device.rs`](#srcnew_uidevicers) — `Cut`
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
@@ -222,6 +223,21 @@ struct Facts {
     services: Option<(usize, usize)>,
     agents: Option<u32>,
     machines: Option<(usize, usize)>,
+}
+```
+
+---
+
+## `src/new_ui/apps.rs`
+
+### struct `Apps`
+
+This machine's dashboards, archived ones left out. `None` until the first answer.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Apps {
+    list: RwSignal<Option<Vec<Dashboard>>>,
 }
 ```
 

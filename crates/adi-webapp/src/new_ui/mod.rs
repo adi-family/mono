@@ -12,7 +12,8 @@
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
-//! What it draws so far: a wallpaper ([`background`]), the windows open over it ([`windows`] —
+//! What it draws so far: a wallpaper ([`background`]), this machine's apps on it as a home screen
+//! ([`apps`]), the windows open over it ([`windows`] —
 //! [`settings`], [`about`] and one paired device's page, [`device`]), the top bar and island
 //! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
 //! `⌘K` palette ([`palette`]). A window's address
@@ -20,6 +21,7 @@
 //! mounts this screen, and [`windows::Desk`] reads the path itself.
 
 mod about;
+mod apps;
 mod background;
 mod device;
 mod fleet;
@@ -143,7 +145,7 @@ fn is_light(a: Appearance) -> bool {
     }
 }
 
-/// The new root screen: the wallpaper, whichever windows are open on it, the top bar and island,
+/// The new root screen: the wallpaper and the apps on it, whichever windows are open on it, the top bar and island,
 /// and the `⌘K` palette —
 /// which draws nothing until pressed, and always carries the way back out.
 #[component]
@@ -152,6 +154,7 @@ pub(crate) fn NewUi() -> impl IntoView {
     let desk = Desk::load();
     let shell = Shell::load();
     let fleet = fleet::Fleet::load();
+    let apps = apps::Apps::load();
     let palette_open = RwSignal::new(false);
 
     // Back and forward change the address without a reload; the window it names comes forward.
@@ -200,6 +203,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                     ></div>
                 </Show>
             </div>
+            <apps::Home apps light=light/>
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
             // was half-done inside it.

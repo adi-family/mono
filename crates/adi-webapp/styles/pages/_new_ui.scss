@@ -887,3 +887,62 @@ $island-gap: var(--s2);
     }
   }
 }
+
+// ---- apps (`apps.rs`) -----------------------------------------------------------------------
+// The home screen: a tile per app, its name beneath, in rows from the top as iOS lays them out.
+// Under every window (they start above 1) and clear of the island on any edge it takes.
+.adi-new-apps {
+  position: fixed;
+  z-index: 1;
+  top: calc(#{$top-bar-h} + var(--s6));
+  left: var(--s16);
+  right: var(--s16);
+  max-height: calc(100dvh - #{$top-bar-h} - var(--s6) - var(--s24));
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 80px);
+  justify-content: center;
+  gap: var(--s6) var(--s4);
+  color: var(--ink);
+}
+
+.adi-new-app {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+
+  // The glyph on a translucent tile — the island's surface, without its lift: it lies on the
+  // wallpaper rather than floating over it.
+  &__icon {
+    width: 60px;
+    height: 60px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--bg-side) 72%, transparent);
+    backdrop-filter: blur(40px) saturate(1.8);
+    -webkit-backdrop-filter: blur(40px) saturate(1.8);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-float);
+    color: var(--ink);
+    transition: background var(--transition);
+  }
+
+  &__name {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-label);
+  }
+
+  &:hover &__icon { background: color-mix(in srgb, var(--bg-side) 90%, transparent); }
+  &:focus-visible { outline: none; }
+  &:focus-visible &__icon { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  // Nothing to open: the tile stays, so the app is not lost from view, but reads as asleep.
+  &.is-off { opacity: .5; cursor: default; }
+}
