@@ -155,7 +155,6 @@ pub(super) fn TopBar(
             >
                 <Mark class="adi-new-top__mark"/>
             </button>
-            <OpenApps desk/>
             <span class="adi-new-top__spacer"></span>
             <Sources fleet desk light=light/>
             {move || status(
@@ -188,39 +187,6 @@ pub(super) fn TopBar(
                 .into_any(),
             }}
         </header>
-    }
-}
-
-/// The apps open in windows, one button each, in the order they were opened — as a taskbar lists
-/// what is running. The one whose window is in front is marked; pressing any brings its window
-/// forward.
-#[component]
-fn OpenApps(desk: Desk) -> impl IntoView {
-    view! {
-        <nav class="adi-new-top__apps" aria-label="Open apps">
-            <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
-                {
-                    let (id, app) = app;
-                    let win = Win::App(id);
-                    let hover = match &app.machine {
-                        Some(m) => format!("{} on {m}", app.name),
-                        None => app.name.clone(),
-                    };
-                    view! {
-                        <button
-                            class="adi-new-top__app"
-                            class:is-front=move || desk.is_front(win)
-                            type="button"
-                            title=hover
-                            on:click=move |_| desk.focus(win)
-                        >
-                            <Icon icon=Lucide::LayoutDashboard size=IconSize::Sm/>
-                            <span class="adi-new-top__app-name">{app.name}</span>
-                        </button>
-                    }
-                }
-            </For>
-        </nav>
     }
 }
 
@@ -295,8 +261,9 @@ fn clock() -> (String, String) {
     (time.into(), date.into())
 }
 
-/// The island: a floating dock of what can be opened from here, on the edge [`Layout`] names. A
-/// small dot marks a window that is open, as macOS marks a running app.
+/// The island: a floating dock of what can be opened from here, and of the apps open in windows,
+/// on the edge [`Layout`] names. A small dot marks a window that is open, as macOS marks a
+/// running app.
 #[component]
 pub(super) fn Island(
     shell: Shell,
@@ -332,6 +299,34 @@ pub(super) fn Island(
             >
                 <Icon icon=Lucide::Settings2 size=IconSize::Lg/>
             </button>
+            // The apps open in windows, after a divider, in the order they were opened — as the
+            // Dock lists running apps after its own. Each carries the open dot; pressing one
+            // brings its window forward.
+            <Show when=move || desk.apps.with(|a| !a.is_empty())>
+                <span class="adi-new-island__divider" aria-hidden="true"></span>
+            </Show>
+            <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
+                {
+                    let (id, app) = app;
+                    let win = Win::App(id);
+                    let label = match &app.machine {
+                        Some(m) => format!("{} on {m}", app.name),
+                        None => app.name.clone(),
+                    };
+                    view! {
+                        <button
+                            class="adi-new-island__item is-open"
+                            class:is-front=move || desk.is_front(win)
+                            type="button"
+                            title=label.clone()
+                            aria-label=label
+                            on:click=move |_| desk.focus(win)
+                        >
+                            <Icon icon=Lucide::LayoutDashboard size=IconSize::Lg/>
+                        </button>
+                    }
+                }
+            </For>
         </nav>
     }
 }

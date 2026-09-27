@@ -501,45 +501,6 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
   &__spacer { flex: 1; }
 
-  // The open apps, after the mark as a menu bar's items follow the Apple menu.
-  &__apps {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  &__app {
-    flex: none;
-    height: 22px;
-    max-width: 160px;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0 var(--s2);
-    border: 0;
-    border-radius: var(--r-sm);
-    background: none;
-    font: inherit;
-    color: var(--ink-2);
-    cursor: pointer;
-
-    &:hover { background: var(--chip-hover); color: var(--ink); }
-    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-
-    // The app whose window is in front: named in full ink and weight, as macOS names the
-    // frontmost app in its menu bar.
-    &.is-front { color: var(--ink); font-weight: 600; }
-  }
-
-  &__app-name {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
   &__status {
     display: inline-flex;
     align-items: center;
@@ -856,6 +817,20 @@ $island-gap: var(--s2);
       background: var(--ink-2);
     }
   }
+
+  // The app whose window is in front: the tile lit, as the item under the pointer is.
+  &__item.is-front { background: var(--btn-hover); }
+
+  // Between the island's own items and the open apps, across the island's run.
+  &__divider {
+    flex: none;
+    align-self: stretch;
+    margin: var(--s1) 0;
+    width: 1px;
+    background: var(--line-strong);
+  }
+  &[data-edge="left"] &__divider,
+  &[data-edge="right"] &__divider { width: auto; height: 1px; margin: 0 var(--s1); }
 
   &[data-edge="bottom"] &__item.is-open::after { bottom: -5px; left: calc(50% - 2px); }
   &[data-edge="top"] &__item.is-open::after { top: -5px; left: calc(50% - 2px); }
