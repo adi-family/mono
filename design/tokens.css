@@ -175,12 +175,16 @@ code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: var(-
 :root {
   --r-float:     12px;                        /* the palette's corners */
   --r-row-float: 8px;                         /* a row inside it */
-  --shadow-float: 0 24px 64px rgba(0,0,0,.5), 0 0 0 .5px rgba(0,0,0,.6);
+  /* Layered, as macOS draws it: one wide dark shadow falls off in bands you can see on a dark
+     wallpaper; three lighter ones at growing distances fade smoothly. */
+  --shadow-float: 0 0 0 .5px rgba(0,0,0,.6), 0 1px 3px rgba(0,0,0,.16),
+                  0 8px 20px rgba(0,0,0,.16), 0 24px 56px rgba(0,0,0,.18);
   --light-close: #FF5F57;                     /* macOS's close light, on the settings window */
   --light-off:   rgba(255,255,255,.16);       /* a light that does nothing on this window */
 }
 .light, [data-theme="light"] {
-  --shadow-float: 0 24px 64px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.12);
+  --shadow-float: 0 0 0 .5px rgba(0,0,0,.12), 0 1px 3px rgba(0,0,0,.06),
+                  0 8px 20px rgba(0,0,0,.06), 0 24px 56px rgba(0,0,0,.08);
   --light-off:   rgba(0,0,0,.14);
 }
 

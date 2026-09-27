@@ -87,6 +87,17 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   // Once resized, the inline `width` / `height` are the size, whatever the content wants.
   &.is-sized { max-height: none; }
 
+  // Filling the screen under the top bar (the inline style places it): flush to every edge, so
+  // no corners, no border and no lift — and nothing to take hold of to resize.
+  &.is-filled {
+    transform: none;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  &.is-filled &__grip { display: none; }
+
   // The resize grips: a thin strip along each edge, a square at each corner. Inside the frame,
   // not straddling its border — the frame clips what hangs outside it.
   &__grip {
@@ -1077,5 +1088,5 @@ $island-gap: var(--s2);
 }
 
 // Until resized, the window has no height of its own and an iframe has none to give it.
-.adi-new-win:not(.is-sized) .adi-new-browser__view { flex: none; height: 70vh; }
+.adi-new-win:not(.is-sized):not(.is-filled) .adi-new-browser__view { flex: none; height: 70vh; }
 .adi-new-win__body:has(> .adi-new-browser) { overflow: hidden; }

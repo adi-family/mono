@@ -409,9 +409,10 @@ impl Desk {
     }
 }
 
-/// A window's frame: a macOS title bar with its traffic lights, dragged to move it, over a body
-/// that scrolls on its own so the title bar — and the way out in it — never scrolls away; and
-/// grips on every edge and corner that resize it.
+/// A window's frame: a macOS title bar with its traffic lights, dragged to move it and
+/// double-clicked to fill the screen (and again to put it back), over a body that scrolls on its
+/// own so the title bar — and the way out in it — never scrolls away; and grips on every edge and
+/// corner that resize it.
 ///
 /// `top` is the highest a window may go — the top bar's lower edge while it is drawn — so a
 /// window can never be dragged or stretched under it, the way macOS keeps windows below its menu
@@ -438,6 +439,9 @@ pub(super) fn Frame(
         let (mw, mh) = win.min_size();
         (w.clamp(mw, vw.max(mw)), h.clamp(mh, vh.max(mh)))
     }));
+    // Filling the screen, from a double-click on the title bar — over, not instead of, the place
+    // and size it had, so the next double-click puts it back there.
+    let filled = RwSignal::new(false);
     let gesture = StoredValue::new(None::<Gesture>);
     let frame: NodeRef<html::Div> = NodeRef::new();
     // Where it sat in the stack when it opened. A window opened over others steps down and right
@@ -449,6 +453,10 @@ pub(super) fn Frame(
 
     // Take hold of the window for a move (`edge: None`) or a resize from one edge or corner.
     let begin = move |ev: &ev::PointerEvent, edge: Option<Edge>| {
+        // A window filling the screen has nowhere to move to and nothing to resize.
+        if filled.get_untracked() {
+            return;
+        }
         let (Some(el), Some(handle)) = (
             frame.get(),
             ev.current_target()
@@ -516,6 +524,16 @@ pub(super) fn Frame(
             begin(&ev, None);
         }
     };
+    let on_bar_double = move |ev: ev::MouseEvent| {
+        let on_button = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|t| t.closest("button").ok().flatten())
+            .is_some();
+        if !on_button {
+            filled.update(|f| *f = !*f);
+        }
+    };
 
     view! {
         <div
@@ -525,7 +543,19 @@ pub(super) fn Frame(
             class:is-placed=move || pos.get().is_some()
             class:is-sized=move || size.get().is_some()
             class:is-front=move || desk.is_front(win)
+            class:is-filled=move || filled.get()
             style=move || {
+                // Edge to edge, from the top bar down: the stylesheet takes off the corners, the
+                // border and the centring.
+                if filled.get() {
+                    return format!(
+                        "left: 0; top: {:.0}px; width: 100vw; height: calc(100dvh - {:.0}px); \
+                         z-index: {}",
+                        top.get(),
+                        top.get(),
+                        desk.z(win),
+                    );
+                }
                 // Kept below the top bar here too, not only while dragging: switching the bar on
                 // must push down a window already sitting where it now goes.
                 let at = pos
@@ -550,6 +580,7 @@ pub(super) fn Frame(
             <header
                 class="adi-new-win__bar"
                 on:pointerdown=on_bar_down
+                on:dblclick=on_bar_double
                 on:pointermove=on_move
                 on:pointerup=on_up
                 on:pointercancel=on_up
