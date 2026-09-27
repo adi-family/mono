@@ -5,8 +5,9 @@
 //! Told from the device's side, by the operator's direction: one row per device, its reachability
 //! (`GET /api/fleet/reach`) on the dot, and under its name, as tags, the two things a pairing can
 //! carry —
-//! **can view this machine** (it holds grants here; `FleetNode::active` says it did within the
-//! last minute) and **viewable from here** (this machine reads it; `FleetNode::source`).
+//! **can access you** (it holds grants here; `FleetNode::active` says it did within the last
+//! minute) and **you can access** (this machine reads it; `FleetNode::source`). "You" is this
+//! machine, the one the panel is open on.
 //!
 //! Each of those is taken away on its own from the row's menu — a right click, or the `⋯` it shows
 //! on hover. The pairing goes only when neither is left, and the confirmation says when it will.
@@ -43,10 +44,10 @@ enum Role {
 #[derive(Clone)]
 struct Target {
     node: String,
-    /// Its grants here — what "stop it viewing this machine" takes away.
+    /// Its grants here — what "stop it accessing you" takes away.
     grants: Vec<String>,
-    can_view: bool,
-    viewable: bool,
+    accesses_you: bool,
+    you_access: bool,
     x: f64,
     y: f64,
 }
@@ -56,8 +57,8 @@ impl Target {
         Self {
             node: n.petname.clone(),
             grants: n.grants.clone(),
-            can_view: !n.grants.is_empty(),
-            viewable: n.source,
+            accesses_you: !n.grants.is_empty(),
+            you_access: n.source,
             x,
             y,
         }
@@ -177,8 +178,8 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         let Target {
             node,
             grants,
-            can_view,
-            viewable,
+            accesses_you,
+            you_access,
             x,
             y,
         } = menu.get()?;
@@ -194,14 +195,14 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                 let name = node.clone();
                 // Whether the other of the two survives; if not, this unpairs.
                 let keeps = match role {
-                    Role::Source => can_view,
-                    Role::Viewer => viewable,
+                    Role::Source => accesses_you,
+                    Role::Viewer => you_access,
                 };
                 let question = match (role, keeps) {
                     (Role::Viewer, true) => view! {
                         <p class="adi-new-menu__text">
-                            "Stop "<strong>{node.clone()}</strong>" viewing this machine? It stays "
-                            "paired and still viewable from here. Removes "
+                            "Stop "<strong>{node.clone()}</strong>" accessing you? It stays "
+                            "paired, and you can still access it. Removes "
                             {grants
                                 .iter()
                                 .map(|g| view! { <code>{g.clone()}</code>" " })
@@ -211,9 +212,8 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                     .into_any(),
                     (Role::Source, true) => view! {
                         <p class="adi-new-menu__text">
-                            "Stop viewing "<strong>{node.clone()}</strong>" from here? It stays "
-                            "paired and can still view this machine. This machine forgets its "
-                            "password for it."
+                            "Stop accessing "<strong>{node.clone()}</strong>"? It stays paired "
+                            "and can still access you. This machine forgets its password for it."
                         </p>
                     }
                     .into_any(),
@@ -250,7 +250,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                 .into_any()
             }
             None => view! {
-                {can_view.then(|| view! {
+                {accesses_you.then(|| view! {
                     <button
                         class="adi-new-menu__item"
                         type="button"
@@ -258,10 +258,10 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         on:click=move |_| confirming.set(Some(Role::Viewer))
                     >
                         <Icon icon=Lucide::EyeOff size=IconSize::Md/>
-                        "Stop it viewing this machine…"
+                        "Stop it accessing you…"
                     </button>
                 })}
-                {viewable.then(|| view! {
+                {you_access.then(|| view! {
                     <button
                         class="adi-new-menu__item"
                         type="button"
@@ -269,7 +269,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         on:click=move |_| confirming.set(Some(Role::Source))
                     >
                         <Icon icon=Lucide::Unplug size=IconSize::Md/>
-                        "Stop viewing it from here…"
+                        "Stop accessing it…"
                     </button>
                 })}
             }
@@ -495,20 +495,20 @@ fn capabilities(n: &FleetNode, now: u64) -> Vec<(String, String)> {
     let mut can = Vec::new();
     if !n.grants.is_empty() {
         can.push((
-            format!("Can view · {}", seen(n.active, n.last_seen, now)),
-            format!("It can view this machine ({})", n.grants.join(", ")),
+            format!("Can access you · {}", seen(n.active, n.last_seen, now)),
+            format!("It can access this machine: {}", n.grants.join(", ")),
         ));
     }
     if n.source {
         can.push((
-            "Viewable".to_string(),
-            "This machine can view it".to_string(),
+            "You can access".to_string(),
+            "This machine can access it".to_string(),
         ));
     }
     can
 }
 
-/// How lately a device viewed this machine, to follow "Can view ·": `now`, `3d ago`, `never`.
+/// How lately a device accessed this machine, to follow "Can access you ·": `now`, `3d ago`, `never`.
 fn seen(active: bool, last_seen: Option<u64>, now: u64) -> String {
     match (active, last_seen) {
         (true, _) => "now".into(),

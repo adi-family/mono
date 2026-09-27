@@ -396,8 +396,8 @@ A row's menu: which device, what it can do now, and where the menu was opened.
 struct Target {
     node: String,
     grants: Vec<String>,
-    can_view: bool,
-    viewable: bool,
+    accesses_you: bool,
+    you_access: bool,
     x: f64,
     y: f64,
 }
