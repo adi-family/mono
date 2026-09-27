@@ -201,3 +201,142 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   min-width: 0;
   accent-color: var(--ink-2);
 }
+
+// ---- command palette (`⌘K`) -----------------------------------------------------------------
+// Raycast's, by the operator's direction, not the design system's modal: a translucent panel
+// that blurs the wallpaper through it, 12px corners, a lift off the screen, no scrim. The tokens
+// are still the ladder's; `.light` (tokens.css) swaps the whole set on a light wallpaper.
+.adi-pal-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.adi-pal {
+  position: fixed;
+  z-index: 41;
+  top: 18vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100vw - var(--s8)));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--bg-side) 72%, transparent);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
+  box-shadow: var(--shadow-float);
+
+  &__search {
+    height: 56px;
+    padding: 0 var(--s4) 0 20px;
+    background: none;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    outline: none;
+    font: inherit;
+    font-size: 17px;
+    color: var(--ink);
+
+    &::placeholder { color: var(--ink-3); }
+  }
+
+  &__list {
+    max-height: min(400px, 50vh);
+    overflow-y: auto;
+    padding: 6px var(--s2) var(--s2);
+  }
+
+  &__section {
+    padding: var(--s2) var(--s3) 6px;
+    font-size: var(--fs-label);
+    font-weight: 500;
+    color: var(--ink-3);
+  }
+
+  &__row {
+    width: 100%;
+    height: 42px;
+    display: flex;
+    align-items: center;
+    gap: var(--s3);
+    padding: 0 var(--s3) 0 var(--s2);
+    background: none;
+    border: 0;
+    border-radius: var(--r-row-float);
+    font: inherit;
+    text-align: left;
+    color: var(--ink);
+    cursor: pointer;
+
+    &[aria-selected="true"] { background: var(--btn-hover); }
+  }
+
+  // The glyph on a small tile, where Raycast puts an app's own icon.
+  &__icon {
+    flex: none;
+    width: 24px;
+    height: 24px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--r);
+    background: var(--chip);
+    color: var(--ink-2);
+  }
+
+  &__title {
+    flex: none;
+    font-size: var(--fs-ui);
+  }
+
+  &__subtitle {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-ui);
+    color: var(--ink-3);
+  }
+
+  &__empty {
+    padding: var(--s8) 0;
+    text-align: center;
+    font-size: var(--fs-small);
+    color: var(--ink-3);
+  }
+
+  &__foot {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    padding: 0 var(--s3) 0 var(--s4);
+    border-top: 1px solid var(--line);
+    background: var(--chip);
+    font-size: var(--fs-label);
+    color: var(--ink-2);
+  }
+
+  &__mark {
+    width: 16px;
+    height: 16px;
+    color: var(--ink-3);
+  }
+
+  &__spacer { flex: 1; }
+
+  &__key {
+    display: grid;
+    place-items: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 var(--s1);
+    border-radius: var(--r-sm);
+    background: var(--chip);
+    color: var(--ink-2);
+    font: inherit;
+  }
+}

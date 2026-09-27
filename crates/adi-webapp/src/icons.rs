@@ -81,10 +81,6 @@ pub(crate) enum Icon {
     ExternalLink,
     /// The rerender overlay — watching the page change.
     Rerenders,
-    /// Light appearance.
-    Light,
-    /// Dark appearance.
-    Dark,
 }
 
 impl Icon {
@@ -129,8 +125,6 @@ impl Icon {
             Icon::Bug => Lucide::Bug,
             Icon::ExternalLink => Lucide::ArrowUpRight,
             Icon::Rerenders => Lucide::Eye,
-            Icon::Light => Lucide::Sun,
-            Icon::Dark => Lucide::Moon,
         }
     }
 }

@@ -168,6 +168,19 @@ code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: var(-
 
 }
 
+/* ---- The new UI's floating surfaces — its `⌘K` palette, drawn after Raycast -----------------
+   Like the wallpapers, these exist only for the new UI (the operator asked for its palette to
+   look like macOS / Raycast rather than the app's modal), and nothing else may use them: §8
+   still forbids a shadow on every other surface. */
+:root {
+  --r-float:     12px;                        /* the palette's corners */
+  --r-row-float: 8px;                         /* a row inside it */
+  --shadow-float: 0 24px 64px rgba(0,0,0,.5), 0 0 0 .5px rgba(0,0,0,.6);
+}
+.light, [data-theme="light"] {
+  --shadow-float: 0 24px 64px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.12);
+}
+
 .light, [data-theme="light"] {
   --on-accent: #FFFFFF;
   --chip:       rgba(0,0,0,.06);

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-81 structs · 26 enums · 5 type aliases across 34 files.
+82 structs · 26 enums · 5 type aliases across 35 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
+- [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -92,8 +93,6 @@ pub(crate) enum Icon {
     Bug,
     ExternalLink,
     Rerenders,
-    Light,
-    Dark,
 }
 ```
 
@@ -282,6 +281,24 @@ The wallpaper's live state, shared by the screen and the settings sheet.
 pub(super) struct Wallpaper {
     pub(super) choice: RwSignal<Choice>,
     pub(super) image: RwSignal<Option<String>>,
+}
+```
+
+---
+
+## `src/new_ui/palette.rs`
+
+### struct `Item`
+
+One command.
+
+```rust
+pub(super) struct Item {
+    section: &'static str,
+    title: &'static str,
+    subtitle: &'static str,
+    icon: Lucide,
+    run: Callback<()>,
 }
 ```
 

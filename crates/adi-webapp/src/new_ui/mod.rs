@@ -7,8 +7,8 @@
 //!
 //! Two ways to flip it, because a screen under construction must never be one you cannot leave:
 //!
-//! * the `⌘K` menu — [`action`] is a row on every shell, and the new screen mounts the menu
-//!   (with that one row) even though it draws nothing else;
+//! * `⌘K` — [`action`] is a row in the old screens' menu, and the new screen's own palette
+//!   ([`palette`]) always carries "Turn off new UI";
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
@@ -17,12 +17,16 @@
 //! one of `main`'s other doors mounts this screen, and it reads the path itself.
 
 mod background;
+mod palette;
 mod settings;
 
+use adi_ui::Lucide;
 use leptos::{ev, prelude::*};
 
-use crate::launcher::{self, Action, Launcher};
+use crate::launcher::Action;
 use crate::{icons, routing, ui};
+use background::Appearance;
+use palette::Item;
 
 /// Where the settings sheet opens.
 const SETTINGS: &str = "/settings";
@@ -83,33 +87,61 @@ pub(crate) fn action() -> Action {
     }
 }
 
-/// A row for each appearance the screen is not already fixed to — one while it is light or dark,
-/// both while it follows the system.
-fn appearance_actions(wall: background::Wallpaper) -> Vec<Action> {
+/// The palette's commands, as they stand right now.
+fn commands(
+    wall: background::Wallpaper,
+    go: impl Fn(&'static str) + Copy + Send + Sync + 'static,
+) -> Vec<Item> {
     let now = wall.choice.get().appearance;
-    [
-        (
-            background::Appearance::Light,
-            "Light mode",
-            icons::Icon::Light,
-        ),
-        (background::Appearance::Dark, "Dark mode", icons::Icon::Dark),
-    ]
-    .into_iter()
-    .filter(|(a, ..)| *a != now)
-    .map(|(a, label, icon)| {
-        Action::new(label, "Appearance", icon, move || {
-            wall.set(|c| c.appearance = a);
-        })
-    })
-    .collect()
+    let mut items = vec![Item::new(
+        "Settings",
+        "Open settings",
+        "Background and appearance",
+        Lucide::Settings2,
+        move || go(SETTINGS),
+    )];
+    // A row for each appearance the screen is not already fixed to — one while it is light or
+    // dark, both while it follows the system.
+    items.extend(
+        [
+            (Appearance::Light, "Light mode", Lucide::Sun),
+            (Appearance::Dark, "Dark mode", Lucide::Moon),
+        ]
+        .into_iter()
+        .filter(|(a, ..)| *a != now)
+        .map(|(a, title, icon)| {
+            Item::new("Appearance", title, "Wallpaper", icon, move || {
+                wall.set(|c| c.appearance = a);
+            })
+        }),
+    );
+    items.push(Item::new(
+        "New UI",
+        "Turn off new UI",
+        "Back to the current chat",
+        Lucide::Sparkles,
+        || set(false),
+    ));
+    items
+}
+
+/// Whether the screen is showing light right now — [`Appearance::Auto`] asks the system.
+fn is_light(a: Appearance) -> bool {
+    match a {
+        Appearance::Light => true,
+        Appearance::Dark => false,
+        Appearance::Auto => window()
+            .match_media("(prefers-color-scheme: light)")
+            .ok()
+            .flatten()
+            .is_some_and(|m| m.matches()),
+    }
 }
 
 /// The new root screen: the wallpaper, the settings sheet when the path asks for it, and the
-/// `⌘K` menu — which draws nothing until pressed, and always carries the way back out.
+/// `⌘K` palette — which draws nothing until pressed, and always carries the way back out.
 #[component]
 pub(crate) fn NewUi() -> impl IntoView {
-    let launcher = Launcher::new();
     let wall = background::Wallpaper::load();
     let path = RwSignal::new(routing::current_path());
 
@@ -144,16 +176,9 @@ pub(crate) fn NewUi() -> impl IntoView {
                 <settings::Sheet wall close=move || go("/")/>
             </Show>
         </div>
-        {launcher::overlay(launcher, move || {
-            let mut rows = vec![Action::new(
-                "Settings",
-                "Background",
-                icons::Icon::Gear,
-                move || go(SETTINGS),
-            )];
-            rows.extend(appearance_actions(wall));
-            rows.push(action());
-            rows
-        })}
+        <palette::Palette
+            items=move || commands(wall, go)
+            light=Signal::derive(move || is_light(wall.choice.get().appearance))
+        />
     }
 }
