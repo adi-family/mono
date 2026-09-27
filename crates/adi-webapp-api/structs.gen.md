@@ -775,6 +775,8 @@ pub struct FleetNode {
     #[serde(default)]
     pub active: bool,
     #[serde(default)]
+    pub last_reached: Option<u64>,
+    #[serde(default)]
     pub agent_instructions: Option<String>,
     #[serde(default = "yes")]
     pub source: bool,

@@ -419,6 +419,11 @@ pub struct FleetNode {
     /// with no sighting at all.
     #[serde(default)]
     pub active: bool,
+    /// Unix seconds at which a dial from *this* machine to the node last got an answer
+    /// (`GET /api/fleet/reach`, `adi_mesh::activity::record_reached`) — the outbound counterpart
+    /// of [`last_seen`](Self::last_seen). `None` until one has.
+    #[serde(default)]
+    pub last_reached: Option<u64>,
     /// Extra system-prompt instructions spliced into any agent conversation *this node* opens here
     /// over the mesh — `adi_mesh::fleet::NodeRecord::agent_instructions`, edited from
     /// `POST /api/fleet/instructions` (ADI-MONO-15). Frozen once, at the moment such a conversation

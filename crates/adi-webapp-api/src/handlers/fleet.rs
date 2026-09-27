@@ -507,7 +507,9 @@ pub fn fleet_dismiss_nickname(store: &Config, body: &[u8]) -> Response {
 fn snapshot(store: &Config) -> Result<FleetState, String> {
     let registry =
         FleetRegistry::load_from(store).map_err(|e| format!("reading the fleet registry: {e}"))?;
-    let seen = activity::last_seen_all(&Db::with_config(store.clone()));
+    let db = Db::with_config(store.clone());
+    let seen = activity::last_seen_all(&db);
+    let reached = activity::last_reached_all(&db);
     let dropped = DroppedSources::load(store);
     let now = adi_config::now_unix();
     Ok(FleetState {
@@ -518,6 +520,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
                 let last_seen = seen.get(&record.nickname).copied();
                 let active = last_seen.is_some_and(|seen| activity::is_active(seen, now));
                 let source = !dropped.holds(&record.key, record.paired_at);
+                let last_reached = reached.get(&record.key).copied();
                 FleetNode {
                     petname,
                     key: record.key,
@@ -530,6 +533,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
                     pending_nickname: record.pending_nickname,
                     last_seen,
                     active,
+                    last_reached,
                     source,
                     agent_instructions: record.agent_instructions,
                 }

@@ -8,8 +8,8 @@ use adi_ui::{Icon, IconSize, Lucide, Mark};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::windows::{Desk, Win};
 use super::sources::Sources;
+use super::windows::{Desk, Win};
 use crate::{live, ui};
 
 const KEY: &str = "adi-new-ui-layout";
@@ -101,7 +101,11 @@ impl Shell {
 /// how many of the paired machines are active, whether the stack's live channel is up, whether
 /// this device is online — and then the time and the date.
 #[component]
-pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
+pub(super) fn TopBar(
+    desk: Desk,
+    fleet: super::fleet::Fleet,
+    #[prop(into)] light: Signal<bool>,
+) -> impl IntoView {
     let now = RwSignal::new(clock());
     let stack = RwSignal::new(false);
     let online = RwSignal::new(window().navigator().on_line());
@@ -126,7 +130,6 @@ pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl Into
         check,
         std::time::Duration::from_millis(CLOCK_TICK_MS.into()),
     );
-
 
     // The browser says when the network comes and goes; asking it on a timer would only lag.
     let went_on = window_event_listener(leptos::ev::online, move |_| online.set(true));
@@ -153,7 +156,7 @@ pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl Into
                 <Mark class="adi-new-top__mark"/>
             </button>
             <span class="adi-new-top__spacer"></span>
-            <Sources light=light/>
+            <Sources fleet desk light=light/>
             {move || status(
                 stack.get(),
                 (Lucide::Plug, "Connected to the stack"),

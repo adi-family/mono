@@ -13,13 +13,16 @@
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
 //! What it draws so far: a wallpaper ([`background`]), the windows open over it ([`windows`] —
-//! so far only [`settings`], at `/settings`), the top bar and island ([`shell`], with the
-//! paired machines' list in [`sources`]), and the `⌘K` palette ([`palette`]). A window's address
+//! [`settings`], [`about`] and one paired device's page, [`device`]), the top bar and island
+//! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
+//! `⌘K` palette ([`palette`]). A window's address
 //! is only a place inside this document: every path that is not one of `main`'s other doors
 //! mounts this screen, and [`windows::Desk`] reads the path itself.
 
 mod about;
 mod background;
+mod device;
+mod fleet;
 mod palette;
 mod settings;
 mod shell;
@@ -148,6 +151,7 @@ pub(crate) fn NewUi() -> impl IntoView {
     let wall = background::Wallpaper::load();
     let desk = Desk::load();
     let shell = Shell::load();
+    let fleet = fleet::Fleet::load();
     let palette_open = RwSignal::new(false);
 
     // Back and forward change the address without a reload; the window it names comes forward.
@@ -209,6 +213,9 @@ pub(crate) fn NewUi() -> impl IntoView {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
                                 Win::About => view! { <about::About/> }.into_any(),
+                                Win::Device => {
+                                    view! { <device::Device fleet desk/> }.into_any()
+                                }
                             }}
                         </Frame>
                     </Show>
@@ -216,7 +223,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                 .collect_view()}
         </div>
         <Show when=move || shell.layout.get().top_bar>
-            <TopBar desk light=light/>
+            <TopBar desk fleet light=light/>
         </Show>
         <Island shell desk palette=palette_open light=light/>
         <palette::Palette items=move || commands(wall, desk) light=light open=palette_open/>

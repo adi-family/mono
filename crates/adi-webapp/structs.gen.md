@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-89 structs · 29 enums · 5 type aliases across 39 files.
+89 structs · 29 enums · 5 type aliases across 40 files.
 
 ## Index
 
@@ -15,9 +15,10 @@
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/about.rs`](#srcnew_uiaboutrs) — `Facts`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
+- [`src/new_ui/device.rs`](#srcnew_uidevicers) — `Cut`
+- [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/sources.rs`](#srcnew_uisourcesrs) — `Role`, `Target`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -311,6 +312,37 @@ pub(super) struct Wallpaper {
 
 ---
 
+## `src/new_ui/device.rs`
+
+### enum `Cut`
+
+What an action takes away.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cut {
+    Viewer,
+    Source,
+    Pairing,
+}
+```
+
+---
+
+## `src/new_ui/fleet.rs`
+
+### struct `Fleet`
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Fleet {
+    pub(super) nodes: RwSignal<Option<Vec<FleetNode>>>,
+    pub(super) reach: RwSignal<Option<HashMap<String, Reach>>>,
+}
+```
+
+---
+
 ## `src/new_ui/palette.rs`
 
 ### struct `Item`
@@ -373,38 +405,6 @@ pub(super) struct Shell {
 
 ---
 
-## `src/new_ui/sources.rs`
-
-### enum `Role`
-
-One of the two things a pairing can carry — which one a menu item takes away.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Role {
-    Source,
-    Viewer,
-}
-```
-
-### struct `Target`
-
-A row's menu: which device, what it can do now, and where the menu was opened.
-
-```rust
-#[derive(Clone)]
-struct Target {
-    node: String,
-    grants: Vec<String>,
-    accesses_you: bool,
-    you_access: bool,
-    x: f64,
-    y: f64,
-}
-```
-
----
-
 ## `src/new_ui/windows.rs`
 
 ### enum `Win`
@@ -417,6 +417,7 @@ A window the new UI can open.
 pub(super) enum Win {
     Settings,
     About,
+    Device,
 }
 ```
 
@@ -428,6 +429,7 @@ The open windows and their order.
 #[derive(Clone, Copy)]
 pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
+    pub(super) device: RwSignal<Option<String>>,
 }
 ```
 

@@ -41,7 +41,7 @@ use adi_webapp_api::handlers::{self, Response};
 use adi_webapp_api::types::{
     Dashboard, DashboardsState, FleetDashboards, FleetGrantRef, FleetNodeAccess, FleetNodes,
     FleetReach, FleetRef, FleetState, NodeDashboard, NodeDashboards, NodeReach, NodeServiceRef,
-    UnlockNode,
+    Reach, UnlockNode,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -154,14 +154,24 @@ pub(crate) async fn reach(secrets: &Secrets) -> Response {
     };
     let held = credentials(secrets);
     let mut dialling = tokio::task::JoinSet::new();
-    for node in registry.nodes.into_keys() {
+    for (node, record) in registry.nodes {
         let auth = held.get(&node).map(Credential::auth).unwrap_or_default();
         dialling.spawn(async move {
             let reach = node::reach(&node, &auth, REACH_TIMEOUT).await;
-            NodeReach { node, reach }
+            (NodeReach { node, reach }, record.key)
         });
     }
-    let mut nodes: Vec<NodeReach> = dialling.join_all().await;
+    let dialled = dialling.join_all().await;
+    // A refusal is an answer too: the node was there to give it. This is what the new UI shows
+    // as a device's "last connected".
+    let db = adi_db::Db::open();
+    let now = crate::now_secs();
+    for (n, key) in &dialled {
+        if matches!(n.reach, Reach::Reachable | Reach::Refused) {
+            adi_mesh::activity::record_reached(&db, key, now);
+        }
+    }
+    let mut nodes: Vec<NodeReach> = dialled.into_iter().map(|(n, _)| n).collect();
     nodes.sort_by(|a, b| a.node.cmp(&b.node));
     handlers::ok_json(&FleetReach { nodes })
 }

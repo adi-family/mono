@@ -574,26 +574,26 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     border-top: 1px solid var(--line);
   }
 
+  &__item + &__item { border-top: 1px solid var(--line); }
+
+  // A device, as a button that opens its page: the name, then one line for each way the pairing
+  // goes with its date flush right.
   &__row {
-    position: relative;
+    width: 100%;
     display: flex;
     align-items: center;
     gap: var(--s2);
-    height: 32px;
-    padding: 0 var(--s3);
+    padding: 7px var(--s2) 7px var(--s3);
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--ink-3);
+    text-align: left;
+    cursor: pointer;
 
-    & + & { border-top: 1px solid var(--line); }
     &:hover { background: var(--chip); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
   }
-
-  // A device: its name and reachability on the first line, what it can do on the second.
-  &__row--device {
-    align-items: flex-start;
-    height: auto;
-    padding: 7px var(--s3);
-  }
-  &__row--device &__dot { margin-top: 7px; }
-  &__row--device &__more { top: 7px; }
 
   &__text {
     flex: 1;
@@ -603,25 +603,26 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     gap: 2px;
   }
 
-  &__line {
+  &__name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-weight: 500;
+    color: var(--ink);
+  }
+
+  &__access {
     display: flex;
     align-items: baseline;
     gap: var(--s2);
-  }
-
-  &__can {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--s1);
-  }
-
-  // §6 tag: sans 12px on a pill of the chip fill.
-  &__tag {
-    padding: 1px var(--s2);
-    border-radius: var(--r-pill);
-    background: var(--chip);
     font-size: var(--fs-label);
     color: var(--ink-2);
+  }
+
+  &__when {
+    margin-left: auto;
+    color: var(--ink-3);
     white-space: nowrap;
   }
 
@@ -637,121 +638,101 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     &[data-tone="err"] { background: var(--err); }
   }
 
-  &__name {
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  &__seen {
-    flex: none;
-    margin-left: auto;
-    font-size: var(--fs-label);
-    color: var(--ink-3);
-  }
-
   &__empty {
     margin: 0;
     padding: var(--s3);
     color: var(--ink-3);
   }
-
-  // The row's `⋯`, over the end of the row: on hover it takes the state's place, so the state
-  // column stays flush right instead of making room for a button that is mostly not there.
-  &__more {
-    position: absolute;
-    top: 6px;
-    right: var(--s2);
-    display: grid;
-    place-items: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: none;
-    color: var(--ink-2);
-    cursor: pointer;
-    opacity: 0;
-
-    &:hover { background: var(--chip-hover); }
-    &:focus-visible { opacity: 1; outline: 2px solid var(--focus); outline-offset: 0; }
-  }
-  &__row:hover &__more { opacity: 1; }
-  &__row:hover &__seen, &__row:focus-within &__seen { visibility: hidden; }
-  &__row:focus-within &__more { opacity: 1; }
 }
 
-// A row's menu, over the list (38/39) and at the palette's level.
-.adi-new-menu-catch {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-}
+// ---- device (`/devices/<name>`) -------------------------------------------------------------
+// One device's page: its state, the two ways the pairing goes, its details, and unpairing last.
+.adi-new-device {
+  &__empty { padding: var(--s4); }
 
-.adi-new-menu {
-  z-index: 41;
-  padding: var(--s1);
-  width: 264px; // `sources::MENU_W` must match: it keeps the menu on-screen.
+  &__head { gap: var(--s1); }
 
-  &__item {
-    display: flex;
+  &__state {
+    display: inline-flex;
     align-items: center;
     gap: var(--s2);
-    width: 100%;
-    height: 28px;
-    padding: 0 var(--s2);
-    border: 0;
-    border-radius: var(--r-row-float);
-    background: none;
-    font: inherit;
-    color: var(--ink);
-    text-align: left;
-    cursor: pointer;
-
-    &:hover, &:focus-visible { background: var(--btn-hover); outline: none; }
+    font-size: var(--fs-ui-sm);
+    color: var(--ink-2);
   }
 
-  &__text {
-    margin: 0;
-    padding: var(--s1) var(--s2) var(--s2);
-    color: var(--ink-2);
+  &__way {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--s2);
+
+    & + & { padding-top: var(--s3); border-top: 1px solid var(--line); }
+  }
+
+  &__line {
+    align-self: stretch;
+    display: flex;
+    align-items: baseline;
+    gap: var(--s2);
+    font-size: var(--fs-ui-sm);
+    color: var(--ink);
+  }
+
+  &__when {
+    margin-left: auto;
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+
+  &__grants {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s1);
+  }
+
+  // §6 grant: a mono pill. Read-only here; what takes grants away is the action under it.
+  &__grant {
+    padding: 1px var(--s2);
+    border-radius: var(--r-pill);
+    background: var(--chip);
+    font-size: var(--fs-label);
+    color: var(--code);
+  }
+
+  // A quiet button flush with the text above it, not indented by its own padding.
+  &__act { margin-left: calc(-1 * var(--s3)); }
+
+  &__confirm {
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s2);
+  }
+
+  &__ask {
+    font-size: var(--fs-small);
     line-height: 1.5;
+    color: var(--ink-2);
 
     strong { color: var(--ink); font-weight: 600; }
   }
 
   &__error {
-    margin: 0;
-    padding: 0 var(--s2) var(--s2);
+    font-size: var(--fs-small);
     color: var(--err);
   }
 
-  &__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--s2);
-    padding: 0 var(--s1) var(--s1);
+  &__facts {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    gap: 6px var(--s3);
+    font-size: var(--fs-small);
+
+    dt { color: var(--ink-3); }
+    dd { min-width: 0; color: var(--ink-2); }
   }
 
-  &__btn {
-    padding: 5px var(--s3);
-    border: 0;
-    border-radius: var(--r);
-    background: none;
-    font: inherit;
-    font-weight: 500;
-    color: var(--ink-2);
-    cursor: pointer;
-
-    &:hover { background: var(--btn-hover); }
-    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-    &:disabled { opacity: .5; cursor: default; }
-
-    // Destructive: `--err` text on the default fill (§3), never an orange or a red fill.
-    &--danger { background: var(--btn); color: var(--err); }
-  }
+  &__key { overflow-wrap: anywhere; font-size: var(--fs-label); }
 }
 
 // ---- island ---------------------------------------------------------------------------------

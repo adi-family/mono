@@ -102,9 +102,68 @@ fn try_last_seen_all(db: &Db) -> adi_db::Result<HashMap<String, u64>> {
         .collect())
 }
 
+/// The outbound half, in a table of its own: when a dial from *this* machine last got an answer
+/// from a node. Keyed by the node's key rather than a name, because the dialler knows it by its
+/// petname and a petname can be changed here at any time. Written by the control panel's reach
+/// check, not by the gateway: an answered dial is the one moment this side knows it connected.
+const REACHED_SCHEMA: &str = "\
+    create table if not exists fleet_reached (
+        node_key     text primary key,
+        last_reached integer not null
+    )";
+
+/// Record that a dial from here to the node holding `key` just got an answer. Best-effort, like
+/// [`record_seen`]: a failed write is logged and dropped.
+pub fn record_reached(db: &Db, key: &str, now: u64) {
+    let wrote = db.exec(None, REACHED_SCHEMA, &[]).and_then(|_| {
+        db.exec(
+            None,
+            "insert into fleet_reached (node_key, last_reached) values (?1, ?2)
+             on conflict(node_key) do update set last_reached = excluded.last_reached",
+            &[key.to_string(), now.to_string()],
+        )
+    });
+    if let Err(e) = wrote {
+        debug!(%key, error = %e, "could not record a node reached");
+    }
+}
+
+/// Every node key's most recent answered dial, as [`record_reached`] last wrote it. Empty when
+/// the store cannot be read, as [`last_seen_all`] is.
+#[must_use]
+pub fn last_reached_all(db: &Db) -> HashMap<String, u64> {
+    let read = db.exec(None, REACHED_SCHEMA, &[]).and_then(|_| {
+        db.query(
+            None,
+            "select node_key, last_reached from fleet_reached",
+            &[],
+        )
+    });
+    read.map(|rows| {
+        rows.rows
+            .into_iter()
+            .filter_map(|row| Some((row.first()?.as_str()?.to_string(), row.get(1)?.as_u64()?)))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reached_node_reads_back_by_key_and_updates_in_place() {
+        let db = scratch("reached");
+        assert!(last_reached_all(&db).is_empty());
+        record_reached(&db, "key-a", 100);
+        record_reached(&db, "key-a", 150);
+        record_reached(&db, "key-b", 200);
+        assert_eq!(
+            last_reached_all(&db),
+            HashMap::from([("key-a".to_string(), 150), ("key-b".to_string(), 200)])
+        );
+    }
 
     /// A store rooted in a temp dir, so no test ever touches the operator's real `db/global.db`.
     fn scratch(tag: &str) -> Db {

@@ -18,6 +18,12 @@ use crate::{routing, ui};
 /// The open windows, back to front.
 const OPEN_KEY: &str = "adi-new-ui-windows";
 
+/// Which device the device window shows.
+const DEVICE_KEY: &str = "adi-new-ui-device";
+
+/// Where the device window's address starts; the device's name follows it.
+const DEVICES: &str = "/devices";
+
 /// How much of a window must stay on screen, so a drag can never lose it: this much of its
 /// width, and all of its title bar.
 const KEEP_VISIBLE: f64 = 96.0;
@@ -33,16 +39,19 @@ const Z_BASE: usize = 10;
 pub(super) enum Win {
     Settings,
     About,
+    /// One paired device's page — which one is [`Desk`]'s to say, so there is one at a time.
+    Device,
 }
 
 impl Win {
-    pub(super) const ALL: [Self; 2] = [Self::Settings, Self::About];
+    pub(super) const ALL: [Self; 3] = [Self::Settings, Self::About, Self::Device];
 
-    /// The address that opens it.
-    pub(super) fn path(self) -> &'static str {
+    /// The address that opens it — for the device window, only the start of it.
+    fn path(self) -> &'static str {
         match self {
             Self::Settings => "/settings",
             Self::About => "/about",
+            Self::Device => DEVICES,
         }
     }
 
@@ -50,6 +59,7 @@ impl Win {
         match self {
             Self::Settings => "Settings",
             Self::About => "About adi",
+            Self::Device => "Device",
         }
     }
 
@@ -58,6 +68,7 @@ impl Win {
         match self {
             Self::Settings => "adi-new-ui-window-settings",
             Self::About => "adi-new-ui-window-about",
+            Self::Device => "adi-new-ui-window-device",
         }
     }
 
@@ -66,6 +77,7 @@ impl Win {
         match self {
             Self::Settings => 480,
             Self::About => 320,
+            Self::Device => 420,
         }
     }
 
@@ -74,6 +86,7 @@ impl Win {
         match self {
             Self::Settings => (380.0, 240.0),
             Self::About => (280.0, 200.0),
+            Self::Device => (320.0, 240.0),
         }
     }
 
@@ -82,12 +95,24 @@ impl Win {
         match self {
             Self::Settings => "adi-new-ui-window-settings-size",
             Self::About => "adi-new-ui-window-about-size",
+            Self::Device => "adi-new-ui-window-device-size",
         }
     }
 
-    fn from_path(path: &str) -> Option<Self> {
+    /// The window an address names, and for the device window the device.
+    fn from_path(path: &str) -> Option<(Self, Option<String>)> {
         let path = path.trim_end_matches('/');
-        Self::ALL.into_iter().find(|w| w.path() == path)
+        if let Some(name) = path.strip_prefix(DEVICES).and_then(|p| p.strip_prefix('/'))
+            && !name.is_empty()
+        {
+            let name =
+                js_sys::decode_uri_component(name).map_or_else(|_| name.to_string(), String::from);
+            return Some((Self::Device, Some(name)));
+        }
+        Self::ALL
+            .into_iter()
+            .find(|w| *w != Self::Device && w.path() == path)
+            .map(|w| (w, None))
     }
 }
 
@@ -96,6 +121,8 @@ impl Win {
 pub(super) struct Desk {
     /// Back to front: the last one is in front, and is the one the address bar names.
     stack: RwSignal<Vec<Win>>,
+    /// The device the device window shows, by the name this machine files it under.
+    pub(super) device: RwSignal<Option<String>>,
 }
 
 impl Desk {
@@ -106,8 +133,10 @@ impl Desk {
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default();
         stack.dedup();
+        let device = ui::storage().and_then(|s| s.get_item(DEVICE_KEY).ok().flatten());
         let desk = Self {
             stack: RwSignal::new(stack),
+            device: RwSignal::new(device),
         };
         desk.arrive(&routing::current_path());
         desk
@@ -116,8 +145,43 @@ impl Desk {
     /// The address changed under us — a load, back, forward. Raise what it names; close nothing,
     /// and write no history, because the browser already has.
     pub(super) fn arrive(self, path: &str) {
-        if let Some(w) = Win::from_path(path) {
+        if let Some((w, device)) = Win::from_path(path) {
+            if let Some(d) = device {
+                self.set_device(d);
+            }
             self.raise(w);
+        }
+    }
+
+    /// Open the device window on one device — a link followed, like [`Self::open`].
+    pub(super) fn open_device(self, petname: String) {
+        self.set_device(petname);
+        self.open(Win::Device);
+    }
+
+    fn set_device(self, petname: String) {
+        if let Some(s) = ui::storage() {
+            let _ = s.set_item(DEVICE_KEY, &petname);
+        }
+        self.device.set(Some(petname));
+    }
+
+    /// The title a window's bar shows: the device's name on the device window.
+    pub(super) fn title(self, w: Win) -> String {
+        match (w, self.device.get()) {
+            (Win::Device, Some(d)) => d,
+            _ => w.title().to_string(),
+        }
+    }
+
+    /// The address that names a window as it stands.
+    fn address(self, w: Win) -> String {
+        match (w, self.device.get_untracked()) {
+            (Win::Device, Some(d)) => format!(
+                "{DEVICES}/{}",
+                String::from(js_sys::encode_uri_component(&d))
+            ),
+            _ => w.path().to_string(),
         }
     }
 
@@ -186,12 +250,13 @@ impl Desk {
     fn show_address(self, push: bool) {
         let to = self
             .stack
-            .with_untracked(|s| s.last().map_or("/", |w| w.path()));
+            .with_untracked(|s| s.last().copied())
+            .map_or_else(|| "/".to_string(), |w| self.address(w));
         if routing::current_path() != to {
             if push {
-                routing::push_state(to);
+                routing::push_state(&to);
             } else {
-                routing::replace_state(to);
+                routing::replace_state(&to);
             }
         }
     }
@@ -328,7 +393,7 @@ pub(super) fn Frame(
                 )
             }
             role="dialog"
-            aria-label=win.title()
+            aria-label=move || desk.title(win)
             // Any press inside a window brings it forward, as a click on a macOS window does.
             on:pointerdown=move |_| desk.focus(win)
         >
@@ -346,14 +411,14 @@ pub(super) fn Frame(
                     <button
                         class="adi-new-win__light adi-new-win__light--close"
                         type="button"
-                        aria-label=format!("Close {}", win.title().to_lowercase())
+                        aria-label=move || format!("Close {}", desk.title(win))
                         title="Close"
                         on:click=move |_| desk.close(win)
                     ></button>
                     <span class="adi-new-win__light" aria-hidden="true"></span>
                     <span class="adi-new-win__light" aria-hidden="true"></span>
                 </div>
-                <h1 class="adi-new-win__title">{win.title()}</h1>
+                <h1 class="adi-new-win__title">{move || desk.title(win)}</h1>
             </header>
             <div class="adi-new-win__body">{children()}</div>
             {Edge::ALL
