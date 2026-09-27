@@ -1,10 +1,11 @@
 //! The top bar's devices: every machine paired with this one, how many answer right now — and, on
 //! a click, each one dropped down under the count the way a macOS menu-bar extra drops its menu.
 //!
-//! A row says only what the pairing carries, by the operator's direction, each with its date:
-//! **can access you** (it holds grants here), with when it last did (`FleetNode::last_seen`), and
-//! **you can access** (this machine reads it; `FleetNode::source`), with when a dial from here last
-//! got an answer (`FleetNode::last_reached`). "You" is this machine, the one the panel is open on.
+//! A row is one line, by the operator's direction: the name, an icon for each way the pairing goes
+//! — **can access you** (it holds grants here) and **you can access** (this machine reads it;
+//! `FleetNode::source`) — and one date, the later of when it last accessed this machine
+//! (`FleetNode::last_seen`) and when a dial from here last got an answer
+//! (`FleetNode::last_reached`). "You" is this machine, the one the panel is open on.
 //! Everything else about a device — its reachability, its key, taking either of those away,
 //! unpairing — is on its own page ([`super::device`]), which a click on the row opens.
 
@@ -166,10 +167,13 @@ fn devices(
     }
 }
 
-/// One device: its name, then a line for each way the pairing goes, with its date.
+/// One device on one line: its name, an icon for each way the pairing goes, and when either
+/// was last used.
 fn row(n: FleetNode, now: u64, pick: impl Fn(String) + Send + Sync + 'static) -> impl IntoView {
-    let lines = access(&n, now);
     let label = format!("{} — open device", n.petname);
+    // The later of the two, by the operator's direction: when the pair last talked, either way.
+    let when = ago(n.last_seen.max(n.last_reached), now);
+    let ways = access(&n);
     let name = n.petname;
     let open = name.clone();
     view! {
@@ -180,38 +184,33 @@ fn row(n: FleetNode, now: u64, pick: impl Fn(String) + Send + Sync + 'static) ->
                 aria-label=label
                 on:click=move |_| pick(open.clone())
             >
-                <span class="adi-new-drop__text">
-                    <span class="adi-new-drop__name">{name}</span>
-                    {lines
+                <span class="adi-new-drop__name">{name}</span>
+                <span class="adi-new-drop__ways">
+                    {ways
                         .into_iter()
-                        .map(|(what, when)| view! {
-                            <span class="adi-new-drop__access">
-                                <span>{what}</span>
-                                <span class="adi-new-drop__when">{when}</span>
+                        .map(|(icon, says)| view! {
+                            <span class="adi-new-drop__way" title=says aria-label=says role="img">
+                                <Icon icon=icon size=IconSize::Sm/>
                             </span>
                         })
                         .collect_view()}
                 </span>
+                <span class="adi-new-drop__when">{when}</span>
                 <Icon icon=Lucide::ChevronRight size=IconSize::Sm/>
             </button>
         </li>
     }
 }
 
-/// The ways a pairing goes, each with when it last did: `("Can access you", "Last access 3d ago")`.
-pub(super) fn access(n: &FleetNode, now: u64) -> Vec<(&'static str, String)> {
-    let mut lines = Vec::new();
+/// The ways a pairing goes, as an icon and the sentence it stands for: it can view this machine
+/// (it holds grants here), and this machine can connect to it (`FleetNode::source`).
+fn access(n: &FleetNode) -> Vec<(Lucide, &'static str)> {
+    let mut ways = Vec::new();
     if !n.grants.is_empty() {
-        lines.push((
-            "Can access you",
-            format!("Last access {}", ago(n.last_seen, now)),
-        ));
+        ways.push((Lucide::Eye, "Can access you"));
     }
     if n.source {
-        lines.push((
-            "You can access",
-            format!("Last connected {}", ago(n.last_reached, now)),
-        ));
+        ways.push((Lucide::Link, "You can access"));
     }
-    lines
+    ways
 }
