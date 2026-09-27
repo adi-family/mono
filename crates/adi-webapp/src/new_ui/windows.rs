@@ -69,6 +69,22 @@ impl Win {
         }
     }
 
+    /// The smallest it may be resized to: whatever keeps its contents readable.
+    fn min_size(self) -> (f64, f64) {
+        match self {
+            Self::Settings => (380.0, 240.0),
+            Self::About => (280.0, 200.0),
+        }
+    }
+
+    /// Where its size is kept, once it has been resized.
+    fn size_key(self) -> &'static str {
+        match self {
+            Self::Settings => "adi-new-ui-window-settings-size",
+            Self::About => "adi-new-ui-window-about-size",
+        }
+    }
+
     fn from_path(path: &str) -> Option<Self> {
         let path = path.trim_end_matches('/');
         Self::ALL.into_iter().find(|w| w.path() == path)
@@ -182,7 +198,12 @@ impl Desk {
 }
 
 /// A window's frame: a macOS title bar with its traffic lights, dragged to move it, over a body
-/// that scrolls on its own so the title bar — and the way out in it — never scrolls away.
+/// that scrolls on its own so the title bar — and the way out in it — never scrolls away; and
+/// grips on every edge and corner that resize it.
+///
+/// `top` is the highest a window may go — the top bar's lower edge while it is drawn — so a
+/// window can never be dragged or stretched under it, the way macOS keeps windows below its menu
+/// bar.
 #[component]
 pub(super) fn Frame(
     win: Win,
@@ -190,13 +211,21 @@ pub(super) fn Frame(
     /// Draw in the light token set, to sit on a light wallpaper.
     #[prop(into)]
     light: Signal<bool>,
+    #[prop(into)] top: Signal<f64>,
     children: Children,
 ) -> impl IntoView {
-    // `None` until it is first dragged: the stylesheet centres it, which stays centred through
-    // a resize in a way a stored pixel position would not.
-    let pos = RwSignal::new(load_pos(win));
-    // Where in the window the pointer took hold, while a drag is on.
-    let grip = StoredValue::new(None::<(f64, f64)>);
+    // Both `None` until first dragged or resized: the stylesheet centres the window and sizes it
+    // to its content, which follows the viewport in a way stored pixels would not.
+    let pos = RwSignal::new(
+        load_pair(win.pos_key())
+            .map(|(x, y)| clamp_pos(x, y, KEEP_VISIBLE * 2.0, top.get_untracked())),
+    );
+    let size = RwSignal::new(load_pair(win.size_key()).map(|(w, h)| {
+        let (vw, vh) = viewport();
+        let (mw, mh) = win.min_size();
+        (w.clamp(mw, vw.max(mw)), h.clamp(mh, vh.max(mh)))
+    }));
+    let gesture = StoredValue::new(None::<Gesture>);
     let frame: NodeRef<html::Div> = NodeRef::new();
     // Where it sat in the stack when it opened. A window opened over others steps down and right
     // by that many places, as macOS cascades new windows, so none opens exactly over another and
@@ -205,47 +234,71 @@ pub(super) fn Frame(
         .stack
         .with_untracked(|s| s.iter().position(|x| *x == win).unwrap_or(0));
 
-    let on_down = move |ev: ev::PointerEvent| {
-        // The traffic lights sit in the title bar; pressing one is a click, not a drag.
-        let on_button = ev
-            .target()
-            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-            .and_then(|t| t.closest("button").ok().flatten())
-            .is_some();
-        if on_button || ev.button() != 0 {
-            return;
-        }
-        let (Some(frame), Some(bar)) = (
+    // Take hold of the window for a move (`edge: None`) or a resize from one edge or corner.
+    let begin = move |ev: &ev::PointerEvent, edge: Option<Edge>| {
+        let (Some(el), Some(handle)) = (
             frame.get(),
             ev.current_target()
                 .and_then(|t| t.dyn_into::<web_sys::Element>().ok()),
         ) else {
             return;
         };
-        let r = frame.get_bounding_client_rect();
-        grip.set_value(Some((
-            f64::from(ev.client_x()) - r.left(),
-            f64::from(ev.client_y()) - r.top(),
-        )));
-        pos.set(Some((r.left(), r.top())));
-        // Captured, so a fast drag that outruns the bar keeps moving the window.
-        let _ = bar.set_pointer_capture(ev.pointer_id());
+        let r = el.get_bounding_client_rect();
+        let rect = (r.left(), r.top(), r.width(), r.height());
+        gesture.set_value(Some(Gesture {
+            edge,
+            from: (f64::from(ev.client_x()), f64::from(ev.client_y())),
+            rect,
+        }));
+        pos.set(Some((rect.0, rect.1)));
+        if edge.is_some() {
+            size.set(Some((rect.2, rect.3)));
+        }
+        // Captured, so a fast pointer that outruns the handle keeps the gesture going.
+        let _ = handle.set_pointer_capture(ev.pointer_id());
         ev.prevent_default();
     };
     let on_move = move |ev: ev::PointerEvent| {
-        let (Some((gx, gy)), Some(frame)) = (grip.get_value(), frame.get()) else {
+        let Some(g) = gesture.get_value() else {
             return;
         };
-        let x = f64::from(ev.client_x()) - gx;
-        let y = f64::from(ev.client_y()) - gy;
-        pos.set(Some(clamp(x, y, frame.offset_width().into())));
+        let (dx, dy) = (
+            f64::from(ev.client_x()) - g.from.0,
+            f64::from(ev.client_y()) - g.from.1,
+        );
+        let (x, y, w, h) = g.rect;
+        match g.edge {
+            None => pos.set(Some(clamp_pos(x + dx, y + dy, w, top.get_untracked()))),
+            Some(edge) => {
+                let (x, y, w, h) = resize(
+                    (x, y, w, h),
+                    edge,
+                    (dx, dy),
+                    win.min_size(),
+                    top.get_untracked(),
+                );
+                pos.set(Some((x, y)));
+                size.set(Some((w, h)));
+            }
+        }
     };
     let on_up = move |_: ev::PointerEvent| {
-        if grip.get_value().is_some() {
-            grip.set_value(None);
-            if let (Some(s), Some((x, y))) = (ui::storage(), pos.get_untracked()) {
-                let _ = s.set_item(win.pos_key(), &format!("{x:.0},{y:.0}"));
-            }
+        if gesture.get_value().is_some() {
+            gesture.set_value(None);
+            save_pair(win.pos_key(), pos.get_untracked());
+            save_pair(win.size_key(), size.get_untracked());
+        }
+    };
+
+    let on_bar_down = move |ev: ev::PointerEvent| {
+        // The traffic lights sit in the title bar; pressing one is a click, not a drag.
+        let on_button = ev
+            .target()
+            .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+            .and_then(|t| t.closest("button").ok().flatten())
+            .is_some();
+        if !on_button && ev.button() == 0 {
+            begin(&ev, None);
         }
     };
 
@@ -255,14 +308,21 @@ pub(super) fn Frame(
             class="adi-new-win"
             class:light=move || light.get()
             class:is-placed=move || pos.get().is_some()
+            class:is-sized=move || size.get().is_some()
             class:is-front=move || desk.is_front(win)
             style=move || {
+                // Kept below the top bar here too, not only while dragging: switching the bar on
+                // must push down a window already sitting where it now goes.
                 let at = pos
                     .get()
-                    .map(|(x, y)| format!("left: {x:.0}px; top: {y:.0}px; "))
+                    .map(|(x, y)| format!("left: {x:.0}px; top: {:.0}px; ", y.max(top.get())))
+                    .unwrap_or_default();
+                let wh = size
+                    .get()
+                    .map(|(w, h)| format!("width: {w:.0}px; height: {h:.0}px; "))
                     .unwrap_or_default();
                 format!(
-                    "{at}z-index: {}; --cascade: {cascade}; --win-w: {}px",
+                    "{at}{wh}z-index: {}; --cascade: {cascade}; --win-w: {}px",
                     desk.z(win),
                     win.width(),
                 )
@@ -274,7 +334,7 @@ pub(super) fn Frame(
         >
             <header
                 class="adi-new-win__bar"
-                on:pointerdown=on_down
+                on:pointerdown=on_bar_down
                 on:pointermove=on_move
                 on:pointerup=on_up
                 on:pointercancel=on_up
@@ -296,16 +356,122 @@ pub(super) fn Frame(
                 <h1 class="adi-new-win__title">{win.title()}</h1>
             </header>
             <div class="adi-new-win__body">{children()}</div>
+            {Edge::ALL
+                .into_iter()
+                .map(|edge| view! {
+                    <div
+                        class=format!("adi-new-win__grip adi-new-win__grip--{}", edge.name())
+                        aria-hidden="true"
+                        on:pointerdown=move |ev: ev::PointerEvent| {
+                            if ev.button() == 0 {
+                                begin(&ev, Some(edge));
+                            }
+                        }
+                        on:pointermove=on_move
+                        on:pointerup=on_up
+                        on:pointercancel=on_up
+                    ></div>
+                })
+                .collect_view()}
         </div>
     }
 }
 
-/// Keep a window of this width with enough of it on screen to take hold of again.
-fn clamp(x: f64, y: f64, width: f64) -> (f64, f64) {
+/// A move or a resize in progress.
+#[derive(Clone, Copy)]
+struct Gesture {
+    /// `None` for a move.
+    edge: Option<Edge>,
+    /// Where the pointer went down.
+    from: (f64, f64),
+    /// The window's `(x, y, width, height)` when it did.
+    rect: (f64, f64, f64, f64),
+}
+
+/// An edge or a corner a window is resized from.
+#[derive(Clone, Copy)]
+struct Edge {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
+}
+
+impl Edge {
+    const fn new(top: bool, right: bool, bottom: bool, left: bool) -> Self {
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+        }
+    }
+
+    const ALL: [Self; 8] = [
+        Self::new(true, false, false, false),
+        Self::new(false, true, false, false),
+        Self::new(false, false, true, false),
+        Self::new(false, false, false, true),
+        Self::new(true, true, false, false),
+        Self::new(false, true, true, false),
+        Self::new(false, false, true, true),
+        Self::new(true, false, false, true),
+    ];
+
+    /// `n`, `se` and so on — the compass point the stylesheet places and cursors it by.
+    fn name(self) -> &'static str {
+        match (self.top, self.right, self.bottom, self.left) {
+            (true, false, false, false) => "n",
+            (false, true, false, false) => "e",
+            (false, false, true, false) => "s",
+            (false, false, false, true) => "w",
+            (true, true, false, false) => "ne",
+            (false, true, true, false) => "se",
+            (false, false, true, true) => "sw",
+            _ => "nw",
+        }
+    }
+}
+
+/// The window's new `(x, y, width, height)` after the pointer moved `(dx, dy)` from where it took
+/// hold of `edge`. The edge opposite the one held stays where it is — shrinking past the minimum
+/// stops the moving edge rather than pushing the window along — and no edge passes the viewport,
+/// or `top` above.
+fn resize(
+    (x, y, w, h): (f64, f64, f64, f64),
+    edge: Edge,
+    (dx, dy): (f64, f64),
+    (min_w, min_h): (f64, f64),
+    top: f64,
+) -> (f64, f64, f64, f64) {
+    let (vw, vh) = viewport();
+    let (mut x, mut y, mut w, mut h) = (x, y, w, h);
+    if edge.right {
+        w = (w + dx).clamp(min_w, (vw - x).max(min_w));
+    }
+    if edge.left {
+        let right = x + w;
+        x = (x + dx).clamp(0.0, right - min_w);
+        w = right - x;
+    }
+    if edge.bottom {
+        h = (h + dy).clamp(min_h, (vh - y).max(min_h));
+    }
+    if edge.top {
+        let bottom = y + h;
+        y = (y + dy).clamp(top, (bottom - min_h).max(top));
+        h = bottom - y;
+    }
+    (x, y, w, h)
+}
+
+/// Keep a window of this width with enough of it on screen to take hold of again, and its title
+/// bar no higher than `top`.
+fn clamp_pos(x: f64, y: f64, width: f64, top: f64) -> (f64, f64) {
     let (vw, vh) = viewport();
     (
         x.clamp(KEEP_VISIBLE - width, (vw - KEEP_VISIBLE).max(0.0)),
-        y.clamp(0.0, (vh - TITLEBAR).max(0.0)),
+        y.clamp(top, (vh - TITLEBAR).max(top)),
     )
 }
 
@@ -315,11 +481,15 @@ fn viewport() -> (f64, f64) {
     (px(w.inner_width()), px(w.inner_height()))
 }
 
-/// The saved position, pulled back on screen — the window may have been left on a larger one.
-fn load_pos(win: Win) -> Option<(f64, f64)> {
-    let saved = ui::storage()?.get_item(win.pos_key()).ok()??;
-    let (x, y) = saved.split_once(',')?;
-    let (x, y) = (x.parse().ok()?, y.parse().ok()?);
-    // The width is not known before the window is drawn; the narrowest it is drawn at stands in.
-    Some(clamp(x, y, KEEP_VISIBLE * 2.0))
+/// A saved `a,b` pair — a position or a size.
+fn load_pair(key: &str) -> Option<(f64, f64)> {
+    let saved = ui::storage()?.get_item(key).ok()??;
+    let (a, b) = saved.split_once(',')?;
+    Some((a.parse().ok()?, b.parse().ok()?))
+}
+
+fn save_pair(key: &str, pair: Option<(f64, f64)>) {
+    if let (Some(s), Some((a, b))) = (ui::storage(), pair) {
+        let _ = s.set_item(key, &format!("{a:.0},{b:.0}"));
+    }
 }

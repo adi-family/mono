@@ -84,6 +84,30 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
     max-height: calc(100dvh - var(--s4));
   }
 
+  // Once resized, the inline `width` / `height` are the size, whatever the content wants.
+  &.is-sized { max-height: none; }
+
+  // The resize grips: a thin strip along each edge, a square at each corner. Inside the frame,
+  // not straddling its border — the frame clips what hangs outside it.
+  &__grip {
+    position: absolute;
+    z-index: 2;
+    touch-action: none;
+
+    &--n, &--s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+    &--e, &--w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+    &--n { top: 0; }
+    &--s { bottom: 0; }
+    &--e { right: 0; }
+    &--w { left: 0; }
+
+    &--ne, &--se, &--sw, &--nw { width: 12px; height: 12px; }
+    &--ne { top: 0; right: 0; cursor: nesw-resize; }
+    &--sw { bottom: 0; left: 0; cursor: nesw-resize; }
+    &--nw { top: 0; left: 0; cursor: nwse-resize; }
+    &--se { bottom: 0; right: 0; cursor: nwse-resize; }
+  }
+
   // The drag handle. Title centred on the window, not on what the lights leave, as macOS does.
   &__bar {
     flex: none;
@@ -181,9 +205,11 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 }
 
 // The preset tiles: the wallpaper itself at the screen's own proportions, name beneath.
+// As many to a row as the window's width holds — four at its default width, more once it is
+// resized wider — rather than four that grow.
 .adi-new-walls {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: var(--s3) var(--s2);
 }
 
@@ -227,6 +253,9 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   font-size: var(--fs-ui-sm);
 
   &__label { color: var(--ink-2); }
+
+  // A control sits at its own width, as the segmented controls in the sections above do.
+  > .adi-segmented { justify-self: start; }
 
   &__value {
     display: flex;
@@ -405,7 +434,7 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 // ---- top bar --------------------------------------------------------------------------------
 // iOS's status bar, macOS's menu bar: a thin strip across the top, translucent over the
 // wallpaper. Above the windows (35), as the menu bar is.
-$top-bar-h: 28px;
+$top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this line.
 
 .adi-new-top {
   position: fixed;

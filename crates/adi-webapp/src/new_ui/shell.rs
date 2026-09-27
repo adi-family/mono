@@ -13,6 +13,10 @@ use crate::{fetch, live, ui};
 
 const KEY: &str = "adi-new-ui-layout";
 
+/// The top bar's height in CSS pixels — `$top-bar-h` in `_new_ui.scss`, which it must match:
+/// windows stop at this line.
+pub(super) const TOP_BAR_H: f64 = 28.0;
+
 /// How often the top bar looks at the time and the connection. Once a second: the socket opens a
 /// moment after the page does, and a slower look would say "not connected" for that long.
 const CLOCK_TICK_MS: u32 = 1_000;

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-86 structs · 28 enums · 5 type aliases across 38 files.
+88 structs · 28 enums · 5 type aliases across 38 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`
+- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -395,6 +395,33 @@ The open windows and their order.
 #[derive(Clone, Copy)]
 pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
+}
+```
+
+### struct `Gesture`
+
+A move or a resize in progress.
+
+```rust
+#[derive(Clone, Copy)]
+struct Gesture {
+    edge: Option<Edge>,
+    from: (f64, f64),
+    rect: (f64, f64, f64, f64),
+}
+```
+
+### struct `Edge`
+
+An edge or a corner a window is resized from.
+
+```rust
+#[derive(Clone, Copy)]
+struct Edge {
+    left: bool,
+    right: bool,
+    top: bool,
+    bottom: bool,
 }
 ```
 

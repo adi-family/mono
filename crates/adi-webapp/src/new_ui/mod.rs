@@ -169,6 +169,14 @@ pub(crate) fn NewUi() -> impl IntoView {
 
     // The floating surfaces — the palette and the windows — go light with the wallpaper.
     let light = Signal::derive(move || is_light(wall.choice.get().appearance));
+    // The highest a window may go: the top bar's lower edge while it is drawn.
+    let top_limit = Signal::derive(move || {
+        if shell.layout.get().top_bar {
+            shell::TOP_BAR_H
+        } else {
+            0.0
+        }
+    });
 
     view! {
         <div
@@ -194,7 +202,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                 .into_iter()
                 .map(|w| view! {
                     <Show when=move || desk.is_open(w)>
-                        <Frame win=w desk light=light>
+                        <Frame win=w desk light=light top=top_limit>
                             {match w {
                                 Win::Settings => {
                                     view! { <settings::Settings wall shell/> }.into_any()
