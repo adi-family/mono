@@ -535,12 +535,11 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 .adi-new-drop {
   position: fixed;
   z-index: 39;
-  width: 280px;
+  width: 300px;
   max-height: calc(100vh - #{$top-bar-h} - var(--s8));
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  padding: var(--s1);
   color: var(--ink);
   font-size: var(--fs-small);
   background: color-mix(in srgb, var(--bg-side) 72%, transparent);
@@ -551,44 +550,40 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
   box-shadow: var(--shadow-float);
   outline: none;
 
-  // Sources, then viewers, a hairline between.
-  &__section + &__section {
-    margin-top: var(--s1);
-    padding-top: var(--s1);
-    border-top: 1px solid var(--line);
-  }
+  // Laid out as a table (§6): label heads, a hairline under each and between rows, rows full
+  // width. The rows run edge to edge, so the panel has no padding of its own.
+  &__section + &__section { border-top: 1px solid var(--line-strong); }
 
   &__head {
     display: flex;
     align-items: baseline;
     gap: var(--s2);
-    padding: 6px var(--s2) var(--s1);
-  }
-
-  &__title { font-weight: 600; }
-
-  &__meta {
-    margin-left: auto;
+    padding: 10px var(--s3) 6px;
     font-size: var(--fs-label);
     color: var(--ink-3);
   }
+
+  &__title { font-weight: 500; color: var(--ink-2); }
+
+  &__meta { margin-left: auto; }
 
   &__list {
     margin: 0;
     padding: 0;
     list-style: none;
-    overflow-y: auto;
+    border-top: 1px solid var(--line);
   }
 
   &__row {
+    position: relative;
     display: flex;
     align-items: center;
     gap: var(--s2);
-    height: 28px;
-    padding: 0 var(--s2);
-    border-radius: var(--r-row-float);
+    height: 32px;
+    padding: 0 var(--s3);
 
-    &:hover { background: var(--btn-hover); }
+    & + & { border-top: 1px solid var(--line); }
+    &:hover { background: var(--chip); }
   }
 
   &__dot {
@@ -600,6 +595,7 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
     &[data-tone="on"] { background: var(--ok); }
     &[data-tone="warn"] { background: var(--warn); }
+    &[data-tone="err"] { background: var(--err); }
   }
 
   &__name {
@@ -618,18 +614,20 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
   &__empty {
     margin: 0;
-    padding: var(--s3) var(--s2);
+    padding: var(--s3);
     color: var(--ink-3);
   }
 
-  // The row's `⋯`: its space always held, so the state beside it does not jump on hover.
+  // The row's `⋯`, over the end of the row: on hover it takes the state's place, so the state
+  // column stays flush right instead of making room for a button that is mostly not there.
   &__more {
-    flex: none;
+    position: absolute;
+    top: 6px;
+    right: var(--s2);
     display: grid;
     place-items: center;
     width: 20px;
     height: 20px;
-    margin-right: -4px;
     padding: 0;
     border: 0;
     border-radius: var(--r-sm);
@@ -642,6 +640,8 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     &:focus-visible { opacity: 1; outline: 2px solid var(--focus); outline-offset: 0; }
   }
   &__row:hover &__more { opacity: 1; }
+  &__row:hover &__seen, &__row:focus-within &__seen { visibility: hidden; }
+  &__row:focus-within &__more { opacity: 1; }
 }
 
 // A row's menu, over the list (38/39) and at the palette's level.
@@ -653,6 +653,7 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
 .adi-new-menu {
   z-index: 41;
+  padding: var(--s1);
   width: 264px; // `sources::MENU_W` must match: it keeps the menu on-screen.
 
   &__item {

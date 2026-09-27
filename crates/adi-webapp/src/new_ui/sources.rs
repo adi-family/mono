@@ -308,7 +308,7 @@ struct Row {
     name: String,
     /// The node's own name for itself, when it differs — what it is recognised by over there.
     called: Option<String>,
-    /// `on`, `warn` or `off` — the dot's colour.
+    /// `on`, `warn`, `err` or `off` — the dot's colour.
     tone: &'static str,
     state: String,
 }
@@ -401,8 +401,8 @@ fn sources(
             let (rank, tone, state) = match reach.and_then(|r| r.get(&n.petname)) {
                 Some(Reach::Reachable) => (0, "on", "Reachable"),
                 Some(Reach::Refused) => (1, "warn", "Refuses this machine"),
-                Some(Reach::Unreachable) => (2, "off", "Unreachable"),
-                Some(Reach::MeshOff) => (2, "off", "Mesh is off"),
+                Some(Reach::Unreachable) => (2, "err", "Unreachable"),
+                Some(Reach::MeshOff) => (2, "err", "Mesh is off"),
                 None => (3, "off", "Checking…"),
             };
             (rank, Row::new(n, tone, state.into()))
