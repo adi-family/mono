@@ -333,6 +333,12 @@ pub async fn fleet_nodes() -> Result<FleetNodes, String> {
     get_local("/api/fleet/nodes").await
 }
 
+/// Whether each paired node answers a dial from here right now — one short mesh call per node, so
+/// it is polled, never watched. Local for the reason [`fleet_nodes`] is.
+pub async fn fleet_reach() -> Result<adi_webapp_api::types::FleetReach, String> {
+    get_local("/api/fleet/reach").await
+}
+
 /// Give this machine a node's password, so that node's dashboards can be listed. Checked against
 /// the node before it is stored, so a rejected password comes back as an error here rather than as
 /// a broken row later.

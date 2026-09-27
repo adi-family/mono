@@ -39,7 +39,8 @@ use adi_secrets::Secrets;
 use adi_webapp_api::handlers::{self, Response};
 use adi_webapp_api::types::{
     Dashboard, DashboardsState, FleetDashboards, FleetGrantRef, FleetNodeAccess, FleetNodes,
-    FleetRef, FleetState, NodeDashboard, NodeDashboards, NodeServiceRef, UnlockNode,
+    FleetReach, FleetRef, FleetState, NodeDashboard, NodeDashboards, NodeReach, NodeServiceRef,
+    UnlockNode,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -134,6 +135,34 @@ pub(crate) fn nodes(secrets: &Secrets) -> Response {
         })
         .collect();
     handlers::ok_json(&FleetNodes { nodes })
+}
+
+/// How long a reach check waits on one node. Short, unlike [`LIST_TIMEOUT`]: nothing is fetched,
+/// the answer is only "there or not", and a sleeping node would otherwise hold the whole list for
+/// the full wait on every poll. A first dial over a relay takes a second or two; five is its margin.
+const REACH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// `GET /api/fleet/reach` — whether each paired node answers a dial from here right now.
+///
+/// Every node is dialled at once, with the credential held for it if there is one. Answered in
+/// petname order, the registry's own, rather than in the order the dials came back.
+pub(crate) async fn reach(secrets: &Secrets) -> Response {
+    let registry = match FleetRegistry::load() {
+        Ok(registry) => registry,
+        Err(e) => return handlers::error(500, &format!("reading the fleet registry: {e}")),
+    };
+    let held = credentials(secrets);
+    let mut dialling = tokio::task::JoinSet::new();
+    for node in registry.nodes.into_keys() {
+        let auth = held.get(&node).map(Credential::auth).unwrap_or_default();
+        dialling.spawn(async move {
+            let reach = node::reach(&node, &auth, REACH_TIMEOUT).await;
+            NodeReach { node, reach }
+        });
+    }
+    let mut nodes: Vec<NodeReach> = dialling.join_all().await;
+    nodes.sort_by(|a, b| a.node.cmp(&b.node));
+    handlers::ok_json(&FleetReach { nodes })
 }
 
 /// `POST /api/fleet/dashboards/unlock` — store a node's password here, so its dashboards can be

@@ -544,6 +544,8 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         // panel, over the same gateway (see [`viewer`]). Async for the same reason as a transfer —
         // every one of these leaves the machine.
         ("GET", "/api/fleet/dashboards") => viewer::fleet_dashboards(&app.secrets).await,
+        // Whether each paired node answers a dial right now — one short mesh call per node.
+        ("GET", "/api/fleet/reach") => viewer::reach(&app.secrets).await,
         ("POST", "/api/fleet/dashboards/unlock") => viewer::unlock(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/forget") => viewer::forget(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/allow") => viewer::allow(&app.secrets, &req.body).await,
@@ -594,6 +596,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/db",
     "/api/fleet",
     "/api/fleet/nodes",
+    "/api/fleet/reach",
     "/api/embeddings/backends",
     "/api/hive",
     "/api/knowledge",

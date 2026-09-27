@@ -1,20 +1,24 @@
-//! The top bar's sources: the paired machines, how many of them are active — and, on a click, each
-//! one with its own state, dropped down under the count the way a macOS menu-bar extra drops its
-//! menu.
+//! The top bar's paired machines, in both directions, dropped down under a count the way a macOS
+//! menu-bar extra drops its menu.
 //!
-//! "Active" is the fleet's own answer (`FleetNode::active`): the machine made a request into this
-//! one within the last minute (`adi_mesh::activity::ACTIVE_WINDOW_SECS`). That says nothing about
-//! a machine this one could reach but that has not called in, so the list shows when each was
-//! last seen as well — the count alone reads as "they are all down" when they are only quiet.
+//! * **Sources** — the machines this one reads from: every paired node, and whether a dial to it
+//!   connects right now (`GET /api/fleet/reach`). The count in the bar is these.
+//! * **Viewers** — the machines that may read this one: every node granted something here, and
+//!   whether it has lately (`FleetNode::active`, a request in within the last minute).
+//!
+//! Two lists because they are two questions. A node can be reachable and never have called in, or
+//! have called in a minute ago and be asleep now; one "active" for both said neither.
 
 use adi_ui::{Icon, IconSize, Lucide};
-use adi_webapp_api::types::FleetNode;
+use std::collections::HashMap;
+
+use adi_webapp_api::types::{FleetNode, Reach};
 use leptos::{ev, html, portal::Portal, prelude::*};
 
 use crate::fetch;
 
-/// How often the paired machines are counted again while the list is closed. A machine coming up
-/// is not urgent news, and every count is a request to the stack. Opening the list asks at once.
+/// How often the paired machines are counted and dialled again. A machine coming up is not urgent
+/// news, and every round is a mesh dial per node. Opening the list asks at once.
 const TICK_MS: u32 = 30_000;
 
 /// The gap between the top bar and the list hanging from it.
@@ -25,6 +29,8 @@ const DROP_GAP: f64 = 4.0;
 pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     // `None` until the fleet first answers, so the bar never claims "0 of 0" it has not been told.
     let nodes = RwSignal::new(None::<Vec<FleetNode>>);
+    // `None` while the first dials are out: a node not yet dialled is not yet unreachable.
+    let reach = RwSignal::new(None::<HashMap<String, Reach>>);
     let open = RwSignal::new(false);
     // Where the list hangs: `(top, right)` in viewport pixels, from the button's own box.
     let at = RwSignal::new((0.0, 0.0));
@@ -35,6 +41,12 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
             // A failed recount keeps the last answer: stale by a tick beats blank.
             if let Ok(fleet) = fetch::fleet().await {
                 nodes.set(Some(fleet.nodes));
+            }
+        });
+        // Apart from the fleet, which is local and quick: this one waits on every node's dial.
+        leptos::task::spawn_local(async move {
+            if let Ok(r) = fetch::fleet_reach().await {
+                reach.set(Some(r.nodes.into_iter().map(|n| (n.node, n.reach)).collect()));
             }
         });
     };
@@ -73,16 +85,22 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         open.set(true);
     };
 
+    // `(reachable, paired)`; the first is `None` until the dials are back.
     let counts = move || {
-        nodes.with(|n| {
-            n.as_ref()
-                .map(|n| (n.iter().filter(|n| n.active).count(), n.len()))
-        })
+        let paired = nodes.with(|n| n.as_ref().map(Vec::len))?;
+        let up = reach.with(|r| {
+            r.as_ref()
+                .map(|r| r.values().filter(|r| **r == Reach::Reachable).count())
+        });
+        Some((up, paired))
     };
 
     view! {
-        {move || counts().map(|(active, paired)| {
-            let label = format!("{active} of {paired} paired machines active now");
+        {move || counts().map(|(up, paired)| {
+            let label = match up {
+                Some(up) => format!("{up} of {paired} sources reachable"),
+                None => format!("Checking {paired} sources"),
+            };
             view! {
                 <button
                     class="adi-new-top__status adi-new-top__sources"
@@ -96,7 +114,8 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                 >
                     <Icon icon=Lucide::Network size=IconSize::Sm/>
                     <span class="adi-new-top__count">
-                        {active}<span class="adi-new-top__of">"/"{paired}</span>
+                        {up.map_or_else(|| "–".to_string(), |u| u.to_string())}
+                        <span class="adi-new-top__of">"/"{paired}</span>
                     </span>
                 </button>
             }
@@ -119,7 +138,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                     }
                     role="dialog"
                     aria-modal="true"
-                    aria-label="Sources"
+                    aria-label="Paired machines"
                     tabindex="-1"
                     on:keydown=move |ev: ev::KeyboardEvent| {
                         if ev.key() == "Escape" {
@@ -129,66 +148,125 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         }
                     }
                 >
-                    <div class="adi-new-drop__head">
-                        <span class="adi-new-drop__title">"Sources"</span>
-                        <span class="adi-new-drop__meta">
-                            {move || counts().map(|(a, p)| format!("{a} of {p} active"))}
-                        </span>
-                    </div>
-                    {move || list(nodes.get())}
-                    <p class="adi-new-drop__note">
-                        "Active means it reached this machine in the last minute."
-                    </p>
+                    {move || match nodes.get() {
+                        None => view! { <p class="adi-new-drop__empty">"Loading…"</p> }.into_any(),
+                        Some(n) if n.is_empty() => view! {
+                            <p class="adi-new-drop__empty">"No paired machines yet"</p>
+                        }
+                        .into_any(),
+                        Some(n) => {
+                            let r = reach.get();
+                            view! { {sources(&n, r.as_ref())} {viewers(&n)} }.into_any()
+                        }
+                    }}
                 </div>
             </Portal>
         </Show>
     }
 }
 
-/// The rows: active machines first, then the most recently seen, then the never seen.
-fn list(nodes: Option<Vec<FleetNode>>) -> AnyView {
-    let Some(mut nodes) = nodes else {
-        return view! { <p class="adi-new-drop__empty">"Loading…"</p> }.into_any();
-    };
-    if nodes.is_empty() {
-        return view! { <p class="adi-new-drop__empty">"No paired machines yet"</p> }.into_any();
+/// One row: a dot for its state, the machine's name, and the state in words.
+struct Row {
+    name: String,
+    /// The node's own name for itself, when it differs — what it is recognised by over there.
+    called: Option<String>,
+    /// `on`, `warn` or `off` — the dot's colour.
+    tone: &'static str,
+    state: String,
+}
+
+impl Row {
+    fn new(n: &FleetNode, tone: &'static str, state: String) -> Self {
+        Self {
+            name: n.petname.clone(),
+            called: (n.nickname != n.petname).then(|| format!("Calls itself {}", n.nickname)),
+            tone,
+            state,
+        }
     }
-    nodes.sort_by(|a, b| {
+}
+
+/// A titled section: its head, a count beside it, and its rows.
+fn section(title: &'static str, meta: String, rows: Vec<Row>) -> impl IntoView {
+    view! {
+        <section class="adi-new-drop__section">
+            <div class="adi-new-drop__head">
+                <span class="adi-new-drop__title">{title}</span>
+                <span class="adi-new-drop__meta">{meta}</span>
+            </div>
+            <ul class="adi-new-drop__list">
+                {rows
+                    .into_iter()
+                    .map(|r| view! {
+                        <li class="adi-new-drop__row" title=r.called>
+                            <span class="adi-new-drop__dot" data-tone=r.tone></span>
+                            <span class="adi-new-drop__name">{r.name}</span>
+                            <span class="adi-new-drop__seen">{r.state}</span>
+                        </li>
+                    })
+                    .collect_view()}
+            </ul>
+        </section>
+    }
+}
+
+/// Every paired node, as something this machine dials: reachable first, then by name.
+fn sources(nodes: &[FleetNode], reach: Option<&HashMap<String, Reach>>) -> impl IntoView {
+    let mut rows: Vec<(u8, Row)> = nodes
+        .iter()
+        .map(|n| {
+            let (rank, tone, state) = match reach.and_then(|r| r.get(&n.petname)) {
+                Some(Reach::Reachable) => (0, "on", "Reachable"),
+                Some(Reach::Refused) => (1, "warn", "Refuses this machine"),
+                Some(Reach::Unreachable) => (2, "off", "Unreachable"),
+                Some(Reach::MeshOff) => (2, "off", "Mesh is off"),
+                None => (3, "off", "Checking…"),
+            };
+            (rank, Row::new(n, tone, state.into()))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    let meta = match reach {
+        Some(r) => format!(
+            "{} of {} reachable",
+            r.values().filter(|r| **r == Reach::Reachable).count(),
+            nodes.len()
+        ),
+        None => "Checking…".into(),
+    };
+    section("Sources", meta, rows.into_iter().map(|(_, r)| r).collect())
+}
+
+/// The nodes granted something here — the ones that can read this machine — by how lately they
+/// did: connected now, then most recently seen, then never.
+fn viewers(nodes: &[FleetNode]) -> impl IntoView {
+    let mut granted: Vec<&FleetNode> = nodes.iter().filter(|n| !n.grants.is_empty()).collect();
+    if granted.is_empty() {
+        return None;
+    }
+    granted.sort_by(|a, b| {
         b.active
             .cmp(&a.active)
             .then(b.last_seen.cmp(&a.last_seen))
             .then_with(|| a.petname.cmp(&b.petname))
     });
     let now = now_unix();
-    view! {
-        <ul class="adi-new-drop__list">
-            {nodes
-                .into_iter()
-                .map(|n| {
-                    let seen = seen(n.active, n.last_seen, now);
-                    // The node's own name for itself, where it differs from the one given it
-                    // here — what someone recognises it by on the other side.
-                    let called = (n.nickname != n.petname)
-                        .then(|| format!("Calls itself {}", n.nickname));
-                    view! {
-                        <li class="adi-new-drop__row" title=called>
-                            <span class="adi-new-drop__dot" class:is-on=n.active></span>
-                            <span class="adi-new-drop__name">{n.petname}</span>
-                            <span class="adi-new-drop__seen">{seen}</span>
-                        </li>
-                    }
-                })
-                .collect_view()}
-        </ul>
-    }
-    .into_any()
+    let connected = granted.iter().filter(|n| n.active).count();
+    let rows = granted
+        .into_iter()
+        .map(|n| {
+            let tone = if n.active { "on" } else { "off" };
+            Row::new(n, tone, seen(n.active, n.last_seen, now))
+        })
+        .collect();
+    Some(section("Viewers", format!("{connected} connected"), rows))
 }
 
-/// A machine's state as a person reads it: `Active now`, `Seen 3d ago`, `Never seen`.
+/// A viewer's state as a person reads it: `Connected now`, `Seen 3d ago`, `Never connected`.
 fn seen(active: bool, last_seen: Option<u64>, now: u64) -> String {
     match (active, last_seen) {
-        (true, _) => "Active now".into(),
-        (false, None) => "Never seen".into(),
+        (true, _) => "Connected now".into(),
+        (false, None) => "Never connected".into(),
         (false, Some(at)) => match now.saturating_sub(at) {
             0..=59 => "Seen just now".into(),
             s if s < 3_600 => format!("Seen {}m ago", s / 60),
@@ -209,10 +287,10 @@ mod tests {
     use super::seen;
 
     #[test]
-    fn seen_reads_the_gap_and_trusts_active_over_it() {
+    fn seen_reads_the_gap_and_trusts_connected_over_it() {
         let now = 1_000_000;
-        assert_eq!(seen(true, Some(0), now), "Active now");
-        assert_eq!(seen(false, None, now), "Never seen");
+        assert_eq!(seen(true, Some(0), now), "Connected now");
+        assert_eq!(seen(false, None, now), "Never connected");
         assert_eq!(seen(false, Some(now - 90), now), "Seen 1m ago");
         assert_eq!(seen(false, Some(now - 3 * 86_400), now), "Seen 3d ago");
     }

@@ -539,7 +539,7 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
   max-height: calc(100vh - #{$top-bar-h} - var(--s8));
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
   padding: var(--s1);
   color: var(--ink);
   font-size: var(--fs-small);
@@ -550,6 +550,13 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
   border-radius: var(--r-float);
   box-shadow: var(--shadow-float);
   outline: none;
+
+  // Sources, then viewers, a hairline between.
+  &__section + &__section {
+    margin-top: var(--s1);
+    padding-top: var(--s1);
+    border-top: 1px solid var(--line);
+  }
 
   &__head {
     display: flex;
@@ -591,7 +598,8 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
     border-radius: 50%;
     background: var(--ink-3);
 
-    &.is-on { background: var(--ok); }
+    &[data-tone="on"] { background: var(--ok); }
+    &[data-tone="warn"] { background: var(--warn); }
   }
 
   &__name {
@@ -611,14 +619,6 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
   &__empty {
     margin: 0;
     padding: var(--s3) var(--s2);
-    color: var(--ink-3);
-  }
-
-  &__note {
-    margin: var(--s1) 0 0;
-    padding: var(--s2) var(--s2) 6px;
-    border-top: 1px solid var(--line);
-    font-size: var(--fs-label);
     color: var(--ink-3);
   }
 }

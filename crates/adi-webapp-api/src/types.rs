@@ -4622,6 +4622,42 @@ pub struct FleetNodeAccess {
     pub locked: bool,
 }
 
+/// `GET /api/fleet/reach` — whether this machine can reach each paired node right now.
+///
+/// The outbound half of a node's state. [`FleetNode::active`] is the inbound half — the node made a
+/// request *into* this machine lately — and says nothing about whether a call *out* to it would
+/// connect: a node that has never opened this machine's panel is still reachable, and one that
+/// opened it a minute ago may since have gone to sleep. One mesh dial per node, so this is polled
+/// and never watched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetReach {
+    pub nodes: Vec<NodeReach>,
+}
+
+/// One paired node, and what dialling it just now found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeReach {
+    /// The node's petname, as this machine files it.
+    pub node: String,
+    pub reach: Reach,
+}
+
+/// What a dial to a node found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reach {
+    /// The node's control panel answered — whatever it answered, a `401` included: an answer is
+    /// the node, up and connected.
+    Reachable,
+    /// The node was reached and refused: it has not granted this machine its panel, or the panel
+    /// there is not running. Connected, but nothing to read.
+    Refused,
+    /// No answer — asleep, offline, or on no relay this machine can find.
+    Unreachable,
+    /// This machine's own mesh gateway is not listening, so no node could be dialled at all.
+    MeshOff,
+}
+
 /// `POST /api/fleet/dashboards/allow` — ask a node to let this machine reach one of its services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeServiceRef {

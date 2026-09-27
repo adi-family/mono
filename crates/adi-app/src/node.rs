@@ -22,7 +22,7 @@
 
 use adi_mesh::fleet::FleetRegistry;
 use adi_webapp_api::handlers::{self, Response};
-use adi_webapp_api::types::ApiError;
+use adi_webapp_api::types::{ApiError, Reach};
 use base64::Engine as _;
 use tracing::debug;
 
@@ -322,9 +322,103 @@ fn refusal(node: &str, path: &str, status: u16, html: bool, body: &str) -> Strin
     }
 }
 
+/// Dial a node's control panel and say what came back — the outbound "is it there" a fleet list
+/// shows beside each node. `auth` is whatever credential this machine holds for it, or empty: a
+/// `401` still proves the node answered.
+pub(crate) async fn reach(node: &str, auth: &str, timeout: std::time::Duration) -> Reach {
+    reach_at(adi_mesh::gateway::configured_addr(), node, auth, timeout).await
+}
+
+/// [`reach`], at an explicit gateway address — see [`call_at`] for why it is a parameter.
+async fn reach_at(
+    gateway: std::net::SocketAddr,
+    node: &str,
+    auth: &str,
+    timeout: std::time::Duration,
+) -> Reach {
+    // Before the builder, which panics rather than erring without a provider.
+    crate::ensure_tls_provider();
+    let Ok(client) = reqwest::Client::builder().timeout(timeout).build() else {
+        return Reach::Unreachable;
+    };
+    let answered = client
+        .get(format!("http://{gateway}/api/health"))
+        .header(
+            reqwest::header::HOST,
+            format!("{APP_SERVICE}.{node}.{MESH_ZONE}"),
+        )
+        .header(reqwest::header::AUTHORIZATION, auth)
+        .send()
+        .await;
+    let response = match answered {
+        Ok(response) => response,
+        Err(e) if e.is_connect() => return Reach::MeshOff,
+        Err(_) => return Reach::Unreachable,
+    };
+    let status = response.status().as_u16();
+    let html = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    let body = if html {
+        response.text().await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+    classify(status, html, &body)
+}
+
+/// What one answer through the gateway says about the node behind it.
+///
+/// Every failure the gateway itself serves is a `502` `text/html` page, and the only thing that
+/// tells them apart on this side of the socket is the heading it draws — `reason_heading` in
+/// `adi-mesh`'s `gateway.rs`, whose "refused the request" is the one case in which the node was
+/// dialled and did answer. Anything else — any status, any type — came from the node's own panel.
+fn classify(status: u16, html: bool, body: &str) -> Reach {
+    if !(html && status == 502) {
+        return Reach::Reachable;
+    }
+    if body.contains("refused the request") {
+        Reach::Refused
+    } else {
+        Reach::Unreachable
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_gateways_own_page_says_a_node_was_not_there() {
+        assert_eq!(classify(200, false, ""), Reach::Reachable);
+        assert_eq!(classify(401, false, ""), Reach::Reachable, "a 401 is the node answering");
+        assert_eq!(
+            classify(502, true, "<h1>That machine refused the request</h1>"),
+            Reach::Refused
+        );
+        assert_eq!(
+            classify(502, true, "<h1>That machine is not reachable from here</h1>"),
+            Reach::Unreachable
+        );
+        assert_eq!(
+            classify(502, true, "<h1>That machine has not paired with this one</h1>"),
+            Reach::Unreachable
+        );
+    }
+
+    #[tokio::test]
+    async fn nothing_listening_on_the_gateway_is_the_mesh_being_off() {
+        // Bound and dropped, so the port is known to be closed.
+        let addr = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .expect("bind");
+        assert_eq!(
+            reach_at(addr, "laptop-b", "", std::time::Duration::from_secs(2)).await,
+            Reach::MeshOff
+        );
+    }
 
     #[test]
     fn a_dashboard_host_becomes_a_service_name_and_a_mesh_url() {
