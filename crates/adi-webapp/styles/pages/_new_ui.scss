@@ -904,6 +904,15 @@ $island-gap: var(--s2);
   justify-content: center;
   gap: var(--s6) var(--s4);
   color: var(--ink);
+
+  // A paired machine's name, across the whole row, over its apps.
+  &__machine {
+    grid-column: 1 / -1;
+    margin: var(--s2) 0 calc(-1 * var(--s3));
+    font-size: var(--fs-label);
+    font-weight: 500;
+    color: var(--ink-2);
+  }
 }
 
 .adi-new-app {
@@ -912,8 +921,13 @@ $island-gap: var(--s2);
   align-items: center;
   gap: 6px;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
   color: inherit;
   text-decoration: none;
+  cursor: pointer;
 
   // The glyph on a translucent tile — the island's surface, without its lift: it lies on the
   // wallpaper rather than floating over it.
@@ -945,4 +959,10 @@ $island-gap: var(--s2);
 
   // Nothing to open: the tile stays, so the app is not lost from view, but reads as asleep.
   &.is-off { opacity: .5; cursor: default; }
+
+  // Running over there, but not yet granted here: the lock in place of the glyph, and pressing
+  // it asks.
+  &.is-ask &__icon { color: var(--ink-2); }
+  &.is-ask:disabled { cursor: progress; }
+  &.is-refused &__name { color: var(--err); }
 }
