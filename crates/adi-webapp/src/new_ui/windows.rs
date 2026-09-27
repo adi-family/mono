@@ -24,12 +24,16 @@ const DEVICE_KEY: &str = "adi-new-ui-device";
 /// Where the device window's address starts; the device's name follows it.
 const DEVICES: &str = "/devices";
 
-/// Which app the app window shows — the whole [`AppRef`], since its address alone does not say
-/// where the app answers.
-const APP_KEY: &str = "adi-new-ui-app";
+/// The apps open in windows, with the number each window goes by — the whole [`AppRef`], since
+/// an app's address alone does not say where it answers.
+const APPS_KEY: &str = "adi-new-ui-apps";
 
-/// Where the app window's address starts; the app's [`AppRef::key`] follows it.
+/// Where an app window's address starts; the app's [`AppRef::key`] follows it.
 const APPS: &str = "/apps";
+
+/// Where every app window's size is kept once one is resized: a new app opens at the size the
+/// last one was left at, as a browser opens a new window.
+const APP_SIZE_KEY: &str = "adi-new-ui-window-app-size";
 
 /// How much of a window must stay on screen, so a drag can never lose it: this much of its
 /// width, and all of its title bar.
@@ -48,21 +52,15 @@ pub(super) enum Win {
     About,
     /// One paired device's page — which one is [`Desk`]'s to say, so there is one at a time.
     Device,
-    /// One app, framed in a small browser — which one is [`Desk`]'s to say, as with the device.
-    App,
+    /// One app, framed in a small browser. As many as there are apps open, each by the number
+    /// [`Desk`] gave it; which app that is is the desk's to say.
+    App(u32),
 }
 
 impl Win {
-    pub(super) const ALL: [Self; 4] = [Self::Settings, Self::About, Self::Device, Self::App];
-
-    /// The windows whose address carries a name after their own path.
-    fn prefix(self) -> Option<&'static str> {
-        match self {
-            Self::Device => Some(DEVICES),
-            Self::App => Some(APPS),
-            Self::Settings | Self::About => None,
-        }
-    }
+    /// The windows there is one of, drawn from this fixed list. App windows come and go, and are
+    /// drawn from [`Desk::apps`].
+    pub(super) const FIXED: [Self; 3] = [Self::Settings, Self::About, Self::Device];
 
     /// The address that opens it — for the device window, only the start of it.
     fn path(self) -> &'static str {
@@ -70,7 +68,7 @@ impl Win {
             Self::Settings => "/settings",
             Self::About => "/about",
             Self::Device => DEVICES,
-            Self::App => APPS,
+            Self::App(_) => APPS,
         }
     }
 
@@ -79,17 +77,18 @@ impl Win {
             Self::Settings => "Settings",
             Self::About => "About adi",
             Self::Device => "Device",
-            Self::App => "App",
+            Self::App(_) => "App",
         }
     }
 
-    /// Where its position is kept.
-    fn pos_key(self) -> &'static str {
+    /// Where its position is kept. Not an app window's: each opens cascaded from the last, as a
+    /// browser's new windows do, rather than all over one remembered spot.
+    fn pos_key(self) -> Option<&'static str> {
         match self {
-            Self::Settings => "adi-new-ui-window-settings",
-            Self::About => "adi-new-ui-window-about",
-            Self::Device => "adi-new-ui-window-device",
-            Self::App => "adi-new-ui-window-app",
+            Self::Settings => Some("adi-new-ui-window-settings"),
+            Self::About => Some("adi-new-ui-window-about"),
+            Self::Device => Some("adi-new-ui-window-device"),
+            Self::App(_) => None,
         }
     }
 
@@ -100,7 +99,7 @@ impl Win {
             Self::Settings => 480,
             Self::About => 320,
             Self::Device => 420,
-            Self::App => 1024,
+            Self::App(_) => 1024,
         }
     }
 
@@ -110,7 +109,7 @@ impl Win {
             Self::Settings => (380.0, 240.0),
             Self::About => (280.0, 200.0),
             Self::Device => (320.0, 240.0),
-            Self::App => (480.0, 320.0),
+            Self::App(_) => (480.0, 320.0),
         }
     }
 
@@ -120,29 +119,47 @@ impl Win {
             Self::Settings => "adi-new-ui-window-settings-size",
             Self::About => "adi-new-ui-window-about-size",
             Self::Device => "adi-new-ui-window-device-size",
-            Self::App => "adi-new-ui-window-app-size",
+            Self::App(_) => APP_SIZE_KEY,
         }
     }
+}
 
-    /// The window an address names, and for the device and app windows the name after it.
-    fn from_path(path: &str) -> Option<(Self, Option<String>)> {
+/// What an address names.
+enum Place {
+    Settings,
+    About,
+    /// A device, by its name.
+    Device(String),
+    /// An app, by its [`AppRef::key`].
+    App(String),
+}
+
+impl Place {
+    fn of(path: &str) -> Option<Self> {
         let path = path.trim_end_matches('/');
-        for w in Self::ALL {
-            if let Some(name) = w
-                .prefix()
-                .and_then(|p| path.strip_prefix(p))
-                .and_then(|p| p.strip_prefix('/'))
-                && !name.is_empty()
-            {
-                let name = js_sys::decode_uri_component(name)
-                    .map_or_else(|_| name.to_string(), String::from);
-                return Some((w, Some(name)));
-            }
+        // The app's key keeps its `/` (`laptop/notes`), so each part is decoded on its own.
+        let named = |prefix: &str| {
+            let rest = path.strip_prefix(prefix)?.strip_prefix('/')?;
+            (!rest.is_empty()).then(|| {
+                rest.split('/')
+                    .map(|p| {
+                        js_sys::decode_uri_component(p).map_or_else(|_| p.to_string(), String::from)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+        };
+        if let Some(name) = named(DEVICES) {
+            return Some(Self::Device(name));
         }
-        Self::ALL
-            .into_iter()
-            .find(|w| w.prefix().is_none() && w.path() == path)
-            .map(|w| (w, None))
+        if let Some(key) = named(APPS) {
+            return Some(Self::App(key));
+        }
+        match path {
+            "/settings" => Some(Self::Settings),
+            "/about" => Some(Self::About),
+            _ => None,
+        }
     }
 }
 
@@ -165,8 +182,8 @@ pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
     /// The device the device window shows, by the name this machine files it under.
     pub(super) device: RwSignal<Option<String>>,
-    /// The app the app window shows.
-    pub(super) app: RwSignal<Option<AppRef>>,
+    /// The apps open in windows, in the order they were opened, each with its window's number.
+    pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
 }
 
 impl Desk {
@@ -178,13 +195,21 @@ impl Desk {
             .unwrap_or_default();
         stack.dedup();
         let device = ui::storage().and_then(|s| s.get_item(DEVICE_KEY).ok().flatten());
-        let app = ui::storage()
-            .and_then(|s| s.get_item(APP_KEY).ok().flatten())
-            .and_then(|json| serde_json::from_str(&json).ok());
+        let mut apps: Vec<(u32, AppRef)> = ui::storage()
+            .and_then(|s| s.get_item(APPS_KEY).ok().flatten())
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+        // The two are saved one after the other, so either can outlive the other by a write: a
+        // window is only kept when both still know it.
+        stack.retain(|w| match w {
+            Win::App(id) => apps.iter().any(|(a, _)| a == id),
+            _ => true,
+        });
+        apps.retain(|(id, _)| stack.contains(&Win::App(*id)));
         let desk = Self {
             stack: RwSignal::new(stack),
             device: RwSignal::new(device),
-            app: RwSignal::new(app),
+            apps: RwSignal::new(apps),
         };
         desk.arrive(&routing::current_path());
         desk
@@ -193,30 +218,62 @@ impl Desk {
     /// The address changed under us — a load, back, forward. Raise what it names; close nothing,
     /// and write no history, because the browser already has.
     pub(super) fn arrive(self, path: &str) {
-        match Win::from_path(path) {
-            Some((Win::Device, Some(d))) => {
+        match Place::of(path) {
+            Some(Place::Settings) => self.raise(Win::Settings),
+            Some(Place::About) => self.raise(Win::About),
+            Some(Place::Device(d)) => {
                 self.set_device(d);
                 self.raise(Win::Device);
             }
-            // An app's address names it but not where it answers, so only the app this window
-            // last showed can be reopened from one — any other is an address to nothing.
-            Some((Win::App, Some(key))) => {
-                if self.app.with_untracked(|a| a.as_ref().is_some_and(|a| a.key == key)) {
-                    self.raise(Win::App);
+            // An app's address names it but not where it answers, so only an app already open
+            // can be come back to by one — any other is an address to nothing.
+            Some(Place::App(key)) => {
+                if let Some(id) = self.app_id(&key) {
+                    self.raise(Win::App(id));
                 }
             }
-            Some((w, _)) => self.raise(w),
             None => {}
         }
     }
 
-    /// Open the app window on one app — a link followed, like [`Self::open`].
+    /// Open an app in a window of its own, or bring its window forward when it has one — a link
+    /// followed, like [`Self::open`].
     pub(super) fn open_app(self, app: AppRef) {
-        if let (Some(s), Ok(json)) = (ui::storage(), serde_json::to_string(&app)) {
-            let _ = s.set_item(APP_KEY, &json);
+        let id = self.app_id(&app.key).unwrap_or_else(|| {
+            let id = self
+                .apps
+                .with_untracked(|a| a.iter().map(|(id, _)| *id).max().map_or(0, |m| m + 1));
+            self.apps.update(|a| a.push((id, app)));
+            self.save_apps();
+            id
+        });
+        self.open(Win::App(id));
+    }
+
+    fn app_id(self, key: &str) -> Option<u32> {
+        self.apps
+            .with_untracked(|a| a.iter().find(|(_, app)| app.key == key).map(|(id, _)| *id))
+    }
+
+    /// The app a window shows — tracked.
+    pub(super) fn app(self, id: u32) -> Option<AppRef> {
+        self.apps
+            .with(|a| a.iter().find(|(i, _)| *i == id).map(|(_, app)| app.clone()))
+    }
+
+    /// [`Self::app`], untracked.
+    pub(super) fn app_untracked(self, id: u32) -> Option<AppRef> {
+        self.apps
+            .with_untracked(|a| a.iter().find(|(i, _)| *i == id).map(|(_, app)| app.clone()))
+    }
+
+    fn save_apps(self) {
+        if let (Some(s), Ok(json)) = (
+            ui::storage(),
+            serde_json::to_string(&self.apps.get_untracked()),
+        ) {
+            let _ = s.set_item(APPS_KEY, &json);
         }
-        self.app.set(Some(app));
-        self.open(Win::App);
     }
 
     /// Open the device window on one device — a link followed, like [`Self::open`].
@@ -237,11 +294,9 @@ impl Desk {
     pub(super) fn title(self, w: Win) -> String {
         match w {
             Win::Device => self.device.get(),
-            Win::App => self.app.with(|a| {
-                a.as_ref().map(|a| match &a.machine {
-                    Some(m) => format!("{} — {m}", a.name),
-                    None => a.name.clone(),
-                })
+            Win::App(id) => self.app(id).map(|a| match &a.machine {
+                Some(m) => format!("{} — {m}", a.name),
+                None => a.name,
             }),
             Win::Settings | Win::About => None,
         }
@@ -252,7 +307,11 @@ impl Desk {
     fn address(self, w: Win) -> String {
         let name = match w {
             Win::Device => self.device.get_untracked(),
-            Win::App => self.app.with_untracked(|a| a.as_ref().map(|a| a.key.clone())),
+            Win::App(id) => self.apps.with_untracked(|a| {
+                a.iter()
+                    .find(|(i, _)| *i == id)
+                    .map(|(_, app)| app.key.clone())
+            }),
             Win::Settings | Win::About => None,
         };
         match name {
@@ -284,10 +343,14 @@ impl Desk {
         }
     }
 
-    /// Close one window and only that one.
+    /// Close one window and only that one. An app's window closed is the app closed.
     pub(super) fn close(self, w: Win) {
         self.stack.update(|s| s.retain(|x| *x != w));
         self.save();
+        if let Win::App(id) = w {
+            self.apps.update(|a| a.retain(|(i, _)| *i != id));
+            self.save_apps();
+        }
         self.show_address(false);
     }
 
@@ -366,7 +429,8 @@ pub(super) fn Frame(
     // Both `None` until first dragged or resized: the stylesheet centres the window and sizes it
     // to its content, which follows the viewport in a way stored pixels would not.
     let pos = RwSignal::new(
-        load_pair(win.pos_key())
+        win.pos_key()
+            .and_then(load_pair)
             .map(|(x, y)| clamp_pos(x, y, KEEP_VISIBLE * 2.0, top.get_untracked())),
     );
     let size = RwSignal::new(load_pair(win.size_key()).map(|(w, h)| {
@@ -434,7 +498,9 @@ pub(super) fn Frame(
     let on_up = move |_: ev::PointerEvent| {
         if gesture.get_value().is_some() {
             gesture.set_value(None);
-            save_pair(win.pos_key(), pos.get_untracked());
+            if let Some(key) = win.pos_key() {
+                save_pair(key, pos.get_untracked());
+            }
             save_pair(win.size_key(), size.get_untracked());
         }
     };

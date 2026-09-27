@@ -477,6 +477,45 @@ $top-bar-h: 28px; // `shell::TOP_BAR_H` in Rust must match: windows stop at this
 
   &__spacer { flex: 1; }
 
+  // The open apps, after the mark as a menu bar's items follow the Apple menu.
+  &__apps {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  &__app {
+    flex: none;
+    height: 22px;
+    max-width: 160px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 var(--s2);
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    font: inherit;
+    color: var(--ink-2);
+    cursor: pointer;
+
+    &:hover { background: var(--chip-hover); color: var(--ink); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+    // The app whose window is in front: named in full ink and weight, as macOS names the
+    // frontmost app in its menu bar.
+    &.is-front { color: var(--ink); font-weight: 600; }
+  }
+
+  &__app-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
   &__status {
     display: inline-flex;
     align-items: center;
@@ -976,8 +1015,6 @@ $island-gap: var(--s2);
   height: 100%;
   display: flex;
   flex-direction: column;
-
-  &__empty { padding: var(--s4); }
 
   &__bar {
     flex: none;

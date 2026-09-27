@@ -23,8 +23,8 @@
 
 mod about;
 mod apps;
-mod browser;
 mod background;
+mod browser;
 mod device;
 mod fleet;
 mod palette;
@@ -209,7 +209,7 @@ pub(crate) fn NewUi() -> impl IntoView {
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
             // was half-done inside it.
-            {Win::ALL
+            {Win::FIXED
                 .into_iter()
                 .map(|w| view! {
                     <Show when=move || desk.is_open(w)>
@@ -219,15 +219,24 @@ pub(crate) fn NewUi() -> impl IntoView {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
                                 Win::About => view! { <about::About/> }.into_any(),
-                                Win::App => view! { <browser::Browser desk/> }.into_any(),
                                 Win::Device => {
                                     view! { <device::Device fleet desk/> }.into_any()
                                 }
+                                // Not in the fixed list; drawn from the desk's apps below.
+                                Win::App(_) => ().into_any(),
                             }}
                         </Frame>
                     </Show>
                 })
                 .collect_view()}
+            // …and the apps' windows, one per open app, in the order they were opened — only
+            // ever added to the end or taken out, so none already open moves, and none reloads
+            // the page inside it.
+            <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
+                <Frame win=Win::App(app.0) desk light=light top=top_limit>
+                    <browser::Browser desk id=app.0/>
+                </Frame>
+            </For>
         </div>
         <Show when=move || shell.layout.get().top_bar>
             <TopBar desk fleet light=light/>

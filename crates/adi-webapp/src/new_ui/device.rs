@@ -100,10 +100,17 @@ fn page(
             let n = n.clone();
             move || {
                 (confirming.get() == Some(cut)).then(|| {
-                    confirm(n.clone(), cut, failed, busy, move || confirming.set(None), {
-                        let n = n.clone();
-                        move || act(n.clone(), cut)
-                    })
+                    confirm(
+                        n.clone(),
+                        cut,
+                        failed,
+                        busy,
+                        move || confirming.set(None),
+                        {
+                            let n = n.clone();
+                            move || act(n.clone(), cut)
+                        },
+                    )
                 })
             }
         }

@@ -113,7 +113,11 @@ impl Apps {
                 if n.locked || n.error.is_some() || n.dashboards.is_empty() {
                     continue;
                 }
-                let tiles = n.dashboards.iter().map(|d| Tile::remote(&n.node, d)).collect();
+                let tiles = n
+                    .dashboards
+                    .iter()
+                    .map(|d| Tile::remote(&n.node, d))
+                    .collect();
                 out.push((Some(n.node.clone()), tiles));
             }
         });
@@ -248,7 +252,9 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
     } = t;
     if let Some(href) = href {
         let app = AppRef {
-            key: machine.as_ref().map_or_else(|| id.clone(), |m| format!("{m}/{id}")),
+            key: machine
+                .as_ref()
+                .map_or_else(|| id.clone(), |m| format!("{m}/{id}")),
             name: name.clone(),
             machine,
             url: href.clone(),

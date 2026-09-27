@@ -155,6 +155,7 @@ pub(super) fn TopBar(
             >
                 <Mark class="adi-new-top__mark"/>
             </button>
+            <OpenApps desk/>
             <span class="adi-new-top__spacer"></span>
             <Sources fleet desk light=light/>
             {move || status(
@@ -187,6 +188,39 @@ pub(super) fn TopBar(
                 .into_any(),
             }}
         </header>
+    }
+}
+
+/// The apps open in windows, one button each, in the order they were opened — as a taskbar lists
+/// what is running. The one whose window is in front is marked; pressing any brings its window
+/// forward.
+#[component]
+fn OpenApps(desk: Desk) -> impl IntoView {
+    view! {
+        <nav class="adi-new-top__apps" aria-label="Open apps">
+            <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
+                {
+                    let (id, app) = app;
+                    let win = Win::App(id);
+                    let hover = match &app.machine {
+                        Some(m) => format!("{} on {m}", app.name),
+                        None => app.name.clone(),
+                    };
+                    view! {
+                        <button
+                            class="adi-new-top__app"
+                            class:is-front=move || desk.is_front(win)
+                            type="button"
+                            title=hover
+                            on:click=move |_| desk.focus(win)
+                        >
+                            <Icon icon=Lucide::LayoutDashboard size=IconSize::Sm/>
+                            <span class="adi-new-top__app-name">{app.name}</span>
+                        </button>
+                    }
+                }
+            </For>
+        </nav>
     }
 }
 

@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-92 structs · 29 enums · 5 type aliases across 41 files.
+92 structs · 30 enums · 5 type aliases across 41 files.
 
 ## Index
 
@@ -20,7 +20,7 @@
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `AppRef`, `Desk`, `Gesture`, `Edge`
+- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -452,7 +452,20 @@ pub(super) enum Win {
     Settings,
     About,
     Device,
-    App,
+    App(u32),
+}
+```
+
+### enum `Place`
+
+What an address names.
+
+```rust
+enum Place {
+    Settings,
+    About,
+    Device(String),
+    App(String),
 }
 ```
 
@@ -479,7 +492,7 @@ The open windows and their order.
 pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
     pub(super) device: RwSignal<Option<String>>,
-    pub(super) app: RwSignal<Option<AppRef>>,
+    pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
 }
 ```
 
