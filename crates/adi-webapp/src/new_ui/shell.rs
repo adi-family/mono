@@ -1,21 +1,25 @@
-//! The new UI's chrome over the wallpaper: a thin top bar, as iOS and macOS draw one, and the
+//! The new UI's chrome over the wallpaper: a thin top bar, as macOS and iOS draw one, and the
 //! island — a floating dock — on whichever edge the person puts it.
 //!
 //! Both are laid out from [`Layout`], a per-device preference kept in `localStorage` beside the
 //! wallpaper, for the same reason.
 
-use adi_ui::{Icon, IconSize, Lucide};
+use adi_ui::{Icon, IconSize, Lucide, Mark};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::windows::{Desk, Win};
-use crate::{live, ui};
+use crate::{fetch, live, ui};
 
 const KEY: &str = "adi-new-ui-layout";
 
 /// How often the top bar looks at the time and the connection. Once a second: the socket opens a
 /// moment after the page does, and a slower look would say "not connected" for that long.
 const CLOCK_TICK_MS: u32 = 1_000;
+
+/// How often the paired machines are counted again. A machine coming up is not urgent news, and
+/// every count is a request to the stack.
+const SOURCES_TICK_MS: u32 = 30_000;
 
 /// An edge of the screen.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -92,12 +96,17 @@ impl Shell {
     }
 }
 
-/// The top bar: the time and date on the left, as an iPad's status bar has them, and on the right
-/// whether the live channel to the stack is up.
+/// The top bar, as macOS lays out its menu bar: the mark on the left; on the right the status —
+/// how many of the paired machines are active, whether the stack's live channel is up, whether
+/// this device is online — and then the time and the date.
 #[component]
 pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     let now = RwSignal::new(clock());
-    let up = RwSignal::new(false);
+    let stack = RwSignal::new(false);
+    let online = RwSignal::new(window().navigator().on_line());
+    // `(active, paired)`, once the fleet has answered.
+    let sources = RwSignal::new(None::<(usize, usize)>);
+
     // The live channel's state is read here, from a timer, and never from the view. The flag in
     // `live` is a signal made on first read and owned by whatever reactive scope is current at
     // that moment: first read from inside a view, it belongs to that view and is thrown away the
@@ -108,9 +117,9 @@ pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         if now.with_untracked(|n| *n != c) {
             now.set(c);
         }
-        let connected = live::connected();
-        if up.get_untracked() != connected {
-            up.set(connected);
+        let up = live::connected();
+        if stack.get_untracked() != up {
+            stack.set(up);
         }
     };
     set_timeout(check, std::time::Duration::ZERO);
@@ -118,30 +127,77 @@ pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         check,
         std::time::Duration::from_millis(CLOCK_TICK_MS.into()),
     );
+
+    let count = move || {
+        leptos::task::spawn_local(async move {
+            if let Ok(fleet) = fetch::fleet().await {
+                let active = fleet.nodes.iter().filter(|n| n.active).count();
+                sources.set(Some((active, fleet.nodes.len())));
+            }
+        });
+    };
+    count();
+    let recount = set_interval_with_handle(
+        count,
+        std::time::Duration::from_millis(SOURCES_TICK_MS.into()),
+    );
+
+    // The browser says when the network comes and goes; asking it on a timer would only lag.
+    let went_on = window_event_listener(leptos::ev::online, move |_| online.set(true));
+    let went_off = window_event_listener(leptos::ev::offline, move |_| online.set(false));
+
     on_cleanup(move || {
-        if let Ok(t) = tick {
+        for t in [tick, recount].into_iter().flatten() {
             t.clear();
         }
+        went_on.remove();
+        went_off.remove();
     });
 
     view! {
         <header class="adi-new-top" class:light=move || light.get()>
-            <span class="adi-new-top__time">{move || now.get().0}</span>
-            <span class="adi-new-top__date">{move || now.get().1}</span>
+            <Mark class="adi-new-top__mark"/>
             <span class="adi-new-top__spacer"></span>
-            {move || {
-                let (icon, label) = if up.get() {
-                    (Lucide::Wifi, "Connected to the stack")
-                } else {
-                    (Lucide::WifiOff, "Not connected — reconnecting")
-                };
+            {move || sources.get().map(|(active, paired)| {
+                let label = format!("{active} of {paired} paired machines active now");
                 view! {
-                    <span class="adi-new-top__status" title=label aria-label=label role="img">
-                        <Icon icon=icon size=IconSize::Sm/>
+                    <span class="adi-new-top__status" title=label.clone() aria-label=label>
+                        <Icon icon=Lucide::Network size=IconSize::Sm/>
+                        <span class="adi-new-top__count">
+                            {active}<span class="adi-new-top__of">"/"{paired}</span>
+                        </span>
                     </span>
                 }
-            }}
+            })}
+            {move || status(
+                stack.get(),
+                (Lucide::Plug, "Connected to the stack"),
+                (Lucide::Unplug, "Not connected to the stack — reconnecting"),
+            )}
+            {move || status(
+                online.get(),
+                (Lucide::Wifi, "Online"),
+                (Lucide::WifiOff, "Offline — no internet connection"),
+            )}
+            <span class="adi-new-top__time">{move || now.get().0}</span>
+            <span class="adi-new-top__date">{move || now.get().1}</span>
         </header>
+    }
+}
+
+/// One status icon: which of two it shows, and what it says on hover.
+fn status(on: bool, yes: (Lucide, &'static str), no: (Lucide, &'static str)) -> impl IntoView {
+    let (icon, label) = if on { yes } else { no };
+    view! {
+        <span
+            class="adi-new-top__status"
+            class:is-off=!on
+            title=label
+            aria-label=label
+            role="img"
+        >
+            <Icon icon=icon size=IconSize::Sm/>
+        </span>
     }
 }
 
