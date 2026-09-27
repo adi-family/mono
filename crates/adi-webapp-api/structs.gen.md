@@ -4,11 +4,12 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-300 structs · 17 enums across 10 files.
+302 structs · 17 enums across 11 files.
 
 ## Index
 
 - [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `Waiting`, `Awaiting`
+- [`src/handlers/fleet.rs`](#srchandlersfleetrs) — `DroppedSources`, `DroppedSource`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
 - [`src/handlers/llm.rs`](#srchandlersllmrs) — `Filter`, `RequestAnalysis`, `ResponseAnalysis`
@@ -60,6 +61,32 @@ Every conversation with a wake registered, keyed by the pair that names one.
 
 ```rust
 struct Awaiting(std::collections::HashMap<(String, String), Vec<AgentAwait>>);
+```
+
+---
+
+## `src/handlers/fleet.rs`
+
+### struct `DroppedSources`
+
+The nodes this machine has stopped reading, each by key *and* pairing time — so pairing the same machine again starts it as a source afresh, and a stale entry can only ever miss.
+
+```rust
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct DroppedSources {
+    #[serde(default)]
+    nodes: Vec<DroppedSource>,
+}
+```
+
+### struct `DroppedSource`
+
+```rust
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DroppedSource {
+    key: String,
+    paired_at: u64,
+}
 ```
 
 ---
@@ -749,6 +776,8 @@ pub struct FleetNode {
     pub active: bool,
     #[serde(default)]
     pub agent_instructions: Option<String>,
+    #[serde(default = "yes")]
+    pub source: bool,
 }
 ```
 

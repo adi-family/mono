@@ -339,6 +339,16 @@ pub async fn fleet_reach() -> Result<adi_webapp_api::types::FleetReach, String> 
     get_local("/api/fleet/reach").await
 }
 
+/// Stop this machine reading a node; it unpairs when the node views nothing here either.
+pub async fn fleet_drop_source(petname: String) -> Result<FleetState, String> {
+    post_local("/api/fleet/sources/drop", &FleetRef { petname }).await
+}
+
+/// Stop a node reading this machine; it unpairs when this machine no longer reads it either.
+pub async fn fleet_drop_viewer(petname: String) -> Result<FleetState, String> {
+    post_local("/api/fleet/viewers/drop", &FleetRef { petname }).await
+}
+
 /// Give this machine a node's password, so that node's dashboards can be listed. Checked against
 /// the node before it is stored, so a rejected password comes back as an error here rather than as
 /// a broken row later.

@@ -803,6 +803,14 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config()),
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
+        // Drop one direction of a pairing — this machine reading the node, or the node reading
+        // this machine — and unpair only when neither is left (the new UI's Disconnect).
+        ("POST", "/api/fleet/sources/drop") => {
+            viewer::drop_source(projects, secrets, &req.body)
+        }
+        ("POST", "/api/fleet/viewers/drop") => {
+            viewer::drop_viewer(projects, secrets, &req.body)
+        }
         ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),
         ("POST", "/api/fleet/grants/remove") => {
             handlers::fleet_revoke(projects.config(), &req.body)

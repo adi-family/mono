@@ -239,6 +239,129 @@ pub fn fleet_unpair(store: &Config, body: &[u8]) -> Response {
     })
 }
 
+/// `POST /api/fleet/sources/drop` — stop this machine reading a node, and unpair it if that was
+/// all the pairing was still for.
+///
+/// A pairing carries two directions: this machine reading the node (a *source*), and the node
+/// reading this machine (a *viewer*, which is whatever it has been granted here). Dropping the
+/// first leaves the second alone — the node keeps its grants and stays paired — unless it has
+/// none, in which case nothing is left for the pairing to do and the node is unpaired.
+///
+/// # Errors
+/// 400 for an unusable body, 404 when no node goes by that petname here, 500 when the registry or
+/// the dropped list cannot be written.
+#[must_use]
+pub fn fleet_drop_source(store: &Config, body: &[u8]) -> Response {
+    let petname = match node_ref(body) {
+        Ok(petname) => petname,
+        Err(response) => return response,
+    };
+    fleet_edit(store, move |registry| {
+        let record = registry.get(&petname).ok_or_else(|| not_paired(&petname))?;
+        if record.grants.is_empty() {
+            registry.unpair(&petname);
+            return Ok(());
+        }
+        let mut dropped = DroppedSources::load(store);
+        dropped.add(&record.key, record.paired_at);
+        dropped
+            .save(store)
+            .map_err(|e| error(500, &format!("writing the dropped sources: {e}")))
+    })
+}
+
+/// `POST /api/fleet/viewers/drop` — stop a node reading this machine, and unpair it if this
+/// machine no longer reads it either.
+///
+/// The mirror of [`fleet_drop_source`]: every grant the node holds here goes, and the pairing
+/// stays for as long as the node is still a source.
+///
+/// # Errors
+/// 400 for an unusable body, 404 when no node goes by that petname here.
+#[must_use]
+pub fn fleet_drop_viewer(store: &Config, body: &[u8]) -> Response {
+    let petname = match node_ref(body) {
+        Ok(petname) => petname,
+        Err(response) => return response,
+    };
+    let mut dropped = DroppedSources::load(store);
+    fleet_edit(store, move |registry| {
+        let record = registry
+            .get_mut(&petname)
+            .ok_or_else(|| not_paired(&petname))?;
+        if !dropped.holds(&record.key, record.paired_at) {
+            record.grants.clear();
+            return Ok(());
+        }
+        // The entry is for a pairing about to be gone; nothing could ever match it again.
+        dropped.remove(&record.key, record.paired_at);
+        registry.unpair(&petname);
+        dropped
+            .save(store)
+            .map_err(|e| error(500, &format!("writing the dropped sources: {e}")))
+    })
+}
+
+/// Where [`DroppedSources`] is kept: beside `fleet.toml`, in the mesh module's directory.
+const DROPPED_FILE: &str = "dropped-sources.toml";
+
+/// The nodes this machine has stopped reading, each by key *and* pairing time — so pairing the
+/// same machine again starts it as a source afresh, and a stale entry can only ever miss.
+///
+/// Its own file rather than a field on the registry's record: the registry is rewritten by every
+/// adi that pairs, including one older than this list, and a field it does not know it would
+/// drop on save — quietly turning a dropped source back on.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct DroppedSources {
+    #[serde(default)]
+    nodes: Vec<DroppedSource>,
+}
+
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct DroppedSource {
+    key: String,
+    paired_at: u64,
+}
+
+impl DroppedSources {
+    fn file(store: &Config) -> adi_config::ConfigFile<Self> {
+        store.module(adi_mesh::config::MODULE).file(DROPPED_FILE)
+    }
+
+    /// The list, or an empty one when it is missing or unreadable — every node a source, which
+    /// is what a machine that never dropped one has.
+    fn load(store: &Config) -> Self {
+        let file = Self::file(store);
+        if !file.exists() {
+            return Self::default();
+        }
+        file.load().unwrap_or_default()
+    }
+
+    fn save(&self, store: &Config) -> Result<(), String> {
+        Self::file(store).save(self).map_err(|e| e.to_string())
+    }
+
+    fn holds(&self, key: &str, paired_at: u64) -> bool {
+        self.nodes
+            .iter()
+            .any(|n| n.key == key && n.paired_at == paired_at)
+    }
+
+    fn remove(&mut self, key: &str, paired_at: u64) {
+        self.nodes.retain(|n| !(n.key == key && n.paired_at == paired_at));
+    }
+
+    fn add(&mut self, key: &str, paired_at: u64) {
+        if !self.holds(key, paired_at) {
+            self.nodes.push(DroppedSource {
+                key: key.to_string(),
+                paired_at,
+            });
+        }
+    }
+}
+
 /// `POST /api/fleet/grants/add` — let a node reach one thing here.
 ///
 /// Grants are the whole of the mesh-layer access control (§5) and they are **default-deny**: a
@@ -385,6 +508,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
     let registry =
         FleetRegistry::load_from(store).map_err(|e| format!("reading the fleet registry: {e}"))?;
     let seen = activity::last_seen_all(&Db::with_config(store.clone()));
+    let dropped = DroppedSources::load(store);
     let now = adi_config::now_unix();
     Ok(FleetState {
         nodes: registry
@@ -393,6 +517,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
             .map(|(petname, record)| {
                 let last_seen = seen.get(&record.nickname).copied();
                 let active = last_seen.is_some_and(|seen| activity::is_active(seen, now));
+                let source = !dropped.holds(&record.key, record.paired_at);
                 FleetNode {
                     petname,
                     key: record.key,
@@ -405,6 +530,7 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
                     pending_nickname: record.pending_nickname,
                     last_seen,
                     active,
+                    source,
                     agent_instructions: record.agent_instructions,
                 }
             })
@@ -687,6 +813,54 @@ mod tests {
         assert_eq!(fleet_rename(&store, br#"{"petname":"work"}"#).status, 400);
         assert_eq!(fleet_rename(&store, b"not json").status, 400);
         assert_eq!(ok_body(&fleet(&store))["nodes"][1]["petname"], "work");
+    }
+
+    #[test]
+    fn dropping_one_direction_keeps_the_pairing_until_neither_is_left() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &["http:app"], false);
+        pair(&store, "desk", "desk", &[], false);
+        let node = |v: &serde_json::Value, name: &str| {
+            v["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|n| n["petname"] == name)
+                .cloned()
+        };
+
+        // A viewer that is also a source: dropping the source leaves it paired and viewing.
+        let v = ok_body(&fleet_drop_source(&store, br#"{"petname":"laptop-b"}"#));
+        let laptop = node(&v, "laptop-b").expect("still paired");
+        assert_eq!(laptop["source"], false);
+        assert_eq!(laptop["grants"], serde_json::json!(["http:app"]));
+
+        // Dropping the viewer too leaves nothing, so it unpairs.
+        let v = ok_body(&fleet_drop_viewer(&store, br#"{"petname":"laptop-b"}"#));
+        assert!(node(&v, "laptop-b").is_none());
+        assert!(DroppedSources::load(&store).nodes.is_empty(), "its entry went with it");
+
+        // A source that views nothing here unpairs on its own drop.
+        let v = ok_body(&fleet_drop_source(&store, br#"{"petname":"desk"}"#));
+        assert!(node(&v, "desk").is_none());
+
+        // Pairing the same machine again starts it as a source afresh: the drop was for the
+        // pairing that is gone.
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        let mut registry = FleetRegistry::load_from(&store).expect("load");
+        registry.get_mut("laptop-b").expect("paired").paired_at += 1;
+        registry.save_to(&store).expect("save");
+        assert_eq!(node(&ok_body(&fleet(&store)), "laptop-b").unwrap()["source"], true);
+    }
+
+    #[test]
+    fn dropping_a_viewer_that_is_a_source_only_takes_its_grants() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &["http:app", "http:nosh"], false);
+        let v = ok_body(&fleet_drop_viewer(&store, br#"{"petname":"laptop-b"}"#));
+        assert_eq!(v["nodes"][0]["grants"], serde_json::json!([]));
+        assert_eq!(v["nodes"][0]["source"], true);
+        assert_eq!(fleet_drop_viewer(&store, br#"{"petname":"gone"}"#).status, 404);
     }
 
     #[test]

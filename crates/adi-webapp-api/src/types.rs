@@ -426,6 +426,17 @@ pub struct FleetNode {
     /// it, never one already running. `None` is every node until an operator sets one.
     #[serde(default)]
     pub agent_instructions: Option<String>,
+    /// Whether this machine still reads the node — a *source*, in the new UI's words. Every node
+    /// is one from pairing until an operator drops it (`POST /api/fleet/sources/drop`), which is
+    /// kept beside the registry rather than in it and forgotten by the next pairing. `true` when
+    /// absent, so a panel older than the field reads every node as it always did.
+    #[serde(default = "yes")]
+    pub source: bool,
+}
+
+/// `true`, for a `#[serde(default)]` that must not read as `false`.
+const fn yes() -> bool {
+    true
 }
 
 impl FleetNode {

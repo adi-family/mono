@@ -1,16 +1,16 @@
 //! The top bar's paired machines, in both directions, dropped down under a count the way a macOS
 //! menu-bar extra drops its menu.
 //!
-//! * **Sources** — the machines this one reads from: every paired node, and whether a dial to it
-//!   connects right now (`GET /api/fleet/reach`). The count in the bar is these.
+//! * **Sources** — the machines this one reads from: every paired node it has not dropped
+//!   (`FleetNode::source`), and whether a dial to it connects right now (`GET /api/fleet/reach`).
+//!   The count in the bar is these.
 //! * **Viewers** — the machines that may read this one: every node granted something here, and
 //!   whether it has lately (`FleetNode::active`, a request in within the last minute).
 //!
 //! Either row disconnects on a right click, or from the `⋯` it shows on hover — and what that
-//! cuts is the row's own direction, by the operator's decision. A **viewer** loses its grants
-//! here, so it can no longer read this machine but stays paired and stays a source. A **source**
-//! is unpaired outright, since this machine reading it needs nothing but the pairing. Both ask
-//! first: a pairing comes back only with a new invite, and grants only from the fleet settings.
+//! cuts is the row's own direction only, by the operator's decision: a dropped **source** is no
+//! longer read from here (and its password is forgotten), a dropped **viewer** loses its grants
+//! here. The pairing goes only when neither direction is left. Both ask first, saying which.
 //!
 //! Two lists because they are two questions. A node can be reachable and never have called in, or
 //! have called in a minute ago and be asleep now; one "active" for both said neither.
@@ -34,12 +34,22 @@ const DROP_GAP: f64 = 4.0;
 /// edge is pulled back onto the screen.
 const MENU_W: f64 = 264.0;
 
-/// A row's menu: which node, where it was opened, and — for a viewer — the grants disconnecting
-/// it takes away. `None` is a source, which is disconnected by unpairing.
+/// Which list a row is in — which direction its Disconnect cuts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Role {
+    Source,
+    Viewer,
+}
+
+/// A row's menu: which node, from which list, and where it was opened.
 #[derive(Clone)]
 struct Target {
     node: String,
-    grants: Option<Vec<String>>,
+    role: Role,
+    /// The node's grants here — what dropping it as a viewer takes away.
+    grants: Vec<String>,
+    /// Whether the other direction survives the drop; when it does not, the drop unpairs.
+    keeps: bool,
     x: f64,
     y: f64,
 }
@@ -107,19 +117,12 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         failed.set(None);
     };
 
-    let disconnect = move |node: String, grants: Option<Vec<String>>| {
+    let disconnect = move |node: String, role: Role| {
         busy.set(true);
         leptos::task::spawn_local(async move {
-            let done = match grants {
-                Some(grants) => revoke_all(&node, grants).await,
-                None => fetch::fleet_unpair(node.clone()).await.map(|fleet| {
-                    reach.update(|r| {
-                        if let Some(r) = r {
-                            r.remove(&node);
-                        }
-                    });
-                    fleet
-                }),
+            let done = match role {
+                Role::Source => fetch::fleet_drop_source(node).await,
+                Role::Viewer => fetch::fleet_drop_viewer(node).await,
             };
             match done {
                 Ok(fleet) => {
@@ -149,18 +152,32 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         open.set(true);
     };
 
-    // `(reachable, paired)`; the first is `None` until the dials are back.
+    // `(reachable, sources)`; the first is `None` until the dials are back.
     let counts = move || {
-        let paired = nodes.with(|n| n.as_ref().map(Vec::len))?;
+        let sources: Vec<String> = nodes.with(|n| {
+            n.as_ref()
+                .map(|n| n.iter().filter(|n| n.source).map(|n| n.petname.clone()).collect())
+        })?;
         let up = reach.with(|r| {
-            r.as_ref()
-                .map(|r| r.values().filter(|r| **r == Reach::Reachable).count())
+            r.as_ref().map(|r| {
+                sources
+                    .iter()
+                    .filter(|p| r.get(*p) == Some(&Reach::Reachable))
+                    .count()
+            })
         });
-        Some((up, paired))
+        Some((up, sources.len()))
     };
 
     let menu_view = move || {
-        let Target { node, grants, x, y } = menu.get()?;
+        let Target {
+            node,
+            role,
+            grants,
+            keeps,
+            x,
+            y,
+        } = menu.get()?;
         let width = window()
             .inner_width()
             .ok()
@@ -169,9 +186,16 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
         let left = x.min(width - MENU_W - 8.0).max(8.0);
         let style = format!("left: {left}px; top: {y}px");
         let body = if confirming.get() {
-            let (name, taking) = (node.clone(), grants.clone());
-            let question = match &grants {
-                Some(grants) => view! {
+            let name = node.clone();
+            let question = match (role, keeps) {
+                (Role::Source, true) => view! {
+                    <p class="adi-new-menu__text">
+                        "Stop reading "<strong>{node.clone()}</strong>"? It stays paired and can "
+                        "still view this machine. This machine forgets its password for it."
+                    </p>
+                }
+                .into_any(),
+                (Role::Viewer, true) => view! {
                     <p class="adi-new-menu__text">
                         "Stop "<strong>{node.clone()}</strong>" viewing this machine? It stays "
                         "paired, and this machine can still read it. Removes "
@@ -179,13 +203,20 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                     </p>
                 }
                 .into_any(),
-                None => view! {
-                    <p class="adi-new-menu__text">
-                        "Disconnect "<strong>{node.clone()}</strong>"? This unpairs it: neither "
-                        "machine can reach the other until you pair them again."
-                    </p>
+                (_, false) => {
+                    let other = if role == Role::Source {
+                        "viewing this machine"
+                    } else {
+                        "a source"
+                    };
+                    view! {
+                        <p class="adi-new-menu__text">
+                            "Disconnect "<strong>{node.clone()}</strong>"? It is not "{other}
+                            " either, so this unpairs it: only a new invite pairs them again."
+                        </p>
+                    }
+                    .into_any()
                 }
-                .into_any(),
             };
             view! {
                 {question}
@@ -198,7 +229,7 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         class="adi-new-menu__btn adi-new-menu__btn--danger"
                         type="button"
                         disabled=move || busy.get()
-                        on:click=move |_| disconnect(name.clone(), taking.clone())
+                        on:click=move |_| disconnect(name.clone(), role)
                     >
                         "Disconnect"
                     </button>
@@ -336,18 +367,25 @@ struct Row {
     /// `on`, `warn`, `err` or `off` — the dot's colour.
     tone: &'static str,
     state: String,
-    /// A viewer's grants here, which its Disconnect revokes; `None` on a source.
-    grants: Option<Vec<String>>,
+    role: Role,
+    grants: Vec<String>,
+    /// Whether the node keeps its other role when dropped from this one — see [`Target::keeps`].
+    keeps: bool,
 }
 
 impl Row {
-    fn new(n: &FleetNode, tone: &'static str, state: String) -> Self {
+    fn new(n: &FleetNode, role: Role, tone: &'static str, state: String) -> Self {
         Self {
             name: n.petname.clone(),
             called: (n.nickname != n.petname).then(|| format!("Calls itself {}", n.nickname)),
             tone,
             state,
-            grants: None,
+            role,
+            grants: n.grants.clone(),
+            keeps: match role {
+                Role::Source => !n.grants.is_empty(),
+                Role::Viewer => n.source,
+            },
         }
     }
 }
@@ -370,8 +408,16 @@ fn section(
                     .into_iter()
                     .map(|r| {
                         let target = {
-                            let (node, grants) = (r.name.clone(), r.grants.clone());
-                            move |x, y| Target { node: node.clone(), grants: grants.clone(), x, y }
+                            let (node, role, grants, keeps) =
+                                (r.name.clone(), r.role, r.grants.clone(), r.keeps);
+                            move |x, y| Target {
+                                node: node.clone(),
+                                role,
+                                grants: grants.clone(),
+                                keeps,
+                                x,
+                                y,
+                            }
                         };
                         let on_more = target.clone();
                         view! {
@@ -422,6 +468,10 @@ fn sources(
     reach: Option<&HashMap<String, Reach>>,
     menu: RwSignal<Option<Target>>,
 ) -> impl IntoView {
+    let nodes: Vec<&FleetNode> = nodes.iter().filter(|n| n.source).collect();
+    if nodes.is_empty() {
+        return None;
+    }
     let mut rows: Vec<(u8, Row)> = nodes
         .iter()
         .map(|n| {
@@ -432,19 +482,27 @@ fn sources(
                 Some(Reach::MeshOff) => (2, "err", "Mesh is off"),
                 None => (3, "off", "Checking…"),
             };
-            (rank, Row::new(n, tone, state.into()))
+            (rank, Row::new(n, Role::Source, tone, state.into()))
         })
         .collect();
     rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
     let meta = match reach {
         Some(r) => format!(
             "{} of {} reachable",
-            r.values().filter(|r| **r == Reach::Reachable).count(),
+            nodes
+                .iter()
+                .filter(|n| r.get(&n.petname) == Some(&Reach::Reachable))
+                .count(),
             nodes.len()
         ),
         None => "Checking…".into(),
     };
-    section("Sources", meta, rows.into_iter().map(|(_, r)| r).collect(), menu)
+    Some(section(
+        "Sources",
+        meta,
+        rows.into_iter().map(|(_, r)| r).collect(),
+        menu,
+    ))
 }
 
 /// The nodes granted something here — the ones that can read this machine — by how lately they
@@ -466,28 +524,10 @@ fn viewers(nodes: &[FleetNode], menu: RwSignal<Option<Target>>) -> impl IntoView
         .into_iter()
         .map(|n| {
             let tone = if n.active { "on" } else { "off" };
-            Row {
-                grants: Some(n.grants.clone()),
-                ..Row::new(n, tone, seen(n.active, n.last_seen, now))
-            }
+            Row::new(n, Role::Viewer, tone, seen(n.active, n.last_seen, now))
         })
         .collect();
     Some(section("Viewers", format!("{connected} connected"), rows, menu))
-}
-
-/// Take every grant a node holds here, one call each; the fleet as the last one left it.
-async fn revoke_all(
-    node: &str,
-    grants: Vec<String>,
-) -> Result<adi_webapp_api::types::FleetState, String> {
-    let mut fleet = None;
-    for grant in grants {
-        fleet = Some(fetch::fleet_revoke(node.to_string(), grant).await?);
-    }
-    match fleet {
-        Some(fleet) => Ok(fleet),
-        None => fetch::fleet().await,
-    }
 }
 
 /// A viewer's state as a person reads it: `Connected now`, `Seen 3d ago`, `Never connected`.

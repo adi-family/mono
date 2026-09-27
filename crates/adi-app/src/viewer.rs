@@ -35,6 +35,7 @@
 use std::collections::BTreeMap;
 
 use adi_mesh::fleet::{FleetRegistry, Grant, Target};
+use adi_projects::Projects;
 use adi_secrets::Secrets;
 use adi_webapp_api::handlers::{self, Response};
 use adi_webapp_api::types::{
@@ -231,6 +232,46 @@ pub(crate) async fn forget(secrets: &Secrets, body: &[u8]) -> Response {
         return handlers::error(500, &e);
     }
     fleet_dashboards(secrets).await
+}
+
+/// `POST /api/fleet/sources/drop` — stop this machine reading a node: the registry half is
+/// [`handlers::fleet_drop_source`], and the half that is this module's is the node's password,
+/// which goes with it. A source this machine no longer reads is one it has no business still
+/// holding a key to.
+pub(crate) fn drop_source(projects: &Projects, secrets: &Secrets, body: &[u8]) -> Response {
+    let response = handlers::fleet_drop_source(projects.config(), body);
+    if response.status == 200
+        && let Ok(node) = serde_json::from_slice::<FleetRef>(body)
+    {
+        forget_quietly(secrets, node.petname.trim());
+    }
+    response
+}
+
+/// `POST /api/fleet/viewers/drop` — stop a node reading this machine ([`handlers::fleet_drop_viewer`]).
+/// When that unpaired it, its password goes too; while it is still a source it is kept, since
+/// reading the node is exactly what the password is for.
+pub(crate) fn drop_viewer(projects: &Projects, secrets: &Secrets, body: &[u8]) -> Response {
+    let response = handlers::fleet_drop_viewer(projects.config(), body);
+    if response.status == 200
+        && let Ok(node) = serde_json::from_slice::<FleetRef>(body)
+        && let Ok(state) = serde_json::from_str::<FleetState>(&response.body)
+        && !state.nodes.iter().any(|n| n.petname == node.petname.trim())
+    {
+        forget_quietly(secrets, node.petname.trim());
+    }
+    response
+}
+
+/// Drop a node's stored password, if one is held. A failure is logged, not answered: the fleet
+/// edit it follows has already happened, and a leftover credential is only ever unused.
+fn forget_quietly(secrets: &Secrets, petname: &str) {
+    let mut held = credentials(secrets);
+    if held.remove(petname).is_some()
+        && let Err(e) = save(secrets, &held)
+    {
+        warn!(node = %petname, error = %e, "viewer: could not forget a dropped node's password");
+    }
 }
 
 /// `POST /api/fleet/dashboards/allow` — ask a node to let this machine reach one of its services,
