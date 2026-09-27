@@ -7,7 +7,7 @@ use adi_ui::{Icon, IconSize, Lucide};
 use leptos::{ev, prelude::*};
 use wasm_bindgen::JsCast;
 
-use super::background::{Kind, Preset, Wallpaper, is_hex};
+use super::background::{Appearance, Kind, Preset, Wallpaper, is_hex};
 
 /// The custom kinds, in the order the segmented control shows them.
 const CUSTOM: [(Kind, &str); 3] = [
@@ -62,6 +62,23 @@ pub(super) fn Sheet(wall: Wallpaper, #[prop(into)] close: Callback<()>) -> impl 
 
             <section class="adi-new-sheet__section">
                 <h2 class="adi-new-sheet__label">"Background"</h2>
+                <div class="adi-segmented" role="group" aria-label="Appearance">
+                    {Appearance::ALL
+                        .into_iter()
+                        .map(|(a, label)| view! {
+                            <button
+                                class="adi-segmented__option"
+                                type="button"
+                                aria-pressed=move || {
+                                    (wall.choice.get().appearance == a).to_string()
+                                }
+                                on:click=move |_| wall.set(|c| c.appearance = a)
+                            >
+                                {label}
+                            </button>
+                        })
+                        .collect_view()}
+                </div>
                 <div class="adi-new-walls">
                     {Preset::ALL
                         .into_iter()

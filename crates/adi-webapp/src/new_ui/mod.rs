@@ -102,10 +102,19 @@ pub(crate) fn NewUi() -> impl IntoView {
     };
 
     view! {
-        <div class="adi-new" style=move || wall.css()></div>
-        <Show when=move || path.get() == SETTINGS>
-            <settings::Sheet wall close=move || go("/")/>
-        </Show>
+        <div
+            class="adi-new-root"
+            data-appearance=move || wall.choice.get().appearance.attr()
+        >
+            <div
+                class="adi-new"
+                class:adi-new--grain=move || wall.grain()
+                style=move || wall.css()
+            ></div>
+            <Show when=move || path.get() == SETTINGS>
+                <settings::Sheet wall close=move || go("/")/>
+            </Show>
+        </div>
         {launcher::overlay(launcher, move || {
             vec![
                 Action::new("Settings", "Background", icons::Icon::Gear, move || go(SETTINGS)),

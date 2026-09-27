@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-81 structs · 25 enums · 5 type aliases across 34 files.
+81 structs · 26 enums · 5 type aliases across 34 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
-- [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Kind`, `Choice`, `Wallpaper`
+- [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -221,6 +221,21 @@ pub(super) enum Preset {
 }
 ```
 
+### enum `Appearance`
+
+Which build of every preset is shown — iOS's pair of a dark and a light wallpaper. A custom colour, gradient or image is exactly what was picked, whatever this says.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Appearance {
+    Auto,
+    #[default]
+    Dark,
+    Light,
+}
+```
+
 ### enum `Kind`
 
 Which kind of wallpaper is showing.
@@ -246,6 +261,7 @@ Everything but the image. Every kind's values are kept, not just the showing one
 #[serde(default)]
 pub(super) struct Choice {
     pub(super) kind: Kind,
+    pub(super) appearance: Appearance,
     pub(super) preset: Preset,
     pub(super) color: String,
     pub(super) from: String,

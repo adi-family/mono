@@ -4,11 +4,42 @@
 // operator's decision; the presets are `--wall-*` in `design/tokens.css`. The settings sheet over
 // it is ordinary chrome and keeps every other rule.
 
+$walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
+
+// Point every `--wall-<name>` at its dark or light build. Set on the screen's root rather than on
+// the wallpaper, so the preset tiles in the settings sheet follow the same appearance.
+@mixin walls($mode) {
+  @each $w in $walls { --wall-#{$w}: var(--wall-#{$w}-#{$mode}); }
+}
+
+.adi-new-root {
+  @include walls(dark);
+
+  &[data-appearance="light"] { @include walls(light); }
+
+  @media (prefers-color-scheme: light) {
+    &[data-appearance="auto"] { @include walls(light); }
+  }
+}
+
 // The chosen wallpaper arrives as an inline `background`, which overrides this one.
 .adi-new {
   position: fixed;
   inset: 0;
   background: var(--bg);
+
+  // Grain, faint enough not to read as texture: 8 bits per channel cannot draw a slow gradient
+  // across a wide screen without steps, and noise breaks those steps up. Not over a photo, which
+  // carries its own.
+  &--grain::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: .06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='1 0 0 0 0 1 0 0 0 0 1 0 0 0 0 0 0 0 0 1'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
 }
 
 // ---- settings sheet (`/settings`) -----------------------------------------------------------

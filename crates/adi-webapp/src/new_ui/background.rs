@@ -83,6 +83,35 @@ impl Preset {
     }
 }
 
+/// Which build of every preset is shown — iOS's pair of a dark and a light wallpaper. A custom
+/// colour, gradient or image is exactly what was picked, whatever this says.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Appearance {
+    /// Whichever the system is set to (`prefers-color-scheme`).
+    Auto,
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Appearance {
+    pub(super) const ALL: [(Self, &'static str); 3] = [
+        (Self::Light, "Light"),
+        (Self::Dark, "Dark"),
+        (Self::Auto, "Automatic"),
+    ];
+
+    /// The value of the screen's `data-appearance`, which the stylesheet keys the presets off.
+    pub(super) fn attr(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+}
+
 /// Which kind of wallpaper is showing.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,6 +129,7 @@ pub(super) enum Kind {
 #[serde(default)]
 pub(super) struct Choice {
     pub(super) kind: Kind,
+    pub(super) appearance: Appearance,
     pub(super) preset: Preset,
     pub(super) color: String,
     pub(super) from: String,
@@ -114,6 +144,7 @@ impl Default for Choice {
         // nothing but `#rrggbb`. They are the Night and Dusk presets' own colours.
         Self {
             kind: Kind::Preset,
+            appearance: Appearance::Dark,
             preset: Preset::Night,
             color: "#23315C".into(),
             from: "#2A1B47".into(),
@@ -198,12 +229,9 @@ impl Wallpaper {
         let c = self.choice.get();
         match c.kind {
             Kind::Color if is_hex(&c.color) => format!("background: {}", c.color),
-            Kind::Gradient if is_hex(&c.from) && is_hex(&c.to) => format!(
-                "background: linear-gradient({}deg, {}, {})",
-                c.angle % 360,
-                c.from,
-                c.to
-            ),
+            Kind::Gradient if is_hex(&c.from) && is_hex(&c.to) => {
+                format!("background: {}", eased(c.angle % 360, &c.from, &c.to))
+            }
             Kind::Image => match self.image.get() {
                 Some(url) => {
                     format!("background: url(\"{url}\") center / cover no-repeat, var(--bg)")
@@ -213,6 +241,31 @@ impl Wallpaper {
             _ => c.preset.css(),
         }
     }
+
+    /// Whether the grain goes over it — everything but a photo, which carries its own.
+    pub(super) fn grain(self) -> bool {
+        !(self.choice.get().kind == Kind::Image && self.image.get().is_some())
+    }
+}
+
+/// A two-colour linear gradient that eases in and out of its ends. Two bare stops change at a
+/// constant rate and stop dead at each end, which reads as a hard edge where the ramp meets the
+/// flat colour; smoothstep between them takes that corner off. Mixed in Oklab, where the
+/// halfway colour between two hues is not the muddy grey sRGB puts there.
+fn eased(angle: u16, from: &str, to: &str) -> String {
+    const STEPS: u32 = 8;
+    let stops: Vec<String> = (0..=STEPS)
+        .map(|i| {
+            let t = f64::from(i) / f64::from(STEPS);
+            let s = t * t * (3.0 - 2.0 * t);
+            format!(
+                "color-mix(in oklab, {to} {:.1}%, {from}) {:.1}%",
+                s * 100.0,
+                t * 100.0
+            )
+        })
+        .collect();
+    format!("linear-gradient(in oklab {angle}deg, {})", stops.join(", "))
 }
 
 /// `#rrggbb` and nothing else — the only shape `<input type="color">` writes.

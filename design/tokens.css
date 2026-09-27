@@ -94,38 +94,78 @@ code { background: rgba(255,255,255,.07); padding: 1px 5px; border-radius: var(-
    The one exception to §8's "no gradients, no blobs": the new UI's background is a wallpaper the
    person picks, iOS-style, and these are its presets (`crates/adi-webapp/src/new_ui/background.rs`).
    Decided by the operator for the new UI, which is leaving the current design behind; nothing
-   else may use them. Soft colour fields over a base, each painted as one `background`. */
+   else may use them.
+
+   Each preset comes dark and light; the new UI maps `--wall-<name>` to one or the other by the
+   appearance chosen (`styles/pages/_new_ui.scss`). A preset is colour fields over a base. Every
+   field falls off along a gaussian (alpha e^(-4.6t²), eight stops) rather than straight to
+   transparent — a linear ramp that stops at 55% draws a visible ring where it stops. */
 :root {
-  --wall-night:
-    radial-gradient(120% 90% at 15% 0%, #23315C 0%, transparent 60%),
-    radial-gradient(90% 80% at 100% 100%, #3B2250 0%, transparent 65%),
-    #0B0C14;
-  --wall-dusk:
-    radial-gradient(110% 80% at 0% 100%, #F2A36B 0%, transparent 55%),
-    radial-gradient(100% 90% at 100% 0%, #5A3A8C 0%, transparent 60%),
-    linear-gradient(170deg, #2A1B47 0%, #B85A7E 100%);
-  --wall-ocean:
-    radial-gradient(100% 80% at 80% 10%, #3FB6C9 0%, transparent 55%),
-    radial-gradient(120% 90% at 0% 100%, #0F3A7A 0%, transparent 60%),
-    linear-gradient(180deg, #0B2346 0%, #0A1426 100%);
-  --wall-forest:
-    radial-gradient(100% 90% at 20% 0%, #6FA36B 0%, transparent 55%),
-    radial-gradient(110% 80% at 100% 100%, #0F3B35 0%, transparent 60%),
-    linear-gradient(180deg, #1C3A27 0%, #0B1A14 100%);
-  --wall-aurora:
-    radial-gradient(70% 60% at 20% 25%, #1FA38A 0%, transparent 70%),
-    radial-gradient(70% 70% at 80% 30%, #5B3FD1 0%, transparent 70%),
-    radial-gradient(90% 70% at 50% 110%, #0E6BA8 0%, transparent 70%),
-    #07131A;
-  --wall-ember:
-    radial-gradient(110% 80% at 50% 110%, #E07A3F 0%, transparent 60%),
-    radial-gradient(90% 70% at 0% 0%, #6E1F2E 0%, transparent 60%),
-    linear-gradient(180deg, #1A0B0C 0%, #3A1410 100%);
-  --wall-blush:
-    radial-gradient(100% 80% at 0% 0%, #F7D9C4 0%, transparent 60%),
-    radial-gradient(100% 90% at 100% 100%, #B9A2E0 0%, transparent 60%),
-    linear-gradient(160deg, #F3C6CF 0%, #D8B4E2 100%);
-  --wall-graphite: linear-gradient(160deg, #2A2A2A 0%, #141414 55%, #0A0A0A 100%);
+  --wall-night-dark:
+    radial-gradient(130% 110% at 10% 0%, #2B3A6EFF 0%, #2B3A6EE6 15%, #2B3A6EA9 30%, #2B3A6E64 45%, #2B3A6E31 60%, #2B3A6E17 72%, #2B3A6E0A 84%, #2B3A6E00 100%),
+    radial-gradient(110% 100% at 100% 100%, #4A2A66FF 0%, #4A2A66E6 15%, #4A2A66A9 30%, #4A2A6664 45%, #4A2A6631 60%, #4A2A6617 72%, #4A2A660A 84%, #4A2A6600 100%),
+    #0A0B12;
+  --wall-night-light:
+    radial-gradient(130% 110% at 10% 0%, #AEBBE6FF 0%, #AEBBE6E6 15%, #AEBBE6A9 30%, #AEBBE664 45%, #AEBBE631 60%, #AEBBE617 72%, #AEBBE60A 84%, #AEBBE600 100%),
+    radial-gradient(110% 100% at 100% 100%, #D7C3EAFF 0%, #D7C3EAE6 15%, #D7C3EAA9 30%, #D7C3EA64 45%, #D7C3EA31 60%, #D7C3EA17 72%, #D7C3EA0A 84%, #D7C3EA00 100%),
+    #EEF0F6;
+  --wall-dusk-dark:
+    radial-gradient(110% 90% at 0% 100%, #E8875AFF 0%, #E8875AE6 15%, #E8875AA9 30%, #E8875A64 45%, #E8875A31 60%, #E8875A17 72%, #E8875A0A 84%, #E8875A00 100%),
+    radial-gradient(110% 100% at 100% 0%, #6A45A8FF 0%, #6A45A8E6 15%, #6A45A8A9 30%, #6A45A864 45%, #6A45A831 60%, #6A45A817 72%, #6A45A80A 84%, #6A45A800 100%),
+    linear-gradient(in oklab 170deg, #1E1433, #5A2A4F);
+  --wall-dusk-light:
+    radial-gradient(110% 90% at 0% 100%, #F4A987FF 0%, #F4A987E6 15%, #F4A987A9 30%, #F4A98764 45%, #F4A98731 60%, #F4A98717 72%, #F4A9870A 84%, #F4A98700 100%),
+    radial-gradient(110% 100% at 100% 0%, #B9A2E6FF 0%, #B9A2E6E6 15%, #B9A2E6A9 30%, #B9A2E664 45%, #B9A2E631 60%, #B9A2E617 72%, #B9A2E60A 84%, #B9A2E600 100%),
+    linear-gradient(in oklab 170deg, #F6E3EC, #F3D2C4);
+  --wall-ocean-dark:
+    radial-gradient(110% 90% at 80% 0%, #2F9FB8FF 0%, #2F9FB8E6 15%, #2F9FB8A9 30%, #2F9FB864 45%, #2F9FB831 60%, #2F9FB817 72%, #2F9FB80A 84%, #2F9FB800 100%),
+    radial-gradient(130% 110% at 0% 100%, #123F8AFF 0%, #123F8AE6 15%, #123F8AA9 30%, #123F8A64 45%, #123F8A31 60%, #123F8A17 72%, #123F8A0A 84%, #123F8A00 100%),
+    linear-gradient(in oklab 180deg, #0A1E3C, #07101F);
+  --wall-ocean-light:
+    radial-gradient(110% 90% at 80% 0%, #8ED3E0FF 0%, #8ED3E0E6 15%, #8ED3E0A9 30%, #8ED3E064 45%, #8ED3E031 60%, #8ED3E017 72%, #8ED3E00A 84%, #8ED3E000 100%),
+    radial-gradient(130% 110% at 0% 100%, #9DB6ECFF 0%, #9DB6ECE6 15%, #9DB6ECA9 30%, #9DB6EC64 45%, #9DB6EC31 60%, #9DB6EC17 72%, #9DB6EC0A 84%, #9DB6EC00 100%),
+    linear-gradient(in oklab 180deg, #E4F2F7, #D2E2F3);
+  --wall-forest-dark:
+    radial-gradient(110% 90% at 20% 0%, #5E9A5CFF 0%, #5E9A5CE6 15%, #5E9A5CA9 30%, #5E9A5C64 45%, #5E9A5C31 60%, #5E9A5C17 72%, #5E9A5C0A 84%, #5E9A5C00 100%),
+    radial-gradient(120% 110% at 100% 100%, #0F4A40FF 0%, #0F4A40E6 15%, #0F4A40A9 30%, #0F4A4064 45%, #0F4A4031 60%, #0F4A4017 72%, #0F4A400A 84%, #0F4A4000 100%),
+    linear-gradient(in oklab 180deg, #15301F, #08140F);
+  --wall-forest-light:
+    radial-gradient(110% 90% at 20% 0%, #A9D19AFF 0%, #A9D19AE6 15%, #A9D19AA9 30%, #A9D19A64 45%, #A9D19A31 60%, #A9D19A17 72%, #A9D19A0A 84%, #A9D19A00 100%),
+    radial-gradient(120% 110% at 100% 100%, #8FC7B6FF 0%, #8FC7B6E6 15%, #8FC7B6A9 30%, #8FC7B664 45%, #8FC7B631 60%, #8FC7B617 72%, #8FC7B60A 84%, #8FC7B600 100%),
+    linear-gradient(in oklab 180deg, #EAF2E4, #D8E9DF);
+  --wall-aurora-dark:
+    radial-gradient(80% 80% at 20% 25%, #1B9C84FF 0%, #1B9C84E6 15%, #1B9C84A9 30%, #1B9C8464 45%, #1B9C8431 60%, #1B9C8417 72%, #1B9C840A 84%, #1B9C8400 100%),
+    radial-gradient(80% 90% at 80% 30%, #5536C8FF 0%, #5536C8E6 15%, #5536C8A9 30%, #5536C864 45%, #5536C831 60%, #5536C817 72%, #5536C80A 84%, #5536C800 100%),
+    radial-gradient(110% 80% at 50% 105%, #0D66A3FF 0%, #0D66A3E6 15%, #0D66A3A9 30%, #0D66A364 45%, #0D66A331 60%, #0D66A317 72%, #0D66A30A 84%, #0D66A300 100%),
+    #06111A;
+  --wall-aurora-light:
+    radial-gradient(80% 80% at 20% 25%, #86D8C4FF 0%, #86D8C4E6 15%, #86D8C4A9 30%, #86D8C464 45%, #86D8C431 60%, #86D8C417 72%, #86D8C40A 84%, #86D8C400 100%),
+    radial-gradient(80% 90% at 80% 30%, #B6A6F0FF 0%, #B6A6F0E6 15%, #B6A6F0A9 30%, #B6A6F064 45%, #B6A6F031 60%, #B6A6F017 72%, #B6A6F00A 84%, #B6A6F000 100%),
+    radial-gradient(110% 80% at 50% 105%, #8CC6EEFF 0%, #8CC6EEE6 15%, #8CC6EEA9 30%, #8CC6EE64 45%, #8CC6EE31 60%, #8CC6EE17 72%, #8CC6EE0A 84%, #8CC6EE00 100%),
+    #F1F5F6;
+  --wall-ember-dark:
+    radial-gradient(130% 90% at 50% 110%, #D9703AFF 0%, #D9703AE6 15%, #D9703AA9 30%, #D9703A64 45%, #D9703A31 60%, #D9703A17 72%, #D9703A0A 84%, #D9703A00 100%),
+    radial-gradient(110% 90% at 0% 0%, #6A1D2CFF 0%, #6A1D2CE6 15%, #6A1D2CA9 30%, #6A1D2C64 45%, #6A1D2C31 60%, #6A1D2C17 72%, #6A1D2C0A 84%, #6A1D2C00 100%),
+    linear-gradient(in oklab 180deg, #170A0B, #2A0F0D);
+  --wall-ember-light:
+    radial-gradient(130% 90% at 50% 110%, #F2A57AFF 0%, #F2A57AE6 15%, #F2A57AA9 30%, #F2A57A64 45%, #F2A57A31 60%, #F2A57A17 72%, #F2A57A0A 84%, #F2A57A00 100%),
+    radial-gradient(110% 90% at 0% 0%, #E7B0B8FF 0%, #E7B0B8E6 15%, #E7B0B8A9 30%, #E7B0B864 45%, #E7B0B831 60%, #E7B0B817 72%, #E7B0B80A 84%, #E7B0B800 100%),
+    linear-gradient(in oklab 180deg, #FBF0EA, #F6DFD2);
+  --wall-blush-dark:
+    radial-gradient(120% 100% at 0% 0%, #8A4A62FF 0%, #8A4A62E6 15%, #8A4A62A9 30%, #8A4A6264 45%, #8A4A6231 60%, #8A4A6217 72%, #8A4A620A 84%, #8A4A6200 100%),
+    radial-gradient(120% 100% at 100% 100%, #5B4A8CFF 0%, #5B4A8CE6 15%, #5B4A8CA9 30%, #5B4A8C64 45%, #5B4A8C31 60%, #5B4A8C17 72%, #5B4A8C0A 84%, #5B4A8C00 100%),
+    linear-gradient(in oklab 160deg, #2A1A24, #1F1830);
+  --wall-blush-light:
+    radial-gradient(120% 100% at 0% 0%, #F7D9C4FF 0%, #F7D9C4E6 15%, #F7D9C4A9 30%, #F7D9C464 45%, #F7D9C431 60%, #F7D9C417 72%, #F7D9C40A 84%, #F7D9C400 100%),
+    radial-gradient(120% 100% at 100% 100%, #B9A2E0FF 0%, #B9A2E0E6 15%, #B9A2E0A9 30%, #B9A2E064 45%, #B9A2E031 60%, #B9A2E017 72%, #B9A2E00A 84%, #B9A2E000 100%),
+    linear-gradient(in oklab 160deg, #F3C6CF, #D8B4E2);
+  --wall-graphite-dark:
+    radial-gradient(120% 100% at 25% 0%, #3A3A3AFF 0%, #3A3A3AE6 15%, #3A3A3AA9 30%, #3A3A3A64 45%, #3A3A3A31 60%, #3A3A3A17 72%, #3A3A3A0A 84%, #3A3A3A00 100%),
+    linear-gradient(in oklab 160deg, #1C1C1C, #0A0A0A);
+  --wall-graphite-light:
+    radial-gradient(120% 100% at 25% 0%, #FFFFFFFF 0%, #FFFFFFE6 15%, #FFFFFFA9 30%, #FFFFFF64 45%, #FFFFFF31 60%, #FFFFFF17 72%, #FFFFFF0A 84%, #FFFFFF00 100%),
+    linear-gradient(in oklab 160deg, #F4F4F2, #E2E2DF);
+
 }
 
 .light, [data-theme="light"] {
