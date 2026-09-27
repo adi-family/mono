@@ -18,6 +18,7 @@
 //! address is only a place inside this document: every path that is not one of `main`'s other
 //! doors mounts this screen, and [`windows::Desk`] reads the path itself.
 
+mod about;
 mod background;
 mod palette;
 mod settings;
@@ -195,7 +196,10 @@ pub(crate) fn NewUi() -> impl IntoView {
                     <Show when=move || desk.is_open(w)>
                         <Frame win=w desk light=light>
                             {match w {
-                                Win::Settings => view! { <settings::Settings wall shell/> },
+                                Win::Settings => {
+                                    view! { <settings::Settings wall shell/> }.into_any()
+                                }
+                                Win::About => view! { <about::About/> }.into_any(),
                             }}
                         </Frame>
                     </Show>
@@ -203,7 +207,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                 .collect_view()}
         </div>
         <Show when=move || shell.layout.get().top_bar>
-            <TopBar light=light/>
+            <TopBar desk light=light/>
         </Show>
         <Island shell desk palette=palette_open light=light/>
         <palette::Palette items=move || commands(wall, desk) light=light open=palette_open/>

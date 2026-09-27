@@ -32,21 +32,24 @@ const Z_BASE: usize = 10;
 #[serde(rename_all = "snake_case")]
 pub(super) enum Win {
     Settings,
+    About,
 }
 
 impl Win {
-    pub(super) const ALL: [Self; 1] = [Self::Settings];
+    pub(super) const ALL: [Self; 2] = [Self::Settings, Self::About];
 
     /// The address that opens it.
     pub(super) fn path(self) -> &'static str {
         match self {
             Self::Settings => "/settings",
+            Self::About => "/about",
         }
     }
 
     pub(super) fn title(self) -> &'static str {
         match self {
             Self::Settings => "Settings",
+            Self::About => "About adi",
         }
     }
 
@@ -54,6 +57,15 @@ impl Win {
     fn pos_key(self) -> &'static str {
         match self {
             Self::Settings => "adi-new-ui-window-settings",
+            Self::About => "adi-new-ui-window-about",
+        }
+    }
+
+    /// Its width in CSS pixels. About is a narrow card, as macOS draws its own.
+    fn width(self) -> u16 {
+        match self {
+            Self::Settings => 480,
+            Self::About => 320,
         }
     }
 
@@ -249,7 +261,11 @@ pub(super) fn Frame(
                     .get()
                     .map(|(x, y)| format!("left: {x:.0}px; top: {y:.0}px; "))
                     .unwrap_or_default();
-                format!("{at}z-index: {}; --cascade: {cascade}", desk.z(win))
+                format!(
+                    "{at}z-index: {}; --cascade: {cascade}; --win-w: {}px",
+                    desk.z(win),
+                    win.width(),
+                )
             }
             role="dialog"
             aria-label=win.title()

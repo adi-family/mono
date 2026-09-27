@@ -64,7 +64,8 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
     calc(-50% + var(--cascade, 0) * var(--s6)),
     calc(var(--cascade, 0) * var(--s6))
   );
-  width: min(480px, calc(100vw - var(--s8)));
+  // Each window's own width arrives inline (`--win-w`).
+  width: min(var(--win-w, 480px), calc(100vw - var(--s8)));
   max-height: calc(100dvh - 10vh - var(--s4));
   display: flex;
   flex-direction: column;
@@ -424,10 +425,25 @@ $top-bar-h: 28px;
   -webkit-backdrop-filter: blur(24px) saturate(1.8);
   user-select: none;
 
+  &__logo {
+    display: grid;
+    place-items: center;
+    height: 22px;
+    margin-left: -6px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: var(--r-sm);
+    background: none;
+    color: var(--ink);
+    cursor: pointer;
+
+    &:hover { background: var(--chip-hover); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  }
+
   &__mark {
     width: 16px;
     height: 16px;
-    color: var(--ink);
   }
 
   &__spacer { flex: 1; }
@@ -568,4 +584,56 @@ $island-gap: var(--s2);
   }
 
   &:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+}
+
+// ---- about (`/about`) -----------------------------------------------------------------------
+// macOS's About This Mac: the mark, the name and version centred, then a few facts in two
+// columns, the key right-aligned against the value.
+.adi-new-about {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: var(--s6) var(--s6) var(--s6);
+  text-align: center;
+
+  &__mark {
+    width: 64px;
+    height: 64px;
+    color: var(--ink);
+  }
+
+  &__name {
+    margin-top: var(--s3);
+    font-size: var(--fs-title);
+    font-weight: 600;
+  }
+
+  &__version {
+    margin-top: 2px;
+    font-size: var(--fs-small);
+    color: var(--ink-2);
+  }
+
+  &__facts {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px var(--s3);
+    width: 100%;
+    margin-top: var(--s6);
+    font-size: var(--fs-small);
+    text-align: left;
+
+    dt {
+      text-align: right;
+      color: var(--ink-3);
+    }
+
+    dd {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      color: var(--ink-2);
+    }
+  }
 }

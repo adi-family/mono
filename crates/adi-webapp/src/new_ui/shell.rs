@@ -100,7 +100,7 @@ impl Shell {
 /// how many of the paired machines are active, whether the stack's live channel is up, whether
 /// this device is online — and then the time and the date.
 #[component]
-pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
+pub(super) fn TopBar(desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
     let now = RwSignal::new(clock());
     let stack = RwSignal::new(false);
     let online = RwSignal::new(window().navigator().on_line());
@@ -156,7 +156,16 @@ pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
 
     view! {
         <header class="adi-new-top" class:light=move || light.get()>
-            <Mark class="adi-new-top__mark"/>
+            // The mark is the way to "About adi", as the Apple menu is to About This Mac.
+            <button
+                class="adi-new-top__logo"
+                type="button"
+                title="About adi"
+                aria-label="About adi"
+                on:click=move |_| desk.open(Win::About)
+            >
+                <Mark class="adi-new-top__mark"/>
+            </button>
             <span class="adi-new-top__spacer"></span>
             {move || sources.get().map(|(active, paired)| {
                 let label = format!("{active} of {paired} paired machines active now");

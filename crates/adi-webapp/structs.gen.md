@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-85 structs · 28 enums · 5 type aliases across 37 files.
+86 structs · 28 enums · 5 type aliases across 38 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
+- [`src/new_ui/about.rs`](#srcnew_uiaboutrs) — `Facts`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
@@ -203,6 +204,27 @@ pub(crate) enum Shell {
 
 ---
 
+## `src/new_ui/about.rs`
+
+### struct `Facts`
+
+What the window shows, gathered from four reads; each part stays `None` until its read answers, and for good if it fails.
+
+```rust
+#[derive(Clone, Default)]
+struct Facts {
+    version: Option<(String, String)>,
+    platform: Option<String>,
+    update: Option<String>,
+    uptime: Option<u64>,
+    services: Option<(usize, usize)>,
+    agents: Option<u32>,
+    machines: Option<(usize, usize)>,
+}
+```
+
+---
+
 ## `src/new_ui/background.rs`
 
 ### enum `Preset`
@@ -361,6 +383,7 @@ A window the new UI can open.
 #[serde(rename_all = "snake_case")]
 pub(super) enum Win {
     Settings,
+    About,
 }
 ```
 
