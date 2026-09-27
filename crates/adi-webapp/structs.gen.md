@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-89 structs · 28 enums · 5 type aliases across 39 files.
+90 structs · 28 enums · 5 type aliases across 39 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/sources.rs`](#srcnew_uisourcesrs) — `Row`
+- [`src/new_ui/sources.rs`](#srcnew_uisourcesrs) — `Target`, `Row`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -374,6 +374,19 @@ pub(super) struct Shell {
 ---
 
 ## `src/new_ui/sources.rs`
+
+### struct `Target`
+
+A row's menu: which node, and where it was opened.
+
+```rust
+#[derive(Clone)]
+struct Target {
+    node: String,
+    x: f64,
+    y: f64,
+}
+```
 
 ### struct `Row`
 

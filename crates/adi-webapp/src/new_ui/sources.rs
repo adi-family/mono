@@ -6,6 +6,10 @@
 //! * **Viewers** — the machines that may read this one: every node granted something here, and
 //!   whether it has lately (`FleetNode::active`, a request in within the last minute).
 //!
+//! Either row disconnects on a right click, or from the `⋯` it shows on hover: that **unpairs** the
+//! node, by the operator's decision — in both lists the same act, since a pairing is one record
+//! that both directions hang off. It asks first, because only a new invite undoes it.
+//!
 //! Two lists because they are two questions. A node can be reachable and never have called in, or
 //! have called in a minute ago and be asleep now; one "active" for both said neither.
 
@@ -24,6 +28,18 @@ const TICK_MS: u32 = 30_000;
 /// The gap between the top bar and the list hanging from it.
 const DROP_GAP: f64 = 4.0;
 
+/// The width of a row's menu — `.adi-new-menu` in `_new_ui.scss` — so one opened near the right
+/// edge is pulled back onto the screen.
+const MENU_W: f64 = 264.0;
+
+/// A row's menu: which node, and where it was opened.
+#[derive(Clone)]
+struct Target {
+    node: String,
+    x: f64,
+    y: f64,
+}
+
 /// The count in the top bar and the list it opens.
 #[component]
 pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
@@ -35,6 +51,12 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
     // Where the list hangs: `(top, right)` in viewport pixels, from the button's own box.
     let at = RwSignal::new((0.0, 0.0));
     let panel: NodeRef<html::Div> = NodeRef::new();
+    let menu = RwSignal::new(None::<Target>);
+    let menu_el: NodeRef<html::Div> = NodeRef::new();
+    // The menu's second step — "are you sure" — and what the unpair call last said, if it failed.
+    let confirming = RwSignal::new(false);
+    let failed = RwSignal::new(None::<String>);
+    let busy = RwSignal::new(false);
 
     let load = move || {
         leptos::task::spawn_local(async move {
@@ -60,13 +82,45 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
 
     // Focus goes into the list, so its Escape is heard there and stopped before the screen's own
     // Escape closes the front window underneath it.
+    // The same for a row's menu while it is up; and back to the list when it goes, so the next
+    // Escape closes the list rather than nothing.
     Effect::new(move |_| {
-        if open.get()
-            && let Some(el) = panel.get()
-        {
+        if !open.get() {
+            return;
+        }
+        if menu.with(Option::is_some) {
+            if let Some(el) = menu_el.get() {
+                let _ = el.focus();
+            }
+        } else if let Some(el) = panel.get() {
             let _ = el.focus();
         }
     });
+
+    let close_menu = move || {
+        menu.set(None);
+        confirming.set(false);
+        failed.set(None);
+    };
+
+    let disconnect = move |node: String| {
+        busy.set(true);
+        leptos::task::spawn_local(async move {
+            match fetch::fleet_unpair(node.clone()).await {
+                Ok(fleet) => {
+                    nodes.set(Some(fleet.nodes));
+                    reach.update(|r| {
+                        if let Some(r) = r {
+                            r.remove(&node);
+                        }
+                    });
+                    close_menu();
+                }
+                Err(e) => failed.set(Some(e)),
+            }
+            busy.set(false);
+        });
+    };
 
     let show = move |ev: ev::MouseEvent| {
         if let Some(el) = ev
@@ -93,6 +147,81 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                 .map(|r| r.values().filter(|r| **r == Reach::Reachable).count())
         });
         Some((up, paired))
+    };
+
+    let menu_view = move || {
+        let Target { node, x, y } = menu.get()?;
+        let width = window()
+            .inner_width()
+            .ok()
+            .and_then(|w| w.as_f64())
+            .unwrap_or_default();
+        let left = x.min(width - MENU_W - 8.0).max(8.0);
+        let style = format!("left: {left}px; top: {y}px");
+        let body = if confirming.get() {
+            let name = node.clone();
+            view! {
+                <p class="adi-new-menu__text">
+                    "Disconnect "<strong>{node.clone()}</strong>"? This unpairs it: neither                     machine can reach the other until you pair them again."
+                </p>
+                {move || failed.get().map(|e| view! { <p class="adi-new-menu__error">{e}</p> })}
+                <div class="adi-new-menu__actions">
+                    <button class="adi-new-menu__btn" type="button" on:click=move |_| close_menu()>
+                        "Cancel"
+                    </button>
+                    <button
+                        class="adi-new-menu__btn adi-new-menu__btn--danger"
+                        type="button"
+                        disabled=move || busy.get()
+                        on:click=move |_| disconnect(name.clone())
+                    >
+                        "Disconnect"
+                    </button>
+                </div>
+            }
+            .into_any()
+        } else {
+            view! {
+                <button
+                    class="adi-new-menu__item"
+                    type="button"
+                    role="menuitem"
+                    on:click=move |_| confirming.set(true)
+                >
+                    <Icon icon=Lucide::Unplug size=IconSize::Md/>
+                    "Disconnect…"
+                </button>
+            }
+            .into_any()
+        };
+        Some(view! {
+            <div
+                class="adi-new-menu-catch"
+                on:click=move |_| close_menu()
+                on:contextmenu=move |ev: ev::MouseEvent| {
+                    ev.prevent_default();
+                    close_menu();
+                }
+            ></div>
+            <div
+                node_ref=menu_el
+                class="adi-new-drop adi-new-menu"
+                class:light=move || light.get()
+                style=style
+                role="menu"
+                aria-label=format!("{node} actions")
+                tabindex="-1"
+                on:keydown=move |ev: ev::KeyboardEvent| {
+                    if ev.key() == "Escape" {
+                        ev.prevent_default();
+                        ev.stop_propagation();
+                        close_menu();
+                    }
+                }
+            >
+                {body}
+            </div>
+        })
     };
 
     view! {
@@ -127,7 +256,14 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
             <Portal>
                 // `click`, not `pointerdown`: the catcher covers the count too, and closing on
                 // the press would hand the click that follows to the count, opening it again.
-                <div class="adi-new-drop-catch" on:click=move |_| open.set(false)></div>
+                <div
+                    class="adi-new-drop-catch"
+                    on:click=move |_| open.set(false)
+                    on:contextmenu=move |ev: ev::MouseEvent| {
+                        ev.prevent_default();
+                        open.set(false);
+                    }
+                ></div>
                 <div
                     node_ref=panel
                     class="adi-new-drop"
@@ -156,10 +292,12 @@ pub(super) fn Sources(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                         .into_any(),
                         Some(n) => {
                             let r = reach.get();
-                            view! { {sources(&n, r.as_ref())} {viewers(&n)} }.into_any()
+                            view! { {sources(&n, r.as_ref(), menu)} {viewers(&n, menu)} }
+                                .into_any()
                         }
                     }}
                 </div>
+                {menu_view}
             </Portal>
         </Show>
     }
@@ -187,7 +325,12 @@ impl Row {
 }
 
 /// A titled section: its head, a count beside it, and its rows.
-fn section(title: &'static str, meta: String, rows: Vec<Row>) -> impl IntoView {
+fn section(
+    title: &'static str,
+    meta: String,
+    rows: Vec<Row>,
+    menu: RwSignal<Option<Target>>,
+) -> impl IntoView {
     view! {
         <section class="adi-new-drop__section">
             <div class="adi-new-drop__head">
@@ -197,12 +340,48 @@ fn section(title: &'static str, meta: String, rows: Vec<Row>) -> impl IntoView {
             <ul class="adi-new-drop__list">
                 {rows
                     .into_iter()
-                    .map(|r| view! {
-                        <li class="adi-new-drop__row" title=r.called>
-                            <span class="adi-new-drop__dot" data-tone=r.tone></span>
-                            <span class="adi-new-drop__name">{r.name}</span>
-                            <span class="adi-new-drop__seen">{r.state}</span>
-                        </li>
+                    .map(|r| {
+                        let (on_right, on_more) = (r.name.clone(), r.name.clone());
+                        view! {
+                            <li
+                                class="adi-new-drop__row"
+                                title=r.called
+                                on:contextmenu=move |ev: ev::MouseEvent| {
+                                    ev.prevent_default();
+                                    menu.set(Some(Target {
+                                        node: on_right.clone(),
+                                        x: f64::from(ev.client_x()),
+                                        y: f64::from(ev.client_y()),
+                                    }));
+                                }
+                            >
+                                <span class="adi-new-drop__dot" data-tone=r.tone></span>
+                                <span class="adi-new-drop__name">{r.name.clone()}</span>
+                                <span class="adi-new-drop__seen">{r.state}</span>
+                                <button
+                                    class="adi-new-drop__more"
+                                    type="button"
+                                    aria-label=format!("{} actions", r.name)
+                                    aria-haspopup="menu"
+                                    on:click=move |ev: ev::MouseEvent| {
+                                        let Some(el) = ev.current_target().and_then(|t| {
+                                            wasm_bindgen::JsCast::dyn_into::<web_sys::Element>(t)
+                                                .ok()
+                                        }) else {
+                                            return;
+                                        };
+                                        let b = el.get_bounding_client_rect();
+                                        menu.set(Some(Target {
+                                            node: on_more.clone(),
+                                            x: b.left(),
+                                            y: b.bottom() + DROP_GAP,
+                                        }));
+                                    }
+                                >
+                                    <Icon icon=Lucide::Ellipsis size=IconSize::Sm/>
+                                </button>
+                            </li>
+                        }
                     })
                     .collect_view()}
             </ul>
@@ -211,7 +390,11 @@ fn section(title: &'static str, meta: String, rows: Vec<Row>) -> impl IntoView {
 }
 
 /// Every paired node, as something this machine dials: reachable first, then by name.
-fn sources(nodes: &[FleetNode], reach: Option<&HashMap<String, Reach>>) -> impl IntoView {
+fn sources(
+    nodes: &[FleetNode],
+    reach: Option<&HashMap<String, Reach>>,
+    menu: RwSignal<Option<Target>>,
+) -> impl IntoView {
     let mut rows: Vec<(u8, Row)> = nodes
         .iter()
         .map(|n| {
@@ -234,12 +417,12 @@ fn sources(nodes: &[FleetNode], reach: Option<&HashMap<String, Reach>>) -> impl 
         ),
         None => "Checking…".into(),
     };
-    section("Sources", meta, rows.into_iter().map(|(_, r)| r).collect())
+    section("Sources", meta, rows.into_iter().map(|(_, r)| r).collect(), menu)
 }
 
 /// The nodes granted something here — the ones that can read this machine — by how lately they
 /// did: connected now, then most recently seen, then never.
-fn viewers(nodes: &[FleetNode]) -> impl IntoView {
+fn viewers(nodes: &[FleetNode], menu: RwSignal<Option<Target>>) -> impl IntoView {
     let mut granted: Vec<&FleetNode> = nodes.iter().filter(|n| !n.grants.is_empty()).collect();
     if granted.is_empty() {
         return None;
@@ -259,7 +442,7 @@ fn viewers(nodes: &[FleetNode]) -> impl IntoView {
             Row::new(n, tone, seen(n.active, n.last_seen, now))
         })
         .collect();
-    Some(section("Viewers", format!("{connected} connected"), rows))
+    Some(section("Viewers", format!("{connected} connected"), rows, menu))
 }
 
 /// A viewer's state as a person reads it: `Connected now`, `Seen 3d ago`, `Never connected`.
