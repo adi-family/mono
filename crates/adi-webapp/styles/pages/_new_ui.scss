@@ -446,7 +446,20 @@ $top-bar-h: 28px;
   &__count { font-weight: 500; color: var(--ink); }
   &__of { color: var(--ink-3); font-weight: 400; }
 
-  &__time { font-weight: 600; margin-left: var(--s1); }
+  &__clock {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s2);
+    height: 22px;
+    margin-left: var(--s1);
+    padding: 0 6px;
+    border-radius: var(--r-sm);
+    color: inherit;
+    text-decoration: none;
+  }
+  a.adi-new-top__clock:hover { background: var(--chip-hover); }
+
+  &__time { font-weight: 600; }
   &__date { color: var(--ink-2); }
 }
 

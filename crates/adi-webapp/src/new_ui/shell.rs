@@ -179,9 +179,55 @@ pub(super) fn TopBar(#[prop(into)] light: Signal<bool>) -> impl IntoView {
                 (Lucide::Wifi, "Online"),
                 (Lucide::WifiOff, "Offline — no internet connection"),
             )}
-            <span class="adi-new-top__time">{move || now.get().0}</span>
-            <span class="adi-new-top__date">{move || now.get().1}</span>
+            {match calendar_href() {
+                Some(href) => view! {
+                    // A real link, not a script: a browser asks before handing a scheme to an
+                    // app, and the Mac app passes a clicked link it does not serve to macOS
+                    // (`WebPanel.swift`), which opens it in Calendar the same way.
+                    <a class="adi-new-top__clock" href=href title="Open Calendar">
+                        <span class="adi-new-top__time">{move || now.get().0}</span>
+                        <span class="adi-new-top__date">{move || now.get().1}</span>
+                    </a>
+                }
+                .into_any(),
+                None => view! {
+                    <span class="adi-new-top__clock">
+                        <span class="adi-new-top__time">{move || now.get().0}</span>
+                        <span class="adi-new-top__date">{move || now.get().1}</span>
+                    </span>
+                }
+                .into_any(),
+            }}
         </header>
+    }
+}
+
+/// The address that opens this device's own calendar app, or `None` where there is no such thing
+/// to point at — Linux has no one calendar and no scheme that reaches whichever is installed.
+///
+/// * macOS — `ical:`, which Calendar registers (checked with `LSCopyDefaultHandlerForURLScheme`);
+/// * iOS and iPadOS — `calshow:`, the scheme Calendar answers there. iPadOS reports itself as a
+///   Mac in its user agent, so a "Mac" with a touch screen is taken to be an iPad;
+/// * Windows — `outlookcal:`, the Calendar app's (and the new Outlook's) scheme;
+/// * Android — an intent for whichever app holds the calendar category, the only way a page can
+///   ask for "the calendar" rather than one vendor's.
+fn calendar_href() -> Option<&'static str> {
+    let nav = window().navigator();
+    let ua = nav.user_agent().unwrap_or_default();
+    let touch = nav.max_touch_points() > 1;
+    if ua.contains("iPhone") || ua.contains("iPad") || (ua.contains("Macintosh") && touch) {
+        Some("calshow://")
+    } else if ua.contains("Android") {
+        Some(
+            "intent:#Intent;action=android.intent.action.MAIN;\
+             category=android.intent.category.APP_CALENDAR;end",
+        )
+    } else if ua.contains("Macintosh") {
+        Some("ical://")
+    } else if ua.contains("Windows") {
+        Some("outlookcal:")
+    } else {
+        None
     }
 }
 
