@@ -54,12 +54,16 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
 // ---- settings window (`/settings`) ----------------------------------------------------------
 // A macOS window rather than a page or a docked panel, so the wallpaper it edits stays in view
 // and can be moved out from under it. The same floating surface as the palette below.
+// Stacked by an inline `z-index` from the desk (`src/new_ui/windows.rs`).
 .adi-new-win {
   position: fixed;
-  z-index: 30;
   top: 10vh;
   left: 50%;
-  transform: translateX(-50%);
+  // Centred, stepped down and right by its place in the stack when it opened (`--cascade`).
+  transform: translate(
+    calc(-50% + var(--cascade, 0) * var(--s6)),
+    calc(var(--cascade, 0) * var(--s6))
+  );
   width: min(480px, calc(100vw - var(--s8)));
   max-height: calc(100dvh - 10vh - var(--s4));
   display: flex;
@@ -125,6 +129,11 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
     color: var(--ink-2);
     pointer-events: none;
   }
+
+  // A window behind another reads as behind, as on macOS: its lights go grey and its title
+  // dims. Its contents stay as they are — they are still live, one click from the front.
+  &:not(.is-front) &__light--close { background: var(--light-off); }
+  &:not(.is-front) &__title { color: var(--ink-3); }
 
   &__body {
     flex: 1;

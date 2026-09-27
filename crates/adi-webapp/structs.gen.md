@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-82 structs · 26 enums · 5 type aliases across 35 files.
+83 structs · 27 enums · 5 type aliases across 36 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
+- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Desk`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -299,6 +300,33 @@ pub(super) struct Item {
     subtitle: &'static str,
     icon: Lucide,
     run: Callback<()>,
+}
+```
+
+---
+
+## `src/new_ui/windows.rs`
+
+### enum `Win`
+
+A window the new UI can open.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Win {
+    Settings,
+}
+```
+
+### struct `Desk`
+
+The open windows and their order.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Desk {
+    stack: RwSignal<Vec<Win>>,
 }
 ```
 

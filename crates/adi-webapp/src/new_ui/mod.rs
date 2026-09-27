@@ -12,13 +12,15 @@
 //! * `?new-ui=1` / `?new-ui=0` on any URL of the root document, read once by [`enabled`] and then
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
-//! What it draws so far: a wallpaper ([`background`]) and, at `/settings`, the window that picks
-//! it ([`settings`]). `/settings` is only a place inside this document — every path that is not
-//! one of `main`'s other doors mounts this screen, and it reads the path itself.
+//! What it draws so far: a wallpaper ([`background`]), the windows open over it ([`windows`] —
+//! so far only [`settings`], at `/settings`), and the `⌘K` palette ([`palette`]). A window's
+//! address is only a place inside this document: every path that is not one of `main`'s other
+//! doors mounts this screen, and [`windows::Desk`] reads the path itself.
 
 mod background;
 mod palette;
 mod settings;
+mod windows;
 
 use adi_ui::Lucide;
 use leptos::{ev, prelude::*};
@@ -27,9 +29,7 @@ use crate::launcher::Action;
 use crate::{icons, routing, ui};
 use background::Appearance;
 use palette::Item;
-
-/// Where the settings window opens.
-const SETTINGS: &str = "/settings";
+use windows::{Desk, Frame, Win};
 
 /// Where the choice is remembered.
 const KEY: &str = "adi-new-ui";
@@ -88,17 +88,14 @@ pub(crate) fn action() -> Action {
 }
 
 /// The palette's commands, as they stand right now.
-fn commands(
-    wall: background::Wallpaper,
-    go: impl Fn(&'static str) + Copy + Send + Sync + 'static,
-) -> Vec<Item> {
+fn commands(wall: background::Wallpaper, desk: Desk) -> Vec<Item> {
     let now = wall.choice.get().appearance;
     let mut items = vec![Item::new(
         "Settings",
         "Open settings",
         "Background and appearance",
         Lucide::Settings2,
-        move || go(SETTINGS),
+        move || desk.open(Win::Settings),
     )];
     // A row for each appearance the screen is not already fixed to — one while it is light or
     // dark, both while it follows the system.
@@ -138,25 +135,33 @@ fn is_light(a: Appearance) -> bool {
     }
 }
 
-/// The new root screen: the wallpaper, the settings window when the path asks for it, and the
-/// `⌘K` palette — which draws nothing until pressed, and always carries the way back out.
+/// The new root screen: the wallpaper, whichever windows are open on it, and the `⌘K` palette —
+/// which draws nothing until pressed, and always carries the way back out.
 #[component]
 pub(crate) fn NewUi() -> impl IntoView {
     let wall = background::Wallpaper::load();
-    let path = RwSignal::new(routing::current_path());
+    let desk = Desk::load();
 
-    // Back and forward move between `/` and `/settings` without a reload, so the browser's own
-    // buttons need telling.
-    let pop = window_event_listener(ev::popstate, move |_| path.set(routing::current_path()));
+    // Back and forward change the address without a reload; the window it names comes forward.
+    let pop = window_event_listener(ev::popstate, move |_| desk.arrive(&routing::current_path()));
     on_cleanup(move || pop.remove());
 
-    // The floating surfaces — the palette and the settings window — go light with the wallpaper.
-    let light = Signal::derive(move || is_light(wall.choice.get().appearance));
+    // Escape closes the front window — unless it is closing the palette, a modal dialog above
+    // every window that stops the key itself but is checked for here too.
+    let keys = window_event_listener(ev::keydown, move |ev| {
+        let modal_open = document()
+            .query_selector("[role=dialog][aria-modal=true]")
+            .ok()
+            .flatten()
+            .is_some();
+        if ev.key() == "Escape" && !modal_open {
+            desk.close_front();
+        }
+    });
+    on_cleanup(move || keys.remove());
 
-    let go = move |to: &'static str| {
-        routing::push_state(to);
-        path.set(to.to_owned());
-    };
+    // The floating surfaces — the palette and the windows — go light with the wallpaper.
+    let light = Signal::derive(move || is_light(wall.choice.get().appearance));
 
     view! {
         <div
@@ -175,13 +180,22 @@ pub(crate) fn NewUi() -> impl IntoView {
                     ></div>
                 </Show>
             </div>
-            <Show when=move || path.get() == SETTINGS>
-                <settings::Window wall close=move || go("/") light=light/>
-            </Show>
+            // Every window is drawn from this fixed list and stacked by `z-index`, never by
+            // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
+            // was half-done inside it.
+            {Win::ALL
+                .into_iter()
+                .map(|w| view! {
+                    <Show when=move || desk.is_open(w)>
+                        <Frame win=w desk light=light>
+                            {match w {
+                                Win::Settings => view! { <settings::Settings wall/> },
+                            }}
+                        </Frame>
+                    </Show>
+                })
+                .collect_view()}
         </div>
-        <palette::Palette
-            items=move || commands(wall, go)
-            light=light
-        />
+        <palette::Palette items=move || commands(wall, desk) light=light/>
     }
 }
