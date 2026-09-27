@@ -87,15 +87,16 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   // Once resized, the inline `width` / `height` are the size, whatever the content wants.
   &.is-sized { max-height: none; }
 
-  // Filling the screen under the top bar (the inline style places it): flush to every edge, so
-  // no corners, no border and no lift — and nothing to take hold of to resize.
-  &.is-filled {
+  // Snapped to a half, a quarter or the whole screen (the inline style places it): flush to the
+  // edges, so no corners and no lift. A half or a quarter keeps its border, the seam between two
+  // snapped side by side; the whole screen has no neighbour, no border, and no edge to resize.
+  &.is-snapped {
     transform: none;
     max-height: none;
-    border: 0;
     border-radius: 0;
     box-shadow: none;
   }
+  &.is-filled { border: 0; }
   &.is-filled &__grip { display: none; }
 
   // The resize grips: a thin strip along each edge, a square at each corner. Inside the frame,
@@ -213,6 +214,18 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   }
 
   .adi-segmented { align-self: start; }
+}
+
+// Where a dragged window will snap: the palette's frosted surface, over the windows behind the
+// one being dragged.
+.adi-new-snap {
+  position: fixed;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-side) 40%, transparent);
+  backdrop-filter: blur(24px) saturate(1.8);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
 }
 
 // The preset tiles: the wallpaper itself at the screen's own proportions, name beneath.
@@ -1088,5 +1101,8 @@ $island-gap: var(--s2);
 }
 
 // Until resized, the window has no height of its own and an iframe has none to give it.
-.adi-new-win:not(.is-sized):not(.is-filled) .adi-new-browser__view { flex: none; height: 70vh; }
+// While a window is moved or resized, no app's page takes the pointer (`Desk::dragging`).
+.adi-new-root.is-dragging .adi-new-browser__view { pointer-events: none; }
+
+.adi-new-win:not(.is-sized):not(.is-snapped) .adi-new-browser__view { flex: none; height: 70vh; }
 .adi-new-win__body:has(> .adi-new-browser) { overflow: hidden; }

@@ -191,6 +191,7 @@ pub(crate) fn NewUi() -> impl IntoView {
     view! {
         <div
             class="adi-new-root"
+            class:is-dragging=move || desk.dragging.get()
             data-appearance=move || wall.choice.get().appearance.attr()
         >
             <div
@@ -206,6 +207,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                 </Show>
             </div>
             <apps::Home apps desk light=light/>
+            <windows::SnapPreview desk top=top_limit/>
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
             // was half-done inside it.

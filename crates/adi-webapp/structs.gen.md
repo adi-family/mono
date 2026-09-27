@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-92 structs · 30 enums · 5 type aliases across 41 files.
+92 structs · 31 enums · 5 type aliases across 41 files.
 
 ## Index
 
@@ -20,7 +20,7 @@
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Gesture`, `Edge`
+- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -493,6 +493,25 @@ pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
     pub(super) device: RwSignal<Option<String>>,
     pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
+    preview: RwSignal<Option<Snap>>,
+    pub(super) dragging: RwSignal<bool>,
+}
+```
+
+### enum `Snap`
+
+Where a window can snap, as macOS and Windows tile them: the whole screen under the top bar, a half of it, or a quarter.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Snap {
+    Fill,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
 }
 ```
 
@@ -506,6 +525,7 @@ struct Gesture {
     edge: Option<Edge>,
     from: (f64, f64),
     rect: (f64, f64, f64, f64),
+    snapped: bool,
 }
 ```
 

@@ -40,6 +40,14 @@ const APP_SIZE_KEY: &str = "adi-new-ui-window-app-size";
 const KEEP_VISIBLE: f64 = 96.0;
 const TITLEBAR: f64 = 40.0;
 
+/// How close to a screen edge the pointer must come, dragging a window, for the window to snap
+/// to it.
+const SNAP_EDGE: f64 = 6.0;
+
+/// How far down from the top, or up from the bottom, an edge counts as its corner — where a
+/// window snaps to a quarter of the screen rather than a half.
+const SNAP_CORNER: f64 = 120.0;
+
 /// The stacking order the windows start from — under the top bar and the island (35), as a
 /// window slides under macOS's menu bar and dock, and under the palette (40).
 const Z_BASE: usize = 10;
@@ -184,6 +192,13 @@ pub(super) struct Desk {
     pub(super) device: RwSignal<Option<String>>,
     /// The apps open in windows, in the order they were opened, each with its window's number.
     pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
+    /// Where the window being dragged will snap if it is let go now — drawn as an outline by
+    /// [`SnapPreview`].
+    preview: RwSignal<Option<Snap>>,
+    /// Whether a window is being moved or resized. An app's page under the pointer would take the
+    /// pointer's events for its own document — a capture held by this one does not reach across —
+    /// and the window would stop following, so while this is set the pages ignore the pointer.
+    pub(super) dragging: RwSignal<bool>,
 }
 
 impl Desk {
@@ -210,6 +225,8 @@ impl Desk {
             stack: RwSignal::new(stack),
             device: RwSignal::new(device),
             apps: RwSignal::new(apps),
+            preview: RwSignal::new(None),
+            dragging: RwSignal::new(false),
         };
         desk.arrive(&routing::current_path());
         desk
@@ -409,10 +426,84 @@ impl Desk {
     }
 }
 
-/// A window's frame: a macOS title bar with its traffic lights, dragged to move it and
-/// double-clicked to fill the screen (and again to put it back), over a body that scrolls on its
-/// own so the title bar — and the way out in it — never scrolls away; and grips on every edge and
-/// corner that resize it.
+/// Where a window can snap, as macOS and Windows tile them: the whole screen under the top bar, a
+/// half of it, or a quarter.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Snap {
+    Fill,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl Snap {
+    /// Where letting go of a dragged window with the pointer at `(x, y)` snaps it: the top edge
+    /// fills the screen, a side edge takes that half, and a side edge near a corner that quarter.
+    fn at(x: f64, y: f64, top: f64) -> Option<Self> {
+        let (vw, vh) = viewport();
+        let (left, right) = (x <= SNAP_EDGE, x >= vw - SNAP_EDGE);
+        let (high, low) = (y <= top + SNAP_CORNER, y >= vh - SNAP_CORNER);
+        match (left, right) {
+            (true, _) if high => Some(Self::TopLeft),
+            (true, _) if low => Some(Self::BottomLeft),
+            (true, _) => Some(Self::Left),
+            (_, true) if high => Some(Self::TopRight),
+            (_, true) if low => Some(Self::BottomRight),
+            (_, true) => Some(Self::Right),
+            // The top bar counts as the top edge: the pointer may go into it, the window not.
+            _ if y <= top + SNAP_EDGE => Some(Self::Fill),
+            _ => None,
+        }
+    }
+
+    /// Its place, as inline CSS measured from the screen, so it follows the screen when that is
+    /// resized. `top` is the top bar's lower edge.
+    fn css(self, top: f64) -> String {
+        let area = format!("(100dvh - {top:.0}px)");
+        let (x, w) = match self {
+            Self::Fill => ("0px", "100vw"),
+            Self::Left | Self::TopLeft | Self::BottomLeft => ("0px", "50vw"),
+            Self::Right | Self::TopRight | Self::BottomRight => ("50vw", "50vw"),
+        };
+        let (y, h) = match self {
+            Self::Fill | Self::Left | Self::Right => (format!("{top:.0}px"), format!("calc{area}")),
+            Self::TopLeft | Self::TopRight => (format!("{top:.0}px"), format!("calc({area} / 2)")),
+            Self::BottomLeft | Self::BottomRight => (
+                format!("calc({top:.0}px + {area} / 2)"),
+                format!("calc({area} / 2)"),
+            ),
+        };
+        format!("left: {x}; top: {y}; width: {w}; height: {h}; ")
+    }
+}
+
+/// The outline of where the window being dragged will snap, under it and over every other
+/// window, as macOS draws one.
+#[component]
+pub(super) fn SnapPreview(desk: Desk, #[prop(into)] top: Signal<f64>) -> impl IntoView {
+    move || {
+        desk.preview.get().map(|snap| {
+            // The front window's own level, drawn before it on the page: under that one, over the
+            // rest. The one being dragged is always in front — pressing it brought it there.
+            let z = Z_BASE + desk.stack.with(|s| s.len().saturating_sub(1));
+            view! {
+                <div
+                    class="adi-new-snap"
+                    style=format!("{}z-index: {z}", snap.css(top.get()))
+                    aria-hidden="true"
+                ></div>
+            }
+        })
+    }
+}
+
+/// A window's frame: a macOS title bar with its traffic lights, dragged to move it — and, let go
+/// at a screen edge, snapped to a half, a quarter or the whole screen — or double-clicked to fill
+/// the screen (and again to put it back); over a body that scrolls on its own so the title bar —
+/// and the way out in it — never scrolls away; and grips on every edge and corner that resize it.
 ///
 /// `top` is the highest a window may go — the top bar's lower edge while it is drawn — so a
 /// window can never be dragged or stretched under it, the way macOS keeps windows below its menu
@@ -439,9 +530,9 @@ pub(super) fn Frame(
         let (mw, mh) = win.min_size();
         (w.clamp(mw, vw.max(mw)), h.clamp(mh, vh.max(mh)))
     }));
-    // Filling the screen, from a double-click on the title bar — over, not instead of, the place
-    // and size it had, so the next double-click puts it back there.
-    let filled = RwSignal::new(false);
+    // Snapped to part of the screen — over, not instead of, the place and size it had, so a
+    // double-click, or a drag away, gives those back.
+    let snap = RwSignal::new(None::<Snap>);
     let gesture = StoredValue::new(None::<Gesture>);
     let frame: NodeRef<html::Div> = NodeRef::new();
     // Where it sat in the stack when it opened. A window opened over others steps down and right
@@ -453,10 +544,6 @@ pub(super) fn Frame(
 
     // Take hold of the window for a move (`edge: None`) or a resize from one edge or corner.
     let begin = move |ev: &ev::PointerEvent, edge: Option<Edge>| {
-        // A window filling the screen has nowhere to move to and nothing to resize.
-        if filled.get_untracked() {
-            return;
-        }
         let (Some(el), Some(handle)) = (
             frame.get(),
             ev.current_target()
@@ -466,30 +553,73 @@ pub(super) fn Frame(
         };
         let r = el.get_bounding_client_rect();
         let rect = (r.left(), r.top(), r.width(), r.height());
-        gesture.set_value(Some(Gesture {
-            edge,
-            from: (f64::from(ev.client_x()), f64::from(ev.client_y())),
-            rect,
-        }));
-        pos.set(Some((rect.0, rect.1)));
-        if edge.is_some() {
-            size.set(Some((rect.2, rect.3)));
+        let from = (f64::from(ev.client_x()), f64::from(ev.client_y()));
+        let snapped = snap.get_untracked().is_some();
+        desk.dragging.set(true);
+        // Held to move while snapped: nothing changes until it moves (see `on_move`), and its
+        // place and size are left as the ones to give back.
+        if snapped && edge.is_none() {
+            gesture.set_value(Some(Gesture {
+                edge,
+                from,
+                rect,
+                snapped: true,
+            }));
+        } else {
+            // Resized while snapped, it comes out of the snap where it is and grows from there.
+            snap.set(None);
+            gesture.set_value(Some(Gesture {
+                edge,
+                from,
+                rect,
+                snapped: false,
+            }));
+            pos.set(Some((rect.0, rect.1)));
+            if edge.is_some() {
+                size.set(Some((rect.2, rect.3)));
+            }
         }
         // Captured, so a fast pointer that outruns the handle keeps the gesture going.
         let _ = handle.set_pointer_capture(ev.pointer_id());
         ev.prevent_default();
     };
     let on_move = move |ev: ev::PointerEvent| {
-        let Some(g) = gesture.get_value() else {
+        let Some(mut g) = gesture.get_value() else {
             return;
         };
+        // A snapped window that starts to move comes out of the snap and takes back the size it
+        // had, under the pointer at the same share of its width, as it does on macOS.
+        if g.snapped {
+            let (px, py) = (f64::from(ev.client_x()), f64::from(ev.client_y()));
+            if (px - g.from.0).hypot(py - g.from.1) < SNAP_EDGE {
+                return;
+            }
+            snap.set(None);
+            let w = size
+                .get_untracked()
+                .map_or_else(|| f64::from(win.width()).min(viewport().0), |(w, _)| w);
+            let share = (g.from.0 - g.rect.0) / g.rect.2.max(1.0);
+            g.rect = (g.from.0 - share * w, g.rect.1, w, g.rect.3);
+            g.snapped = false;
+            gesture.set_value(Some(g));
+        }
         let (dx, dy) = (
             f64::from(ev.client_x()) - g.from.0,
             f64::from(ev.client_y()) - g.from.1,
         );
         let (x, y, w, h) = g.rect;
         match g.edge {
-            None => pos.set(Some(clamp_pos(x + dx, y + dy, w, top.get_untracked()))),
+            None => {
+                pos.set(Some(clamp_pos(x + dx, y + dy, w, top.get_untracked())));
+                let at = Snap::at(
+                    f64::from(ev.client_x()),
+                    f64::from(ev.client_y()),
+                    top.get_untracked(),
+                );
+                if desk.preview.get_untracked() != at {
+                    desk.preview.set(at);
+                }
+            }
             Some(edge) => {
                 let (x, y, w, h) = resize(
                     (x, y, w, h),
@@ -504,8 +634,16 @@ pub(super) fn Frame(
         }
     };
     let on_up = move |_: ev::PointerEvent| {
-        if gesture.get_value().is_some() {
+        if let Some(g) = gesture.get_value() {
             gesture.set_value(None);
+            desk.dragging.set(false);
+            // Let go over a snap: it snaps, and keeps the place it was taken from as the one a
+            // double-click or a drag away gives back.
+            if let Some(at) = desk.preview.get_untracked() {
+                desk.preview.set(None);
+                snap.set(Some(at));
+                pos.set(Some((g.rect.0, g.rect.1)));
+            }
             if let Some(key) = win.pos_key() {
                 save_pair(key, pos.get_untracked());
             }
@@ -531,7 +669,7 @@ pub(super) fn Frame(
             .and_then(|t| t.closest("button").ok().flatten())
             .is_some();
         if !on_button {
-            filled.update(|f| *f = !*f);
+            snap.update(|s| *s = if s.is_some() { None } else { Some(Snap::Fill) });
         }
     };
 
@@ -543,18 +681,13 @@ pub(super) fn Frame(
             class:is-placed=move || pos.get().is_some()
             class:is-sized=move || size.get().is_some()
             class:is-front=move || desk.is_front(win)
-            class:is-filled=move || filled.get()
+            class:is-snapped=move || snap.get().is_some()
+            class:is-filled=move || snap.get() == Some(Snap::Fill)
             style=move || {
-                // Edge to edge, from the top bar down: the stylesheet takes off the corners, the
-                // border and the centring.
-                if filled.get() {
-                    return format!(
-                        "left: 0; top: {:.0}px; width: 100vw; height: calc(100dvh - {:.0}px); \
-                         z-index: {}",
-                        top.get(),
-                        top.get(),
-                        desk.z(win),
-                    );
+                // Flush to the screen's edges: the stylesheet takes off the corners, the lift and
+                // the centring.
+                if let Some(s) = snap.get() {
+                    return format!("{}z-index: {}", s.css(top.get()), desk.z(win));
                 }
                 // Kept below the top bar here too, not only while dragging: switching the bar on
                 // must push down a window already sitting where it now goes.
@@ -632,6 +765,9 @@ struct Gesture {
     from: (f64, f64),
     /// The window's `(x, y, width, height)` when it did.
     rect: (f64, f64, f64, f64),
+    /// Taken hold of to move while snapped, and not yet moved: it stays snapped until it is, so
+    /// a click — or the first half of a double-click — on its title bar leaves it where it is.
+    snapped: bool,
 }
 
 /// An edge or a corner a window is resized from.
