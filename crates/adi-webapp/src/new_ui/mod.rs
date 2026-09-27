@@ -83,6 +83,28 @@ pub(crate) fn action() -> Action {
     }
 }
 
+/// A row for each appearance the screen is not already fixed to — one while it is light or dark,
+/// both while it follows the system.
+fn appearance_actions(wall: background::Wallpaper) -> Vec<Action> {
+    let now = wall.choice.get().appearance;
+    [
+        (
+            background::Appearance::Light,
+            "Light mode",
+            icons::Icon::Light,
+        ),
+        (background::Appearance::Dark, "Dark mode", icons::Icon::Dark),
+    ]
+    .into_iter()
+    .filter(|(a, ..)| *a != now)
+    .map(|(a, label, icon)| {
+        Action::new(label, "Appearance", icon, move || {
+            wall.set(|c| c.appearance = a);
+        })
+    })
+    .collect()
+}
+
 /// The new root screen: the wallpaper, the settings sheet when the path asks for it, and the
 /// `⌘K` menu — which draws nothing until pressed, and always carries the way back out.
 #[component]
@@ -123,10 +145,15 @@ pub(crate) fn NewUi() -> impl IntoView {
             </Show>
         </div>
         {launcher::overlay(launcher, move || {
-            vec![
-                Action::new("Settings", "Background", icons::Icon::Gear, move || go(SETTINGS)),
-                action(),
-            ]
+            let mut rows = vec![Action::new(
+                "Settings",
+                "Background",
+                icons::Icon::Gear,
+                move || go(SETTINGS),
+            )];
+            rows.extend(appearance_actions(wall));
+            rows.push(action());
+            rows
         })}
     }
 }

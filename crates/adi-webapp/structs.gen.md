@@ -92,6 +92,8 @@ pub(crate) enum Icon {
     Bug,
     ExternalLink,
     Rerenders,
+    Light,
+    Dark,
 }
 ```
 
