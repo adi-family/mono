@@ -218,6 +218,18 @@ cargo doc -p <crate> --no-deps      # unresolved intra-doc links = dead referenc
 
 and a grep for backticked identifiers in comments that match no definition in the tree.
 
+## Building an app (dashboard): `docs/apps.md`
+
+The recommended shape of every app under `~/.adi/mono/dashboards/<id>/`. The short version:
+
+- **Three entry points, one origin**: `frontend/` at `/`, `backend/` at `/api`, and — for home-screen
+  widgets — `widget/` at `/widget`, each its own hive service on the same host. Relative URLs only.
+- **Widgets are declared in `config.toml`**: `[widget.<id>]` with `name`, `url` (a path such as
+  `/widget/<id>`, never an address) and `size` (`small` | `medium` | `large` | `half`). The page is
+  `widget/<id>.html`; it links `/widget/tokens.css` rather than copying the palette.
+- **`hive.yaml` uses relative paths**: `working_dir: .`, which adi-hive resolves against the app's
+  directory, not `.adi/`. `..` would point at the dashboards root, and nothing would start.
+
 ## The design system: `design/DESIGN.md`
 
 Every UI surface — the control panel, the mesh client, the landing, the native apps, the pages
