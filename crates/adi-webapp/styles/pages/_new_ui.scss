@@ -255,13 +255,17 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   }
 }
 
-// An app's mark (`apps::AppMark`): its favicon, or the first letter of its name, centred on
-// whatever tile it sits on — the home screen's or the island's.
+// An app's mark (`apps::AppMark`): its favicon, or the first letter of its name, on whatever
+// tile it sits on — the home screen's or the island's. A favicon is the icon itself, as an iOS
+// app's picture is: it fills the tile to its rounded edge rather than sitting on it.
 .adi-new-mark {
   &__img {
-    width: 55%;
-    height: 55%;
-    object-fit: contain;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    // Rounded with the tile it sits on, rather than the tile clipping it — the island's clips
+    // nothing, or its open dot, which hangs outside it, would go too.
+    border-radius: inherit;
   }
 
   &__letter {
