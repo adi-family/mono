@@ -181,6 +181,9 @@ pub(super) struct AppRef {
     /// The paired machine it runs on; `None` for this one.
     pub(super) machine: Option<String>,
     pub(super) url: String,
+    /// Its favicon's address, when it was running as it was opened — see `apps::favicon`.
+    #[serde(default)]
+    pub(super) favicon: Option<String>,
 }
 
 /// The open windows and their order.

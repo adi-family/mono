@@ -322,7 +322,7 @@ pub(super) fn Island(
                             aria-label=label
                             on:click=move |_| desk.focus(win)
                         >
-                            <Icon icon=Lucide::LayoutDashboard size=IconSize::Lg/>
+                            <super::apps::AppMark name=app.name.clone() favicon=app.favicon.clone()/>
                         </button>
                     }
                 }

@@ -135,6 +135,8 @@ struct Tile {
     name: String,
     /// The paired machine it runs on; `None` for this one.
     machine: Option<String>,
+    /// Where its favicon is, asked for only while it runs (see [`favicon`]).
+    favicon: Option<String>,
     /// Where pressing it goes, when it goes anywhere.
     href: Option<String>,
     /// The grant to ask for when it is pressed instead: the machine and the service.
@@ -158,7 +160,13 @@ impl Tile {
         } else {
             format!("{} — not running, and no address to start it at", d.name)
         };
+        let favicon = if d.frontend_running {
+            href.as_deref().and_then(favicon)
+        } else {
+            None
+        };
         Self {
+            favicon,
             key: format!(":{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -193,7 +201,13 @@ impl Tile {
                 format!("{} on {node} — no address reaches it from here", d.name),
             ),
         };
+        let favicon = if d.running && d.allowed {
+            href.as_deref().and_then(favicon)
+        } else {
+            None
+        };
         Self {
+            favicon,
             key: format!("{node}:{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -231,12 +245,48 @@ pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) ->
     }
 }
 
-fn face(icon: Lucide, name: impl IntoView + 'static) -> impl IntoView {
+/// A tile's face: `mark` on the tile, the name beneath.
+fn face(mark: impl IntoView + 'static, name: impl IntoView + 'static) -> impl IntoView {
     view! {
-        <span class="adi-new-app__icon">
-            <Icon icon=icon size=IconSize::Xl/>
-        </span>
+        <span class="adi-new-app__icon">{mark}</span>
         <span class="adi-new-app__name">{name}</span>
+    }
+}
+
+/// Where an app's favicon would be: `/favicon.ico` on its own origin, where browsers have always
+/// looked first.
+///
+/// Asked for only while the app runs. A stopped one's address is also the address that starts it,
+/// so a picture of it would start every app on the screen just by drawing it.
+fn favicon(href: &str) -> Option<String> {
+    let (scheme, rest) = href.split_once("://")?;
+    let host = rest.split('/').next().filter(|h| !h.is_empty())?;
+    Some(format!("{scheme}://{host}/favicon.ico"))
+}
+
+/// An app's mark: its favicon when it has one that loads, the first letter of its name when not —
+/// on a home-screen tile and on the island alike.
+#[component]
+pub(super) fn AppMark(name: String, favicon: Option<String>) -> impl IntoView {
+    let letter = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "·".to_string(), |c| c.to_uppercase().to_string());
+    // Anything that is not an image — the front door's page for a name it does not know, an app
+    // that serves no icon — fails to load as one, and the letter stands in.
+    let failed = RwSignal::new(favicon.is_none());
+    view! {
+        <Show
+            when=move || !failed.get()
+            fallback=move || view! { <span class="adi-new-mark__letter">{letter.clone()}</span> }
+        >
+            <img
+                class="adi-new-mark__img"
+                src=favicon.clone()
+                alt=""
+                on:error=move |_| failed.set(true)
+            />
+        </Show>
     }
 }
 
@@ -246,6 +296,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
         id,
         name,
         machine,
+        favicon,
         href,
         ask,
         note,
@@ -258,6 +309,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
             name: name.clone(),
             machine,
             url: href.clone(),
+            favicon: favicon.clone(),
         };
         // Opens in the app window. Still a real link to the app underneath, so a modified or
         // middle click does what it does on any link — a tab of its own — and is left alone.
@@ -277,7 +329,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
                     }
                 }
             >
-                {face(Lucide::LayoutDashboard, name)}
+                {face(view! { <AppMark name=name.clone() favicon/> }, name)}
             </a>
         }
         .into_any();
@@ -285,7 +337,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
     let Some((node, service)) = ask else {
         return view! {
             <span class="adi-new-app is-off" title=note>
-                {face(Lucide::LayoutDashboard, name)}
+                {face(view! { <AppMark name=name.clone() favicon=None/> }, name)}
             </span>
         }
         .into_any();
@@ -314,7 +366,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
             prop:disabled=busy
             on:click=move |_| apps.ask(key.clone(), node.clone(), service.clone())
         >
-            {face(Lucide::Lock, label)}
+            {face(view! { <Icon icon=Lucide::Lock size=IconSize::Xl/> }, label)}
         </button>
     }
     .into_any()

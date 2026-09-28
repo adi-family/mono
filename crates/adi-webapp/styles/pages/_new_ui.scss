@@ -216,6 +216,23 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   .adi-segmented { align-self: start; }
 }
 
+// An app's mark (`apps::AppMark`): its favicon, or the first letter of its name, centred on
+// whatever tile it sits on — the home screen's or the island's.
+.adi-new-mark {
+  &__img {
+    width: 55%;
+    height: 55%;
+    object-fit: contain;
+  }
+
+  &__letter {
+    font-size: var(--fs-title);
+    font-weight: 500;
+    line-height: 1;
+    color: var(--ink);
+  }
+}
+
 // Where a dragged window will snap: the palette's frosted surface, over the windows behind the
 // one being dragged.
 .adi-new-snap {
