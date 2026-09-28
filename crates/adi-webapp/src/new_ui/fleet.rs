@@ -1,13 +1,20 @@
 //! The paired devices, read once for the whole screen: the top bar's count and list
 //! ([`super::sources`]) and the device window ([`super::device`]) draw the same answer, so a
 //! device unpaired in one is gone from the other without either asking again.
+//!
+//! Both halves start from the last load's answers ([`super::cache`]), so a reload shows the
+//! devices at once and the reads below only update them.
 
 use std::collections::HashMap;
 
 use adi_webapp_api::types::{FleetNode, FleetState, Reach};
 use leptos::prelude::*;
 
+use super::cache;
 use crate::fetch;
+
+const NODES_KEY: &str = "fleet-nodes";
+const REACH_KEY: &str = "fleet-reach";
 
 /// How often the paired devices are read and dialled again. A machine coming up is not urgent
 /// news, and every round is a mesh dial per node. Opening the list asks at once.
@@ -15,7 +22,8 @@ const TICK_MS: u32 = 30_000;
 
 #[derive(Clone, Copy)]
 pub(super) struct Fleet {
-    /// `None` until the fleet first answers, so nothing claims "0 devices" it has not been told.
+    /// `None` until the fleet first answers (or a previous load's answer is found), so nothing
+    /// claims "0 devices" it has not been told.
     pub(super) nodes: RwSignal<Option<Vec<FleetNode>>>,
     /// `None` while the first dials are out: a node not yet dialled is not yet unreachable.
     pub(super) reach: RwSignal<Option<HashMap<String, Reach>>>,
@@ -25,8 +33,8 @@ impl Fleet {
     /// Read now, and again every [`TICK_MS`] for as long as the calling scope lives.
     pub(super) fn load() -> Self {
         let fleet = Self {
-            nodes: RwSignal::new(None),
-            reach: RwSignal::new(None),
+            nodes: RwSignal::new(cache::load(NODES_KEY)),
+            reach: RwSignal::new(cache::load(REACH_KEY)),
         };
         fleet.refresh();
         let tick = set_interval_with_handle(
@@ -48,9 +56,10 @@ impl Fleet {
         // device's "last connected".
         leptos::task::spawn_local(async move {
             if let Ok(r) = fetch::fleet_reach().await {
-                self.reach.set(Some(
-                    r.nodes.into_iter().map(|n| (n.node, n.reach)).collect(),
-                ));
+                let reach: HashMap<String, Reach> =
+                    r.nodes.into_iter().map(|n| (n.node, n.reach)).collect();
+                cache::save(REACH_KEY, &reach);
+                self.reach.set(Some(reach));
                 self.read();
             }
         });
@@ -60,14 +69,19 @@ impl Fleet {
         leptos::task::spawn_local(async move {
             // A failed read keeps the last answer: stale by a tick beats blank.
             if let Ok(fleet) = fetch::fleet().await {
-                self.nodes.set(Some(fleet.nodes));
+                self.set_nodes(fleet.nodes);
             }
         });
     }
 
     /// Take the registry an edit answered with, so every view shows it without a second read.
     pub(super) fn apply(self, state: FleetState) {
-        self.nodes.set(Some(state.nodes));
+        self.set_nodes(state.nodes);
+    }
+
+    fn set_nodes(self, nodes: Vec<FleetNode>) {
+        cache::save(NODES_KEY, &nodes);
+        self.nodes.set(Some(nodes));
     }
 
     /// One device by the name this machine files it under — tracked.

@@ -19,13 +19,17 @@
 //!
 //! A tile's picture is the app's own `frontend/favicon.svg`, read as a file from its directory
 //! ([`Apps::pictures`]) rather than fetched from the app — so a stopped app shows it too.
+//!
+//! The listings and the pictures start from the last load's ([`super::cache`]): a reload draws
+//! the whole home screen at once, and the reads only update it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
 use leptos::{ev, prelude::*};
 
+use super::cache;
 use super::windows::{AppRef, Desk};
 use crate::pages::dashboards;
 use crate::{fetch, origin};
@@ -33,6 +37,10 @@ use crate::{fetch, origin};
 /// How often the apps are read again. A dashboard started or stopped elsewhere shows up within
 /// this; the paired machines' half is a mesh round trip per machine, so not more often.
 const TICK_MS: u32 = 30_000;
+
+const LOCAL_KEY: &str = "apps-local";
+const REMOTE_KEY: &str = "apps-remote";
+const PICTURES_KEY: &str = "apps-pictures";
 
 #[derive(Clone, Copy)]
 pub(super) struct Apps {
@@ -44,20 +52,23 @@ pub(super) struct Apps {
     asking: RwSignal<Option<String>>,
     /// The last ask that failed: which tile, and the node's refusal.
     refused: RwSignal<Option<(String, String)>>,
-    /// Each app's `frontend/favicon.svg` as a `data:` URL, by [`Tile::key`]; `None` once asked
-    /// and found missing (or still on its way). Asked once per tile for the life of the screen.
-    pictures: RwSignal<HashMap<String, Option<String>>>,
+    /// Each app's `frontend/favicon.svg` as a `data:` URL, by [`Tile::key`], as last read.
+    pictures: RwSignal<HashMap<String, String>>,
+    /// The tiles whose picture has been asked for since this screen mounted: once each, so a
+    /// cached picture is still checked once per load, and never once per tick.
+    asked: StoredValue<HashSet<String>>,
 }
 
 impl Apps {
     /// Read now, and again every [`TICK_MS`] for as long as the calling scope lives.
     pub(super) fn load() -> Self {
         let apps = Self {
-            local: RwSignal::new(None),
-            remote: RwSignal::new(None),
+            local: RwSignal::new(cache::load(LOCAL_KEY)),
+            remote: RwSignal::new(cache::load(REMOTE_KEY)),
             asking: RwSignal::new(None),
             refused: RwSignal::new(None),
-            pictures: RwSignal::new(HashMap::new()),
+            pictures: RwSignal::new(cache::load(PICTURES_KEY).unwrap_or_default()),
+            asked: StoredValue::new(HashSet::new()),
         };
         apps.read();
         let tick = set_interval_with_handle(
@@ -86,6 +97,7 @@ impl Apps {
                 for d in &live {
                     self.picture(format!(":{}", d.id), None, &d.id);
                 }
+                cache::save(LOCAL_KEY, &live);
                 self.local.set(Some(live));
             }
         });
@@ -96,25 +108,24 @@ impl Apps {
                         self.picture(format!("{}:{}", n.node, d.id), Some(&n.node), &d.id);
                     }
                 }
+                cache::save(REMOTE_KEY, &f.nodes);
                 self.remote.set(Some(f.nodes));
             }
         });
     }
 
     /// Read app `id`'s picture off `node` (this machine for `None`) into [`Self::pictures`], unless
-    /// it has been asked for already.
+    /// it has been asked for already since the screen mounted. A picture that fails to read keeps
+    /// the one cached, if any: an unreachable machine is not a reason to blank its tiles.
     ///
     /// Through the panel's store browser, `/api/fs/read` — on a paired machine via its own panel,
     /// `/api/node/<node>/…` — because the file is text and that route already exists on every
     /// panel, released or not. An SVG in an `<img>` runs no script, so a machine's picture cannot
     /// act on this page.
     fn picture(self, key: String, node: Option<&str>, id: &str) {
-        if self.pictures.with_untracked(|p| p.contains_key(&key)) {
+        if !self.asked.try_update_value(|a| a.insert(key.clone())).unwrap_or(false) {
             return;
         }
-        self.pictures.update(|p| {
-            p.insert(key.clone(), None);
-        });
         let node = node.map(str::to_string);
         let path = format!("dashboards/{id}/frontend/favicon.svg");
         leptos::task::spawn_local(async move {
@@ -123,9 +134,13 @@ impl Apps {
                     "data:image/svg+xml;charset=utf-8,{}",
                     js_sys::encode_uri_component(&file.content)
                 );
-                self.pictures.update(|p| {
-                    p.insert(key, Some(url));
-                });
+                // Only a changed picture is written, so re-checking the cached ones redraws nothing.
+                if self.pictures.with_untracked(|p| p.get(&key) != Some(&url)) {
+                    self.pictures.update(|p| {
+                        p.insert(key, url);
+                    });
+                    self.pictures.with_untracked(|p| cache::save(PICTURES_KEY, p));
+                }
             }
         });
     }
@@ -201,8 +216,8 @@ struct Tile {
 impl Tile {
     /// Prefer the picture read from the app's directory to the favicon address worked out from
     /// its link: it is there whether or not the app runs.
-    fn with_picture(mut self, pictures: &HashMap<String, Option<String>>) -> Self {
-        if let Some(Some(url)) = pictures.get(&self.key) {
+    fn with_picture(mut self, pictures: &HashMap<String, String>) -> Self {
+        if let Some(url) = pictures.get(&self.key) {
             self.favicon = Some(url.clone());
         }
         self

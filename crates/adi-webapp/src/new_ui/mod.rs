@@ -25,6 +25,7 @@ mod about;
 mod apps;
 mod background;
 mod browser;
+mod cache;
 mod chat;
 mod device;
 mod fleet;
