@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-92 structs · 31 enums · 5 type aliases across 41 files.
+93 structs · 33 enums · 6 type aliases across 43 files.
 
 ## Index
 
@@ -14,12 +14,14 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/about.rs`](#srcnew_uiaboutrs) — `Facts`
-- [`src/new_ui/apps.rs`](#srcnew_uiappsrs) — `Apps`, `Tile`
+- [`src/new_ui/apps.rs`](#srcnew_uiappsrs) — `Apps`, `Tile`, `Item`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/device.rs`](#srcnew_uidevicers) — `Cut`
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
+- [`src/new_ui/watching.rs`](#srcnew_uiwatchingrs) — `Wants`, `Part`
+- [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -240,6 +242,7 @@ pub(super) struct Apps {
     asking: RwSignal<Option<String>>,
     refused: RwSignal<Option<(String, String)>>,
     pictures: RwSignal<HashMap<String, String>>,
+    widgets: RwSignal<HashMap<String, Size>>,
     asked: StoredValue<HashSet<String>>,
 }
 ```
@@ -249,7 +252,7 @@ pub(super) struct Apps {
 What one tile is, worked out before anything is drawn — and compared, so a tick that changes nothing redraws nothing.
 
 ```rust
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Tile {
     key: String,
     id: String,
@@ -257,9 +260,27 @@ struct Tile {
     machine: Option<String>,
     favicon: Option<String>,
     icon: Option<String>,
+    widget: Option<Size>,
     href: Option<String>,
     ask: Option<(String, String)>,
     note: String,
+}
+```
+
+### enum `Item`
+
+One thing in the grid, in order: a machine's heading, an app's widget, an app's tile.
+
+```rust
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Item {
+    Machine(String),
+    Widget {
+        name: String,
+        url: String,
+        size: Size,
+    },
+    Tile(Tile),
 }
 ```
 
@@ -438,6 +459,42 @@ The layout's live state, shared by the screen and the settings window.
 #[derive(Clone, Copy)]
 pub(super) struct Shell {
     pub(super) layout: RwSignal<Layout>,
+}
+```
+
+---
+
+## `src/new_ui/watching.rs`
+
+### type `Wants`
+
+```rust
+type Wants = Rc<dyn Fn() -> Vec<Sub>>;
+```
+
+### struct `Part`
+
+One part's place in the list; dropping it with `leave` takes its watches out.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Part(u32);
+```
+
+---
+
+## `src/new_ui/widgets.rs`
+
+### enum `Size`
+
+How much of the apps' grid an app's widget takes, in tiles.
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(super) enum Size {
+    Small,
+    Medium,
+    Large,
 }
 ```
 

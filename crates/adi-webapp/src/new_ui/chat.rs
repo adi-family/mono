@@ -4,19 +4,28 @@
 //!
 //! It keeps a chat's state of its own ([`State`], [`AgentsWatch`]), as the embedded chat in
 //! `main.rs` does, so nothing here reaches into — or is disturbed by — the rest of the screen.
+//! The home screen's chat widget ([`super::widgets`]) is a second one, beside the window's.
 
 use adi_webapp_api::types::AgentDto;
 use leptos::prelude::*;
 
 use crate::pages::{live_view, poll_watch, reset_chat_home};
 use crate::state::{self, AgentsWatch, ROOT_AGENT, State};
+use super::watching;
 use crate::{fetch, live};
 
 /// How often the chat is read while the live channel is down. With the channel up, it pushes.
 const POLL_MS: u64 = 1_000;
 
+/// `widget` is the home screen's copy rather than the window's: only its element ids differ, so
+/// the two can be on screen at once.
 #[component]
-pub(super) fn Chat() -> impl IntoView {
+pub(super) fn Chat(#[prop(optional)] widget: bool) -> impl IntoView {
+    let picker_id = if widget {
+        "adi-new-chat-agent-widget"
+    } else {
+        "adi-new-chat-agent"
+    };
     let state = State::fresh();
     let watch = AgentsWatch::new();
 
@@ -31,7 +40,8 @@ pub(super) fn Chat() -> impl IntoView {
         }
     });
 
-    Effect::new(move |_| live::watch(state::chat_subscriptions(watch)));
+    let part = watching::join(move || state::chat_subscriptions(watch));
+    Effect::new(move |_| watching::send());
     let tick = set_interval_with_handle(
         move || {
             if !live::connected() {
@@ -40,13 +50,11 @@ pub(super) fn Chat() -> impl IntoView {
         },
         std::time::Duration::from_millis(POLL_MS),
     );
-    // This window is the only thing on the new screen that watches the channel, so closing it
-    // leaves nothing watched.
     on_cleanup(move || {
         if let Ok(t) = tick {
             t.clear();
         }
-        live::watch(Vec::new());
+        watching::leave(part);
     });
 
     let agents = move || {
@@ -61,9 +69,9 @@ pub(super) fn Chat() -> impl IntoView {
     view! {
         <div class="adi-new-chat">
             <div class="adi-new-chat__bar">
-                <label class="adi-new-chat__label" for="adi-new-chat-agent">"Agent"</label>
+                <label class="adi-new-chat__label" for=picker_id>"Agent"</label>
                 <select
-                    id="adi-new-chat-agent"
+                    id=picker_id
                     class="adi-input adi-new-chat__agent"
                     prop:value=move || watch.name.get().unwrap_or_default()
                     on:change=move |ev| {

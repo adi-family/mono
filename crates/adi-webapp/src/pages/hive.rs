@@ -654,6 +654,7 @@ mod tests {
             archived_at: None,
             moved_to: None,
             never_started: false,
+            icon: None,
         };
         let mut svc = svc("frontend", None, None);
         svc.dashboard = Some(board.id.clone());

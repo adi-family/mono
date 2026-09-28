@@ -22,14 +22,19 @@
 //!
 //! The listings and the pictures start from the last load's ([`super::cache`]): a reload draws
 //! the whole home screen at once, and the reads only update it.
+//!
+//! An app that ships `frontend/widget.html` also gets its widget in the grid, ahead of its
+//! machine's tiles ([`super::widgets`]).
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
 use leptos::{ev, prelude::*};
 
 use super::cache;
+use super::widgets::{self, AppWidget, Size};
 use super::windows::{AppRef, Desk};
 use crate::pages::dashboards;
 use crate::{fetch, origin};
@@ -41,6 +46,7 @@ const TICK_MS: u32 = 30_000;
 const LOCAL_KEY: &str = "apps-local";
 const REMOTE_KEY: &str = "apps-remote";
 const PICTURES_KEY: &str = "apps-pictures";
+const WIDGETS_KEY: &str = "apps-widgets";
 
 #[derive(Clone, Copy)]
 pub(super) struct Apps {
@@ -54,8 +60,10 @@ pub(super) struct Apps {
     refused: RwSignal<Option<(String, String)>>,
     /// Each app's `frontend/favicon.svg` as a `data:` URL, by [`Tile::key`], as last read.
     pictures: RwSignal<HashMap<String, String>>,
-    /// The tiles whose picture has been asked for since this screen mounted: once each, so a
-    /// cached picture is still checked once per load, and never once per tick.
+    /// The apps that ship a `widget.html`, by [`Tile::key`], with the size it declares.
+    widgets: RwSignal<HashMap<String, Size>>,
+    /// The files asked for since this screen mounted, by kind and [`Tile::key`]: once each, so a
+    /// cached answer is still checked once per load, and never once per tick.
     asked: StoredValue<HashSet<String>>,
 }
 
@@ -68,6 +76,7 @@ impl Apps {
             asking: RwSignal::new(None),
             refused: RwSignal::new(None),
             pictures: RwSignal::new(cache::load(PICTURES_KEY).unwrap_or_default()),
+            widgets: RwSignal::new(cache::load(WIDGETS_KEY).unwrap_or_default()),
             asked: StoredValue::new(HashSet::new()),
         };
         apps.read();
@@ -96,6 +105,7 @@ impl Apps {
                     .collect::<Vec<Dashboard>>();
                 for d in &live {
                     self.picture(format!(":{}", d.id), None, &d.id);
+                    self.widget(format!(":{}", d.id), None, &d.id);
                 }
                 cache::save(LOCAL_KEY, &live);
                 self.local.set(Some(live));
@@ -106,6 +116,7 @@ impl Apps {
                 for n in f.nodes.iter().filter(|n| !n.locked && n.error.is_none()) {
                     for d in &n.dashboards {
                         self.picture(format!("{}:{}", n.node, d.id), Some(&n.node), &d.id);
+                        self.widget(format!("{}:{}", n.node, d.id), Some(&n.node), &d.id);
                     }
                 }
                 cache::save(REMOTE_KEY, &f.nodes);
@@ -123,7 +134,7 @@ impl Apps {
     /// panel, released or not. An SVG in an `<img>` runs no script, so a machine's picture cannot
     /// act on this page.
     fn picture(self, key: String, node: Option<&str>, id: &str) {
-        if !self.asked.try_update_value(|a| a.insert(key.clone())).unwrap_or(false) {
+        if !self.first_ask(format!("picture|{key}")) {
             return;
         }
         let node = node.map(str::to_string);
@@ -141,6 +152,44 @@ impl Apps {
                     });
                     self.pictures.with_untracked(|p| cache::save(PICTURES_KEY, p));
                 }
+            }
+        });
+    }
+
+    /// Whether `what` is being asked for the first time since the screen mounted — and, if so,
+    /// mark it asked.
+    fn first_ask(self, what: String) -> bool {
+        self.asked
+            .try_update_value(|a| a.insert(what))
+            .unwrap_or(false)
+    }
+
+    /// Find out whether app `id` on `node` ships a `widget.html`, and at what size, into
+    /// [`Self::widgets`] — read as a file, as its picture is ([`Self::picture`]).
+    ///
+    /// Unlike a picture, a widget the machine says is gone is dropped from the cache: a frame
+    /// kept for a file that no longer exists would show the app's 404 on the home screen. Any
+    /// other failure — the machine not answering — keeps what was cached.
+    fn widget(self, key: String, node: Option<&str>, id: &str) {
+        if !self.first_ask(format!("widget|{key}")) {
+            return;
+        }
+        let node = node.map(str::to_string);
+        let path = format!("dashboards/{id}/frontend/widget.html");
+        leptos::task::spawn_local(async move {
+            let now = match fetch::fs_read_on(node.as_deref(), &path).await {
+                Ok(file) => Some(Size::declared(&file.content)),
+                Err(e) if e.contains("no such file") => None,
+                Err(_) => return,
+            };
+            if self.widgets.with_untracked(|w| w.get(&key).copied()) != now {
+                self.widgets.update(|w| {
+                    match now {
+                        Some(size) => w.insert(key, size),
+                        None => w.remove(&key),
+                    };
+                });
+                self.widgets.with_untracked(|w| cache::save(WIDGETS_KEY, w));
             }
         });
     }
@@ -164,10 +213,11 @@ impl Apps {
     fn sections(self) -> Vec<(Option<String>, Vec<Tile>)> {
         let mut out = Vec::new();
         let pictures = self.pictures.get();
+        let widgets = self.widgets.get();
         let here: Vec<Tile> = self.local.with(|l| {
             l.iter()
                 .flatten()
-                .map(|d| Tile::local(d).with_picture(&pictures))
+                .map(|d| Tile::local(d).with_files(&pictures, &widgets))
                 .collect()
         });
         if !here.is_empty() {
@@ -181,7 +231,7 @@ impl Apps {
                 let tiles = n
                     .dashboards
                     .iter()
-                    .map(|d| Tile::remote(&n.node, d).with_picture(&pictures))
+                    .map(|d| Tile::remote(&n.node, d).with_files(&pictures, &widgets))
                     .collect();
                 out.push((Some(n.node.clone()), tiles));
             }
@@ -192,7 +242,7 @@ impl Apps {
 
 /// What one tile is, worked out before anything is drawn — and compared, so a tick that changes
 /// nothing redraws nothing.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Tile {
     /// Unique on the screen: the machine (empty for this one) and the app's id.
     key: String,
@@ -205,6 +255,8 @@ struct Tile {
     favicon: Option<String>,
     /// The Lucide icon it names as its picture, if any (see [`AppMark`]).
     icon: Option<String>,
+    /// The size of its widget, when it ships one.
+    widget: Option<Size>,
     /// Where pressing it goes, when it goes anywhere.
     href: Option<String>,
     /// The grant to ask for when it is pressed instead: the machine and the service.
@@ -214,12 +266,17 @@ struct Tile {
 }
 
 impl Tile {
-    /// Prefer the picture read from the app's directory to the favicon address worked out from
-    /// its link: it is there whether or not the app runs.
-    fn with_picture(mut self, pictures: &HashMap<String, String>) -> Self {
+    /// What was read from the app's directory: its picture — preferred to the favicon address
+    /// worked out from its link, being there whether or not the app runs — and its widget.
+    fn with_files(
+        mut self,
+        pictures: &HashMap<String, String>,
+        widgets: &HashMap<String, Size>,
+    ) -> Self {
         if let Some(url) = pictures.get(&self.key) {
             self.favicon = Some(url.clone());
         }
+        self.widget = widgets.get(&self.key).copied();
         self
     }
 
@@ -245,6 +302,7 @@ impl Tile {
         Self {
             favicon,
             icon: d.icon.clone(),
+            widget: None,
             key: format!(":{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -287,6 +345,7 @@ impl Tile {
         Self {
             favicon,
             icon: d.icon.clone(),
+            widget: None,
             key: format!("{node}:{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -298,27 +357,61 @@ impl Tile {
     }
 }
 
+/// One thing in the grid, in order: a machine's heading, an app's widget, an app's tile.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Item {
+    Machine(String),
+    Widget { name: String, url: String, size: Size },
+    Tile(Tile),
+}
+
+impl Item {
+    /// The item's identity for [`For`]: everything it draws. An item that did not change keeps its
+    /// node — which for a widget is the difference between a live frame and one that reloads its
+    /// page on every read.
+    fn key(&self) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.hash(&mut h);
+        h.finish()
+    }
+}
+
+/// The grid as a flat list: each section's heading, then its widgets, then its tiles. Tracked.
+fn items(apps: Apps) -> Vec<Item> {
+    let mut out = Vec::new();
+    for (machine, tiles) in apps.sections() {
+        out.extend(machine.map(Item::Machine));
+        out.extend(tiles.iter().filter_map(|t| {
+            Some(Item::Widget {
+                name: t.name.clone(),
+                url: widgets::url(t.href.as_deref()?)?,
+                size: t.widget?,
+            })
+        }));
+        out.extend(tiles.into_iter().map(Item::Tile));
+    }
+    out
+}
+
 /// The grid. Draws nothing until there is an app, so a machine with none keeps a bare wallpaper.
 #[component]
 pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
-    let sections = Memo::new(move |_| apps.sections());
+    let items = Memo::new(move |_| items(apps));
     view! {
-        <Show when=move || sections.with(|s| !s.is_empty())>
+        <Show when=move || items.with(|i| !i.is_empty())>
             <nav class="adi-new-apps" class:light=move || light.get() aria-label="Apps">
-                {move || {
-                    sections
-                        .get()
-                        .into_iter()
-                        .map(|(machine, tiles)| {
-                            view! {
-                                {machine.map(|m| view! {
-                                    <h2 class="adi-new-apps__machine">{m}</h2>
-                                })}
-                                {tiles.into_iter().map(|t| tile(apps, desk, t)).collect_view()}
-                            }
-                        })
-                        .collect_view()
-                }}
+                <For each=move || items.get() key=Item::key let:item>
+                    {match item {
+                        Item::Machine(m) => view! {
+                            <h2 class="adi-new-apps__machine">{m}</h2>
+                        }
+                        .into_any(),
+                        Item::Widget { name, url, size } => {
+                            view! { <AppWidget name url size/> }.into_any()
+                        }
+                        Item::Tile(t) => tile(apps, desk, t),
+                    }}
+                </For>
             </nav>
         </Show>
     }
@@ -394,6 +487,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
         href,
         ask,
         note,
+        widget: _,
     } = t;
     if let Some(href) = href {
         let app = AppRef {
