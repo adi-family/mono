@@ -30,8 +30,8 @@ pub struct BundleFile {
 ///
 /// What is **not** in here is the point. The manifest and `.adi/hive.yaml` are omitted and rebuilt
 /// on the far side, because both name things that are true only where they were written: the hive
-/// file carries an absolute `working_dir`, and its `proxy.host` may already belong to a different
-/// dashboard over there. Everything a person or an agent authored travels verbatim.
+/// file's `proxy.host` may already belong to a different dashboard over there, and the manifest
+/// carries this machine's project and archive state. Everything a person or an agent authored travels verbatim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardBundle {
     /// The dashboard's id, carried across so a second transfer **updates** the copy on the node
@@ -77,8 +77,8 @@ pub const MAX_BUNDLE_FILES: usize = 2000;
 
 /// Directory names never packed, wherever they appear in the tree.
 ///
-/// `.adi` because the hive file inside it is rebuilt on the far side (its `working_dir` is an
-/// absolute local path, and its host may be taken over there); the other two because they are
+/// `.adi` because the hive file inside it is rebuilt on the far side (its host may be taken over
+/// there, and a file written by an older panel names an absolute local `working_dir`); the other two because they are
 /// caches of things already in the bundle, and shipping them is how a 20 KB dashboard becomes a
 /// 200 MB one.
 pub const NEVER_BUNDLED_DIRS: &[&str] = &[".adi", "node_modules", ".git"];

@@ -16,8 +16,12 @@ use std::path::Path;
 use serde::Deserialize;
 
 /// The dashboard's hive services: **one host, two services**. `{{HOST}}` is the hostname both
-/// share and `{{DIR}}` the dashboard directory; nothing else is generated, and in particular no
-/// port ever is — adi-hive leases those.
+/// share; nothing else is generated, and in particular no port ever is — adi-hive leases those.
+///
+/// `working_dir: .` is the dashboard's own directory, not `.adi/`: adi-hive resolves an imported
+/// file's relative paths against the directory that *holds* its `.adi` (`import_base_dir` in
+/// adi-hive's `config.rs`), so `..` would be the dashboards root. Relative, so the file stays true
+/// when the directory is moved, copied or restored somewhere else.
 ///
 /// Kept as a template rather than a `format!` chain so the emitted YAML reads here exactly as it
 /// lands on disk, comments and all.
@@ -32,6 +36,9 @@ const HIVE_TEMPLATE: &str = r#"# Dashboard hive services — run by the per-user
 #
 # The front door imports dashboards (stripping their runners, since it only routes) and picks
 # both entries up; the per-user supervisor is what actually runs them.
+#
+# `working_dir: .` is this dashboard's directory — adi-hive resolves it against the directory
+# holding `.adi/`, not against `.adi/` itself.
 #
 # No port is declared: adi-hive leases a stable one per service from the ports manager (keyed
 # `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it as $PORT. The leases are
@@ -48,7 +55,7 @@ services:
       type: script
       script:
         run: bun run frontend/index.ts
-        working_dir: {{DIR}}
+        working_dir: .
 
   backend:
     restart: always
@@ -59,7 +66,7 @@ services:
       type: script
       script:
         run: bun run backend/index.ts
-        working_dir: {{DIR}}
+        working_dir: .
 "#;
 
 /// The third service, for a dashboard that has a `widget/` directory: its home-screen widgets,
@@ -77,7 +84,7 @@ const WIDGET_TEMPLATE: &str = r#"
       type: script
       script:
         run: bun run widget/index.ts
-        working_dir: {{DIR}}
+        working_dir: .
 "#;
 
 /// The path prefix the widget service claims on the dashboard's host.
@@ -98,7 +105,6 @@ pub fn hive_yaml(dir: &Path, host: &str) -> String {
         yaml.push_str(WIDGET_TEMPLATE);
     }
     yaml.replace("{{HOST}}", host)
-        .replace("{{DIR}}", &dir.display().to_string())
 }
 
 /// Whether the dashboard in `dir` serves widgets: whether it has a [`WIDGET_DIR`].
@@ -253,6 +259,21 @@ pub struct HiveFile {
 pub struct HiveService {
     #[serde(default)]
     pub proxy: Option<HiveProxy>,
+    #[serde(default)]
+    pub runner: Option<HiveRunner>,
+}
+
+/// The runner, read only for its script's `working_dir`.
+#[derive(Debug, Deserialize)]
+pub struct HiveRunner {
+    #[serde(default)]
+    pub script: Option<HiveScript>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HiveScript {
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,12 +316,22 @@ pub fn is_one_origin(parsed: &HiveFile) -> bool {
         && path_claim(backend.path.as_deref()).as_deref() == Some(API_PATH)
 }
 
-/// Whether a parsed hive file is what [`hive_yaml`] would write for `dir` today, as far as routing
-/// goes: one origin, and a widget service on that host at [`WIDGET_PATH`] exactly when the
-/// directory has widgets.
+/// Whether a parsed hive file is what [`hive_yaml`] would write for `dir` today: one origin, a
+/// widget service on that host at [`WIDGET_PATH`] exactly when the directory has widgets, and
+/// every runner in the dashboard's directory by the relative `.` — a file written before that
+/// carries an absolute path, which is wrong the moment the directory moves.
 #[must_use]
 pub fn is_current(dir: &Path, parsed: &HiveFile) -> bool {
     if !is_one_origin(parsed) {
+        return false;
+    }
+    let relative = parsed.services.values().all(|s| {
+        s.runner
+            .as_ref()
+            .and_then(|r| r.script.as_ref())
+            .is_some_and(|script| script.working_dir.as_deref().map(str::trim) == Some("."))
+    });
+    if !relative {
         return false;
     }
     let widget = parsed.services.get("widget").and_then(|s| s.proxy.as_ref());
@@ -502,10 +533,8 @@ mod tests {
         assert!(!yaml.contains("ports:"), "{yaml}");
         assert!(!yaml.contains("rollout:"), "{yaml}");
         assert!(yaml.contains("run: bun run frontend/index.ts"), "{yaml}");
-        assert!(
-            yaml.contains(&format!("working_dir: {}", dir.display())),
-            "{yaml}"
-        );
+        assert!(yaml.contains("working_dir: .\n"), "{yaml}");
+        assert!(!yaml.contains(&dir.display().to_string()), "no absolute path: {yaml}");
     }
 
     #[test]

@@ -874,10 +874,8 @@ mod tests {
         // The runner shape is what the front door strips and the supervisor runs — unchanged.
         assert!(raw.contains("run: bun run frontend/index.ts"), "{raw}");
         assert!(raw.contains("run: bun run backend/index.ts"), "{raw}");
-        assert!(
-            raw.contains(&format!("working_dir: {}", dir.display())),
-            "{raw}"
-        );
+        assert!(raw.contains("working_dir: .\n"), "{raw}");
+        assert!(!raw.contains(&dir.display().to_string()), "no absolute path: {raw}");
     }
 
     // MARK: the templates the browser gets
@@ -1115,6 +1113,28 @@ mod tests {
         // Restoring it must bring back the current shape, not the one it was archived with.
         assert!(is_one_origin(&hive_of(&dir)));
         assert!(!dir.join(".adi").join(HIVE_LIVE).exists());
+    }
+
+    #[test]
+    fn an_absolute_working_dir_is_rewritten_relative_and_keeps_the_host() {
+        let root = scratch("relative");
+        let dir = root.join("nosh");
+        scaffold(&dir, "Nosh", "", None).expect("scaffold");
+        let hive = dir.join(".adi").join(HIVE_LIVE);
+        // What every panel wrote before: one origin, a hand-picked host, absolute runner paths.
+        let old = std::fs::read_to_string(&hive)
+            .expect("hive")
+            .replace("working_dir: .", &format!("working_dir: {}", dir.display()))
+            .replace("nosh.adi", "picked.adi");
+        std::fs::write(&hive, &old).expect("old hive");
+        assert!(!is_current(&dir, &hive_of(&dir)));
+
+        migrate(&dir, "Nosh");
+
+        let raw = std::fs::read_to_string(&hive).expect("hive");
+        assert!(!raw.contains(&dir.display().to_string()), "{raw}");
+        assert_eq!(declared_host(&dir).as_deref(), Some("picked.adi"));
+        assert!(is_current(&dir, &hive_of(&dir)));
     }
 
     #[test]
@@ -1375,14 +1395,12 @@ mod tests {
             "an import is live by definition"
         );
 
-        // The hive file is this machine's own — one origin, and a working_dir under *its* store.
+        // The hive file is this machine's own — one origin, and no path from anywhere.
         let hive = hive_of(&dir);
         assert!(is_one_origin(&hive));
         let raw = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive");
-        assert!(
-            raw.contains(&format!("working_dir: {}", dir.display())),
-            "{raw}"
-        );
+        assert!(raw.contains("working_dir: .\n"), "{raw}");
+        assert!(!raw.contains(&dir.display().to_string()), "no absolute path: {raw}");
         assert!(
             !raw.contains("transfer-from"),
             "no path from the sending machine: {raw}"

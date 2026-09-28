@@ -4,12 +4,12 @@
 
 > The on-disk contract of a dashboard directory: its manifest, its hive file and hostname, and the bundle it becomes when it travels.
 
-7 structs · 2 enums · 1 type alias across 3 files.
+9 structs · 2 enums · 1 type alias across 3 files.
 
 ## Index
 
 - [`src/bundle.rs`](#srcbundlers) — `BundleFile`, `DashboardBundle`, `DecodedFiles`, `BundleError`, `CollectError`
-- [`src/hive.rs`](#srchivers) — `HiveFile`, `HiveService`, `HiveProxy`
+- [`src/hive.rs`](#srchivers) — `HiveFile`, `HiveService`, `HiveRunner`, `HiveScript`, `HiveProxy`
 - [`src/manifest.rs`](#srcmanifestrs) — `Manifest`, `Widget`
 
 ---
@@ -133,6 +133,30 @@ pub struct HiveFile {
 pub struct HiveService {
     #[serde(default)]
     pub proxy: Option<HiveProxy>,
+    #[serde(default)]
+    pub runner: Option<HiveRunner>,
+}
+```
+
+### struct `HiveRunner`
+
+The runner, read only for its script's `working_dir`.
+
+```rust
+#[derive(Debug, Deserialize)]
+pub struct HiveRunner {
+    #[serde(default)]
+    pub script: Option<HiveScript>,
+}
+```
+
+### struct `HiveScript`
+
+```rust
+#[derive(Debug, Deserialize)]
+pub struct HiveScript {
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 ```
 
