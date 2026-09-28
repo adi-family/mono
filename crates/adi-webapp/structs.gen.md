@@ -452,6 +452,7 @@ A window the new UI can open.
 pub(super) enum Win {
     Settings,
     About,
+    Chat,
     Device,
     App(u32),
 }
@@ -465,6 +466,7 @@ What an address names.
 enum Place {
     Settings,
     About,
+    Chat,
     Device(String),
     App(String),
 }

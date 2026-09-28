@@ -58,6 +58,8 @@ const Z_BASE: usize = 10;
 pub(super) enum Win {
     Settings,
     About,
+    /// A chat with one of this machine's agents.
+    Chat,
     /// One paired device's page — which one is [`Desk`]'s to say, so there is one at a time.
     Device,
     /// One app, framed in a small browser. As many as there are apps open, each by the number
@@ -68,13 +70,14 @@ pub(super) enum Win {
 impl Win {
     /// The windows there is one of, drawn from this fixed list. App windows come and go, and are
     /// drawn from [`Desk::apps`].
-    pub(super) const FIXED: [Self; 3] = [Self::Settings, Self::About, Self::Device];
+    pub(super) const FIXED: [Self; 4] = [Self::Settings, Self::About, Self::Chat, Self::Device];
 
     /// The address that opens it — for the device window, only the start of it.
     fn path(self) -> &'static str {
         match self {
             Self::Settings => "/settings",
             Self::About => "/about",
+            Self::Chat => "/chat",
             Self::Device => DEVICES,
             Self::App(_) => APPS,
         }
@@ -84,6 +87,7 @@ impl Win {
         match self {
             Self::Settings => "Settings",
             Self::About => "About adi",
+            Self::Chat => "Chat",
             Self::Device => "Device",
             Self::App(_) => "App",
         }
@@ -95,6 +99,7 @@ impl Win {
         match self {
             Self::Settings => Some("adi-new-ui-window-settings"),
             Self::About => Some("adi-new-ui-window-about"),
+            Self::Chat => Some("adi-new-ui-window-chat"),
             Self::Device => Some("adi-new-ui-window-device"),
             Self::App(_) => None,
         }
@@ -106,6 +111,7 @@ impl Win {
         match self {
             Self::Settings => 480,
             Self::About => 320,
+            Self::Chat => 760,
             Self::Device => 420,
             Self::App(_) => 1024,
         }
@@ -116,6 +122,7 @@ impl Win {
         match self {
             Self::Settings => (380.0, 240.0),
             Self::About => (280.0, 200.0),
+            Self::Chat => (420.0, 320.0),
             Self::Device => (320.0, 240.0),
             Self::App(_) => (480.0, 320.0),
         }
@@ -126,6 +133,7 @@ impl Win {
         match self {
             Self::Settings => "adi-new-ui-window-settings-size",
             Self::About => "adi-new-ui-window-about-size",
+            Self::Chat => "adi-new-ui-window-chat-size",
             Self::Device => "adi-new-ui-window-device-size",
             Self::App(_) => APP_SIZE_KEY,
         }
@@ -136,6 +144,7 @@ impl Win {
 enum Place {
     Settings,
     About,
+    Chat,
     /// A device, by its name.
     Device(String),
     /// An app, by its [`AppRef::key`].
@@ -166,6 +175,7 @@ impl Place {
         match path {
             "/settings" => Some(Self::Settings),
             "/about" => Some(Self::About),
+            "/chat" => Some(Self::Chat),
             _ => None,
         }
     }
@@ -241,6 +251,7 @@ impl Desk {
         match Place::of(path) {
             Some(Place::Settings) => self.raise(Win::Settings),
             Some(Place::About) => self.raise(Win::About),
+            Some(Place::Chat) => self.raise(Win::Chat),
             Some(Place::Device(d)) => {
                 self.set_device(d);
                 self.raise(Win::Device);
@@ -318,7 +329,7 @@ impl Desk {
                 Some(m) => format!("{} — {m}", a.name),
                 None => a.name,
             }),
-            Win::Settings | Win::About => None,
+            Win::Settings | Win::About | Win::Chat => None,
         }
         .unwrap_or_else(|| w.title().to_string())
     }
@@ -332,7 +343,7 @@ impl Desk {
                     .find(|(i, _)| *i == id)
                     .map(|(_, app)| app.key.clone())
             }),
-            Win::Settings | Win::About => None,
+            Win::Settings | Win::About | Win::Chat => None,
         };
         match name {
             // The key's own `/` is kept, so a paired machine's app reads `/apps/laptop/notes`.

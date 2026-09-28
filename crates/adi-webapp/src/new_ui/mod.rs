@@ -14,7 +14,7 @@
 //!
 //! What it draws so far: a wallpaper ([`background`]), the apps on it as a home screen
 //! ([`apps`]), the windows open over it ([`windows`] —
-//! [`settings`], [`about`], one paired device's page, [`device`], and one app in a small browser,
+//! [`settings`], [`about`], a chat with an agent, [`chat`], one paired device's page, [`device`], and one app in a small browser,
 //! [`browser`]), the top bar and island
 //! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
 //! `⌘K` palette ([`palette`]). A window's address
@@ -25,6 +25,7 @@ mod about;
 mod apps;
 mod background;
 mod browser;
+mod chat;
 mod device;
 mod fleet;
 mod palette;
@@ -102,13 +103,22 @@ pub(crate) fn action() -> Action {
 /// The palette's commands, as they stand right now.
 fn commands(wall: background::Wallpaper, desk: Desk) -> Vec<Item> {
     let now = wall.choice.get().appearance;
-    let mut items = vec![Item::new(
-        "Settings",
-        "Open settings",
-        "Background and appearance",
-        Lucide::Settings2,
-        move || desk.open(Win::Settings),
-    )];
+    let mut items = vec![
+        Item::new(
+            "Chat",
+            "Open chat",
+            "Talk to one of your agents",
+            Lucide::MessageSquare,
+            move || desk.open(Win::Chat),
+        ),
+        Item::new(
+            "Settings",
+            "Open settings",
+            "Background and appearance",
+            Lucide::Settings2,
+            move || desk.open(Win::Settings),
+        ),
+    ];
     // A row for each appearance the screen is not already fixed to — one while it is light or
     // dark, both while it follows the system.
     items.extend(
@@ -221,6 +231,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
                                 Win::About => view! { <about::About/> }.into_any(),
+                                Win::Chat => view! { <chat::Chat/> }.into_any(),
                                 Win::Device => {
                                     view! { <device::Device fleet desk/> }.into_any()
                                 }

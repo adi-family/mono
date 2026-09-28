@@ -299,6 +299,16 @@ pub(super) fn Island(
             >
                 <Icon icon=Lucide::Settings2 size=IconSize::Lg/>
             </button>
+            <button
+                class="adi-new-island__item"
+                class:is-open=move || desk.is_open(Win::Chat)
+                type="button"
+                title=Win::Chat.title()
+                aria-label=Win::Chat.title()
+                on:click=move |_| desk.open(Win::Chat)
+            >
+                <Icon icon=Lucide::MessageSquare size=IconSize::Lg/>
+            </button>
             // The apps open in windows, after a divider, in the order they were opened — as the
             // Dock lists running apps after its own. Each carries the open dot; pressing one
             // brings its window forward.

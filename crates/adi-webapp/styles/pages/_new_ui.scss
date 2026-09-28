@@ -216,6 +216,45 @@ $walls: night, dusk, ocean, forest, aurora, ember, blush, graphite;
   .adi-segmented { align-self: start; }
 }
 
+// ---- chat window (`/chat`, `chat.rs`) ------------------------------------------------------
+// The old screens' chat as it is, under a bar that picks the agent. The chat's own panels bring
+// their own spacing; the window only gives them room and a scroll.
+.adi-new-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+
+  &__bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--s2);
+    padding: var(--s2) var(--s4);
+    border-bottom: 1px solid var(--line);
+  }
+
+  &__label {
+    font-size: var(--fs-label);
+    color: var(--ink-3);
+  }
+
+  &__agent { width: auto; min-width: 200px; }
+
+  &__error {
+    margin: 0;
+    padding: var(--s2) var(--s4);
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-small);
+    color: var(--err);
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    padding: var(--s3) var(--s4);
+  }
+}
+
 // An app's mark (`apps::AppMark`): its favicon, or the first letter of its name, centred on
 // whatever tile it sits on — the home screen's or the island's.
 .adi-new-mark {
