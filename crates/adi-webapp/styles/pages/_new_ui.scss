@@ -986,10 +986,10 @@ $island-gap: var(--s2);
   }
 }
 
-// ---- home screen (`mod.rs`) ------------------------------------------------------------------
-// The chat widget across the left half, the apps across the right. Under every window (they start
-// above 1) and clear of the island on any edge it takes. One column on a narrow screen, the chat
-// on top.
+// ---- home screen (`apps.rs`) -----------------------------------------------------------------
+// The apps, and beside them on the right half the widget that asks for it (the Agent board's
+// chat). Under every window (they start above 1) and clear of the island on any edge it takes.
+// One column on a narrow screen, the widget below the apps.
 .adi-new-home {
   position: fixed;
   z-index: 1;
@@ -998,12 +998,16 @@ $island-gap: var(--s2);
   left: var(--s16);
   right: var(--s16);
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: var(--s8);
 
+  &.has-half { grid-template-columns: 1fr 1fr; }
+
   @media (max-width: 960px) {
-    grid-template-columns: 1fr;
-    grid-template-rows: 60% 1fr;
+    &.has-half {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 60%;
+    }
     left: var(--s4);
     right: var(--s4);
   }
@@ -1025,14 +1029,7 @@ $tile-col: 80px;
   border: 1px solid var(--line-strong);
   border-radius: var(--r-float);
 
-  &.is-chat {
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-
-    .adi-new-chat { flex: 1; min-height: 0; }
-    .adi-new-chat__body { overflow-y: auto; }
-  }
+  &.is-half { min-height: 0; }
 
   &.is-small  { grid-column: span 2; grid-row: span 2; height: calc(2 * #{$tile-row} + var(--s6)); }
   &.is-medium { grid-column: span 4; grid-row: span 2; height: calc(2 * #{$tile-row} + var(--s6)); }

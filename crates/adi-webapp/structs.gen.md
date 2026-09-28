@@ -487,7 +487,7 @@ pub(super) struct Part(u32);
 
 ### enum `Size`
 
-How much of the apps' grid an app's widget takes, in tiles.
+How much of the home screen an app's widget takes: tiles of the grid, or the right half.
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -495,6 +495,7 @@ pub(super) enum Size {
     Small,
     Medium,
     Large,
+    Half,
 }
 ```
 

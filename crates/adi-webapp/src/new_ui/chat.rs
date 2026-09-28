@@ -4,7 +4,6 @@
 //!
 //! It keeps a chat's state of its own ([`State`], [`AgentsWatch`]), as the embedded chat in
 //! `main.rs` does, so nothing here reaches into — or is disturbed by — the rest of the screen.
-//! The home screen's chat widget ([`super::widgets`]) is a second one, beside the window's.
 
 use adi_webapp_api::types::AgentDto;
 use leptos::prelude::*;
@@ -17,15 +16,8 @@ use crate::{fetch, live};
 /// How often the chat is read while the live channel is down. With the channel up, it pushes.
 const POLL_MS: u64 = 1_000;
 
-/// `widget` is the home screen's copy rather than the window's: only its element ids differ, so
-/// the two can be on screen at once.
 #[component]
-pub(super) fn Chat(#[prop(optional)] widget: bool) -> impl IntoView {
-    let picker_id = if widget {
-        "adi-new-chat-agent-widget"
-    } else {
-        "adi-new-chat-agent"
-    };
+pub(super) fn Chat() -> impl IntoView {
     let state = State::fresh();
     let watch = AgentsWatch::new();
 
@@ -69,9 +61,9 @@ pub(super) fn Chat(#[prop(optional)] widget: bool) -> impl IntoView {
     view! {
         <div class="adi-new-chat">
             <div class="adi-new-chat__bar">
-                <label class="adi-new-chat__label" for=picker_id>"Agent"</label>
+                <label class="adi-new-chat__label" for="adi-new-chat-agent">"Agent"</label>
                 <select
-                    id=picker_id
+                    id="adi-new-chat-agent"
                     class="adi-input adi-new-chat__agent"
                     prop:value=move || watch.name.get().unwrap_or_default()
                     on:change=move |ev| {

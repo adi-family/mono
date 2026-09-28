@@ -23,8 +23,9 @@
 //! The listings and the pictures start from the last load's ([`super::cache`]): a reload draws
 //! the whole home screen at once, and the reads only update it.
 //!
-//! An app that ships `frontend/widget.html` also gets its widget in the grid, ahead of its
-//! machine's tiles ([`super::widgets`]).
+//! An app that ships `frontend/widget.html` also gets its widget: in the grid ahead of its
+//! machine's tiles, or — one that asks for `half` — across the screen's right half, beside the
+//! grid ([`super::widgets`]).
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -376,28 +377,44 @@ impl Item {
     }
 }
 
-/// The grid as a flat list: each section's heading, then its widgets, then its tiles. Tracked.
+/// A tile's widget, when it has one and somewhere to frame it from.
+fn widget(t: &Tile) -> Option<(String, String, Size)> {
+    Some((t.name.clone(), widgets::url(t.href.as_deref()?)?, t.widget?))
+}
+
+/// The grid as a flat list: each section's heading, then its widgets, then its tiles — leaving
+/// out the one widget [`half`] puts beside the grid. Tracked.
 fn items(apps: Apps) -> Vec<Item> {
+    let beside = half(apps).map(|(_, url)| url);
     let mut out = Vec::new();
     for (machine, tiles) in apps.sections() {
         out.extend(machine.map(Item::Machine));
-        out.extend(tiles.iter().filter_map(|t| {
-            Some(Item::Widget {
-                name: t.name.clone(),
-                url: widgets::url(t.href.as_deref()?)?,
-                size: t.widget?,
-            })
+        out.extend(tiles.iter().filter_map(widget).filter_map(|(name, url, size)| {
+            (beside.as_ref() != Some(&url)).then_some(Item::Widget { name, url, size })
         }));
         out.extend(tiles.into_iter().map(Item::Tile));
     }
     out
 }
 
+/// The widget that takes the screen's right half: the first app, this machine's before a paired
+/// one's, whose widget asks for [`Size::Half`]. A second is drawn as large, in the grid. Tracked.
+fn half(apps: Apps) -> Option<(String, String)> {
+    apps.sections()
+        .iter()
+        .flat_map(|(_, tiles)| tiles.iter())
+        .filter_map(widget)
+        .find(|(.., size)| *size == Size::Half)
+        .map(|(name, url, _)| (name, url))
+}
+
 /// The grid. Draws nothing until there is an app, so a machine with none keeps a bare wallpaper.
 #[component]
 pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
     let items = Memo::new(move |_| items(apps));
+    let half = Memo::new(move |_| half(apps));
     view! {
+        <div class="adi-new-home" class:has-half=move || half.with(Option::is_some)>
         <Show when=move || items.with(|i| !i.is_empty())>
             <nav class="adi-new-apps" class:light=move || light.get() aria-label="Apps">
                 <For each=move || items.get() key=Item::key let:item>
@@ -407,13 +424,20 @@ pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) ->
                         }
                         .into_any(),
                         Item::Widget { name, url, size } => {
-                            view! { <AppWidget name url size/> }.into_any()
+                            // A second `half` has no half left to take.
+                            let size = if size == Size::Half { Size::Large } else { size };
+                            view! { <AppWidget name url size light/> }.into_any()
                         }
                         Item::Tile(t) => tile(apps, desk, t),
                     }}
                 </For>
             </nav>
         </Show>
+        // `half` is a memo, so a read that leaves it as it was does not rebuild the frame.
+        {move || half.get().map(|(name, url)| view! {
+            <AppWidget name url size=Size::Half light/>
+        })}
+        </div>
     }
 }
 
