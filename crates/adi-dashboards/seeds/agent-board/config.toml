@@ -1,0 +1,3 @@
+name = "Agent board"
+description = "Talk to this machine's agents — their conversations, and a chat widget for the home screen."
+icon = "message-square"
