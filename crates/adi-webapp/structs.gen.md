@@ -254,6 +254,7 @@ struct Tile {
     name: String,
     machine: Option<String>,
     favicon: Option<String>,
+    icon: Option<String>,
     href: Option<String>,
     ask: Option<(String, String)>,
     note: String,
@@ -485,6 +486,8 @@ pub(super) struct AppRef {
     pub(super) url: String,
     #[serde(default)]
     pub(super) favicon: Option<String>,
+    #[serde(default)]
+    pub(super) icon: Option<String>,
 }
 ```
 

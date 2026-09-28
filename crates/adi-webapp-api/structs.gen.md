@@ -3606,6 +3606,8 @@ pub struct Dashboard {
     pub moved_to: Option<String>,
     #[serde(default)]
     pub never_started: bool,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 ```
 
@@ -4028,6 +4030,8 @@ pub struct NodeDashboard {
     pub allowed: bool,
     #[serde(default)]
     pub url: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 ```
 

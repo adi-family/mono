@@ -1993,6 +1993,8 @@ fn land_dashboard(
             // Arrives exactly as v1's own app does: archived until started.
             archived_at: Some(adi_config::now_unix()),
             moved_to: None,
+            // The only field kept from the app's own `config.toml`, which the import just wrote.
+            icon: adi_dashboards::read_manifest(&dest).icon,
         },
     ) {
         return Landed::Failed(e.to_string());

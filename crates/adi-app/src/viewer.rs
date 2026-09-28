@@ -568,6 +568,7 @@ fn assemble(petname: &str, dashboards: Vec<Dashboard>, grants: &[Grant]) -> Vec<
                 service,
                 running: d.frontend_running,
                 allowed,
+                icon: d.icon,
             }
         })
         .collect()
@@ -746,6 +747,7 @@ mod tests {
             archived_at: None,
             moved_to: None,
             never_started: false,
+            icon: None,
         }
     }
 

@@ -38,6 +38,7 @@ circle-check
 circle-dot
 circle-help
 circle-x
+clapperboard
 clipboard
 clock
 cloud
@@ -47,6 +48,7 @@ coins
 copy
 corner-down-left
 cpu
+credit-card
 database
 diff
 dollar-sign
@@ -73,6 +75,7 @@ git-commit-horizontal
 git-compare
 globe
 grip-vertical
+handshake
 hard-drive
 hash
 history
@@ -83,6 +86,7 @@ info
 key
 key-round
 keyboard
+landmark
 laptop
 layers
 layout-dashboard
@@ -101,6 +105,7 @@ lock-open
 log-out
 mail
 maximize-2
+megaphone
 menu
 message-square
 message-square-plus
@@ -112,21 +117,25 @@ monitor
 moon
 network
 package
+palette
 panel-left
 panel-right
 paperclip
 pause
+pen-line
 pencil
 pin
 play
 plug
 plus
 power
+presentation
 qr-code
 quote
 radio
 receipt
 refresh-cw
+rocket
 rotate-ccw
 rotate-cw
 save
@@ -154,6 +163,7 @@ sun
 sun-moon
 table
 tag
+telescope
 terminal
 text
 timer
@@ -164,6 +174,7 @@ unplug
 upload
 user
 users
+video
 wand-sparkles
 waypoints
 wifi

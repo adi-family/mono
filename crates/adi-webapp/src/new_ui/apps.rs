@@ -137,6 +137,8 @@ struct Tile {
     machine: Option<String>,
     /// Where its favicon is, asked for only while it runs (see [`favicon`]).
     favicon: Option<String>,
+    /// The Lucide icon it names as its picture, if any (see [`AppMark`]).
+    icon: Option<String>,
     /// Where pressing it goes, when it goes anywhere.
     href: Option<String>,
     /// The grant to ask for when it is pressed instead: the machine and the service.
@@ -167,6 +169,7 @@ impl Tile {
         };
         Self {
             favicon,
+            icon: d.icon.clone(),
             key: format!(":{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -208,6 +211,7 @@ impl Tile {
         };
         Self {
             favicon,
+            icon: d.icon.clone(),
             key: format!("{node}:{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -264,21 +268,35 @@ fn favicon(href: &str) -> Option<String> {
     Some(format!("{scheme}://{host}/favicon.ico"))
 }
 
-/// An app's mark: its favicon when it has one that loads, the first letter of its name when not —
-/// on a home-screen tile and on the island alike.
+/// An app's mark: its favicon when it has one that loads; else the Lucide icon its `config.toml`
+/// names; else the first letter of its name — on a home-screen tile and on the island alike.
+///
+/// An icon name this build's set lacks falls through to the letter: the name comes from the app,
+/// possibly from a machine running a newer panel, and a blank tile would be worse than a letter.
 #[component]
-pub(super) fn AppMark(name: String, favicon: Option<String>) -> impl IntoView {
+pub(super) fn AppMark(
+    name: String,
+    favicon: Option<String>,
+    icon: Option<String>,
+) -> impl IntoView {
+    let glyph = icon.as_deref().and_then(Lucide::from_name);
     let letter = name
         .chars()
         .find(|c| c.is_alphanumeric())
         .map_or_else(|| "·".to_string(), |c| c.to_uppercase().to_string());
     // Anything that is not an image — the front door's page for a name it does not know, an app
-    // that serves no icon — fails to load as one, and the letter stands in.
+    // that serves no icon — fails to load as one, and the glyph or the letter stands in.
     let failed = RwSignal::new(favicon.is_none());
     view! {
         <Show
             when=move || !failed.get()
-            fallback=move || view! { <span class="adi-new-mark__letter">{letter.clone()}</span> }
+            fallback=move || match glyph {
+                Some(g) => view! { <Icon icon=g size=IconSize::Xl/> }.into_any(),
+                None => view! {
+                    <span class="adi-new-mark__letter">{letter.clone()}</span>
+                }
+                .into_any(),
+            }
         >
             <img
                 class="adi-new-mark__img"
@@ -297,6 +315,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
         name,
         machine,
         favicon,
+        icon,
         href,
         ask,
         note,
@@ -310,6 +329,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
             machine,
             url: href.clone(),
             favicon: favicon.clone(),
+            icon: icon.clone(),
         };
         // Opens in the app window. Still a real link to the app underneath, so a modified or
         // middle click does what it does on any link — a tab of its own — and is left alone.
@@ -329,7 +349,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
                     }
                 }
             >
-                {face(view! { <AppMark name=name.clone() favicon/> }, name)}
+                {face(view! { <AppMark name=name.clone() favicon icon/> }, name)}
             </a>
         }
         .into_any();
@@ -337,7 +357,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
     let Some((node, service)) = ask else {
         return view! {
             <span class="adi-new-app is-off" title=note>
-                {face(view! { <AppMark name=name.clone() favicon=None/> }, name)}
+                {face(view! { <AppMark name=name.clone() favicon=None icon/> }, name)}
             </span>
         }
         .into_any();

@@ -52,6 +52,10 @@ pub struct DashboardBundle {
     /// not, because two dashboards on one hostname is a routing coin-flip.
     #[serde(default)]
     pub host: Option<String>,
+    /// Its picture, a Lucide icon name (see [`crate::Manifest::icon`]). Carried because the
+    /// manifest is not: a transfer that dropped it would land the app as a bare letter.
+    #[serde(default)]
+    pub icon: Option<String>,
     pub files: Vec<BundleFile>,
 }
 

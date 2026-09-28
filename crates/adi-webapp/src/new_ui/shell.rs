@@ -332,7 +332,11 @@ pub(super) fn Island(
                             aria-label=label
                             on:click=move |_| desk.focus(win)
                         >
-                            <super::apps::AppMark name=app.name.clone() favicon=app.favicon.clone()/>
+                            <super::apps::AppMark
+                                name=app.name.clone()
+                                favicon=app.favicon.clone()
+                                icon=app.icon.clone()
+                            />
                         </button>
                     }
                 }

@@ -43,6 +43,8 @@ pub struct DashboardBundle {
     pub project: Option<String>,
     #[serde(default)]
     pub host: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
     pub files: Vec<BundleFile>,
 }
 ```
@@ -164,6 +166,8 @@ pub struct Manifest {
     pub archived_at: Option<u64>,
     #[serde(default)]
     pub moved_to: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 ```
 

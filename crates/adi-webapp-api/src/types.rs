@@ -4102,6 +4102,10 @@ pub struct Dashboard {
     /// row belongs in the main list, saying it is not started, offering to start it.
     #[serde(default)]
     pub never_started: bool,
+    /// Its picture: a Lucide icon name from its `config.toml` (`icon = "receipt"`), or `None`
+    /// when it names none. The client draws it only if the name is in its own icon set.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 impl Dashboard {
@@ -4597,6 +4601,10 @@ pub struct NodeDashboard {
     /// to offer it as a link or as an ask.
     #[serde(default)]
     pub url: Option<String>,
+    /// Its picture, as the node lists it — see [`Dashboard::icon`]. `None` from a node whose
+    /// panel predates the field.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// `POST /api/fleet/dashboards/unlock` — hand this machine a node's password so it can ask that

@@ -302,6 +302,7 @@ fn scaffold(
             project: project.map(str::to_string),
             archived_at: None,
             moved_to: None,
+            icon: None,
         },
     )?;
     let host = dashboard_host(dir, name);
@@ -432,6 +433,7 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
         description: manifest.description,
         project: manifest.project,
         host: declared_host(&dir),
+        icon: manifest.icon,
         files,
     })
 }
@@ -510,6 +512,12 @@ pub fn import_dashboard(
             // that had been archived here, which is precisely how you un-retire one.
             archived_at: None,
             moved_to: None,
+            icon: bundle
+                .icon
+                .as_deref()
+                .map(str::trim)
+                .filter(|i| !i.is_empty())
+                .map(str::to_string),
         },
     ) {
         return error(500, &format!("writing the dashboard manifest: {e}"));
@@ -654,6 +662,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         // through Restore (which stamps nothing) and a record written before the stamp existed.
         never_started: manifest.archived_at.is_some()
             && adi_marketplace::install::never_started(dir),
+        icon: manifest.icon,
         dir: dir.display().to_string(),
         id,
     }
@@ -1434,6 +1443,7 @@ mod tests {
                 description: None,
                 project: None,
                 host: None,
+                icon: None,
                 files: vec![BundleFile {
                     path: path.to_string(),
                     contents: base64::engine::general_purpose::STANDARD.encode("pwned"),
@@ -1461,6 +1471,7 @@ mod tests {
                 description: None,
                 project: None,
                 host: None,
+                icon: None,
                 files: Vec::new(),
             };
             let body = serde_json::to_vec(&bundle).expect("serialize");

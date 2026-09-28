@@ -457,6 +457,8 @@ fn land(
             // The arrival state: archived until started.
             archived_at: Some(adi_config::now_unix()),
             moved_to: None,
+            // Kept from the app's own `config.toml`, when it ships one naming its picture.
+            icon: read_manifest(dir).icon,
         },
     )?;
     write_record(

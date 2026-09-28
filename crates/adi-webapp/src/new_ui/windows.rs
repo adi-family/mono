@@ -194,6 +194,9 @@ pub(super) struct AppRef {
     /// Its favicon's address, when it was running as it was opened — see `apps::favicon`.
     #[serde(default)]
     pub(super) favicon: Option<String>,
+    /// The Lucide icon it names as its picture — see `apps::AppMark`.
+    #[serde(default)]
+    pub(super) icon: Option<String>,
 }
 
 /// The open windows and their order.

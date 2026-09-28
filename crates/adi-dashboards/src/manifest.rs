@@ -31,6 +31,11 @@ pub struct Manifest {
     /// archived like any other archived dashboard, and this only says *why*.
     #[serde(default)]
     pub moved_to: Option<String>,
+    /// The app's picture, as a Lucide icon name (`receipt`, `chart-column`). A name rather than
+    /// an image file so the panel can draw it in its own ink, on its own tile, whether or not the
+    /// app is running — a favicon can only be fetched from an app that is up.
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 /// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
@@ -59,6 +64,7 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
         ("project", manifest.project.as_deref().map(toml_string)),
         ("archived_at", manifest.archived_at.map(|ts| ts.to_string())),
         ("moved_to", manifest.moved_to.as_deref().map(toml_string)),
+        ("icon", manifest.icon.as_deref().map(toml_string)),
     ] {
         if let Some(value) = value {
             out.push_str(key);
@@ -132,6 +138,7 @@ mod tests {
                 project: Some("demo".to_string()),
                 archived_at: Some(1_786_839_320),
                 moved_to: Some("laptop-b".to_string()),
+                icon: Some("receipt".to_string()),
             },
         )
         .expect("write");
@@ -140,6 +147,7 @@ mod tests {
         assert!(raw.contains("name = \"Nosh\"\n"), "{raw}");
         assert!(raw.contains("archived_at = 1786839320\n"), "{raw}");
         assert!(raw.contains("moved_to = \"laptop-b\"\n"), "{raw}");
+        assert!(raw.contains("icon = \"receipt\"\n"), "{raw}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
