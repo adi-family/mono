@@ -20,6 +20,39 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.24.0 — 2026-09-28
+
+### Added
+
+- **A preview of the new panel, opt-in per browser.** Open `http://app.adi/?new-ui=1`, or the
+  *New UI* door on the chat's right rail, and the root page becomes a desktop instead of the chat;
+  `?new-ui=0` or ⌘K → *Turn off new UI* puts the chat back. Nothing changes for anyone who does not
+  turn it on. What it has so far:
+  - a wallpaper — presets, your own colours, or an image with a blur — in light and dark, picked in
+    a Settings window and kept on that device;
+  - a thin top bar with the adi mark (*About adi*), your paired devices and how many are active,
+    whether the panel's live channel and the internet are up, and the time and date, which open
+    your calendar app;
+  - a floating island — a dock — on whichever edge you put it, with Search, Settings and Chat, and
+    a button for every app you have open;
+  - your apps as an iOS-style home screen: this machine's dashboards, then each paired machine's
+    under its name, each with its favicon or the first letter of its name. An app opens in a
+    window of its own — a small browser with reload, its address and *Open in new tab*; an app
+    another machine has not let you open yet asks for access from its tile;
+  - windows that move, resize from any edge, fill the screen on a double-click of the title bar,
+    and snap to a half, a quarter or the whole screen when dragged to an edge or corner;
+  - a Chat window with any of your agents, and a Raycast-style ⌘K palette of its own;
+  - a page per paired device: whether it answers now, what each side may reach, and ways to stop
+    either direction or unpair.
+- **`GET /api/fleet/reach`** dials every paired machine and says whether it answers right now, and
+  each device in `GET /api/fleet` carries `last_reached` — when a dial from here last got an
+  answer.
+
+### Fixed
+
+- The chat's sessions rail no longer rebuilds every row a conversation passes on its way to the
+  top when it gets a new message, so the rail stays smooth with many sessions open.
+
 ## 1.23.0 — 2026-09-26
 
 ### Added
