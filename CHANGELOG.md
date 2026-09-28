@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.24.1 — 2026-09-28
+
 ### Fixed
 
 - The sessions rail's "Only starred" and "Only started by me" filters now page correctly. The
