@@ -1785,6 +1785,18 @@ pub async fn fs_read(path: &str) -> Result<FsContent, String> {
     .await
 }
 
+/// [`fs_read`] on a named machine — this one for `None` — whatever the source picker points at.
+pub async fn fs_read_on(node: Option<&str>, path: &str) -> Result<FsContent, String> {
+    post_on(
+        node,
+        "/api/fs/read",
+        &FsRef {
+            path: path.to_string(),
+        },
+    )
+    .await
+}
+
 pub async fn fs_write(path: &str, content: String) -> Result<FsContent, String> {
     post(
         "/api/fs/write",

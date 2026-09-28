@@ -16,6 +16,11 @@
 //!
 //! A paired machine that is locked (no password held here) or refused is left out: there is
 //! nothing of its to draw, and the top bar's device list is where a machine's state is read.
+//!
+//! A tile's picture is the app's own `frontend/favicon.svg`, read as a file from its directory
+//! ([`Apps::pictures`]) rather than fetched from the app — so a stopped app shows it too.
+
+use std::collections::HashMap;
 
 use adi_ui::{Icon, IconSize, Lucide};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
@@ -39,6 +44,9 @@ pub(super) struct Apps {
     asking: RwSignal<Option<String>>,
     /// The last ask that failed: which tile, and the node's refusal.
     refused: RwSignal<Option<(String, String)>>,
+    /// Each app's `frontend/favicon.svg` as a `data:` URL, by [`Tile::key`]; `None` once asked
+    /// and found missing (or still on its way). Asked once per tile for the life of the screen.
+    pictures: RwSignal<HashMap<String, Option<String>>>,
 }
 
 impl Apps {
@@ -49,6 +57,7 @@ impl Apps {
             remote: RwSignal::new(None),
             asking: RwSignal::new(None),
             refused: RwSignal::new(None),
+            pictures: RwSignal::new(HashMap::new()),
         };
         apps.read();
         let tick = set_interval_with_handle(
@@ -73,13 +82,50 @@ impl Apps {
                     .dashboards
                     .into_iter()
                     .filter(|d| !d.is_archived())
-                    .collect();
+                    .collect::<Vec<Dashboard>>();
+                for d in &live {
+                    self.picture(format!(":{}", d.id), None, &d.id);
+                }
                 self.local.set(Some(live));
             }
         });
         leptos::task::spawn_local(async move {
             if let Ok(f) = fetch::fleet_dashboards().await {
+                for n in f.nodes.iter().filter(|n| !n.locked && n.error.is_none()) {
+                    for d in &n.dashboards {
+                        self.picture(format!("{}:{}", n.node, d.id), Some(&n.node), &d.id);
+                    }
+                }
                 self.remote.set(Some(f.nodes));
+            }
+        });
+    }
+
+    /// Read app `id`'s picture off `node` (this machine for `None`) into [`Self::pictures`], unless
+    /// it has been asked for already.
+    ///
+    /// Through the panel's store browser, `/api/fs/read` — on a paired machine via its own panel,
+    /// `/api/node/<node>/…` — because the file is text and that route already exists on every
+    /// panel, released or not. An SVG in an `<img>` runs no script, so a machine's picture cannot
+    /// act on this page.
+    fn picture(self, key: String, node: Option<&str>, id: &str) {
+        if self.pictures.with_untracked(|p| p.contains_key(&key)) {
+            return;
+        }
+        self.pictures.update(|p| {
+            p.insert(key.clone(), None);
+        });
+        let node = node.map(str::to_string);
+        let path = format!("dashboards/{id}/frontend/favicon.svg");
+        leptos::task::spawn_local(async move {
+            if let Ok(file) = fetch::fs_read_on(node.as_deref(), &path).await {
+                let url = format!(
+                    "data:image/svg+xml;charset=utf-8,{}",
+                    js_sys::encode_uri_component(&file.content)
+                );
+                self.pictures.update(|p| {
+                    p.insert(key, Some(url));
+                });
             }
         });
     }
@@ -102,9 +148,13 @@ impl Apps {
     /// any. Tracked.
     fn sections(self) -> Vec<(Option<String>, Vec<Tile>)> {
         let mut out = Vec::new();
-        let here: Vec<Tile> = self
-            .local
-            .with(|l| l.iter().flatten().map(Tile::local).collect());
+        let pictures = self.pictures.get();
+        let here: Vec<Tile> = self.local.with(|l| {
+            l.iter()
+                .flatten()
+                .map(|d| Tile::local(d).with_picture(&pictures))
+                .collect()
+        });
         if !here.is_empty() {
             out.push((None, here));
         }
@@ -116,7 +166,7 @@ impl Apps {
                 let tiles = n
                     .dashboards
                     .iter()
-                    .map(|d| Tile::remote(&n.node, d))
+                    .map(|d| Tile::remote(&n.node, d).with_picture(&pictures))
                     .collect();
                 out.push((Some(n.node.clone()), tiles));
             }
@@ -135,7 +185,8 @@ struct Tile {
     name: String,
     /// The paired machine it runs on; `None` for this one.
     machine: Option<String>,
-    /// Where its favicon is, asked for only while it runs (see [`favicon`]).
+    /// Its picture: the app's own `favicon.svg` read from its directory; failing that, where its
+    /// favicon is while it runs (see [`favicon`]).
     favicon: Option<String>,
     /// The Lucide icon it names as its picture, if any (see [`AppMark`]).
     icon: Option<String>,
@@ -148,6 +199,15 @@ struct Tile {
 }
 
 impl Tile {
+    /// Prefer the picture read from the app's directory to the favicon address worked out from
+    /// its link: it is there whether or not the app runs.
+    fn with_picture(mut self, pictures: &HashMap<String, Option<String>>) -> Self {
+        if let Some(Some(url)) = pictures.get(&self.key) {
+            self.favicon = Some(url.clone());
+        }
+        self
+    }
+
     fn local(d: &Dashboard) -> Self {
         let (href, note) = if d.frontend_running {
             (dashboards::open_url(d), d.name.clone())
@@ -357,7 +417,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
     let Some((node, service)) = ask else {
         return view! {
             <span class="adi-new-app is-off" title=note>
-                {face(view! { <AppMark name=name.clone() favicon=None icon/> }, name)}
+                {face(view! { <AppMark name=name.clone() favicon icon/> }, name)}
             </span>
         }
         .into_any();

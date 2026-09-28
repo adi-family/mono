@@ -239,6 +239,7 @@ pub(super) struct Apps {
     remote: RwSignal<Option<Vec<NodeDashboards>>>,
     asking: RwSignal<Option<String>>,
     refused: RwSignal<Option<(String, String)>>,
+    pictures: RwSignal<HashMap<String, Option<String>>>,
 }
 ```
 
