@@ -20,6 +20,13 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- The sessions rail's "Only starred" and "Only started by me" filters now page correctly. The
+  filter is applied on the server before the list is cut to a page, so a narrowed view shows a
+  full page of matching conversations instead of a handful with the rest stranded behind
+  "Load more", and the "N older" count reflects what the filter actually matched.
+
 ## 1.24.0 — 2026-09-28
 
 ### Added

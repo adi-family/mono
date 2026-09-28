@@ -1248,30 +1248,72 @@ pub fn rename_run(store: &Agents, body: &[u8]) -> Response {
 /// [`filter_by_hidden`]), `Some(true)` for the Hidden band, fetched only while it is open, and
 /// `None` for everyone else — a workbench, Analytics, an older client that sends no such
 /// parameter — which gets the whole history exactly as it always has.
+/// The sessions rail's `?filter=` narrowing — its "Only starred" / "Only started by me" box, moved
+/// server-side (`docs/sessions.md`). `All` is the *absence* of the parameter, so an unnarrowed rail
+/// sends the same request it always did; only these two ever reach [`all_agent_runs`]. The wire
+/// strings are the contract with the client's `SessionFilter::query_value`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunFilter {
+    /// Only runs a person started — `launched_by == human`.
+    Mine,
+    /// Only runs whose agent is starred on the Agents page.
+    Starred,
+}
+
+impl RunFilter {
+    /// Parse the `?filter=` value. Anything unrecognized — including `all` and an empty string —
+    /// is `None`, which leaves the index unnarrowed, so a stray value fails open rather than
+    /// hiding every row.
+    #[must_use]
+    pub fn from_query(value: &str) -> Option<Self> {
+        match value {
+            "mine" => Some(Self::Mine),
+            "starred" => Some(Self::Starred),
+            _ => None,
+        }
+    }
+}
+
 #[must_use]
-pub fn all_agent_runs(store: &Agents, limit: Option<usize>, hidden: Option<bool>) -> Response {
+pub fn all_agent_runs(
+    store: &Agents,
+    limit: Option<usize>,
+    hidden: Option<bool>,
+    filter: Option<RunFilter>,
+) -> Response {
     match store.list() {
         Ok(agents) => {
+            // Which agents are starred, read off the manifests before `agents` is remapped into
+            // `AgentRuns` (which does not carry the agent-level mark) — the set `RunFilter::Starred`
+            // narrows by. The Agents page's ★ is a fact about the agent, not the run.
+            let starred: std::collections::HashSet<&str> = agents
+                .iter()
+                .filter(|a| a.manifest.starred)
+                .map(|a| a.name.as_str())
+                .collect();
             // One question query for the whole answer rather than one per agent: the index is
             // partial and the usual row count is zero, but this endpoint is the chat rail's poll
             // and everything on its path is paid for on every tick.
             let waiting = Waiting::of(store);
             let awaiting = Awaiting::of(store);
-            let mut agents: Vec<AgentRuns> = agents
+            let mut runs: Vec<AgentRuns> = agents
                 .iter()
                 .map(|a| runs_response_with(store, a, &waiting, &awaiting))
                 .collect();
             if let Some(only_hidden) = hidden {
-                agents = filter_by_hidden(agents, only_hidden);
+                runs = filter_by_hidden(runs, only_hidden);
             }
-            // Counted after the `hidden` narrowing and before the `limit` cut, so both the rail's
-            // "N older" and the Hidden band's own count describe the population that was actually
-            // asked for, not the whole store.
-            let total = agents.iter().map(|a| a.runs.len()).sum();
+            if let Some(filter) = filter {
+                runs = filter_by_run(runs, filter, &starred);
+            }
+            // Counted after the `hidden` and `filter` narrowings and before the `limit` cut, so the
+            // rail's "N older", the Hidden band's count and a narrowed view's count each describe the
+            // population that was actually asked for, not the whole store.
+            let total = runs.iter().map(|a| a.runs.len()).sum();
             if let Some(limit) = limit {
-                agents = newest(agents, limit);
+                runs = newest(runs, limit);
             }
-            ok_json(&AllAgentRuns { agents, total })
+            ok_json(&AllAgentRuns { agents: runs, total })
         }
         Err(e) => Response::from(&e),
     }
@@ -1292,6 +1334,39 @@ fn filter_by_hidden(mut agents: Vec<AgentRuns>, only_hidden: bool) -> Vec<AgentR
             } else {
                 r.pending_question.is_some() || !r.hidden
             }
+        });
+    }
+    agents
+}
+
+/// The `?filter=` narrowing: keep only the runs the sessions rail's box would draw, per agent —
+/// the same job [`filter_by_hidden`] does for `?hidden=`, for the "Only starred" / "Only started by
+/// me" choice instead. Applied here so the `?limit=` page and `total` describe the narrowed
+/// population, which is the whole point of pushing the filter down: a `limit` of 100 over the *whole*
+/// index leaves a filtered view showing a handful of rows with the rest stranded behind "Load more".
+///
+/// [`RunFilter::Mine`] keeps a run a person started; [`RunFilter::Starred`] keeps a run whose agent
+/// is in `starred`. A run carrying a [`AgentRunInfo::pending_question`] survives either, whatever the
+/// choice — a question addressed to a person is stranded the instant nothing shows it, the exemption
+/// `filter_by_hidden`, `newest` and the client's own `source_rows` all already make.
+///
+/// The client re-applies its own copy of this filter over the answer, because the rail draws rows
+/// this index does not carry — a pty agent's live terminal, the open conversation's own history from
+/// the unfiltered `POST /api/agents/runs`. Narrowing here only makes the paging and the counts agree
+/// with what the client will draw; it is never the last word on what shows (`docs/sessions.md`).
+fn filter_by_run(
+    mut agents: Vec<AgentRuns>,
+    filter: RunFilter,
+    starred: &std::collections::HashSet<&str>,
+) -> Vec<AgentRuns> {
+    for a in &mut agents {
+        let agent_starred = starred.contains(a.name.as_str());
+        a.runs.retain(|r| {
+            r.pending_question.is_some()
+                || match filter {
+                    RunFilter::Mine => r.launched_by == adi_agents::launcher::HUMAN,
+                    RunFilter::Starred => agent_starred,
+                }
         });
     }
     agents
@@ -4247,14 +4322,14 @@ mod tests {
                 .expect("open a session");
         }
 
-        let Response { status, body } = all_agent_runs(&store, Some(2), None);
+        let Response { status, body } = all_agent_runs(&store, Some(2), None, None);
         assert_eq!(status, 200);
         let page: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(page.total, 5, "what exists, not what was sent");
         assert_eq!(page.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 2);
 
         // And no limit is the whole history, for the pages that read all of it.
-        let Response { body, .. } = all_agent_runs(&store, None, None);
+        let Response { body, .. } = all_agent_runs(&store, None, None, None);
         let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(all.total, 5);
         assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);
@@ -4290,6 +4365,48 @@ mod tests {
             kept(&hidden_band),
             ["solver-200"],
             "the asking one is already in the main listing and must not draw twice",
+        );
+    }
+
+    /// The rail's "All / Only starred / Only started by me" box, moved server-side. `Mine` keeps the
+    /// runs a person started; `Starred` keeps the runs of a starred agent — and, like `hidden`, a run
+    /// asking a person a question rides through either narrowing, because nothing else would show it.
+    #[test]
+    fn filter_narrows_by_launcher_or_star_but_never_drops_a_pending_question() {
+        let mut agents = vec![
+            listing("solver", &[500, 400, 300]),
+            listing("looper", &[200, 100]),
+        ];
+        // solver-500 a person started; solver-400 a subagent did but it is asking; the rest are
+        // ordinary agent- or automation-launched runs, and one is unattributed.
+        agents[0].runs[0].launched_by = "human".to_string();
+        agents[0].runs[1].launched_by = "agent:planner".to_string();
+        agents[0].runs[1].pending_question = Some(AgentAsk {
+            id: "q1".to_string(),
+            asked_at: 1,
+            note: String::new(),
+            questions: Vec::new(),
+            deadline: None,
+            headline: "which branch?".to_string(),
+        });
+        agents[0].runs[2].launched_by = "agent:planner".to_string();
+        agents[1].runs[0].launched_by = "automation".to_string();
+        agents[1].runs[1].launched_by = String::new(); // unattributed is deliberately not a person
+
+        let starred: std::collections::HashSet<&str> = ["looper"].into_iter().collect();
+
+        let mine = filter_by_run(agents.clone(), RunFilter::Mine, &starred);
+        assert_eq!(
+            kept(&mine),
+            ["solver-500", "solver-400"],
+            "only what a person launched, plus the asking one whoever launched it",
+        );
+
+        let starred_only = filter_by_run(agents, RunFilter::Starred, &starred);
+        assert_eq!(
+            kept(&starred_only),
+            ["solver-400", "looper-200", "looper-100"],
+            "every run of the starred agent, plus the asking one under an unstarred agent",
         );
     }
 

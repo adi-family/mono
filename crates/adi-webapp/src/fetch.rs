@@ -35,6 +35,8 @@ use adi_webapp_api::types::{
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile, WriteToolScript,
 };
+
+use crate::state::SessionFilter;
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -712,9 +714,13 @@ pub fn all_runs_path(limit: Option<usize>) -> String {
 
 /// The sessions rail's own page: [`all_agent_runs`], narrowed server-side to what the main list may
 /// draw — a hidden run stays out unless it is asking a question nobody has answered
-/// (`docs/sessions.md`).
-pub async fn all_agent_runs_visible(limit: Option<usize>) -> Result<AllAgentRuns, String> {
-    get(&all_visible_runs_path(limit)).await
+/// (`docs/sessions.md`), and, when the box is set, narrowed to the chosen [`SessionFilter`] too, so
+/// the `limit` page is a page of the rows the rail will actually draw rather than of the whole store.
+pub async fn all_agent_runs_visible(
+    limit: Option<usize>,
+    filter: SessionFilter,
+) -> Result<AllAgentRuns, String> {
+    get(&all_visible_runs_path(limit, filter)).await
 }
 
 /// [`all_agent_runs_visible`], for one paired node's own sessions — the sessions rail's per-source
@@ -722,16 +728,24 @@ pub async fn all_agent_runs_visible(limit: Option<usize>) -> Result<AllAgentRuns
 pub async fn all_agent_runs_visible_on(
     node: &str,
     limit: Option<usize>,
+    filter: SessionFilter,
 ) -> Result<AllAgentRuns, String> {
-    get_on(Some(node), &all_visible_runs_path(limit)).await
+    get_on(Some(node), &all_visible_runs_path(limit, filter)).await
 }
 
 /// The rail's own page of the index — see [`all_agent_runs_visible`]. Its own path function, for
 /// the same reason [`all_runs_path`] has one: the live channel keys a subscription by this string.
-pub fn all_visible_runs_path(limit: Option<usize>) -> String {
+pub fn all_visible_runs_path(limit: Option<usize>, filter: SessionFilter) -> String {
+    // `SessionFilter::All` sends no parameter, so the default rail keeps the exact path it always
+    // had â and so watches the same live topic (keyed on the full path) every other tab already
+    // does, rather than opening a second one that answers the same question.
+    let filter = filter
+        .query_value()
+        .map(|f| format!("&filter={f}"))
+        .unwrap_or_default();
     match limit {
-        Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false"),
-        None => "/api/agents/runs/all?hidden=false".to_string(),
+        Some(n) => format!("/api/agents/runs/all?limit={n}&hidden=false{filter}"),
+        None => format!("/api/agents/runs/all?hidden=false{filter}"),
     }
 }
 

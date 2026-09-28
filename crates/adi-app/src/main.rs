@@ -924,11 +924,15 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // (or unparseable) means the whole index, which is what the pages that read all of it ask
         // for. `?hidden=false|true` is the rail's own narrowing, moved server-side — see
         // `handlers::all_agent_runs`; absent means every run, hidden or not, exactly as before that
-        // parameter existed.
+        // parameter existed. `?filter=starred|mine` is the rail's "All / Only starred / Only started
+        // by me" box, moved down the same way so the `?limit=` page is a page of the rows it draws;
+        // absent (or `all`) narrows nothing — see `handlers::RunFilter`.
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(
             agents,
             req.query_param("limit").and_then(|n| n.parse().ok()),
             req.query_param("hidden").and_then(|v| v.parse().ok()),
+            req.query_param("filter")
+                .and_then(handlers::RunFilter::from_query),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         // The calls behind one folded run of a transcript — what a reader asks for when they open

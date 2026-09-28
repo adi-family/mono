@@ -565,6 +565,18 @@ impl SessionFilter {
 
     /// Every option the box offers, in the order it offers them.
     pub(crate) const ALL: [Self; 3] = [Self::All, Self::Starred, Self::Mine];
+
+    /// The `filter=` value that tells the server to narrow the index this way before it pages it,
+    /// or `None` for [`Self::All`] — which sends no parameter, so the unnarrowed rail keeps the
+    /// exact request path (and so the exact live topic) it has always used. The strings are the
+    /// wire contract with `RunFilter::from_query` on the backend.
+    pub(crate) fn query_value(self) -> Option<&'static str> {
+        match self {
+            Self::All => None,
+            Self::Starred => Some("starred"),
+            Self::Mine => Some("mine"),
+        }
+    }
 }
 
 /// How the chat rail's rows are **grouped** — the second half of the Sessions head's filter menu,
@@ -2637,6 +2649,7 @@ pub(crate) fn toggle_session_source(s: State, watch: AgentsWatch, node: Option<S
 /// [`crate::main`]'s `refresh` keeps for this machine's own copies of the same two reads.
 pub(crate) fn refresh_rail_node(s: State, node: String) {
     let limit = Some(source_limit_untracked(s, Some(&node)));
+    let filter = s.session_filter.get_untracked();
     wasm_bindgen_futures::spawn_local(async move {
         // Still selected? A slow answer for a node ticked and un-ticked in the same second must not
         // resurrect a row for a source the rail no longer shows.
@@ -2653,7 +2666,7 @@ pub(crate) fn refresh_rail_node(s: State, node: String) {
             }
             Err(e) => s.flash.set(Some(Flash::err(format!("{node}: {e}")))),
         }
-        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit).await
+        if let Ok(c) = fetch::all_agent_runs_visible_on(&node, limit, filter).await
             && s.session_nodes.get_untracked().contains(&node)
         {
             s.rail_node_chats.update(|m| {

@@ -4,11 +4,11 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-302 structs · 17 enums across 11 files.
+302 structs · 18 enums across 11 files.
 
 ## Index
 
-- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `Waiting`, `Awaiting`
+- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `RunFilter`, `Waiting`, `Awaiting`
 - [`src/handlers/fleet.rs`](#srchandlersfleetrs) — `DroppedSources`, `DroppedSource`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
@@ -44,6 +44,18 @@ The run caps as one page render sees them: what is allowed, and what is live.
 struct RunCaps {
     limits: adi_agents::RunLimits,
     load: adi_agents::RunLoad,
+}
+```
+
+### enum `RunFilter`
+
+`GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the cross-agent chat index. One `AgentRuns` per agent (same shape as `/api/agents/runs`), in the store's list order; the client flattens and sorts them.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunFilter {
+    Mine,
+    Starred,
 }
 ```
 

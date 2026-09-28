@@ -6477,10 +6477,11 @@ async fn settle_session_change(
                 watch.runs.set(runs.runs);
             }
             let limit = Some(crate::state::source_limit_untracked(state, node.as_deref()));
+            let filter = state.session_filter.get_untracked();
             let show_hidden = state.show_hidden.get_untracked();
             match &node {
                 None => {
-                    if let Ok(all) = fetch::all_agent_runs_visible(limit).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible(limit, filter).await {
                         state.all_chats.set(Some(all));
                     }
                     if show_hidden && let Ok(all) = fetch::hidden_runs().await {
@@ -6488,7 +6489,7 @@ async fn settle_session_change(
                     }
                 }
                 Some(node) => {
-                    if let Ok(all) = fetch::all_agent_runs_visible_on(node, limit).await {
+                    if let Ok(all) = fetch::all_agent_runs_visible_on(node, limit, filter).await {
                         state.rail_node_chats.update(|m| {
                             m.insert(node.clone(), all);
                         });

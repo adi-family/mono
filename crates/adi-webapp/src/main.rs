@@ -233,7 +233,8 @@ fn Home() -> impl IntoView {
             // task rather than an effect: what re-reads it when Load more moves is the subscription
             // below, which is what asks in the ordinary case anyway.
             let limit = Some(state::source_limit_untracked(state, None));
-            if let Ok(c) = fetch::all_agent_runs_visible(limit).await
+            let filter = state.session_filter.get_untracked();
+            if let Ok(c) = fetch::all_agent_runs_visible(limit, filter).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
                 state.all_chats.set(Some(c));
@@ -296,6 +297,10 @@ fn Home() -> impl IntoView {
         // which re-subscribes at the wider path and so asks for the next page immediately rather
         // than at whatever the socket's next tick would have been.
         let local_limit = Some(state::source_limit(state, None));
+        // The chosen narrowing, read *tracked* for the same reason: it is part of the request path
+        // (`fetch::all_visible_runs_path`), so switching it has to tear down the old subscription
+        // and open the one that asks the newly-narrowed question — of this machine and of each node.
+        let filter = state.session_filter.get();
         let mut subs = state::chat_subscriptions(watch);
         // The node menu's own list: which paired nodes this machine holds a password for. Local
         // and cheap — it asks no node anything — so it rides the socket with everything else.
@@ -340,7 +345,7 @@ fn Home() -> impl IntoView {
         // Only this machine's own page, and only what the main list may draw — a hidden run stays
         // out server-side (`docs/sessions.md`).
         subs.push(live::Sub::get(
-            fetch::all_visible_runs_path(local_limit),
+            fetch::all_visible_runs_path(local_limit, filter),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -384,7 +389,7 @@ fn Home() -> impl IntoView {
             let for_chats = node.clone();
             subs.push(live::Sub::get_on(
                 Some(node),
-                fetch::all_visible_runs_path(node_limit),
+                fetch::all_visible_runs_path(node_limit, filter),
                 move |c: adi_webapp_api::types::AllAgentRuns| {
                     state.rail_node_chats.update(|m| {
                         if m.get(&for_chats) != Some(&c) {
