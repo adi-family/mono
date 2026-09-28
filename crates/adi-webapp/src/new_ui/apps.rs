@@ -23,9 +23,9 @@
 //! The listings and the pictures start from the last load's ([`super::cache`]): a reload draws
 //! the whole home screen at once, and the reads only update it.
 //!
-//! An app that ships `frontend/widget.html` also gets its widget: in the grid ahead of its
-//! machine's tiles, or — one that asks for `half` — across the screen's right half, beside the
-//! grid ([`super::widgets`]).
+//! An app whose `config.toml` declares widgets also gets them: in the grid ahead of its machine's
+//! tiles, or — one that asks for `half` — across the screen's right half, beside the grid
+//! ([`super::widgets`]).
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -35,7 +35,7 @@ use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashb
 use leptos::{ev, prelude::*};
 
 use super::cache;
-use super::widgets::{self, AppWidget, Size};
+use super::widgets::{self, AppWidget, Declared, Size};
 use super::windows::{AppRef, Desk};
 use crate::pages::dashboards;
 use crate::{fetch, origin};
@@ -47,7 +47,9 @@ const TICK_MS: u32 = 30_000;
 const LOCAL_KEY: &str = "apps-local";
 const REMOTE_KEY: &str = "apps-remote";
 const PICTURES_KEY: &str = "apps-pictures";
-const WIDGETS_KEY: &str = "apps-widgets";
+// Not `apps-widgets`: that held the sizes read out of `frontend/widget.html`, which no longer
+// means anything.
+const WIDGETS_KEY: &str = "apps-widgets-declared";
 
 #[derive(Clone, Copy)]
 pub(super) struct Apps {
@@ -61,8 +63,8 @@ pub(super) struct Apps {
     refused: RwSignal<Option<(String, String)>>,
     /// Each app's `frontend/favicon.svg` as a `data:` URL, by [`Tile::key`], as last read.
     pictures: RwSignal<HashMap<String, String>>,
-    /// The apps that ship a `widget.html`, by [`Tile::key`], with the size it declares.
-    widgets: RwSignal<HashMap<String, Size>>,
+    /// The widgets each app's `config.toml` declares, by [`Tile::key`]; absent until read.
+    widgets: RwSignal<HashMap<String, Vec<Declared>>>,
     /// The files asked for since this screen mounted, by kind and [`Tile::key`]: once each, so a
     /// cached answer is still checked once per load, and never once per tick.
     asked: StoredValue<HashSet<String>>,
@@ -165,30 +167,27 @@ impl Apps {
             .unwrap_or(false)
     }
 
-    /// Find out whether app `id` on `node` ships a `widget.html`, and at what size, into
-    /// [`Self::widgets`] — read as a file, as its picture is ([`Self::picture`]).
+    /// Read the widgets app `id` on `node` declares in its `config.toml` into [`Self::widgets`] —
+    /// read as a file, as its picture is ([`Self::picture`]).
     ///
-    /// Unlike a picture, a widget the machine says is gone is dropped from the cache: a frame
-    /// kept for a file that no longer exists would show the app's 404 on the home screen. Any
-    /// other failure — the machine not answering — keeps what was cached.
+    /// Unlike a picture, widgets the machine says are gone are dropped from the cache: a frame
+    /// kept for a widget nobody declares any more would show the app's 404 on the home screen. A
+    /// read that fails for any other reason — the machine not answering — keeps what was cached.
     fn widget(self, key: String, node: Option<&str>, id: &str) {
         if !self.first_ask(format!("widget|{key}")) {
             return;
         }
         let node = node.map(str::to_string);
-        let path = format!("dashboards/{id}/frontend/widget.html");
+        let path = format!("dashboards/{id}/config.toml");
         leptos::task::spawn_local(async move {
             let now = match fetch::fs_read_on(node.as_deref(), &path).await {
-                Ok(file) => Some(Size::declared(&file.content)),
-                Err(e) if e.contains("no such file") => None,
+                Ok(file) => widgets::declared(&file.content),
+                Err(e) if e.contains("no such file") => Vec::new(),
                 Err(_) => return,
             };
-            if self.widgets.with_untracked(|w| w.get(&key).copied()) != now {
+            if self.widgets.with_untracked(|w| w.get(&key) != Some(&now)) {
                 self.widgets.update(|w| {
-                    match now {
-                        Some(size) => w.insert(key, size),
-                        None => w.remove(&key),
-                    };
+                    w.insert(key, now);
                 });
                 self.widgets.with_untracked(|w| cache::save(WIDGETS_KEY, w));
             }
@@ -256,8 +255,8 @@ struct Tile {
     favicon: Option<String>,
     /// The Lucide icon it names as its picture, if any (see [`AppMark`]).
     icon: Option<String>,
-    /// The size of its widget, when it ships one.
-    widget: Option<Size>,
+    /// The widgets it declares.
+    widgets: Vec<Declared>,
     /// Where pressing it goes, when it goes anywhere.
     href: Option<String>,
     /// The grant to ask for when it is pressed instead: the machine and the service.
@@ -268,16 +267,16 @@ struct Tile {
 
 impl Tile {
     /// What was read from the app's directory: its picture — preferred to the favicon address
-    /// worked out from its link, being there whether or not the app runs — and its widget.
+    /// worked out from its link, being there whether or not the app runs — and its widgets.
     fn with_files(
         mut self,
         pictures: &HashMap<String, String>,
-        widgets: &HashMap<String, Size>,
+        widgets: &HashMap<String, Vec<Declared>>,
     ) -> Self {
         if let Some(url) = pictures.get(&self.key) {
             self.favicon = Some(url.clone());
         }
-        self.widget = widgets.get(&self.key).copied();
+        self.widgets = widgets.get(&self.key).cloned().unwrap_or_default();
         self
     }
 
@@ -303,7 +302,7 @@ impl Tile {
         Self {
             favicon,
             icon: d.icon.clone(),
-            widget: None,
+            widgets: Vec::new(),
             key: format!(":{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -346,7 +345,7 @@ impl Tile {
         Self {
             favicon,
             icon: d.icon.clone(),
-            widget: None,
+            widgets: Vec::new(),
             key: format!("{node}:{}", d.id),
             id: d.id.clone(),
             name: d.name.clone(),
@@ -377,9 +376,18 @@ impl Item {
     }
 }
 
-/// A tile's widget, when it has one and somewhere to frame it from.
-fn widget(t: &Tile) -> Option<(String, String, Size)> {
-    Some((t.name.clone(), widgets::url(t.href.as_deref()?)?, t.widget?))
+/// A tile's widgets, as far as there is somewhere to frame them from: name, address and size.
+fn framed(t: &Tile) -> Vec<(String, String, Size)> {
+    let Some(href) = t.href.as_deref() else {
+        return Vec::new();
+    };
+    t.widgets
+        .iter()
+        .filter_map(|w| {
+            let url = widgets::url(href, &w.path)?;
+            Some((w.name.clone().unwrap_or_else(|| t.name.clone()), url, w.size))
+        })
+        .collect()
 }
 
 /// The grid as a flat list: each section's heading, then its widgets, then its tiles — leaving
@@ -389,7 +397,7 @@ fn items(apps: Apps) -> Vec<Item> {
     let mut out = Vec::new();
     for (machine, tiles) in apps.sections() {
         out.extend(machine.map(Item::Machine));
-        out.extend(tiles.iter().filter_map(widget).filter_map(|(name, url, size)| {
+        out.extend(tiles.iter().flat_map(framed).filter_map(|(name, url, size)| {
             (beside.as_ref() != Some(&url)).then_some(Item::Widget { name, url, size })
         }));
         out.extend(tiles.into_iter().map(Item::Tile));
@@ -397,13 +405,13 @@ fn items(apps: Apps) -> Vec<Item> {
     out
 }
 
-/// The widget that takes the screen's right half: the first app, this machine's before a paired
-/// one's, whose widget asks for [`Size::Half`]. A second is drawn as large, in the grid. Tracked.
+/// The widget that takes the screen's right half: the first, this machine's apps before a paired
+/// one's, that asks for [`Size::Half`]. A second is drawn as large, in the grid. Tracked.
 fn half(apps: Apps) -> Option<(String, String)> {
     apps.sections()
         .iter()
         .flat_map(|(_, tiles)| tiles.iter())
-        .filter_map(widget)
+        .flat_map(framed)
         .find(|(.., size)| *size == Size::Half)
         .map(|(name, url, _)| (name, url))
 }
@@ -511,7 +519,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
         href,
         ask,
         note,
-        widget: _,
+        widgets: _,
     } = t;
     if let Some(href) = href {
         let app = AppRef {

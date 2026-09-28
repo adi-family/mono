@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- The Agent board's chat widget, for the ADI home screen. Declared in config.toml as
+     [widget.chat]; served at /widget/chat by the app's widget service (widget/index.ts). It
+     mounts the same chat module the board's own page does, the frontend's /modules/chat.js.
+     It paints no background — the home screen's frosted ground shows through — and declares no
+     colour scheme, which is what lets it. `?light` switches it to the light tokens. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent board</title>
+<link rel="stylesheet" href="/widget/tokens.css">
+<style>html, body { height: 100%; margin: 0; background: none; }</style>
+</head>
+<body>
+<div id="chat" style="height:100%"></div>
+<script type="module">
+  if (new URLSearchParams(location.search).has("light")) document.documentElement.classList.add("light");
+  const { chat } = await import("/modules/chat.js");
+  chat(document.getElementById("chat"));
+</script>
+</body>
+</html>

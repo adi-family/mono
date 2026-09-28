@@ -88,6 +88,8 @@ web-sys = { version = "0.3", features = [
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+# An app's `config.toml`, read as a file: the widgets it offers the new UI's home screen.
+toml = { workspace = true }
 
 [lints]
 workspace = true

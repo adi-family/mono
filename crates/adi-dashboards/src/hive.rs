@@ -6,6 +6,9 @@
 //! address. That is what lets the same dashboard work at `<host>.adi`, at
 //! `<host>.<node>.n.adi` over the mesh (where `127.0.0.1` would be the *viewer's* machine), and
 //! behind a real domain later — for every viewer, with no substitution.
+//!
+//! A dashboard with a `widget/` directory runs a third service on the same host, claiming
+//! `/widget` ([`WIDGET_PATH`]): the pages its `config.toml` offers the home screen as widgets.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -59,12 +62,49 @@ services:
         working_dir: {{DIR}}
 "#;
 
-/// Render [`HIVE_TEMPLATE`] for one dashboard directory and hostname.
+/// The third service, for a dashboard that has a `widget/` directory: its home-screen widgets,
+/// claiming [`WIDGET_PATH`] on the same host — so a widget page reaches the backend at `/api` and
+/// the frontend's modules at `/modules`, same-origin, exactly as the app's own page does.
+const WIDGET_TEMPLATE: &str = r#"
+  # The app's home-screen widgets (`widget/`), under /widget on the same host. Its config.toml
+  # names each one: [widget.<id>] with url = "/widget/<id>".
+  widget:
+    restart: always
+    proxy:
+      host: {{HOST}}
+      path: /widget
+    runner:
+      type: script
+      script:
+        run: bun run widget/index.ts
+        working_dir: {{DIR}}
+"#;
+
+/// The path prefix the widget service claims on the dashboard's host.
+pub const WIDGET_PATH: &str = "/widget";
+
+/// The directory whose presence gives a dashboard its widget service.
+pub const WIDGET_DIR: &str = "widget";
+
+/// Render the hive file for one dashboard directory and hostname: [`HIVE_TEMPLATE`], plus
+/// [`WIDGET_TEMPLATE`] when the directory has a [`WIDGET_DIR`].
+///
+/// Decided from the directory rather than passed in, so every writer — create, import, migrate,
+/// a marketplace install — agrees on it without being told.
 #[must_use]
 pub fn hive_yaml(dir: &Path, host: &str) -> String {
-    HIVE_TEMPLATE
-        .replace("{{HOST}}", host)
+    let mut yaml = HIVE_TEMPLATE.to_string();
+    if has_widgets(dir) {
+        yaml.push_str(WIDGET_TEMPLATE);
+    }
+    yaml.replace("{{HOST}}", host)
         .replace("{{DIR}}", &dir.display().to_string())
+}
+
+/// Whether the dashboard in `dir` serves widgets: whether it has a [`WIDGET_DIR`].
+#[must_use]
+pub fn has_widgets(dir: &Path) -> bool {
+    dir.join(WIDGET_DIR).is_dir()
 }
 
 /// The live name of the dashboard's hive file, as the supervisor's import glob names it. Writing
@@ -253,6 +293,27 @@ pub fn is_one_origin(parsed: &HiveFile) -> bool {
     same_host
         && path_claim(frontend.path.as_deref()).is_none()
         && path_claim(backend.path.as_deref()).as_deref() == Some(API_PATH)
+}
+
+/// Whether a parsed hive file is what [`hive_yaml`] would write for `dir` today, as far as routing
+/// goes: one origin, and a widget service on that host at [`WIDGET_PATH`] exactly when the
+/// directory has widgets.
+#[must_use]
+pub fn is_current(dir: &Path, parsed: &HiveFile) -> bool {
+    if !is_one_origin(parsed) {
+        return false;
+    }
+    let widget = parsed.services.get("widget").and_then(|s| s.proxy.as_ref());
+    match (has_widgets(dir), widget) {
+        (false, None) => !parsed.services.contains_key("widget"),
+        (true, Some(widget)) => {
+            let host = |p: &HiveProxy| p.host.trim().to_ascii_lowercase();
+            let frontend = parsed.services["frontend"].proxy.as_ref();
+            frontend.map(host) == Some(host(widget))
+                && path_claim(widget.path.as_deref()).as_deref() == Some(WIDGET_PATH)
+        }
+        _ => false,
+    }
 }
 
 /// Normalise a `proxy.path` the way adi-hive's router does: `None` (the host's fallback) or a
@@ -445,6 +506,30 @@ mod tests {
             yaml.contains(&format!("working_dir: {}", dir.display())),
             "{yaml}"
         );
+    }
+
+    #[test]
+    fn a_widget_directory_adds_the_widget_service_on_the_same_host() {
+        let root = scratch("widget");
+        let dir = root.join("board");
+        std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, "board.adi"))
+            .expect("write");
+        assert!(!hive_of(&dir).services.contains_key("widget"));
+        assert!(is_current(&dir, &hive_of(&dir)));
+
+        // Gaining a `widget/` makes the file behind until it is rewritten.
+        std::fs::create_dir_all(dir.join(WIDGET_DIR)).expect("widget dir");
+        assert!(!is_current(&dir, &hive_of(&dir)));
+
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, "board.adi"))
+            .expect("rewrite");
+        let hive = hive_of(&dir);
+        let widget = hive.services["widget"].proxy.as_ref().expect("widget");
+        assert_eq!(widget.host, "board.adi");
+        assert_eq!(widget.path.as_deref(), Some(WIDGET_PATH));
+        assert!(is_one_origin(&hive));
+        assert!(is_current(&dir, &hive));
     }
 
     #[test]

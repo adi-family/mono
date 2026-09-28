@@ -25,7 +25,8 @@ pub use bundle::{
     clear_imported, collect_files, decode_bundle, valid_id, write_import,
 };
 pub use hive::{
-    API_PATH, HIVE_ARCHIVED, HIVE_LIVE, HOST_ZONE, HiveFile, dashboard_host, declared_host,
-    hive_yaml, is_one_origin, parse_hive, preferred_host,
+    API_PATH, HIVE_ARCHIVED, HIVE_LIVE, HOST_ZONE, HiveFile, WIDGET_DIR, WIDGET_PATH,
+    dashboard_host, declared_host, has_widgets, hive_yaml, is_current, is_one_origin, parse_hive,
+    preferred_host,
 };
-pub use manifest::{Manifest, read_manifest, write_manifest};
+pub use manifest::{Manifest, Widget, read_manifest, write_manifest};

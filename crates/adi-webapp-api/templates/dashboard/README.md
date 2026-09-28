@@ -11,7 +11,8 @@ frontend/index.html   the shell that mounts modules                  (do not edi
 frontend/modules/     >>> agents add UI panels here <<<
 backend/index.ts      entry — discovers and serves routes            (do not edit)
 backend/routes/       >>> agents add endpoints here <<<
-.adi/hive.yaml        the two hive services, sharing one host   (do not edit)
+widget/               >>> optional: home-screen widgets, one page each <<<
+.adi/hive.yaml        the hive services, sharing one host       (do not edit)
 ```
 
 Only the two `index.ts` files are fixed. Everything a user sees comes from `modules/` and
@@ -108,6 +109,51 @@ Routes are loaded at startup; after adding one, `curl http://<this dashboard>/ap
 it up without a restart. `/api/_routes` lists what is currently served, `/api/health` is the
 liveness probe the shell polls.
 
+## Add a home-screen widget
+
+A widget is a live piece of this app on the ADI home screen. It is its own entry point, beside
+`frontend/` and `backend/`: create `widget/<id>.html` and name it in `config.toml`.
+
+```toml
+[widget.status]
+name = "Status"              # what the home screen calls it; the app's name when absent
+url = "/widget/status"       # a path on this app's origin — never a host
+size = "medium"              # small (2x2 tiles) | medium (4x2) | large (4x4) | half (the right half)
+```
+
+The first time the control panel lists the dashboard after `widget/` appears, it writes
+`widget/index.ts` (do not edit) and a third hive service, `widget`, claiming `/widget` on this
+host. That server serves `widget/<id>.html` at `/widget/<id>`, `widget/<name>.ts` as
+`/widget/<name>.js`, any other file in `widget/` as itself, and the design tokens at
+`/widget/tokens.css`.
+
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/widget/tokens.css">
+<style>html, body { height: 100%; margin: 0; background: none; }</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+  if (new URLSearchParams(location.search).has("light")) document.documentElement.classList.add("light");
+  const status = await fetch("/api/status").then((r) => r.json());
+  document.getElementById("root").textContent = status.ok ? "Up" : "Down";
+</script>
+</body>
+</html>
+```
+
+- It is the same origin as the app: call the backend at `/api/…`, and reuse a panel's code by
+  importing the frontend's `/modules/<id>.js` rather than copying it.
+- Paint no background and declare no `color-scheme`: the home screen frames the widget on its
+  own frosted ground, which has to show through.
+- Framed with `?light` while the home screen is light — add the `light` class to `<html>` then,
+  and the tokens switch.
+- Showing a widget starts the app, like opening it does.
+
 ## How it runs
 
 Two hive services, both supervised by the per-user `family.adi.app.dashboards` LaunchAgent, sharing
@@ -115,6 +161,7 @@ Two hive services, both supervised by the per-user `family.adi.app.dashboards` L
 
 - **frontend** — the page itself, owning `/` on that host
 - **backend** — the JSON API the page calls, claiming `/api` on the same host
+- **widget** — only when `widget/` exists: the home-screen widgets, claiming `/widget`
 
 One origin is the contract, not an implementation detail: it is what lets the page use relative
 URLs only, and so work unchanged for a viewer on another machine (over the mesh the dashboard

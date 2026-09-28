@@ -1,9 +1,10 @@
 //! A dashboard's `config.toml` — the metadata its directory carries, independent of anything
 //! the hive file says about running it.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The metadata file each dashboard directory carries.
 ///
@@ -36,6 +37,39 @@ pub struct Manifest {
     /// app is running — a favicon can only be fetched from an app that is up.
     #[serde(default)]
     pub icon: Option<String>,
+    /// The widgets the app offers the home screen, by id — each a `[widget.<id>]` table:
+    ///
+    /// ```toml
+    /// [widget.chat]
+    /// name = "Chat"
+    /// url = "/widget/chat"
+    /// size = "half"
+    /// ```
+    ///
+    /// Declared here rather than discovered, so a screen learns what an app offers from one file
+    /// it can read whether or not the app is running — framing a widget is what starts it.
+    #[serde(default)]
+    pub widget: BTreeMap<String, Widget>,
+}
+
+/// One widget an app offers: a page on the app's own origin that the home screen frames.
+///
+/// Every field is optional for the same reason the manifest's are; a reader decides what a widget
+/// with no `url` means (nothing to frame), rather than the parse refusing the whole manifest.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Widget {
+    /// What the screen calls it; the app's own name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Where it is served, as a path on the app's origin — `/widget/chat`, the app's `widget`
+    /// service. A path and not an address, because the app answers under a different hostname
+    /// for every viewer (`<label>.adi` here, `<label>.<node>.n.adi` over the mesh).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// `small`, `medium`, `large` or `half`; the screen draws what it does not know as `small`.
+    /// A word rather than an enum so a manifest written for a newer screen still parses here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
 }
 
 /// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
@@ -73,6 +107,19 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
             out.push('\n');
         }
     }
+    // Tables last: in TOML a bare key after a `[table]` header belongs to that table.
+    for (id, widget) in &manifest.widget {
+        out.push_str(&format!("\n[widget.{}]\n", toml_key(id)));
+        for (key, value) in [
+            ("name", &widget.name),
+            ("url", &widget.url),
+            ("size", &widget.size),
+        ] {
+            if let Some(value) = value {
+                out.push_str(&format!("{key} = {}\n", toml_string(value)));
+            }
+        }
+    }
     std::fs::write(dir.join("config.toml"), out)
 }
 
@@ -83,6 +130,16 @@ fn toml_string(value: &str) -> String {
         .replace('"', "\\\"")
         .replace('\n', "\\n");
     format!("\"{escaped}\"")
+}
+
+/// A table key as TOML accepts it: bare when it is only the characters a bare key allows, quoted
+/// otherwise.
+fn toml_key(key: &str) -> String {
+    let bare = !key.is_empty()
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if bare { key.to_string() } else { toml_string(key) }
 }
 
 #[cfg(test)]
@@ -139,6 +196,7 @@ mod tests {
                 archived_at: Some(1_786_839_320),
                 moved_to: Some("laptop-b".to_string()),
                 icon: Some("receipt".to_string()),
+                widget: BTreeMap::new(),
             },
         )
         .expect("write");
@@ -148,6 +206,29 @@ mod tests {
         assert!(raw.contains("archived_at = 1786839320\n"), "{raw}");
         assert!(raw.contains("moved_to = \"laptop-b\"\n"), "{raw}");
         assert!(raw.contains("icon = \"receipt\"\n"), "{raw}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn widgets_are_read_and_survive_a_rewrite() {
+        let dir = scratch("widgets");
+        std::fs::write(
+            dir.join("config.toml"),
+            "name = \"Agent board\"\n\n[widget.chat]\nname = \"Chat\"\nurl = \"/widget/chat\"\nsize = \"half\"\n\n[widget.\"a b\"]\nurl = \"/widget/ab\"\n",
+        )
+        .expect("config");
+
+        let mut manifest = read_manifest(&dir);
+        let chat = &manifest.widget["chat"];
+        assert_eq!(chat.name.as_deref(), Some("Chat"));
+        assert_eq!(chat.url.as_deref(), Some("/widget/chat"));
+        assert_eq!(chat.size.as_deref(), Some("half"));
+        assert_eq!(manifest.widget["a b"].size, None);
+
+        // Archiving rewrites the file; the widgets must come back out of it unchanged.
+        manifest.archived_at = Some(1);
+        write_manifest(&dir, &manifest).expect("write");
+        assert_eq!(read_manifest(&dir), manifest);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

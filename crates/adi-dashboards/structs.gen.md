@@ -4,13 +4,13 @@
 
 > The on-disk contract of a dashboard directory: its manifest, its hive file and hostname, and the bundle it becomes when it travels.
 
-6 structs · 2 enums · 1 type alias across 3 files.
+7 structs · 2 enums · 1 type alias across 3 files.
 
 ## Index
 
 - [`src/bundle.rs`](#srcbundlers) — `BundleFile`, `DashboardBundle`, `DecodedFiles`, `BundleError`, `CollectError`
 - [`src/hive.rs`](#srchivers) — `HiveFile`, `HiveService`, `HiveProxy`
-- [`src/manifest.rs`](#srcmanifestrs) — `Manifest`
+- [`src/manifest.rs`](#srcmanifestrs) — `Manifest`, `Widget`
 
 ---
 
@@ -45,6 +45,8 @@ pub struct DashboardBundle {
     pub host: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub widget: std::collections::BTreeMap<String, crate::Widget>,
     pub files: Vec<BundleFile>,
 }
 ```
@@ -168,6 +170,24 @@ pub struct Manifest {
     pub moved_to: Option<String>,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub widget: BTreeMap<String, Widget>,
+}
+```
+
+### struct `Widget`
+
+One widget an app offers: a page on the app's own origin that the home screen frames.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Widget {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
 }
 ```
 

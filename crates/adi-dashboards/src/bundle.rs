@@ -56,6 +56,10 @@ pub struct DashboardBundle {
     /// manifest is not: a transfer that dropped it would land the app as a bare letter.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Its home-screen widgets (see [`crate::Manifest::widget`]), carried for the same reason as
+    /// [`icon`](Self::icon). Absent from a bundle packed by an older panel.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub widget: std::collections::BTreeMap<String, crate::Widget>,
     pub files: Vec<BundleFile>,
 }
 

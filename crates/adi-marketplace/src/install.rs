@@ -446,6 +446,7 @@ fn land(
     entry: &BundleEntry,
     pin: &git::Pin,
 ) -> Result<String> {
+    let shipped = read_manifest(dir);
     write_manifest(
         dir,
         &Manifest {
@@ -457,8 +458,10 @@ fn land(
             // The arrival state: archived until started.
             archived_at: Some(adi_config::now_unix()),
             moved_to: None,
-            // Kept from the app's own `config.toml`, when it ships one naming its picture.
-            icon: read_manifest(dir).icon,
+            // Kept from the app's own `config.toml`, when it ships one naming its picture and
+            // the widgets it offers.
+            icon: shipped.icon,
+            widget: shipped.widget,
         },
     )?;
     write_record(

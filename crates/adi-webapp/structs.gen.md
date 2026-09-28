@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-93 structs · 33 enums · 6 type aliases across 43 files.
+96 structs · 33 enums · 6 type aliases across 43 files.
 
 ## Index
 
@@ -21,7 +21,7 @@
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
 - [`src/new_ui/watching.rs`](#srcnew_uiwatchingrs) — `Wants`, `Part`
-- [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`
+- [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
@@ -242,7 +242,7 @@ pub(super) struct Apps {
     asking: RwSignal<Option<String>>,
     refused: RwSignal<Option<(String, String)>>,
     pictures: RwSignal<HashMap<String, String>>,
-    widgets: RwSignal<HashMap<String, Size>>,
+    widgets: RwSignal<HashMap<String, Vec<Declared>>>,
     asked: StoredValue<HashSet<String>>,
 }
 ```
@@ -260,7 +260,7 @@ struct Tile {
     machine: Option<String>,
     favicon: Option<String>,
     icon: Option<String>,
-    widget: Option<Size>,
+    widgets: Vec<Declared>,
     href: Option<String>,
     ask: Option<(String, String)>,
     note: String,
@@ -496,6 +496,42 @@ pub(super) enum Size {
     Medium,
     Large,
     Half,
+}
+```
+
+### struct `Declared`
+
+One widget as an app's `config.toml` declares it, its path not yet put on an origin.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(super) struct Declared {
+    pub(super) name: Option<String>,
+    pub(super) path: String,
+    pub(super) size: Size,
+}
+```
+
+### struct `Config`
+
+The part of `config.toml` read here. The rest is the panel's (`adi_dashboards::Manifest`), which the listings already carry.
+
+```rust
+#[derive(Deserialize)]
+struct Config {
+    #[serde(default)]
+    widget: BTreeMap<String, Entry>,
+}
+```
+
+### struct `Entry`
+
+```rust
+#[derive(Deserialize)]
+struct Entry {
+    name: Option<String>,
+    url: Option<String>,
+    size: Option<String>,
 }
 ```
 

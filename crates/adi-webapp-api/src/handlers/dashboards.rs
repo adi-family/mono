@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 use adi_config::Config;
 use adi_dashboards::{
     BundleError, CollectError, DashboardBundle, HIVE_ARCHIVED, HIVE_LIVE, MAX_BUNDLE_FILES,
-    Manifest, dashboard_host, declared_host, decode_bundle, hive_yaml, is_one_origin, parse_hive,
-    preferred_host, read_manifest, valid_id, write_import, write_manifest,
+    Manifest, dashboard_host, declared_host, decode_bundle, has_widgets, hive_yaml, is_current, parse_hive,
+    preferred_host, read_manifest, valid_id, write_import, write_manifest, WIDGET_DIR,
 };
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
@@ -54,6 +54,17 @@ const BACKEND_INDEX_TS: &str = include_str!("../../templates/dashboard/backend/i
 const BACKEND_ROUTE_STATUS: &str =
     include_str!("../../templates/dashboard/backend/routes/status.ts");
 const README: &str = include_str!("../../templates/dashboard/README.md");
+/// The widget entry point (`widget/index.ts`), written into a dashboard that has a `widget/`
+/// directory. `design/tokens.css` is spliced into its `TOKENS` constant, as a JS string literal,
+/// so every widget links one stylesheet instead of carrying a copy of the palette.
+static WIDGET_INDEX_TS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    include_str!("../../templates/dashboard/widget/index.ts").replacen(
+        "\"/* @adi-tokens */\"",
+        &serde_json::to_string(include_str!("../../../../design/tokens.css"))
+            .unwrap_or_else(|_| "\"\"".to_string()),
+        1,
+    )
+});
 
 /// `POST /api/dashboards/create` — scaffold a new dashboard and let the supervisor pick it up.
 ///
@@ -303,6 +314,7 @@ fn scaffold(
             archived_at: None,
             moved_to: None,
             icon: None,
+            widget: std::collections::BTreeMap::new(),
         },
     )?;
     let host = dashboard_host(dir, name);
@@ -328,6 +340,7 @@ const ID_FALLBACK: &str = "dashboard";
 const SHELL_STAMP: &str = "<!-- adi-shell: 3";
 const FRONTEND_ENTRY_STAMP: &str = "// adi-frontend-entry: 1";
 const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
+const WIDGET_ENTRY_STAMP: &str = "// adi-widget-entry: 1";
 
 /// Bring a dashboard's generated files up to the current templates, in place, the next time it is
 /// read or listed. There is no separate migration command: a dashboard is a directory, and the
@@ -358,6 +371,24 @@ fn migrate(dir: &Path, name: &str) {
         BACKEND_ENTRY_STAMP,
         BACKEND_INDEX_TS,
     );
+    migrate_widget_entry(dir);
+}
+
+/// Give a dashboard that has a `widget/` directory its entry point: written when missing — an
+/// author starts a widget by creating the directory and one page — and restamped when behind.
+///
+/// Runs after [`migrate_hive`] on purpose, and the order is harmless either way: the supervisor
+/// retries a service whose script is not there yet.
+fn migrate_widget_entry(dir: &Path) {
+    if !has_widgets(dir) {
+        return;
+    }
+    let entry = dir.join(WIDGET_DIR).join("index.ts");
+    if entry.exists() {
+        restamp_entry_point(&entry, WIDGET_ENTRY_STAMP, &WIDGET_INDEX_TS);
+    } else {
+        let _ = std::fs::write(entry, WIDGET_INDEX_TS.as_str());
+    }
 }
 
 /// Replace one generated entry point with the current template while it does not spell `stamp`.
@@ -377,22 +408,23 @@ fn restamp_entry_point(path: &Path, stamp: &str, template: &str) {
     let _ = std::fs::write(path, template);
 }
 
-/// Rewrite the dashboard's hive file to the one-origin form, keeping the hostname it already
+/// Rewrite the dashboard's hive file to the current form — one origin, and a widget service
+/// exactly when the dashboard has a `widget/` directory — keeping the hostname it already
 /// declares. A hand-picked host is a link somebody has bookmarked, so migration never re-derives
 /// one that exists; a dashboard that declares none gets [`dashboard_host`].
 ///
 /// Anything that is not recognisably this scaffold's own file — unparseable, or carrying services
-/// beyond the `frontend`/`backend` pair — is left exactly as it is. A rewrite is a full rewrite,
+/// beyond `frontend`, `backend` and `widget` — is left exactly as it is. A rewrite is a full rewrite,
 /// and clobbering a hive file we do not understand would cost more than the stale shape does.
 fn migrate_hive(dir: &Path, name: &str) {
     let Some((path, parsed)) = parse_hive(dir) else {
         return;
     };
     let services: Vec<&str> = parsed.services.keys().map(String::as_str).collect();
-    if services != ["backend", "frontend"] {
+    if services != ["backend", "frontend"] && services != ["backend", "frontend", "widget"] {
         return;
     }
-    if is_one_origin(&parsed) {
+    if is_current(dir, &parsed) {
         return;
     }
 
@@ -434,6 +466,7 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
         project: manifest.project,
         host: declared_host(&dir),
         icon: manifest.icon,
+        widget: manifest.widget,
         files,
     })
 }
@@ -518,6 +551,7 @@ pub fn import_dashboard(
                 .map(str::trim)
                 .filter(|i| !i.is_empty())
                 .map(str::to_string),
+            widget: bundle.widget,
         },
     ) {
         return error(500, &format!("writing the dashboard manifest: {e}"));
@@ -691,7 +725,7 @@ fn ts_stems(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adi_dashboards::BundleFile;
+    use adi_dashboards::{BundleFile, is_one_origin};
     use base64::Engine as _;
 
     /// A dashboards root of this test's own, under the system temp dir — never the user's store.
@@ -946,6 +980,7 @@ mod tests {
         assert!(FRONTEND_INDEX_TS.contains(FRONTEND_ENTRY_STAMP));
         assert!(FRONTEND_INDEX_HTML.contains(SHELL_STAMP));
         assert!(BACKEND_INDEX_TS.contains(BACKEND_ENTRY_STAMP));
+        assert!(WIDGET_INDEX_TS.contains(WIDGET_ENTRY_STAMP));
     }
 
     #[test]
@@ -1080,6 +1115,32 @@ mod tests {
         // Restoring it must bring back the current shape, not the one it was archived with.
         assert!(is_one_origin(&hive_of(&dir)));
         assert!(!dir.join(".adi").join(HIVE_LIVE).exists());
+    }
+
+    #[test]
+    fn a_widget_directory_gets_its_entry_point_and_its_service() {
+        let root = scratch("widget");
+        let dir = root.join("board");
+        scaffold(&dir, "Board", "", None).expect("scaffold");
+        let host = declared_host(&dir).expect("host");
+        std::fs::create_dir_all(dir.join(WIDGET_DIR)).expect("widget dir");
+        std::fs::write(dir.join(WIDGET_DIR).join("chat.html"), "<p>hi</p>").expect("page");
+
+        migrate(&dir, "Board");
+
+        let entry = std::fs::read_to_string(dir.join(WIDGET_DIR).join("index.ts")).expect("entry");
+        assert!(entry.contains(WIDGET_ENTRY_STAMP), "{entry}");
+        assert!(!entry.contains("@adi-tokens"), "the tokens were not spliced in");
+        assert!(entry.contains("--accent"), "the tokens were not spliced in");
+        let hive = hive_of(&dir);
+        let widget = hive.services["widget"].proxy.as_ref().expect("widget service");
+        assert_eq!(widget.host, host, "the widget keeps the dashboard's host");
+        assert!(is_current(&dir, &hive));
+        // The author's page is never touched.
+        assert_eq!(
+            std::fs::read_to_string(dir.join(WIDGET_DIR).join("chat.html")).expect("page"),
+            "<p>hi</p>"
+        );
     }
 
     #[test]
@@ -1444,6 +1505,7 @@ mod tests {
                 project: None,
                 host: None,
                 icon: None,
+                widget: Default::default(),
                 files: vec![BundleFile {
                     path: path.to_string(),
                     contents: base64::engine::general_purpose::STANDARD.encode("pwned"),
@@ -1472,6 +1534,7 @@ mod tests {
                 project: None,
                 host: None,
                 icon: None,
+                widget: Default::default(),
                 files: Vec::new(),
             };
             let body = serde_json::to_vec(&bundle).expect("serialize");
