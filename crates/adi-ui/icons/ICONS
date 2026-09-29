@@ -2,6 +2,7 @@
 # `crates/adi-ui/build.rs` turns the directory into the `Lucide` enum. Keep it sorted.
 # DESIGN.md §9 is the noun→icon map; add a name here only after checking that table.
 activity
+app-window
 archive
 arrow-down
 arrow-down-to-line

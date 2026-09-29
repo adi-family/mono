@@ -30,7 +30,7 @@ use crate::{chat_elements, icons, new_ui, origin, pages, pwa, rerenders, update}
 /// An intent flag and nothing else. The token is minted by the panel over the API once it is
 /// there — a URL is typed, pasted, logged and kept in browser history, and a pairing invite is a
 /// bearer credential until it is spent, so the two never meet.
-const PAIR_INTENT: &str = "pair";
+pub(crate) const PAIR_INTENT: &str = "pair";
 
 /// Which shell is asking for the rows, and how it gets where a row points.
 #[derive(Clone, Copy)]

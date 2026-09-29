@@ -14,9 +14,9 @@ use leptos::{ev, html, prelude::*};
 pub(super) struct Item {
     /// The label it is listed under. Items sharing one should sit next to each other.
     section: &'static str,
-    title: &'static str,
+    title: String,
     /// A dim second phrase after the title — what it touches.
-    subtitle: &'static str,
+    subtitle: String,
     icon: Lucide,
     run: Callback<()>,
 }
@@ -24,15 +24,15 @@ pub(super) struct Item {
 impl Item {
     pub(super) fn new(
         section: &'static str,
-        title: &'static str,
-        subtitle: &'static str,
+        title: impl Into<String>,
+        subtitle: impl Into<String>,
         icon: Lucide,
         run: impl Fn() + Send + Sync + 'static,
     ) -> Self {
         Self {
             section,
-            title,
-            subtitle,
+            title: title.into(),
+            subtitle: subtitle.into(),
             icon,
             run: Callback::new(move |()| run()),
         }

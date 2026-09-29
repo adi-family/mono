@@ -25,8 +25,19 @@ fn bridge() -> Option<JsValue> {
     (!bridge.is_undefined() && !bridge.is_null()).then_some(bridge)
 }
 
+/// Whether the overlay is on; `None` when the script didn't load.
+pub(crate) fn is_on() -> Option<bool> {
+    let bridge = bridge()?;
+    Some(
+        Reflect::get(&bridge, &JsValue::from_str("on"))
+            .ok()
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    )
+}
+
 /// Flip the overlay. A no-op when the script didn't load.
-fn toggle() {
+pub(crate) fn toggle() {
     let Some(bridge) = bridge() else {
         return;
     };
