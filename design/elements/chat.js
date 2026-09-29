@@ -11,11 +11,16 @@
 // opened, the window is fixed on it: the bar says which, and its one way out is back to the list.
 //
 // Attributes:
-//   agent     which agent. Without it the one this browser last picked, else `adi-agent`.
+//   agent     which agent. Without it, `adi-agent` on this machine.
 //   node      the paired machine that agent is on (`hetzner-adi`); absent for this one. Everything
 //             for it goes through this panel's `/api/node/<node>` forwarder.
 //   run       which conversation; `new` for a fresh one. Without it, the list (`picker`), or the
 //             agent's newest (no `picker`).
+//
+// The three are where the element *is*, and nothing else is: it keeps no memory of its own between
+// loads and shares none with any other `<adi-chat>`. A host that wants a window to come back where
+// it was keeps `place` and hands it back as these attributes — the new UI keeps one per window, as
+// its address.
 //   picker    the agent picker and the conversation list.
 //   windows   the host can open a conversation in a window of its own: the list's right-click
 //             menu offers "Open in new window", and the choice arrives as `open-window`.
@@ -24,8 +29,9 @@
 // A picker lists this machine's agents and every unlocked paired machine's (`/api/fleet/nodes`),
 // grouped by machine as the old chat's picker groups them.
 //
-// Events: `open` `{ node, agent, run }` whenever the conversation shown changes; `open-window`
-// `{ node, agent, run, title }` when a conversation is asked for in a window of its own.
+// Events: `place` `{ node, agent, run, title }` whenever it moves — another agent, a conversation
+// opened, back to the list (`run` null); `open-window` `{ node, agent, run, title }` when a
+// conversation is asked for in a window of its own.
 //
 // # How it reads
 //
@@ -326,7 +332,6 @@ class AdiChat extends AdiElement {
   setup() {
     this.$(".agent").addEventListener("change", (e) => {
       const [node, name] = JSON.parse(e.target.value);
-      localStorage.setItem("adi-chat:agent", JSON.stringify({ node, name }));
       this.#openAgent(name, undefined, node);
     });
     this.$(".back").addEventListener("click", () => this.#showList());
@@ -371,14 +376,32 @@ class AdiChat extends AdiElement {
   attributeChangedCallback(name, old, value) {
     super.attributeChangedCallback();
     if (!this.#live || old === value) return;
-    if ((name === "agent" || name === "node") && this.getAttribute("agent")) {
-      const node = this.getAttribute("node") || null;
-      const agent = this.getAttribute("agent");
-      if (agent !== this.#agent || node !== this.#node) this.#openAgent(agent, this.getAttribute("run"), node);
-    }
-    else if (name === "run" && this.#agent && (value || null) !== this.#run) this.#openRun(value === "new" ? null : value);
-    else if (name === "api") this.#start();
+    if (name === "api") return this.#start();
+    if (name === "node" || name === "agent" || name === "run") this.#followSoon();
   }
+
+  /**
+   * Go where the attributes now say, once they have all been set. A host moving a window writes
+   * `node`, `agent` and `run` one after another, and acting on each as it lands would open the new
+   * agent's name on the old machine for one request. The attributes the element's own `place`
+   * event caused are where it already is, and cost nothing.
+   */
+  #followSoon() {
+    if (this.#following) return;
+    this.#following = true;
+    queueMicrotask(() => {
+      this.#following = false;
+      const agent = this.getAttribute("agent");
+      if (!agent || !this.#agent) return;
+      const node = this.getAttribute("node") || null;
+      const run = this.getAttribute("run") || null;
+      if (agent !== this.#agent || node !== this.#node) return this.#openAgent(agent, run, node);
+      if (run === "new") return this.#openRun(null);
+      if (run !== this.#run) return run ? this.#openRun(run) : this.#showList();
+    });
+  }
+
+  #following = false;
 
   update() {
     const picker = this.hasAttribute("picker");
@@ -425,23 +448,28 @@ class AdiChat extends AdiElement {
 
   async #start() {
     try {
-      const saved = this.#savedAgent();
       const wanted = this.getAttribute("agent")
         ? { node: this.getAttribute("node") || null, name: this.getAttribute("agent") }
-        : (saved ?? { node: null, name: ROOT_AGENT });
+        : { node: null, name: ROOT_AGENT };
       this.#node = wanted.node;
       const local = await this.#readAgents(null);
       this.#sources = [{ node: null, agents: local }];
       let agents = local;
       if (wanted.node) {
-        agents = await this.#readAgents(wanted.node).catch(() => []);
+        agents = await this.#readAgents(wanted.node).catch(() => {
+          this.#fail(`${wanted.node} is not answering`);
+          return [];
+        });
         this.#sources.push({ node: wanted.node, agents });
       }
-      let name = agents.some((a) => a.name === wanted.name) ? wanted.name : null;
+      // Named by the host, it is gone to whatever it says, reachable or not: this is an address,
+      // and one that quietly became another agent on a slow machine would have lost the place it
+      // named. What is wrong with it is said where the chat would be.
+      let name = this.getAttribute("agent") || null;
       if (!name) {
-        // What was asked for is not there — a machine gone, an agent deleted: this machine's root.
-        this.#node = null;
-        name = (local.find((a) => a.name === ROOT_AGENT) ?? local[0])?.name;
+        name = agents.some((a) => a.name === wanted.name)
+          ? wanted.name
+          : (local.find((a) => a.name === ROOT_AGENT) ?? local[0])?.name;
       }
       if (!name) {
         this.$(".empty").textContent = "No agents on this machine yet.";
@@ -487,18 +515,6 @@ class AdiChat extends AdiElement {
           this.#drawAgents();
         }),
     );
-  }
-
-  /** The agent this browser last picked: `{ node, name }` (a bare name, from before machines). */
-  #savedAgent() {
-    const raw = localStorage.getItem("adi-chat:agent");
-    if (!raw) return null;
-    try {
-      const v = JSON.parse(raw);
-      return typeof v === "string" ? { node: null, name: v } : { node: v.node ?? null, name: v.name };
-    } catch {
-      return { node: null, name: raw };
-    }
   }
 
   /**
@@ -558,35 +574,10 @@ class AdiChat extends AdiElement {
     }
     if (run === "new") return this.#openRun(null);
     if (run) return this.#openRun(run);
-    // No conversation named: with a picker, whatever this window was on when it was last left —
-    // the conversation, if it is still there, else the list; without a picker there is nothing to
-    // choose with, so the newest.
-    if (this.hasAttribute("picker")) {
-      const was = this.#remembered();
-      if (was?.agent === name && (was.node ?? null) === this.#node && this.#runs.some((r) => r.run_id === was.run)) {
-        return this.#openRun(was.run);
-      }
-      return this.#showList();
-    }
+    // No conversation named: with a picker, the list; without one there is nothing to choose
+    // with, so the newest.
+    if (this.hasAttribute("picker")) return this.#showList();
     this.#openRun(this.#runs[0]?.run_id ?? null);
-  }
-
-  /**
-   * What a picker window was on, kept per browser so a reload lands back there: `{ agent, run }`,
-   * `run` null for the list. Only a picker window keeps it — one given its conversation by its host
-   * is that conversation whatever was open last.
-   */
-  #remembered() {
-    try {
-      return JSON.parse(localStorage.getItem("adi-chat:open") ?? "null");
-    } catch {
-      return null;
-    }
-  }
-
-  #remember() {
-    if (!this.hasAttribute("picker") || !this.#agent) return;
-    localStorage.setItem("adi-chat:open", JSON.stringify({ node: this.#node, agent: this.#agent, run: this.#run }));
   }
 
   /** Back to the agent's conversations — the window lets go of the one it was fixed on. */
@@ -594,10 +585,9 @@ class AdiChat extends AdiElement {
     this.#epoch += 1;
     this.#mode = "list";
     this.#run = null;
-    this.#remember();
     this.#peek = null;
     this.$("adi-transcript").entries = [];
-    this.emit("open", { node: this.#node, agent: this.#agent, run: null });
+    this.emit("place", { node: this.#node, agent: this.#agent, run: null, title: "" });
     this.#drawMode();
     this.#drawRuns();
     this.#tick();
@@ -621,7 +611,6 @@ class AdiChat extends AdiElement {
     this.#mode = "chat";
     this.$(".menu").hidden = true;
     this.#run = run;
-    this.#remember();
     this.#peek = null;
     this.#limit = PAGE;
     this.#steps.clear();
@@ -631,7 +620,8 @@ class AdiChat extends AdiElement {
     this.$(".error").textContent = "";
     this.$("adi-transcript").entries = [];
     this.#drawMode();
-    this.emit("open", { node: this.#node, agent: this.#agent, run });
+    const shown = this.#runs.find((r) => r.run_id === run);
+    this.emit("place", { node: this.#node, agent: this.#agent, run, title: run ? titleOf(shown) : "" });
     this.#draw();
     this.#tick();
   }

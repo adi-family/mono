@@ -333,26 +333,19 @@ pub(super) fn Island(
             }>
                 <span class="adi-new-island__divider" aria-hidden="true"></span>
             </Show>
-            // The conversations open in windows of their own, before the apps: each is a chat, and
-            // says so with the chat's own glyph; its name is on hover.
+            // The chat windows beyond the first, before the apps: each is a chat, and says so with
+            // the chat's own glyph; where it is — its title bar's words — is on hover, and follows
+            // the window as it moves.
             <For each=move || desk.chats.get() key=|(id, _)| *id let:chat>
                 {
-                    let (id, chat) = chat;
-                    let win = Win::Talk(id);
-                    let label = if chat.agent.is_empty() {
-                        "Chat".to_string()
-                    } else if chat.title.is_empty() {
-                        format!("Chat with {}", chat.agent)
-                    } else {
-                        format!("{} — {}", chat.title, chat.agent)
-                    };
+                    let win = Win::Talk(chat.0);
                     view! {
                         <button
                             class="adi-new-island__item is-open"
                             class:is-front=move || desk.is_front(win)
                             type="button"
-                            title=label.clone()
-                            aria-label=label
+                            title=move || desk.title(win)
+                            aria-label=move || desk.title(win)
                             on:click=move |_| desk.focus(win)
                             on:contextmenu=move |ev| at_pointer(ev, win)
                         >

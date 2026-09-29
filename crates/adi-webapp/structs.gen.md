@@ -544,10 +544,9 @@ What an address names.
 enum Place {
     Settings,
     About,
-    Chat,
+    Chat(ChatRef),
     Device(String),
     App(String),
-    Talk(Option<String>, String, String),
 }
 ```
 
@@ -571,14 +570,16 @@ pub(super) struct AppRef {
 
 ### struct `ChatRef`
 
-The conversation a chat window is pinned to — or, with no agent, nothing yet: a second chat window with its own pickers, opened by the island's "New window".
+Where one chat window is, as its address says it: nowhere yet, an agent's conversations, or one conversation — each window its own, like a browser tab's address. Nothing about one window is read from, or written to, any other.
 
 ```rust
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(super) struct ChatRef {
     #[serde(default)]
     pub(super) node: Option<String>,
+    #[serde(default)]
     pub(super) agent: String,
+    #[serde(default)]
     pub(super) run: String,
     #[serde(default)]
     pub(super) title: String,
@@ -596,6 +597,7 @@ pub(super) struct Desk {
     pub(super) device: RwSignal<Option<String>>,
     pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
     pub(super) chats: RwSignal<Vec<(u32, ChatRef)>>,
+    chat_home: RwSignal<ChatRef>,
     preview: RwSignal<Option<Snap>>,
     pub(super) dragging: RwSignal<bool>,
 }
