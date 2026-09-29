@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-96 structs · 33 enums · 5 type aliases across 42 files.
+100 structs · 34 enums · 5 type aliases across 43 files.
 
 ## Index
 
@@ -14,7 +14,8 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/menu.rs`](#srcmenurs) — `Shell`
 - [`src/new_ui/about.rs`](#srcnew_uiaboutrs) — `Facts`
-- [`src/new_ui/apps.rs`](#srcnew_uiappsrs) — `Apps`, `Tile`, `Item`
+- [`src/new_ui/apps.rs`](#srcnew_uiappsrs) — `Apps`, `Tile`, `Item`, `Half`, `Laid`, `Menued`
+- [`src/new_ui/arrange.rs`](#srcnew_uiarrangers) — `Arrangement`, `Arrange`
 - [`src/new_ui/background.rs`](#srcnew_uibackgroundrs) — `Preset`, `Appearance`, `Kind`, `Choice`, `Wallpaper`
 - [`src/new_ui/device.rs`](#srcnew_uidevicers) — `Cut`
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
@@ -275,11 +276,83 @@ One thing in the grid, in order: a machine's heading, an app's widget, an app's 
 enum Item {
     Machine(String),
     Widget {
+        id: String,
         name: String,
         url: String,
         size: Size,
     },
     Tile(Tile),
+}
+```
+
+### struct `Half`
+
+The widget beside the grid: its id, name and address.
+
+```rust
+#[derive(Clone, PartialEq)]
+struct Half {
+    id: String,
+    name: String,
+    url: String,
+}
+```
+
+### struct `Laid`
+
+The home screen as arranged.
+
+```rust
+#[derive(Clone, PartialEq)]
+struct Laid {
+    half: Option<Half>,
+    items: Vec<Item>,
+    ids: Vec<String>,
+}
+```
+
+### enum `Menued`
+
+What the home screen's own menus were opened on.
+
+```rust
+#[derive(Clone)]
+enum Menued {
+    Screen,
+    Tile(AppRef, String),
+    Size(String, Size),
+}
+```
+
+---
+
+## `src/new_ui/arrange.rs`
+
+### struct `Arrangement`
+
+What was changed, and nothing else.
+
+```rust
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub(super) struct Arrangement {
+    order: Vec<String>,
+    sizes: BTreeMap<String, Size>,
+    hidden: BTreeSet<String>,
+}
+```
+
+### struct `Arrange`
+
+The home screen's arrangement, and whether it is being edited.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Arrange {
+    pub(super) now: RwSignal<Arrangement>,
+    pub(super) editing: RwSignal<bool>,
+    pub(super) dragging: RwSignal<Option<String>>,
+    pub(super) target: RwSignal<Option<String>>,
 }
 ```
 

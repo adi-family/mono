@@ -13,7 +13,7 @@
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
 //! What it draws so far: a wallpaper ([`background`]), the apps on it as a home screen
-//! ([`apps`]), the windows open over it ([`windows`] —
+//! ([`apps`], arranged by the person: [`arrange`]), the windows open over it ([`windows`] —
 //! [`settings`], [`about`], a chat with an agent, [`chat`], one paired device's page, [`device`], and one app in a small browser,
 //! [`browser`]), the top bar and island
 //! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
@@ -23,6 +23,7 @@
 
 mod about;
 mod apps;
+mod arrange;
 mod background;
 mod browser;
 mod cache;
@@ -103,7 +104,7 @@ pub(crate) fn action() -> Action {
 }
 
 /// The palette's commands, as they stand right now.
-fn commands(wall: background::Wallpaper, desk: Desk) -> Vec<Item> {
+fn commands(wall: background::Wallpaper, desk: Desk, home: arrange::Arrange) -> Vec<Item> {
     let now = wall.choice.get().appearance;
     let mut items = vec![
         Item::new(
@@ -119,6 +120,13 @@ fn commands(wall: background::Wallpaper, desk: Desk) -> Vec<Item> {
             "Background and appearance",
             Lucide::Settings2,
             move || desk.open(Win::Settings),
+        ),
+        Item::new(
+            "Home screen",
+            "Edit home screen",
+            "Move apps and widgets, resize or remove them",
+            Lucide::LayoutGrid,
+            move || home.edit(true),
         ),
     ];
     // A row for each appearance the screen is not already fixed to — one while it is light or
@@ -169,21 +177,28 @@ pub(crate) fn NewUi() -> impl IntoView {
     let shell = Shell::load();
     let fleet = fleet::Fleet::load();
     let apps = apps::Apps::load();
+    let home = arrange::Arrange::load();
     let palette_open = RwSignal::new(false);
 
     // Back and forward change the address without a reload; the window it names comes forward.
     let pop = window_event_listener(ev::popstate, move |_| desk.arrive(&routing::current_path()));
     on_cleanup(move || pop.remove());
 
-    // Escape closes the front window — unless it is closing the palette, a modal dialog above
-    // every window that stops the key itself but is checked for here too.
+    // Escape ends editing the home screen, or else closes the front window — unless it is closing
+    // the palette, a modal dialog above every window that stops the key itself but is checked for
+    // here too.
     let keys = window_event_listener(ev::keydown, move |ev| {
         let modal_open = document()
             .query_selector("[role=dialog][aria-modal=true]")
             .ok()
             .flatten()
             .is_some();
-        if ev.key() == "Escape" && !modal_open {
+        if ev.key() != "Escape" || modal_open {
+            return;
+        }
+        if home.editing.get_untracked() {
+            home.edit(false);
+        } else {
             desk.close_front();
         }
     });
@@ -218,7 +233,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                     ></div>
                 </Show>
             </div>
-            <apps::Home apps desk light=light/>
+            <apps::Home apps desk home light=light/>
             <windows::SnapPreview desk top=top_limit/>
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
@@ -263,6 +278,6 @@ pub(crate) fn NewUi() -> impl IntoView {
             <TopBar desk fleet light=light/>
         </Show>
         <Island shell desk palette=palette_open light=light/>
-        <palette::Palette items=move || commands(wall, desk) light=light open=palette_open/>
+        <palette::Palette items=move || commands(wall, desk, home) light=light open=palette_open/>
     }
 }

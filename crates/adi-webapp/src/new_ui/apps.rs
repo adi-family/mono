@@ -26,6 +26,9 @@
 //! An app whose `config.toml` declares widgets also gets them: in the grid ahead of its machine's
 //! tiles, or — one that asks for `half` — across the screen's right half, beside the grid
 //! ([`super::widgets`]).
+//!
+//! The order of all of it, each widget's size and what is left off are the person's to change
+//! ([`super::arrange`]), in the home screen's editing mode.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -34,6 +37,7 @@ use adi_ui::{Icon, IconSize, Lucide, Menu, MenuAt, MenuItem};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
 use leptos::{ev, portal::Portal, prelude::*};
 
+use super::arrange::{self, Arrange, Arrangement};
 use super::cache;
 use super::widgets::{self, AppWidget, Declared, Size};
 use super::windows::{AppRef, Desk};
@@ -361,7 +365,12 @@ impl Tile {
 #[derive(Clone, PartialEq, Eq, Hash)]
 enum Item {
     Machine(String),
-    Widget { name: String, url: String, size: Size },
+    Widget {
+        id: String,
+        name: String,
+        url: String,
+        size: Size,
+    },
     Tile(Tile),
 }
 
@@ -376,8 +385,9 @@ impl Item {
     }
 }
 
-/// A tile's widgets, as far as there is somewhere to frame them from: name, address and size.
-fn framed(t: &Tile) -> Vec<(String, String, Size)> {
+/// A tile's widgets, as far as there is somewhere to frame them from: path, name, address and
+/// declared size.
+fn framed(t: &Tile) -> Vec<(String, String, String, Size)> {
     let Some(href) = t.href.as_deref() else {
         return Vec::new();
     };
@@ -385,71 +395,332 @@ fn framed(t: &Tile) -> Vec<(String, String, Size)> {
         .iter()
         .filter_map(|w| {
             let url = widgets::url(href, &w.path)?;
-            Some((w.name.clone().unwrap_or_else(|| t.name.clone()), url, w.size))
+            Some((
+                w.path.clone(),
+                w.name.clone().unwrap_or_else(|| t.name.clone()),
+                url,
+                w.size,
+            ))
         })
         .collect()
 }
 
-/// The grid as a flat list: each section's heading, then its widgets, then its tiles — leaving
-/// out the one widget [`half`] puts beside the grid. Tracked.
-fn items(apps: Apps) -> Vec<Item> {
-    let beside = half(apps).map(|(_, url)| url);
-    let mut out = Vec::new();
-    for (machine, tiles) in apps.sections() {
-        out.extend(machine.map(Item::Machine));
-        out.extend(tiles.iter().flat_map(framed).filter_map(|(name, url, size)| {
-            (beside.as_ref() != Some(&url)).then_some(Item::Widget { name, url, size })
-        }));
-        out.extend(tiles.into_iter().map(Item::Tile));
-    }
-    out
+/// The widget beside the grid: its id, name and address.
+#[derive(Clone, PartialEq)]
+struct Half {
+    id: String,
+    name: String,
+    url: String,
 }
 
-/// The widget that takes the screen's right half: the first, this machine's apps before a paired
-/// one's, that asks for [`Size::Half`]. A second is drawn as large, in the grid. Tracked.
-fn half(apps: Apps) -> Option<(String, String)> {
-    apps.sections()
-        .iter()
-        .flat_map(|(_, tiles)| tiles.iter())
-        .flat_map(framed)
-        .find(|(.., size)| *size == Size::Half)
-        .map(|(name, url, _)| (name, url))
+/// The home screen as arranged.
+#[derive(Clone, PartialEq)]
+struct Laid {
+    /// The widget that takes the right half: one chosen for it while editing, else the first,
+    /// this machine's before a paired one's, whose app asks for [`Size::Half`]. Any other that
+    /// asks is drawn large, in the grid.
+    half: Option<Half>,
+    /// The grid as a flat list: each section's heading, then its widgets and tiles as arranged,
+    /// the half left out.
+    items: Vec<Item>,
+    /// Every item shown, the half's included, in order — what a drag reorders.
+    ids: Vec<String>,
+}
+
+/// The listing, put in the order and sizes `arr` holds, with what it hides left out. Tracked.
+fn laid(apps: Apps, arr: &Arrangement) -> Laid {
+    let mut sections = Vec::new();
+    for (machine, tiles) in apps.sections() {
+        let mut entries = Vec::new();
+        for t in &tiles {
+            for (path, name, url, size) in framed(t) {
+                let id = arrange::widget_id(&t.key, &path);
+                let size = arr.size(&id, size);
+                entries.push((id.clone(), Item::Widget { id, name, url, size }));
+            }
+        }
+        entries.extend(tiles.into_iter().map(|t| (arrange::app_id(&t.key), Item::Tile(t))));
+        entries.retain(|(id, _)| !arr.is_hidden(id));
+        sections.push((machine, arr.sorted(entries)));
+    }
+    let shown = || sections.iter().flat_map(|(_, e)| e.iter());
+    let half = arr
+        .chosen_half()
+        .and_then(|h| shown().find(|(id, _)| id == h))
+        .or_else(|| {
+            shown().find(|(_, i)| matches!(i, Item::Widget { size: Size::Half, .. }))
+        })
+        .and_then(|(_, i)| match i {
+            Item::Widget { id, name, url, .. } => Some(Half {
+                id: id.clone(),
+                name: name.clone(),
+                url: url.clone(),
+            }),
+            _ => None,
+        });
+    let ids = shown().map(|(id, _)| id.clone()).collect();
+    let beside = half.as_ref().map(|h| h.id.as_str());
+    let mut items = Vec::new();
+    for (machine, entries) in sections {
+        if entries.is_empty() {
+            continue;
+        }
+        items.extend(machine.map(Item::Machine));
+        items.extend(
+            entries
+                .into_iter()
+                .filter(|(id, _)| Some(id.as_str()) != beside)
+                .map(|(_, i)| i),
+        );
+    }
+    Laid { half, items, ids }
+}
+
+/// What the home screen's own menus were opened on.
+#[derive(Clone)]
+enum Menued {
+    /// The wallpaper, between the tiles.
+    Screen,
+    /// An app's tile: the app, and its item id.
+    Tile(AppRef, String),
+    /// A widget's size, while editing: its id and the size it is drawn at.
+    Size(String, Size),
 }
 
 /// The grid. Draws nothing until there is an app, so a machine with none keeps a bare wallpaper.
+///
+/// Editing (see [`super::arrange`]) is the home screen's own mode, as iOS's: every item can be
+/// dragged among its machine's, a widget resized, anything taken off; tiles stop opening. Entered
+/// from a right-click on the wallpaper or a tile, or the palette; left with Done, `Escape`, or a
+/// click on the wallpaper.
 #[component]
-pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
-    let items = Memo::new(move |_| items(apps));
-    let half = Memo::new(move |_| half(apps));
-    // One menu for the whole grid — the app a tile was right-clicked on, and where.
-    let menu: RwSignal<Option<(MenuAt, AppRef)>> = RwSignal::new(None);
+pub(super) fn Home(
+    apps: Apps,
+    desk: Desk,
+    home: Arrange,
+    #[prop(into)] light: Signal<bool>,
+) -> impl IntoView {
+    let laid = Memo::new(move |_| home.now.with(|arr| laid(apps, arr)));
+    let items = Memo::new(move |_| laid.with(|l| l.items.clone()));
+    // A memo, so a read that leaves it as it was does not rebuild the frame.
+    let half = Memo::new(move |_| laid.with(|l| l.half.clone()));
+    // One menu for the whole screen — what it was opened on, and where.
+    let menu: RwSignal<Option<(MenuAt, Menued)>> = RwSignal::new(None);
+    let editing = home.editing;
+    let on_screen = move |ev: ev::MouseEvent| {
+        // A tile's own menu has already answered it.
+        if ev.default_prevented() {
+            return;
+        }
+        ev.prevent_default();
+        menu.set(Some((MenuAt::Point(ev.client_x(), ev.client_y()), Menued::Screen)));
+    };
+    // A click on the wallpaper itself, not on anything drawn on it, ends editing.
+    let off_screen = move |ev: ev::MouseEvent| {
+        if editing.get_untracked() && ev.target() == ev.current_target() {
+            home.edit(false);
+        }
+    };
     view! {
-        <div class="adi-new-home" class:has-half=move || half.with(Option::is_some)>
+        <div
+            class="adi-new-home"
+            class:has-half=move || half.with(Option::is_some)
+            class:is-editing=move || editing.get()
+            on:contextmenu=on_screen
+            on:click=off_screen
+        >
+        <Show when=move || editing.get()>
+            <EditBar home light/>
+        </Show>
         <Show when=move || items.with(|i| !i.is_empty())>
-            <nav class="adi-new-apps" class:light=move || light.get() aria-label="Apps">
+            <nav
+                class="adi-new-apps"
+                class:light=move || light.get()
+                aria-label="Apps"
+                on:click=off_screen
+            >
                 <For each=move || items.get() key=Item::key let:item>
                     {match item {
                         Item::Machine(m) => view! {
                             <h2 class="adi-new-apps__machine">{m}</h2>
                         }
                         .into_any(),
-                        Item::Widget { name, url, size } => {
-                            // A second `half` has no half left to take.
+                        Item::Widget { id, name, url, size } => {
+                            // Only one widget has the half; any other that asks for it is large.
                             let size = if size == Size::Half { Size::Large } else { size };
-                            view! { <AppWidget name url size light/> }.into_any()
+                            let body = view! { <AppWidget name url size light/> }.into_any();
+                            slot(home, laid, menu, id, Some(size), true, body)
                         }
-                        Item::Tile(t) => tile(apps, desk, menu, t),
+                        Item::Tile(t) => {
+                            let id = arrange::app_id(&t.key);
+                            let body = tile(apps, desk, home, menu, id.clone(), t);
+                            slot(home, laid, menu, id, None, true, body)
+                        }
                     }}
                 </For>
             </nav>
         </Show>
-        // `half` is a memo, so a read that leaves it as it was does not rebuild the frame.
-        {move || half.get().map(|(name, url)| view! {
-            <AppWidget name url size=Size::Half light/>
+        {move || half.get().map(|Half { id, name, url }| {
+            let body = view! { <AppWidget name url size=Size::Half light/> }.into_any();
+            slot(home, laid, menu, id, Some(Size::Half), false, body)
         })}
-        {move || menu.get().map(|(at, app)| tile_menu(desk, menu, at, app, light.get_untracked()))}
+        {move || menu.get().map(|(at, on)| {
+            screen_menu(desk, home, laid, menu, at, on, light.get_untracked())
+        })}
         </div>
     }
+}
+
+/// The strip over the grid while editing: what to do, and the ways out of it.
+#[component]
+fn EditBar(home: Arrange, #[prop(into)] light: Signal<bool>) -> impl IntoView {
+    let hidden = move || home.now.with(Arrangement::hidden_count);
+    view! {
+        <div class="adi-new-edit" class:light=move || light.get() role="toolbar" aria-label="Edit home screen">
+            <span class="adi-new-edit__hint">"Drag to rearrange"</span>
+            <Show when=move || { hidden() > 0 }>
+                <button
+                    class="adi-btn adi-btn--quiet adi-btn--sm"
+                    type="button"
+                    on:click=move |_| home.show_hidden()
+                >
+                    {move || format!("Show {} hidden", hidden())}
+                </button>
+            </Show>
+            <button
+                class="adi-btn adi-btn--quiet adi-btn--sm"
+                type="button"
+                title="Back to the listing's order, every widget at its app's size, nothing hidden"
+                prop:disabled=move || home.now.with(Arrangement::is_empty)
+                on:click=move |_| home.reset()
+            >
+                "Reset"
+            </button>
+            <button
+                class="adi-btn adi-btn--strong adi-btn--sm"
+                type="button"
+                on:click=move |_| home.edit(false)
+            >
+                "Done"
+            </button>
+        </div>
+    }
+}
+
+/// One item's place on the home screen: what drags it and what it is dropped on, and — while
+/// editing — its remove button and, for a widget, its size.
+///
+/// A widget's page is covered while editing: a frame takes the pointer, so a drag that began over
+/// it would never reach this page.
+fn slot(
+    home: Arrange,
+    laid: Memo<Laid>,
+    menu: RwSignal<Option<(MenuAt, Menued)>>,
+    id: String,
+    widget: Option<Size>,
+    movable: bool,
+    body: AnyView,
+) -> AnyView {
+    let class = match widget {
+        None => "adi-new-slot is-app",
+        Some(Size::Small) => "adi-new-slot is-small",
+        Some(Size::Medium) => "adi-new-slot is-medium",
+        Some(Size::Large) => "adi-new-slot is-large",
+        Some(Size::Half) => "adi-new-slot is-half",
+    };
+    let editing = home.editing;
+    let id = StoredValue::new(id);
+    let is = move |s: RwSignal<Option<String>>| {
+        s.with(|d| id.with_value(|id| d.as_deref() == Some(id.as_str())))
+    };
+    let start = move |ev: ev::DragEvent| {
+        if !movable || !editing.get_untracked() {
+            ev.prevent_default();
+            return;
+        }
+        if let Some(dt) = ev.data_transfer() {
+            // Firefox starts no drag that carries no data.
+            let _ = dt.set_data("text/plain", &id.get_value());
+            dt.set_effect_allowed("move");
+        }
+        home.dragging.set(Some(id.get_value()));
+    };
+    let over = move |ev: ev::DragEvent| {
+        let Some(from) = home.dragging.get_untracked() else {
+            return;
+        };
+        if !movable || !id.with_value(|id| arrange::same_machine(&from, id)) {
+            return;
+        }
+        ev.prevent_default();
+        if !is(home.target) {
+            home.target.set(Some(id.get_value()));
+        }
+    };
+    let drop = move |ev: ev::DragEvent| {
+        ev.prevent_default();
+        if let Some(from) = home.dragging.get_untracked() {
+            laid.with_untracked(|l| id.with_value(|to| home.put(&l.ids, &from, to)));
+        }
+        home.dragging.set(None);
+        home.target.set(None);
+    };
+    let end = move |_: ev::DragEvent| {
+        home.dragging.set(None);
+        home.target.set(None);
+    };
+    let remove = move |ev: ev::MouseEvent| {
+        ev.stop_propagation();
+        id.with_value(|id| home.hide(id));
+    };
+    let resize = move |ev: ev::MouseEvent| {
+        ev.stop_propagation();
+        if let Some(size) = widget {
+            menu.set(Some((
+                MenuAt::Point(ev.client_x(), ev.client_y()),
+                Menued::Size(id.get_value(), size),
+            )));
+        }
+    };
+    view! {
+        <div
+            class=class
+            class:is-dragged=move || is(home.dragging)
+            class:is-target=move || is(home.target) && !is(home.dragging)
+            draggable=move || if movable && editing.get() { "true" } else { "false" }
+            on:dragstart=start
+            on:dragover=over
+            on:drop=drop
+            on:dragend=end
+        >
+            {body}
+            <Show when=move || editing.get()>
+                {widget.map(|size| view! {
+                    <div class="adi-new-slot__cover">
+                        <button
+                            class="adi-btn adi-btn--sm adi-new-slot__size"
+                            type="button"
+                            title="Widget size"
+                            on:click=resize
+                        >
+                            {size.label()}
+                            <Icon icon=Lucide::ChevronDown size=IconSize::Sm/>
+                        </button>
+                    </div>
+                })}
+                <button
+                    class="adi-new-slot__remove"
+                    type="button"
+                    title="Remove from home screen"
+                    aria-label="Remove from home screen"
+                    on:click=remove
+                >
+                    <Icon icon=Lucide::Minus size=IconSize::Sm/>
+                </button>
+            </Show>
+        </div>
+    }
+    .into_any()
 }
 
 /// A tile's face: `mark` on the tile, the name beneath.
@@ -505,34 +776,66 @@ pub(super) fn AppMark(
                 class="adi-new-mark__img"
                 src=favicon.clone()
                 alt=""
+                draggable="false"
                 on:error=move |_| failed.set(true)
             />
         </Show>
     }
 }
 
-/// A tile's right-click menu: open the app — in its window, or in a new one beside it.
+/// The home screen's right-click menu, and a widget's size menu while editing.
+///
+/// * on a tile: open the app — in its window, or in a new one beside it — then edit the home
+///   screen, or take the tile off it;
+/// * on the wallpaper: edit the home screen;
+/// * on a widget's size button: the four sizes, the one it has ticked.
 ///
 /// Out of the grid into the body, as the devices drop-down is: the home screen sits under blurred
 /// surfaces, and a fixed menu inside one of them is placed against it rather than the screen.
-fn tile_menu(
+fn screen_menu(
     desk: Desk,
-    menu: RwSignal<Option<(MenuAt, AppRef)>>,
+    home: Arrange,
+    laid: Memo<Laid>,
+    menu: RwSignal<Option<(MenuAt, Menued)>>,
     at: MenuAt,
-    app: AppRef,
+    on: Menued,
     light: bool,
 ) -> AnyView {
-    let again = app.clone();
     // Built outside the portal: its children are drawn by a closure that may run more than once,
     // so what they capture has to be `Copy`, and a callback is.
-    let open = Callback::new(move |()| {
-        menu.set(None);
-        desk.open_app(app.clone());
-    });
-    let fresh = Callback::new(move |()| {
-        menu.set(None);
-        desk.open_app_new(again.clone());
-    });
+    let act = move |f: Box<dyn Fn() + Send + Sync>| {
+        Callback::new(move |()| {
+            menu.set(None);
+            f();
+        })
+    };
+    // Each row: its words, what it does, and — in the size menu — whether it is the one picked.
+    let mut rows: Vec<(&'static str, Callback<()>, Option<bool>)> = Vec::new();
+    let edit = (!home.editing.get_untracked())
+        .then(|| ("Edit home screen", act(Box::new(move || home.edit(true))), None));
+    match on {
+        Menued::Screen => rows.extend(edit),
+        Menued::Tile(app, id) => {
+            let again = app.clone();
+            rows.push(("Open", act(Box::new(move || desk.open_app(app.clone()))), None));
+            rows.push((
+                "Open in new window",
+                act(Box::new(move || desk.open_app_new(again.clone()))),
+                None,
+            ));
+            rows.extend(edit);
+            rows.push(("Remove from home screen", act(Box::new(move || home.hide(&id))), None));
+        }
+        Menued::Size(id, now) => rows.extend(Size::ALL.into_iter().map(|size| {
+            let id = id.clone();
+            let pick = act(Box::new(move || {
+                let half = laid.with_untracked(|l| l.half.as_ref().map(|h| h.id.clone()));
+                home.resize(&id, size, half.as_deref());
+            }));
+            (size.label(), pick, Some(size == now))
+        })),
+    }
+    let rows = StoredValue::new(rows);
     let class = if light { "light" } else { "" };
     view! {
         <Portal>
@@ -541,15 +844,32 @@ fn tile_menu(
                 on_dismiss=Callback::new(move |()| menu.set(None))
                 class=class
             >
-                <MenuItem on_select=open>"Open"</MenuItem>
-                <MenuItem on_select=fresh>"Open in new window"</MenuItem>
+                {rows
+                    .get_value()
+                    .into_iter()
+                    .map(|(label, on, checked)| match checked {
+                        Some(c) => view! {
+                            <MenuItem on_select=on checked=c radio=true>{label}</MenuItem>
+                        }
+                        .into_any(),
+                        None => view! { <MenuItem on_select=on>{label}</MenuItem> }.into_any(),
+                    })
+                    .collect_view()}
             </Menu>
         </Portal>
     }
     .into_any()
 }
 
-fn tile(apps: Apps, desk: Desk, menu: RwSignal<Option<(MenuAt, AppRef)>>, t: Tile) -> AnyView {
+fn tile(
+    apps: Apps,
+    desk: Desk,
+    home: Arrange,
+    menu: RwSignal<Option<(MenuAt, Menued)>>,
+    item: String,
+    t: Tile,
+) -> AnyView {
+    let editing = home.editing;
     let Tile {
         key,
         id,
@@ -583,12 +903,19 @@ fn tile(apps: Apps, desk: Desk, menu: RwSignal<Option<(MenuAt, AppRef)>>, t: Til
                 target="_blank"
                 rel="noopener"
                 title=note
+                // A link drags its address; while editing, the drag is the tile's slot.
+                draggable=move || if editing.get() { "false" } else { "true" }
                 on:contextmenu=move |ev: ev::MouseEvent| {
                     ev.prevent_default();
-                    menu.set(Some((MenuAt::Point(ev.client_x(), ev.client_y()), for_menu.clone())));
+                    menu.set(Some((
+                        MenuAt::Point(ev.client_x(), ev.client_y()),
+                        Menued::Tile(for_menu.clone(), item.clone()),
+                    )));
                 }
                 on:click=move |ev: ev::MouseEvent| {
-                    if ev.button() == 0
+                    if editing.get_untracked() {
+                        ev.prevent_default();
+                    } else if ev.button() == 0
                         && !(ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.alt_key())
                     {
                         ev.prevent_default();
@@ -631,7 +958,11 @@ fn tile(apps: Apps, desk: Desk, menu: RwSignal<Option<(MenuAt, AppRef)>>, t: Til
             type="button"
             title=move || failed.get().unwrap_or_else(|| note.clone())
             prop:disabled=busy
-            on:click=move |_| apps.ask(key.clone(), node.clone(), service.clone())
+            on:click=move |_| {
+                if !editing.get_untracked() {
+                    apps.ask(key.clone(), node.clone(), service.clone());
+                }
+            }
         >
             {face(view! { <Icon icon=Lucide::Lock size=IconSize::Xl/> }, label)}
         </button>

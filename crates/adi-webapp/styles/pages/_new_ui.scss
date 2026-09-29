@@ -982,12 +982,15 @@ $island-gap: var(--s2);
   gap: var(--s8);
 
   &.has-half { grid-template-columns: 1fr 1fr; }
+  // The edit strip takes a row of its own over everything else.
+  &.is-editing { grid-template-rows: auto minmax(0, 1fr); }
 
   @media (max-width: 960px) {
     &.has-half {
       grid-template-columns: 1fr;
       grid-template-rows: 1fr 60%;
     }
+    &.has-half.is-editing { grid-template-rows: auto minmax(0, 1fr) 60%; }
     left: var(--s4);
     right: var(--s4);
   }
@@ -1009,11 +1012,11 @@ $tile-col: 80px;
   border: 1px solid var(--line-strong);
   border-radius: var(--r-float);
 
-  &.is-half { min-height: 0; }
+  &.is-half { height: 100%; }
 
-  &.is-small  { grid-column: span 2; grid-row: span 2; height: calc(2 * #{$tile-row} + var(--s6)); }
-  &.is-medium { grid-column: span 4; grid-row: span 2; height: calc(2 * #{$tile-row} + var(--s6)); }
-  &.is-large  { grid-column: span 4; grid-row: span 4; height: calc(4 * #{$tile-row} + 3 * var(--s6)); }
+  &.is-small,
+  &.is-medium { height: calc(2 * #{$tile-row} + var(--s6)); }
+  &.is-large  { height: calc(4 * #{$tile-row} + 3 * var(--s6)); }
 
   &__view {
     display: block;
@@ -1178,3 +1181,78 @@ $tile-col: 80px;
 
 .adi-new-win:not(.is-sized):not(.is-snapped) .adi-new-browser__view { flex: none; height: 70vh; }
 .adi-new-win__body:has(> .adi-new-browser) { overflow: hidden; }
+
+// ---- editing the home screen (`apps.rs`, `arrange.rs`) --------------------------------------
+// Every item sits in a slot: the thing dragged and dropped on, carrying the remove button while
+// editing. A widget's slot takes its tiles of the grid.
+.adi-new-slot {
+  position: relative;
+  min-width: 0;
+  display: grid;
+
+  &.is-small  { grid-column: span 2; grid-row: span 2; }
+  &.is-medium { grid-column: span 4; grid-row: span 2; }
+  &.is-large  { grid-column: span 4; grid-row: span 4; }
+  &.is-half   { min-height: 0; }
+
+  // Where a drop would land, and what is being carried there.
+  &.is-dragged { opacity: .4; }
+  &.is-target > .adi-new-app .adi-new-app__icon,
+  &.is-target > .adi-new-widget { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  // Over a widget's page while editing, so the pointer reaches the slot and not the frame.
+  &__cover {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    border-radius: var(--r-float);
+    background: color-mix(in srgb, var(--bg-side) 40%, transparent);
+    cursor: grab;
+  }
+
+  &__size { gap: var(--s1); }
+
+  &__remove {
+    position: absolute;
+    top: calc(-1 * var(--s1));
+    left: calc(-1 * var(--s1));
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-pill);
+    background: var(--bg-raise);
+    color: var(--ink-2);
+    cursor: pointer;
+
+    &:hover { color: var(--ink); background: var(--bg-active); }
+    &:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+  }
+}
+
+// A tile has no pointer of its own while editing: it is carried, not opened.
+.adi-new-home.is-editing .adi-new-slot[draggable="true"] { cursor: grab; }
+.adi-new-home.is-editing .adi-new-app { cursor: inherit; }
+// Onto the tile's corner, not the slot's: the slot is as wide as its column, the tile 60px.
+.adi-new-slot.is-app .adi-new-slot__remove { left: calc(50% - 30px - var(--s1)); }
+
+// The strip over the grid while editing: the hint, then the ways out, on the island's surface.
+.adi-new-edit {
+  grid-column: 1 / -1;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s1) var(--s1) var(--s1) var(--s3);
+  background: color-mix(in srgb, var(--bg-side) 72%, transparent);
+  backdrop-filter: blur(40px) saturate(1.8);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-float);
+  color: var(--ink);
+
+  &__hint { font-size: var(--fs-small); color: var(--ink-2); margin-right: var(--s2); }
+}

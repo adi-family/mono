@@ -47,6 +47,18 @@ pub(super) enum Size {
 }
 
 impl Size {
+    /// Every size, smallest first, as the size menu lists them.
+    pub(super) const ALL: [Self; 4] = [Self::Small, Self::Medium, Self::Large, Self::Half];
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+            Self::Half => "Half the screen",
+        }
+    }
+
     /// The size a `size = "…"` names; small when it names none, or one this build does not know.
     fn named(word: Option<&str>) -> Self {
         match word.map(str::trim) {
