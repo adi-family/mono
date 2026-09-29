@@ -97,25 +97,44 @@ pub(super) fn Palette(
         }
     });
 
+    let filtered = move || {
+        let needle = query.get().to_lowercase();
+        items().into_iter().filter(|i| i.matches(&needle)).collect::<Vec<Item>>()
+    };
+
     // The filtered rows and the cursor pulled back inside them — one place, so what is drawn
     // selected and what Enter runs can never disagree.
     let shown = move || {
-        let needle = query.get().to_lowercase();
-        let rows: Vec<Item> = items().into_iter().filter(|i| i.matches(&needle)).collect();
+        let rows = filtered();
         let at = cursor.get().min(rows.len().saturating_sub(1));
         (rows, at)
     };
 
-    // Arrowing past the bottom of a list taller than its box scrolls the row into view.
-    Effect::new(move |_| {
-        cursor.track();
-        if let Some(row) = list
-            .get()
-            .and_then(|l| l.query_selector("[aria-selected=true]").ok().flatten())
-        {
-            row.scroll_into_view_with_bool(false);
+    // Only the arrow keys scroll, and only as far as it takes to bring the row fully into
+    // view. Doing this from an effect on `cursor` made a hover scroll the list too — the row
+    // under the pointer was pinned to the bottom edge while a wheel was moving it up, which
+    // read as the list fighting the scroll.
+    let reveal = move |i: usize| {
+        let Some(list) = list.get_untracked() else {
+            return;
+        };
+        let Some(row) = list
+            .query_selector(&format!("[data-row=\"{i}\"]"))
+            .ok()
+            .flatten()
+        else {
+            return;
+        };
+        let (b, r) = (list.get_bounding_client_rect(), row.get_bounding_client_rect());
+        // The first row's section label sits above it; wrapping back to the top shows it too.
+        if i == 0 {
+            list.set_scroll_top(0);
+        } else if r.top() < b.top() {
+            list.set_scroll_top(list.scroll_top() - (b.top() - r.top()).ceil() as i32);
+        } else if r.bottom() > b.bottom() {
+            list.set_scroll_top(list.scroll_top() + (r.bottom() - b.bottom()).ceil() as i32);
         }
-    });
+    };
 
     let run = move |item: &Item| {
         open.set(false);
@@ -128,13 +147,17 @@ pub(super) fn Palette(
             "ArrowDown" => {
                 ev.prevent_default();
                 if !rows.is_empty() {
-                    cursor.set((at + 1) % rows.len());
+                    let next = (at + 1) % rows.len();
+                    cursor.set(next);
+                    reveal(next);
                 }
             }
             "ArrowUp" => {
                 ev.prevent_default();
                 if !rows.is_empty() {
-                    cursor.set((at + rows.len() - 1) % rows.len());
+                    let next = (at + rows.len() - 1) % rows.len();
+                    cursor.set(next);
+                    reveal(next);
                 }
             }
             "Enter" => {
@@ -181,19 +204,23 @@ pub(super) fn Palette(
                     on:keydown=on_key
                 />
                 <div class="adi-pal__list" role="listbox" node_ref=list>
+                    // Rebuilt when the filter changes, never when the cursor moves: a hover
+                    // re-renders two `aria-selected`s, not every row.
                     {move || {
-                        let (rows, at) = shown();
+                        let rows = filtered();
                         if rows.is_empty() {
                             return view! { <p class="adi-pal__empty">"No results"</p> }
                                 .into_any();
                         }
+                        let last_row = rows.len() - 1;
                         let mut last = "";
                         rows.into_iter()
                             .enumerate()
                             .map(|(i, item)| {
                                 let head = (item.section != last).then_some(item.section);
                                 last = item.section;
-                                row(item, head, i, i == at, cursor, open)
+                                let selected = move || cursor.get().min(last_row) == i;
+                                row(item, head, i, selected, cursor, open)
                             })
                             .collect::<Vec<_>>()
                             .into_any()
@@ -217,7 +244,7 @@ fn row(
     item: Item,
     head: Option<&'static str>,
     i: usize,
-    selected: bool,
+    selected: impl Fn() -> bool + Send + Sync + 'static,
     cursor: RwSignal<usize>,
     open: RwSignal<bool>,
 ) -> AnyView {
@@ -228,7 +255,8 @@ fn row(
             type="button"
             class="adi-pal__row"
             role="option"
-            aria-selected=selected.to_string()
+            data-row=i
+            aria-selected=move || selected().to_string()
             // `pointermove`, not `pointerenter`: a list that scrolls under a resting pointer
             // must not steal the cursor from the arrow keys.
             on:pointermove=move |_| {
