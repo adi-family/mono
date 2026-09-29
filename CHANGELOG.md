@@ -20,6 +20,53 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The new UI preview (`?new-ui=1`) gets more:**
+  - the home screen gets an editing mode — drag apps and widgets between machines, resize a
+    widget (small/medium/large/half the screen), remove anything, show what's hidden, or reset;
+    entered by right-clicking the wallpaper or a tile, or ⌘K → *Edit home screen*, left with Done,
+    Escape or a click on the wallpaper; kept per device;
+  - a website can be added to the home screen by hand — right-click the wallpaper (or ⌘K) → *Add
+    website…*, type the address as its machine calls it (`app.nosh1.adi`) and pick the machine, or
+    paste a fleet address and the machine is picked for you; a name typed without its zone gets
+    `.adi` appended, and only a pasted `https://` address, `localhost`, an IP or a `host:port` is
+    taken as a real address; a paired machine is asked for the grant first; kept per device,
+    arranged and removed like any other tile;
+  - the chat window's picker now goes agent → its conversations → one conversation, with a way
+    back, filtered the same way the old chat's is (starred and current first, root first, ● for
+    running); right-click a conversation for *Open in new window* to pin a second chat window in
+    the island, or an app tile for *Open* / *Open in new window* for a second window on the same
+    app; a reload lands the window back on whichever conversation (or list) it was showing;
+  - every chat window is now its own address — `/chat`, `/chat/<agent>`, `/chat/<agent>/<run>`, or
+    `@<node>/` first for a paired machine's — so it comes back from the same place on reload, and
+    a pasted chat address opens straight to it; *Open in new window* always opens a new window at
+    that link, the island's *New window* a clean `/chat`;
+  - the chat picker now lists every unlocked paired machine's agents too, grouped with "on
+    <machine>" beside them; everything for one of them goes through that machine's pairing, and a
+    pinned window for one carries the machine in its address (`/chat/<node>/<agent>/<run>`);
+  - every island item now answers a right-click: Settings and Chat get *Open* / *Close window*, an
+    open window's own item gets *New window* (a second window on the same app, or another chat
+    with pickers of its own) and *Close window*; the browser's own context menu never shows over
+    the island, whose menu opens upward when the island sits on the lower half of the screen;
+  - the chat gets a goal bar (*Set a goal*, reword, *Met*, *Give up*), the composer a tray and
+    paperclip for pasted, dropped or picked files (uploaded and sent by id), and a tools slot
+    where a new dictation button transcribes into it, using either the browser's own recogniser or
+    a server engine;
+  - a widget can now ask for a chat window of its own: posting `{type: 'adi:open-chat', node,
+    agent, run, title}` from its frame opens one at that conversation.
+- **Chat home has a per-browser switch to the HTML chat.** `?chat-elements=1`, or ⌘K → *Use the
+  HTML chat*, draws the open conversation with the new `<adi-chat>` element instead of the Leptos
+  transcript; the sessions rail, right panel, home composer and terminal agents are unchanged. Off
+  by default.
+
+### Fixed
+
+- Trunk's dev server now sends `Cache-Control: no-cache` for the panel's plain-JS element scripts
+  (`/elements/*.js`). A browser could keep reusing a stale copy of that unhashed module graph from
+  its heuristic cache, so a newly added element such as `<adi-chat>` never registered and the chat
+  drew as nothing.
+
 ## 1.24.1 — 2026-09-28
 
 ### Fixed
