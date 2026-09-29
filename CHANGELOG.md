@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.25.0 — 2026-09-30
+
 ### Added
 
 - **The new UI preview (`?new-ui=1`) gets more:**
