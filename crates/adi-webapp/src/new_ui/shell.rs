@@ -312,9 +312,36 @@ pub(super) fn Island(
             // The apps open in windows, after a divider, in the order they were opened — as the
             // Dock lists running apps after its own. Each carries the open dot; pressing one
             // brings its window forward.
-            <Show when=move || desk.apps.with(|a| !a.is_empty())>
+            <Show when=move || {
+                desk.apps.with(|a| !a.is_empty()) || desk.chats.with(|c| !c.is_empty())
+            }>
                 <span class="adi-new-island__divider" aria-hidden="true"></span>
             </Show>
+            // The conversations open in windows of their own, before the apps: each is a chat, and
+            // says so with the chat's own glyph; its name is on hover.
+            <For each=move || desk.chats.get() key=|(id, _)| *id let:chat>
+                {
+                    let (id, chat) = chat;
+                    let win = Win::Talk(id);
+                    let label = if chat.title.is_empty() {
+                        format!("Chat with {}", chat.agent)
+                    } else {
+                        format!("{} — {}", chat.title, chat.agent)
+                    };
+                    view! {
+                        <button
+                            class="adi-new-island__item is-open"
+                            class:is-front=move || desk.is_front(win)
+                            type="button"
+                            title=label.clone()
+                            aria-label=label
+                            on:click=move |_| desk.focus(win)
+                        >
+                            <Icon icon=Lucide::MessageSquare size=IconSize::Lg/>
+                        </button>
+                    }
+                }
+            </For>
             <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
                 {
                     let (id, app) = app;

@@ -233,12 +233,12 @@ pub(crate) fn NewUi() -> impl IntoView {
                                     view! { <settings::Settings wall shell/> }.into_any()
                                 }
                                 Win::About => view! { <about::About/> }.into_any(),
-                                Win::Chat => view! { <chat::Chat/> }.into_any(),
+                                Win::Chat => view! { <chat::Chat desk/> }.into_any(),
                                 Win::Device => {
                                     view! { <device::Device fleet desk/> }.into_any()
                                 }
-                                // Not in the fixed list; drawn from the desk's apps below.
-                                Win::App(_) => ().into_any(),
+                                // Not in the fixed list; drawn from the desk's lists below.
+                                Win::App(_) | Win::Talk(_) => ().into_any(),
                             }}
                         </Frame>
                     </Show>
@@ -250,6 +250,12 @@ pub(crate) fn NewUi() -> impl IntoView {
             <For each=move || desk.apps.get() key=|(id, _)| *id let:app>
                 <Frame win=Win::App(app.0) desk light=light top=top_limit>
                     <browser::Browser desk id=app.0/>
+                </Frame>
+            </For>
+            // …and the conversations opened in windows of their own, the same way.
+            <For each=move || desk.chats.get() key=|(id, _)| *id let:chat>
+                <Frame win=Win::Talk(chat.0) desk light=light top=top_limit>
+                    <chat::Pinned desk id=chat.0/>
                 </Frame>
             </For>
         </div>

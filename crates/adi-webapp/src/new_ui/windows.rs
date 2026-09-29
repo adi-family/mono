@@ -31,6 +31,13 @@ const APPS_KEY: &str = "adi-new-ui-apps";
 /// Where an app window's address starts; the app's [`AppRef::key`] follows it.
 const APPS: &str = "/apps";
 
+/// The conversations open in windows of their own, with the number each window goes by.
+const CHATS_KEY: &str = "adi-new-ui-chats";
+
+/// Where the chat windows' address starts: `/chat` alone is the chat window with its pickers,
+/// `/chat/<agent>/<run>` one conversation in a window of its own.
+const CHAT: &str = "/chat";
+
 /// Where every app window's size is kept once one is resized: a new app opens at the size the
 /// last one was left at, as a browser opens a new window.
 const APP_SIZE_KEY: &str = "adi-new-ui-window-app-size";
@@ -65,6 +72,9 @@ pub(super) enum Win {
     /// One app, framed in a small browser. As many as there are apps open, each by the number
     /// [`Desk`] gave it; which app that is is the desk's to say.
     App(u32),
+    /// One conversation, pinned: a window that shows that chat and nothing else, opened from a
+    /// chat list's "Open in new window". As many as are open, like [`Self::App`].
+    Talk(u32),
 }
 
 impl Win {
@@ -80,6 +90,7 @@ impl Win {
             Self::Chat => "/chat",
             Self::Device => DEVICES,
             Self::App(_) => APPS,
+            Self::Talk(_) => CHAT,
         }
     }
 
@@ -87,7 +98,7 @@ impl Win {
         match self {
             Self::Settings => "Settings",
             Self::About => "About adi",
-            Self::Chat => "Chat",
+            Self::Chat | Self::Talk(_) => "Chat",
             Self::Device => "Device",
             Self::App(_) => "App",
         }
@@ -101,7 +112,7 @@ impl Win {
             Self::About => Some("adi-new-ui-window-about"),
             Self::Chat => Some("adi-new-ui-window-chat"),
             Self::Device => Some("adi-new-ui-window-device"),
-            Self::App(_) => None,
+            Self::App(_) | Self::Talk(_) => None,
         }
     }
 
@@ -111,7 +122,7 @@ impl Win {
         match self {
             Self::Settings => 480,
             Self::About => 320,
-            Self::Chat => 760,
+            Self::Chat | Self::Talk(_) => 760,
             Self::Device => 420,
             Self::App(_) => 1024,
         }
@@ -122,7 +133,7 @@ impl Win {
         match self {
             Self::Settings => (380.0, 240.0),
             Self::About => (280.0, 200.0),
-            Self::Chat => (420.0, 320.0),
+            Self::Chat | Self::Talk(_) => (420.0, 320.0),
             Self::Device => (320.0, 240.0),
             Self::App(_) => (480.0, 320.0),
         }
@@ -133,7 +144,7 @@ impl Win {
         match self {
             Self::Settings => "adi-new-ui-window-settings-size",
             Self::About => "adi-new-ui-window-about-size",
-            Self::Chat => "adi-new-ui-window-chat-size",
+            Self::Chat | Self::Talk(_) => "adi-new-ui-window-chat-size",
             Self::Device => "adi-new-ui-window-device-size",
             Self::App(_) => APP_SIZE_KEY,
         }
@@ -149,6 +160,8 @@ enum Place {
     Device(String),
     /// An app, by its [`AppRef::key`].
     App(String),
+    /// One conversation, by its agent and run.
+    Talk(String, String),
 }
 
 impl Place {
@@ -171,6 +184,9 @@ impl Place {
         }
         if let Some(key) = named(APPS) {
             return Some(Self::App(key));
+        }
+        if let Some((agent, run)) = named(CHAT).as_deref().and_then(|k| k.split_once('/')) {
+            return Some(Self::Talk(agent.to_string(), run.to_string()));
         }
         match path {
             "/settings" => Some(Self::Settings),
@@ -199,6 +215,16 @@ pub(super) struct AppRef {
     pub(super) icon: Option<String>,
 }
 
+/// The conversation a chat window is pinned to.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChatRef {
+    pub(super) agent: String,
+    pub(super) run: String,
+    /// What its title bar says — the conversation's own title, as the list it came from had it.
+    #[serde(default)]
+    pub(super) title: String,
+}
+
 /// The open windows and their order.
 #[derive(Clone, Copy)]
 pub(super) struct Desk {
@@ -208,6 +234,8 @@ pub(super) struct Desk {
     pub(super) device: RwSignal<Option<String>>,
     /// The apps open in windows, in the order they were opened, each with its window's number.
     pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
+    /// The conversations open in windows of their own, in the order they were opened.
+    pub(super) chats: RwSignal<Vec<(u32, ChatRef)>>,
     /// Where the window being dragged will snap if it is let go now — drawn as an outline by
     /// [`SnapPreview`].
     preview: RwSignal<Option<Snap>>,
@@ -232,15 +260,22 @@ impl Desk {
             .unwrap_or_default();
         // The two are saved one after the other, so either can outlive the other by a write: a
         // window is only kept when both still know it.
+        let mut chats: Vec<(u32, ChatRef)> = ui::storage()
+            .and_then(|s| s.get_item(CHATS_KEY).ok().flatten())
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
         stack.retain(|w| match w {
             Win::App(id) => apps.iter().any(|(a, _)| a == id),
+            Win::Talk(id) => chats.iter().any(|(c, _)| c == id),
             _ => true,
         });
         apps.retain(|(id, _)| stack.contains(&Win::App(*id)));
+        chats.retain(|(id, _)| stack.contains(&Win::Talk(*id)));
         let desk = Self {
             stack: RwSignal::new(stack),
             device: RwSignal::new(device),
             apps: RwSignal::new(apps),
+            chats: RwSignal::new(chats),
             preview: RwSignal::new(None),
             dragging: RwSignal::new(false),
         };
@@ -266,6 +301,19 @@ impl Desk {
                     self.raise(Win::App(id));
                 }
             }
+            // A conversation's address says everything its window needs, so it opens one even
+            // when none is open — a link to a chat is a chat.
+            Some(Place::Talk(agent, run)) => {
+                let id = self.chat_id(&agent, &run);
+                let id = id.unwrap_or_else(|| {
+                    self.add_chat(ChatRef {
+                        agent,
+                        run,
+                        title: String::new(),
+                    })
+                });
+                self.raise(Win::Talk(id));
+            }
             None => {}
         }
     }
@@ -282,6 +330,57 @@ impl Desk {
             id
         });
         self.open(Win::App(id));
+    }
+
+    /// Open an app in a window of its own even when it already has one — the menu's "Open in new
+    /// window", as a browser opens a second window on the same site.
+    pub(super) fn open_app_new(self, app: AppRef) {
+        let id = self
+            .apps
+            .with_untracked(|a| a.iter().map(|(id, _)| *id).max().map_or(0, |m| m + 1));
+        self.apps.update(|a| a.push((id, app)));
+        self.save_apps();
+        self.open(Win::App(id));
+    }
+
+    /// Open one conversation in a window of its own, or bring its window forward when it has one.
+    pub(super) fn open_chat(self, chat: ChatRef) {
+        let id = self
+            .chat_id(&chat.agent, &chat.run)
+            .unwrap_or_else(|| self.add_chat(chat));
+        self.open(Win::Talk(id));
+    }
+
+    fn add_chat(self, chat: ChatRef) -> u32 {
+        let id = self
+            .chats
+            .with_untracked(|c| c.iter().map(|(id, _)| *id).max().map_or(0, |m| m + 1));
+        self.chats.update(|c| c.push((id, chat)));
+        self.save_chats();
+        id
+    }
+
+    fn chat_id(self, agent: &str, run: &str) -> Option<u32> {
+        self.chats.with_untracked(|c| {
+            c.iter()
+                .find(|(_, x)| x.agent == agent && x.run == run)
+                .map(|(id, _)| *id)
+        })
+    }
+
+    /// The conversation a chat window shows — tracked.
+    pub(super) fn chat(self, id: u32) -> Option<ChatRef> {
+        self.chats
+            .with(|c| c.iter().find(|(i, _)| *i == id).map(|(_, x)| x.clone()))
+    }
+
+    fn save_chats(self) {
+        if let (Some(s), Ok(json)) = (
+            ui::storage(),
+            serde_json::to_string(&self.chats.get_untracked()),
+        ) {
+            let _ = s.set_item(CHATS_KEY, &json);
+        }
     }
 
     fn app_id(self, key: &str) -> Option<u32> {
@@ -332,6 +431,13 @@ impl Desk {
                 Some(m) => format!("{} — {m}", a.name),
                 None => a.name,
             }),
+            Win::Talk(id) => self.chat(id).map(|c| {
+                if c.title.is_empty() {
+                    c.agent
+                } else {
+                    format!("{} — {}", c.title, c.agent)
+                }
+            }),
             Win::Settings | Win::About | Win::Chat => None,
         }
         .unwrap_or_else(|| w.title().to_string())
@@ -345,6 +451,11 @@ impl Desk {
                 a.iter()
                     .find(|(i, _)| *i == id)
                     .map(|(_, app)| app.key.clone())
+            }),
+            Win::Talk(id) => self.chats.with_untracked(|c| {
+                c.iter()
+                    .find(|(i, _)| *i == id)
+                    .map(|(_, x)| format!("{}/{}", x.agent, x.run))
             }),
             Win::Settings | Win::About | Win::Chat => None,
         };
@@ -384,6 +495,10 @@ impl Desk {
         if let Win::App(id) = w {
             self.apps.update(|a| a.retain(|(i, _)| *i != id));
             self.save_apps();
+        }
+        if let Win::Talk(id) = w {
+            self.chats.update(|c| c.retain(|(i, _)| *i != id));
+            self.save_chats();
         }
         self.show_address(false);
     }

@@ -1,20 +1,27 @@
-// `<adi-chat>` — a chat window, whole: pick an agent and a conversation, read it as it streams,
-// answer it. Plain JavaScript over the panel's own agent API, so it works anywhere the panel's
-// `/api` answers — the new UI's chat window, the old chat, a page an agent writes.
+// `<adi-chat>` — a chat window, whole: pick an agent, pick one of its conversations, read it as it
+// streams, answer it. Plain JavaScript over the panel's own agent API, so it works anywhere the
+// panel's `/api` answers — the new UI's chat windows, the old chat, a widget, a page an agent writes.
 //
-//   <adi-chat picker></adi-chat>                          agent + conversation pickers above it
+//   <adi-chat picker windows></adi-chat>                    agent → its chats → one chat
 //   <adi-chat agent="adi-agent" run="1790…-0000"></adi-chat>   one conversation, no chrome
 //
+// With `picker` the window moves in two steps. First the agent — the picker lists what the old
+// chat's does: starred agents only (and whichever is open), the root agent first, a ● before one
+// that is running — and under it every conversation it has, newest first. Then, a conversation
+// opened, the window is fixed on it: the bar says which, and its one way out is back to the list.
+//
 // Attributes:
-//   agent     which agent. Without it the window opens on `adi-agent`, or the first there is.
-//   run       which conversation; `new` for a fresh one. Without it, the one this browser last had
-//             open with that agent, else its newest.
-//   picker    draw the agent and conversation pickers.
+//   agent     which agent. Without it the one this browser last picked, else `adi-agent`.
+//   run       which conversation; `new` for a fresh one. Without it, the list (`picker`), or the
+//             agent's newest (no `picker`).
+//   picker    the agent picker and the conversation list.
+//   windows   the host can open a conversation in a window of its own: the list's right-click
+//             menu offers "Open in new window", and the choice arrives as `open-window`.
 //   api       where the panel answers, for a paired machine (`http://<node>.node.adi`). Default: this
 //             page's own origin.
 //
-// Events: `open` `{ agent, run }` whenever the conversation shown changes — a host that keeps the
-// choice in its URL listens for this.
+// Events: `open` `{ agent, run }` whenever the conversation shown changes; `open-window`
+// `{ agent, run, title }` when a conversation is asked for in a window of its own.
 //
 // # How it reads
 //
@@ -134,6 +141,23 @@ function platformNote(turn) {
   return null;
 }
 
+/** A conversation's name in a list: its title, else the first line it was opened with. */
+function titleOf(run) {
+  if (!run) return "Conversation";
+  const line = (run.title || run.message?.split("\n").find((l) => l.trim()) || "Conversation").trim();
+  return line.length > 80 ? `${line.slice(0, 80)}…` : line;
+}
+
+/** How long ago, in the coarsest unit that still says something: `40s ago`, `12m ago`, `3h ago`. */
+function ago(ms) {
+  if (!ms) return "";
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
 class AdiChat extends AdiElement {
   static observedAttributes = ["agent", "run", "picker", "api"];
 
@@ -173,6 +197,40 @@ class AdiChat extends AdiElement {
     .explain { font-size: var(--fs-label); color: var(--ink-3); }
     .note { min-height: 0; font-size: var(--fs-label); color: var(--ink-3); }
     .note:empty { display: none; }
+    .crumb { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1; }
+    .crumb[hidden], .pick[hidden] { display: none; }
+    .back { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 4px;
+      border-radius: var(--r); font-size: var(--fs-small); color: var(--ink-2);
+      transition: background var(--transition), color var(--transition); }
+    .back:hover { background: var(--bg-hover); color: var(--ink); }
+    .crumb .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: var(--fs-ui-sm); font-weight: 500; }
+    .pick { display: flex; align-items: center; gap: var(--s2); flex: 1; min-width: 0; }
+    .pickhint { font-size: var(--fs-small); color: var(--ink-3); }
+    .pickhint:empty { display: none; }
+    .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .chat[hidden], .list[hidden] { display: none; }
+    .list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s3) var(--s2); }
+    .fresh { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
+      font-size: var(--fs-ui-sm); color: var(--ink-2); transition: background var(--transition), color var(--transition); }
+    .fresh:hover { background: var(--bg-hover); color: var(--ink); }
+    .rows { display: flex; flex-direction: column; margin-top: var(--s2); }
+    .row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
+      text-align: left; transition: background var(--transition); }
+    .row:hover { background: var(--bg-hover); }
+    .row .text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+    .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-ui-sm); color: var(--ink); }
+    .row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-label); color: var(--ink-3); }
+    .row .star { flex: none; color: var(--ink-3); }
+    .live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+    .none { padding: 7px 8px; font-size: var(--fs-small); color: var(--ink-3); }
+    :host { position: relative; }
+    .menu { position: absolute; z-index: 20; min-width: 168px; padding: 4px; border: 1px solid var(--line-strong);
+      border-radius: var(--r-lg); background: var(--bg-raise); }
+    .menu[hidden] { display: none; }
+    .menu button { display: block; width: 100%; padding: 6px 8px; border-radius: var(--r); text-align: left;
+      font-size: var(--fs-ui-sm); color: var(--ink); }
+    .menu button:hover { background: var(--bg-hover); }
     .error { flex: none; margin: 0; padding: var(--s2) var(--s4); font-size: var(--fs-small); color: var(--err); }
     .error:empty { display: none; }
     adi-transcript { flex: 1; min-height: 0; padding: var(--s4); }
@@ -212,15 +270,33 @@ class AdiChat extends AdiElement {
   #files = [];
   /** Whether the last read had a turn running — its end is when goals are worth re-reading. */
   #wasRunning = false;
+  #runsDrawn = "";
+  /** `list` — an agent's conversations — or `chat`, one of them. */
+  #mode = "list";
   /** Bumped on every switch, so an answer for a conversation the window has left is dropped. */
   #epoch = 0;
 
   template() {
     return `
       <div class="bar" part="bar" hidden>
-        <select class="agent" aria-label="Agent"></select>
-        <select class="conv" aria-label="Conversation"></select>
+        <div class="pick">
+          <select class="agent" aria-label="Agent"
+            title="which agent this chat runs on — starred agents only"></select>
+          <span class="pickhint"></span>
+        </div>
+        <div class="crumb" hidden>
+          <button class="back" type="button" title="Every conversation with this agent">
+            <adi-icon name="chevron-left" size="16"></adi-icon><span class="to"></span>
+          </button>
+          <span class="title"></span>
+        </div>
       </div>
+      <div class="list" hidden>
+        <button class="fresh" type="button"><adi-icon name="message-square-plus" size="16"></adi-icon>New conversation</button>
+        <div class="rows" role="list"></div>
+      </div>
+      <div class="menu" role="menu" hidden></div>
+      <div class="chat">
       <div class="top" hidden>
         <div class="goals"></div>
         <div class="awaits"></div>
@@ -236,12 +312,22 @@ class AdiChat extends AdiElement {
           <button class="earlier" type="button" hidden></button>
         </div>
       </adi-transcript>
+      </div>
     `;
   }
 
   setup() {
-    this.$(".agent").addEventListener("change", (e) => this.#openAgent(e.target.value, undefined));
-    this.$(".conv").addEventListener("change", (e) => this.#openRun(e.target.value || null));
+    this.$(".agent").addEventListener("change", (e) => {
+      localStorage.setItem("adi-chat:agent", e.target.value);
+      this.#openAgent(e.target.value, undefined);
+    });
+    this.$(".back").addEventListener("click", () => this.#showList());
+    this.$(".fresh").addEventListener("click", () => this.#openRun(null));
+    // Any click anywhere closes the menu, the one that chose from it included.
+    this.shadowRoot.addEventListener("click", () => (this.$(".menu").hidden = true));
+    this.addEventListener("contextmenu", (ev) => {
+      if (!ev.composedPath().some((n) => n.classList?.contains("row"))) this.$(".menu").hidden = true;
+    });
     const composer = this.$("adi-composer");
     composer.addEventListener("send", (e) => this.#say(e.detail.text, "regular"));
     composer.addEventListener("asap", (e) => this.#say(e.detail.text, "asap"));
@@ -283,7 +369,11 @@ class AdiChat extends AdiElement {
   }
 
   update() {
-    this.$(".bar").hidden = !this.hasAttribute("picker");
+    const picker = this.hasAttribute("picker");
+    this.$(".bar").hidden = !picker;
+    // Without a picker there is no list to be on: the element is the conversation it was given.
+    if (!picker) this.#mode = "chat";
+    this.#drawMode();
     this.$("adi-mic").setAttribute("api", this.attr("api"));
   }
 
@@ -319,20 +409,11 @@ class AdiChat extends AdiElement {
   async #start() {
     try {
       const { agents } = await this.#call("/agents");
-      this.#agents = (agents ?? []).slice().sort(
-        (a, b) => Number(a.name !== ROOT_AGENT) - Number(b.name !== ROOT_AGENT) || a.name.localeCompare(b.name),
-      );
-      const select = this.$(".agent");
-      select.replaceChildren(
-        ...this.#agents.map((a) => {
-          const o = document.createElement("option");
-          o.value = a.name;
-          o.textContent = a.name;
-          return o;
-        }),
-      );
-      const wanted = this.getAttribute("agent");
-      const name = this.#agents.some((a) => a.name === wanted) ? wanted : this.#agents[0]?.name;
+      this.#agents = agents ?? [];
+      const wanted = this.getAttribute("agent") || localStorage.getItem("adi-chat:agent") || ROOT_AGENT;
+      const name = this.#agents.some((a) => a.name === wanted)
+        ? wanted
+        : (this.#agents.find((a) => a.name === ROOT_AGENT) ?? this.#agents[0])?.name;
       if (!name) {
         this.$(".empty").textContent = "No agents on this machine yet.";
         return;
@@ -343,9 +424,31 @@ class AdiChat extends AdiElement {
     }
   }
 
+  /**
+   * The agent picker, as the old chat's (`chat_agent_picker`): starred agents, and whichever is
+   * open whether starred or not; the root agent first and the rest in the order they came; a ●
+   * before one that is running, since an option carries no markup for a dot.
+   */
+  #drawAgents() {
+    const options = this.#agents.filter((a) => a.starred || a.name === this.#agent);
+    options.sort((a, b) => Number(a.name !== ROOT_AGENT) - Number(b.name !== ROOT_AGENT));
+    const select = this.$(".agent");
+    select.replaceChildren(
+      ...options.map((a) => {
+        const o = document.createElement("option");
+        o.value = a.name;
+        o.textContent = a.running ? `\u25CF ${a.name}` : a.name;
+        return o;
+      }),
+    );
+    select.value = this.#agent ?? "";
+    select.hidden = !options.length;
+    this.$(".pickhint").textContent = options.length ? "" : "No starred agents";
+  }
+
   async #openAgent(name, run) {
     this.#agent = name;
-    this.$(".agent").value = name;
+    this.#drawAgents();
     this.#epoch += 1;
     const epoch = this.#epoch;
     try {
@@ -357,16 +460,44 @@ class AdiChat extends AdiElement {
     } catch (err) {
       this.#fail(err);
     }
-    let target = run === "new" ? null : run;
-    if (run === undefined || run === null) {
-      const saved = localStorage.getItem(`adi-chat:${name}`);
-      target = this.#runs.some((r) => r.run_id === saved) ? saved : (this.#runs[0]?.run_id ?? null);
+    if (run === "new") return this.#openRun(null);
+    if (run) return this.#openRun(run);
+    // No conversation named: with a picker, the list of them is the answer; without one there is
+    // nothing to choose with, so the newest.
+    if (this.hasAttribute("picker")) return this.#showList();
+    this.#openRun(this.#runs[0]?.run_id ?? null);
+  }
+
+  /** Back to the agent's conversations — the window lets go of the one it was fixed on. */
+  #showList() {
+    this.#epoch += 1;
+    this.#mode = "list";
+    this.#run = null;
+    this.#peek = null;
+    this.$("adi-transcript").entries = [];
+    this.emit("open", { agent: this.#agent, run: null });
+    this.#drawMode();
+    this.#drawRuns();
+    this.#tick();
+  }
+
+  #drawMode() {
+    const list = this.#mode === "list";
+    this.$(".list").hidden = !list;
+    this.$(".chat").hidden = list;
+    this.$(".pick").hidden = !list;
+    this.$(".crumb").hidden = list;
+    if (!list) {
+      const run = this.#runs.find((r) => r.run_id === this.#run);
+      this.$(".crumb .title").textContent = this.#run ? titleOf(run) : "New conversation";
+      this.$(".crumb .to").textContent = this.#agent ?? "";
     }
-    this.#openRun(target);
   }
 
   #openRun(run) {
     this.#epoch += 1;
+    this.#mode = "chat";
+    this.$(".menu").hidden = true;
     this.#run = run;
     this.#peek = null;
     this.#limit = PAGE;
@@ -374,31 +505,71 @@ class AdiChat extends AdiElement {
     this.#goals = [];
     this.#goalEditor = null;
     this.#loadGoals();
-    this.$(".conv").value = run ?? "";
     this.$(".error").textContent = "";
-    if (this.#agent) localStorage.setItem(`adi-chat:${this.#agent}`, run ?? "");
     this.$("adi-transcript").entries = [];
+    this.#drawMode();
     this.emit("open", { agent: this.#agent, run });
     this.#draw();
     this.#tick();
   }
 
+  /** The agent's conversations, newest first — the list a window is on before it opens one. */
   #drawRuns() {
-    const select = this.$(".conv");
-    const fresh = document.createElement("option");
-    fresh.value = "";
-    fresh.textContent = "New conversation";
-    select.replaceChildren(
-      fresh,
+    const box = this.$(".rows");
+    if (!this.#runs.length) {
+      box.innerHTML = `<div class="none">No conversations with this agent yet.</div>`;
+      return;
+    }
+    const sig = JSON.stringify(this.#runs.map((r) => [r.run_id, r.title, r.running, r.starred, r.last_activity]));
+    if (sig === this.#runsDrawn) return;
+    this.#runsDrawn = sig;
+    box.replaceChildren(
       ...this.#runs.map((r) => {
-        const o = document.createElement("option");
-        o.value = r.run_id;
-        const line = (r.title || r.message.split("\n").find((l) => l.trim()) || "Conversation").trim();
-        o.textContent = line.length > 70 ? `${line.slice(0, 70)}…` : line;
-        return o;
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "row";
+        row.setAttribute("role", "listitem");
+        row.innerHTML = `${r.running ? `<span class="live" aria-label="running"></span>` : ""}
+          <span class="text"><span class="name"></span><span class="meta"></span></span>
+          ${r.starred ? `<adi-icon class="star" name="star" size="14" label="Starred"></adi-icon>` : ""}`;
+        row.querySelector(".name").textContent = titleOf(r);
+        row.querySelector(".meta").textContent = r.running ? "working" : ago(r.last_activity || r.started_at);
+        row.addEventListener("click", () => this.#openRun(r.run_id));
+        row.addEventListener("contextmenu", (ev) => {
+          ev.preventDefault();
+          this.#menu(ev, r);
+        });
+        return row;
       }),
     );
-    select.value = this.#run ?? "";
+  }
+
+  /** A conversation's right-click menu: open it here, or — where the host has windows — in one of its own. */
+  #menu(ev, run) {
+    const menu = this.$(".menu");
+    menu.replaceChildren();
+    const item = (label, act) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.textContent = label;
+      b.addEventListener("click", act);
+      menu.append(b);
+    };
+    item("Open", () => this.#openRun(run.run_id));
+    if (this.hasAttribute("windows")) {
+      item("Open in new window", () =>
+        this.emit("open-window", { agent: this.#agent, run: run.run_id, title: titleOf(run) }),
+      );
+    }
+    // Placed against this element rather than the screen: a host that is itself a blurred window
+    // is the containing block of anything fixed inside it, and the menu would land beside the click.
+    const box = this.getBoundingClientRect();
+    menu.hidden = false;
+    const x = Math.min(ev.clientX - box.left, box.width - menu.offsetWidth - 4);
+    const y = Math.min(ev.clientY - box.top, box.height - menu.offsetHeight - 4);
+    menu.style.left = `${Math.max(4, x)}px`;
+    menu.style.top = `${Math.max(4, y)}px`;
   }
 
   // ---- polling ----------------------------------------------------------------------------
@@ -407,7 +578,19 @@ class AdiChat extends AdiElement {
     window.clearTimeout(this.#timer);
     if (!this.#live) return;
     const epoch = this.#epoch;
-    if (this.#run && this.#agent) {
+    // On the list, the list is what moves: a conversation starts, another finishes.
+    if (this.#mode === "list" && this.#agent) {
+      try {
+        const res = await this.#call("/agents/runs", { name: this.#agent });
+        if (epoch !== this.#epoch) return;
+        this.#runs = (res.runs ?? []).filter((r) => !r.hidden);
+        this.#runs.sort((a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at));
+        this.#drawRuns();
+      } catch {
+        // The next tick asks again.
+      }
+    }
+    if (this.#mode === "chat" && this.#run && this.#agent) {
       try {
         const peek = await this.#call("/agents/run/peek", { name: this.#agent, run_id: this.#run, ...this.#view() });
         if (epoch !== this.#epoch) return;

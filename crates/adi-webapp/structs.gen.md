@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-95 structs · 33 enums · 5 type aliases across 42 files.
+96 structs · 33 enums · 5 type aliases across 42 files.
 
 ## Index
 
@@ -21,7 +21,7 @@
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
 - [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
-- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Snap`, `Gesture`, `Edge`
+- [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `ChatRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
 - [`src/pages/agents/mod.rs`](#srcpagesagentsmodrs) — `AgentsFilter`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
@@ -532,6 +532,7 @@ pub(super) enum Win {
     Chat,
     Device,
     App(u32),
+    Talk(u32),
 }
 ```
 
@@ -546,6 +547,7 @@ enum Place {
     Chat,
     Device(String),
     App(String),
+    Talk(String, String),
 }
 ```
 
@@ -567,6 +569,20 @@ pub(super) struct AppRef {
 }
 ```
 
+### struct `ChatRef`
+
+The conversation a chat window is pinned to.
+
+```rust
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub(super) struct ChatRef {
+    pub(super) agent: String,
+    pub(super) run: String,
+    #[serde(default)]
+    pub(super) title: String,
+}
+```
+
 ### struct `Desk`
 
 The open windows and their order.
@@ -577,6 +593,7 @@ pub(super) struct Desk {
     stack: RwSignal<Vec<Win>>,
     pub(super) device: RwSignal<Option<String>>,
     pub(super) apps: RwSignal<Vec<(u32, AppRef)>>,
+    pub(super) chats: RwSignal<Vec<(u32, ChatRef)>>,
     preview: RwSignal<Option<Snap>>,
     pub(super) dragging: RwSignal<bool>,
 }

@@ -30,9 +30,9 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use adi_ui::{Icon, IconSize, Lucide};
+use adi_ui::{Icon, IconSize, Lucide, Menu, MenuAt, MenuItem};
 use adi_webapp_api::types::{Dashboard, FleetDashboards, NodeDashboard, NodeDashboards};
-use leptos::{ev, prelude::*};
+use leptos::{ev, portal::Portal, prelude::*};
 
 use super::cache;
 use super::widgets::{self, AppWidget, Declared, Size};
@@ -421,6 +421,8 @@ fn half(apps: Apps) -> Option<(String, String)> {
 pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) -> impl IntoView {
     let items = Memo::new(move |_| items(apps));
     let half = Memo::new(move |_| half(apps));
+    // One menu for the whole grid — the app a tile was right-clicked on, and where.
+    let menu: RwSignal<Option<(MenuAt, AppRef)>> = RwSignal::new(None);
     view! {
         <div class="adi-new-home" class:has-half=move || half.with(Option::is_some)>
         <Show when=move || items.with(|i| !i.is_empty())>
@@ -436,7 +438,7 @@ pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) ->
                             let size = if size == Size::Half { Size::Large } else { size };
                             view! { <AppWidget name url size light/> }.into_any()
                         }
-                        Item::Tile(t) => tile(apps, desk, t),
+                        Item::Tile(t) => tile(apps, desk, menu, t),
                     }}
                 </For>
             </nav>
@@ -445,6 +447,7 @@ pub(super) fn Home(apps: Apps, desk: Desk, #[prop(into)] light: Signal<bool>) ->
         {move || half.get().map(|(name, url)| view! {
             <AppWidget name url size=Size::Half light/>
         })}
+        {move || menu.get().map(|(at, app)| tile_menu(desk, menu, at, app, light.get_untracked()))}
         </div>
     }
 }
@@ -508,7 +511,45 @@ pub(super) fn AppMark(
     }
 }
 
-fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
+/// A tile's right-click menu: open the app — in its window, or in a new one beside it.
+///
+/// Out of the grid into the body, as the devices drop-down is: the home screen sits under blurred
+/// surfaces, and a fixed menu inside one of them is placed against it rather than the screen.
+fn tile_menu(
+    desk: Desk,
+    menu: RwSignal<Option<(MenuAt, AppRef)>>,
+    at: MenuAt,
+    app: AppRef,
+    light: bool,
+) -> AnyView {
+    let again = app.clone();
+    // Built outside the portal: its children are drawn by a closure that may run more than once,
+    // so what they capture has to be `Copy`, and a callback is.
+    let open = Callback::new(move |()| {
+        menu.set(None);
+        desk.open_app(app.clone());
+    });
+    let fresh = Callback::new(move |()| {
+        menu.set(None);
+        desk.open_app_new(again.clone());
+    });
+    let class = if light { "light" } else { "" };
+    view! {
+        <Portal>
+            <Menu
+                at=Signal::derive(move || Some(at))
+                on_dismiss=Callback::new(move |()| menu.set(None))
+                class=class
+            >
+                <MenuItem on_select=open>"Open"</MenuItem>
+                <MenuItem on_select=fresh>"Open in new window"</MenuItem>
+            </Menu>
+        </Portal>
+    }
+    .into_any()
+}
+
+fn tile(apps: Apps, desk: Desk, menu: RwSignal<Option<(MenuAt, AppRef)>>, t: Tile) -> AnyView {
     let Tile {
         key,
         id,
@@ -534,6 +575,7 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
         };
         // Opens in the app window. Still a real link to the app underneath, so a modified or
         // middle click does what it does on any link — a tab of its own — and is left alone.
+        let for_menu = app.clone();
         return view! {
             <a
                 class="adi-new-app"
@@ -541,6 +583,10 @@ fn tile(apps: Apps, desk: Desk, t: Tile) -> AnyView {
                 target="_blank"
                 rel="noopener"
                 title=note
+                on:contextmenu=move |ev: ev::MouseEvent| {
+                    ev.prevent_default();
+                    menu.set(Some((MenuAt::Point(ev.client_x(), ev.client_y()), for_menu.clone())));
+                }
                 on:click=move |ev: ev::MouseEvent| {
                     if ev.button() == 0
                         && !(ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.alt_key())
