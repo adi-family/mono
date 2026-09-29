@@ -34,6 +34,11 @@ tailwindcss = "4.2.1"
 [serve]
 addresses = ["127.0.0.1"]
 port = 9080
+# Revalidate everything, every load. Trunk sends `Last-Modified` and no `Cache-Control`, which lets
+# a browser reuse a file it holds without asking — harmless for the hashed wasm and CSS, but the
+# element files (`/elements/*.js`, copied unhashed) are an ES module graph, and a stale
+# `adi-elements.js` over a new tree registers none of the new tags: `<adi-chat>` drew as nothing.
+headers = { "cache-control" = "no-cache" }
 
 [[proxy]]
 rewrite = "/api/"
