@@ -547,7 +547,7 @@ enum Place {
     Chat,
     Device(String),
     App(String),
-    Talk(String, String),
+    Talk(Option<String>, String, String),
 }
 ```
 
@@ -576,6 +576,8 @@ The conversation a chat window is pinned to.
 ```rust
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct ChatRef {
+    #[serde(default)]
+    pub(super) node: Option<String>,
     pub(super) agent: String,
     pub(super) run: String,
     #[serde(default)]

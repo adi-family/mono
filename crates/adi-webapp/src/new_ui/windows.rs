@@ -35,7 +35,8 @@ const APPS: &str = "/apps";
 const CHATS_KEY: &str = "adi-new-ui-chats";
 
 /// Where the chat windows' address starts: `/chat` alone is the chat window with its pickers,
-/// `/chat/<agent>/<run>` one conversation in a window of its own.
+/// `/chat/<agent>/<run>` one conversation in a window of its own — `/chat/<node>/<agent>/<run>` when
+/// it is on a paired machine.
 const CHAT: &str = "/chat";
 
 /// Where every app window's size is kept once one is resized: a new app opens at the size the
@@ -160,8 +161,8 @@ enum Place {
     Device(String),
     /// An app, by its [`AppRef::key`].
     App(String),
-    /// One conversation, by its agent and run.
-    Talk(String, String),
+    /// One conversation, by its machine (`None` for this one), agent and run.
+    Talk(Option<String>, String, String),
 }
 
 impl Place {
@@ -185,8 +186,13 @@ impl Place {
         if let Some(key) = named(APPS) {
             return Some(Self::App(key));
         }
-        if let Some((agent, run)) = named(CHAT).as_deref().and_then(|k| k.split_once('/')) {
-            return Some(Self::Talk(agent.to_string(), run.to_string()));
+        if let Some(key) = named(CHAT) {
+            let parts: Vec<&str> = key.split('/').collect();
+            return match parts[..] {
+                [agent, run] => Some(Self::Talk(None, agent.into(), run.into())),
+                [node, agent, run] => Some(Self::Talk(Some(node.into()), agent.into(), run.into())),
+                _ => None,
+            };
         }
         match path {
             "/settings" => Some(Self::Settings),
@@ -218,6 +224,9 @@ pub(super) struct AppRef {
 /// The conversation a chat window is pinned to.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct ChatRef {
+    /// The paired machine the agent is on; `None` for this one.
+    #[serde(default)]
+    pub(super) node: Option<String>,
     pub(super) agent: String,
     pub(super) run: String,
     /// What its title bar says — the conversation's own title, as the list it came from had it.
@@ -303,10 +312,11 @@ impl Desk {
             }
             // A conversation's address says everything its window needs, so it opens one even
             // when none is open — a link to a chat is a chat.
-            Some(Place::Talk(agent, run)) => {
-                let id = self.chat_id(&agent, &run);
+            Some(Place::Talk(node, agent, run)) => {
+                let id = self.chat_id(node.as_deref(), &agent, &run);
                 let id = id.unwrap_or_else(|| {
                     self.add_chat(ChatRef {
+                        node,
                         agent,
                         run,
                         title: String::new(),
@@ -346,7 +356,7 @@ impl Desk {
     /// Open one conversation in a window of its own, or bring its window forward when it has one.
     pub(super) fn open_chat(self, chat: ChatRef) {
         let id = self
-            .chat_id(&chat.agent, &chat.run)
+            .chat_id(chat.node.as_deref(), &chat.agent, &chat.run)
             .unwrap_or_else(|| self.add_chat(chat));
         self.open(Win::Talk(id));
     }
@@ -360,10 +370,10 @@ impl Desk {
         id
     }
 
-    fn chat_id(self, agent: &str, run: &str) -> Option<u32> {
+    fn chat_id(self, node: Option<&str>, agent: &str, run: &str) -> Option<u32> {
         self.chats.with_untracked(|c| {
             c.iter()
-                .find(|(_, x)| x.agent == agent && x.run == run)
+                .find(|(_, x)| x.node.as_deref() == node && x.agent == agent && x.run == run)
                 .map(|(id, _)| *id)
         })
     }
@@ -432,10 +442,14 @@ impl Desk {
                 None => a.name,
             }),
             Win::Talk(id) => self.chat(id).map(|c| {
+                let who = match &c.node {
+                    Some(n) => format!("{} on {n}", c.agent),
+                    None => c.agent,
+                };
                 if c.title.is_empty() {
-                    c.agent
+                    who
                 } else {
-                    format!("{} — {}", c.title, c.agent)
+                    format!("{} — {who}", c.title)
                 }
             }),
             Win::Settings | Win::About | Win::Chat => None,
@@ -455,7 +469,10 @@ impl Desk {
             Win::Talk(id) => self.chats.with_untracked(|c| {
                 c.iter()
                     .find(|(i, _)| *i == id)
-                    .map(|(_, x)| format!("{}/{}", x.agent, x.run))
+                    .map(|(_, x)| match &x.node {
+                        Some(n) => format!("{n}/{}/{}", x.agent, x.run),
+                        None => format!("{}/{}", x.agent, x.run),
+                    })
             }),
             Win::Settings | Win::About | Win::Chat => None,
         };

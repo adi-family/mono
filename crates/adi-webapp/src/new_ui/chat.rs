@@ -4,7 +4,8 @@
 //!
 //! - [`Chat`], at `/chat`: pick an agent, then one of its conversations. Its list's right-click
 //!   "Open in new window" asks for a [`Pinned`] one, which the desk opens.
-//! - [`Pinned`], at `/chat/<agent>/<run>`: one conversation and nothing else, as many as are open.
+//! - [`Pinned`], at `/chat/[<node>/]<agent>/<run>`: one conversation and nothing else, as many as
+//!   are open.
 
 use leptos::prelude::*;
 use wasm_bindgen::{JsCast, JsValue};
@@ -35,13 +36,19 @@ pub(super) fn Pinned(desk: Desk, id: u32) -> impl IntoView {
     view! {
         <div class="adi-new-chat">
             {move || desk.chat(id).map(|c| view! {
-                <adi-chat class="adi-new-chat__body" agent=c.agent run=c.run></adi-chat>
+                <adi-chat
+                    class="adi-new-chat__body"
+                    node=c.node.unwrap_or_default()
+                    agent=c.agent
+                    run=c.run
+                ></adi-chat>
             })}
         </div>
     }
 }
 
-/// The conversation an `open-window` event names: `{ agent, run, title }` in its detail.
+/// The conversation an `open-window` event names: `{ node, agent, run, title }` in its detail —
+/// `node` null for this machine, which `as_string` reads as absent.
 fn chat_of(ev: &web_sys::Event) -> Option<ChatRef> {
     let detail = js_sys::Reflect::get(ev.unchecked_ref::<JsValue>(), &"detail".into()).ok()?;
     let field = |k: &str| {
@@ -50,6 +57,7 @@ fn chat_of(ev: &web_sys::Event) -> Option<ChatRef> {
             .and_then(|v| v.as_string())
     };
     Some(ChatRef {
+        node: field("node").filter(|n| !n.is_empty()),
         agent: field("agent")?,
         run: field("run")?,
         title: field("title").unwrap_or_default(),

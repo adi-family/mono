@@ -12,16 +12,20 @@
 //
 // Attributes:
 //   agent     which agent. Without it the one this browser last picked, else `adi-agent`.
+//   node      the paired machine that agent is on (`hetzner-adi`); absent for this one. Everything
+//             for it goes through this panel's `/api/node/<node>` forwarder.
 //   run       which conversation; `new` for a fresh one. Without it, the list (`picker`), or the
 //             agent's newest (no `picker`).
 //   picker    the agent picker and the conversation list.
 //   windows   the host can open a conversation in a window of its own: the list's right-click
 //             menu offers "Open in new window", and the choice arrives as `open-window`.
-//   api       where the panel answers, for a paired machine (`http://<node>.node.adi`). Default: this
-//             page's own origin.
+//   api       where the panel answers. Default: this page's own origin.
 //
-// Events: `open` `{ agent, run }` whenever the conversation shown changes; `open-window`
-// `{ agent, run, title }` when a conversation is asked for in a window of its own.
+// A picker lists this machine's agents and every unlocked paired machine's (`/api/fleet/nodes`),
+// grouped by machine as the old chat's picker groups them.
+//
+// Events: `open` `{ node, agent, run }` whenever the conversation shown changes; `open-window`
+// `{ node, agent, run, title }` when a conversation is asked for in a window of its own.
 //
 // # How it reads
 //
@@ -159,7 +163,7 @@ function ago(ms) {
 }
 
 class AdiChat extends AdiElement {
-  static observedAttributes = ["agent", "run", "picker", "api"];
+  static observedAttributes = ["agent", "run", "picker", "api", "node"];
 
   static sheet = sheet(`
     :host { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--ink); }
@@ -248,7 +252,10 @@ class AdiChat extends AdiElement {
     pre.log:empty { display: none; }
   `);
 
-  #agents = [];
+  /** Every machine's agents: `[{ node, agents }]`, this machine (`node: null`) first. */
+  #sources = [];
+  /** The paired machine the open agent is on; `null` for this one. */
+  #node = null;
   #runs = [];
   #agent = null;
   /** The open conversation; `null` is a new one, started by the next message. */
@@ -318,8 +325,9 @@ class AdiChat extends AdiElement {
 
   setup() {
     this.$(".agent").addEventListener("change", (e) => {
-      localStorage.setItem("adi-chat:agent", e.target.value);
-      this.#openAgent(e.target.value, undefined);
+      const [node, name] = JSON.parse(e.target.value);
+      localStorage.setItem("adi-chat:agent", JSON.stringify({ node, name }));
+      this.#openAgent(name, undefined, node);
     });
     this.$(".back").addEventListener("click", () => this.#showList());
     this.$(".fresh").addEventListener("click", () => this.#openRun(null));
@@ -363,7 +371,11 @@ class AdiChat extends AdiElement {
   attributeChangedCallback(name, old, value) {
     super.attributeChangedCallback();
     if (!this.#live || old === value) return;
-    if (name === "agent" && value && value !== this.#agent) this.#openAgent(value, this.getAttribute("run"));
+    if ((name === "agent" || name === "node") && this.getAttribute("agent")) {
+      const node = this.getAttribute("node") || null;
+      const agent = this.getAttribute("agent");
+      if (agent !== this.#agent || node !== this.#node) this.#openAgent(agent, this.getAttribute("run"), node);
+    }
     else if (name === "run" && this.#agent && (value || null) !== this.#run) this.#openRun(value === "new" ? null : value);
     else if (name === "api") this.#start();
   }
@@ -380,7 +392,7 @@ class AdiChat extends AdiElement {
   // ---- the wire ----------------------------------------------------------------------------
 
   async #call(path, payload) {
-    const res = await fetch(`${this.attr("api")}/api${path}`, {
+    const res = await fetch(`${this.#base()}/api${path}`, {
       method: payload === undefined ? "GET" : "POST",
       headers: payload === undefined ? {} : { "content-type": "application/json" },
       body: payload === undefined ? undefined : JSON.stringify(payload),
@@ -396,6 +408,11 @@ class AdiChat extends AdiElement {
     return data;
   }
 
+  /** Where the open agent's machine answers: this panel, or its forwarder to a paired one. */
+  #base() {
+    return `${this.attr("api")}${this.#node ? `/api/node/${encodeURIComponent(this.#node)}` : ""}`;
+  }
+
   #view() {
     return { limit: this.#limit, fold: true };
   }
@@ -408,46 +425,125 @@ class AdiChat extends AdiElement {
 
   async #start() {
     try {
-      const { agents } = await this.#call("/agents");
-      this.#agents = agents ?? [];
-      const wanted = this.getAttribute("agent") || localStorage.getItem("adi-chat:agent") || ROOT_AGENT;
-      const name = this.#agents.some((a) => a.name === wanted)
-        ? wanted
-        : (this.#agents.find((a) => a.name === ROOT_AGENT) ?? this.#agents[0])?.name;
+      const saved = this.#savedAgent();
+      const wanted = this.getAttribute("agent")
+        ? { node: this.getAttribute("node") || null, name: this.getAttribute("agent") }
+        : (saved ?? { node: null, name: ROOT_AGENT });
+      this.#node = wanted.node;
+      const local = await this.#readAgents(null);
+      this.#sources = [{ node: null, agents: local }];
+      let agents = local;
+      if (wanted.node) {
+        agents = await this.#readAgents(wanted.node).catch(() => []);
+        this.#sources.push({ node: wanted.node, agents });
+      }
+      let name = agents.some((a) => a.name === wanted.name) ? wanted.name : null;
+      if (!name) {
+        // What was asked for is not there — a machine gone, an agent deleted: this machine's root.
+        this.#node = null;
+        name = (local.find((a) => a.name === ROOT_AGENT) ?? local[0])?.name;
+      }
       if (!name) {
         this.$(".empty").textContent = "No agents on this machine yet.";
         return;
       }
-      await this.#openAgent(name, this.getAttribute("run"));
+      if (this.hasAttribute("picker")) this.#readFleet();
+      await this.#openAgent(name, this.getAttribute("run"), this.#node);
     } catch (err) {
       this.#fail(err);
     }
   }
 
-  /**
-   * The agent picker, as the old chat's (`chat_agent_picker`): starred agents, and whichever is
-   * open whether starred or not; the root agent first and the rest in the order they came; a ●
-   * before one that is running, since an option carries no markup for a dot.
-   */
-  #drawAgents() {
-    const options = this.#agents.filter((a) => a.starred || a.name === this.#agent);
-    options.sort((a, b) => Number(a.name !== ROOT_AGENT) - Number(b.name !== ROOT_AGENT));
-    const select = this.$(".agent");
-    select.replaceChildren(
-      ...options.map((a) => {
-        const o = document.createElement("option");
-        o.value = a.name;
-        o.textContent = a.running ? `\u25CF ${a.name}` : a.name;
-        return o;
-      }),
-    );
-    select.value = this.#agent ?? "";
-    select.hidden = !options.length;
-    this.$(".pickhint").textContent = options.length ? "" : "No starred agents";
+  /** One machine's agents — this one for `null`. */
+  async #readAgents(node) {
+    const base = `${this.attr("api")}${node ? `/api/node/${encodeURIComponent(node)}` : ""}`;
+    const res = await fetch(`${base}/api/agents`, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return (await res.json()).agents ?? [];
   }
 
-  async #openAgent(name, run) {
+  /**
+   * Every unlocked paired machine's agents, added to the picker as each answers. A locked machine
+   * asks for a login this window cannot give, and one that does not answer is left out rather than
+   * holding the others back.
+   */
+  async #readFleet() {
+    let nodes = [];
+    try {
+      const res = await fetch(`${this.attr("api")}/api/fleet/nodes`);
+      nodes = res.ok ? ((await res.json()).nodes ?? []) : [];
+    } catch {
+      return;
+    }
+    await Promise.allSettled(
+      nodes
+        .filter((n) => !n.locked)
+        .map(async ({ node }) => {
+          const agents = await this.#readAgents(node);
+          const at = this.#sources.findIndex((s) => s.node === node);
+          if (at >= 0) this.#sources[at] = { node, agents };
+          else this.#sources.push({ node, agents });
+          this.#sources.sort((a, b) => (a.node === null ? -1 : b.node === null ? 1 : a.node.localeCompare(b.node)));
+          this.#drawAgents();
+        }),
+    );
+  }
+
+  /** The agent this browser last picked: `{ node, name }` (a bare name, from before machines). */
+  #savedAgent() {
+    const raw = localStorage.getItem("adi-chat:agent");
+    if (!raw) return null;
+    try {
+      const v = JSON.parse(raw);
+      return typeof v === "string" ? { node: null, name: v } : { node: v.node ?? null, name: v.name };
+    } catch {
+      return { node: null, name: raw };
+    }
+  }
+
+  /**
+   * The agent picker, as the old chat's (`chat_agent_picker`): each machine's starred agents, and
+   * whichever is open whether starred or not; the root agent first; a ● before one that is running,
+   * since an option carries no markup for a dot. With more than one machine the list is grouped by
+   * machine — an `<optgroup>` each — and which machine the chosen one is on is said beside it, since
+   * a closed select shows the option and never its group.
+   */
+  #drawAgents() {
+    const select = this.$(".agent");
+    const multi = this.#sources.length > 1;
+    const groups = this.#sources
+      .map(({ node, agents }) => {
+        const options = agents.filter(
+          (a) => a.starred || (a.name === this.#agent && node === this.#node),
+        );
+        options.sort((a, b) => Number(!(node === null && a.name === ROOT_AGENT)) - Number(!(node === null && b.name === ROOT_AGENT)));
+        return { node, options };
+      })
+      .filter((g) => g.options.length);
+    const option = (node, a) => {
+      const o = document.createElement("option");
+      o.value = JSON.stringify([node, a.name]);
+      o.textContent = a.running ? `\u25CF ${a.name}` : a.name;
+      return o;
+    };
+    select.replaceChildren(
+      ...groups.map(({ node, options }) => {
+        if (!multi) return options.map((a) => option(node, a));
+        const g = document.createElement("optgroup");
+        g.label = node ?? "This machine";
+        g.append(...options.map((a) => option(node, a)));
+        return [g];
+      }).flat(),
+    );
+    select.value = JSON.stringify([this.#node, this.#agent]);
+    const any = groups.length > 0;
+    select.hidden = !any;
+    this.$(".pickhint").textContent = !any ? "No starred agents" : multi ? `on ${this.#node ?? "this machine"}` : "";
+  }
+
+  async #openAgent(name, run, node = this.#node) {
     this.#agent = name;
+    this.#node = node ?? null;
     this.#drawAgents();
     this.#epoch += 1;
     const epoch = this.#epoch;
@@ -467,7 +563,9 @@ class AdiChat extends AdiElement {
     // choose with, so the newest.
     if (this.hasAttribute("picker")) {
       const was = this.#remembered();
-      if (was?.agent === name && this.#runs.some((r) => r.run_id === was.run)) return this.#openRun(was.run);
+      if (was?.agent === name && (was.node ?? null) === this.#node && this.#runs.some((r) => r.run_id === was.run)) {
+        return this.#openRun(was.run);
+      }
       return this.#showList();
     }
     this.#openRun(this.#runs[0]?.run_id ?? null);
@@ -488,7 +586,7 @@ class AdiChat extends AdiElement {
 
   #remember() {
     if (!this.hasAttribute("picker") || !this.#agent) return;
-    localStorage.setItem("adi-chat:open", JSON.stringify({ agent: this.#agent, run: this.#run }));
+    localStorage.setItem("adi-chat:open", JSON.stringify({ node: this.#node, agent: this.#agent, run: this.#run }));
   }
 
   /** Back to the agent's conversations — the window lets go of the one it was fixed on. */
@@ -499,7 +597,7 @@ class AdiChat extends AdiElement {
     this.#remember();
     this.#peek = null;
     this.$("adi-transcript").entries = [];
-    this.emit("open", { agent: this.#agent, run: null });
+    this.emit("open", { node: this.#node, agent: this.#agent, run: null });
     this.#drawMode();
     this.#drawRuns();
     this.#tick();
@@ -514,7 +612,7 @@ class AdiChat extends AdiElement {
     if (!list) {
       const run = this.#runs.find((r) => r.run_id === this.#run);
       this.$(".crumb .title").textContent = this.#run ? titleOf(run) : "New conversation";
-      this.$(".crumb .to").textContent = this.#agent ?? "";
+      this.$(".crumb .to").textContent = this.#node ? `${this.#agent} on ${this.#node}` : (this.#agent ?? "");
     }
   }
 
@@ -533,7 +631,7 @@ class AdiChat extends AdiElement {
     this.$(".error").textContent = "";
     this.$("adi-transcript").entries = [];
     this.#drawMode();
-    this.emit("open", { agent: this.#agent, run });
+    this.emit("open", { node: this.#node, agent: this.#agent, run });
     this.#draw();
     this.#tick();
   }
@@ -584,7 +682,7 @@ class AdiChat extends AdiElement {
     item("Open", () => this.#openRun(run.run_id));
     if (this.hasAttribute("windows")) {
       item("Open in new window", () =>
-        this.emit("open-window", { agent: this.#agent, run: run.run_id, title: titleOf(run) }),
+        this.emit("open-window", { node: this.#node, agent: this.#agent, run: run.run_id, title: titleOf(run) }),
       );
     }
     // Placed against this element rather than the screen: a host that is itself a blurred window
@@ -726,7 +824,7 @@ class AdiChat extends AdiElement {
 
   #pictures(turn) {
     return (turn.images ?? []).map((img) => ({
-      url: `${this.attr("api")}/api/agents/attachment/${encodeURIComponent(img.id)}`,
+      url: `${this.#base()}/api/agents/attachment/${encodeURIComponent(img.id)}`,
       name: img.name || img.id,
       picture: String(img.media_type).startsWith("image/"),
     }));
@@ -1076,7 +1174,7 @@ class AdiChat extends AdiElement {
 
   async #upload(entry, file, type) {
     try {
-      const res = await fetch(`${this.attr("api")}/api/agents/attachment`, {
+      const res = await fetch(`${this.#base()}/api/agents/attachment`, {
         method: "POST",
         // The name travels in a header because the body is the file. Headers are Latin-1, and a
         // screenshot's name routinely is not — so anything else becomes `_`.
@@ -1089,7 +1187,7 @@ class AdiChat extends AdiElement {
       Object.assign(entry, {
         state: "ready",
         id: data.id,
-        preview: entry.image ? `${this.attr("api")}/api/agents/attachment/${encodeURIComponent(data.id)}` : "",
+        preview: entry.image ? `${this.#base()}/api/agents/attachment/${encodeURIComponent(data.id)}` : "",
       });
     } catch (err) {
       // The row stays, marked failed, so it can be removed deliberately — and the error says why.
