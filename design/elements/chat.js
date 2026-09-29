@@ -462,10 +462,33 @@ class AdiChat extends AdiElement {
     }
     if (run === "new") return this.#openRun(null);
     if (run) return this.#openRun(run);
-    // No conversation named: with a picker, the list of them is the answer; without one there is
-    // nothing to choose with, so the newest.
-    if (this.hasAttribute("picker")) return this.#showList();
+    // No conversation named: with a picker, whatever this window was on when it was last left —
+    // the conversation, if it is still there, else the list; without a picker there is nothing to
+    // choose with, so the newest.
+    if (this.hasAttribute("picker")) {
+      const was = this.#remembered();
+      if (was?.agent === name && this.#runs.some((r) => r.run_id === was.run)) return this.#openRun(was.run);
+      return this.#showList();
+    }
     this.#openRun(this.#runs[0]?.run_id ?? null);
+  }
+
+  /**
+   * What a picker window was on, kept per browser so a reload lands back there: `{ agent, run }`,
+   * `run` null for the list. Only a picker window keeps it — one given its conversation by its host
+   * is that conversation whatever was open last.
+   */
+  #remembered() {
+    try {
+      return JSON.parse(localStorage.getItem("adi-chat:open") ?? "null");
+    } catch {
+      return null;
+    }
+  }
+
+  #remember() {
+    if (!this.hasAttribute("picker") || !this.#agent) return;
+    localStorage.setItem("adi-chat:open", JSON.stringify({ agent: this.#agent, run: this.#run }));
   }
 
   /** Back to the agent's conversations — the window lets go of the one it was fixed on. */
@@ -473,6 +496,7 @@ class AdiChat extends AdiElement {
     this.#epoch += 1;
     this.#mode = "list";
     this.#run = null;
+    this.#remember();
     this.#peek = null;
     this.$("adi-transcript").entries = [];
     this.emit("open", { agent: this.#agent, run: null });
@@ -499,6 +523,7 @@ class AdiChat extends AdiElement {
     this.#mode = "chat";
     this.$(".menu").hidden = true;
     this.#run = run;
+    this.#remember();
     this.#peek = null;
     this.#limit = PAGE;
     this.#steps.clear();
