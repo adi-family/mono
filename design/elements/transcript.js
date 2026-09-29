@@ -430,7 +430,10 @@ function setAttr(node, name, value) {
 
 class AdiTranscript extends AdiElement {
   static sheet = sheet(`
-    :host { display: flex; flex-direction: column; gap: var(--s4); overflow-y: auto; background: var(--bg); }
+    :host { display: flex; flex-direction: column; gap: var(--s4); overflow-y: auto;
+      /* --adi-transcript-bg: for a host that paints its own ground — the home screen's widget,
+         which is frosted glass rather than a page. Everywhere else it is the page (§2.1). */
+      background: var(--adi-transcript-bg, var(--bg)); }
     ::slotted([slot="lead"]), ::slotted([slot="foot"]) { flex: none; max-width: 80ch; }
     .entries { display: contents; }
   `);
