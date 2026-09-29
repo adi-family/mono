@@ -1006,6 +1006,11 @@ fn clamp_pos(x: f64, y: f64, width: f64, top: f64) -> (f64, f64) {
     )
 }
 
+/// The screen's height, for a menu deciding whether it has room to drop down.
+pub(super) fn viewport_height() -> f64 {
+    viewport().1
+}
+
 fn viewport() -> (f64, f64) {
     let w = window();
     let px = |v: Result<wasm_bindgen::JsValue, _>| v.ok().and_then(|v| v.as_f64()).unwrap_or(0.0);

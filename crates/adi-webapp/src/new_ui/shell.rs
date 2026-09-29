@@ -4,8 +4,8 @@
 //! Both are laid out from [`Layout`], a per-device preference kept in `localStorage` beside the
 //! wallpaper, for the same reason.
 
-use adi_ui::{Icon, IconSize, Lucide, Mark};
-use leptos::prelude::*;
+use adi_ui::{Icon, IconSize, Lucide, Mark, Menu, MenuAt, MenuItem};
+use leptos::{ev, portal::Portal, prelude::*};
 use serde::{Deserialize, Serialize};
 
 use super::sources::Sources;
@@ -272,6 +272,17 @@ pub(super) fn Island(
     palette: RwSignal<bool>,
     #[prop(into)] light: Signal<bool>,
 ) -> impl IntoView {
+    // The right-click menu of an open window's item: which window, and where the click was.
+    let menu: RwSignal<Option<(MenuAt, Win)>> = RwSignal::new(None);
+    let at_pointer = move |ev: ev::MouseEvent, win: Win| {
+        ev.prevent_default();
+        // The island sits on a screen edge, and a menu dropped down from an island at the bottom
+        // would open off the screen: in the lower half it opens upward, its foot at the pointer.
+        let tall = if matches!(win, Win::App(_)) { MENU_TWO } else { MENU_ONE };
+        let low = f64::from(ev.client_y()) > super::windows::viewport_height() / 2.0;
+        let y = if low { ev.client_y() - tall } else { ev.client_y() };
+        menu.set(Some((MenuAt::Point(ev.client_x(), y), win)));
+    };
     view! {
         <nav
             class="adi-new-island"
@@ -336,6 +347,7 @@ pub(super) fn Island(
                             title=label.clone()
                             aria-label=label
                             on:click=move |_| desk.focus(win)
+                            on:contextmenu=move |ev| at_pointer(ev, win)
                         >
                             <Icon icon=Lucide::MessageSquare size=IconSize::Lg/>
                         </button>
@@ -358,6 +370,7 @@ pub(super) fn Island(
                             title=label.clone()
                             aria-label=label
                             on:click=move |_| desk.focus(win)
+                            on:contextmenu=move |ev| at_pointer(ev, win)
                         >
                             <super::apps::AppMark
                                 name=app.name.clone()
@@ -369,5 +382,50 @@ pub(super) fn Island(
                 }
             </For>
         </nav>
+        {move || menu.get().map(|(at, win)| island_menu(desk, menu, at, win, light.get_untracked()))}
     }
+}
+
+/// The island menu's height with one row and with two, in px — what it is lifted by when it opens
+/// upward. `adi_ui::Menu`'s rows are 30px under 4px of padding and a hairline each side.
+const MENU_ONE: i32 = 40;
+const MENU_TWO: i32 = 70;
+
+/// An open window's menu in the island, as the Dock's: another window on the same app, or this one
+/// closed. Out of the island into the body — the island is a blurred surface, and a fixed menu
+/// inside one is placed against it rather than the screen.
+fn island_menu(
+    desk: Desk,
+    menu: RwSignal<Option<(MenuAt, Win)>>,
+    at: MenuAt,
+    win: Win,
+    light: bool,
+) -> AnyView {
+    // Only an app has a second window to open: a pinned chat already is its conversation's window.
+    let fresh = match win {
+        Win::App(id) => desk.app_untracked(id).map(|app| {
+            Callback::new(move |()| {
+                menu.set(None);
+                desk.open_app_new(app.clone());
+            })
+        }),
+        _ => None,
+    };
+    let close = Callback::new(move |()| {
+        menu.set(None);
+        desk.close(win);
+    });
+    view! {
+        <Portal>
+            <Menu
+                at=Signal::derive(move || Some(at))
+                on_dismiss=Callback::new(move |()| menu.set(None))
+                class=if light { "light" } else { "" }
+            >
+                {fresh.map(|fresh| view! { <MenuItem on_select=fresh>"New window"</MenuItem> })}
+                <MenuItem on_select=close>"Close window"</MenuItem>
+            </Menu>
+        </Portal>
+    }
+    .into_any()
 }
