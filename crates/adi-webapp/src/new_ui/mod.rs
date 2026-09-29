@@ -33,7 +33,6 @@ mod palette;
 mod settings;
 mod shell;
 mod sources;
-mod watching;
 mod widgets;
 mod windows;
 

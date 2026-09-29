@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-96 structs · 33 enums · 6 type aliases across 43 files.
+95 structs · 33 enums · 5 type aliases across 42 files.
 
 ## Index
 
@@ -20,7 +20,6 @@
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
-- [`src/new_ui/watching.rs`](#srcnew_uiwatchingrs) — `Wants`, `Part`
 - [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
@@ -460,25 +459,6 @@ The layout's live state, shared by the screen and the settings window.
 pub(super) struct Shell {
     pub(super) layout: RwSignal<Layout>,
 }
-```
-
----
-
-## `src/new_ui/watching.rs`
-
-### type `Wants`
-
-```rust
-type Wants = Rc<dyn Fn() -> Vec<Sub>>;
-```
-
-### struct `Part`
-
-One part's place in the list; dropping it with `leave` takes its watches out.
-
-```rust
-#[derive(Clone, Copy)]
-pub(super) struct Part(u32);
 ```
 
 ---

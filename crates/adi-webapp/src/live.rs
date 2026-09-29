@@ -222,28 +222,6 @@ pub(crate) fn watch(subs: Vec<Sub>) {
     }
 }
 
-/// [`watch`], for a page made of several parts that each watch something: every part's list at
-/// once. Two parts watching the same read are both answered — handed to [`watch`] as they are,
-/// the second would replace the first's callback, and the first would stop updating.
-pub(crate) fn watch_all(parts: Vec<Vec<Sub>>) {
-    let mut merged: BTreeMap<_, Sub> = BTreeMap::new();
-    for sub in parts.into_iter().flatten() {
-        match merged.entry(sub.key()) {
-            std::collections::btree_map::Entry::Vacant(e) => {
-                e.insert(sub);
-            }
-            std::collections::btree_map::Entry::Occupied(mut e) => {
-                let (first, second) = (e.get().apply.clone(), sub.apply);
-                e.get_mut().apply = Rc::new(move |json| {
-                    first(json);
-                    second(json);
-                });
-            }
-        }
-    }
-    watch(merged.into_values().collect());
-}
-
 /// Tell the server the current watch list. A no-op while the socket is down — [`on_open`] sends it
 /// as soon as one is up, which is also how a reconnect restores what the page was watching.
 fn send_subscription() {

@@ -66,11 +66,16 @@ the `value` *attribute* is the starting value, read once; the `value` *property*
 | `adi-notice` `adi-empty` | a line under the header · an empty state | §6 |
 | `adi-tool-call` | the collapsed receipt of what an agent ran | §6 |
 | `adi-modal` | a native `<dialog>`: top layer, focus held, Escape closes | §2.5 |
+| `adi-markdown` | what an agent says, rendered — `adi_ui::Markdown`'s subset, built from text nodes only | §4 |
+| `adi-transcript` | the feed: newest first, keyed by `entries[].key`, an entry redrawn only when it changed | §2.1 |
+| `adi-message` `adi-note` `adi-tool-run` | one thing said (yours raised, the agent's plain, queued hollowed) · a platform note · a run of tool calls as one receipt line | §6 |
+| `adi-composer` `adi-ask` | the chat box (Enter sends, grows, Stop and asap while a turn runs) · the question card | §6 |
+| `adi-chat` | a whole chat window over the panel's `/api/agents`: pickers, transcript, composer, question card, queue, awaits | — |
 | `adi-gallery` | all of the above, on one page | — |
 
 Events are plain `CustomEvent`s on the element itself, `composed` so they cross the shadow
 boundary: `change` (segmented, fields), `remove` (grant), `sort` / `select` (table), `dismiss`
-(notice), `toggle` (tool call), `open` / `close` (modal), `copy` (code).
+(notice), `toggle` (tool call), `open` / `close` (modal), `copy` (code), `toggle` (tool run), `unqueue` (message), `send` / `asap` / `stop` (composer), `answer` (ask), `open` (chat).
 
 ## Icons
 
