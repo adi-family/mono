@@ -278,7 +278,7 @@ pub(super) fn Island(
         ev.prevent_default();
         // The island sits on a screen edge, and a menu dropped down from an island at the bottom
         // would open off the screen: in the lower half it opens upward, its foot at the pointer.
-        let tall = if matches!(win, Win::App(_)) { MENU_TWO } else { MENU_ONE };
+        let tall = if matches!(win, Win::App(_)) && desk.is_open(win) { MENU_TWO } else { MENU_ONE };
         let low = f64::from(ev.client_y()) > super::windows::viewport_height() / 2.0;
         let y = if low { ev.client_y() - tall } else { ev.client_y() };
         menu.set(Some((MenuAt::Point(ev.client_x(), y), win)));
@@ -290,6 +290,9 @@ pub(super) fn Island(
             class:under-top-bar=move || shell.layout.get().top_bar
             data-edge=move || shell.layout.get().island.attr()
             aria-label="Island"
+            // Nothing here is a page the browser's own menu has anything to say about — no link to
+            // copy, no image to save — so its menu is never shown over the island.
+            on:contextmenu=|ev: ev::MouseEvent| ev.prevent_default()
         >
             <button
                 class="adi-new-island__item"
@@ -307,6 +310,7 @@ pub(super) fn Island(
                 title=Win::Settings.title()
                 aria-label=Win::Settings.title()
                 on:click=move |_| desk.open(Win::Settings)
+                on:contextmenu=move |ev| at_pointer(ev, Win::Settings)
             >
                 <Icon icon=Lucide::Settings2 size=IconSize::Lg/>
             </button>
@@ -317,6 +321,7 @@ pub(super) fn Island(
                 title=Win::Chat.title()
                 aria-label=Win::Chat.title()
                 on:click=move |_| desk.open(Win::Chat)
+                on:contextmenu=move |ev| at_pointer(ev, Win::Chat)
             >
                 <Icon icon=Lucide::MessageSquare size=IconSize::Lg/>
             </button>
@@ -391,9 +396,9 @@ pub(super) fn Island(
 const MENU_ONE: i32 = 40;
 const MENU_TWO: i32 = 70;
 
-/// An open window's menu in the island, as the Dock's: another window on the same app, or this one
-/// closed. Out of the island into the body — the island is a blurred surface, and a fixed menu
-/// inside one is placed against it rather than the screen.
+/// A window's menu in the island, as the Dock's: another window on the same app, this one closed,
+/// or — for a fixed window not open — opened. Out of the island into the body: the island is a
+/// blurred surface, and a fixed menu inside one is placed against it rather than the screen.
 fn island_menu(
     desk: Desk,
     menu: RwSignal<Option<(MenuAt, Win)>>,
@@ -415,6 +420,12 @@ fn island_menu(
         menu.set(None);
         desk.close(win);
     });
+    let open = Callback::new(move |()| {
+        menu.set(None);
+        desk.open(win);
+    });
+    // A fixed window that is not open has nothing to close — its one row opens it.
+    let is_open = desk.is_open(win);
     view! {
         <Portal>
             <Menu
@@ -423,7 +434,11 @@ fn island_menu(
                 class=if light { "light" } else { "" }
             >
                 {fresh.map(|fresh| view! { <MenuItem on_select=fresh>"New window"</MenuItem> })}
-                <MenuItem on_select=close>"Close window"</MenuItem>
+                {if is_open {
+                    view! { <MenuItem on_select=close>"Close window"</MenuItem> }.into_any()
+                } else {
+                    view! { <MenuItem on_select=open>"Open"</MenuItem> }.into_any()
+                }}
             </Menu>
         </Portal>
     }
