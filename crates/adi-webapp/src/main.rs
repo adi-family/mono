@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 mod attach;
+mod chat_elements;
 mod fetch;
 mod icons;
 mod launcher;
@@ -89,6 +90,9 @@ fn main() {
     //   * `/extended/…` — the full control panel (the App shell + every workbench route).
     //   * anything else (notably the bare `/`) — the minimal launcher that just points at it,
     //     or [`new_ui::NewUi`] on a browser that has opted into the new UI.
+    // Read before anything mounts: it strips its own `?chat-elements=` from the address, which the
+    // new UI's switch below would otherwise throw away with the rest of the query.
+    chat_elements::enabled();
     if path.starts_with("/embed/dashboard-agent") {
         mount_to_body(EmbedDashboardAgent);
     } else if routing::is_market_path(&path) {

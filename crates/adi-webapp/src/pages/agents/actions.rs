@@ -7281,6 +7281,27 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chome__chatwrap">
             {move || match watch.run_id.get() {
+                // The HTML chat, where this browser has asked for it (`chat_elements`). Keyed by
+                // being rebuilt: this arm re-runs whenever the rail opens another conversation, so
+                // each one gets an element of its own, pointed at the machine it is on.
+                Some(run) if crate::chat_elements::enabled() => {
+                    let api = watch
+                        .node
+                        .get_untracked()
+                        .map(|n| format!("http://{}", adi_webapp_api::types::node_app_host(&n)))
+                        .unwrap_or_default();
+                    view! {
+                        <div class="adi-chome__feed">
+                            <adi-chat
+                                agent=watch.name.get_untracked().unwrap_or_default()
+                                run=run
+                                api=api
+                                style="flex:1;min-height:0;height:100%"
+                            ></adi-chat>
+                        </div>
+                    }
+                    .into_any()
+                }
                 Some(_) => view! {
                     <div class="adi-chome__feed">
                         // Sourced: the rail under this feed merges several machines, so which one a
