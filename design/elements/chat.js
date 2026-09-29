@@ -35,6 +35,17 @@ import "./transcript.js";
 import "./composer.js";
 import "./ask.js";
 import "./icon.js";
+import "./mic.js";
+
+/** A message carries at most this many files; the rest are refused with a sentence. */
+const MAX_ATTACHMENTS = 6;
+/** What a model can be *shown*; anything else reaches it as a path it opens. */
+const PICTURES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+const MAX_PICTURE = 5 * 1024 * 1024;
+const MAX_FILE = 25 * 1024 * 1024;
+/** Said instead of a paperclip when this conversation can be shown nothing — the panel's words. */
+const IMAGES_REFUSED =
+  "this one can't be sent a file — a terminal session takes typing, and a simulated run has no model to give one to";
 
 /** The agent a window opens on when it is told nothing — the environment's root agent. */
 const ROOT_AGENT = "adi-agent";
@@ -142,6 +153,26 @@ class AdiChat extends AdiElement {
     .await button { padding: 2px 8px; border-radius: var(--r); color: var(--ink-2);
       transition: background var(--transition); }
     .await button:hover { background: var(--bg-hover); }
+    .goal { display: flex; align-items: center; gap: var(--s2); min-height: 28px;
+      font-size: var(--fs-small); color: var(--ink-3); }
+    .goal .text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      text-align: left; color: var(--ink-2); }
+    .goal .text:hover { color: var(--ink); }
+    .goal input { flex: 1; min-width: 0; padding: 5px 10px; border: 1px solid var(--line-strong);
+      border-radius: var(--r); background: var(--bg-raise); color: var(--ink); font: inherit; font-size: var(--fs-ui); }
+    .goal input::placeholder { color: var(--ink-3); }
+    .link { color: var(--ink-3); transition: color var(--transition); }
+    .link:hover { color: var(--ink-2); }
+    .small { flex: none; padding: 3px 10px; border-radius: var(--r); font-size: var(--fs-small); color: var(--ink-2);
+      transition: background var(--transition), color var(--transition); }
+    .small:hover { background: var(--bg-hover); color: var(--ink); }
+    .small.default { background: var(--btn); color: var(--ink); }
+    .small.default:hover { background: var(--btn-hover); }
+    .small.danger:hover { color: var(--err); }
+    .small:disabled { opacity: .4; cursor: not-allowed; }
+    .explain { font-size: var(--fs-label); color: var(--ink-3); }
+    .note { min-height: 0; font-size: var(--fs-label); color: var(--ink-3); }
+    .note:empty { display: none; }
     .error { flex: none; margin: 0; padding: var(--s2) var(--s4); font-size: var(--fs-small); color: var(--err); }
     .error:empty { display: none; }
     adi-transcript { flex: 1; min-height: 0; padding: var(--s4); }
@@ -172,6 +203,15 @@ class AdiChat extends AdiElement {
   #busy = false;
   #answering = false;
   #live = false;
+  /** This conversation's goals, open and closed, and the editor's state over them. */
+  #goals = [];
+  #goalEditor = null;
+  #goalBusy = false;
+  #goalsDrawn = "";
+  /** What the next message carries: `{ key, name, preview, image, state, id, error }`. */
+  #files = [];
+  /** Whether the last read had a turn running — its end is when goals are worth re-reading. */
+  #wasRunning = false;
   /** Bumped on every switch, so an answer for a conversation the window has left is dropped. */
   #epoch = 0;
 
@@ -182,8 +222,10 @@ class AdiChat extends AdiElement {
         <select class="conv" aria-label="Conversation"></select>
       </div>
       <div class="top" hidden>
+        <div class="goals"></div>
         <div class="awaits"></div>
-        <adi-composer></adi-composer>
+        <adi-composer attach><adi-mic slot="tools"></adi-mic></adi-composer>
+        <div class="note"></div>
       </div>
       <p class="error" role="alert"></p>
       <adi-transcript>
@@ -204,6 +246,11 @@ class AdiChat extends AdiElement {
     composer.addEventListener("send", (e) => this.#say(e.detail.text, "regular"));
     composer.addEventListener("asap", (e) => this.#say(e.detail.text, "asap"));
     composer.addEventListener("stop", () => this.#stop());
+    composer.addEventListener("files", (e) => this.#attach(e.detail.files));
+    composer.addEventListener("unattach", (e) => {
+      this.#files = this.#files.filter((f) => f.key !== e.detail.key);
+      this.#drawFiles();
+    });
     this.$("adi-transcript").addEventListener("toggle", (e) => this.#toggleRun(e.detail));
     this.$("adi-transcript").addEventListener("unqueue", (e) => {
       const index = Number(e.target.dataset.place);
@@ -237,6 +284,7 @@ class AdiChat extends AdiElement {
 
   update() {
     this.$(".bar").hidden = !this.hasAttribute("picker");
+    this.$("adi-mic").setAttribute("api", this.attr("api"));
   }
 
   // ---- the wire ----------------------------------------------------------------------------
@@ -323,6 +371,9 @@ class AdiChat extends AdiElement {
     this.#peek = null;
     this.#limit = PAGE;
     this.#steps.clear();
+    this.#goals = [];
+    this.#goalEditor = null;
+    this.#loadGoals();
     this.$(".conv").value = run ?? "";
     this.$(".error").textContent = "";
     if (this.#agent) localStorage.setItem(`adi-chat:${this.#agent}`, run ?? "");
@@ -368,6 +419,10 @@ class AdiChat extends AdiElement {
         }
         this.#peek = peek;
         this.$(".error").textContent = "";
+        // A turn that just ended is when a goal is likeliest to have moved — the agent closes its
+        // own, or sets one — so that is when they are read again, rather than on every poll.
+        if (this.#wasRunning && !peek.running) this.#loadGoals();
+        this.#wasRunning = Boolean(peek.running);
         this.#draw();
       } catch (err) {
         if (epoch === this.#epoch) this.#fail(err);
@@ -391,6 +446,15 @@ class AdiChat extends AdiElement {
     composer.toggleAttribute("busy", this.#busy);
     composer.toggleAttribute("stoppable", Boolean(p?.running));
     composer.setAttribute("asap", "");
+    // Whether the open conversation's own engine can be handed a file — its capability profile,
+    // not the agent's current settings, because a conversation is answered by whatever started it.
+    const attach = fresh || Boolean(p?.caps?.images);
+    composer.toggleAttribute("attach", attach);
+    composer.setAttribute("refusal", IMAGES_REFUSED);
+    // A message sent mid-answer is queued, not refused — and the line under the box says so.
+    this.$(".note").textContent = p?.running ? "queued — the agent is answering" : "";
+
+    this.#drawGoals();
 
     this.#drawAwaits(p?.awaits ?? []);
 
@@ -549,6 +613,7 @@ class AdiChat extends AdiElement {
 
   async #say(text, mode) {
     if (this.#busy || !this.#agent) return;
+    const attachments = this.#files.filter((f) => f.state === "ready").map((f) => f.id);
     this.#busy = true;
     this.#draw();
     const epoch = this.#epoch;
@@ -556,13 +621,17 @@ class AdiChat extends AdiElement {
     try {
       if (this.#run) {
         const peek = await this.#call("/agents/run/reply", {
-          name: this.#agent, run_id: this.#run, message: text, mode, ...this.#view(),
+          name: this.#agent, run_id: this.#run, message: text, mode, attachments, ...this.#view(),
         });
         composer.value = "";
+        this.#clearFiles();
         if (epoch === this.#epoch) this.#peek = peek;
       } else {
-        const res = await this.#call("/agents/run", { name: this.#agent, message: text, launched_by: "human" });
+        const res = await this.#call("/agents/run", {
+          name: this.#agent, message: text, attachments, launched_by: "human",
+        });
         composer.value = "";
+        this.#clearFiles();
         if (res.run_id) {
           this.#busy = false;
           await this.#openAgent(this.#agent, res.run_id);
@@ -618,6 +687,219 @@ class AdiChat extends AdiElement {
       this.#draw();
     }
     this.#tick();
+  }
+
+  // ---- goals ------------------------------------------------------------------------------
+  // What this conversation is *for*: its open goals, each with the two ways out, and a link to set
+  // one — `goal_bar` in the panel. Above the composer rather than in the transcript, because a goal
+  // is a standing condition on the whole conversation, not a thing said in it. Closed goals are not
+  // drawn: the transcript carries the turn that met them.
+
+  async #loadGoals() {
+    if (!this.#run || !this.#agent) return this.#drawGoals();
+    const [epoch, run] = [this.#epoch, this.#run];
+    try {
+      const res = await this.#call("/agents/goals", { name: this.#agent, run_id: run });
+      if (epoch !== this.#epoch) return;
+      this.#goals = res.goals ?? [];
+      this.#drawGoals();
+    } catch {
+      // A panel too old to keep goals has none to show; the chat is no worse for it.
+    }
+  }
+
+  #drawGoals() {
+    const box = this.$(".goals");
+    // A goal belongs to a conversation, so a new one has nowhere to put it yet.
+    if (!this.#run) {
+      this.#goalsDrawn = "";
+      return box.replaceChildren();
+    }
+    const editor = this.#goalEditor;
+    if (editor) {
+      if (box.querySelector("input")) return this.#goalButtons();
+      box.innerHTML = `
+        <div class="goal">
+          <input type="text" placeholder="what would make this chat done">
+          <button class="small default save" type="button">Save</button>
+          <button class="small cancel" type="button">Cancel</button>
+        </div>
+        <div class="explain">Put back to the agent every time this chat falls quiet, until it is met or given up on.</div>`;
+      const input = box.querySelector("input");
+      input.value = editor.text;
+      input.addEventListener("input", () => {
+        editor.text = input.value;
+        this.#goalButtons();
+      });
+      // Enter saves and Escape closes: this opened under the cursor, and asking for the mouse back
+      // to dismiss a one-line box is the annoying half of a popover.
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" && !ev.isComposing) this.#saveGoal();
+        else if (ev.key === "Escape") this.#closeGoalEditor();
+      });
+      box.querySelector(".save").addEventListener("click", () => this.#saveGoal());
+      box.querySelector(".cancel").addEventListener("click", () => this.#closeGoalEditor());
+      this.#goalButtons();
+      input.focus();
+      return;
+    }
+    const open = this.#goals.filter((g) => g.state === "open");
+    const sig = JSON.stringify([open, this.#goalBusy]);
+    if (sig === this.#goalsDrawn && box.firstChild) return;
+    this.#goalsDrawn = sig;
+    if (!open.length) {
+      // Nothing set is the normal case, so it costs one quiet line.
+      box.innerHTML = `<div class="goal"><button class="link" type="button"
+        title="Set what would make this chat done. It is put back to the agent every time the chat falls quiet, until it is met or given up on.">+ Set a goal</button></div>`;
+      box.querySelector(".link").addEventListener("click", () => this.#openGoalEditor(null, ""));
+      return;
+    }
+    box.replaceChildren(
+      ...open.map((goal) => {
+        const row = document.createElement("div");
+        row.className = "goal";
+        const self = goal.set_by === "agent";
+        row.innerHTML = `
+          <span title="This chat has a goal">Goal</span>
+          <button class="text" type="button"></button>
+          ${self ? `<span title="The agent set this goal for itself">self-set</span>` : ""}
+          ${goal.nudges > 1 ? `<span>asked ${goal.nudges}×</span>` : ""}
+          <button class="small met" type="button" title="Close this goal as met">Met</button>
+          <button class="small danger gave" type="button" title="Stop working toward this goal, and stop being asked about it">Give up</button>`;
+        const text = row.querySelector(".text");
+        text.textContent = goal.text;
+        // The sentence is the edit control: the obvious thing to do with one you disagree with is click it.
+        text.title = `${goal.text} — click to reword${self ? " (the agent set this itself)" : ""}`;
+        text.addEventListener("click", () => this.#openGoalEditor(goal.id, goal.text));
+        row.querySelector(".met").addEventListener("click", () => this.#closeGoal(goal.id, "met"));
+        row.querySelector(".gave").addEventListener("click", () => this.#closeGoal(goal.id, "given_up"));
+        for (const b of row.querySelectorAll(".small")) b.disabled = this.#goalBusy;
+        return row;
+      }),
+    );
+  }
+
+  #goalButtons() {
+    const box = this.$(".goals");
+    const save = box.querySelector(".save");
+    if (save) save.disabled = this.#goalBusy || !this.#goalEditor?.text.trim();
+    const input = box.querySelector("input");
+    if (input) input.disabled = this.#goalBusy;
+  }
+
+  #openGoalEditor(id, text) {
+    this.#goalEditor = { id, text };
+    this.#goalsDrawn = "";
+    this.$(".goals").replaceChildren();
+    this.#drawGoals();
+  }
+
+  #closeGoalEditor() {
+    this.#goalEditor = null;
+    this.#goalsDrawn = "";
+    this.#drawGoals();
+  }
+
+  async #saveGoal() {
+    const editor = this.#goalEditor;
+    if (!editor || !editor.text.trim() || this.#goalBusy) return;
+    this.#goalBusy = true;
+    this.#goalButtons();
+    try {
+      const res = await this.#call("/agents/goal/set", {
+        name: this.#agent, run_id: this.#run, text: editor.text, goal: editor.id,
+      });
+      this.#goals = res.goals ?? [];
+      // Closed only on success: a goal the server refused is still in the box, where it can be fixed.
+      this.#goalEditor = null;
+      this.#goalsDrawn = "";
+    } catch (err) {
+      this.#fail(err);
+    } finally {
+      this.#goalBusy = false;
+      this.#drawGoals();
+    }
+  }
+
+  async #closeGoal(goal, as) {
+    this.#goalBusy = true;
+    this.#drawGoals();
+    try {
+      const res = await this.#call("/agents/goal/close", { goal, as_: as, note: "" });
+      this.#goals = res.goals ?? [];
+    } catch (err) {
+      this.#fail(err);
+    } finally {
+      this.#goalBusy = false;
+      this.#drawGoals();
+    }
+  }
+
+  // ---- attachments ------------------------------------------------------------------------
+  // `crate::attach` in the panel: each file is stored the moment it is attached
+  // (`POST /api/agents/attachment`, raw bytes, its name in a header), and the message carries the
+  // ids. A picture is shown to the model; anything else reaches it as a path it opens.
+
+  #attach(files) {
+    for (const file of files) {
+      if (this.#files.length >= MAX_ATTACHMENTS) {
+        this.#fail(`A message can carry ${MAX_ATTACHMENTS} attachments; the rest were left out.`);
+        break;
+      }
+      const type = file.type.trim() || "application/octet-stream";
+      const image = PICTURES.includes(type);
+      if (file.size > (image ? MAX_PICTURE : MAX_FILE)) {
+        this.#fail(`“${file.name}” is larger than ${image ? "5 MB" : "25 MB"} — it was left out.`);
+        continue;
+      }
+      const name = file.name.trim() || (image ? "pasted image" : "pasted file");
+      const entry = {
+        key: `attach-${Date.now()}-${this.#files.length}`,
+        name,
+        image,
+        preview: image ? URL.createObjectURL(file) : "",
+        state: "uploading",
+      };
+      this.#files = [...this.#files, entry];
+      this.#upload(entry, file, type);
+    }
+    this.#drawFiles();
+  }
+
+  async #upload(entry, file, type) {
+    try {
+      const res = await fetch(`${this.attr("api")}/api/agents/attachment`, {
+        method: "POST",
+        // The name travels in a header because the body is the file. Headers are Latin-1, and a
+        // screenshot's name routinely is not — so anything else becomes `_`.
+        headers: { "content-type": type, "x-adi-filename": entry.name.replace(/[^\x20-\x7e]/g, "_") },
+        body: file,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `${res.status}`);
+      if (entry.preview) URL.revokeObjectURL(entry.preview);
+      Object.assign(entry, {
+        state: "ready",
+        id: data.id,
+        preview: entry.image ? `${this.attr("api")}/api/agents/attachment/${encodeURIComponent(data.id)}` : "",
+      });
+    } catch (err) {
+      // The row stays, marked failed, so it can be removed deliberately — and the error says why.
+      Object.assign(entry, { state: "failed", error: err.message });
+      this.#fail(`${entry.name}: ${err.message}`);
+    }
+    this.#files = [...this.#files];
+    this.#drawFiles();
+  }
+
+  #drawFiles() {
+    this.$("adi-composer").attachments = this.#files;
+  }
+
+  #clearFiles() {
+    for (const f of this.#files) if (f.preview.startsWith("blob:")) URL.revokeObjectURL(f.preview);
+    this.#files = [];
+    this.#drawFiles();
   }
 
   async #ignoreAwait(id) {

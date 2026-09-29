@@ -34,6 +34,7 @@ export * from "./tool-call.js";
 export * from "./markdown.js";
 export * from "./transcript.js";
 export * from "./composer.js";
+export * from "./mic.js";
 export * from "./ask.js";
 export * from "./chat.js";
 export * from "./modal.js";

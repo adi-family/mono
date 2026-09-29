@@ -69,8 +69,8 @@ the `value` *attribute* is the starting value, read once; the `value` *property*
 | `adi-markdown` | what an agent says, rendered — `adi_ui::Markdown`'s subset, built from text nodes only | §4 |
 | `adi-transcript` | the feed: newest first, keyed by `entries[].key`, an entry redrawn only when it changed | §2.1 |
 | `adi-message` `adi-note` `adi-tool-run` | one thing said (yours raised, the agent's plain, queued hollowed) · a platform note · a run of tool calls as one receipt line | §6 |
-| `adi-composer` `adi-ask` | the chat box (Enter sends, grows, Stop and asap while a turn runs) · the question card | §6 |
-| `adi-chat` | a whole chat window over the panel's `/api/agents`: pickers, transcript, composer, question card, queue, awaits | — |
+| `adi-composer` `adi-mic` `adi-ask` | the chat box (Enter sends, grows, a tray for pasted/dropped/picked files, Stop and asap while a turn runs) · dictation into it (browser or a server engine) · the question card | §6 |
+| `adi-chat` | a whole chat window over the panel's `/api/agents`: pickers, goals, awaits, transcript, composer with attachments and dictation, question card, queue | — |
 | `adi-gallery` | all of the above, on one page | — |
 
 Events are plain `CustomEvent`s on the element itself, `composed` so they cross the shadow
