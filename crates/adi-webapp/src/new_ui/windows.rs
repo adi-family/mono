@@ -221,7 +221,8 @@ pub(super) struct AppRef {
     pub(super) icon: Option<String>,
 }
 
-/// The conversation a chat window is pinned to.
+/// The conversation a chat window is pinned to — or, with no agent, nothing yet: a second chat
+/// window with its own pickers, opened by the island's "New window".
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct ChatRef {
     /// The paired machine the agent is on; `None` for this one.
@@ -361,6 +362,17 @@ impl Desk {
         self.open(Win::Talk(id));
     }
 
+    /// Another chat window with pickers of its own, beside whatever chat windows are open.
+    pub(super) fn open_chat_new(self) {
+        let id = self.add_chat(ChatRef {
+            node: None,
+            agent: String::new(),
+            run: String::new(),
+            title: String::new(),
+        });
+        self.open(Win::Talk(id));
+    }
+
     fn add_chat(self, chat: ChatRef) -> u32 {
         let id = self
             .chats
@@ -441,7 +453,7 @@ impl Desk {
                 Some(m) => format!("{} — {m}", a.name),
                 None => a.name,
             }),
-            Win::Talk(id) => self.chat(id).map(|c| {
+            Win::Talk(id) => self.chat(id).filter(|c| !c.agent.is_empty()).map(|c| {
                 let who = match &c.node {
                     Some(n) => format!("{} on {n}", c.agent),
                     None => c.agent,
@@ -469,6 +481,7 @@ impl Desk {
             Win::Talk(id) => self.chats.with_untracked(|c| {
                 c.iter()
                     .find(|(i, _)| *i == id)
+                    .filter(|(_, x)| !x.agent.is_empty())
                     .map(|(_, x)| match &x.node {
                         Some(n) => format!("{n}/{}/{}", x.agent, x.run),
                         None => format!("{}/{}", x.agent, x.run),

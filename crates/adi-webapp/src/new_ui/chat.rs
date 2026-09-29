@@ -5,7 +5,7 @@
 //! - [`Chat`], at `/chat`: pick an agent, then one of its conversations. Its list's right-click
 //!   "Open in new window" asks for a [`Pinned`] one, which the desk opens.
 //! - [`Pinned`], at `/chat/[<node>/]<agent>/<run>`: one conversation and nothing else, as many as
-//!   are open.
+//!   are open — or a second [`Chat`], when the island's "New window" asked for one.
 
 use leptos::prelude::*;
 use wasm_bindgen::{JsCast, JsValue};
@@ -30,20 +30,28 @@ pub(super) fn Chat(desk: Desk) -> impl IntoView {
     }
 }
 
-/// One conversation in a window of its own: no pickers, and no list to go back to.
+/// One conversation in a window of its own: no pickers, and no list to go back to — or, opened by
+/// the island's "New window" with no conversation, a second chat window with pickers of its own.
 #[component]
 pub(super) fn Pinned(desk: Desk, id: u32) -> impl IntoView {
     view! {
-        <div class="adi-new-chat">
-            {move || desk.chat(id).map(|c| view! {
-                <adi-chat
-                    class="adi-new-chat__body"
-                    node=c.node.unwrap_or_default()
-                    agent=c.agent
-                    run=c.run
-                ></adi-chat>
-            })}
-        </div>
+        {move || desk.chat(id).map(|c| {
+            if c.agent.is_empty() {
+                view! { <Chat desk/> }.into_any()
+            } else {
+                view! {
+                    <div class="adi-new-chat">
+                        <adi-chat
+                            class="adi-new-chat__body"
+                            node=c.node.unwrap_or_default()
+                            agent=c.agent
+                            run=c.run
+                        ></adi-chat>
+                    </div>
+                }
+                .into_any()
+            }
+        })}
     }
 }
 

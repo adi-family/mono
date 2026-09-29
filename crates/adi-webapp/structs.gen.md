@@ -571,7 +571,7 @@ pub(super) struct AppRef {
 
 ### struct `ChatRef`
 
-The conversation a chat window is pinned to.
+The conversation a chat window is pinned to — or, with no agent, nothing yet: a second chat window with its own pickers, opened by the island's "New window".
 
 ```rust
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

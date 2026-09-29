@@ -278,7 +278,7 @@ pub(super) fn Island(
         ev.prevent_default();
         // The island sits on a screen edge, and a menu dropped down from an island at the bottom
         // would open off the screen: in the lower half it opens upward, its foot at the pointer.
-        let tall = if matches!(win, Win::App(_)) && desk.is_open(win) { MENU_TWO } else { MENU_ONE };
+        let tall = if matches!(win, Win::App(_) | Win::Chat | Win::Talk(_)) { MENU_TWO } else { MENU_ONE };
         let low = f64::from(ev.client_y()) > super::windows::viewport_height() / 2.0;
         let y = if low { ev.client_y() - tall } else { ev.client_y() };
         menu.set(Some((MenuAt::Point(ev.client_x(), y), win)));
@@ -339,7 +339,9 @@ pub(super) fn Island(
                 {
                     let (id, chat) = chat;
                     let win = Win::Talk(id);
-                    let label = if chat.title.is_empty() {
+                    let label = if chat.agent.is_empty() {
+                        "Chat".to_string()
+                    } else if chat.title.is_empty() {
                         format!("Chat with {}", chat.agent)
                     } else {
                         format!("{} — {}", chat.title, chat.agent)
@@ -396,7 +398,8 @@ pub(super) fn Island(
 const MENU_ONE: i32 = 40;
 const MENU_TWO: i32 = 70;
 
-/// A window's menu in the island, as the Dock's: another window on the same app, this one closed,
+/// A window's menu in the island, as the Dock's: another window on the same app (or another chat
+/// window), this one closed,
 /// or — for a fixed window not open — opened. Out of the island into the body: the island is a
 /// blurred surface, and a fixed menu inside one is placed against it rather than the screen.
 fn island_menu(
@@ -406,7 +409,8 @@ fn island_menu(
     win: Win,
     light: bool,
 ) -> AnyView {
-    // Only an app has a second window to open: a pinned chat already is its conversation's window.
+    // A second window: another on the same app, or another chat window with pickers of its own.
+    // Settings and About are one of a kind.
     let fresh = match win {
         Win::App(id) => desk.app_untracked(id).map(|app| {
             Callback::new(move |()| {
@@ -414,6 +418,10 @@ fn island_menu(
                 desk.open_app_new(app.clone());
             })
         }),
+        Win::Chat | Win::Talk(_) => Some(Callback::new(move |()| {
+            menu.set(None);
+            desk.open_chat_new();
+        })),
         _ => None,
     };
     let close = Callback::new(move |()| {
