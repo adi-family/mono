@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-100 structs · 34 enums · 5 type aliases across 43 files.
+102 structs · 34 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -21,6 +21,7 @@
 - [`src/new_ui/fleet.rs`](#srcnew_uifleetrs) — `Fleet`
 - [`src/new_ui/palette.rs`](#srcnew_uipaletters) — `Item`
 - [`src/new_ui/shell.rs`](#srcnew_uishellrs) — `Edge`, `Layout`, `Shell`
+- [`src/new_ui/sites.rs`](#srcnew_uisitesrs) — `Site`, `Sites`
 - [`src/new_ui/widgets.rs`](#srcnew_uiwidgetsrs) — `Size`, `Declared`, `Config`, `Entry`
 - [`src/new_ui/windows.rs`](#srcnew_uiwindowsrs) — `Win`, `Place`, `AppRef`, `ChatRef`, `Desk`, `Snap`, `Gesture`, `Edge`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `PtyPhase`, `RunState`, `FoldedBlock`, `StoredRunSettings`, `PickerOption`, `SessionRow`, `RailBand`, `RailLayout`, `RowFace`, `RowId`, `SessionRef`, `PendingWalk`
@@ -282,6 +283,7 @@ enum Item {
         size: Size,
     },
     Tile(Tile),
+    Site(Site),
 }
 ```
 
@@ -320,6 +322,7 @@ What the home screen's own menus were opened on.
 enum Menued {
     Screen,
     Tile(AppRef, String),
+    Site(AppRef, String),
     Size(String, Size),
 }
 ```
@@ -531,6 +534,35 @@ The layout's live state, shared by the screen and the settings window.
 #[derive(Clone, Copy)]
 pub(super) struct Shell {
     pub(super) layout: RwSignal<Layout>,
+}
+```
+
+---
+
+## `src/new_ui/sites.rs`
+
+### struct `Site`
+
+One website on the home screen.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub(super) struct Site {
+    pub(super) host: String,
+    pub(super) path: String,
+    pub(super) machine: Option<String>,
+}
+```
+
+### struct `Sites`
+
+The websites added on this device, and whether the add panel is open.
+
+```rust
+#[derive(Clone, Copy)]
+pub(super) struct Sites {
+    pub(super) list: RwSignal<Vec<Site>>,
+    pub(super) adding: RwSignal<bool>,
 }
 ```
 

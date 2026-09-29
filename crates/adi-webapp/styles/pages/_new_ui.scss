@@ -1256,3 +1256,20 @@ $tile-col: 80px;
 
   &__hint { font-size: var(--fs-small); color: var(--ink-2); margin-right: var(--s2); }
 }
+
+// ---- add website (`sites.rs`) ----------------------------------------------------------------
+// The palette's surface: the address typed, then one row per machine that could serve it.
+.adi-new-add {
+  // Each row's subtitle is where the site will open from here — a machine string (§2).
+  &__url { font-family: var(--mono); font-size: var(--fs-label); color: var(--code); }
+
+  .adi-pal__row:disabled { opacity: .5; cursor: default; }
+
+  &__error {
+    margin: 0;
+    padding: var(--s2) 20px;
+    border-top: 1px solid var(--line);
+    font-size: var(--fs-small);
+    color: var(--err);
+  }
+}

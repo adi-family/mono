@@ -39,6 +39,7 @@ use leptos::{ev, portal::Portal, prelude::*};
 
 use super::arrange::{self, Arrange, Arrangement};
 use super::cache;
+use super::sites::{Site, Sites};
 use super::widgets::{self, AppWidget, Declared, Size};
 use super::windows::{AppRef, Desk};
 use crate::pages::dashboards;
@@ -372,6 +373,8 @@ enum Item {
         size: Size,
     },
     Tile(Tile),
+    /// A website added by hand ([`super::sites`]).
+    Site(Site),
 }
 
 impl Item {
@@ -427,9 +430,11 @@ struct Laid {
     ids: Vec<String>,
 }
 
-/// The listing, put in the order and sizes `arr` holds, with what it hides left out. Tracked.
-fn laid(apps: Apps, arr: &Arrangement) -> Laid {
-    let mut sections = Vec::new();
+/// The listing and the websites, put in the order and sizes `arr` holds, with what it hides left
+/// out. A website goes in its machine's section, which it opens if the machine lists no app.
+/// Tracked.
+fn laid(apps: Apps, arr: &Arrangement, sites: &[Site]) -> Laid {
+    let mut listed: Vec<(Option<String>, Vec<(String, Item)>)> = Vec::new();
     for (machine, tiles) in apps.sections() {
         let mut entries = Vec::new();
         for t in &tiles {
@@ -440,9 +445,22 @@ fn laid(apps: Apps, arr: &Arrangement) -> Laid {
             }
         }
         entries.extend(tiles.into_iter().map(|t| (arrange::app_id(&t.key), Item::Tile(t))));
-        entries.retain(|(id, _)| !arr.is_hidden(id));
-        sections.push((machine, arr.sorted(entries)));
+        listed.push((machine, entries));
     }
+    for site in sites {
+        let entry = (arrange::site_id(&site.key()), Item::Site(site.clone()));
+        match listed.iter_mut().find(|(m, _)| *m == site.machine) {
+            Some((_, entries)) => entries.push(entry),
+            None => listed.push((site.machine.clone(), vec![entry])),
+        }
+    }
+    let sections: Vec<_> = listed
+        .into_iter()
+        .map(|(machine, mut entries)| {
+            entries.retain(|(id, _)| !arr.is_hidden(id));
+            (machine, arr.sorted(entries))
+        })
+        .collect();
     let shown = || sections.iter().flat_map(|(_, e)| e.iter());
     let half = arr
         .chosen_half()
@@ -483,6 +501,8 @@ enum Menued {
     Screen,
     /// An app's tile: the app, and its item id.
     Tile(AppRef, String),
+    /// A website's tile: where it opens, and the site's key.
+    Site(AppRef, String),
     /// A widget's size, while editing: its id and the size it is drawn at.
     Size(String, Size),
 }
@@ -498,9 +518,12 @@ pub(super) fn Home(
     apps: Apps,
     desk: Desk,
     home: Arrange,
+    sites: Sites,
     #[prop(into)] light: Signal<bool>,
 ) -> impl IntoView {
-    let laid = Memo::new(move |_| home.now.with(|arr| laid(apps, arr)));
+    let laid = Memo::new(move |_| {
+        home.now.with(|arr| sites.list.with(|s| laid(apps, arr, s)))
+    });
     let items = Memo::new(move |_| laid.with(|l| l.items.clone()));
     // A memo, so a read that leaves it as it was does not rebuild the frame.
     let half = Memo::new(move |_| laid.with(|l| l.half.clone()));
@@ -549,12 +572,19 @@ pub(super) fn Home(
                             // Only one widget has the half; any other that asks for it is large.
                             let size = if size == Size::Half { Size::Large } else { size };
                             let body = view! { <AppWidget name url size light/> }.into_any();
-                            slot(home, laid, menu, id, Some(size), true, body)
+                            slot(home, laid, menu, id, Some(size), true, None, body)
                         }
                         Item::Tile(t) => {
                             let id = arrange::app_id(&t.key);
                             let body = tile(apps, desk, home, menu, id.clone(), t);
-                            slot(home, laid, menu, id, None, true, body)
+                            slot(home, laid, menu, id, None, true, None, body)
+                        }
+                        Item::Site(site) => {
+                            let key = site.key();
+                            let id = arrange::site_id(&key);
+                            let body = site_tile(desk, home, menu, site);
+                            let gone = Callback::new(move |()| sites.remove(&key));
+                            slot(home, laid, menu, id, None, true, Some(gone), body)
                         }
                     }}
                 </For>
@@ -562,10 +592,10 @@ pub(super) fn Home(
         </Show>
         {move || half.get().map(|Half { id, name, url }| {
             let body = view! { <AppWidget name url size=Size::Half light/> }.into_any();
-            slot(home, laid, menu, id, Some(Size::Half), false, body)
+            slot(home, laid, menu, id, Some(Size::Half), false, None, body)
         })}
         {move || menu.get().map(|(at, on)| {
-            screen_menu(desk, home, laid, menu, at, on, light.get_untracked())
+            screen_menu(desk, home, sites, laid, menu, at, on, light.get_untracked())
         })}
         </div>
     }
@@ -619,6 +649,8 @@ fn slot(
     id: String,
     widget: Option<Size>,
     movable: bool,
+    // What removing it does, when it is more than hiding it: a website added here is deleted.
+    removal: Option<Callback<()>>,
     body: AnyView,
 ) -> AnyView {
     let class = match widget {
@@ -671,7 +703,10 @@ fn slot(
     };
     let remove = move |ev: ev::MouseEvent| {
         ev.stop_propagation();
-        id.with_value(|id| home.hide(id));
+        match removal {
+            Some(r) => r.run(()),
+            None => id.with_value(|id| home.hide(id)),
+        }
     };
     let resize = move |ev: ev::MouseEvent| {
         ev.stop_propagation();
@@ -795,6 +830,7 @@ pub(super) fn AppMark(
 fn screen_menu(
     desk: Desk,
     home: Arrange,
+    sites: Sites,
     laid: Memo<Laid>,
     menu: RwSignal<Option<(MenuAt, Menued)>>,
     at: MenuAt,
@@ -813,8 +849,23 @@ fn screen_menu(
     let mut rows: Vec<(&'static str, Callback<()>, Option<bool>)> = Vec::new();
     let edit = (!home.editing.get_untracked())
         .then(|| ("Edit home screen", act(Box::new(move || home.edit(true))), None));
+    let add = ("Add website…", act(Box::new(move || sites.adding.set(true))), None);
     match on {
-        Menued::Screen => rows.extend(edit),
+        Menued::Screen => {
+            rows.extend(edit);
+            rows.push(add);
+        }
+        Menued::Site(app, key) => {
+            let again = app.clone();
+            rows.push(("Open", act(Box::new(move || desk.open_app(app.clone()))), None));
+            rows.push((
+                "Open in new window",
+                act(Box::new(move || desk.open_app_new(again.clone()))),
+                None,
+            ));
+            rows.extend(edit);
+            rows.push(("Remove from home screen", act(Box::new(move || sites.remove(&key))), None));
+        }
         Menued::Tile(app, id) => {
             let again = app.clone();
             rows.push(("Open", act(Box::new(move || desk.open_app(app.clone()))), None));
@@ -857,6 +908,74 @@ fn screen_menu(
                     .collect_view()}
             </Menu>
         </Portal>
+    }
+    .into_any()
+}
+
+/// A website's tile: an app tile in every way but where it came from — it opens in the app window,
+/// and its picture is its own favicon, else its first letter.
+fn site_tile(
+    desk: Desk,
+    home: Arrange,
+    menu: RwSignal<Option<(MenuAt, Menued)>>,
+    site: Site,
+) -> AnyView {
+    let editing = home.editing;
+    let name = site.name();
+    let key = site.key();
+    let Some(href) = site.url() else {
+        let note = format!("{name} — no address reaches it from here");
+        return view! {
+            <span class="adi-new-app is-off" title=note>
+                {face(view! { <AppMark name=name.clone() favicon=None icon=None/> }, name)}
+            </span>
+        }
+        .into_any();
+    };
+    let note = match &site.machine {
+        Some(m) => format!("{name} on {m}"),
+        None => name.clone(),
+    };
+    let app = AppRef {
+        key: format!("site/{key}"),
+        name: name.clone(),
+        machine: site.machine.clone(),
+        url: href.clone(),
+        favicon: favicon(&href),
+        icon: None,
+    };
+    let for_menu = app.clone();
+    view! {
+        <a
+            class="adi-new-app"
+            href=href
+            target="_blank"
+            rel="noopener"
+            title=note
+            draggable=move || if editing.get() { "false" } else { "true" }
+            on:contextmenu=move |ev: ev::MouseEvent| {
+                ev.prevent_default();
+                menu.set(Some((
+                    MenuAt::Point(ev.client_x(), ev.client_y()),
+                    Menued::Site(for_menu.clone(), key.clone()),
+                )));
+            }
+            on:click=move |ev: ev::MouseEvent| {
+                if editing.get_untracked() {
+                    ev.prevent_default();
+                } else if ev.button() == 0
+                    && !(ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.alt_key())
+                {
+                    ev.prevent_default();
+                    desk.open_app(app.clone());
+                }
+            }
+        >
+            {face(
+                view! { <AppMark name=name.clone() favicon=favicon(&href) icon=None/> },
+                name.clone(),
+            )}
+        </a>
     }
     .into_any()
 }

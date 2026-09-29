@@ -13,7 +13,7 @@
 //!   taken back out of the address bar. The way out that needs no working wasm beyond this file.
 //!
 //! What it draws so far: a wallpaper ([`background`]), the apps on it as a home screen
-//! ([`apps`], arranged by the person: [`arrange`]), the windows open over it ([`windows`] —
+//! ([`apps`], arranged by the person: [`arrange`], with websites added by hand: [`sites`]), the windows open over it ([`windows`] —
 //! [`settings`], [`about`], a chat with an agent, [`chat`], one paired device's page, [`device`], and one app in a small browser,
 //! [`browser`]), the top bar and island
 //! ([`shell`], with the paired machines' list in [`sources`], both read from [`fleet`]), and the
@@ -33,6 +33,7 @@ mod fleet;
 mod palette;
 mod settings;
 mod shell;
+mod sites;
 mod sources;
 mod widgets;
 mod windows;
@@ -104,7 +105,12 @@ pub(crate) fn action() -> Action {
 }
 
 /// The palette's commands, as they stand right now.
-fn commands(wall: background::Wallpaper, desk: Desk, home: arrange::Arrange) -> Vec<Item> {
+fn commands(
+    wall: background::Wallpaper,
+    desk: Desk,
+    home: arrange::Arrange,
+    sites: sites::Sites,
+) -> Vec<Item> {
     let now = wall.choice.get().appearance;
     let mut items = vec![
         Item::new(
@@ -127,6 +133,13 @@ fn commands(wall: background::Wallpaper, desk: Desk, home: arrange::Arrange) -> 
             "Move apps and widgets, resize or remove them",
             Lucide::LayoutGrid,
             move || home.edit(true),
+        ),
+        Item::new(
+            "Home screen",
+            "Add website",
+            "Put a site any of your machines serves on the home screen",
+            Lucide::Globe,
+            move || sites.adding.set(true),
         ),
     ];
     // A row for each appearance the screen is not already fixed to — one while it is light or
@@ -178,6 +191,7 @@ pub(crate) fn NewUi() -> impl IntoView {
     let fleet = fleet::Fleet::load();
     let apps = apps::Apps::load();
     let home = arrange::Arrange::load();
+    let sites = sites::Sites::load();
     let palette_open = RwSignal::new(false);
 
     // Back and forward change the address without a reload; the window it names comes forward.
@@ -233,7 +247,7 @@ pub(crate) fn NewUi() -> impl IntoView {
                     ></div>
                 </Show>
             </div>
-            <apps::Home apps desk home light=light/>
+            <apps::Home apps desk home sites light=light/>
             <windows::SnapPreview desk top=top_limit/>
             // Every window is drawn from this fixed list and stacked by `z-index`, never by
             // reordering: a window that moved in the DOM would be rebuilt, and lose whatever
@@ -278,6 +292,7 @@ pub(crate) fn NewUi() -> impl IntoView {
             <TopBar desk fleet light=light/>
         </Show>
         <Island shell desk palette=palette_open light=light/>
-        <palette::Palette items=move || commands(wall, desk, home) light=light open=palette_open/>
+        <sites::AddSite sites fleet light=light/>
+        <palette::Palette items=move || commands(wall, desk, home, sites) light=light open=palette_open/>
     }
 }

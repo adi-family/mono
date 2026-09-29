@@ -30,6 +30,11 @@ pub(super) fn widget_id(key: &str, path: &str) -> String {
     format!("widget|{key}|{path}")
 }
 
+/// The id of the website keyed `key` (`<machine>:<host><path>`, see `sites::Site::key`).
+pub(super) fn site_id(key: &str) -> String {
+    format!("site|{key}")
+}
+
 /// The machine an item belongs to: empty for this one.
 fn section(id: &str) -> &str {
     let key = id.split_once('|').map_or(id, |(_, rest)| rest);
