@@ -1,23 +1,71 @@
 <!doctype html>
 <!-- The Agent board's chat widget, for the ADI home screen. Declared in config.toml as
-     [widget.chat]; served at /widget/chat by the app's widget service (widget/index.ts). It
-     mounts the same chat module the board's own page does, the frontend's /modules/chat.js.
+     [widget.chat]; served at /widget/chat by the app's widget service (widget/index.ts).
+     It is the panel's own chat, `<adi-chat>`, loaded from the panel through this app's backend
+     (/api/elements/*, backend/routes/elements.ts) — the same files the panel loads, not a copy —
+     and talking to the panel's agent API through the same backend (/api/agents/*, /api/voice/*).
      It paints no background — the home screen's frosted ground shows through — and declares no
-     colour scheme, which is what lets it. `?light` switches it to the light tokens. -->
+     colour scheme, which is what lets it. `?light` switches it to the light tokens.
+
+     Framed by the home screen, it also offers "Open in window": the conversation it is on goes to
+     the home screen as a message — { type: "adi:open-chat", node, agent, run, title }, posted to
+     the framing page's origin only — which opens a chat window there, and the widget starts over
+     with a fresh chat. Right-click "Open in new window" on a conversation sends the same message
+     and leaves the widget where it is. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Agent board</title>
 <link rel="stylesheet" href="/widget/tokens.css">
-<style>html, body { height: 100%; margin: 0; background: none; }</style>
+<style>
+  html, body { height: 100%; margin: 0; background: none; }
+  adi-chat { height: 100%; --adi-transcript-bg: transparent; }
+  /* In the chat's own top bar, at its right end: the bar is 8px + a 30px picker + 8px tall. */
+  .out { position: fixed; top: 8px; right: 12px; z-index: 1; }
+  .out[hidden] { display: none; }
+  /* Room for it at the bar's end, so a long conversation title stops short of it. */
+  body.framed adi-chat::part(bar) { padding-right: 150px; }
+</style>
+<script type="module" src="/api/elements/adi-elements.js"></script>
 </head>
 <body>
-<div id="chat" style="height:100%"></div>
-<script type="module">
+<script>
   if (new URLSearchParams(location.search).has("light")) document.documentElement.classList.add("light");
-  const { chat } = await import("/modules/chat.js");
-  chat(document.getElementById("chat"));
+</script>
+<adi-chat picker windows></adi-chat>
+<adi-button class="out" variant="quiet" size="sm" icon="maximize-2" hidden
+  title="Open this chat in a window of its own, and start this one over">Open in window</adi-button>
+<script type="module">
+  // The page that frames this one: only it hears where the chat is. `ancestorOrigins` where the
+  // browser has it (Chromium, Safari), the referrer otherwise — and nothing at all when neither
+  // names one, so the button stays hidden rather than posting to "*".
+  const host = location.ancestorOrigins?.[0] ||
+    (document.referrer ? new URL(document.referrer).origin : null);
+  const out = document.querySelector(".out");
+  let place = null;
+  const send = (p) => window.parent.postMessage({ type: "adi:open-chat", ...p }, host);
+  const watch = (chat) => {
+    chat.addEventListener("place", (ev) => { place = ev.detail; });
+    chat.addEventListener("open-window", (ev) => send(ev.detail));
+  };
+  watch(document.querySelector("adi-chat"));
+  if (window.parent !== window && host) {
+    out.hidden = false;
+    document.body.classList.add("framed");
+    out.addEventListener("click", () => {
+      if (!place?.agent) return;
+      send(place);
+      // A new element, not a reload: the chat keeps no memory, so a fresh one is a fresh chat,
+      // and the page's modules are already loaded.
+      const fresh = document.createElement("adi-chat");
+      fresh.setAttribute("picker", "");
+      fresh.setAttribute("windows", "");
+      document.querySelector("adi-chat").replaceWith(fresh);
+      place = null;
+      watch(fresh);
+    });
+  }
 </script>
 </body>
 </html>

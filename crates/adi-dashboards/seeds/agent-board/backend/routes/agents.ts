@@ -1,8 +1,10 @@
-// GET /agents — this machine's agents, as the panel lists them.
+// GET /agents[/…] — the panel's agent API, read through: the agent list, and an attached file by
+// id (`/agents/attachment/<id>`) for the chat to draw.
 
-import { panel } from "../lib/panel.ts";
+import { relay } from "../lib/panel.ts";
 
 export const method = "GET";
 export const path = "/agents";
 
-export default () => panel("/api/agents");
+export default (req: Request, ctx: { params: string[] }) =>
+  relay(req, ["/api/agents", ...ctx.params].join("/"));
