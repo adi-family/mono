@@ -53,15 +53,19 @@ impl Site {
 /// What was typed, as a host, a path, and — when it was a whole fleet address — the machine in it.
 /// `None` when there is no host to take.
 ///
-/// Forgiving on purpose, because the address is copied from wherever it was seen: a scheme is
-/// dropped; a bare name (`crm`) gets the `.adi` it lives under; and `app.nosh1.hetzner-nosh.n.adi`,
-/// pasted from a browser, is read back as `app.nosh1.adi` on hetzner-nosh.
+/// Forgiving on purpose, because the address is copied from wherever it was seen: a name typed
+/// without its zone (`crm`, `app.nosh1`) gets the `.adi` every machine's names live under; and
+/// `app.nosh1.hetzner-nosh.n.adi`, pasted from a browser, is read back as `app.nosh1.adi` on
+/// hetzner-nosh. Only an address with its scheme (`https://example.com`) is taken as it is — a
+/// real domain — as are `localhost`, an IP address and anything with a port: none of those is an
+/// ADI name, and there is no telling `app.nosh1` from a domain by its shape.
 pub(super) fn parse(typed: &str) -> Option<(String, String, Option<String>)> {
-    let t = typed.trim();
-    let t = t
+    let typed = typed.trim();
+    let t = typed
         .strip_prefix("http://")
-        .or_else(|| t.strip_prefix("https://"))
-        .unwrap_or(t);
+        .or_else(|| typed.strip_prefix("https://"))
+        .unwrap_or(typed);
+    let exact = t.len() != typed.len();
     let (host, path) = match t.find('/') {
         Some(i) => (&t[..i], &t[i..]),
         None => (t, "/"),
@@ -76,11 +80,13 @@ pub(super) fn parse(typed: &str) -> Option<(String, String, Option<String>)> {
     {
         return Some((format!("{}.adi", service.join(".")), path.to_string(), Some((*node).to_string())));
     }
-    let host = if host.contains('.') || host.contains(':') {
-        host
-    } else {
-        format!("{host}.adi")
-    };
+    // A name without a dot is no domain, however it was written.
+    let literal = (exact && host.contains('.'))
+        || host.ends_with(".adi")
+        || host == "localhost"
+        || host.contains(':')
+        || host.parse::<std::net::Ipv4Addr>().is_ok();
+    let host = if literal { host } else { format!("{host}.adi") };
     Some((host, path.to_string(), None))
 }
 
@@ -363,7 +369,10 @@ mod tests {
     fn what_was_typed_becomes_a_host_and_a_path() {
         assert_eq!(p("app.nosh1.adi"), ("app.nosh1.adi".into(), "/".into(), None));
         assert_eq!(p(" http://crm/deals "), ("crm.adi".into(), "/deals".into(), None));
-        assert_eq!(p("example.com"), ("example.com".into(), "/".into(), None));
+        assert_eq!(p("app.nosh1"), ("app.nosh1.adi".into(), "/".into(), None));
+        assert_eq!(p("https://example.com"), ("example.com".into(), "/".into(), None));
+        assert_eq!(p("localhost:3000/x"), ("localhost:3000".into(), "/x".into(), None));
+        assert_eq!(p("10.0.0.2"), ("10.0.0.2".into(), "/".into(), None));
         assert_eq!(
             p("http://app.nosh1.hetzner-nosh.n.adi/login"),
             ("app.nosh1.adi".into(), "/login".into(), Some("hetzner-nosh".into()))
