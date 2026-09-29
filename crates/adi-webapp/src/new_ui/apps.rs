@@ -571,7 +571,7 @@ pub(super) fn Home(
                         Item::Widget { id, name, url, size } => {
                             // Only one widget has the half; any other that asks for it is large.
                             let size = if size == Size::Half { Size::Large } else { size };
-                            let body = view! { <AppWidget name url size light/> }.into_any();
+                            let body = view! { <AppWidget name url size desk light/> }.into_any();
                             slot(home, laid, menu, id, Some(size), true, None, body)
                         }
                         Item::Tile(t) => {
@@ -591,7 +591,7 @@ pub(super) fn Home(
             </nav>
         </Show>
         {move || half.get().map(|Half { id, name, url }| {
-            let body = view! { <AppWidget name url size=Size::Half light/> }.into_any();
+            let body = view! { <AppWidget name url size=Size::Half desk light/> }.into_any();
             slot(home, laid, menu, id, Some(Size::Half), false, None, body)
         })}
         {move || menu.get().map(|(at, on)| {

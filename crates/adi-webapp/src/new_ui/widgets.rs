@@ -28,14 +28,22 @@
 //! Read as a file from the app's directory, as its picture is — so a machine running an older
 //! panel still offers its apps' widgets, and a stopped app's are known without starting it.
 //!
+//! A widget may ask for a chat window: `postMessage({ type: "adi:open-chat", node, agent, run,
+//! title })` to its parent opens one at that conversation (`node` null for this machine, `run`
+//! null for the agent's list) — how the Agent board's chat widget hands its conversation over.
+//! Heard only from the widget's own frame: any page can post to this one.
+//!
 //! An app widget runs its app: framing it is a request to the app's address, which starts an app
 //! that is stopped. That is what a widget is for — it shows the app live — and it is why only an
 //! app that declares one ever gets one.
 
 use std::collections::BTreeMap;
 
-use leptos::prelude::*;
+use leptos::{ev, html, prelude::*};
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
+
+use super::windows::{ChatRef, Desk};
 
 /// How much of the home screen an app's widget takes: tiles of the grid, or the right half.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -135,8 +143,20 @@ pub(super) fn AppWidget(
     name: String,
     url: String,
     size: Size,
+    desk: Desk,
     #[prop(into)] light: Signal<bool>,
 ) -> impl IntoView {
+    let frame: NodeRef<html::Iframe> = NodeRef::new();
+    let heard = window_event_listener(ev::message, move |ev| {
+        let from_here = frame.get_untracked().and_then(|f| f.content_window()).is_some_and(|w| {
+            ev.source()
+                .is_some_and(|s| JsValue::from(s) == JsValue::from(w))
+        });
+        if from_here && let Some(chat) = asked_chat(&ev.data()) {
+            desk.open_chat(chat);
+        }
+    });
+    on_cleanup(move || heard.remove());
     let src = move || {
         if !light.get() {
             return url.clone();
@@ -147,6 +167,7 @@ pub(super) fn AppWidget(
     view! {
         <div class=size.class() class:light=move || light.get()>
             <iframe
+                node_ref=frame
                 class="adi-new-widget__view"
                 src=src
                 title=format!("{name} widget")
@@ -154,6 +175,18 @@ pub(super) fn AppWidget(
             ></iframe>
         </div>
     }
+}
+
+/// The chat window a widget's message asks for, if it is one (see the module doc).
+fn asked_chat(data: &JsValue) -> Option<ChatRef> {
+    let field = |k: &str| js_sys::Reflect::get(data, &k.into()).ok().and_then(|v| v.as_string());
+    (field("type")? == "adi:open-chat").then_some(())?;
+    Some(ChatRef {
+        node: field("node").filter(|n| !n.is_empty()),
+        agent: field("agent").filter(|a| !a.is_empty())?,
+        run: field("run").unwrap_or_default(),
+        title: field("title").unwrap_or_default(),
+    })
 }
 
 /// Where a widget declared at `path` is served for app `href`: that path on the app's own origin.
