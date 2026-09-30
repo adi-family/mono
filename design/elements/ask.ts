@@ -1,7 +1,7 @@
 // Emits `answer` with `{ id, replies }`; replies combine selected labels and free text.
 
-import { AdiElement, define, esc } from "./base.js";
-import { renderMarkdown } from "./markdown.js";
+import { AdiElement, define, esc } from "./base.ts";
+import { renderMarkdown } from "./markdown.ts";
 
 export interface AskOption {
   label: string;

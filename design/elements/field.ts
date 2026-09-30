@@ -1,7 +1,7 @@
 // Form-associated controls. The value attribute sets the default; the property holds live input.
 
-import { AdiElement, define, watchChildren } from "./base.js";
-import "./icon.js";
+import { AdiElement, define, watchChildren } from "./base.ts";
+import "./icon.ts";
 
 type NativeControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 

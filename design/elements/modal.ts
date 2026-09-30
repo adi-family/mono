@@ -1,7 +1,7 @@
 // Native dialog wrapper. Emits `open` and `close` on the host element.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 class AdiModal extends AdiElement {
   static observedAttributes = ["label", "open"];

@@ -45,9 +45,10 @@ scripts/elements.sh check  # checks TypeScript separately
 node scripts/elements.test.mjs --shared  # browser regression checks (requires Playwright)
 ```
 
-All element sources are TypeScript. The build strips types and inlines `elements.css` into
-`base.js` with esbuild's `.css=text` loader. Relative module imports stay separate; use
-`./base.js` in TypeScript imports so they resolve to the emitted JavaScript.
+All element sources are TypeScript. Write relative imports with `.ts`, such as `./base.ts`.
+TypeScript's `rewriteRelativeImportExtensions` converts them to `.js` during the build, then
+esbuild inlines `elements.css` into `base.js`. Relative modules stay separate, and source maps
+point back to the TypeScript files. Builds skip type checking; `check` and CI run it separately.
 
 Trunk runs the build through `crates/adi-webapp/Trunk.toml`, then copies `target/elements` into
 `dist/elements`. Pages load `/elements/adi-elements.js` from that output. Trunk watches `design/`

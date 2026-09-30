@@ -1,7 +1,7 @@
 // Dismissal emits `dismiss` and hides the notice; persistence belongs to the caller.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 class AdiNotice extends AdiElement {
   static observedAttributes = ["lead", "tone", "dismissible"];

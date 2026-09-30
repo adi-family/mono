@@ -1,8 +1,8 @@
 // Entries arrive oldest first and render newest first, keyed to preserve open state across polls.
 
-import { AdiElement, define, esc } from "./base.js";
-import { renderMarkdown } from "./markdown.js";
-import "./icon.js";
+import { AdiElement, define, esc } from "./base.ts";
+import { renderMarkdown } from "./markdown.ts";
+import "./icon.ts";
 
 export interface Picture {
   url: string;

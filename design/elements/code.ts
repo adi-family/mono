@@ -1,7 +1,7 @@
 // Light-DOM text is preserved verbatim, including indentation.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 class AdiCode extends AdiElement {
   static observedAttributes = ["label", "copy"];

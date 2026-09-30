@@ -1,10 +1,10 @@
 // Render every variant and derive its example markup from the same specimen.
 
-import { AdiElement, define, detail, esc } from "./base.js";
-import type { AdiInput } from "./field.js";
-import { ICON_NAMES } from "./icon.js";
-import type { AdiModal } from "./modal.js";
-import type { AdiTable } from "./table.js";
+import { AdiElement, define, detail, esc } from "./base.ts";
+import type { AdiInput } from "./field.ts";
+import { ICON_NAMES } from "./icon.ts";
+import type { AdiModal } from "./modal.ts";
+import type { AdiTable } from "./table.ts";
 
 export interface GallerySection {
   id: string;

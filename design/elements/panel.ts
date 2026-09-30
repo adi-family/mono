@@ -1,4 +1,4 @@
-import { AdiElement, define } from "./base.js";
+import { AdiElement, define } from "./base.ts";
 
 class AdiPanel extends AdiElement {
   static observedAttributes = ["label"];

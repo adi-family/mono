@@ -1,7 +1,7 @@
 // adi-grant emits `remove` with `{ value }`; the caller removes the element.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 class AdiTag extends AdiElement {}
 

@@ -1,5 +1,5 @@
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 class AdiToolCall extends AdiElement {
   static observedAttributes = ["calls", "tool", "command", "open"];

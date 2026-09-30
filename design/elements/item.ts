@@ -1,6 +1,6 @@
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
-import "./status.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
+import "./status.ts";
 
 class AdiKbd extends AdiElement {
 }

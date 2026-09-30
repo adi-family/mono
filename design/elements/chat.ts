@@ -2,15 +2,15 @@
 // Events: `place` and `open-window` carry `{ node, agent, run, title }`.
 // The host persists the location through attributes; each chat instance is independent.
 
-import { AdiElement, define, detail } from "./base.js";
-import type { AdiTranscript, Call, CallRun, CallState, Note, NotePart, Picture, TranscriptEntry as Entry, TranscriptPart as Part } from "./transcript.js";
-import "./transcript.js";
-import type { AdiComposer, ComposerAttachment } from "./composer.js";
-import "./composer.js";
-import type { AdiAsk, AskQuestion } from "./ask.js";
-import "./ask.js";
-import "./icon.js";
-import "./mic.js";
+import { AdiElement, define, detail } from "./base.ts";
+import type { AdiTranscript, Call, CallRun, CallState, Note, NotePart, Picture, TranscriptEntry as Entry, TranscriptPart as Part } from "./transcript.ts";
+import "./transcript.ts";
+import type { AdiComposer, ComposerAttachment } from "./composer.ts";
+import "./composer.ts";
+import type { AdiAsk, AskQuestion } from "./ask.ts";
+import "./ask.ts";
+import "./icon.ts";
+import "./mic.ts";
 
 const MAX_ATTACHMENTS = 6;
 const PICTURES = ["image/png", "image/jpeg", "image/webp", "image/gif"];

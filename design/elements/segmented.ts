@@ -1,6 +1,6 @@
 // Options move into the shadow root. Use `value` and `change` after upgrade.
 
-import { AdiElement, define, watchChildren } from "./base.js";
+import { AdiElement, define, watchChildren } from "./base.ts";
 
 class AdiSegmented extends AdiElement {
   static observedAttributes = ["value"];

@@ -1,8 +1,8 @@
 // Events: send/asap `{ text }`, stop, files `{ files }`, unattach `{ key }`.
 // The caller uploads attachments and clears the message after a successful send.
 
-import { AdiElement, define, esc } from "./base.js";
-import "./icon.js";
+import { AdiElement, define, esc } from "./base.ts";
+import "./icon.ts";
 
 const MAX_HEIGHT = 200;
 

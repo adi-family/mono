@@ -1,7 +1,7 @@
 // Set `columns` and `rows` as properties. Attributes: empty, sort, dir.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 export type TableRow = Record<string, unknown>;
 

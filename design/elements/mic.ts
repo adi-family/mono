@@ -1,8 +1,8 @@
 // Dictation appends to the composer. Browser recognition streams; other engines upload recorded audio.
 
-import { AdiElement, define, esc } from "./base.js";
-import type { AdiComposer } from "./composer.js";
-import "./icon.js";
+import { AdiElement, define, esc } from "./base.ts";
+import type { AdiComposer } from "./composer.ts";
+import "./icon.ts";
 
 const ENGINE_KEY = "adi.voice.engine.v1";
 const BROWSER = "browser";

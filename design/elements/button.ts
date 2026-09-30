@@ -1,7 +1,7 @@
 // Variants: `primary` is accent-filled; `strong` is ink-filled.
 
-import { AdiElement, define } from "./base.js";
-import "./icon.js";
+import { AdiElement, define } from "./base.ts";
+import "./icon.ts";
 
 const VARIANTS = ["default", "primary", "strong", "quiet", "link", "danger"] as const;
 

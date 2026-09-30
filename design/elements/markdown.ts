@@ -1,7 +1,7 @@
 // Build untrusted Markdown with DOM nodes and textContent; validate link targets with safeHref.
 // Unrecognized syntax stays text, and an unclosed code fence runs to the end.
 
-import { AdiElement, define } from "./base.js";
+import { AdiElement, define } from "./base.ts";
 
 export type MarkdownAlignment = "left" | "center" | "right";
 
