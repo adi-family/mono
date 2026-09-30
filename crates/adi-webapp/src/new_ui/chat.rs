@@ -1,5 +1,5 @@
-//! The chat windows — `<adi-chat>`, the chat as plain HTML and JavaScript
-//! (`design/elements/chat.js`), which reads the agent API and polls on its own.
+//! The chat windows — `<adi-chat>`, the chat as a custom element
+//! (`design/elements/chat.ts`), which reads the agent API and polls on its own.
 //!
 //! Every chat window is the same thing at its own address, like a browser tab: `/chat`,
 //! `/chat/<agent>`, `/chat/<agent>/<run>`, with `@<node>/` first for a paired machine

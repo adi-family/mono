@@ -10,8 +10,8 @@
 # this, build. Names are checked against lucide.dev — a typo is a 404, never a silent blank.
 #
 # Two consumers, one directory. The Rust side reads it at build time; the custom elements in
-# `design/elements` have no build step at all, so their copy is written out here as
-# `icons.gen.js` on every run — which is why this script regenerates it even when nothing was
+# `design/elements` do not read SVGs (their build only strips TypeScript), so their copy is
+# written out here as `icons.gen.js` on every run — which is why this script regenerates it even when nothing was
 # fetched. One set of glyphs, whichever language draws them.
 set -euo pipefail
 

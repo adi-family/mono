@@ -1,0 +1,88 @@
+/* <adi-chat> — its own stylesheet, inlined into chat.js by the build (scripts/elements.sh) and
+   adopted by every <adi-chat> as one constructable sheet. Only var(--…): the values live in
+   design/tokens.css, which reaches in through the shadow boundary (DESIGN.md §8). */
+
+:host { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--ink); }
+.bar { flex: none; display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s4);
+  border-bottom: 1px solid var(--line); }
+.bar[hidden] { display: none; }
+select { min-width: 0; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--r);
+  background: var(--bg-raise); color: var(--ink); font: inherit; font-size: var(--fs-small); }
+.agent { flex: 0 1 200px; }
+.conv { flex: 1; }
+.top { flex: none; display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3) var(--s4) 0; }
+.top[hidden] { display: none; }
+.await { display: flex; align-items: center; gap: var(--s2); font-size: var(--fs-label); color: var(--ink-3); }
+.await .what { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); }
+.await button { padding: 2px 8px; border-radius: var(--r); color: var(--ink-2);
+  transition: background var(--transition); }
+.await button:hover { background: var(--bg-hover); }
+.goal { display: flex; align-items: center; gap: var(--s2); min-height: 28px;
+  font-size: var(--fs-small); color: var(--ink-3); }
+.goal .text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  text-align: left; color: var(--ink-2); }
+.goal .text:hover { color: var(--ink); }
+.goal input { flex: 1; min-width: 0; padding: 5px 10px; border: 1px solid var(--line-strong);
+  border-radius: var(--r); background: var(--bg-raise); color: var(--ink); font: inherit; font-size: var(--fs-ui); }
+.goal input::placeholder { color: var(--ink-3); }
+.link { color: var(--ink-3); transition: color var(--transition); }
+.link:hover { color: var(--ink-2); }
+.small { flex: none; padding: 3px 10px; border-radius: var(--r); font-size: var(--fs-small); color: var(--ink-2);
+  transition: background var(--transition), color var(--transition); }
+.small:hover { background: var(--bg-hover); color: var(--ink); }
+.small.default { background: var(--btn); color: var(--ink); }
+.small.default:hover { background: var(--btn-hover); }
+.small.danger:hover { color: var(--err); }
+.small:disabled { opacity: .4; cursor: not-allowed; }
+.explain { font-size: var(--fs-label); color: var(--ink-3); }
+.note { min-height: 0; font-size: var(--fs-label); color: var(--ink-3); }
+.note:empty { display: none; }
+.crumb { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1; }
+.crumb[hidden], .pick[hidden] { display: none; }
+.back { flex: none; display: flex; align-items: center; gap: 4px; padding: 4px 8px 4px 4px;
+  border-radius: var(--r); font-size: var(--fs-small); color: var(--ink-2);
+  transition: background var(--transition), color var(--transition); }
+.back:hover { background: var(--bg-hover); color: var(--ink); }
+.crumb .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-ui-sm); font-weight: 500; }
+.pick { display: flex; align-items: center; gap: var(--s2); flex: 1; min-width: 0; }
+.pickhint { font-size: var(--fs-small); color: var(--ink-3); }
+.pickhint:empty { display: none; }
+.chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chat[hidden], .list[hidden] { display: none; }
+.list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s3) var(--s2); }
+.fresh { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
+  font-size: var(--fs-ui-sm); color: var(--ink-2); transition: background var(--transition), color var(--transition); }
+.fresh:hover { background: var(--bg-hover); color: var(--ink); }
+.rows { display: flex; flex-direction: column; margin-top: var(--s2); }
+.row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
+  text-align: left; transition: background var(--transition); }
+.row:hover { background: var(--bg-hover); }
+.row .text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-ui-sm); color: var(--ink); }
+.row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-label); color: var(--ink-3); }
+.row .star { flex: none; color: var(--ink-3); }
+.live { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.none { padding: 7px 8px; font-size: var(--fs-small); color: var(--ink-3); }
+:host { position: relative; }
+.menu { position: absolute; z-index: 20; min-width: 168px; padding: 4px; border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg); background: var(--bg-raise); }
+.menu[hidden] { display: none; }
+.menu button { display: block; width: 100%; padding: 6px 8px; border-radius: var(--r); text-align: left;
+  font-size: var(--fs-ui-sm); color: var(--ink); }
+.menu button:hover { background: var(--bg-hover); }
+.error { flex: none; margin: 0; padding: var(--s2) var(--s4); font-size: var(--fs-small); color: var(--err); }
+.error:empty { display: none; }
+adi-transcript { flex: 1; min-height: 0; padding: var(--s4); }
+.lead { display: flex; flex-direction: column; gap: var(--s3); }
+.lead:empty { display: none; }
+.earlier { align-self: flex-start; padding: 4px 8px; border-radius: var(--r); font-size: var(--fs-small);
+  color: var(--ink-3); transition: background var(--transition), color var(--transition); }
+.earlier:hover { background: var(--bg-hover); color: var(--ink-2); }
+.earlier[hidden] { display: none; }
+.empty { font-size: var(--fs-small); color: var(--ink-3); }
+.empty:empty { display: none; }
+pre.log { margin: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--bg-raise); font-family: var(--mono); font-size: var(--fs-mono); line-height: 1.6;
+  color: var(--code); white-space: pre-wrap; word-break: break-word; }
+pre.log:empty { display: none; }

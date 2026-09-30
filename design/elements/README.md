@@ -1,7 +1,8 @@
 # adi-elements — the design system as custom elements
 
-`design/DESIGN.md` written out as HTML tags. No framework, no build step, no npm: every file
-here is an ES module defining `HTMLElement` subclasses, and the browser is the runtime.
+`design/DESIGN.md` written out as HTML tags. No framework, no npm, no bundler: every file here is
+an ES module defining `HTMLElement` subclasses — TypeScript where it has been converted, stripped
+to JavaScript one file at a time — and the browser is the runtime.
 
 ```html
 <link rel="stylesheet" href="/design/tokens.css">
@@ -42,6 +43,29 @@ Three decisions, all in [`base.js`](./base.js), and they explain most of what yo
 - **Build once, update often.** `template()` runs on the first connect; `update()` runs on every
   attribute change after it. Nothing rebuilds its shadow root on an attribute change, which is
   what would throw away focus, selection and scroll position in anything holding an `<input>`.
+
+## TypeScript
+
+The elements are moving to TypeScript one file at a time: `base.ts` and `chat.ts` are converted,
+the rest are still `.js`, and both sit side by side here. A browser cannot run a `.ts` file, so what
+a page loads is the output of `scripts/elements.sh build`, never this directory itself:
+
+- **One file out per file in.** Each `x.ts` becomes `x.js` with its types stripped; each `x.js` is
+  copied as it is. Nothing is merged, so `/elements/chat.js` is still one module importing
+  `./base.js` — and a TypeScript file writes its imports as `./base.js` too.
+- **An element's CSS is a `.css` file beside it**, imported as `import css from "./chat.css"` and
+  inlined as text by the build; `static override sheet = sheet(css)` compiles it once, as before.
+- **The build does not check types.** `scripts/elements.sh check` does (tsc, pinned in the
+  script), the editor does as you type (it reads `tsconfig.json` here), and CI runs the check
+  before every release build.
+- **Where it runs.** Trunk's pre-build hook (`crates/adi-webapp/Trunk.toml`) builds into
+  `target/elements` and the panel copies that to `/elements/`, on `trunk build` and on every
+  `trunk serve` rebuild. Load the elements from a panel's `/elements/`, as before — not from a
+  file path into this directory.
+
+To convert another element: rename it to `.ts`, type it until `scripts/elements.sh check` is clean,
+move its `sheet(`…`)` into a `.css` beside it, and delete from `chat.ts` whichever stand-in
+interface covered it (`TranscriptElement`, `ComposerElement`, …) in favour of the class it exports.
 
 The form controls (`adi-input`, `adi-select`, `adi-textarea`) are **form-associated**: they carry
 a `name`, submit with the form around them, and reset with it. Values follow native semantics —

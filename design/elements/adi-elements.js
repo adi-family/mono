@@ -4,9 +4,11 @@
 //   <script type="module" src="/elements/adi-elements.js"></script>
 //   <adi-button variant="primary">Save</adi-button>
 //
-// No framework, no build step, no npm: these are HTMLElement subclasses and the browser is the
-// runtime. The panel loads this file from `index.html` (Trunk copies the directory into `dist/`
-// verbatim), which is why every element is available on every page of it, Leptos or not.
+// No framework, no npm, no bundler: these are HTMLElement subclasses and the browser is the
+// runtime. Some are TypeScript, stripped to JavaScript one file at a time by
+// `scripts/elements.sh build`; the panel loads this file from `index.html` (Trunk copies that
+// build into `dist/elements/`), which is why every element is available on every page of it,
+// Leptos or not.
 //
 // What makes them look right is `design/tokens.css`, loaded by the page. Custom properties
 // inherit through a shadow boundary, so the elements draw themselves out of whatever token file

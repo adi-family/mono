@@ -14,9 +14,12 @@
 // `update()` runs on every attribute change after it. Rebuilding a shadow root wholesale on an
 // attribute change is what loses focus, selection and scroll position in anything that contains
 // a real `<input>` — see `field.js`, where that is the whole design.
+//
+// TypeScript, served as JavaScript: `scripts/elements.sh build` strips the types file by file, so
+// every `./base.js` import across this directory resolves to what this file becomes.
 
 /** Compile CSS once into a stylesheet every instance of a class can adopt. */
-export function sheet(css) {
+export function sheet(css: string): CSSStyleSheet {
   const compiled = new CSSStyleSheet();
   compiled.replaceSync(css);
   return compiled;
@@ -29,16 +32,16 @@ export function sheet(css) {
  * under two URLs (`./button.js` and `/elements/button.js` are two modules) is a thing that
  * happens. A second registration should be a no-op, not a page that dies on load.
  */
-export function define(tag, cls) {
+export function define<T extends CustomElementConstructor>(tag: string, cls: T): T {
   if (!customElements.get(tag)) customElements.define(tag, cls);
   return cls;
 }
 
-const ENTITIES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const ENTITIES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 
 /** Text, safe to interpolate into one of the template strings below. */
-export function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) => ENTITIES[c]);
+export function esc(value: unknown): string {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ENTITIES[c] ?? c);
 }
 
 // Shared by every element: the box model, and the type the design system starts from (§4).
@@ -69,7 +72,7 @@ const BASE = sheet(`
  * `<option>`s, `<adi-textarea>` taking its default text — has to be told about them rather than
  * looking once and finding nothing. (Slotted content does not need this: a slot is live.)
  */
-export function watchChildren(element, handle) {
+export function watchChildren(element: Node, handle: () => void): void {
   handle();
   new MutationObserver(handle).observe(element, {
     childList: true,
@@ -78,10 +81,24 @@ export function watchChildren(element, handle) {
   });
 }
 
+/**
+ * A custom event's `detail`, as the listener knows it was sent.
+ *
+ * The DOM types every listener's argument as a plain `Event`, so what an element's event carries
+ * is a contract between two files the checker cannot see across. This is where that is said —
+ * once, by name — rather than as a cast in every listener.
+ */
+export function detail<T>(event: Event): T {
+  return (event as CustomEvent<T>).detail;
+}
+
 /** The base class: a shadow root, the shared sheet plus the class's own, and the two phases. */
 export class AdiElement extends HTMLElement {
   /** The class's own stylesheet, adopted after the shared one. Build it with `sheet()`. */
-  static sheet = null;
+  static sheet: CSSStyleSheet | null = null;
+
+  /** Attached in the constructor, so never the `null` the DOM types allow for. */
+  declare readonly shadowRoot: ShadowRoot;
 
   #built = false;
 
@@ -92,7 +109,7 @@ export class AdiElement extends HTMLElement {
 
   connectedCallback() {
     if (!this.#built) {
-      const own = this.constructor.sheet;
+      const own = (this.constructor as typeof AdiElement).sheet;
       this.shadowRoot.adoptedStyleSheets = own ? [BASE, own] : [BASE];
       this.shadowRoot.innerHTML = this.template();
       this.#built = true;
@@ -101,7 +118,7 @@ export class AdiElement extends HTMLElement {
     this.update();
   }
 
-  attributeChangedCallback() {
+  attributeChangedCallback(_name?: string, _old?: string | null, _value?: string | null): void {
     // The parser sets attributes before the element is connected as often as after, and
     // `connectedCallback` ends with the same `update()` — so anything arriving early is read
     // there rather than lost here.
@@ -109,23 +126,36 @@ export class AdiElement extends HTMLElement {
   }
 
   /** The shadow root's markup, built once. Slots for anything the caller supplies. */
-  template() {
+  template(): string {
     return "<slot></slot>";
   }
 
   /** Called after the first build: wire listeners to what `template()` just created. */
-  setup() {}
+  setup(): void {}
 
   /** Called after every build and every attribute change: reflect the element's state. */
-  update() {}
+  update(): void {}
 
-  /** One node from this element's shadow root. */
-  $(selector) {
-    return this.shadowRoot.querySelector(selector);
+  /** One node from this element's shadow root, or `null` — before the first connect, always. */
+  $<E extends Element = HTMLElement>(selector: string): E | null {
+    return this.shadowRoot.querySelector<E>(selector);
+  }
+
+  /**
+   * One node from this element's shadow root that `template()` always creates.
+   *
+   * For code that runs after the build (`setup()`, `update()`, and everything they start), where a
+   * missing node is a typo in a selector rather than a state to handle — so it throws, naming both,
+   * instead of handing back a `null` that fails three calls later.
+   */
+  must<E extends Element = HTMLElement>(selector: string): E {
+    const node = this.shadowRoot.querySelector<E>(selector);
+    if (!node) throw new Error(`<${this.localName}> has no ${selector}`);
+    return node;
   }
 
   /** An attribute's value, or `fallback` when it is absent. */
-  attr(name, fallback = "") {
+  attr(name: string, fallback = ""): string {
     const value = this.getAttribute(name);
     return value === null ? fallback : value;
   }
@@ -136,9 +166,9 @@ export class AdiElement extends HTMLElement {
    * The design system is a closed list of variants, not a free-form style prop; a typo should
    * land on the default rather than render an element with no styling at all.
    */
-  pick(name, allowed) {
+  pick<T extends string>(name: string, allowed: readonly T[]): T {
     const value = this.getAttribute(name);
-    return allowed.includes(value) ? value : allowed[0];
+    return allowed.find((a) => a === value) ?? (allowed[0] as T);
   }
 
   /**
@@ -147,7 +177,7 @@ export class AdiElement extends HTMLElement {
    * `composed`, because an event raised inside a shadow root does not cross the boundary
    * otherwise — and a listener bound on `<adi-segmented>` is the whole API.
    */
-  emit(type, detail) {
+  emit(type: string, detail?: unknown): boolean {
     return this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
 }
