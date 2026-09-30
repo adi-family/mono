@@ -1,25 +1,20 @@
-// `<adi-gallery>` — every element in this directory, on one page, with the markup for each.
-//
-// It is the reference surface: the panel mounts it at `/extended/ui` (see
-// `crates/adi-webapp/src/pages/elements.rs`), and it works just as well in a bare HTML file
-// that links `design/tokens.css` and imports `adi-elements.js`.
-//
-// Two rules for adding to it, both learned from the Leptos playground next door:
-//
-//   1. **Show every arm of every enum.** A variant nobody renders is a variant nobody notices
-//      is broken. If an element takes five tones, five are on this page.
-//   2. **Show the markup.** The block under each section is what to paste — so it is generated
-//      from the same string that rendered the specimens above it, and cannot drift from them.
-//
-// The page spends its one orange (§2.4) on the single `variant="primary"` button in the Button
-// section. Everything else that is accent-coloured here is a 6px dot, which §3 allows alongside
-// it. If you add a second filled orange specimen, the page is wrong — pick another variant.
+// Render every variant and derive its example markup from the same specimen.
 
-import { AdiElement, define, esc, sheet } from "./base.js";
+import { AdiElement, define, detail, esc } from "./base.js";
+import type { AdiInput } from "./field.js";
 import { ICON_NAMES } from "./icon.js";
+import type { AdiModal } from "./modal.js";
+import type { AdiTable } from "./table.js";
 
-// The type scale (§4), read off the tokens rather than restated: `--fs-title` is 22px because
-// tokens.css says so, and if that changes this page changes with it.
+export interface GallerySection {
+  id: string;
+  title: string;
+  tag: string;
+  blurb: string;
+  rows: [label: string, html: string][];
+  mount?: (root: HTMLElement) => void;
+}
+
 const TYPE = [
   ["--fs-title", "Page title · 600", "font-size: var(--fs-title); font-weight: 600; color: var(--ink)"],
   ["--fs-section", "Section · 600", "font-size: var(--fs-section); font-weight: 600; color: var(--ink)"],
@@ -35,8 +30,7 @@ const SURFACES = ["--bg-side", "--bg", "--bg-hover", "--bg-raise", "--bg-active"
 const INKS = ["--ink", "--ink-2", "--ink-3", "--code"];
 const SIGNALS = ["--accent", "--accent-hover", "--ok", "--warn", "--err"];
 
-/** A section of the page: specimen rows, and the markup that drew them. */
-function section({ id, title, tag, blurb, rows, mount }) {
+function section({ id, title, tag, blurb, rows, mount }: GallerySection): GallerySection {
   return { id, title, tag, blurb, rows, mount };
 }
 
@@ -123,12 +117,13 @@ const SECTIONS = [
     ],
     mount(root) {
       const seg = root.querySelector("adi-segmented");
+      if (!seg) return;
       const said = document.createElement("span");
       said.style.cssText = "font-size: var(--fs-label); color: var(--ink-3); margin-left: 12px";
       said.textContent = "change → table";
       seg.after(said);
       seg.addEventListener("change", (event) => {
-        said.textContent = `change → ${event.detail.value}`;
+        said.textContent = `change → ${detail<{ value: string }>(event).value}`;
       });
     },
   }),
@@ -160,8 +155,7 @@ const SECTIONS = [
     mount(root) {
       for (const grant of root.querySelectorAll("adi-grant")) {
         grant.addEventListener("remove", (event) => {
-          // The element does not take itself away: what removing means belongs to the caller.
-          event.target.replaceWith(said(`removed ${event.detail.value}`));
+          grant.replaceWith(said(`removed ${detail<{ value: string }>(event).value}`));
         });
       }
     },
@@ -224,8 +218,9 @@ const SECTIONS = [
     blurb: "No card around it. Header sentence case over a strong hairline, identifier columns in mono one step dimmer, repeated values dimmed, — for nothing, and the row's actions behind a ⋯ at the far right. Click a header to sort.",
     rows: [["Services", `<adi-table sort="port" empty="No services"></adi-table>`]],
     mount(root) {
-      const table = root.querySelector("adi-table");
-      const status = (tone, text) => {
+      const table = root.querySelector<AdiTable>("adi-table");
+      if (!table) return;
+      const status = (tone: string, text: string) => {
         const el = document.createElement("adi-status");
         el.setAttribute("tone", tone);
         el.textContent = text;
@@ -380,8 +375,9 @@ Finished in 21.06s</adi-code>
       `],
     ],
     mount(root) {
-      const modal = root.querySelector("adi-modal");
-      root.querySelector("#open-modal").addEventListener("click", () => modal.show());
+      const modal = root.querySelector<AdiModal>("adi-modal");
+      if (!modal) return;
+      root.querySelector("#open-modal")?.addEventListener("click", () => modal.show());
       for (const button of modal.querySelectorAll("[data-close]")) {
         button.addEventListener("click", () => modal.close());
       }
@@ -389,119 +385,24 @@ Finished in 21.06s</adi-code>
   }),
 ];
 
-/** A small grey aside the specimens use to report what an event said. */
-function said(text) {
+function said(text: string): HTMLSpanElement {
   const el = document.createElement("span");
   el.style.cssText = "font-size: var(--fs-label); color: var(--ink-3)";
   el.textContent = text;
   return el;
 }
 
-/** Strip the leading indentation a template literal carries, so the markup block reads. */
-function dedent(text) {
+function dedent(text: string): string {
   const lines = text.replace(/^\n/, "").replace(/\s+$/, "").split("\n");
   const indent = Math.min(
-    ...lines.filter((line) => line.trim()).map((line) => line.match(/^ */)[0].length),
+    ...lines.filter((line) => line.trim()).map((line) => line.match(/^ */)?.[0].length ?? 0),
   );
   return lines.map((line) => line.slice(indent)).join("\n");
 }
 
 class AdiGallery extends AdiElement {
-  static sheet = sheet(`
-    :host { display: block; padding-bottom: 64px; }
 
-    .index {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px 12px;
-      padding-bottom: 12px;
-      margin-bottom: 24px;
-      border-bottom: 1px solid var(--line);
-      font-size: var(--fs-label);
-      color: var(--ink-3);
-    }
-    .index button { color: inherit; transition: color var(--transition); }
-    .index button:hover { color: var(--ink); }
-
-    section { margin-bottom: 32px; scroll-margin-top: 16px; }
-    .sec-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-    h2 { margin: 0; font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
-    .tag { font-family: var(--mono); font-size: var(--fs-mono); color: var(--ink-3); }
-    .blurb {
-      margin: 4px 0 0;
-      max-width: 64ch;
-      font-size: var(--fs-small);
-      color: var(--ink-3);
-      line-height: 1.5;
-    }
-    .rows { margin-top: 12px; border-top: 1px solid var(--line); }
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .row > .label {
-      width: 120px;
-      flex: none;
-      font-size: var(--fs-label);
-      color: var(--ink-3);
-    }
-    .specimens { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; flex: 1; min-width: 0; }
-    .specimens > div[style] { display: block; }
-
-    details { margin-top: 12px; }
-    summary {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      font-size: var(--fs-label);
-      color: var(--ink-3);
-      cursor: pointer;
-      list-style: none;
-    }
-    summary::-webkit-details-marker { display: none; }
-    summary:hover { color: var(--ink); }
-    details[open] summary { margin-bottom: 8px; }
-
-    /* ---- foundations ---------------------------------------------------------------- */
-    .type-row { display: flex; align-items: baseline; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-    .type-row .token { width: 120px; flex: none; font-family: var(--mono); font-size: var(--fs-mono); color: var(--ink-3); }
-    .type-row .role { width: 200px; flex: none; font-size: var(--fs-label); color: var(--ink-3); }
-
-    .swatches { display: flex; flex-wrap: wrap; gap: 12px; }
-    .swatch { display: flex; flex-direction: column; gap: 6px; width: 132px; }
-    .chipbox { height: 44px; border: 1px solid var(--line); border-radius: var(--r); }
-    .swatch .token { font-family: var(--mono); font-size: var(--fs-mono); color: var(--ink-2); }
-    .swatch .value { font-family: var(--mono); font-size: var(--fs-label); color: var(--ink-3); }
-
-    .icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 2px; }
-    .icon-cell {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
-      padding: 12px 6px;
-      border-radius: var(--r);
-      color: var(--ink-2);
-      text-align: center;
-    }
-    .icon-cell:hover { background: var(--bg-hover); color: var(--ink); }
-    .icon-cell span {
-      max-width: 100%;
-      font-family: var(--mono);
-      font-size: 11px;
-      color: var(--ink-3);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .icon-head { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
-    .icon-count { font-size: var(--fs-label); color: var(--ink-3); }
-  `);
-
-  template() {
+  override template(): string {
     const index = [
       ["type", "Type"],
       ["colour", "Colour"],
@@ -523,8 +424,8 @@ class AdiGallery extends AdiElement {
     `;
   }
 
-  #foundations() {
-    const swatches = (tokens) =>
+  #foundations(): string {
+    const swatches = (tokens: string[]) =>
       tokens
         .map(
           (token) => `
@@ -578,7 +479,7 @@ class AdiGallery extends AdiElement {
     `;
   }
 
-  #section({ id, title, tag, blurb, rows }) {
+  #section({ id, title, tag, blurb, rows }: GallerySection): string {
     const markup = rows.map(([, html]) => dedent(html)).join("\n");
     return `
       <section id="${id}">
@@ -603,36 +504,33 @@ class AdiGallery extends AdiElement {
     `;
   }
 
-  setup() {
+  override setup(): void {
     const root = this.shadowRoot;
 
-    root.querySelector(".index").addEventListener("click", (event) => {
-      const id = event.target.closest("[data-goto]")?.dataset.goto;
-      // An `href="#id"` cannot find an id inside a shadow root — the document's fragment
-      // navigation does not look in here, so the scroll is done by hand.
+    this.must(".index").addEventListener("click", (event) => {
+      const id = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-goto]")?.dataset.goto : undefined;
+      // Document fragment navigation cannot reach IDs inside this shadow root.
       if (id) root.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
 
-    // The palette's values, read off the live tokens rather than written down a second time.
     const computed = getComputedStyle(document.documentElement);
-    for (const node of root.querySelectorAll("[data-value]")) {
-      node.textContent = computed.getPropertyValue(node.dataset.value).trim();
+    for (const node of root.querySelectorAll<HTMLElement>("[data-value]")) {
+      node.textContent = computed.getPropertyValue(node.dataset.value ?? "").trim();
     }
 
     this.#icons();
 
     for (const spec of SECTIONS) {
-      if (spec.mount) spec.mount(root.getElementById(spec.id));
+      if (spec.mount) spec.mount(this.must(`#${spec.id}`));
     }
   }
 
-  #icons() {
-    const root = this.shadowRoot;
-    const grid = root.querySelector(".icons");
-    const count = root.querySelector(".icon-count");
-    const filter = root.querySelector("#icon-filter");
+  #icons(): void {
+    const grid = this.must<HTMLDivElement>(".icons");
+    const count = this.must<HTMLSpanElement>(".icon-count");
+    const filter = this.must<AdiInput>("#icon-filter");
 
-    const draw = (query) => {
+    const draw = (query: string) => {
       const names = ICON_NAMES.filter((name) => name.includes(query.trim().toLowerCase()));
       grid.innerHTML = names
         .map(
@@ -647,10 +545,16 @@ class AdiGallery extends AdiElement {
     };
 
     draw("");
-    filter.addEventListener("input", () => draw(filter.value));
+    filter.addEventListener("input", () => draw(String(filter.value ?? "")));
   }
 }
 
 define("adi-gallery", AdiGallery);
 
 export { AdiGallery, SECTIONS };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "adi-gallery": AdiGallery;
+  }
+}

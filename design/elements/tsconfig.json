@@ -1,6 +1,3 @@
-// Type-checking the elements — `scripts/elements.sh check`, and the editor. Nothing here builds
-// anything: `scripts/elements.sh build` strips the types with esbuild, which reads only the
-// class-field and import settings below, so both agree on what a file means.
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -13,12 +10,8 @@
     "useDefineForClassFields": true,
     "verbatimModuleSyntax": true,
     "isolatedModules": true,
-    // The elements not yet converted are still read, so a `.ts` file importing from one gets
-    // what can be inferred — but they are not checked themselves.
-    "allowJs": true,
-    "checkJs": false,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["*.ts", "*.js"]
+  "include": ["*.ts"]
 }

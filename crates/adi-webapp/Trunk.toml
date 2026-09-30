@@ -4,11 +4,8 @@
 target = "index.html"
 dist = "dist"
 
-# The custom elements (`design/elements`, TypeScript where converted) are built into
-# target/elements before anything else, and index.html copies that into dist as `/elements/`.
-# Every build and every `trunk serve` rebuild — an edit to a `.ts` file is picked up like any
-# other, since `../../design` is watched below. Types are not checked here: that is
-# `scripts/elements.sh check`, the editor, and CI.
+# Build the TypeScript elements into target/elements for index.html to copy.
+# Type checking runs separately through scripts/elements.sh check and CI.
 [[hooks]]
 stage = "pre_build"
 command = "bash"

@@ -1,85 +1,30 @@
-// `<adi-chat>` — a chat window, whole: pick an agent, pick one of its conversations, read it as it
-// streams, answer it. Plain JavaScript over the panel's own agent API, so it works anywhere the
-// panel's `/api` answers — the new UI's chat windows, the old chat, a widget, a page an agent writes.
-//
-//   <adi-chat picker windows></adi-chat>                    agent → its chats → one chat
-//   <adi-chat agent="adi-agent" run="1790…-0000"></adi-chat>   one conversation, no chrome
-//
-// With `picker` the window moves in two steps. First the agent — the picker lists what the old
-// chat's does: starred agents only (and whichever is open), the root agent first, a ● before one
-// that is running — and under it every conversation it has, newest first. Then, a conversation
-// opened, the window is fixed on it: the bar says which, and its one way out is back to the list.
-//
-// Attributes:
-//   agent     which agent. Without it, `adi-agent` on this machine.
-//   node      the paired machine that agent is on (`hetzner-adi`); absent for this one. Everything
-//             for it goes through this panel's `/api/node/<node>` forwarder.
-//   run       which conversation; `new` for a fresh one. Without it, the list (`picker`), or the
-//             agent's newest (no `picker`).
-//
-// The three are where the element *is*, and nothing else is: it keeps no memory of its own between
-// loads and shares none with any other `<adi-chat>`. A host that wants a window to come back where
-// it was keeps `place` and hands it back as these attributes — the new UI keeps one per window, as
-// its address.
-//   picker    the agent picker and the conversation list.
-//   windows   the host can open a conversation in a window of its own: the list's right-click
-//             menu offers "Open in new window", and the choice arrives as `open-window`.
-//   api       where the panel answers. Default: this page's own origin.
-//
-// A picker lists this machine's agents and every unlocked paired machine's (`/api/fleet/nodes`),
-// grouped by machine as the old chat's picker groups them.
-//
-// Events: `place` `{ node, agent, run, title }` whenever it moves — another agent, a conversation
-// opened, back to the list (`run` null); `open-window` `{ node, agent, run, title }` when a
-// conversation is asked for in a window of its own.
-//
-// # How it reads
-//
-// Exactly what the old chat asks for (`state::chat_view`): the newest twenty turns, tool runs
-// folded to their receipt lines, more on "earlier messages", and a folded run's calls fetched from
-// `/api/agents/run/steps` when a reader opens it. It polls — every second while an answer is
-// streaming or a message is queued, every five otherwise — and the transcript repaints only what
-// changed (see `transcript.js`).
-//
-// How a wire turn becomes transcript entries is `feed_turn` in the panel
-// (crates/adi-webapp/src/pages/agents/actions.rs), ported rule for rule: text is the divider, so
-// every run of tool calls between two things the agent said is one receipt; a message the platform
-// stamped is a note, not a bubble; keys and DOM ids are `adi-turn-<seq>[-<part>]`, and a call's
-// anchor is `adi-step-<turn>-<step>`, so a link built by the panel lands here too.
-//
-// Its styles are `chat.css`, beside it; the build inlines them here (scripts/elements.sh).
+// Attributes: agent, node (paired machine), run (`new` for a fresh conversation), picker, windows, api.
+// Events: `place` and `open-window` carry `{ node, agent, run, title }`.
+// The host persists the location through attributes; each chat instance is independent.
 
-import { AdiElement, define, detail, sheet } from "./base.js";
-import css from "./chat.css";
+import { AdiElement, define, detail } from "./base.js";
+import type { AdiTranscript, Call, CallRun, CallState, Note, NotePart, Picture, TranscriptEntry as Entry, TranscriptPart as Part } from "./transcript.js";
 import "./transcript.js";
+import type { AdiComposer, ComposerAttachment } from "./composer.js";
 import "./composer.js";
+import type { AdiAsk, AskQuestion } from "./ask.js";
 import "./ask.js";
 import "./icon.js";
 import "./mic.js";
 
-/** A message carries at most this many files; the rest are refused with a sentence. */
 const MAX_ATTACHMENTS = 6;
-/** What a model can be *shown*; anything else reaches it as a path it opens. */
 const PICTURES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 const MAX_PICTURE = 5 * 1024 * 1024;
 const MAX_FILE = 25 * 1024 * 1024;
-/** Said instead of a paperclip when this conversation can be shown nothing — the panel's words. */
 const IMAGES_REFUSED =
   "this one can't be sent a file — a terminal session takes typing, and a simulated run has no model to give one to";
 
-/** The agent a window opens on when it is told nothing — the environment's root agent. */
 const ROOT_AGENT = "adi-agent";
-/** Turns per page, and what "earlier messages" adds. The panel's `CHAT_PAGE`. */
 const PAGE = 20;
 const FAST_MS = 1000;
 const SLOW_MS = 5000;
 
-// ---- the wire's shapes -------------------------------------------------------------------
-// What the panel's agent API answers, as far as this element reads it. The Rust types are the
-// source of truth — each interface is named after its counterpart in
-// crates/adi-webapp-api/src/types.rs — and nothing here re-validates the JSON: `#call` hands back
-// what the server sent, typed as what it promises to send.
-
+// Wire types mirror crates/adi-webapp-api/src/types.rs; responses are not revalidated here.
 /** One agent on a machine, from `GET /api/agents` — `AgentDto`. */
 interface AgentDto {
   name: string;
@@ -126,7 +71,6 @@ type TurnMarker =
   | { kind: "pre-run"; ran: number; dropped: number }
   | { kind: "unknown" };
 
-/** A file a turn carries — `AgentAttachment`. */
 interface AgentAttachment {
   id: string;
   name: string;
@@ -134,7 +78,6 @@ interface AgentAttachment {
   size: number;
 }
 
-/** One turn of a conversation — `AgentTurn`. */
 interface AgentTurn {
   role: string;
   text: string;
@@ -147,7 +90,6 @@ interface AgentTurn {
   markers?: TurnMarker[];
 }
 
-/** A wake the conversation registered — `AgentAwait`. */
 interface AgentAwait {
   id: string;
   note: string;
@@ -155,11 +97,10 @@ interface AgentAwait {
   check?: string;
 }
 
-/** The question a conversation is waiting on a person for — `AgentAsk`. `<adi-ask>` draws it. */
 interface AgentAsk {
   id: string;
   headline: string;
-  questions: unknown[];
+  questions: AskQuestion[];
 }
 
 /** A snapshot of one conversation, from `/agents/run/peek` and every reply — `AgentPeek`. */
@@ -173,7 +114,6 @@ interface AgentPeek {
   turns: AgentTurn[];
 }
 
-/** A goal set on a conversation — `AgentGoal`. */
 interface AgentGoal {
   id: string;
   text: string;
@@ -182,84 +122,10 @@ interface AgentGoal {
   nudges: number;
 }
 
-// ---- what this element hands its children ------------------------------------------------
-// The properties `<adi-transcript>`, `<adi-message>`, `<adi-composer>` and `<adi-ask>` take, and
-// the events they raise. Those four are still JavaScript, so their side of this contract is not
-// checked yet: when one becomes TypeScript it exports its own types and these give way to them.
-
-type CallState = "running" | "ok" | "failed" | "unanswered";
-
-/** One tool call (or a thinking block), as a receipt line opens it. */
-interface Call {
-  name: string;
-  params: [string, string][];
-  state: CallState;
-  result: string | null;
-  anchor: string | null;
-}
-
-/** A run of calls between two things the agent said — its receipt, and the calls once known. */
-interface CallRun {
-  id: string;
-  count: number;
-  tools: string[];
-  preview: string;
-  state: CallState;
-  calls: Call[] | null;
-}
-
-/** A picture or file a message shows. */
-interface Picture {
-  url: string;
-  name: string;
-  picture: boolean;
-}
-
-type NotePart = { text: string } | { code: string };
-
-/** A platform note — a woken await, an answered question, a goal check. */
-interface Note {
-  icon: string;
-  head: NotePart[];
-  id: string | null;
-  body: string;
-}
-
-type Part =
-  | { kind: "note"; note: Note }
-  | { kind: "said"; role: "user" | "agent"; body: string; images?: Picture[]; by?: string | null }
-  | { kind: "did"; run: CallRun };
-
-/** One transcript entry: a part, and the key it is redrawn by. */
-type Entry = Part & { key: string };
-
-/** A file the next message carries, as `<adi-composer>` draws it in its tray. */
-interface Attachment {
-  key: string;
-  name: string;
+interface Attachment extends ComposerAttachment {
   image: boolean;
   preview: string;
-  state: "uploading" | "ready" | "failed";
   id?: string;
-  error?: string;
-}
-
-interface TranscriptElement extends HTMLElement {
-  entries: Entry[];
-}
-
-interface MessageElement extends HTMLElement {
-  images: Picture[];
-  body: string;
-}
-
-interface ComposerElement extends HTMLElement {
-  value: string;
-  attachments: Attachment[];
-}
-
-interface AskElement extends HTMLElement {
-  ask: AgentAsk | null;
 }
 
 /** `send` and `asap` from the composer. */
@@ -277,7 +143,6 @@ interface Source {
 
 const TOOL_STATE: Record<ToolStatus, CallState> = { running: "running", ok: "ok", error: "failed", unanswered: "unanswered" };
 
-/** A tool call's arguments the way the model wrote them — `AgentStep::params_of`. */
 function paramsOf(input: string): [string, string][] {
   try {
     const value = JSON.parse(input);
@@ -285,14 +150,12 @@ function paramsOf(input: string): [string, string][] {
       return Object.entries(value).map(([k, v]) => [k, typeof v === "string" ? v : JSON.stringify(v, null, 2)]);
     }
   } catch {
-    // Not JSON — shown as the one string it is.
   }
   return [["input", input]];
 }
 
-/** The first argument, flattened: what a receipt line shows of a call. */
 function previewOf(call: Call): string {
-  return (call.params[0]?.[1] ?? "").split(/\s+/).filter(Boolean).join(" ");
+  return (call.params?.[0]?.[1] ?? "").split(/\s+/).filter(Boolean).join(" ");
 }
 
 function toolCall(turn: number, step: number, s: ToolStep): Call {
@@ -309,26 +172,22 @@ function thinkingCall(text: string): Call {
   return { name: "thinking", params: [["text", text]], state: "ok", result: null, anchor: null };
 }
 
-/** A run whose calls are here: its receipt derived from them, exactly as a folded one arrives. */
 function loadedRun(id: string, calls: Call[]): CallRun {
   const tools = [...new Set(calls.map((c) => c.name))];
   const head = calls.find((c) => c.state === "running") ?? calls[calls.length - 1];
   return { id, count: calls.length, tools, preview: head ? previewOf(head) : "", state: head?.state ?? "ok", calls };
 }
 
-/** The key a folded run's fetched calls are filed under: its address plus its shape. */
 function runKey(turn: number, from: number, to: number, count: number, status: ToolStatus): string {
   return `adi-run-${turn}-${from}:${to}:${count}:${status}`;
 }
 
-/** Who sent a message, off its `from` marker. */
 function senderOf(markers: TurnMarker[] = []): string | null {
   const from = markers.find((m) => m.kind === "from");
   if (!from) return null;
   return from.user ? `${from.node}/${from.user}` : from.node;
 }
 
-/** The platform's own note on a turn, or null for a message somebody typed — `platform_note`. */
 function platformNote(turn: AgentTurn): Note | null {
   const sender = senderOf(turn.markers);
   for (const m of turn.markers ?? []) {
@@ -355,14 +214,12 @@ function platformNote(turn: AgentTurn): Note | null {
   return null;
 }
 
-/** A conversation's name in a list: its title, else the first line it was opened with. */
 function titleOf(run: AgentRunInfo | undefined): string {
   if (!run) return "Conversation";
   const line = (run.title || run.message?.split("\n").find((l) => l.trim()) || "Conversation").trim();
   return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
-/** How long ago, in the coarsest unit that still says something: `40s ago`, `12m ago`, `3h ago`. */
 function ago(ms: number): string {
   if (!ms) return "";
   const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -375,35 +232,25 @@ function ago(ms: number): string {
 class AdiChat extends AdiElement {
   static observedAttributes = ["agent", "run", "picker", "api", "node"];
 
-  static override sheet = sheet(css);
-
-  /** Every machine's agents: `[{ node, agents }]`, this machine (`node: null`) first. */
   #sources: Source[] = [];
-  /** The paired machine the open agent is on; `null` for this one. */
   #node: string | null = null;
   #runs: AgentRunInfo[] = [];
   #agent: string | null = null;
-  /** The open conversation; `null` is a new one, started by the next message. */
   #run: string | null = null;
   #peek: AgentPeek | null = null;
   #limit = PAGE;
-  /** Calls fetched for folded runs, by `runKey`. */
   #steps = new Map<string, AgentStep[]>();
   #timer = 0;
   #busy = false;
   #answering = false;
   #live = false;
-  /** This conversation's goals, open and closed, and the editor's state over them. */
   #goals: AgentGoal[] = [];
   #goalEditor: { id: string | null; text: string } | null = null;
   #goalBusy = false;
   #goalsDrawn = "";
-  /** What the next message carries: `{ key, name, preview, image, state, id, error }`. */
   #files: Attachment[] = [];
-  /** Whether the last read had a turn running — its end is when goals are worth re-reading. */
   #wasRunning = false;
   #runsDrawn = "";
-  /** `list` — an agent's conversations — or `chat`, one of them. */
   #mode: "list" | "chat" = "list";
   /** Bumped on every switch, so an answer for a conversation the window has left is dropped. */
   #epoch = 0;
@@ -456,12 +303,11 @@ class AdiChat extends AdiElement {
     });
     this.must(".back").addEventListener("click", () => this.#showList());
     this.must(".fresh").addEventListener("click", () => this.#openRun(null));
-    // Any click anywhere closes the menu, the one that chose from it included.
     this.shadowRoot.addEventListener("click", () => (this.must(".menu").hidden = true));
     this.addEventListener("contextmenu", (ev) => {
       if (!ev.composedPath().some((n) => n instanceof Element && n.classList.contains("row"))) this.must(".menu").hidden = true;
     });
-    const composer = this.must<ComposerElement>("adi-composer");
+    const composer = this.must<AdiComposer>("adi-composer");
     composer.addEventListener("send", (e) => this.#say(detail<Said>(e).text, "regular"));
     composer.addEventListener("asap", (e) => this.#say(detail<Said>(e).text, "asap"));
     composer.addEventListener("stop", () => this.#stop());
@@ -471,13 +317,13 @@ class AdiChat extends AdiElement {
       this.#files = this.#files.filter((f) => f.key !== key);
       this.#drawFiles();
     });
-    const transcript = this.must<TranscriptElement>("adi-transcript");
+    const transcript = this.must<AdiTranscript>("adi-transcript");
     transcript.addEventListener("toggle", (e) => this.#toggleRun(detail<Toggled>(e)));
     transcript.addEventListener("unqueue", (e) => {
       const index = Number((e.target as HTMLElement).dataset.place);
       if (Number.isInteger(index)) this.#unqueue(index);
     });
-    this.must<AskElement>("adi-ask").addEventListener("answer", (e) => this.#answer(detail<Answered>(e)));
+    this.must<AdiAsk>("adi-ask").addEventListener("answer", (e) => this.#answer(detail<Answered>(e)));
     this.must(".earlier").addEventListener("click", () => {
       this.#limit += PAGE;
       this.#tick();
@@ -505,12 +351,7 @@ class AdiChat extends AdiElement {
     if (name === "node" || name === "agent" || name === "run") this.#followSoon();
   }
 
-  /**
-   * Go where the attributes now say, once they have all been set. A host moving a window writes
-   * `node`, `agent` and `run` one after another, and acting on each as it lands would open the new
-   * agent's name on the old machine for one request. The attributes the element's own `place`
-   * event caused are where it already is, and cost nothing.
-   */
+  /** Batch attribute changes to avoid requesting a new agent on the previous machine. */
   #followSoon(): void {
     if (this.#following) return;
     this.#following = true;
@@ -531,13 +372,10 @@ class AdiChat extends AdiElement {
   override update(): void {
     const picker = this.hasAttribute("picker");
     this.must(".bar").hidden = !picker;
-    // Without a picker there is no list to be on: the element is the conversation it was given.
     if (!picker) this.#mode = "chat";
     this.#drawMode();
     this.must("adi-mic").setAttribute("api", this.attr("api"));
   }
-
-  // ---- the wire ----------------------------------------------------------------------------
 
   async #call<T = unknown>(path: string, payload?: object): Promise<T> {
     const res = await fetch(`${this.#base()}/api${path}`, {
@@ -556,7 +394,6 @@ class AdiChat extends AdiElement {
     return data as T;
   }
 
-  /** Where the open agent's machine answers: this panel, or its forwarder to a paired one. */
   #base(): string {
     return `${this.attr("api")}${this.#node ? `/api/node/${encodeURIComponent(this.#node)}` : ""}`;
   }
@@ -568,8 +405,6 @@ class AdiChat extends AdiElement {
   #fail(err: unknown): void {
     this.must(".error").textContent = err instanceof Error ? err.message : String(err);
   }
-
-  // ---- opening ----------------------------------------------------------------------------
 
   async #start(): Promise<void> {
     try {
@@ -587,9 +422,6 @@ class AdiChat extends AdiElement {
         });
         this.#sources.push({ node: wanted.node, agents });
       }
-      // Named by the host, it is gone to whatever it says, reachable or not: this is an address,
-      // and one that quietly became another agent on a slow machine would have lost the place it
-      // named. What is wrong with it is said where the chat would be.
       let name = this.getAttribute("agent") || null;
       if (!name) {
         name = agents.some((a) => a.name === wanted.name)
@@ -615,11 +447,7 @@ class AdiChat extends AdiElement {
     return ((await res.json()) as { agents?: AgentDto[] }).agents ?? [];
   }
 
-  /**
-   * Every unlocked paired machine's agents, added to the picker as each answers. A locked machine
-   * asks for a login this window cannot give, and one that does not answer is left out rather than
-   * holding the others back.
-   */
+  /** Load unlocked paired machines independently; unavailable machines do not block the picker. */
   async #readFleet(): Promise<void> {
     let nodes: FleetNodeAccess[] = [];
     try {
@@ -642,13 +470,7 @@ class AdiChat extends AdiElement {
     );
   }
 
-  /**
-   * The agent picker, as the old chat's (`chat_agent_picker`): each machine's starred agents, and
-   * whichever is open whether starred or not; the root agent first; a ● before one that is running,
-   * since an option carries no markup for a dot. With more than one machine the list is grouped by
-   * machine — an `<optgroup>` each — and which machine the chosen one is on is said beside it, since
-   * a closed select shows the option and never its group.
-   */
+  /** Group starred agents and the current agent by machine, with the root agent first. */
   #drawAgents(): void {
     const select = this.must<HTMLSelectElement>(".agent");
     const multi = this.#sources.length > 1;
@@ -699,19 +521,16 @@ class AdiChat extends AdiElement {
     }
     if (run === "new") return this.#openRun(null);
     if (run) return this.#openRun(run);
-    // No conversation named: with a picker, the list; without one there is nothing to choose
-    // with, so the newest.
     if (this.hasAttribute("picker")) return this.#showList();
     this.#openRun(this.#runs[0]?.run_id ?? null);
   }
 
-  /** Back to the agent's conversations — the window lets go of the one it was fixed on. */
   #showList(): void {
     this.#epoch += 1;
     this.#mode = "list";
     this.#run = null;
     this.#peek = null;
-    this.must<TranscriptElement>("adi-transcript").entries = [];
+    this.must<AdiTranscript>("adi-transcript").entries = [];
     this.emit("place", { node: this.#node, agent: this.#agent, run: null, title: "" });
     this.#drawMode();
     this.#drawRuns();
@@ -743,7 +562,7 @@ class AdiChat extends AdiElement {
     this.#goalEditor = null;
     this.#loadGoals();
     this.must(".error").textContent = "";
-    this.must<TranscriptElement>("adi-transcript").entries = [];
+    this.must<AdiTranscript>("adi-transcript").entries = [];
     this.#drawMode();
     const shown = this.#runs.find((r) => r.run_id === run);
     this.emit("place", { node: this.#node, agent: this.#agent, run, title: run ? titleOf(shown) : "" });
@@ -751,7 +570,6 @@ class AdiChat extends AdiElement {
     this.#tick();
   }
 
-  /** The agent's conversations, newest first — the list a window is on before it opens one. */
   #drawRuns(): void {
     const box = this.must(".rows");
     if (!this.#runs.length) {
@@ -782,7 +600,6 @@ class AdiChat extends AdiElement {
     );
   }
 
-  /** A conversation's right-click menu: open it here, or — where the host has windows — in one of its own. */
   #menu(ev: MouseEvent, run: AgentRunInfo): void {
     const menu = this.must(".menu");
     menu.replaceChildren();
@@ -800,8 +617,7 @@ class AdiChat extends AdiElement {
         this.emit("open-window", { node: this.#node, agent: this.#agent, run: run.run_id, title: titleOf(run) }),
       );
     }
-    // Placed against this element rather than the screen: a host that is itself a blurred window
-    // is the containing block of anything fixed inside it, and the menu would land beside the click.
+    // Position relative to this host because a blurred ancestor contains fixed descendants.
     const box = this.getBoundingClientRect();
     menu.hidden = false;
     const x = Math.min(ev.clientX - box.left, box.width - menu.offsetWidth - 4);
@@ -810,13 +626,10 @@ class AdiChat extends AdiElement {
     menu.style.top = `${Math.max(4, y)}px`;
   }
 
-  // ---- polling ----------------------------------------------------------------------------
-
   async #tick(): Promise<void> {
     window.clearTimeout(this.#timer);
     if (!this.#live) return;
     const epoch = this.#epoch;
-    // On the list, the list is what moves: a conversation starts, another finishes.
     if (this.#mode === "list" && this.#agent) {
       try {
         const res = await this.#call<{ runs?: AgentRunInfo[] }>("/agents/runs", { name: this.#agent });
@@ -825,14 +638,13 @@ class AdiChat extends AdiElement {
         this.#runs.sort((a, b) => (b.last_activity || b.started_at) - (a.last_activity || a.started_at));
         this.#drawRuns();
       } catch {
-        // The next tick asks again.
       }
     }
     if (this.#mode === "chat" && this.#run && this.#agent) {
       try {
         const peek = await this.#call<AgentPeek>("/agents/run/peek", { name: this.#agent, run_id: this.#run, ...this.#view() });
         if (epoch !== this.#epoch) return;
-        // A run that is not a conversation has no turns to fold — its log is what there is to show.
+        // Non-conversation runs expose logs rather than turns.
         if (!peek.answerable && !peek.turns?.length) {
           const whole = await this.#call<AgentPeek>("/agents/run/peek", { name: this.#agent, run_id: this.#run });
           if (epoch !== this.#epoch) return;
@@ -840,8 +652,7 @@ class AdiChat extends AdiElement {
         }
         this.#peek = peek;
         this.must(".error").textContent = "";
-        // A turn that just ended is when a goal is likeliest to have moved — the agent closes its
-        // own, or sets one — so that is when they are read again, rather than on every poll.
+        // Refresh goals when a turn ends, not on every poll.
         if (this.#wasRunning && !peek.running) this.#loadGoals();
         this.#wasRunning = Boolean(peek.running);
         this.#draw();
@@ -855,31 +666,27 @@ class AdiChat extends AdiElement {
     this.#timer = window.setTimeout(() => this.#tick(), streaming ? FAST_MS : SLOW_MS);
   }
 
-  // ---- drawing ----------------------------------------------------------------------------
-
   #draw(): void {
     const p = this.#peek;
     const fresh = !this.#run;
     const answerable = fresh || Boolean(p?.answerable);
-    const composer = this.must<ComposerElement>("adi-composer");
+    const composer = this.must<AdiComposer>("adi-composer");
     this.must(".top").hidden = !answerable;
     composer.setAttribute("placeholder", `Write to ${this.#agent ?? "the agent"}…`);
     composer.toggleAttribute("busy", this.#busy);
     composer.toggleAttribute("stoppable", Boolean(p?.running));
     composer.setAttribute("asap", "");
-    // Whether the open conversation's own engine can be handed a file — its capability profile,
-    // not the agent's current settings, because a conversation is answered by whatever started it.
+    // Use the conversation engine’s capabilities, which may differ from current agent settings.
     const attach = fresh || Boolean(p?.caps?.images);
     composer.toggleAttribute("attach", attach);
     composer.setAttribute("refusal", IMAGES_REFUSED);
-    // A message sent mid-answer is queued, not refused — and the line under the box says so.
     this.must(".note").textContent = p?.running ? "queued — the agent is answering" : "";
 
     this.#drawGoals();
 
     this.#drawAwaits(p?.awaits ?? []);
 
-    const ask = this.must<AskElement>("adi-ask");
+    const ask = this.must<AdiAsk>("adi-ask");
     ask.ask = p?.pending_question ?? null;
     ask.hidden = !p?.pending_question;
     ask.toggleAttribute("busy", this.#answering);
@@ -889,7 +696,7 @@ class AdiChat extends AdiElement {
       ...turns
         .filter((t) => t.queued)
         .map((t, place) => {
-          const m = document.createElement("adi-message") as MessageElement;
+          const m = document.createElement("adi-message");
           m.setAttribute("role", "user");
           m.setAttribute("queued", "");
           m.setAttribute("removable", "");
@@ -904,7 +711,7 @@ class AdiChat extends AdiElement {
         .reverse(),
     );
 
-    this.must<TranscriptElement>("adi-transcript").entries = this.#entries(turns);
+    this.must<AdiTranscript>("adi-transcript").entries = this.#entries(turns);
 
     const oldest = turns.length ? (turns[0].seq || 0) : 0;
     const earlier = this.must(".earlier");
@@ -1006,8 +813,6 @@ class AdiChat extends AdiElement {
     return parts.map((part, i) => ({ key: key(i), ...part }));
   }
 
-  // ---- acting -----------------------------------------------------------------------------
-
   /** A folded run was opened: fetch its calls, once per shape. */
   async #toggleRun({ id, open }: Toggled): Promise<void> {
     if (!open || !this.#peek) return;
@@ -1026,7 +831,7 @@ class AdiChat extends AdiElement {
           this.#steps.set(k, res.steps ?? []);
           this.#draw();
         } catch {
-          // Left on its "fetching" line; the next open tries again.
+          // Keep the loading line; opening again retries the fetch.
         }
         return;
       }
@@ -1039,7 +844,7 @@ class AdiChat extends AdiElement {
     this.#busy = true;
     this.#draw();
     const epoch = this.#epoch;
-    const composer = this.must<ComposerElement>("adi-composer");
+    const composer = this.must<AdiComposer>("adi-composer");
     try {
       if (this.#run) {
         const peek = await this.#call<AgentPeek>("/agents/run/reply", {
@@ -1102,7 +907,7 @@ class AdiChat extends AdiElement {
       });
       this.#peek = peek;
     } catch (err) {
-      // A 404 is a question settled while the card sat open — the next read clears it.
+      // A 404 means the question was settled; the next poll clears it.
       if (!/404|not found/i.test(String(err))) this.#fail(err);
     } finally {
       this.#answering = false;
@@ -1110,12 +915,6 @@ class AdiChat extends AdiElement {
     }
     this.#tick();
   }
-
-  // ---- goals ------------------------------------------------------------------------------
-  // What this conversation is *for*: its open goals, each with the two ways out, and a link to set
-  // one — `goal_bar` in the panel. Above the composer rather than in the transcript, because a goal
-  // is a standing condition on the whole conversation, not a thing said in it. Closed goals are not
-  // drawn: the transcript carries the turn that met them.
 
   async #loadGoals(): Promise<void> {
     if (!this.#run || !this.#agent) return this.#drawGoals();
@@ -1126,13 +925,12 @@ class AdiChat extends AdiElement {
       this.#goals = res.goals ?? [];
       this.#drawGoals();
     } catch {
-      // A panel too old to keep goals has none to show; the chat is no worse for it.
+      // Older panels may not support goals.
     }
   }
 
   #drawGoals(): void {
     const box = this.must(".goals");
-    // A goal belongs to a conversation, so a new one has nowhere to put it yet.
     if (!this.#run) {
       this.#goalsDrawn = "";
       return box.replaceChildren();
@@ -1153,8 +951,6 @@ class AdiChat extends AdiElement {
         editor.text = input.value;
         this.#goalButtons();
       });
-      // Enter saves and Escape closes: this opened under the cursor, and asking for the mouse back
-      // to dismiss a one-line box is the annoying half of a popover.
       input.addEventListener("keydown", (ev) => {
         if (ev.key === "Enter" && !ev.isComposing) this.#saveGoal();
         else if (ev.key === "Escape") this.#closeGoalEditor();
@@ -1170,7 +966,6 @@ class AdiChat extends AdiElement {
     if (sig === this.#goalsDrawn && box.firstChild) return;
     this.#goalsDrawn = sig;
     if (!open.length) {
-      // Nothing set is the normal case, so it costs one quiet line.
       box.innerHTML = `<div class="goal"><button class="link" type="button"
         title="Set what would make this chat done. It is put back to the agent every time the chat falls quiet, until it is met or given up on.">+ Set a goal</button></div>`;
       box.querySelector(".link")!.addEventListener("click", () => this.#openGoalEditor(null, ""));
@@ -1190,7 +985,6 @@ class AdiChat extends AdiElement {
           <button class="small danger gave" type="button" title="Stop working toward this goal, and stop being asked about it">Give up</button>`;
         const text = row.querySelector<HTMLButtonElement>(".text")!;
         text.textContent = goal.text;
-        // The sentence is the edit control: the obvious thing to do with one you disagree with is click it.
         text.title = `${goal.text} — click to reword${self ? " (the agent set this itself)" : ""}`;
         text.addEventListener("click", () => this.#openGoalEditor(goal.id, goal.text));
         row.querySelector(".met")!.addEventListener("click", () => this.#closeGoal(goal.id, "met"));
@@ -1232,7 +1026,7 @@ class AdiChat extends AdiElement {
         name: this.#agent, run_id: this.#run, text: editor.text, goal: editor.id,
       });
       this.#goals = res.goals ?? [];
-      // Closed only on success: a goal the server refused is still in the box, where it can be fixed.
+      // Keep rejected goal text available for correction.
       this.#goalEditor = null;
       this.#goalsDrawn = "";
     } catch (err) {
@@ -1256,11 +1050,6 @@ class AdiChat extends AdiElement {
       this.#drawGoals();
     }
   }
-
-  // ---- attachments ------------------------------------------------------------------------
-  // `crate::attach` in the panel: each file is stored the moment it is attached
-  // (`POST /api/agents/attachment`, raw bytes, its name in a header), and the message carries the
-  // ids. A picture is shown to the model; anything else reaches it as a path it opens.
 
   #attach(files: File[]): void {
     for (const file of files) {
@@ -1292,8 +1081,7 @@ class AdiChat extends AdiElement {
     try {
       const res = await fetch(`${this.#base()}/api/agents/attachment`, {
         method: "POST",
-        // The name travels in a header because the body is the file. Headers are Latin-1, and a
-        // screenshot's name routinely is not — so anything else becomes `_`.
+        // Headers require Latin-1; replace unsupported filename characters.
         headers: { "content-type": type, "x-adi-filename": entry.name.replace(/[^\x20-\x7e]/g, "_") },
         body: file,
       });
@@ -1304,7 +1092,6 @@ class AdiChat extends AdiElement {
       entry.id = data.id;
       entry.preview = entry.image ? `${this.#base()}/api/agents/attachment/${encodeURIComponent(data.id)}` : "";
     } catch (err) {
-      // The row stays, marked failed, so it can be removed deliberately — and the error says why.
       const message = err instanceof Error ? err.message : String(err);
       entry.state = "failed";
       entry.error = message;
@@ -1315,7 +1102,7 @@ class AdiChat extends AdiElement {
   }
 
   #drawFiles(): void {
-    this.must<ComposerElement>("adi-composer").attachments = this.#files;
+    this.must<AdiComposer>("adi-composer").attachments = this.#files;
   }
 
   #clearFiles(): void {
@@ -1337,3 +1124,9 @@ class AdiChat extends AdiElement {
 define("adi-chat", AdiChat);
 
 export { AdiChat };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "adi-chat": AdiChat;
+  }
+}

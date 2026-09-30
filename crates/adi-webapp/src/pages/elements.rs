@@ -1,7 +1,7 @@
 //! The UI elements page — the adi-elements gallery, inside the panel.
 //!
 //! There is nothing else in this module on purpose. The page is one custom element,
-//! `<adi-gallery>`, defined in `design/elements/gallery.js` and loaded by the module script in
+//! `<adi-gallery>`, defined in `design/elements/gallery.ts` and loaded by the module script in
 //! `index.html`; everything on the screen — the sections, the specimens, the markup blocks — is
 //! built by that element in JavaScript. Leptos only puts the tag in the document.
 //!

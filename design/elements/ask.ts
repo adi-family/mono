@@ -1,24 +1,36 @@
-// `<adi-ask>` — the block a run puts up when it needs a person to decide something: the
-// JavaScript twin of `adi_ui::Ask` (crates/adi-ui/src/ask.rs), which says why it is a block and
-// not a message.
-//
-//   ask.ask = { id, note, deadline, questions: [{ header, question, multi_select,
-//                                                   options: [{ label, description }] }] };
-//   ask.addEventListener("answer", (e) => post(e.detail.id, e.detail.replies));
-//
-// Drawn as §6 draws an ask: a 2px rule down the left and nothing else around it. One question
-// with a fixed set of answers sends on the click; everything else has a Send, lit as soon as *any*
-// question has an answer, so the one question nobody can settle never holds the rest hostage.
-// Every question keeps a free-text box, because the right answer is regularly "neither — do this".
-//
-// A reply is the chosen labels, then anything typed, joined by an em dash: "Postgres — but read
-// analytics off the replica" arrives as one sentence.
+// Emits `answer` with `{ id, replies }`; replies combine selected labels and free text.
 
-import { AdiElement, define, esc, sheet } from "./base.js";
-import { MARKDOWN_SHEET, renderMarkdown } from "./markdown.js";
+import { AdiElement, define, esc } from "./base.js";
+import { renderMarkdown } from "./markdown.js";
 
-/** Milliseconds as the coarsest unit that still says something: `40s`, `12m`, `3h`, `2d`. */
-function shortDuration(ms) {
+export interface AskOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskQuestion {
+  id?: string;
+  header?: string;
+  question: string;
+  options?: AskOption[];
+  multi_select?: boolean;
+}
+
+export interface Ask {
+  id: string;
+  asked_at?: number;
+  headline?: string;
+  note?: string;
+  questions?: AskQuestion[];
+  deadline?: number | null;
+}
+
+interface AnswerPick {
+  chosen: Set<number>;
+  typed: string;
+}
+
+function shortDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
@@ -29,57 +41,22 @@ function shortDuration(ms) {
 class AdiAsk extends AdiElement {
   static observedAttributes = ["busy"];
 
-  static sheet = sheet(`
-    :host { display: block; flex: none; max-width: 80ch; padding: 4px 0 4px 18px;
-      border-left: 2px solid var(--line-strong); }
-    .head { display: flex; align-items: center; gap: 12px; margin-bottom: 8px;
-      font-size: var(--fs-label); color: var(--ink-3); }
-    .deadline { margin-left: auto; }
-    .md.note { margin-bottom: 12px; font-size: var(--fs-small); color: var(--ink-2); }
-    .md.note:empty { display: none; }
-    .questions { display: flex; flex-direction: column; gap: 16px; }
-    .q { display: flex; flex-direction: column; gap: 8px; }
-    .q-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
-    .num { font-size: var(--fs-label); color: var(--ink-3); }
-    .tag { padding: 2px 8px; border-radius: var(--r-pill); background: var(--chip);
-      font-size: var(--fs-label); color: var(--ink-2); }
-    .text { font-size: 15px; color: var(--ink); }
-    .any { font-size: var(--fs-label); color: var(--ink-3); }
-    .options { display: flex; flex-wrap: wrap; gap: 8px; }
-    .option { max-width: 100%; padding: 7px 14px; border-radius: var(--r); background: var(--btn);
-      font-size: var(--fs-ui-sm); font-weight: 500; text-align: left; transition: background var(--transition); }
-    .option:hover { background: var(--btn-hover); }
-    .option[aria-pressed="true"] { background: var(--bg-active); }
-    .option:disabled { opacity: .4; cursor: not-allowed; }
-    .desc { display: block; margin-top: 2px; font-size: var(--fs-label); font-weight: 400; color: var(--ink-3); }
-    input { width: 100%; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: var(--r);
-      background: var(--bg-raise); color: var(--ink); font: inherit; font-size: var(--fs-ui); }
-    input::placeholder { color: var(--ink-3); }
-    .foot { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-    .foot[hidden] { display: none; }
-    .send { padding: 7px 14px; border-radius: var(--r); background: var(--btn);
-      font-size: var(--fs-ui-sm); font-weight: 500; transition: background var(--transition); }
-    .send:hover { background: var(--btn-hover); }
-    .send:disabled { opacity: .4; cursor: not-allowed; }
-    .hint { font-size: var(--fs-small); color: var(--ink-3); }
-  `);
-
-  #ask = null;
-  #picks = [];
+  #ask: Ask | null = null;
+  #picks: AnswerPick[] = [];
   #clock = 0;
 
   /** The pending question — `null` draws nothing. A new id resets the answers; the same id keeps them. */
-  get ask() {
+  get ask(): Ask | null {
     return this.#ask;
   }
 
-  set ask(value) {
+  set ask(value: Ask | null) {
     const same = value && this.#ask && value.id === this.#ask.id;
     this.#ask = value;
     if (!same) this.#build();
   }
 
-  template() {
+  override template(): string {
     return `
       <div class="head"><span>Waiting on you</span><span class="deadline"></span></div>
       <div class="md note"></div>
@@ -89,42 +66,40 @@ class AdiAsk extends AdiElement {
     `;
   }
 
-  setup() {
-    this.shadowRoot.adoptedStyleSheets = [MARKDOWN_SHEET, ...this.shadowRoot.adoptedStyleSheets];
-    this.$(".send").addEventListener("click", () => this.#send());
+  override setup(): void {
+    this.must<HTMLButtonElement>(".send").addEventListener("click", () => this.#send());
     this.#build();
   }
 
-  connectedCallback() {
+  override connectedCallback(): void {
     super.connectedCallback();
-    // The deadline is a clock the reader is watching, not decoration — one text node a second.
     this.#clock = window.setInterval(() => this.#tick(), 1000);
   }
 
-  disconnectedCallback() {
+  disconnectedCallback(): void {
     window.clearInterval(this.#clock);
   }
 
-  update() {
+  override update(): void {
     const busy = this.hasAttribute("busy");
-    for (const b of this.shadowRoot.querySelectorAll("button, input")) {
+    for (const b of this.shadowRoot.querySelectorAll<HTMLButtonElement | HTMLInputElement>("button, input")) {
       if (b.classList.contains("send")) continue;
       b.disabled = busy;
     }
     this.#refresh();
   }
 
-  #build() {
+  #build(): void {
     const box = this.$(".questions");
     if (!box) return;
     const ask = this.#ask;
     this.hidden = !ask;
     if (!ask) return;
     const questions = ask.questions ?? [];
-    this.#picks = questions.map(() => ({ chosen: new Set(), typed: "" }));
-    this.$(".note").replaceChildren(ask.note?.trim() ? renderMarkdown(ask.note) : "");
+    this.#picks = questions.map(() => ({ chosen: new Set<number>(), typed: "" }));
+    this.must(".note").replaceChildren(ask.note?.trim() ? renderMarkdown(ask.note) : "");
     const oneTap = questions.length === 1 && questions[0].options?.length && !questions[0].multi_select;
-    this.$(".foot").hidden = Boolean(oneTap);
+    this.must(".foot").hidden = Boolean(oneTap);
     box.replaceChildren(
       ...questions.map((q, index) => {
         const row = document.createElement("div");
@@ -159,9 +134,9 @@ class AdiAsk extends AdiElement {
             if (oneTap && pick.chosen.size) this.#send();
             this.#refresh();
           });
-          row.querySelector(".options").append(b);
+          row.querySelector<HTMLElement>(".options")!.append(b);
         });
-        const input = row.querySelector("input");
+        const input = row.querySelector("input")!;
         input.addEventListener("input", () => {
           pick.typed = input.value;
           this.#refresh();
@@ -176,10 +151,10 @@ class AdiAsk extends AdiElement {
     this.update();
   }
 
-  #replies() {
+  #replies(): string[] {
     const questions = this.#ask?.questions ?? [];
     return questions.map((q, i) => {
-      const pick = this.#picks[i] ?? { chosen: new Set(), typed: "" };
+      const pick = this.#picks[i] ?? { chosen: new Set<number>(), typed: "" };
       const labels = (q.options ?? []).filter((_, o) => pick.chosen.has(o)).map((o) => o.label);
       const typed = pick.typed.trim();
       if (labels.length && typed) return `${labels.join(", ")} — ${typed}`;
@@ -187,23 +162,23 @@ class AdiAsk extends AdiElement {
     });
   }
 
-  #refresh() {
-    const send = this.$(".send");
+  #refresh(): void {
+    const send = this.$<HTMLButtonElement>(".send");
     if (!send) return;
     const answered = this.#replies().some((r) => r.trim());
     send.disabled = this.hasAttribute("busy") || !answered;
-    this.$(".hint").textContent = answered
+    this.must(".hint").textContent = answered
       ? "a question left blank is answered “(no answer)”"
       : "pick an option or write an answer";
   }
 
-  #send() {
+  #send(): void {
     const replies = this.#replies();
     if (this.hasAttribute("busy") || replies.every((r) => !r.trim())) return;
     this.emit("answer", { id: this.#ask?.id, replies });
   }
 
-  #tick() {
+  #tick(): void {
     const at = this.#ask?.deadline;
     const line = this.$(".deadline");
     if (!line) return;
@@ -219,3 +194,9 @@ class AdiAsk extends AdiElement {
 define("adi-ask", AdiAsk);
 
 export { AdiAsk };
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "adi-ask": AdiAsk;
+  }
+}
