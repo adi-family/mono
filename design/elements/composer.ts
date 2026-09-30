@@ -47,36 +47,42 @@ class AdiComposer extends AdiElement {
   }
 
   override setup(): void {
-    const area = this.must<HTMLTextAreaElement>("textarea");
-    area.addEventListener("input", () => {
+    this.#setupInput();
+    this.#setupAttachments();
+    this.must<HTMLButtonElement>(".send").addEventListener("click", () => this.#send("send"));
+    this.must<HTMLButtonElement>(".asap").addEventListener("click", () => this.#send("asap"));
+    this.must<HTMLButtonElement>(".stop").addEventListener("click", () => this.emit("stop"));
+  }
+
+  #setupInput(): void {
+    const textarea = this.must<HTMLTextAreaElement>("textarea");
+    textarea.addEventListener("input", () => {
       this.#fit();
       this.update();
     });
-    area.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" && !ev.shiftKey && !ev.altKey && !ev.ctrlKey && !ev.metaKey && !ev.isComposing) {
-        ev.preventDefault();
-        this.#send("send");
-      }
+    textarea.addEventListener("keydown", (event) => {
+      const hasModifier = event.shiftKey || event.altKey || event.ctrlKey || event.metaKey;
+      if (event.key !== "Enter" || hasModifier || event.isComposing) return;
+
+      event.preventDefault();
+      this.#send("send");
     });
-    area.addEventListener("paste", (ev) => {
-      const files = [...(ev.clipboardData?.files ?? [])];
-      if (files.length && this.hasAttribute("attach")) {
-        ev.preventDefault();
-        this.emit("files", { files });
-      }
+  }
+
+  #setupAttachments(): void {
+    this.must<HTMLTextAreaElement>("textarea").addEventListener("paste", (event) => {
+      this.#receiveFiles(event, event.clipboardData?.files);
     });
+
     const box = this.must<HTMLDivElement>(".box");
     // Cancel dragover to prevent navigation to the dropped file.
-    box.addEventListener("dragover", (ev) => {
-      if (this.hasAttribute("attach")) ev.preventDefault();
+    box.addEventListener("dragover", (event) => {
+      if (this.hasAttribute("attach")) event.preventDefault();
     });
-    box.addEventListener("drop", (ev) => {
-      const files = [...(ev.dataTransfer?.files ?? [])];
-      if (files.length && this.hasAttribute("attach")) {
-        ev.preventDefault();
-        this.emit("files", { files });
-      }
+    box.addEventListener("drop", (event) => {
+      this.#receiveFiles(event, event.dataTransfer?.files);
     });
+
     const picker = this.must<HTMLInputElement>("input[type=file]");
     this.must<HTMLButtonElement>(".clip").addEventListener("click", () => picker.click());
     picker.addEventListener("change", () => {
@@ -84,9 +90,14 @@ class AdiComposer extends AdiElement {
       picker.value = "";
       if (files.length) this.emit("files", { files });
     });
-    this.must<HTMLButtonElement>(".send").addEventListener("click", () => this.#send("send"));
-    this.must<HTMLButtonElement>(".asap").addEventListener("click", () => this.#send("asap"));
-    this.must<HTMLButtonElement>(".stop").addEventListener("click", () => this.emit("stop"));
+  }
+
+  #receiveFiles(event: ClipboardEvent | DragEvent, fileList: FileList | undefined): void {
+    const files = [...(fileList ?? [])];
+    if (!files.length || !this.hasAttribute("attach")) return;
+
+    event.preventDefault();
+    this.emit("files", { files });
   }
 
   get value(): string {
@@ -94,9 +105,9 @@ class AdiComposer extends AdiElement {
   }
 
   set value(text: string) {
-    const area = this.$<HTMLTextAreaElement>("textarea");
-    if (!area) return;
-    area.value = text ?? "";
+    const textarea = this.$<HTMLTextAreaElement>("textarea");
+    if (!textarea) return;
+    textarea.value = text ?? "";
     this.#fit();
     this.update();
   }
@@ -116,48 +127,68 @@ class AdiComposer extends AdiElement {
   }
 
   override update(): void {
-    const area = this.must<HTMLTextAreaElement>("textarea");
+    const textarea = this.must<HTMLTextAreaElement>("textarea");
     const busy = this.hasAttribute("busy");
-    area.placeholder = this.attr("placeholder", "Write to the agent…");
-    area.disabled = busy;
+    textarea.placeholder = this.attr("placeholder", "Write to the agent…");
+    textarea.disabled = busy;
+
     const ready = this.#ready();
     this.must<HTMLButtonElement>(".send").disabled = !ready;
     this.must<HTMLButtonElement>(".asap").disabled = !ready;
+
     const stoppable = this.hasAttribute("stoppable");
     this.must<HTMLButtonElement>(".stop").hidden = !stoppable;
     this.must<HTMLButtonElement>(".asap").hidden = !(stoppable && this.hasAttribute("asap"));
-    const attach = this.hasAttribute("attach");
-    this.must<HTMLButtonElement>(".clip").hidden = !attach;
-    const uploading = this.#attachments.some((a) => a.state === "uploading");
-    this.must(".line").textContent = uploading ? "attaching…" : !attach ? this.attr("refusal") : "";
+
+    const canAttach = this.hasAttribute("attach");
+    this.must<HTMLButtonElement>(".clip").hidden = !canAttach;
+
+    const uploading = this.#attachments.some((attachment) => attachment.state === "uploading");
+    let attachmentStatus = "";
+    if (uploading) attachmentStatus = "attaching…";
+    else if (!canAttach) attachmentStatus = this.attr("refusal");
+    this.must(".line").textContent = attachmentStatus;
   }
 
   #ready(): boolean {
-    const typed = Boolean(this.value.trim());
-    const attached = this.#attachments.some((a) => a.state === "ready");
-    const uploading = this.#attachments.some((a) => a.state === "uploading");
-    return (typed || attached) && !uploading && !this.hasAttribute("busy");
+    const hasText = Boolean(this.value.trim());
+    const hasAttachment = this.#attachments.some((attachment) => attachment.state === "ready");
+    const uploading = this.#attachments.some((attachment) => attachment.state === "uploading");
+    return (hasText || hasAttachment) && !uploading && !this.hasAttribute("busy");
   }
 
   #drawTray(): void {
     const tray = this.$(".tray");
     if (!tray) return;
-    tray.replaceChildren(
-      ...this.#attachments.map((a) => {
-        const thumb = document.createElement("div");
-        thumb.className = `thumb ${a.state}`;
-        thumb.setAttribute("role", "listitem");
-        thumb.title = a.error ? `${a.name} — ${a.error}` : a.name;
-        thumb.innerHTML = `
-          ${a.image && a.preview ? `<img alt="${esc(a.name)}" src="${esc(a.preview)}">` : `<div class="file"><adi-icon name="paperclip" size="14" label="File"></adi-icon><span>${esc(a.name)}</span></div>`}
-          ${a.state === "uploading" ? `<div class="over">…</div>` : a.state === "failed" ? `<div class="over">failed</div>` : ""}
-          <button class="remove" type="button" title="Remove this attachment">
-            <adi-icon name="x" size="14" label="Remove ${esc(a.name)}"></adi-icon>
-          </button>`;
-        thumb.querySelector<HTMLButtonElement>(".remove")?.addEventListener("click", () => this.emit("unattach", { key: a.key }));
-        return thumb;
-      }),
-    );
+    tray.replaceChildren(...this.#attachments.map((attachment) => this.#buildAttachment(attachment)));
+  }
+
+  #buildAttachment(attachment: ComposerAttachment): HTMLDivElement {
+    const thumbnail = document.createElement("div");
+    thumbnail.className = `thumb ${attachment.state}`;
+    thumbnail.setAttribute("role", "listitem");
+    thumbnail.title = attachment.error ? `${attachment.name} — ${attachment.error}` : attachment.name;
+
+    const name = esc(attachment.name);
+    let preview = `<div class="file"><adi-icon name="paperclip" size="14" label="File"></adi-icon><span>${name}</span></div>`;
+    if (attachment.image && attachment.preview) {
+      preview = `<img alt="${name}" src="${esc(attachment.preview)}">`;
+    }
+
+    let overlay = "";
+    if (attachment.state === "uploading") overlay = `<div class="over">…</div>`;
+    else if (attachment.state === "failed") overlay = `<div class="over">failed</div>`;
+
+    thumbnail.innerHTML = `
+      ${preview}
+      ${overlay}
+      <button class="remove" type="button" title="Remove this attachment">
+        <adi-icon name="x" size="14" label="Remove ${name}"></adi-icon>
+      </button>`;
+    thumbnail.querySelector<HTMLButtonElement>(".remove")?.addEventListener("click", () => {
+      this.emit("unattach", { key: attachment.key });
+    });
+    return thumbnail;
   }
 
   #send(kind: "send" | "asap"): void {
@@ -167,10 +198,10 @@ class AdiComposer extends AdiElement {
 
   // Reset before measuring so the textarea can shrink. Skip placeholder height when empty.
   #fit(): void {
-    const area = this.must<HTMLTextAreaElement>("textarea");
-    area.style.height = "auto";
-    if (!area.value) return;
-    area.style.height = `${Math.min(area.scrollHeight, MAX_HEIGHT)}px`;
+    const textarea = this.must<HTMLTextAreaElement>("textarea");
+    textarea.style.height = "auto";
+    if (!textarea.value) return;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_HEIGHT)}px`;
   }
 }
 

@@ -90,75 +90,113 @@ class AdiAsk extends AdiElement {
   }
 
   #build(): void {
-    const box = this.$(".questions");
-    if (!box) return;
+    const container = this.$(".questions");
+    if (!container) return;
+
     const ask = this.#ask;
     this.hidden = !ask;
     if (!ask) return;
+
     const questions = ask.questions ?? [];
     this.#picks = questions.map(() => ({ chosen: new Set<number>(), typed: "" }));
     this.must(".note").replaceChildren(ask.note?.trim() ? renderMarkdown(ask.note) : "");
-    const oneTap = questions.length === 1 && questions[0].options?.length && !questions[0].multi_select;
-    this.must(".foot").hidden = Boolean(oneTap);
-    box.replaceChildren(
-      ...questions.map((q, index) => {
-        const row = document.createElement("div");
-        row.className = "q";
-        row.innerHTML = `
-          <div class="q-line">
-            ${questions.length > 1 ? `<span class="num">${index + 1}.</span>` : ""}
-            ${q.header ? `<span class="tag">${esc(q.header)}</span>` : ""}
-            <span class="text">${esc(q.question)}</span>
-            ${q.multi_select ? `<span class="any">(choose any)</span>` : ""}
-          </div>
-          ${q.options?.length ? `<div class="options"></div>` : ""}
-          <input type="text" placeholder="${q.options?.length ? "Or say something else…" : "Your answer…"}">
-        `;
-        const pick = this.#picks[index];
-        (q.options ?? []).forEach((option, o) => {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.className = "option";
-          b.setAttribute("aria-pressed", "false");
-          b.innerHTML = `${esc(option.label)}${option.description ? `<span class="desc">${esc(option.description)}</span>` : ""}`;
-          b.addEventListener("click", () => {
-            if (q.multi_select) {
-              if (pick.chosen.has(o)) pick.chosen.delete(o);
-              else pick.chosen.add(o);
-            } else {
-              pick.chosen = new Set(pick.chosen.has(o) ? [] : [o]);
-            }
-            for (const [i, other] of [...row.querySelectorAll(".option")].entries()) {
-              other.setAttribute("aria-pressed", String(pick.chosen.has(i)));
-            }
-            if (oneTap && pick.chosen.size) this.#send();
-            this.#refresh();
-          });
-          row.querySelector<HTMLElement>(".options")!.append(b);
-        });
-        const input = row.querySelector("input")!;
-        input.addEventListener("input", () => {
-          pick.typed = input.value;
-          this.#refresh();
-        });
-        input.addEventListener("keydown", (ev) => {
-          if (ev.key === "Enter" && !ev.isComposing) this.#send();
-        });
-        return row;
-      }),
+
+    const submitOnSelection = questions.length === 1
+      && (questions[0].options?.length ?? 0) > 0
+      && !questions[0].multi_select;
+    this.must(".foot").hidden = submitOnSelection;
+
+    container.replaceChildren(
+      ...questions.map((question, index) => this.#buildQuestion(question, index, submitOnSelection)),
     );
     this.#tick();
     this.update();
   }
 
+  #buildQuestion(question: AskQuestion, index: number, submitOnSelection: boolean): HTMLDivElement {
+    const answer = this.#picks[index];
+    const options = question.options ?? [];
+    const showNumber = this.#picks.length > 1;
+    const placeholder = options.length ? "Or say something else…" : "Your answer…";
+
+    const row = document.createElement("div");
+    row.className = "q";
+    row.innerHTML = `
+      <div class="q-line">
+        ${showNumber ? `<span class="num">${index + 1}.</span>` : ""}
+        ${question.header ? `<span class="tag">${esc(question.header)}</span>` : ""}
+        <span class="text">${esc(question.question)}</span>
+        ${question.multi_select ? `<span class="any">(choose any)</span>` : ""}
+      </div>
+    `;
+
+    if (options.length) {
+      row.append(this.#buildOptions(question, answer, submitOnSelection));
+    }
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = placeholder;
+    input.addEventListener("input", () => {
+      answer.typed = input.value;
+      this.#refresh();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) this.#send();
+    });
+    row.append(input);
+
+    return row;
+  }
+
+  #buildOptions(question: AskQuestion, answer: AnswerPick, submitOnSelection: boolean): HTMLDivElement {
+    const container = document.createElement("div");
+    container.className = "options";
+
+    for (const [optionIndex, option] of (question.options ?? []).entries()) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "option";
+      button.setAttribute("aria-pressed", "false");
+      const description = option.description ? `<span class="desc">${esc(option.description)}</span>` : "";
+      button.innerHTML = `${esc(option.label)}${description}`;
+
+      button.addEventListener("click", () => {
+        const wasSelected = answer.chosen.has(optionIndex);
+        if (!question.multi_select) answer.chosen.clear();
+
+        if (wasSelected) answer.chosen.delete(optionIndex);
+        else answer.chosen.add(optionIndex);
+
+        container.querySelectorAll(".option").forEach((optionButton, index) => {
+          optionButton.setAttribute("aria-pressed", String(answer.chosen.has(index)));
+        });
+
+        if (submitOnSelection && answer.chosen.size > 0) this.#send();
+        this.#refresh();
+      });
+      container.append(button);
+    }
+
+    return container;
+  }
+
   #replies(): string[] {
     const questions = this.#ask?.questions ?? [];
-    return questions.map((q, i) => {
-      const pick = this.#picks[i] ?? { chosen: new Set<number>(), typed: "" };
-      const labels = (q.options ?? []).filter((_, o) => pick.chosen.has(o)).map((o) => o.label);
-      const typed = pick.typed.trim();
-      if (labels.length && typed) return `${labels.join(", ")} — ${typed}`;
-      return labels.length ? labels.join(", ") : typed;
+
+    return questions.map((question, index) => {
+      const answer = this.#picks[index];
+      if (!answer) return "";
+
+      const selectedLabels = (question.options ?? [])
+        .filter((_, optionIndex) => answer.chosen.has(optionIndex))
+        .map((option) => option.label);
+      const selectedAnswer = selectedLabels.join(", ");
+      const typedAnswer = answer.typed.trim();
+
+      if (selectedLabels.length === 0) return typedAnswer;
+      if (!typedAnswer) return selectedAnswer;
+      return `${selectedAnswer} — ${typedAnswer}`;
     });
   }
 

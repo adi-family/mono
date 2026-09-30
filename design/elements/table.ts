@@ -57,11 +57,12 @@ class AdiTable extends AdiElement {
 
   get sorted(): TableRow[] {
     const key = this.attr("sort");
-    const column = this.#columns.find((c) => c.key === key);
+    const column = this.#columns.find((column) => column.key === key);
     if (!column) return this.#rows;
-    const sign = this.attr("dir", "asc") === "desc" ? -1 : 1;
+
+    const direction = this.attr("dir", "asc") === "desc" ? -1 : 1;
     const compare = column.compare ?? defaultCompare;
-    return [...this.#rows].sort((a, b) => sign * compare(a[key], b[key], a, b));
+    return [...this.#rows].sort((left, right) => direction * compare(left[key], right[key], left, right));
   }
 
   #draw(): void {
@@ -69,93 +70,114 @@ class AdiTable extends AdiElement {
     const head = this.must<HTMLTableRowElement>("thead tr");
     const body = this.must<HTMLTableSectionElement>("tbody");
     const empty = this.must(".empty");
-    const sort = this.attr("sort");
-    const dir = this.attr("dir", "asc");
+    const sortKey = this.attr("sort");
+    const sortDirection = this.attr("dir", "asc");
 
     head.replaceChildren(
-      ...this.#columns.map((column) => {
-        const th = document.createElement("th");
-        if (column.align) th.setAttribute("align", column.align);
-        if (column.width) th.style.width = column.width;
-        if (column.actions) th.classList.add("actions");
-        const sortable = column.sortable !== false && !column.actions;
-        if (!sortable) {
-          th.textContent = column.label ?? "";
-          return th;
-        }
-        th.classList.add("sortable");
-        if (column.key === sort) th.setAttribute("aria-sort", dir === "desc" ? "descending" : "ascending");
-        const button = document.createElement("button");
-        button.type = "button";
-        button.append(column.label ?? "");
-        const arrow = document.createElement("adi-icon");
-        arrow.setAttribute("name", column.key === sort && dir === "desc" ? "arrow-down" : "arrow-up");
-        arrow.setAttribute("size", "14");
-        button.append(arrow);
-        button.addEventListener("click", () => this.#sortBy(column.key));
-        th.append(button);
-        return th;
-      }),
+      ...this.#columns.map((column) => this.#buildHeader(column, sortKey, sortDirection)),
     );
 
     const rows = this.sorted;
-    body.replaceChildren(
-      ...rows.map((row, index) => {
-        const tr = document.createElement("tr");
-        for (const column of this.#columns) {
-          const td = document.createElement("td");
-          if (column.mono) td.classList.add("mono");
-          if (column.muted) td.classList.add("muted");
-          if (column.align) td.setAttribute("align", column.align);
-          if (column.actions) td.classList.add("actions");
-          cell(td, column.format ? column.format(row[column.key], row) : row[column.key]);
-          tr.append(td);
-        }
-        if (this.hasAttribute("selectable")) {
-          tr.addEventListener("click", (event) => {
-            if (event.target instanceof Element && event.target.closest("button, a, adi-button")) return;
-            this.emit("select", { row, index });
-          });
-        }
-        return tr;
-      }),
-    );
+    body.replaceChildren(...rows.map((row, index) => this.#buildRow(row, index)));
 
-    const nothing = rows.length === 0;
-    this.must<HTMLTableElement>("table").hidden = nothing;
-    empty.hidden = !nothing;
+    const hasRows = rows.length > 0;
+    this.must<HTMLTableElement>("table").hidden = !hasRows;
+    empty.hidden = hasRows;
     empty.textContent = this.attr("empty", "Nothing here yet");
   }
 
+  #buildHeader(column: TableColumn, sortKey: string, sortDirection: string): HTMLTableCellElement {
+    const header = document.createElement("th");
+    if (column.align) header.setAttribute("align", column.align);
+    if (column.width) header.style.width = column.width;
+    if (column.actions) header.classList.add("actions");
+
+    const sortable = column.sortable !== false && !column.actions;
+    if (!sortable) {
+      header.textContent = column.label ?? "";
+      return header;
+    }
+
+    const isSorted = column.key === sortKey;
+    const descending = sortDirection === "desc";
+    header.classList.add("sortable");
+    if (isSorted) header.setAttribute("aria-sort", descending ? "descending" : "ascending");
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.append(column.label ?? "");
+
+    const arrow = document.createElement("adi-icon");
+    arrow.setAttribute("name", isSorted && descending ? "arrow-down" : "arrow-up");
+    arrow.setAttribute("size", "14");
+    button.append(arrow);
+    button.addEventListener("click", () => this.#sortBy(column.key));
+    header.append(button);
+
+    return header;
+  }
+
+  #buildRow(row: TableRow, index: number): HTMLTableRowElement {
+    const rowElement = document.createElement("tr");
+    for (const column of this.#columns) {
+      const cell = document.createElement("td");
+      if (column.mono) cell.classList.add("mono");
+      if (column.muted) cell.classList.add("muted");
+      if (column.align) cell.setAttribute("align", column.align);
+      if (column.actions) cell.classList.add("actions");
+
+      const value = row[column.key];
+      const content = column.format ? column.format(value, row) : value;
+      renderCellContent(cell, content);
+      rowElement.append(cell);
+    }
+
+    if (this.hasAttribute("selectable")) {
+      rowElement.addEventListener("click", (event) => {
+        const clickedControl = event.target instanceof Element
+          && event.target.closest("button, a, adi-button");
+        if (clickedControl) return;
+        this.emit("select", { row, index });
+      });
+    }
+
+    return rowElement;
+  }
+
   #sortBy(key: string): void {
-    const dir = this.attr("sort") === key && this.attr("dir", "asc") === "asc" ? "desc" : "asc";
+    const alreadyAscending = this.attr("sort") === key && this.attr("dir", "asc") === "asc";
+    const dir = alreadyAscending ? "desc" : "asc";
     this.setAttribute("sort", key);
     this.setAttribute("dir", dir);
     this.emit("sort", { key, dir });
   }
 }
 
-function cell(td: HTMLTableCellElement, value: unknown): void {
+function renderCellContent(cell: HTMLTableCellElement, value: unknown): void {
   if (value instanceof Node) {
-    td.append(value);
+    cell.append(value);
     return;
   }
   if (value === null || value === undefined || value === "") {
-    const nothing = document.createElement("span");
-    nothing.className = "nothing";
-    nothing.textContent = "—";
-    td.append(nothing);
+    const placeholder = document.createElement("span");
+    placeholder.className = "nothing";
+    placeholder.textContent = "—";
+    cell.append(placeholder);
     return;
   }
-  td.textContent = String(value);
+  cell.textContent = String(value);
 }
 
 /** Numbers numerically, everything else as text; an empty cell sorts last going up. */
-function defaultCompare(a: unknown, b: unknown): number {
-  const missing = (v: unknown) => v === null || v === undefined || v === "";
-  if (missing(a) || missing(b)) return missing(a) && missing(b) ? 0 : missing(a) ? 1 : -1;
-  if (typeof a === "number" && typeof b === "number") return a - b;
-  return String(a).localeCompare(String(b), undefined, { numeric: true });
+function defaultCompare(left: unknown, right: unknown): number {
+  const leftMissing = left === null || left === undefined || left === "";
+  const rightMissing = right === null || right === undefined || right === "";
+  if (leftMissing && rightMissing) return 0;
+  if (leftMissing) return 1;
+  if (rightMissing) return -1;
+
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  return String(left).localeCompare(String(right), undefined, { numeric: true });
 }
 
 define("adi-table", AdiTable);

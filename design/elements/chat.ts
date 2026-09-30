@@ -61,6 +61,7 @@ type AgentStep =
   | { kind: "unknown" };
 
 type ToolStep = Extract<AgentStep, { kind: "tool" }>;
+type FoldedCallsStep = Extract<AgentStep, { kind: "calls" }>;
 
 /** What the platform stamped on a turn — `TurnMarker`, tagged by `kind`. */
 type TurnMarker =
@@ -120,6 +121,11 @@ interface AgentGoal {
   state: string;
   set_by: string;
   nudges: number;
+}
+
+interface GoalEditor {
+  id: string | null;
+  text: string;
 }
 
 interface Attachment extends ComposerAttachment {
@@ -245,7 +251,7 @@ class AdiChat extends AdiElement {
   #answering = false;
   #live = false;
   #goals: AgentGoal[] = [];
-  #goalEditor: { id: string | null; text: string } | null = null;
+  #goalEditor: GoalEditor | null = null;
   #goalBusy = false;
   #goalsDrawn = "";
   #files: Attachment[] = [];
@@ -473,35 +479,42 @@ class AdiChat extends AdiElement {
   /** Group starred agents and the current agent by machine, with the root agent first. */
   #drawAgents(): void {
     const select = this.must<HTMLSelectElement>(".agent");
-    const multi = this.#sources.length > 1;
-    const groups = this.#sources
-      .map(({ node, agents }) => {
-        const options = agents.filter(
-          (a) => a.starred || (a.name === this.#agent && node === this.#node),
-        );
-        options.sort((a, b) => Number(!(node === null && a.name === ROOT_AGENT)) - Number(!(node === null && b.name === ROOT_AGENT)));
-        return { node, options };
-      })
-      .filter((g) => g.options.length);
-    const option = (node: string | null, a: AgentDto) => {
-      const o = document.createElement("option");
-      o.value = JSON.stringify([node, a.name]);
-      o.textContent = a.running ? `\u25CF ${a.name}` : a.name;
-      return o;
-    };
-    select.replaceChildren(
-      ...groups.map(({ node, options }) => {
-        if (!multi) return options.map((a) => option(node, a));
-        const g = document.createElement("optgroup");
-        g.label = node ?? "This machine";
-        g.append(...options.map((a) => option(node, a)));
-        return [g];
-      }).flat(),
-    );
+    const multipleMachines = this.#sources.length > 1;
+    const choices: (HTMLOptionElement | HTMLOptGroupElement)[] = [];
+    for (const { node, agents } of this.#sources) {
+      const visibleAgents = agents.filter(
+        (agent) => agent.starred || (agent.name === this.#agent && node === this.#node),
+      );
+      if (!visibleAgents.length) continue;
+      visibleAgents.sort((left, right) => {
+        const leftIsRoot = node === null && left.name === ROOT_AGENT;
+        const rightIsRoot = node === null && right.name === ROOT_AGENT;
+        return Number(rightIsRoot) - Number(leftIsRoot);
+      });
+
+      const options = visibleAgents.map((agent) => {
+        const option = document.createElement("option");
+        option.value = JSON.stringify([node, agent.name]);
+        option.textContent = agent.running ? `\u25CF ${agent.name}` : agent.name;
+        return option;
+      });
+      if (multipleMachines) {
+        const group = document.createElement("optgroup");
+        group.label = node ?? "This machine";
+        group.append(...options);
+        choices.push(group);
+      } else {
+        choices.push(...options);
+      }
+    }
+
+    select.replaceChildren(...choices);
     select.value = JSON.stringify([this.#node, this.#agent]);
-    const any = groups.length > 0;
-    select.hidden = !any;
-    this.must(".pickhint").textContent = !any ? "No starred agents" : multi ? `on ${this.#node ?? "this machine"}` : "";
+    select.hidden = choices.length === 0;
+    const hint = this.must(".pickhint");
+    if (!choices.length) hint.textContent = "No starred agents";
+    else if (multipleMachines) hint.textContent = `on ${this.#node ?? "this machine"}`;
+    else hint.textContent = "";
   }
 
   async #openAgent(name: string, run?: string | null, node: string | null = this.#node): Promise<void> {
@@ -576,28 +589,30 @@ class AdiChat extends AdiElement {
       box.innerHTML = `<div class="none">No conversations with this agent yet.</div>`;
       return;
     }
-    const sig = JSON.stringify(this.#runs.map((r) => [r.run_id, r.title, r.running, r.starred, r.last_activity]));
-    if (sig === this.#runsDrawn) return;
-    this.#runsDrawn = sig;
-    box.replaceChildren(
-      ...this.#runs.map((r) => {
-        const row = document.createElement("button");
-        row.type = "button";
-        row.className = "row";
-        row.setAttribute("role", "listitem");
-        row.innerHTML = `${r.running ? `<span class="live" aria-label="running"></span>` : ""}
-          <span class="text"><span class="name"></span><span class="meta"></span></span>
-          ${r.starred ? `<adi-icon class="star" name="star" size="14" label="Starred"></adi-icon>` : ""}`;
-        row.querySelector(".name")!.textContent = titleOf(r);
-        row.querySelector(".meta")!.textContent = r.running ? "working" : ago(r.last_activity || r.started_at);
-        row.addEventListener("click", () => this.#openRun(r.run_id));
-        row.addEventListener("contextmenu", (ev) => {
-          ev.preventDefault();
-          this.#menu(ev, r);
-        });
-        return row;
-      }),
+    const signature = JSON.stringify(
+      this.#runs.map((run) => [run.run_id, run.title, run.running, run.starred, run.last_activity]),
     );
+    if (signature === this.#runsDrawn) return;
+    this.#runsDrawn = signature;
+    box.replaceChildren(...this.#runs.map((run) => this.#runRow(run)));
+  }
+
+  #runRow(run: AgentRunInfo): HTMLButtonElement {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "row";
+    row.setAttribute("role", "listitem");
+    row.innerHTML = `${run.running ? `<span class="live" aria-label="running"></span>` : ""}
+      <span class="text"><span class="name"></span><span class="meta"></span></span>
+      ${run.starred ? `<adi-icon class="star" name="star" size="14" label="Starred"></adi-icon>` : ""}`;
+    row.querySelector(".name")!.textContent = titleOf(run);
+    row.querySelector(".meta")!.textContent = run.running ? "working" : ago(run.last_activity || run.started_at);
+    row.addEventListener("click", () => this.#openRun(run.run_id));
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      this.#menu(event, run);
+    });
+    return row;
   }
 
   #menu(ev: MouseEvent, run: AgentRunInfo): void {
@@ -667,50 +682,31 @@ class AdiChat extends AdiElement {
   }
 
   #draw(): void {
-    const p = this.#peek;
+    const peek = this.#peek;
     const fresh = !this.#run;
-    const answerable = fresh || Boolean(p?.answerable);
+    const answerable = fresh || Boolean(peek?.answerable);
     const composer = this.must<AdiComposer>("adi-composer");
     this.must(".top").hidden = !answerable;
     composer.setAttribute("placeholder", `Write to ${this.#agent ?? "the agent"}…`);
     composer.toggleAttribute("busy", this.#busy);
-    composer.toggleAttribute("stoppable", Boolean(p?.running));
+    composer.toggleAttribute("stoppable", Boolean(peek?.running));
     composer.setAttribute("asap", "");
     // Use the conversation engine’s capabilities, which may differ from current agent settings.
-    const attach = fresh || Boolean(p?.caps?.images);
+    const attach = fresh || Boolean(peek?.caps?.images);
     composer.toggleAttribute("attach", attach);
     composer.setAttribute("refusal", IMAGES_REFUSED);
-    this.must(".note").textContent = p?.running ? "queued — the agent is answering" : "";
+    this.must(".note").textContent = peek?.running ? "queued — the agent is answering" : "";
 
     this.#drawGoals();
-
-    this.#drawAwaits(p?.awaits ?? []);
+    this.#drawAwaits(peek?.awaits ?? []);
 
     const ask = this.must<AdiAsk>("adi-ask");
-    ask.ask = p?.pending_question ?? null;
-    ask.hidden = !p?.pending_question;
+    ask.ask = peek?.pending_question ?? null;
+    ask.hidden = !peek?.pending_question;
     ask.toggleAttribute("busy", this.#answering);
 
-    const turns = p?.turns ?? [];
-    this.must(".queued").replaceChildren(
-      ...turns
-        .filter((t) => t.queued)
-        .map((t, place) => {
-          const m = document.createElement("adi-message");
-          m.setAttribute("role", "user");
-          m.setAttribute("queued", "");
-          m.setAttribute("removable", "");
-          m.dataset.place = String(place);
-          if (t.mode === "asap") m.setAttribute("asap", "");
-          const by = senderOf(t.markers);
-          if (by) m.setAttribute("by", by);
-          m.images = this.#pictures(t);
-          m.body = t.text;
-          return m;
-        })
-        .reverse(),
-    );
-
+    const turns = peek?.turns ?? [];
+    this.#drawQueued(turns);
     this.must<AdiTranscript>("adi-transcript").entries = this.#entries(turns);
 
     const oldest = turns.length ? (turns[0].seq || 0) : 0;
@@ -720,10 +716,29 @@ class AdiChat extends AdiElement {
 
     let empty = "";
     if (fresh) empty = `A new conversation with ${this.#agent ?? "the agent"} starts with what you write above.`;
-    else if (!p) empty = "Loading…";
-    else if (!turns.length && !p.output) empty = p.running ? "Working…" : "No output.";
+    else if (!peek) empty = "Loading…";
+    else if (!turns.length && !peek.output) empty = peek.running ? "Working…" : "No output.";
     this.must(".empty").textContent = empty;
-    this.must("pre.log").textContent = !turns.length ? (p?.output ?? "") : "";
+    this.must("pre.log").textContent = !turns.length ? (peek?.output ?? "") : "";
+  }
+
+  #drawQueued(turns: AgentTurn[]): void {
+    const queuedTurns = turns.filter((turn) => turn.queued);
+    const messages = queuedTurns.map((turn, queueIndex) => {
+      const message = document.createElement("adi-message");
+      message.setAttribute("role", "user");
+      message.setAttribute("queued", "");
+      message.setAttribute("removable", "");
+      message.dataset.place = String(queueIndex);
+      if (turn.mode === "asap") message.setAttribute("asap", "");
+      const sender = senderOf(turn.markers);
+      if (sender) message.setAttribute("by", sender);
+      message.images = this.#pictures(turn);
+      message.body = turn.text;
+      return message;
+    });
+    // Show the newest first while preserving the queue index used to remove it.
+    this.must(".queued").replaceChildren(...messages.reverse());
   }
 
   #drawAwaits(awaits: AgentAwait[]): void {
@@ -764,53 +779,70 @@ class AdiChat extends AdiElement {
     return out;
   }
 
-  #feedTurn(at: number, turn: AgentTurn): Entry[] {
-    const key = (part: number) => (part === 0 ? `adi-turn-${at}` : `adi-turn-${at}-${part}`);
+  #feedTurn(turnIndex: number, turn: AgentTurn): Entry[] {
+    const key = (partIndex: number) => (
+      partIndex === 0 ? `adi-turn-${turnIndex}` : `adi-turn-${turnIndex}-${partIndex}`
+    );
     if (turn.role === "user") {
       const note = platformNote(turn);
       if (note) return [{ key: key(0), kind: "note", note }];
       return [{ key: key(0), kind: "said", role: "user", body: turn.text, images: this.#pictures(turn), by: senderOf(turn.markers) }];
     }
+
     const parts: Part[] = [];
-    let run: Call[] = [];
-    let runFrom = 0;
-    const close = () => {
-      if (run.length) parts.push({ kind: "did", run: loadedRun(`adi-run-${at}-${runFrom}`, run) });
-      run = [];
-    };
-    (turn.steps ?? []).forEach((step, i) => {
-      if (step.kind === "message") {
-        close();
-        if (step.text?.trim()) parts.push({ kind: "said", role: "agent", body: step.text });
-      } else if (step.kind === "thinking" || step.kind === "tool") {
-        if (!run.length) runFrom = i;
-        run.push(step.kind === "tool" ? toolCall(at, i, step) : thinkingCall(step.text));
-      } else if (step.kind === "calls") {
-        close();
-        const id = `adi-run-${at}-${step.from}`;
-        const fetched = this.#steps.get(runKey(at, step.from, step.to, step.count, step.status));
-        parts.push({
-          kind: "did",
-          run: {
-            id,
-            count: step.count,
-            tools: step.tools ?? [],
-            preview: step.preview ?? "",
-            state: TOOL_STATE[step.status] ?? "ok",
-            calls: fetched
-              ? fetched
-                  .map((s, offset) =>
-                    s.kind === "tool" ? toolCall(at, step.from + offset, s) : s.kind === "thinking" ? thinkingCall(s.text) : null,
-                  )
-                  .filter((c) => c !== null)
-              : null,
-          },
-        });
+    let calls: Call[] = [];
+    let firstCallIndex = 0;
+    const finishCalls = () => {
+      if (calls.length) {
+        const id = `adi-run-${turnIndex}-${firstCallIndex}`;
+        parts.push({ kind: "did", run: loadedRun(id, calls) });
       }
-    });
-    close();
+      calls = [];
+    };
+
+    for (const [stepIndex, step] of (turn.steps ?? []).entries()) {
+      switch (step.kind) {
+        case "message":
+          finishCalls();
+          if (step.text?.trim()) parts.push({ kind: "said", role: "agent", body: step.text });
+          break;
+        case "thinking":
+        case "tool":
+          if (!calls.length) firstCallIndex = stepIndex;
+          calls.push(step.kind === "tool" ? toolCall(turnIndex, stepIndex, step) : thinkingCall(step.text));
+          break;
+        case "calls":
+          finishCalls();
+          parts.push({ kind: "did", run: this.#foldedCallRun(turnIndex, step) });
+          break;
+      }
+    }
+
+    finishCalls();
     if (turn.text?.trim()) parts.push({ kind: "said", role: "agent", body: turn.text });
-    return parts.map((part, i) => ({ key: key(i), ...part }));
+    return parts.map((part, partIndex) => ({ key: key(partIndex), ...part }));
+  }
+
+  #foldedCallRun(turnIndex: number, step: FoldedCallsStep): CallRun {
+    const cacheKey = runKey(turnIndex, step.from, step.to, step.count, step.status);
+    const fetchedSteps = this.#steps.get(cacheKey);
+    let calls: Call[] | null = null;
+    if (fetchedSteps) {
+      calls = [];
+      for (const [offset, fetchedStep] of fetchedSteps.entries()) {
+        if (fetchedStep.kind === "tool") calls.push(toolCall(turnIndex, step.from + offset, fetchedStep));
+        else if (fetchedStep.kind === "thinking") calls.push(thinkingCall(fetchedStep.text));
+      }
+    }
+
+    return {
+      id: `adi-run-${turnIndex}-${step.from}`,
+      count: step.count,
+      tools: step.tools ?? [],
+      preview: step.preview ?? "",
+      state: TOOL_STATE[step.status] ?? "ok",
+      calls,
+    };
   }
 
   /** A folded run was opened: fetch its calls, once per shape. */
@@ -937,62 +969,68 @@ class AdiChat extends AdiElement {
     }
     const editor = this.#goalEditor;
     if (editor) {
-      if (box.querySelector("input")) return this.#goalButtons();
-      box.innerHTML = `
-        <div class="goal">
-          <input type="text" placeholder="what would make this chat done">
-          <button class="small default save" type="button">Save</button>
-          <button class="small cancel" type="button">Cancel</button>
-        </div>
-        <div class="explain">Put back to the agent every time this chat falls quiet, until it is met or given up on.</div>`;
-      const input = box.querySelector("input")!;
-      input.value = editor.text;
-      input.addEventListener("input", () => {
-        editor.text = input.value;
-        this.#goalButtons();
-      });
-      input.addEventListener("keydown", (ev) => {
-        if (ev.key === "Enter" && !ev.isComposing) this.#saveGoal();
-        else if (ev.key === "Escape") this.#closeGoalEditor();
-      });
-      box.querySelector(".save")!.addEventListener("click", () => this.#saveGoal());
-      box.querySelector(".cancel")!.addEventListener("click", () => this.#closeGoalEditor());
-      this.#goalButtons();
-      input.focus();
+      this.#drawGoalEditor(box, editor);
       return;
     }
-    const open = this.#goals.filter((g) => g.state === "open");
-    const sig = JSON.stringify([open, this.#goalBusy]);
-    if (sig === this.#goalsDrawn && box.firstChild) return;
-    this.#goalsDrawn = sig;
-    if (!open.length) {
+
+    const openGoals = this.#goals.filter((goal) => goal.state === "open");
+    const signature = JSON.stringify([openGoals, this.#goalBusy]);
+    if (signature === this.#goalsDrawn && box.firstChild) return;
+    this.#goalsDrawn = signature;
+    if (!openGoals.length) {
       box.innerHTML = `<div class="goal"><button class="link" type="button"
         title="Set what would make this chat done. It is put back to the agent every time the chat falls quiet, until it is met or given up on.">+ Set a goal</button></div>`;
       box.querySelector(".link")!.addEventListener("click", () => this.#openGoalEditor(null, ""));
       return;
     }
-    box.replaceChildren(
-      ...open.map((goal) => {
-        const row = document.createElement("div");
-        row.className = "goal";
-        const self = goal.set_by === "agent";
-        row.innerHTML = `
-          <span title="This chat has a goal">Goal</span>
-          <button class="text" type="button"></button>
-          ${self ? `<span title="The agent set this goal for itself">self-set</span>` : ""}
-          ${goal.nudges > 1 ? `<span>asked ${goal.nudges}×</span>` : ""}
-          <button class="small met" type="button" title="Close this goal as met">Met</button>
-          <button class="small danger gave" type="button" title="Stop working toward this goal, and stop being asked about it">Give up</button>`;
-        const text = row.querySelector<HTMLButtonElement>(".text")!;
-        text.textContent = goal.text;
-        text.title = `${goal.text} — click to reword${self ? " (the agent set this itself)" : ""}`;
-        text.addEventListener("click", () => this.#openGoalEditor(goal.id, goal.text));
-        row.querySelector(".met")!.addEventListener("click", () => this.#closeGoal(goal.id, "met"));
-        row.querySelector(".gave")!.addEventListener("click", () => this.#closeGoal(goal.id, "given_up"));
-        for (const b of row.querySelectorAll<HTMLButtonElement>(".small")) b.disabled = this.#goalBusy;
-        return row;
-      }),
-    );
+    box.replaceChildren(...openGoals.map((goal) => this.#goalRow(goal)));
+  }
+
+  #drawGoalEditor(box: HTMLElement, editor: GoalEditor): void {
+    // Polling must keep the existing input and its selection intact.
+    if (box.querySelector("input")) return this.#goalButtons();
+    box.innerHTML = `
+      <div class="goal">
+        <input type="text" placeholder="what would make this chat done">
+        <button class="small default save" type="button">Save</button>
+        <button class="small cancel" type="button">Cancel</button>
+      </div>
+      <div class="explain">Put back to the agent every time this chat falls quiet, until it is met or given up on.</div>`;
+    const input = box.querySelector("input")!;
+    input.value = editor.text;
+    input.addEventListener("input", () => {
+      editor.text = input.value;
+      this.#goalButtons();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing) this.#saveGoal();
+      else if (event.key === "Escape") this.#closeGoalEditor();
+    });
+    box.querySelector(".save")!.addEventListener("click", () => this.#saveGoal());
+    box.querySelector(".cancel")!.addEventListener("click", () => this.#closeGoalEditor());
+    this.#goalButtons();
+    input.focus();
+  }
+
+  #goalRow(goal: AgentGoal): HTMLDivElement {
+    const row = document.createElement("div");
+    row.className = "goal";
+    const setByAgent = goal.set_by === "agent";
+    row.innerHTML = `
+      <span title="This chat has a goal">Goal</span>
+      <button class="text" type="button"></button>
+      ${setByAgent ? `<span title="The agent set this goal for itself">self-set</span>` : ""}
+      ${goal.nudges > 1 ? `<span>asked ${goal.nudges}×</span>` : ""}
+      <button class="small met" type="button" title="Close this goal as met">Met</button>
+      <button class="small danger gave" type="button" title="Stop working toward this goal, and stop being asked about it">Give up</button>`;
+    const text = row.querySelector<HTMLButtonElement>(".text")!;
+    text.textContent = goal.text;
+    text.title = `${goal.text} — click to reword${setByAgent ? " (the agent set this itself)" : ""}`;
+    text.addEventListener("click", () => this.#openGoalEditor(goal.id, goal.text));
+    row.querySelector(".met")!.addEventListener("click", () => this.#closeGoal(goal.id, "met"));
+    row.querySelector(".gave")!.addEventListener("click", () => this.#closeGoal(goal.id, "given_up"));
+    for (const button of row.querySelectorAll<HTMLButtonElement>(".small")) button.disabled = this.#goalBusy;
+    return row;
   }
 
   #goalButtons(): void {

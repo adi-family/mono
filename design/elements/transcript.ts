@@ -40,7 +40,14 @@ export interface CallRun {
 }
 
 export type TranscriptPart =
-  | { kind: "said"; role: "user" | "agent"; body?: string; images?: Picture[]; from?: string | null; by?: string | null }
+  | {
+    kind: "said";
+    role: "user" | "agent";
+    body?: string;
+    images?: Picture[];
+    from?: string | null;
+    by?: string | null;
+  }
   | { kind: "did"; run: CallRun }
   | { kind: "note"; note: Note };
 
@@ -50,7 +57,7 @@ type TranscriptNode = AdiMessage | AdiToolRun | AdiNote;
 
 interface KeptEntry {
   node: TranscriptNode;
-  sig: string | null;
+  signature: string | null;
   kind: TranscriptEntry["kind"];
 }
 
@@ -107,49 +114,54 @@ class AdiMessage extends AdiElement {
   override update(): void {
     const role = this.pick("role", ["agent", "user"]);
     const queued = this.hasAttribute("queued");
-    let head = sourceLine(role, this.attr("from"), this.attr("by"));
+    const from = this.attr("from");
+    const by = this.attr("by");
+    let heading = sourceLine(role, from, by);
+
     if (queued) {
-      const by = this.attr("by");
-      const from = this.attr("from");
-      head = by ? `${by} · queued` : from ? `You · queued · ${from}` : "You · queued";
-      if (this.hasAttribute("asap")) head += " · asap";
+      if (by) heading = `${by} · queued`;
+      else if (from) heading = `You · queued · ${from}`;
+      else heading = "You · queued";
+
+      if (this.hasAttribute("asap")) heading += " · asap";
     }
-    this.must(".source").textContent = head;
+
+    this.must(".source").textContent = heading;
     const removable = queued && this.hasAttribute("removable");
     this.must<HTMLButtonElement>(".unqueue").hidden = !removable;
-    this.must(".head").hidden = !head && !removable;
+    this.must(".head").hidden = !heading && !removable;
     this.#draw();
   }
 
   #draw(): void {
     if (!this.shadowRoot.firstElementChild) return;
-    const sig = JSON.stringify([this.#body, this.#images]);
-    if (sig === this.#drawn) return;
-    this.#drawn = sig;
+    const signature = JSON.stringify([this.#body, this.#images]);
+    if (signature === this.#drawn) return;
+    this.#drawn = signature;
     this.must(".md").replaceChildren(this.#body.trim() ? renderMarkdown(this.#body) : "");
-    this.must(".pictures").replaceChildren(...this.#images.map(attachment));
+    this.must(".pictures").replaceChildren(...this.#images.map(createAttachment));
   }
 }
 
-function attachment({ url, name, picture }: Picture): HTMLAnchorElement {
-  const a = document.createElement("a");
-  a.href = url;
-  a.target = "_blank";
-  a.rel = "noreferrer";
+function createAttachment({ url, name, picture }: Picture): HTMLAnchorElement {
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noreferrer";
   if (picture) {
-    a.className = "picture";
-    a.title = `${name} — open full size`;
-    const img = document.createElement("img");
-    img.src = url;
-    img.alt = name;
-    img.loading = "lazy";
-    a.append(img);
+    link.className = "picture";
+    link.title = `${name} — open full size`;
+    const image = document.createElement("img");
+    image.src = url;
+    image.alt = name;
+    image.loading = "lazy";
+    link.append(image);
   } else {
-    a.className = "file";
-    a.title = `${name} — open this file`;
-    a.innerHTML = `<adi-icon name="paperclip" size="14" label="Attached file"></adi-icon><span>${esc(name)}</span>`;
+    link.className = "file";
+    link.title = `${name} — open this file`;
+    link.innerHTML = `<adi-icon name="paperclip" size="14" label="Attached file"></adi-icon><span>${esc(name)}</span>`;
   }
-  return a;
+  return link;
 }
 
 class AdiNote extends AdiElement {
@@ -255,62 +267,77 @@ class AdiToolRun extends AdiElement {
   override update(): void {
     const run = this.#run;
     if (!run || !this.shadowRoot.firstElementChild) return;
+
     this.toggleAttribute("open", this.#open);
     this.must<HTMLButtonElement>(".head").setAttribute("aria-expanded", String(this.#open));
     const count = run.count === 1 ? "1 call" : `${run.count} calls`;
     this.must(".what").textContent = `${count} · ${toolsLine(run.tools ?? [])}`;
     this.must(".preview").textContent = run.preview ?? "";
-    const note = RUN_NOTE[run.state];
-    this.must(".note").innerHTML = note
-      ? `<span class="dot" style="background:${note[1]}" aria-hidden="true"></span>${note[0]}`
+
+    const [statusLabel, statusColor] = RUN_NOTE[run.state] ?? ["", ""];
+    this.must(".note").innerHTML = statusLabel
+      ? `<span class="dot" style="background:${statusColor}" aria-hidden="true"></span>${statusLabel}`
       : "";
+
     const body = this.must(".body");
     body.hidden = !this.#open;
-    if (!this.#open) return;
-    const sig = JSON.stringify(run.calls);
-    if (sig === this.#drawn) return;
-    this.#drawn = sig;
-    if (!run.calls) {
+    if (this.#open) this.#drawCalls(body, run.calls);
+  }
+
+  #drawCalls(body: HTMLElement, calls: Call[] | null): void {
+    const signature = JSON.stringify(calls);
+    if (signature === this.#drawn) return;
+    this.#drawn = signature;
+
+    if (!calls) {
       body.innerHTML = `<div class="fetching">Fetching these calls…</div>`;
       return;
     }
-    body.replaceChildren(...run.calls.map(callBlock));
+    body.replaceChildren(...calls.map(createCallBlock));
   }
 }
 
 /** Render model arguments as invoke/parameter markup with verbatim values. */
-function callBlock(call: Call): HTMLDivElement {
-  const box = document.createElement("div");
-  box.className = "call";
-  if (call.anchor) box.id = call.anchor;
-  const params = (call.params ?? [])
-    .map(([k, v]) => `<span class="tag">  &lt;parameter name="${esc(k)}"&gt;</span>${esc(v)}<span class="tag">&lt;/parameter&gt;\n</span>`)
+function createCallBlock(call: Call): HTMLDivElement {
+  const block = document.createElement("div");
+  block.className = "call";
+  if (call.anchor) block.id = call.anchor;
+
+  const parameters = (call.params ?? [])
+    .map(([name, value]) => {
+      const openingTag = `<span class="tag">  &lt;parameter name="${esc(name)}"&gt;</span>`;
+      const closingTag = `<span class="tag">&lt;/parameter&gt;\n</span>`;
+      return `${openingTag}${esc(value)}${closingTag}`;
+    })
     .join("");
-  box.innerHTML = `
+  const statusColor = CALL_DOT[call.state] ?? CALL_DOT.ok;
+
+  block.innerHTML = `
     <div class="call-head">
-      <span class="dot" style="background:${CALL_DOT[call.state] ?? CALL_DOT.ok}" aria-hidden="true"></span>
+      <span class="dot" style="background:${statusColor}" aria-hidden="true"></span>
       <span>${esc(call.name)}</span>
     </div>
-    <pre><span class="tag">&lt;invoke name="${esc(call.name)}"&gt;\n</span>${params}<span class="tag">&lt;/invoke&gt;</span></pre>
+    <pre><span class="tag">&lt;invoke name="${esc(call.name)}"&gt;\n</span>${parameters}<span class="tag">&lt;/invoke&gt;</span></pre>
   `;
+
   if (call.result) {
-    const pre = document.createElement("pre");
-    pre.className = "result";
-    pre.innerHTML = `<span class="tag">&lt;result&gt;\n</span>${esc(call.result)}<span class="tag">\n&lt;/result&gt;</span>`;
-    box.append(pre);
+    const result = document.createElement("pre");
+    result.className = "result";
+    result.innerHTML = `<span class="tag">&lt;result&gt;\n</span>${esc(call.result)}<span class="tag">\n&lt;/result&gt;</span>`;
+    block.append(result);
   }
-  return box;
+  return block;
 }
 
 const TAG = { said: "adi-message", did: "adi-tool-run", note: "adi-note" } as const;
 
-function fill(node: TranscriptNode, entry: TranscriptEntry): void {
+function updateEntryNode(node: TranscriptNode, entry: TranscriptEntry): void {
   switch (entry.kind) {
     case "said":
       if (!(node instanceof AdiMessage)) return;
       node.setAttribute("role", entry.role === "user" ? "user" : "agent");
-      setAttr(node, "from", entry.from);
-      setAttr(node, "by", entry.by);
+      setOptionalAttribute(node, "from", entry.from);
+      setOptionalAttribute(node, "by", entry.by);
       node.images = entry.images ?? [];
       node.body = entry.body ?? "";
       break;
@@ -325,7 +352,7 @@ function fill(node: TranscriptNode, entry: TranscriptEntry): void {
   }
 }
 
-function setAttr(node: HTMLElement, name: string, value: string | null | undefined): void {
+function setOptionalAttribute(node: HTMLElement, name: string, value: string | null | undefined): void {
   if (value) node.setAttribute(name, value);
   else node.removeAttribute(name);
 }
@@ -350,15 +377,18 @@ class AdiTranscript extends AdiElement {
   }
 
   override update(): void {
-    const box = this.$(".entries");
-    if (!box) return;
-    const seen = new Set<string>();
-    let cursor = box.firstChild;
-    for (let i = this.#entries.length - 1; i >= 0; i -= 1) {
-      const entry = this.#entries[i];
-      seen.add(entry.key);
-      const sig = JSON.stringify(entry);
+    const container = this.$(".entries");
+    if (!container) return;
+
+    const activeKeys = new Set<string>();
+    let cursor = container.firstChild;
+
+    for (let index = this.#entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.#entries[index];
+      activeKeys.add(entry.key);
+      const signature = JSON.stringify(entry);
       let kept = this.#kept.get(entry.key);
+
       // Replace the node if a live entry changes kind while retaining its key.
       if (kept && kept.kind !== entry.kind) {
         if (kept.node === cursor) cursor = kept.node.nextSibling;
@@ -366,19 +396,27 @@ class AdiTranscript extends AdiElement {
         kept = undefined;
       }
       if (!kept) {
-        kept = { node: document.createElement(TAG[entry.kind] ?? "adi-message"), sig: null, kind: entry.kind };
+        kept = {
+          node: document.createElement(TAG[entry.kind] ?? "adi-message"),
+          signature: null,
+          kind: entry.kind,
+        };
         this.#kept.set(entry.key, kept);
       }
+
       kept.node.id = entry.id ?? entry.key;
-      if (kept.sig !== sig) {
-        fill(kept.node, entry);
-        kept.sig = sig;
+      if (kept.signature !== signature) {
+        updateEntryNode(kept.node, entry);
+        kept.signature = signature;
       }
-      if (kept.node !== cursor) box.insertBefore(kept.node, cursor);
+
+      // Leave correctly positioned nodes in place to preserve their local state.
+      if (kept.node !== cursor) container.insertBefore(kept.node, cursor);
       else cursor = kept.node.nextSibling;
     }
+
     for (const [key, kept] of this.#kept) {
-      if (!seen.has(key)) {
+      if (!activeKeys.has(key)) {
         kept.node.remove();
         this.#kept.delete(key);
       }

@@ -65,10 +65,10 @@ interface RecognitionWindow extends Window {
   webkitSpeechRecognition?: new () => BrowserRecognition;
 }
 
-function join(base: string, heard: string): string {
-  if (!heard) return base;
-  if (!base.trim()) return heard;
-  return /\s$/.test(base) ? `${base}${heard}` : `${base} ${heard}`;
+function appendTranscript(base: string, transcript: string): string {
+  if (!transcript) return base;
+  if (!base.trim()) return transcript;
+  return /\s$/.test(base) ? `${base}${transcript}` : `${base} ${transcript}`;
 }
 
 class AdiMic extends AdiElement {
@@ -104,7 +104,7 @@ class AdiMic extends AdiElement {
   override update(): void {
     const mic = this.$<HTMLButtonElement>(".mic");
     if (!mic) return;
-    const engine = this.#engines.find((e) => e.id === this.#engine);
+    const engine = this.#engines.find((candidate) => candidate.id === this.#engine);
     const hint = engine ? `${engine.label} · ${engine.detail}` : this.#engine;
     const verbs: Partial<Record<MicState, string>> = { listening: "Stop dictating", working: "Working out what you said" };
     const verb = verbs[this.#state] ?? "Dictate a message";
@@ -135,11 +135,12 @@ class AdiMic extends AdiElement {
 
   async #loadEngines(): Promise<void> {
     try {
-      const res = await fetch(`${this.attr("api")}/api/voice`);
-      if (!res.ok) return;
-      const voice: VoiceResponse = await res.json();
+      const response = await fetch(`${this.attr("api")}/api/voice`);
+      if (!response.ok) return;
+      const voice: VoiceResponse = await response.json();
       this.#engines = voice.engines ?? [];
-      if (!this.#engines.some((e) => e.id === this.#engine && e.ready)) {
+      const selectedEngineReady = this.#engines.some((engine) => engine.id === this.#engine && engine.ready);
+      if (!selectedEngineReady) {
         this.#engine = voice.default_engine || BROWSER;
         localStorage.setItem(ENGINE_KEY, this.#engine);
       }
@@ -156,30 +157,32 @@ class AdiMic extends AdiElement {
       return;
     }
     // Place the menu above the button to avoid the composer’s overflow clipping.
-    const r = this.getBoundingClientRect();
-    menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
-    menu.style.bottom = `${Math.max(8, window.innerHeight - r.top + 6)}px`;
-    menu.replaceChildren(
-      ...this.#engines.map((e) => {
-        const b = document.createElement("button");
-        b.type = "button";
-        b.className = "option";
-        b.disabled = !e.ready;
-        const chosen = e.id === this.#engine;
-        b.innerHTML = `<span class="name ${chosen ? "chosen" : ""}">${esc(e.label)}${chosen ? `<adi-icon name="check" size="14"></adi-icon>` : ""}</span>
-          <span class="detail">${esc(e.detail)}</span>`;
-        b.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          this.#engine = e.id;
-          localStorage.setItem(ENGINE_KEY, e.id);
-          menu.hidden = true;
-          if (this.#state === "blocked" && window.isSecureContext) this.#set("idle");
-          else this.update();
-        });
-        return b;
-      }),
-    );
+    const bounds = this.getBoundingClientRect();
+    menu.style.right = `${Math.max(8, window.innerWidth - bounds.right)}px`;
+    menu.style.bottom = `${Math.max(8, window.innerHeight - bounds.top + 6)}px`;
+    menu.replaceChildren(...this.#engines.map((engine) => this.#buildEngineOption(engine, menu)));
     menu.hidden = false;
+  }
+
+  #buildEngineOption(engine: VoiceEngine, menu: HTMLDivElement): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "option";
+    button.disabled = !engine.ready;
+
+    const chosen = engine.id === this.#engine;
+    const checkmark = chosen ? `<adi-icon name="check" size="14"></adi-icon>` : "";
+    button.innerHTML = `<span class="name ${chosen ? "chosen" : ""}">${esc(engine.label)}${checkmark}</span>
+      <span class="detail">${esc(engine.detail)}</span>`;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      this.#engine = engine.id;
+      localStorage.setItem(ENGINE_KEY, engine.id);
+      menu.hidden = true;
+      if (this.#state === "blocked" && window.isSecureContext) this.#set("idle");
+      else this.update();
+    });
+    return button;
   }
 
   #press(): void {
@@ -202,36 +205,37 @@ class AdiMic extends AdiElement {
     const browser: RecognitionWindow = window;
     const Recognition = browser.SpeechRecognition || browser.webkitSpeechRecognition;
     if (!Recognition) throw new Error("This browser has no speech recogniser — pick another engine, or use Chrome or Safari");
-    const rec = new Recognition();
-    rec.continuous = true;
-    rec.interimResults = true;
-    if (document.documentElement.lang) rec.lang = document.documentElement.lang;
+    const recognition = new Recognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    if (document.documentElement.lang) recognition.lang = document.documentElement.lang;
     const target = this.#target;
     const base = target?.value ?? "";
     let committed = "";
-    rec.onresult = (ev) => {
+    recognition.onresult = (event) => {
       let interim = "";
       // Results before resultIndex are final and are not repeated.
-      for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
-        const text = ev.results[i][0].transcript;
-        if (ev.results[i].isFinal) committed += text;
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const text = result[0].transcript;
+        if (result.isFinal) committed += text;
         else interim += text;
       }
-      if (target) target.value = join(base, `${committed}${interim}`.trim());
+      if (target) target.value = appendTranscript(base, `${committed}${interim}`.trim());
     };
-    rec.onerror = (ev) => {
-      if (ev.error === "not-allowed" || ev.error === "service-not-allowed") this.#block(BLOCKED);
-      else if (ev.error === "no-speech" || ev.error === "aborted") this.#set("idle");
-      else this.#block(`the recogniser stopped: ${ev.error}`);
+    recognition.onerror = (event) => {
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") this.#block(BLOCKED);
+      else if (event.error === "no-speech" || event.error === "aborted") this.#set("idle");
+      else this.#block(`the recogniser stopped: ${event.error}`);
     };
-    rec.onend = () => {
+    recognition.onend = () => {
       if (this.#state === "listening") this.#set("idle");
     };
-    rec.start();
+    recognition.start();
     return {
       // stop preserves the final sentence; abort discards it.
       stop: () => {
-        rec.stop();
+        recognition.stop();
         this.#set("idle");
       },
     };
@@ -239,8 +243,8 @@ class AdiMic extends AdiElement {
 
   #startRecording(): DictationSession {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("this browser exposes no microphone");
-    const mime = CONTAINERS.find((c) => window.MediaRecorder?.isTypeSupported(c));
-    if (!mime) throw new Error("this browser records no audio format the server accepts");
+    const mimeType = CONTAINERS.find((container) => window.MediaRecorder?.isTypeSupported(container));
+    if (!mimeType) throw new Error("this browser records no audio format the server accepts");
     const target = this.#target;
     const base = target?.value ?? "";
     const engine = this.#engine;
@@ -249,23 +253,19 @@ class AdiMic extends AdiElement {
     navigator.mediaDevices.getUserMedia({ audio: true }).then(
       (stream) => {
         const chunks: Blob[] = [];
-        recorder = new MediaRecorder(stream, { mimeType: mime });
-        recorder.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+        recorder = new MediaRecorder(stream, { mimeType });
+        recorder.ondataavailable = (event) => {
+          if (event.data.size) chunks.push(event.data);
+        };
         recorder.onstop = async () => {
           // Stop all tracks before uploading so the recording indicator turns off immediately.
-          stream.getTracks().forEach((t) => t.stop());
-          const clip = new Blob(chunks, { type: mime });
+          stream.getTracks().forEach((track) => track.stop());
+          const clip = new Blob(chunks, { type: mimeType });
           if (!clip.size) return this.#set("idle");
           this.#set("working");
           try {
-            const res = await fetch(`${this.attr("api")}/api/voice/transcribe?engine=${encodeURIComponent(engine)}`, {
-              method: "POST",
-              headers: { "content-type": mime },
-              body: clip,
-            });
-            const data: TranscriptionResponse = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data.error || `${res.status}`);
-            if (target) target.value = join(base, (data.text ?? "").trim());
+            const transcript = await this.#transcribe(clip, mimeType, engine);
+            if (target) target.value = appendTranscript(base, transcript.trim());
             this.#set("idle");
           } catch (err) {
             this.#block(`transcription failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -284,6 +284,18 @@ class AdiMic extends AdiElement {
         else if (!recorder) this.#set("idle");
       },
     };
+  }
+
+  async #transcribe(clip: Blob, mimeType: string, engine: string): Promise<string> {
+    const url = `${this.attr("api")}/api/voice/transcribe?engine=${encodeURIComponent(engine)}`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": mimeType },
+      body: clip,
+    });
+    const data: TranscriptionResponse = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `${response.status}`);
+    return data.text ?? "";
   }
 }
 
