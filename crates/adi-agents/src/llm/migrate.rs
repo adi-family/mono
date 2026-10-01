@@ -84,7 +84,6 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Whether there is anything to do.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.moves.is_empty()
@@ -354,8 +353,6 @@ mod tests {
         }
     }
 
-    /// The shape of the whole upgrade: the model configuration is gone from the agent, it is on a
-    /// backend, and the agent names that backend first.
     #[test]
     fn an_agents_model_configuration_becomes_its_first_backend() {
         let agents = scratch("one");
@@ -490,7 +487,6 @@ mod tests {
         assert!(plan.moves[0].moved.is_empty());
     }
 
-    /// The dividing line, stated as a test: a dial is the model's, an executor switch is not.
     #[test]
     fn executor_switches_stay_on_the_agent() {
         let agents = scratch("split");

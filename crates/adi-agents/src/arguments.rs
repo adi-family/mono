@@ -30,7 +30,6 @@ macro_rules! string_enum {
 }
 
 string_enum! {
-    /// Claude's permission handling mode.
     ClaudePermissionMode {
         AcceptEdits => "acceptEdits",
         Auto => "auto",
@@ -42,7 +41,6 @@ string_enum! {
 }
 
 string_enum! {
-    /// Claude's reasoning effort.
     ClaudeEffort {
         Low => "low",
         Medium => "medium",
@@ -80,7 +78,6 @@ string_enum! {
 }
 
 string_enum! {
-    /// Codex model reasoning effort.
     CodexReasoningEffort {
         Low => "low",
         Medium => "medium",
@@ -146,7 +143,6 @@ pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()
     }
 }
 
-/// Arguments accepted by the interactive `pty:claude` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PtyClaudeArguments {
@@ -171,7 +167,6 @@ pub struct PtyClaudeArguments {
     pub add_dir: Option<String>,
 }
 
-/// Arguments accepted by the headless `process:claude` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessClaudeArguments {
@@ -208,7 +203,6 @@ pub struct ProcessClaudeArguments {
     pub working_dir: Option<String>,
 }
 
-/// Arguments accepted by the interactive `pty:codex` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PtyCodexArguments {
@@ -230,7 +224,6 @@ pub struct PtyCodexArguments {
     pub web_search: bool,
 }
 
-/// Arguments accepted by the headless `process:codex` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProcessCodexArguments {

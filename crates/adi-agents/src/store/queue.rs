@@ -74,7 +74,6 @@ pub struct QueuedMessage {
     /// do: a message queued behind an answer is asked minutes later, and by then nothing else
     /// remembers that a peer sent it.
     pub markers: Vec<Marker>,
-    /// See [`QueueMode`].
     pub mode: QueueMode,
 }
 

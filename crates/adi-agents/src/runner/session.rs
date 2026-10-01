@@ -14,7 +14,6 @@ pub trait Session {
     /// This session's id — durable, and the key everything else about it is filed under.
     fn id(&self) -> &str;
 
-    /// The agent this session belongs to.
     fn agent(&self) -> &str;
 
     /// Whether at least one turn has already run here.

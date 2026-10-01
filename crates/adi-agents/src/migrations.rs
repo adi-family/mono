@@ -81,10 +81,8 @@ pub const STEPS: [Step; 3] = [
     },
 ];
 
-/// What one agent needs, if anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
-    /// The agent's name.
     pub agent: String,
     /// The shape it is in now.
     pub from: u32,
@@ -127,7 +125,6 @@ impl Plan {
     }
 }
 
-/// What applying it did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Applied {
     /// The steps that ran, by name.
@@ -327,7 +324,6 @@ fn run_runtime(
                     ),
                 );
             }
-            // Either they agree, or the file never had one to disagree with.
             (_, Some(_)) => {
                 let mut manifest = agent.manifest;
                 manifest.backend = None;
@@ -421,7 +417,6 @@ mod tests {
             .backend
     }
 
-    /// Put a backend in the store, so a chain naming it has a head to take a runtime from.
     fn backend(agents: &crate::Agents, id: &str, runtime: Backend) -> LlmBackends {
         let registry = LlmBackends::with_config(agents.config().clone());
         registry
@@ -510,8 +505,6 @@ mod tests {
         assert!(plan.ahead.is_empty());
     }
 
-    /// The other half of the same rule: a definition that already says what it is only gets the
-    /// steps above it, not the whole chain again.
     #[test]
     fn a_stamped_agent_only_gets_the_steps_above_it() {
         let agents = scratch("a_stamped_agent_only_gets_the_steps_above_it");
@@ -602,8 +595,6 @@ mod tests {
         );
     }
 
-    /// The whole of the third step, on the shape it was written for: the runtime leaves the file,
-    /// and reading the agent back answers with the one on the backend it starts on.
     #[test]
     fn the_runtime_leaves_a_chained_agent_and_comes_back_from_its_first_backend() {
         let agents = scratch("the_runtime_leaves_a_chained_agent_and_comes_back_from_its_first_backend");
@@ -736,7 +727,6 @@ mod tests {
         assert_eq!(store_version(&agents).expect("mixed"), UNVERSIONED);
     }
 
-    /// What `adi-app` does as it opens the store: no plan, no flag, and nothing left behind.
     #[test]
     fn booting_brings_the_store_forward_and_a_second_boot_is_quiet() {
         let agents = scratch("booting_brings_the_store_forward_and_a_second_boot_is_quiet");

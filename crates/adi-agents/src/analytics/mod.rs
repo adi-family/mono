@@ -125,16 +125,12 @@ pub enum Source {
     User,
     /// The agent's answer, or something it said mid-turn.
     Agent,
-    /// A reasoning block.
     Thinking,
-    /// The arguments a tool was called with.
     ToolInput,
-    /// What a tool handed back.
     ToolOutput,
 }
 
 impl Source {
-    /// The word the rail puts on it.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -154,7 +150,6 @@ pub enum Shape {
     /// A filesystem path — the textbook case for a variable, or for a working directory the agent is
     /// told once.
     Path,
-    /// A URL.
     Url,
     /// A long opaque literal: a hash, a key, an id.
     Literal,
@@ -198,7 +193,6 @@ pub struct Site {
 pub struct Repeat {
     /// The repeated text itself, trimmed for display (see [`preview`]).
     pub preview: String,
-    /// Its length in tokens.
     pub tokens: usize,
     /// How many times it was sent (non-overlapping occurrences).
     pub count: usize,
@@ -230,7 +224,6 @@ pub struct NearDuplicates {
 /// The itemization of one conversation's context.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReport {
-    /// The encoding the counts are in.
     pub encoding: String,
     /// Every token analyzed, across every source.
     pub total: usize,
@@ -804,7 +797,6 @@ mod tests {
         assert!(!turns.is_empty(), "the transcript parsed as no turns");
     }
 
-    /// A preview is one line, whatever the repeat was.
     #[test]
     fn previews_are_a_single_line() {
         let p = preview("  first line\n\n\tsecond    line  ");

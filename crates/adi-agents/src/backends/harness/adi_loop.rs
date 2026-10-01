@@ -215,9 +215,6 @@ pub(crate) fn probe(
     Ok(reply.text)
 }
 
-// ---- the loop ----------------------------------------------------------------------
-
-/// One tool call the model asked for.
 struct ToolCall {
     /// The provider's own id where it has one; a synthesized `call-N` where it doesn't (Gemini and
     /// Ollama identify a call only by position, so the loop supplies what the transcript needs).
@@ -398,8 +395,6 @@ fn take_queued(ctx: &tools::Ctx<'_>, mut hear: impl FnMut(&crate::store::QueuedM
     heard
 }
 
-// ---- the four wire formats ---------------------------------------------------------
-
 /// Whether a round is allowed to reach for a tool.
 ///
 /// [`Withheld`](Self::Withheld) is the wrap-up round, and it is *not* implemented by dropping the
@@ -506,7 +501,6 @@ impl<'a> Wire<'a> {
         }
     }
 
-    /// The transcript as this provider's opening message list.
     fn seed(&self, turns: &[Turn], images: &ImageStore<'_>) -> Vec<Value> {
         let plain = merged(turns, images.store);
         match self {
@@ -848,7 +842,6 @@ fn words_of(turn: &Turn, store: &crate::store::SessionStore) -> String {
     crate::with_attachment_paths(store, &words, &turn.images, ImageDelivery::Inline)
 }
 
-/// One image, ready to go into a request body.
 struct Encoded {
     media_type: String,
     data: String,
@@ -919,8 +912,6 @@ fn function_declarations() -> Vec<Value> {
         })
         .collect()
 }
-
-// ---- Anthropic ---------------------------------------------------------------------
 
 #[allow(clippy::too_many_lines)] // one request field per agent option, one reply field per thing
 // worth a bug report — splitting either half would only move the list, not shorten it.
@@ -1057,8 +1048,6 @@ fn anthropic_round(
         endpoint: url,
     })
 }
-
-// ---- OpenAI dialect (OpenAI, Monshoot's Kimi, and z.ai's GLM) ----------------------
 
 /// The providers that speak `OpenAI`'s `/chat/completions`. They agree on the whole request body
 /// but disagree on where they live, which variable holds the key, what the path before the endpoint
@@ -1270,8 +1259,6 @@ fn openai_round(
     })
 }
 
-// ---- Gemini ------------------------------------------------------------------------
-
 /// Google's `generateContent` — the one provider here that isn't a chat-completions clone. Its
 /// differences, all visible below: the assistant role is called `model`, the system prompt is a
 /// `systemInstruction` of its own, every sampling knob lives under `generationConfig`, the model
@@ -1421,8 +1408,6 @@ fn gemini_round(
     })
 }
 
-// ---- Ollama (local) ----------------------------------------------------------------
-
 fn ollama_round(
     args: &HarnessAdiArguments,
     model: &str,
@@ -1539,8 +1524,6 @@ fn ollama_round(
     })
 }
 
-// ---- shared HTTP + argument helpers ------------------------------------------------
-
 /// Tool arguments as an object, whichever way the provider sent them: an object already (Ollama,
 /// Gemini) or a JSON string to decode (`OpenAI`, Monshoot). A model that emits malformed JSON gets
 /// an empty object and, a moment later, the tool's own complaint about the missing argument —
@@ -1553,7 +1536,6 @@ fn parse_arguments(raw: Option<&Value>) -> Value {
     }
 }
 
-/// A usage counter from a response, by path.
 fn usage(resp: &Value, path: &[&str]) -> Option<u64> {
     let mut node = resp;
     for key in path {
@@ -1762,7 +1744,6 @@ fn shape_error_finish_reason(provider: &str, resp: &Value) -> Option<String> {
             .and_then(|c| c.get("finishReason"))
             .and_then(Value::as_str),
         "ollama" => resp.get("done_reason").and_then(Value::as_str),
-        // The chat-completions dialects: openai, monshoot, zai.
         _ => resp
             .get("choices")
             .and_then(Value::as_array)
@@ -1982,7 +1963,6 @@ fn api_key(args: &HarnessAdiArguments, default_env: &str, provider: &str) -> Res
     })
 }
 
-/// The provider's endpoint: the agent's `base_url` override, or the provider's own host.
 fn base_url(args: &HarnessAdiArguments, default: &str) -> String {
     args.base_url
         .as_deref()
@@ -2023,7 +2003,6 @@ fn response_format_kind(format: HarnessResponseFormat) -> Result<&'static str> {
     }
 }
 
-/// The system prompt, trimmed to a non-empty value, or `None`.
 fn system_prompt(args: &HarnessAdiArguments) -> Option<String> {
     args.system_prompt
         .as_deref()
@@ -2032,7 +2011,6 @@ fn system_prompt(args: &HarnessAdiArguments) -> Option<String> {
         .map(str::to_string)
 }
 
-/// The prompt the runner composed for this turn and handed down in the environment, if it did.
 fn composed_prompt() -> Option<String> {
     std::env::var(crate::runner::detached::SYSTEM_PROMPT_ENV)
         .ok()
@@ -2040,7 +2018,6 @@ fn composed_prompt() -> Option<String> {
         .filter(|prompt| !prompt.is_empty())
 }
 
-/// The comma-separated `stop` argument split into a non-empty list of stop strings.
 fn stop_sequences(args: &HarnessAdiArguments) -> Option<Vec<String>> {
     let stops: Vec<String> = args
         .stop
@@ -2416,7 +2393,6 @@ mod tests {
             ..turn("user", "what is wrong here?")
         };
         let images = ImageStore::new(&store);
-        // The bytes, exactly as every provider takes them: base64 of what was stored.
         let data = BASE64.encode(b"\x89PNG");
 
         let anthropic = args_for(HarnessProvider::Anthropic);
@@ -2695,8 +2671,6 @@ mod tests {
             !sentence.contains("BadRequestError"),
             "raw provider JSON leaked into the sentence a person reads: {sentence}"
         );
-        // The full body is still there for whoever needs it — just behind the sentence, in the
-        // fenced block, not instead of one.
         assert!(text.contains("maximum context length"), "{text}");
     }
 

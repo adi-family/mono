@@ -48,7 +48,6 @@ use crate::llm::{BACKENDS_DIR, LLM_MODULE};
 /// would then describe a credential nobody is using.
 pub const CREDENTIAL_KEYS: [&str; 4] = ["settings", "provider", "base_url", "api_key_env"];
 
-/// The argument key holding the model name, on every backend that has one.
 pub const MODEL_KEY: &str = "model";
 
 /// What a matched error means, and therefore what happens next. The classification — not the regex
@@ -128,13 +127,10 @@ pub struct LimitRule {
     /// line). Spelled `match` in the file, which is a Rust keyword — hence the rename.
     #[serde(rename = "match")]
     pub pattern: String,
-    /// What a match means. See [`LimitClass`].
     #[serde(default)]
     pub class: LimitClass,
-    /// How wide the resulting hold spreads. See [`HoldScope`].
     #[serde(default)]
     pub scope: HoldScope,
-    /// Where the resume time comes from. See [`Resume`].
     #[serde(default)]
     pub resume: Resume,
     /// The wait used when nothing parseable is found — `"4h"`, `"30m"`, `"90s"`. Absent means
@@ -366,7 +362,6 @@ pub struct LlmBackends {
 }
 
 impl LlmBackends {
-    /// Open the store over a config root.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self { config }
@@ -377,7 +372,6 @@ impl LlmBackends {
             .module(&format!("{LLM_MODULE}/{BACKENDS_DIR}"))
     }
 
-    /// Where the definitions live.
     #[must_use]
     pub fn dir(&self) -> std::path::PathBuf {
         self.module().dir().to_path_buf()

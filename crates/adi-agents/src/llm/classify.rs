@@ -13,12 +13,9 @@
 
 use crate::llm::backend::{HoldScope, LimitClass, LimitRule, Resume};
 
-/// What a failure turned out to be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Classification {
-    /// What happened, and therefore what the run does next.
     pub class: LimitClass,
-    /// How wide a hold would spread.
     pub scope: HoldScope,
     /// How many seconds to hold it for. `0` when nothing should be held.
     pub hold_for: u64,
@@ -87,7 +84,6 @@ pub fn classify(
     Classification::unknown(evidence_line(text, 0))
 }
 
-/// How long to hold, from whichever source this rule names.
 fn wait_for(rule: &LimitRule, text: &str, retry_after: Option<u64>, now: u64) -> u64 {
     match rule.resume {
         Resume::RetryAfter => retry_after.unwrap_or_else(|| rule.fixed_seconds()),
@@ -214,8 +210,6 @@ mod tests {
         assert!(found.evidence.contains("usage limit reached"));
     }
 
-    /// The first matching rule wins, so a specific rule above a general one is what an operator
-    /// writes to get the specific answer.
     #[test]
     fn the_first_matching_rule_wins() {
         let rules = vec![
@@ -264,8 +258,6 @@ mod tests {
         );
     }
 
-    /// A hand-edited file may hold a rule that does not compile; it is skipped, and the rules under
-    /// it still get their chance.
     #[test]
     fn an_uncompilable_rule_is_skipped_rather_than_fatal() {
         let rules = vec![
@@ -302,10 +294,8 @@ mod tests {
     #[test]
     fn from_message_falls_back_to_retry_after_then_to_fixed() {
         let rules = vec![rule("(?i)usage limit", LimitClass::Quota)];
-        // Nothing parseable in the text, but a header — the header wins over the fixed default.
         let with_header = classify("usage limit", &rules, Some(90), 0);
         assert_eq!(with_header.hold_for, 90);
-        // Neither — the rule's own fixed wait.
         let bare = classify("usage limit", &rules, None, 0);
         assert_eq!(bare.hold_for, 14_400);
     }

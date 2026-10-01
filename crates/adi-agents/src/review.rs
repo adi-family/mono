@@ -71,12 +71,10 @@ pub struct Review {
 pub struct Evidence<'a> {
     pub agent: &'a StoredAgent,
     pub run_id: &'a str,
-    /// The session's own record — where it ran, what it was opened with, when.
     pub record: &'a SessionRecord,
     /// The conversation, oldest first, exactly as a reader sees it.
     pub turns: &'a [Turn],
     pub report: &'a TokenReport,
-    /// What this agent looks like across its recent sessions.
     pub history: &'a History,
     /// The adi tools on this agent's PATH: name and one-line description.
     pub tools_on: &'a [(String, String)],
@@ -489,7 +487,6 @@ fn configuration(out: &mut String, e: &Evidence<'_>) {
     }
 }
 
-/// Section 2 — the shape of the conversation, before the turn-by-turn of it.
 fn conversation(out: &mut String, t: &Totals) {
     let _ = writeln!(out, "## 2. The conversation in numbers\n");
     let _ = writeln!(
@@ -890,7 +887,6 @@ fn fit_block(block: &str, max: usize) -> String {
     out
 }
 
-/// One turn of the trace.
 fn turn_block(n: usize, turn: &Turn) -> String {
     let mut out = String::new();
     if turn.role == "user" {
@@ -1001,7 +997,6 @@ fn fence_for(body: &str) -> String {
     "`".repeat(longest.max(2) + 1)
 }
 
-/// `1 call` / `2 calls`. A tally that says "1 calls" reads as a bug in the thing being reviewed.
 fn plural(n: usize, one: &str, many: &str) -> String {
     if n == 1 {
         format!("{n} {one}")
@@ -1030,7 +1025,6 @@ fn shape(s: Shape) -> &'static str {
     }
 }
 
-/// Add one to a `(name, count)` tally, appending the name the first time it is seen.
 fn bump(list: &mut Vec<(String, usize)>, name: &str) {
     match list.iter_mut().find(|(n, _)| n == name) {
         Some((_, n)) => *n += 1,
@@ -1057,7 +1051,6 @@ fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// A short single-line quotation, for a title.
 fn quote_line(text: &str, max: usize) -> String {
     format!("“{}”", clip(&one_line(text), max))
 }
@@ -1404,14 +1397,10 @@ mod tests {
         assert!(doc.contains("test_name_number_799\n"), "{doc}");
     }
 
-    /// Nothing is cut while something larger is left whole: a short turn that already fits keeps
-    /// all of it, and the surplus goes to the turn that is going to be cut anyway.
     #[test]
     fn the_room_goes_to_whoever_still_needs_it() {
         assert_eq!(fair_shares(&[10, 10, 10], 30), vec![10, 10, 10]);
-        // 1000 wants far more than its third; the two small ones keep everything and hand back 80.
         assert_eq!(fair_shares(&[10, 10, 1000], 300), vec![10, 10, 280]);
-        // Nothing to give: every block is cut, none is spared for another.
         assert_eq!(fair_shares(&[100, 100], 50), vec![25, 25]);
     }
 

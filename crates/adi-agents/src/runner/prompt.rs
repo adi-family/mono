@@ -282,8 +282,6 @@ mod tests {
         );
     }
 
-    /// An agent whose `can_spawn` is empty gets no section for it at all — a run that may launch
-    /// nothing should not be handed a paragraph about a feature it does not have.
     #[test]
     fn an_agent_with_nothing_to_launch_gets_no_spawn_section() {
         let mut spec = spec();

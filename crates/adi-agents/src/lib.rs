@@ -179,16 +179,6 @@ fn as_run<'a>(agent: &'a StoredAgent, record: &SessionRecord) -> std::borrow::Co
     }
 }
 
-/// This launch's chain: the agent's ordered list, resolved against the backend store and rotated to
-/// where the launch asked to begin.
-///
-/// `None` for an agent that lists none, which is every agent not yet migrated and every one a test
-/// builds by hand. Those run on their manifest's own `backend` exactly as they did before chains
-/// existed — the one thing this must never do is invent a model for an agent that named none.
-///
-/// A list that resolves to nothing at all is a different matter and is an error: the agent *does*
-/// say what it wants to answer on, every one of those backends is gone, and falling back to a stale
-/// `backend` field would quietly answer on a model nobody chose.
 /// What to say to somebody whose agent cannot be run because nothing says what to run it on.
 ///
 /// One sentence, one fix. Since v3 the runtime comes from the chain, so "no rows" and "rows naming
@@ -311,7 +301,6 @@ struct Pending {
     /// Conversations with a pending [`awaits::Await`] — a background job is one, since
     /// [`crate::backends::jobs`] registers its wake the same way.
     awaiting: std::collections::HashSet<String>,
-    /// Conversations with a message queued behind their last turn.
     queued: std::collections::HashSet<String>,
     /// Conversations blocked on an unanswered [`store::Ask`].
     asked: std::collections::HashSet<String>,
@@ -547,7 +536,6 @@ impl Agents {
         Ok(Some(file.load()?))
     }
 
-    /// Every LLM backend in the store, by id — the lookup a definition's runtime is derived through.
     fn backend_catalog(&self) -> Result<BTreeMap<String, llm::LlmBackendManifest>> {
         Ok(llm::catalog(
             llm::LlmBackends::with_config(self.config.clone()).list()?,
@@ -1012,7 +1000,6 @@ impl Agents {
         )
     }
 
-    /// How many runs are live right now, across every agent and backend.
     #[must_use]
     pub fn running_count(&self) -> usize {
         self.run_load().total()
@@ -1615,7 +1602,6 @@ impl Agents {
         Ok(sent)
     }
 
-    /// What this conversation is waiting on a person for, if anything.
     #[must_use]
     pub fn pending_question(&self, name: &str, conv_id: &str) -> Option<Ask> {
         self.sessions().pending_question(name, conv_id)
@@ -2904,8 +2890,6 @@ impl Agents {
         Ok(removed)
     }
 
-    // ---- the simulator -------------------------------------------------------------------
-    //
     // A run of the agent with a person in the model's seat. Everything here goes through the paths
     // a real run goes through — the same spec, the same composer, the same tool table, the same
     // store, the same event log. Where one of these looks like it is doing something itself, read
@@ -2938,14 +2922,12 @@ impl Agents {
             Some(runner.kind()),
             &spec.cwd,
             message,
-            // A simulated run is a person in the model's seat, so it is a person's run twice over.
             launcher::HUMAN,
         )?;
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
         store.append_turn(&agent.name, &record.id, user_turn(message))?;
-        // Composes the prompt and opens the seat. No child is spawned.
         runner.send(&spec, &session, message)?;
         store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
@@ -3141,7 +3123,6 @@ pub enum SimBlock {
     },
 }
 
-/// What one call returned.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimResult {
     pub name: String,
@@ -3662,8 +3643,6 @@ mod tests {
         assert_eq!(with_knowledge_tool(&already, &some), already);
     }
 
-    /// The same exception, for `can_spawn`: an agent that may launch others gets the CLI that
-    /// launches them.
     #[test]
     fn an_agent_with_can_spawn_gets_the_cli_that_launches() {
         assert_eq!(
@@ -3789,7 +3768,6 @@ mod tests {
         pin_owner_instructions(&sessions, "solver", &record.id, &mut later);
         assert_eq!(later.system_prompt, opening.system_prompt);
 
-        // A conversation nobody froze anything for is untouched.
         let plain = sessions
             .create("solver", Backend::ProcessClaude, "/tmp/work", "again")
             .expect("create");
@@ -3946,7 +3924,6 @@ mod tests {
         let first = store.save("a", fresh).expect("create");
         assert_eq!(first.manifest.created_by, launcher::HUMAN);
 
-        // A later save claiming a different author is ignored — the file already exists.
         let mut edited = spec("harness:adi");
         edited.created_by = "agent:adi-agent".to_string();
         let second = store.save("a", edited).expect("update");
@@ -3956,7 +3933,6 @@ mod tests {
             "an edit cannot reassign who created the definition"
         );
 
-        // An agent created with nothing said stays unknown, not `human` by default.
         let unattributed = store.save("b", spec("process:codex")).expect("create");
         assert_eq!(unattributed.manifest.created_by, "");
     }
@@ -4235,7 +4211,6 @@ mod tests {
         assert!(raw.contains("path = ["), "expected a path array in {raw}");
     }
 
-    /// An agent that declares neither keeps the manifest it had before these fields existed.
     #[test]
     fn an_agent_with_no_run_environment_stores_neither_key() {
         let store = scratch("no-run-env");
@@ -4305,8 +4280,6 @@ mod tests {
         assert!(!env.contains_key("NOT_ATTACHED"));
     }
 
-    /// End to end through the launch context: what an agent declares is what its run is started
-    /// with — the dirs on `PATH`, the vars in the environment.
     #[test]
     fn a_declared_run_environment_reaches_the_launch_context() {
         let store = scratch("declared-run-env");
@@ -4406,7 +4379,6 @@ mod tests {
         store.get(name).expect("read back").expect("the agent")
     }
 
-    /// Register a backend the agent rows below can name.
     fn backend_named(
         store: &Agents,
         id: &str,
@@ -4532,7 +4504,6 @@ mod tests {
             Some("claude-opus-5"),
         );
 
-        // The second row is the same agent on another model — identity untouched, model replaced.
         let mut moved = record.clone();
         moved.chain.as_mut().expect("pinned").move_to(1);
         let fallen = as_run(&agent, &moved);
@@ -4561,7 +4532,6 @@ mod tests {
             ..SessionRecord::default()
         };
 
-        // Somebody repoints the backend at a cheaper model while the chat is live.
         backend_named(&store, "anthropic", "harness:claude-sdk", "claude-haiku-4-5");
         let agent = store.get("solver").expect("read").expect("the agent");
 
@@ -5171,8 +5141,6 @@ mod tests {
         assert!(spec.tools.is_empty(), "{:?}", spec.tools);
     }
 
-    /// The per-run directory reaches the spec — as the directory the run is *started* in, and in
-    /// the environment, for the scripts a run writes.
     #[test]
     fn the_spec_carries_the_directory_the_run_actually_gets() {
         let store = scratch("workspace-block-run-dir");
@@ -5961,7 +5929,6 @@ mod tests {
             store.reply_with("printer", &simulated, "look", &[image.id.clone()]),
             Err(Error::Unsupported(_)),
         ));
-        // …and the same message without pictures is delivered as it always was.
         assert!(store.reply("printer", &simulated, "look").is_ok());
 
         assert!(matches!(
@@ -6118,7 +6085,6 @@ mod tests {
             prompt.starts_with("work the task"),
             "the task still leads: {prompt}"
         );
-        // The output itself — really produced by really running the command.
         assert!(
             prompt.contains("severity: high") && prompt.contains("asset: api.example.com"),
             "the command's real output must reach the model: {prompt}"
@@ -6457,7 +6423,6 @@ mod tests {
                 sent.contains(&sessions.attachment_path(&file).display().to_string()),
                 "{backend}: {sent}",
             );
-            // The name it arrived with, and the extension that tells a reading tool what it is.
             assert!(sent.contains("(Q3 report.pdf)"), "{backend}: {sent}");
             assert!(sent.contains(".pdf"), "{backend}: {sent}");
         }
@@ -6793,7 +6758,6 @@ mod tests {
             "a run that isn't there is nothing to flag",
         );
 
-        // The star is the other flag on the same row, and it travels with the listing the same way.
         assert!(store.set_run_starred("recon", &first, true).expect("star"));
         assert!(
             store
@@ -7025,8 +6989,6 @@ mod tests {
         assert!(spec.tools.is_empty(), "{:?}", spec.tools);
     }
 
-    // ---- questions -----------------------------------------------------------------
-    //
     // What is exercised here is the *claiming*: which caller settles a question, and what happens
     // to the ones that do not. Delivering the answer spawns an engine, so these stop at the point
     // the turn would start — the store's own tests cover the row, and the tool's cover what a
@@ -7101,7 +7063,6 @@ mod tests {
         );
     }
 
-    /// The inbox is a question about the machine, not about an agent: one query, every agent.
     #[test]
     fn pending_questions_span_every_agent() {
         let store = scratch("inbox");
@@ -7143,8 +7104,6 @@ mod tests {
             assert!(found.headline().contains(&name));
         }
     }
-
-    // ---- the simulator ---------------------------------------------------------------------
 
     /// A prompt is a prompt. The one claim the whole feature rests on is that what a person reads
     /// in the seat is byte-for-byte what the model is handed — so the two must come out of the same

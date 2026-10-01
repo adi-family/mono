@@ -11,10 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::StoredAgent;
 
-/// The rule that permits launching anything.
 const WILDCARD: &str = "*";
 
-/// The prefix on a rule naming a whole project's own agents.
 const PROJECT_PREFIX: &str = "project:";
 
 /// Whether `rules` (an agent's own `can_spawn`) permits launching an agent named `name`, filed
@@ -355,8 +353,6 @@ mod tests {
         assert!(refusals.is_empty());
     }
 
-    /// A caller with no rule for the target at all — the ordinary case before ADI-MONO-113 ever
-    /// shipped — is exactly what the list exists to surface.
     #[test]
     fn a_launch_outside_the_callers_rules_is_a_refusal() {
         let all = vec![agent("a", None, &[])];
@@ -369,8 +365,6 @@ mod tests {
         }]);
     }
 
-    /// Repeated launches of the same pair group into one row, counted, with the latest moment kept
-    /// — not the whole history as separate entries.
     #[test]
     fn repeated_refusals_of_the_same_pair_group_into_one_row() {
         let all = vec![agent("a", None, &[])];
@@ -407,8 +401,6 @@ mod tests {
         assert_eq!(refusals(&elsewhere, [launch("a", "b", Some("other"), 1)]).len(), 1);
     }
 
-    /// Newest refusal first, so an operator scanning the list sees what is still happening before
-    /// what happened once, long ago.
     #[test]
     fn refusals_are_ordered_newest_first() {
         let all = vec![agent("a", None, &[]), agent("c", None, &[])];

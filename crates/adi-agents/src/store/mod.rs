@@ -71,7 +71,6 @@ pub(crate) use transcript::ROLE_ASSISTANT;
 /// oldest finished ones.
 pub const MAX_SESSIONS: usize = 50;
 
-/// The database's name inside the store's root.
 const DB_FILE: &str = "sessions.db";
 
 /// The columns of a record, in the order [`record::from_row`] reads them.
@@ -167,8 +166,6 @@ impl SessionStore {
     pub fn session_as_listed<'a>(&'a self, record: &SessionRecord) -> SessionRef<'a> {
         SessionRef::as_listed(self, &record.agent, &record.id, record.runner_state.clone())
     }
-
-    // ---- records -------------------------------------------------------------------
 
     /// Open a session for `agent` and return its record.
     ///
@@ -674,8 +671,6 @@ impl SessionStore {
         Ok(gone > 0)
     }
 
-    // ---- attachments ---------------------------------------------------------------
-
     /// Store an image or a file and hand back the reference a message carries it by.
     ///
     /// Unclaimed until a turn records it: what is uploaded from a composer may never be sent, so the
@@ -751,8 +746,6 @@ impl SessionStore {
         }
         removed
     }
-
-    // ---- the queue -----------------------------------------------------------------
 
     /// Put a message at the back of this session's queue, returning its 1-based place in line.
     ///
@@ -859,8 +852,6 @@ impl SessionStore {
         queue::clear(&conn, agent, id)
     }
 
-    // ---- questions -----------------------------------------------------------------
-
     /// Write down what this conversation is blocked on, returning the stored ask.
     ///
     /// # Errors
@@ -917,8 +908,6 @@ impl SessionStore {
     pub fn overdue_questions(&self, now_ms: u64) -> Vec<(Ask, Answer)> {
         self.read(|conn| questions::overdue(conn, now_ms))
     }
-
-    // ---- goals ---------------------------------------------------------------------
 
     /// Write down what this conversation is for, returning the stored goal.
     ///
@@ -992,8 +981,6 @@ impl SessionStore {
     pub fn forget_goals(&self, agent: &str) -> usize {
         self.read(|conn| goals::forget_agent(conn, agent))
     }
-
-    // ---- the transcript ------------------------------------------------------------
 
     /// Record a turn, where it stays.
     ///
@@ -1100,8 +1087,6 @@ impl SessionStore {
     }
 }
 
-// ---- internals ---------------------------------------------------------------------
-
 /// Remove every file a session owns.
 ///
 /// By prefix rather than a list of extensions: a runner is free to keep its own sidecars beside the
@@ -1127,8 +1112,6 @@ mod tests {
     use super::*;
     use crate::runner::Session;
 
-    /// Just what was typed. Most cases here are about the order of the line rather than about what
-    /// rode along with a message, and comparing whole [`QueuedMessage`]s would say so in every one.
     fn texts(queued: Vec<QueuedMessage>) -> Vec<String> {
         queued.into_iter().map(|m| m.text).collect()
     }
@@ -1224,7 +1207,6 @@ mod tests {
         );
     }
 
-    /// A three-row chain, as the first turn of a conversation would have resolved it.
     fn pinned(ids: &[&str]) -> crate::llm::PinnedChain {
         crate::llm::PinnedChain {
             entries: ids
@@ -1285,8 +1267,6 @@ mod tests {
         assert_eq!(stored.current().map(|row| row.backend.as_str()), Some("anthropic"));
     }
 
-    /// Failover moves the position and nothing else: what a conversation can still fall through to
-    /// stays the list it was handed, including the rows it has already left.
     #[test]
     fn moving_along_a_chain_changes_the_row_and_not_the_list() {
         let store = scratch("move-chain");
@@ -1400,8 +1380,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Hiding is a flag and nothing else: the session stays in the history with its task intact, and
-    /// flagging it never reads as the session having just moved.
     #[test]
     fn hiding_a_session_only_flags_it() {
         let store = scratch("hidden");
@@ -1581,7 +1559,6 @@ mod tests {
             "the other did not"
         );
 
-        // And unstarring gives it back to the cap.
         store.set_starred("solver", &oldest, false).expect("unstar");
         assert_eq!(store.prune_old("solver", |_| false), 1);
         assert!(store.get("solver", &oldest).is_none());

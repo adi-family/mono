@@ -42,7 +42,6 @@ use crate::llm::classify::classify;
 /// [`crate::backends::harness::adi_loop`]'s ten-minute round budget for.
 const TEST_TIMEOUT_MS: u64 = 45_000;
 
-/// What a test found, and how long it took.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestResult {
     pub verdict: TestVerdict,
@@ -85,7 +84,6 @@ impl TestResult {
 /// out and a failure worth showing as-is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestVerdict {
-    /// It answered.
     Answered,
     /// Read against the backend's own limit rules: still out, in the provider's own words.
     RateLimited { reason: String },
@@ -479,8 +477,6 @@ mod tests {
         assert_eq!(model, "does-not-matter");
     }
 
-    /// A probe's own model overrides the backend's — the cheap-model override a recovery probe would
-    /// use is exactly what a human testing the backend should spend, too.
     #[test]
     fn a_probes_own_model_and_prompt_win_over_the_backends() {
         let m = LlmBackendManifest {
@@ -549,8 +545,6 @@ mod tests {
         );
     }
 
-    /// No model and no settings still asks something: both flags are simply absent, exactly as an
-    /// agent with no override runs on the runtime's own default.
     #[test]
     fn claude_argv_omits_absent_model_and_settings() {
         assert_eq!(
@@ -611,8 +605,6 @@ mod tests {
         assert!(err.contains("SOME_MISSING_KEY"), "{err}");
     }
 
-    /// A named `api_key_env` backed by a secret of the same name is injected under that name —
-    /// exactly the env var the backend said it reads its key from.
     #[test]
     fn a_named_api_key_env_backed_by_a_secret_is_injected_under_its_own_name() {
         let config = scratch_config("api-key-env-secret");

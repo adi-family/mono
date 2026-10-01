@@ -153,8 +153,6 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         images: Vec::new(),
         steps: content.steps.clone(),
         metrics: content.metrics.clone(),
-        // Nothing stamps an answer: a marker says who put a message *into* the conversation, and
-        // the engine is not one of the things that can.
         markers: Vec::new(),
     }
 }

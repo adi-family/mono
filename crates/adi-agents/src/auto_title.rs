@@ -27,7 +27,6 @@ use adi_config::Module;
 
 use crate::store::SessionStore;
 
-/// The file the toggle lives in, within the [sessions module](crate::Agents::sessions).
 const SETTINGS_FILE: &str = "auto_title.toml";
 
 /// Whether [`spawn`] does anything at all. Lives beside [`RunLimits`](crate::RunLimits) — a
@@ -77,13 +76,11 @@ impl AutoTitleSettings {
 /// no business moving just because somebody repointed one agent.
 const DEFAULT_HOST: &str = "http://127.0.0.1:11434";
 
-/// The environment variable that moves the host.
 const HOST_VAR: &str = "ADI_AUTO_TITLE_OLLAMA";
 
 /// The model asked to name a chat. See the [module docs](self) for why this one.
 const DEFAULT_MODEL: &str = "llama3.2:1b";
 
-/// The environment variable that moves the model.
 const MODEL_VAR: &str = "ADI_AUTO_TITLE_MODEL";
 
 /// How long to wait for an answer before giving up. Generous for a 1B model's first token on a cold

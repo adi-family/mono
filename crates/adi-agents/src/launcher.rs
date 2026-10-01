@@ -4,12 +4,6 @@
 //! *conversation*, the other who created the *definition*, and both are answered in the same three
 //! words so a reader never has to learn a second vocabulary for the second question.
 //!
-//! A fleet starts most of its own work: an agent launches a helper, a trigger fires one on an
-//! event, a script runs one on a schedule. In a rail of four hundred conversations that makes "the
-//! ones I started myself" a question nothing could answer — a run a person opened and a run another
-//! agent spawned looked identical, because nothing wrote down the difference. This is that
-//! difference, recorded at the one moment it is known: the launch.
-//!
 //! Three words and an absence:
 //!
 //! * [`HUMAN`] — a person asked for it. The control panel (somebody is looking at it), or a
@@ -44,7 +38,6 @@ pub fn by_caller() -> Option<String> {
     crate::awaits::caller().map(|who| format!("{AGENT_PREFIX}{}", who.agent))
 }
 
-/// Whether `launched_by` says a person asked for the run.
 #[must_use]
 pub fn is_human(launched_by: &str) -> bool {
     launched_by == HUMAN
@@ -75,7 +68,6 @@ pub fn is_mine(created_by: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// The one rule a reader depends on: an unattributed session is not a person's.
     #[test]
     fn only_the_word_human_reads_as_a_person() {
         assert!(is_human(HUMAN));
@@ -84,7 +76,6 @@ mod tests {
         assert!(!is_human("agent:adi-agent"));
     }
 
-    /// The Agents page's Mine differs from the rail's in exactly one case: the empty string.
     #[test]
     fn mine_counts_human_and_unknown_but_not_machine_made() {
         assert!(is_mine(HUMAN));

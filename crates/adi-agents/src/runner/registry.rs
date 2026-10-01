@@ -44,7 +44,6 @@ pub fn runner_for(backend: &Backend) -> Option<Box<dyn Runner>> {
         | Backend::ProcessCodex
         | Backend::HarnessClaudeSdk
         | Backend::HarnessAdi => Some(Box::new(DetachedRunner::new(backend.clone()))),
-        // A plugin backend, or the empty default: kept verbatim through the store, run by nobody.
         Backend::Other(_) => None,
     }
 }
@@ -53,8 +52,6 @@ pub fn runner_for(backend: &Backend) -> Option<Box<dyn Runner>> {
 mod tests {
     use super::*;
 
-    /// Every backend this crate claims to run must resolve to a runner — the honest version of the
-    /// old `is_runnable` match, now with nowhere for a backend to be quietly forgotten.
     #[test]
     fn every_runnable_backend_has_a_runner() {
         for wire in [
@@ -72,8 +69,6 @@ mod tests {
         }
     }
 
-    /// A terminal answers the extension; a headless run does not. This is the question call sites ask
-    /// instead of matching on the kind, so it is the one worth pinning.
     #[test]
     fn only_terminal_backends_answer_the_terminal_extension() {
         let pty = runner_for(&Backend::PtyClaude).expect("pty runner");
@@ -101,8 +96,6 @@ mod tests {
             "human",
         );
 
-        // No runner recorded is every session written before the column existed: they read as
-        // whatever runs their backend, which is what they were.
         record.runner = None;
         assert_eq!(
             runner_of(&record).expect("a runner").kind().as_str(),

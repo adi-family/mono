@@ -520,8 +520,6 @@ mod tests {
         assert!(content.steps.is_empty());
     }
 
-    /// A started command that never completed — the run was stopped mid-call. It stays one step,
-    /// still running, and its command is readable.
     #[test]
     fn a_command_folds_its_start_and_end_into_one_step() {
         let started = r#"{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}"#;
@@ -611,8 +609,6 @@ mod tests {
         assert_eq!(parse(log.as_bytes()).text, "partway there\n\n429 slow down");
     }
 
-    /// A log that is not this stream at all — a Codex that failed before it emitted an event, or a
-    /// run recorded before `--json` was unconditional. The text is all there is, and it is kept.
     #[test]
     fn a_log_with_no_events_falls_back_to_its_text() {
         let log = "codex: command not found\n";
@@ -643,7 +639,6 @@ mod tests {
         assert_eq!(parse(log.as_bytes()).text, log.trim());
     }
 
-    /// A tool kind added by a newer Codex is shown, not dropped.
     #[test]
     fn an_unknown_item_kind_becomes_a_step_named_after_itself() {
         let log = r#"{"type":"item.completed","item":{"id":"x1","type":"todo_list","items":[{"text":"ship","completed":true}],"status":"completed"}}"#;

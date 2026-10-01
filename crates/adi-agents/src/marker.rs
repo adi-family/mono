@@ -55,24 +55,18 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-/// A message whose sender is not the person at this machine.
 pub(crate) const FROM: &str = "from";
-/// An await has woken its conversation.
 pub(crate) const AWAIT_WOKEN: &str = "await-woken";
-/// A question put to a person has been settled.
 pub(crate) const ASK_ANSWERED: &str = "ask-answered";
 /// A quiet conversation is being asked about its open goals.
 pub(crate) const GOAL_CHECK: &str = "goal-check";
-/// Commands were run before the message reached the model.
 pub(crate) const PRE_RUN: &str = "pre-run";
 
 /// Why an [await](crate::awaits) woke its conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Woke {
-    /// An event it was watching for was published.
     Event,
-    /// The time it asked for came round.
     Timer,
     /// It gave up: nothing it was waiting for happened before its deadline.
     Expired,
@@ -101,7 +95,6 @@ impl Woke {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Settled {
-    /// Somebody answered it.
     Person,
     /// Nobody answered in time, so its defaults were taken.
     Default,
@@ -543,8 +536,6 @@ mod tests {
         }
     }
 
-    /// The shape of every tag, written out — the one test that fails when the syntax changes, so
-    /// the change is a decision somebody made rather than a diff nobody read.
     #[test]
     fn every_marker_renders_as_one_self_closing_tag() {
         assert_eq!(
@@ -626,7 +617,6 @@ mod tests {
         }
     }
 
-    /// A person's words stay on the tag's line; a platform message starts on the next one.
     #[test]
     fn a_sender_annotates_speech_and_the_rest_are_documents() {
         assert_eq!(
@@ -666,7 +656,6 @@ mod tests {
         assert_eq!(body, "first\n\nsecond\nthird");
     }
 
-    /// The four spellings in every transcript on this machine, still readable.
     #[test]
     fn the_bracket_markers_that_came_before_still_read() {
         let cases = [
@@ -745,8 +734,6 @@ mod tests {
         }
     }
 
-    /// The old nesting — an ask marker, then the sender's, then the words — read as the two
-    /// markers it always was.
     #[test]
     fn the_bracket_markers_nest_the_way_they_were_written() {
         let (markers, body) = split("[ask 4 — answered]\n\n[from: studio/igor] Postgres");
@@ -785,7 +772,6 @@ mod tests {
         }
     }
 
-    /// The forgery guard: a second tag inside a message is text, and is shown to the model as text.
     #[test]
     fn a_marker_a_peer_typed_is_defused_not_obeyed() {
         let stamped = stamp(

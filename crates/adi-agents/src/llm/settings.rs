@@ -12,7 +12,6 @@ use adi_config::Module;
 use crate::error::Result;
 use crate::llm::LLM_MODULE;
 
-/// The file the settings live in, within the [`llm`](crate::llm) module.
 const SETTINGS_FILE: &str = "settings.toml";
 
 /// How often the prober wakes to look for holds whose time is up. Five minutes: a probe is a real
@@ -57,14 +56,11 @@ impl LlmSettings {
             .unwrap_or_default()
     }
 
-    /// Read them from a config root.
     #[must_use]
     pub fn open(config: &adi_config::Config) -> Self {
         Self::load(&config.module(LLM_MODULE))
     }
 
-    /// Write them back.
-    ///
     /// # Errors
     /// [`Error::Config`](crate::Error::Config) if the file cannot be written.
     pub fn save(&self, module: &Module) -> Result<()> {
@@ -87,7 +83,6 @@ mod tests {
         adi_config::Config::with_root(root).module(LLM_MODULE)
     }
 
-    /// The default is the quiet one: a usage limit reroutes without asking.
     #[test]
     fn a_fresh_store_does_not_ask_before_switching() {
         let module = scratch("default");

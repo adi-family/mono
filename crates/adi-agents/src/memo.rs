@@ -29,7 +29,6 @@ use crate::progress::TurnContent;
 /// at once, and small enough that the whole cache is a rounding error beside one parsed log.
 const CAPACITY: usize = 64;
 
-/// A file's identity: two cheap `stat` fields that together change whenever its bytes do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
     len: u64,
@@ -48,7 +47,6 @@ impl Stamp {
     }
 }
 
-/// One remembered parse, plus when it was last handed out (for eviction).
 #[derive(Debug)]
 struct Entry<T> {
     stamp: Stamp,
@@ -56,7 +54,6 @@ struct Entry<T> {
     used: u64,
 }
 
-/// A bounded map from file path to its parsed contents.
 #[derive(Debug)]
 struct Memo<T> {
     entries: Mutex<HashMap<PathBuf, Entry<T>>>,
@@ -90,7 +87,6 @@ impl<T> Memo<T> {
     /// was asked for.
     fn get_or_insert_as(&self, key: PathBuf, path: &Path, parse: impl FnOnce() -> T) -> Arc<T> {
         let Some(stamp) = Stamp::of(path) else {
-            // No file to key on — parse whatever the caller makes of that, but remember nothing.
             return Arc::new(parse());
         };
         let tick = self.tick.fetch_add(1, Ordering::Relaxed);
@@ -168,8 +164,6 @@ mod tests {
         dir
     }
 
-    /// The point of the whole module: an unchanged file is parsed once, no matter how often it is
-    /// asked for — and a file that grows is parsed again.
     #[test]
     fn a_file_is_reparsed_only_when_it_changes() {
         let dir = scratch("reparse");

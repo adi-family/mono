@@ -46,7 +46,6 @@ pub enum Decision {
     /// conversation naming the thing only they can settle — a broken login, an empty chain, or a
     /// switch they asked to approve.
     Ask {
-        /// What to say.
         reason: String,
     },
 }
@@ -328,8 +327,6 @@ mod tests {
         }
     }
 
-    /// The headline case: row 1 runs out, the conversation lands on row 2, and the chat is told in
-    /// one line naming both.
     #[test]
     fn a_quota_moves_to_the_next_row_and_says_so_once() {
         let chain = three();
@@ -381,7 +378,6 @@ mod tests {
         assert!(reason.contains("usage limit reached"), "{reason}");
     }
 
-    /// A single-row chain has nothing behind it — and says that, rather than listing an empty set.
     #[test]
     fn a_one_row_chain_says_it_is_the_only_backend() {
         let chain = chain_of(&[("only", manifest("harness:adi", "m", "a", 0))]);
@@ -422,7 +418,6 @@ mod tests {
         }
     }
 
-    /// The global switch, and it applies to the class that would otherwise move silently.
     #[test]
     fn ask_on_switch_offers_the_move_instead_of_making_it() {
         let chain = three();

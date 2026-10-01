@@ -466,8 +466,6 @@ mod tests {
         assert!(!scope.allowed.contains("Bash"), "{}", scope.allowed);
     }
 
-    /// An agent that names our server itself is not given it twice, and stray separators name
-    /// nothing.
     #[test]
     fn the_grant_is_not_repeated_and_empty_entries_are_not_tools() {
         let scope = scope_tools(Some("Read,,mcp__adi, "));

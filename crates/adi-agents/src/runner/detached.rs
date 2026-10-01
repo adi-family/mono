@@ -2236,8 +2236,6 @@ mod tests {
         ));
     }
 
-    /// The continuation nobody passes: whether the Claude CLI is told to establish a session or to
-    /// resume it comes only from whether a turn has already run here.
     #[test]
     fn a_claude_session_is_established_once_and_resumed_after() {
         let spec = spec(json!({}));
@@ -3338,8 +3336,6 @@ mod tests {
         assert!(!argv.iter().any(|arg| arg == "resume"), "{argv:?}");
     }
 
-    /// An id already in the state slot is the thread to continue; a session that has never run
-    /// mints one. Either way the caller said nothing about it.
     #[test]
     fn each_engine_session_id_comes_from_its_own_state_slot() {
         let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
@@ -3673,8 +3669,6 @@ mod tests {
         );
     }
 
-    /// A Claude turn's `stream-json` log becomes the timeline, the answer, and the telemetry — and
-    /// a second read from the returned cursor finds nothing new to say.
     #[test]
     fn a_claude_log_translates_to_steps_an_answer_and_metrics() {
         let session = FakeSession::new("claude-events").with_state(json!({ "pid": dead_pid() }));
@@ -3762,8 +3756,6 @@ mod tests {
         assert!(matches!(&second.events[0], RunEvent::Answer { text } if text == "found it"));
     }
 
-    /// A log replaced under a stale cursor (the next turn spawns into the same slot and truncates
-    /// it) is read from the top rather than skipped for ever.
     #[test]
     fn a_cursor_past_the_end_starts_over() {
         let session = FakeSession::new("truncated").with_state(json!({ "pid": dead_pid() }));
@@ -3902,8 +3894,6 @@ mod tests {
         }
     }
 
-    /// The command is built before anything is spawned, so a spec this engine cannot run leaves no
-    /// child, no state, and no log behind — `send` is all-or-nothing.
     #[test]
     fn a_send_that_cannot_build_a_command_starts_nothing() {
         let runner = DetachedRunner::new(Backend::HarnessAdi);

@@ -45,7 +45,6 @@ pub enum Verdict {
     StillOut {
         /// When it may be tried again now, in unix seconds.
         until: u64,
-        /// What it said this time.
         reason: String,
     },
     /// It failed for a reason that is not a limit — a dead key, a DNS failure, a 500. Left held and
@@ -58,7 +57,6 @@ pub enum Verdict {
     /// it answers through a vendor CLI rather than a provider ADI calls. The hold stands and expires
     /// on its own deadline.
     Unreachable {
-        /// Which of those it is.
         reason: String,
     },
 }
@@ -85,7 +83,6 @@ pub struct Prober {
 }
 
 impl Prober {
-    /// A prober over a config root's `llm/` module.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self { config }
@@ -281,7 +278,6 @@ mod tests {
         }
     }
 
-    /// A vendor-CLI backend: the shape most of the migrated ones will have.
     fn cli_backend(probe: Option<Probe>) -> LlmBackendManifest {
         LlmBackendManifest {
             runtime: "harness:claude-sdk".into(),

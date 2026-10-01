@@ -33,7 +33,6 @@ pub struct SessionRef<'a> {
     /// spawned child needs a real file descriptor to redirect into — and a borrow has to point at
     /// something that outlives the call.
     log: PathBuf,
-    /// Where [`Session::state`] is answered from.
     state: StateSource,
 }
 
@@ -104,7 +103,6 @@ impl Session for SessionRef<'_> {
         self.log.exists()
     }
 
-    /// Fresh unless this view was built from a listed record, which already carried it.
     fn state(&self) -> Option<serde_json::Value> {
         match &self.state {
             StateSource::Fresh => self.store.runner_state(&self.agent, &self.id),

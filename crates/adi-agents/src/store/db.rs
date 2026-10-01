@@ -257,7 +257,6 @@ pub(super) fn forget_connections() {
     CONNS.with(|cache| cache.borrow_mut().clear());
 }
 
-/// A stored error, named after what was being attempted.
 pub(super) fn sql_err(doing: &str, e: rusqlite::Error) -> Error {
     Error::Session(format!("couldn't {doing} the session database: {e}"))
 }

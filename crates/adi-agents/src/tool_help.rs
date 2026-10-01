@@ -57,7 +57,6 @@ pub(crate) fn block(tools: &[ToolHelp]) -> Option<String> {
     Some(out)
 }
 
-/// One tool's section: the name it is run by, its one-line description, and its own help.
 fn section(tool: &ToolHelp) -> String {
     let mut out = format!("\n\n## {}", tool.name);
     if let Some(description) = tool

@@ -191,7 +191,6 @@ fn absorb_tool_results(event: &Value, steps: &mut [Step], tool_index: &HashMap<S
     }
 }
 
-/// The content blocks of a message event (`event.message.content`), or empty.
 fn content_blocks(event: &Value) -> Vec<Value> {
     event
         .get("message")
@@ -216,7 +215,6 @@ fn tool_result_text(content: Option<&Value>) -> String {
     }
 }
 
-/// Parse the terminal `result` event's telemetry.
 fn parse_metrics(event: &Value) -> TurnMetrics {
     let usage = event.get("usage");
     let denials = event
@@ -355,8 +353,6 @@ mod tests {
         r#"{"type":"result","is_error":false,"result":"Moved it to 81.","duration_ms":10}"#,
     );
 
-    /// The heart of it: mid-turn commentary keeps its place on the timeline instead of being glued
-    /// into one chunk, and only the final message is lifted out as the turn's answer.
     #[test]
     fn commentary_between_tool_calls_stays_in_place_and_is_never_merged() {
         let c = parse(CHATTY_TURN.as_bytes());
@@ -407,8 +403,6 @@ mod tests {
         );
     }
 
-    /// One message split by the engine across several `text` blocks (no tool call between them) is
-    /// one message, joined — not two bubbles mid-sentence.
     #[test]
     fn consecutive_text_blocks_are_one_message() {
         let log = concat!(

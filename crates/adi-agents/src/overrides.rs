@@ -175,7 +175,6 @@ mod tests {
         }
     }
 
-    /// Nothing to say means the caller's own agent back, not a copy of it.
     #[test]
     fn empty_overrides_borrow() {
         let agent = agent_with("sonnet");
@@ -201,7 +200,6 @@ mod tests {
         );
         assert!(!run.manifest.arguments.contains_key("permission_mode"));
         assert!(run.manifest.unattended);
-        // The definition itself is untouched — an override is about one run.
         assert_eq!(
             agent.manifest.arguments.get("model"),
             Some(&serde_json::json!("sonnet"))

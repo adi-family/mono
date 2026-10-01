@@ -45,7 +45,6 @@ pub(crate) struct RunKnowledge {
 }
 
 impl RunKnowledge {
-    /// Whether this run has any knowledge at all — the gate on saying anything about it.
     pub(crate) fn is_empty(&self) -> bool {
         self.memory.is_none() && self.bases.is_empty()
     }
@@ -269,7 +268,6 @@ mod tests {
         );
     }
 
-    /// The toggle's whole job: the base exists after a launch, not merely as an intention.
     #[test]
     fn memory_is_created_at_launch_and_named_in_the_environment() {
         let config = scratch("memory");
@@ -288,7 +286,6 @@ mod tests {
         );
     }
 
-    /// The wish list ends here: what reaches the run is what the isolation levels allow.
     #[test]
     fn configured_bases_are_filtered_by_what_the_agent_can_actually_read() {
         let config = scratch("filter");

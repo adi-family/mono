@@ -278,8 +278,6 @@ pub struct AgentGoalClosed {
     pub nudges: u64,
 }
 
-/// The JSON Schema of `T` as a plain `serde_json::Value` for a catalog entry — `to_value` of the
-/// reflected schema, so nothing in the catalog is hand-written.
 fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).unwrap_or(Value::Null)
 }

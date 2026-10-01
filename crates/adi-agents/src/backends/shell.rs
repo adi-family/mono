@@ -226,8 +226,6 @@ mod tests {
         text
     }
 
-    /// The whole point: a path named once is still named on the next call, and so is the directory
-    /// the last command walked to.
     #[test]
     #[cfg(unix)]
     fn an_exported_variable_and_a_cd_reach_the_next_call() {
@@ -281,8 +279,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// The command's own exit status is what the call reports — the recording runs after it, and
-    /// must not become the answer.
     #[test]
     #[cfg(unix)]
     fn the_commands_exit_status_survives_the_recording() {
@@ -301,7 +297,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// A conversation whose directory has been deleted starts where it can always start.
     #[test]
     fn a_vanished_directory_falls_back_to_the_run_directory() {
         let home = scratch("gone");

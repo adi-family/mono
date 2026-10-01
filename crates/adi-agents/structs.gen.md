@@ -316,8 +316,6 @@ pub(super) struct RawRepeat {
 
 ### struct `PtyClaudeArguments`
 
-Arguments accepted by the interactive `pty:claude` backend.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -340,8 +338,6 @@ pub struct PtyClaudeArguments {
 ```
 
 ### struct `ProcessClaudeArguments`
-
-Arguments accepted by the headless `process:claude` backend.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -374,8 +370,6 @@ pub struct ProcessClaudeArguments {
 
 ### struct `PtyCodexArguments`
 
-Arguments accepted by the interactive `pty:codex` backend.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -400,8 +394,6 @@ pub struct PtyCodexArguments {
 ```
 
 ### struct `ProcessCodexArguments`
-
-Arguments accepted by the headless `process:codex` backend.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -713,8 +705,6 @@ pub struct Change {
 
 ### struct `CheckOutcome`
 
-What running an await's check produced.
-
 ```rust
 struct CheckOutcome {
     passed: bool,
@@ -789,8 +779,6 @@ pub(crate) struct Spawned {
 ## `src/backends/harness/adi_loop.rs`
 
 ### struct `ToolCall`
-
-One tool call the model asked for.
 
 ```rust
 struct ToolCall {
@@ -895,8 +883,6 @@ struct Said<'a> {
 ```
 
 ### struct `Encoded`
-
-One image, ready to go into a request body.
 
 ```rust
 struct Encoded {
@@ -1438,8 +1424,6 @@ pub enum SimBlock {
 
 ### struct `SimResult`
 
-What one call returned.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimResult {
@@ -1732,8 +1716,6 @@ pub struct PinnedChain {
 
 ### struct `Classification`
 
-What a failure turned out to be.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Classification {
@@ -1799,8 +1781,6 @@ pub struct HoldKey {
 
 ### struct `Hold`
 
-One recorded hold.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hold {
@@ -1817,8 +1797,6 @@ pub struct Hold {
 ```
 
 ### struct `Holds`
-
-The hold store.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -1875,8 +1853,6 @@ pub struct Plan {
 ## `src/llm/ondemand.rs`
 
 ### struct `TestResult`
-
-What a test found, and how long it took.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2075,8 +2051,6 @@ pub enum Marker {
 
 ### struct `Stamp`
 
-A file's identity: two cheap `stat` fields that together change whenever its bytes do.
-
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
@@ -2086,8 +2060,6 @@ struct Stamp {
 ```
 
 ### struct `Entry`
-
-One remembered parse, plus when it was last handed out (for eviction).
 
 ```rust
 #[derive(Debug)]
@@ -2099,8 +2071,6 @@ struct Entry<T> {
 ```
 
 ### struct `Memo`
-
-A bounded map from file path to its parsed contents.
 
 ```rust
 #[derive(Debug)]
@@ -2131,8 +2101,6 @@ pub struct Step {
 
 ### struct `Pending`
 
-What one agent needs, if anything.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
@@ -2156,8 +2124,6 @@ pub struct Plan {
 ```
 
 ### struct `Applied`
-
-What applying it did.
 
 ```rust
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2665,8 +2631,6 @@ struct Cursor {
 
 ### enum `RunEvent`
 
-One thing that happened during a turn.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEvent {
@@ -2796,8 +2760,6 @@ pub struct Section<'a> {
 
 ### struct `PtyRunner`
 
-A live terminal session for one engine.
-
 ```rust
 #[derive(Debug, Clone)]
 pub struct PtyRunner {
@@ -2822,8 +2784,6 @@ struct State {
 ## `src/runner/spec.rs`
 
 ### struct `RunSpec`
-
-One run's materialized context.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -2942,8 +2902,6 @@ pub enum SetBy {
 
 ### struct `Goal`
 
-One goal, open or closed.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Goal {
@@ -2995,8 +2953,6 @@ pub struct SessionStore {
 ## `src/store/questions.rs`
 
 ### struct `Question`
-
-One thing a run wants to know.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

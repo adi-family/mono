@@ -4,7 +4,6 @@ use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
 use crate::backends::mcp::ToolScope;
 use crate::backends::{push_mcp_config, push_option, push_tool_scope};
 
-/// Build the Claude CLI command run by the shared pty executor.
 pub(crate) fn argv(
     config: &PtyClaudeArguments,
     mcp: Option<&str>,

@@ -76,7 +76,6 @@ use crate::backends::harness::tools::wait_with_timeout;
 use crate::error::{Error, Result};
 use crate::marker::{Marker, Woke};
 
-/// The store module awaits live under, and each record's extension.
 const MODULE: &str = "awaits";
 const RECORD_EXT: &str = "json";
 
@@ -277,15 +276,10 @@ impl Cause<'_> {
 /// is worth saying out loud.
 #[derive(Debug, Clone)]
 pub struct Woken {
-    /// The await's id.
     pub id: String,
-    /// The agent whose conversation was woken.
     pub agent: String,
-    /// The conversation the wake was delivered into.
     pub conv: String,
-    /// Why it woke.
     pub cause: String,
-    /// What went wrong delivering it, if anything.
     pub error: Option<String>,
 }
 
@@ -318,7 +312,6 @@ impl Awaits {
         Self { config }
     }
 
-    /// The directory records live in.
     #[must_use]
     pub fn dir(&self) -> PathBuf {
         self.config.module(MODULE).dir().to_path_buf()
@@ -623,15 +616,11 @@ pub fn ignore(store: &Awaits, agent: &str, conv: &str, id: &str) -> Result<Await
 /// that part of the record exactly as it was, so changing a note says nothing about a check.
 #[derive(Debug, Clone, Default)]
 pub struct Change {
-    /// Replace the note handed back on waking.
     pub note: Option<String>,
-    /// Replace the event patterns outright.
     pub events: Option<Vec<String>>,
-    /// Replace the payload fields a matching event must carry.
     pub when: Option<BTreeMap<String, String>>,
     /// Move the next deadline to this many seconds from now.
     pub after_seconds: Option<u64>,
-    /// Replace the polling interval.
     pub every_seconds: Option<u64>,
     /// Replace the check. An empty string removes it, which is the only way to say "stop asking and
     /// just wake me".
@@ -923,7 +912,6 @@ fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> Stri
     text
 }
 
-/// What running an await's check produced.
 struct CheckOutcome {
     /// Whether it exited 0 — the whole verdict.
     passed: bool,
@@ -1240,8 +1228,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// A change that would leave nothing to wake on is refused, rather than quietly storing a record
-    /// the sweep can never reach.
     #[test]
     fn a_change_that_empties_the_wake_condition_is_refused() {
         let store = scratch("update-empty");
@@ -1370,8 +1356,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// A poll is a deadline plus a check: `every_seconds` sets the *first* look one interval out,
-    /// so registering one never fires it immediately.
     #[test]
     fn a_poll_looks_one_interval_from_now_and_keeps_its_interval() {
         let store = scratch("poll");
@@ -1467,7 +1451,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// The check is told why it was asked, so one command can serve a poll and an event.
     #[test]
     fn a_check_can_read_the_cause_and_the_event_that_woke_it() {
         let store = scratch("checkenv");
