@@ -5741,6 +5741,112 @@ pub struct Transcript {
     pub engine: String,
 }
 
+// ---- channels (docs/channels.md — Telegram/Slack connections to an agent) -----------
+
+/// What a connection dispatches to — only `agent` is built today; `trigger`/`app_route` are named
+/// so a bundle-installed channel (`docs/channels.md` §6) never has to widen this type later.
+/// Mirrors `adi_channels::connection::Target`, kept as its own plain type here since this module
+/// compiles for wasm and `adi-channels` (tokio, reqwest) does not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChannelTargetDto {
+    Agent { agent: String },
+    Trigger { trigger: String },
+    AppRoute { app: String, route: String },
+}
+
+/// Who may talk to a connection's target. Mirrors `adi_channels::connection::Allowlist`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChannelAllowlistDto {
+    OwnerOnly,
+    List { sender_ids: Vec<String> },
+    Open,
+}
+
+/// One connection, flattened for the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelConnectionDto {
+    pub id: String,
+    /// `"telegram"`, `"slack"`, …
+    pub provider: String,
+    /// Empty until the install/link flow binds it.
+    #[serde(default)]
+    pub routing_key: String,
+    pub target: ChannelTargetDto,
+    pub allowlist: ChannelAllowlistDto,
+    /// Stop delivering to the target without tearing the connection down.
+    pub paused: bool,
+    /// Whether the install/link flow has bound a routing key yet.
+    pub linked: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `GET /api/channels` — every connection this node holds.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChannelsState {
+    pub connections: Vec<ChannelConnectionDto>,
+}
+
+/// `POST /api/channels/connect` — `docs/channels.md` §7.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectChannel {
+    pub provider: String,
+    pub target: ChannelTargetDto,
+}
+
+/// The answer to a connect: the new, still-unlinked connection, plus the install/link URL to show
+/// the operator — `t.me/<bot>?start=<code>` for Telegram. Empty for a provider the router has no
+/// way to build one for from a bare code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelConnected {
+    pub connection: ChannelConnectionDto,
+    #[serde(default)]
+    pub install_url: String,
+}
+
+/// Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>`
+/// poll (`docs/channels.md` §7: "the node is just waiting on its own WebSocket for a `linked`
+/// frame").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelRef {
+    pub id: String,
+}
+
+/// `POST /api/channels/route` — change a connection's target.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteChannel {
+    pub id: String,
+    pub target: ChannelTargetDto,
+}
+
+/// `POST /api/channels/pause` — stop or resume delivery without disconnecting (§7 "Decisions
+/// taken" #5: folded into a flag rather than a new verb).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PauseChannel {
+    pub id: String,
+    pub paused: bool,
+}
+
+/// `POST /api/channels/allow` — change who may talk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowChannel {
+    pub id: String,
+    pub allowlist: ChannelAllowlistDto,
+}
+
+/// `POST /api/channels/reply` — the `channel-reply` tool's own local endpoint (§5 "Decisions
+/// taken" #4): a mid-run post, routed by `run_id` alone (globally unique, so `agent` is carried
+/// for context but not needed to resolve it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelReplyRequest {
+    #[serde(default)]
+    pub agent: String,
+    pub run_id: String,
+    pub text: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

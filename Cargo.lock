@@ -39,6 +39,7 @@ name = "adi-app"
 version = "0.1.0"
 dependencies = [
  "adi-agents",
+ "adi-channels",
  "adi-config",
  "adi-core",
  "adi-css",
@@ -64,6 +65,27 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "adi-channels"
+version = "0.1.0"
+dependencies = [
+ "adi-agents",
+ "adi-config",
+ "adi-events",
+ "adi-secrets",
+ "adi-tools",
+ "base64 0.22.1",
+ "rand 0.10.2",
+ "reqwest",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -99,6 +121,7 @@ name = "adi-core"
 version = "0.1.0"
 dependencies = [
  "adi-agents",
+ "adi-channels",
  "adi-config",
  "adi-db",
  "adi-embeddings",
@@ -560,6 +583,7 @@ name = "adi-webapp-api"
 version = "0.1.0"
 dependencies = [
  "adi-agents",
+ "adi-channels",
  "adi-config",
  "adi-core",
  "adi-dashboards",

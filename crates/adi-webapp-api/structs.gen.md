@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-302 structs · 18 enums across 11 files.
+311 structs · 20 enums across 11 files.
 
 ## Index
 
@@ -18,7 +18,7 @@
 - [`src/handlers/shared_assets.rs`](#srchandlersshared_assetsrs) — `Settings`
 - [`src/handlers/update.rs`](#srchandlersupdaters) — `Installing`
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `Transcript`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`
 
 ---
 
@@ -5234,6 +5234,160 @@ pub struct VoiceState {
 pub struct Transcript {
     pub text: String,
     pub engine: String,
+}
+```
+
+### enum `ChannelTargetDto`
+
+What a connection dispatches to — only `agent` is built today; `trigger`/`app_route` are named so a bundle-installed channel (`docs/channels.md` §6) never has to widen this type later. Mirrors `adi_channels::connection::Target`, kept as its own plain type here since this module compiles for wasm and `adi-channels` (tokio, reqwest) does not.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChannelTargetDto {
+    Agent {
+        agent: String,
+    },
+    Trigger {
+        trigger: String,
+    },
+    AppRoute {
+        app: String,
+        route: String,
+    },
+}
+```
+
+### enum `ChannelAllowlistDto`
+
+Who may talk to a connection's target. Mirrors `adi_channels::connection::Allowlist`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ChannelAllowlistDto {
+    OwnerOnly,
+    List {
+        sender_ids: Vec<String>,
+    },
+    Open,
+}
+```
+
+### struct `ChannelConnectionDto`
+
+One connection, flattened for the wire.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelConnectionDto {
+    pub id: String,
+    pub provider: String,
+    #[serde(default)]
+    pub routing_key: String,
+    pub target: ChannelTargetDto,
+    pub allowlist: ChannelAllowlistDto,
+    pub paused: bool,
+    pub linked: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `ChannelsState`
+
+`GET /api/channels` — every connection this node holds.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChannelsState {
+    pub connections: Vec<ChannelConnectionDto>,
+}
+```
+
+### struct `ConnectChannel`
+
+`POST /api/channels/connect` — `docs/channels.md` §7.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectChannel {
+    pub provider: String,
+    pub target: ChannelTargetDto,
+}
+```
+
+### struct `ChannelConnected`
+
+The answer to a connect: the new, still-unlinked connection, plus the install/link URL to show the operator — `t.me/<bot>?start=<code>` for Telegram. Empty for a provider the router has no way to build one for from a bare code.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelConnected {
+    pub connection: ChannelConnectionDto,
+    #[serde(default)]
+    pub install_url: String,
+}
+```
+
+### struct `ChannelRef`
+
+Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>` poll (`docs/channels.md` §7: "the node is just waiting on its own WebSocket for a `linked` frame").
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelRef {
+    pub id: String,
+}
+```
+
+### struct `RouteChannel`
+
+`POST /api/channels/route` — change a connection's target.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteChannel {
+    pub id: String,
+    pub target: ChannelTargetDto,
+}
+```
+
+### struct `PauseChannel`
+
+`POST /api/channels/pause` — stop or resume delivery without disconnecting (§7 "Decisions taken" #5: folded into a flag rather than a new verb).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PauseChannel {
+    pub id: String,
+    pub paused: bool,
+}
+```
+
+### struct `AllowChannel`
+
+`POST /api/channels/allow` — change who may talk.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllowChannel {
+    pub id: String,
+    pub allowlist: ChannelAllowlistDto,
+}
+```
+
+### struct `ChannelReplyRequest`
+
+`POST /api/channels/reply` — the `channel-reply` tool's own local endpoint (§5 "Decisions taken" #4): a mid-run post, routed by `run_id` alone (globally unique, so `agent` is carried for context but not needed to resolve it).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelReplyRequest {
+    #[serde(default)]
+    pub agent: String,
+    pub run_id: String,
+    pub text: String,
 }
 ```
 

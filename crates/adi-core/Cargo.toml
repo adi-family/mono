@@ -12,6 +12,9 @@ repository.workspace = true
 adi-config = { workspace = true }
 
 adi-agents = { workspace = true }
+# For `event_catalog`: the whole-platform catalog, now including `adi.channels.message`, is
+# assembled one layer above `adi-agents` — see adi_channels::events' own module doc for why.
+adi-channels = { workspace = true }
 adi-db = { workspace = true }
 
 # The knowledge base. A path dependency with `default-features = false`, not `workspace = true`:

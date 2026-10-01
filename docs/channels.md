@@ -52,16 +52,31 @@ one file per service.
 | `GET /link/<provider>?code=<link-code>` | GET | the service's own install flow (Telegram's `/start` deep link; Slack's OAuth redirect) | Verify the signed link code, record the routing key → node binding, tell the node (over its WebSocket) that a new chat/workspace is attached. For Telegram this *is* the bot receiving `/start <code>` as an ordinary message, handled like any other webhook with one extra step; for Slack it is the callback leg of "Add to Slack". |
 | `POST /subscribe` | POST | a node | Upgrade to WebSocket. `Authorization: Bearer <node-token>` (query param `?token=` for clients that cannot set a header on the upgrade request) identifies which Durable Object this node is subscribing to. |
 | `POST /send` | POST | a node | `{ "connection": "<id>", "text": "…", … }` (§3). Looks up which service/chat the connection maps to from the DO's own state, calls that provider's credential, posts to the service. This is the **only** path a reply takes — a node never calls Telegram/Slack directly, so a bot token never leaves the router. |
-| `POST /register` | POST | a human operator (CLI/panel, not a node) | Mint a node token for a new connection (§2). Requires the router's own operator credential (`ROUTER_ADMIN_SECRET`, analogous to `STATE_SECRET`), not a service's. |
+| `POST /register` | POST | a human operator (CLI/panel, not a node) | Mint a node token for a new connection (§2). Requires the router's own operator credential (`ROUTER_ADMIN_SECRET`, analogous to `STATE_SECRET`), not a service's. (ADI-MONO-120 reads "for a new connection" literally: the response is `{ token, connection, link_code }` — a fresh pending connection and the signed link code for it, not just the token. A repeat call for a `(node, provider)` that already has a token returns that same token, per §1 step 4 below, alongside a new connection + code.) |
 
-**Storage.** One Durable Object per node, keyed by node id — `idFromName(nodeId)`. The DO holds:
+This table has no `/disconnect` route, even though §7's CLI table below describes
+`adi-mono channels disconnect` telling the router to drop the DO entry and the D1 row.
+ADI-MONO-120's own build order (§9) names exactly the six routes above and nothing else, so this
+is a real gap, intentionally left for whichever task adds `adi-mono channels disconnect` to
+close, not fixed here.
+
+**Storage.** One Durable Object per `(node, provider)` pair, keyed by both —
+``idFromName(`${provider}:${nodeId}`)``. (This corrects an inconsistency in the original text,
+which said "keyed by node id" alone; §2 below already requires two separate Durable Objects for
+a node that talks to both Telegram and Slack, which only holds if the key is the pair — also
+exactly the granularity §8 scopes a node token to. ADI-MONO-120 implements it this way; flagging
+it here since this document, not the code, is the contract other tasks build against.) The DO
+holds:
 
 - the node's current WebSocket (if connected) and its outbound frame queue (if not);
 - every connection this node has (routing key → `{provider, agent/trigger/app-route target,
   allowlist, thread map}`, §5) — a node's connections are its own DO's state, not a global table,
   so a node's data lives with the one object that ever touches it and two nodes never contend;
 - the signed, expiring link codes it has minted (§2), so `/link/<provider>` can verify one without
-  a second store.
+  a second store. (ADI-MONO-120's implementation doesn't keep a separate list of minted codes:
+  a code is self-contained and HMAC-verified without any store at all, and replay safety comes
+  from the connection it names refusing a second link once `linked` is already `true` — one
+  fewer store than this bullet describes, not a different one.)
 
 A **D1 table** (`routing_keys`), outside any one DO, is the only thing that has to be queried
 *before* a node is known: `provider, routing_key → node_id`. The webhook handler is the one path
@@ -193,14 +208,25 @@ interface ChannelAdapter {
   routingKey(payload: unknown): string | null;              // chat id / team id — null if this
                                                              // payload carries none (e.g. a
                                                              // Slack url_verification challenge)
-  normalize(payload: unknown, connection: string): ChannelMessage[];  // 0, 1, or several —
-                                                             // a Slack event batch can carry more
-                                                             // than one
+  normalize(payload: unknown, connection: string, env: Env): Promise<ChannelMessage[]>;  // 0, 1,
+                                                             // or several — a Slack event batch
+                                                             // can carry more than one
   send(reply: OutboundReply, credential: ResolvedProvider): Promise<void>;  // the one place a
                                                              // bot token is actually used
+  extractLinkCode?(payload: unknown): string | null;         // is this payload a link attempt
+                                                             // (Telegram's /start <code>)? absent
+                                                             // for a provider whose link flow is
+                                                             // a real redirect (Slack)
   // Install/link, see below — shaped differently per service, so not one signature.
 }
 ```
+
+(This corrects two things ADI-MONO-120 found couldn't both be true as originally written:
+`normalize` has to be `async` and needs `env` — Telegram's own worked-through section below
+requires a `getFile` round-trip, an async call needing the bot token, before a photo attachment
+can be forwarded, which a synchronous env-less signature can't do. `extractLinkCode` is new: the
+webhook handler needs a uniform, optional way to ask "is this payload actually a link attempt?"
+without hard-coding Telegram's `/start` syntax into the router itself.)
 
 `verify` and `routingKey` run before the router does anything else with a request — unlike
 oauth-router's state (which the router itself signs), a webhook's authenticity is the *service's*
@@ -443,6 +469,36 @@ target handling, not a new axis the store needs to track twice.
    Telegram, and whatever Slack's app-directory listing needs. Outward-facing and irreversible in
    ways 1–4 are not (a real bot, a real domain) — **needs Igor's sign-off before any of it runs**,
    per the platform rule against creating real bots/apps or touching DNS without approval.
+
+## ADI-MONO-121 implementation notes
+
+Built as `crates/adi-channels` — the router client, `adi.channels.message`, the connection store,
+dispatch, the run-finished auto-post-back, the `channel-reply` tool, and the node's
+`/api/channels/*` endpoints (wired into `adi-webapp-api`/`adi-app`). Tested only against an
+in-process fake router (`ws.rs`'s and `client.rs`'s own tests) and a fake HTTP router
+(`router_api.rs`'s), never the real `apps/channel-router`, per this task's own instructions — but
+the fake ones, and this crate's request/response shapes, were checked against ADI-MONO-120's
+actual `router.ts`/`do.ts` (built concurrently in a sibling worktree) rather than guessed:
+
+- **`POST /register` mints the connection too, not just the token**, and takes `target`
+  (`allowlist` optional, defaulting to owner-only) in its request body. The response is
+  `{ token, connection, link_code, install_url }` — `connection` is the router's own id for the
+  pending connection, minted in the same call; this node's `connect::connect` mirrors it locally
+  via `Connections::create_with_id` rather than minting one of its own, since every later frame
+  and `/send` call names the connection by that id. `install_url` is the whole
+  `t.me/<bot>?start=<code>` for Telegram (the router knows the bot's public username; this crate
+  doesn't), `null` for a provider with no such logic yet.
+- **`/subscribe` accepts any HTTP method** on the router side, so this client's `GET` (RFC 6455
+  §4.1's requirement, which every real client follows) works against it — the route table's
+  "POST" was never actually enforced.
+- **A `linked` frame carries no sender**, so `Allowlist::OwnerOnly` claims the first sender to
+  actually message instead (`adi_channels::dispatch::is_allowed`). Exactly right for a Telegram
+  DM (the same person who tapped the deep link); less precise for a group or a Slack workspace.
+- **There is still no named disconnect route** — confirmed against the real router, not just the
+  spec text: `do.ts` has no `/internal/disconnect`, and `router.ts` exposes none either.
+  `adi_channels::connect::disconnect` only drops this node's local state (the connection row, and
+  the node token once the provider has none left); telling the router is left for whichever of
+  ADI-MONO-120/124 names that route.
 
 ## Decisions taken
 

@@ -1,0 +1,42 @@
+[package]
+name = "adi-channels"
+description = "The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+adi-events = { workspace = true }
+adi-agents = { workspace = true }
+adi-tools = { workspace = true }
+# A node token (docs/channels.md §1) is stored in the reserved scope the fleet's own node
+# passwords use — never injected into an agent run's environment, see src/token.rs.
+adi-secrets = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+# The one place a bot token never is: this crate only ever holds a node token, over HTTP to the
+# router (`/register`, `/send`). rustls rather than native-tls, same reason as everywhere else in
+# this workspace — see the root manifest's note on `rustls-no-provider`.
+reqwest = { workspace = true, features = ["blocking"] }
+rustls = { workspace = true }
+
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "sync", "macros"] }
+tracing = { workspace = true }
+
+uuid = { workspace = true }
+# The websocket handshake's `Sec-WebSocket-Key`/frame masks (see src/ws.rs).
+rand = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+
+[lints]
+workspace = true

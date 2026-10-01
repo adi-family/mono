@@ -36,6 +36,10 @@ adi-tools = { workspace = true }
 
 adi-agents = { workspace = true }
 
+# The node side of Channels (docs/channels.md): the connection store, the router client, and the
+# run-finished auto-post-back observer composed into the event dispatcher below.
+adi-channels = { workspace = true }
+
 # The knowledge base, with its default features — which is what turns the embedder on for this
 # binary. Deliberate, and the one place the panel pays for it: `adi-core` takes this crate
 # without default features precisely so nothing else has to, but a Knowledge page that could not

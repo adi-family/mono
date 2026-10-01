@@ -20,6 +20,7 @@ macro_rules! require {
 }
 
 mod agents;
+mod channels;
 mod dashboards;
 mod db;
 /// The registry of embedding backends the indexer, knowledge and facts stores resolve through.
@@ -55,6 +56,7 @@ mod voice;
 mod workspaces;
 
 pub use agents::*;
+pub use channels::*;
 pub use dashboards::*;
 pub use db::*;
 pub use embedding_backends::*;

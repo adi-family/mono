@@ -5,10 +5,15 @@
 //! what lets [`event_types`] publish a JSON Schema guaranteed to match what is emitted: the same
 //! struct is both serialized onto the bus and reflected into the schema.
 //!
-//! [`event_catalog`] is the *entire* catalog — the task events (from `adi-tasks`) followed by the
+//! [`event_catalog`] is the task+agent catalog — the task events (from `adi-tasks`) followed by the
 //! agent events defined here. It is assembled in this crate because this is the lowest one that can
-//! see every producer's payload type: `adi-agents` depends on both `adi-events` and `adi-tasks`,
+//! see both producers' payload types: `adi-agents` depends on both `adi-events` and `adi-tasks`,
 //! while `adi-events` (the bus) sits below both and cannot.
+//!
+//! It is no longer the *whole* platform catalog: `adi-channels` depends on this crate (to dispatch
+//! a channel message to an agent), so it sits one layer further up and is where
+//! `adi_channels::event_catalog` extends this one with `adi.channels.message`. `adi-core` and the
+//! webapp API read that extended catalog; this function stays exactly what it always was.
 
 use adi_events::EventType;
 use schemars::JsonSchema;

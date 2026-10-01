@@ -9,6 +9,7 @@
 //! their DTO types with that frontend.
 
 mod awaits;
+mod channels;
 mod http;
 mod live;
 mod node;
@@ -29,6 +30,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
+use adi_channels::Connections;
 use adi_db::Db;
 use adi_events::Events;
 use adi_knowledge::KnowledgeStore;
@@ -66,6 +68,11 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
+    /// The node side of Channels (`docs/channels.md`): connections this node holds, each bound to
+    /// an agent/trigger/app-route target.
+    channels: Connections,
+    /// This node's live channel-router sockets, one per provider with a connection on it.
+    channels_live: channels::Live,
     mesh: MeshCtl,
     /// A `dist/` to serve the webapp from instead of the embedded copy ([`DIST_ENV`]).
     dist: Option<PathBuf>,
@@ -270,6 +277,17 @@ async fn main() -> anyhow::Result<()> {
     {
         warn!(error = %e, "seeding system tools failed");
     }
+    // The `channel-reply` tool (docs/channels.md §5) — same best-effort seeding as the system
+    // tools above, re-seeded (not just created once) so an edit to its script ships on restart.
+    if let Err(e) = adi_channels::tool::ensure(&tools) {
+        warn!(error = %e, "seeding the channel-reply tool failed");
+    }
+    // This node's own address, for the channel-reply tool script to find without guessing a port
+    // (`adi_channels::node_port`). Written after the listener is bound, so it is always this
+    // process's *real* address even when `$PORT` was 0.
+    if let Err(e) = adi_channels::node_port::write(tools.config(), local.port()) {
+        warn!(error = %e, "recording this node's own port failed");
+    }
     // Create the global database (so it exists in WAL mode before anything races to make it) and
     // seed the `@adi/db` Bun client into the store's node_modules, so `import … from "@adi/db"`
     // resolves from every `.ts` the platform runs. Best-effort, like the tools above.
@@ -318,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
     let knowledge = KnowledgeStore::open();
     let triggers = Triggers::open();
     let events = Events::open();
+    let channels_store = Connections::open();
     // Background triggers are long-lived processes owned by this app: the supervisor keeps
     // every enabled one running for as long as the app is up, and stops them on the way out.
     let trigger_supervisor = Supervisor::start(triggers.clone());
@@ -326,10 +345,25 @@ async fn main() -> anyhow::Result<()> {
     // event trigger whose patterns match a drained event.
     //
     // Triggers are not the only subscriber: a harness run can register an *await* — "wake me when
-    // this is published" — and the await worker is what honors it. It watches from the dispatcher's
-    // side rather than draining the spool itself, because two drainers would race for records.
-    let event_dispatcher =
-        EventDispatcher::start_watched(triggers.clone(), awaits::start(agents.clone()));
+    // this is published" — and the await worker is what honors it. A channel-opened run's answer
+    // (docs/channels.md §5) is the second: `adi_channels::finished::observer` posts it back to the
+    // router the moment `adi.agents.run.finished`/`question.asked` fires. Both watch from the
+    // dispatcher's side rather than draining the spool themselves, because two drainers would race
+    // for records — see `adi_triggers::dispatch`'s own module doc.
+    let awaits_observer = awaits::start(agents.clone());
+    let channels_observer = adi_channels::finished::observer(
+        channels_store.clone(),
+        agents.clone(),
+        secrets.clone(),
+        channels::router_url(),
+    );
+    let event_dispatcher = EventDispatcher::start_watched(
+        triggers.clone(),
+        std::sync::Arc::new(move |record: &adi_events::EventRecord| {
+            awaits_observer(record);
+            channels_observer(record);
+        }),
+    );
     // And the third worker on this clock: the sweep that finds out an LLM backend whose usage limit
     // has expired is actually back. It belongs to the app rather than to the hive because it binds
     // no port, and the hive watches a service by its port — see `crate::prober`.
@@ -352,6 +386,8 @@ async fn main() -> anyhow::Result<()> {
         triggers,
         trigger_supervisor,
         events,
+        channels: channels_store,
+        channels_live: channels::Live::default(),
         mesh: MeshCtl::default(),
         dist,
         start: Instant::now(),
@@ -362,6 +398,37 @@ async fn main() -> anyhow::Result<()> {
     // The live channel's clock: it recomputes only what some open page is watching, so until a
     // control panel connects this costs a wakeup every quarter second and nothing else.
     live::start(Arc::clone(&app));
+
+    // Resume a socket for every provider that already has a linked connection and a node token
+    // on file — a restart must not leave a previously connected chat silent until somebody hits
+    // Connect again. Best-effort: a provider this node has never registered (no token yet, or
+    // one dropped since) is skipped rather than failing the whole start-up.
+    {
+        let app = Arc::clone(&app);
+        tokio::spawn(async move {
+            let Ok(connections) = app.channels.list() else {
+                return;
+            };
+            let mut providers: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for connection in connections {
+                providers.insert(connection.manifest.provider);
+            }
+            for provider in providers {
+                let Ok(Some(token)) = adi_channels::token::load(&app.secrets, &provider) else {
+                    continue;
+                };
+                app.channels_live
+                    .ensure(
+                        &provider,
+                        token,
+                        app.channels.clone(),
+                        app.agents.clone(),
+                        app.events.clone(),
+                    )
+                    .await;
+            }
+        });
+    }
 
     // The mesh daemon runs in-process, so it lives only as long as this app, and it is opt-in:
     // autostart it (non-blocking, best-effort) only when `mesh.toml`'s `enabled` resolves to on
@@ -414,6 +481,7 @@ async fn main() -> anyhow::Result<()> {
     // this just ends its poll loop cleanly.
     event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
     app.mesh.stop().await;
+    app.channels_live.stop_all().await;
     Ok(())
 }
 
@@ -569,6 +637,11 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         ("POST", "/api/mesh/forwards/remove") => {
             handlers::mesh_remove_forward(app.mesh.running().await, &req.body)
         }
+        // Both talk to the router (`POST /register`, a blocking HTTP call run off the runtime —
+        // see `blocking`) and, on success, start or stop this node's live socket for the
+        // provider — the one piece of channel state that lives on the tokio runtime itself.
+        ("POST", "/api/channels/connect") => channels_connect(app, &req.body).await,
+        ("POST", "/api/channels/disconnect") => channels_disconnect(app, &req.body).await,
         _ => return None,
     };
     Some(response)
@@ -686,6 +759,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         triggers,
         trigger_supervisor,
         events,
+        channels,
         start,
         ..
     } = app;
@@ -1004,6 +1078,20 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
         // Publish a platform event by hand — the app's dispatcher fires matching event triggers.
         ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
+        // Channels (docs/channels.md §7). `connect`/`disconnect` are async routes (they talk to
+        // the router) — see `async_route` below.
+        ("GET", "/api/channels") => handlers::channels(channels),
+        ("POST", "/api/channels/route") => handlers::route_channel(channels, &req.body),
+        ("POST", "/api/channels/pause") => handlers::pause_channel(channels, &req.body),
+        ("POST", "/api/channels/allow") => handlers::allow_channel(channels, &req.body),
+        // The `channel-reply` tool's own local endpoint — a mid-run post, routed by run id alone.
+        ("POST", "/api/channels/reply") => {
+            handlers::reply_channel(channels, secrets, &channels::router_url(), &req.body)
+        }
+        // One connection, for the connect flow's own poll on `linked`.
+        (m, p) if m == "GET" && p.starts_with("/api/channels/") => {
+            handlers::channel(channels, &p["/api/channels/".len()..])
+        }
         // The public webhook endpoint: fire an enabled `webhook` trigger with the request body
         // as its payload. GET is accepted too — some webhook providers ping with it. The secret
         // (when the trigger requires one) rides in the query, which route_path() strips.
@@ -1115,6 +1203,76 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
     }
     mesh.stop().await;
     handlers::mesh(false)
+}
+
+/// `POST /api/channels/connect` (`docs/channels.md` §7): register this node for the provider
+/// (minting/refreshing its node token — a blocking HTTP call, run off the runtime through
+/// [`blocking`]) and create a fresh connection. On success, starts this node's live socket for
+/// the provider if one isn't already running.
+async fn channels_connect(app: &App, body: &[u8]) -> Response {
+    let connections = app.channels.clone();
+    let secrets = app.secrets.clone();
+    let config = connections.config().clone();
+    let body = body.to_vec();
+    let response = blocking(move || {
+        handlers::connect_channel(
+            &connections,
+            &secrets,
+            &config,
+            &channels::router_url(),
+            &channels::router_admin_secret(),
+            &body,
+        )
+    })
+    .await;
+    if response.status == 200
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&response.body)
+        && let Some(provider) = v["connection"]["provider"].as_str()
+    {
+        let provider = provider.to_string();
+        if let Ok(Some(token)) = adi_channels::token::load(&app.secrets, &provider) {
+            app.channels_live
+                .ensure(
+                    &provider,
+                    token,
+                    app.channels.clone(),
+                    app.agents.clone(),
+                    app.events.clone(),
+                )
+                .await;
+        }
+    }
+    response
+}
+
+/// `POST /api/channels/disconnect` — drop the connection, and stop this node's live socket for
+/// its provider too if nothing else on this node still has a connection there.
+async fn channels_disconnect(app: &App, body: &[u8]) -> Response {
+    // The provider has to be read *before* the store mutation below removes the only record of
+    // it — there is nothing left to ask once the connection is gone.
+    let provider = serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["id"].as_str().map(str::to_string))
+        .and_then(|id| app.channels.get(&id).ok().flatten())
+        .map(|c| c.manifest.provider);
+
+    let connections = app.channels.clone();
+    let secrets = app.secrets.clone();
+    let body = body.to_vec();
+    let response =
+        blocking(move || handlers::disconnect_channel(&connections, &secrets, &body)).await;
+
+    if response.status == 200
+        && let Some(provider) = provider
+        && !app
+            .channels
+            .list()
+            .map(|l| l.iter().any(|c| c.manifest.provider == provider))
+            .unwrap_or(true)
+    {
+        app.channels_live.stop(&provider).await;
+    }
+    response
 }
 
 /// Persist an explicit on/off choice to `mesh.toml`. Never called from the shutdown path
