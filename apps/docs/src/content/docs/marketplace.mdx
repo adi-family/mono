@@ -105,11 +105,15 @@ without you saying so.
 
 There's no single "uninstall this bundle" verb — `marketplace uninstall
 <marketplace>/<slug>/<kind>/<name>` (add `--project`, as shown above, for a project-scoped
-install) removes one element at a time, by that kind's own ordinary path. The one exception is a
-dashboard: it goes through Archive → Delete on [[Dashboards]], the same route a legacy
-single-dashboard bundle always used. A bundle isn't a container you pull out as a unit — it's a
-set of ordinary things that happen to share where they came from, and removing them stays that
-granular.
+install) removes one element at a time, by that kind's own ordinary path, **dashboards included**:
+it archives the directory and deletes it in one call, no separate trip to [[Dashboards]] needed.
+A bundle isn't a container you pull out as a unit — it's a set of ordinary things that happen to
+share where they came from, and removing them stays that granular.
+
+The one real exception is the legacy single-dashboard bundle — a repository with no kind
+directories at all, which installs as a plain dashboard with its own `.git` clone. It carries no
+marketplace ledger for `marketplace uninstall` to act on, so it still goes through Archive →
+Delete on the Dashboards page, exactly as v1 always has.
 
 ## Secrets
 
@@ -171,3 +175,6 @@ before anyone's cloned anything — and it's advisory, not binding: what actuall
 off the pinned commit's own tree. Shipping a new version is one line, changing `commit` (and
 `version`, for readers); nothing on anyone else's machine moves until they run `update`
 themselves.
+
+See [[Building a marketplace bundle]] to package two agents and a dashboard, publish the bundle,
+and update two installs independently.

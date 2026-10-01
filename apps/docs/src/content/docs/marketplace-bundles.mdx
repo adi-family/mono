@@ -1,0 +1,486 @@
+---
+title: Building a marketplace bundle
+description: Package two agents and a dashboard as one git repository, publish the bundle, and install, connect, update and remove it — a worked example, end to end.
+---
+
+import Flags from '../../components/Flags.astro';
+
+[[Marketplace]] covers installing someone else's bundle. This page is the other side: building
+one of your own — a worked example with two agents and a dashboard, packaged, published,
+installed, connected, updated, and installed a second time, independent of the first.
+
+## Vocabulary <Flags>Expert area</Flags>
+
+Six words that mean six different things, and the whole design turns on keeping them apart:
+
+| word | meaning | example |
+| --- | --- | --- |
+| source alias | the local name you added a manifest under | `store`, `local-demo` |
+| bundle slug | the publisher's identity for the bundle | `research-assistant` |
+| published name | what an element is called in the repository | `researcher`, `research-board` |
+| installed id | what it actually landed as, after minting | `researcher`, or `researcher-2` |
+| scope | one project, or the machine's global scope | a project id, or absent |
+| commit vs. version | what installs, vs. what a person reads | a 40-hex sha, vs. `"0.3.0"` |
+
+A project is not a security sandbox — an installed element still uses its own store's ordinary id
+namespace (agent ids, tool ids, and so on all still live machine-wide). A project is a *filing*
+boundary: where something runs, whose database it reads, and — critically — the one way to hold
+two copies of the same bundle at once (below).
+
+## The example
+
+One repository, three elements: two agents that hand work to each other, and a dashboard that
+drives them.
+
+```text
+research-assistant/
+  agents/researcher.toml
+  agents/writer.toml
+  dashboards/research-board/
+    frontend/index.ts          # generated shape — copy, don't hand-write
+    frontend/index.html        # generated shape — copy, don't hand-write
+    frontend/modules/brief.ts  # your own panel
+    backend/index.ts           # generated shape — copy, don't hand-write
+    backend/lib/panel.ts       # your own helper, not a route
+    backend/routes/submit.ts   # your own endpoint
+    backend/routes/status.ts   # your own endpoint
+```
+
+Every directory in a bundle is optional and every file is written in exactly the shape the real
+store already reads elsewhere — there is no bundle-specific schema. `agents/researcher.toml` is a
+`StoredAgentManifest` ([[Agents]]); `dashboards/research-board/` is an ordinary dashboard
+([[Dashboards]]). Learning to hand-write one of those is learning to write one for a bundle.
+
+## The agents
+
+```toml
+# agents/researcher.toml
+backend = "process:claude"
+tags = ["research"]
+
+[arguments]
+system_prompt = """
+You are the researcher half of a two-agent pipeline. Given a topic, gather the key facts
+a writer would need and return them as plain findings — not instructions to anyone else.
+"""
+```
+
+```toml
+# agents/writer.toml
+backend = "process:claude"
+tags = ["writing"]
+
+[arguments]
+system_prompt = """
+You are the writer half of a two-agent pipeline. You will be given a researcher's
+findings on a topic; turn them into a short, clear brief.
+"""
+```
+
+That is a complete, valid agent definition — every other field defaults. A few things worth
+being deliberate about:
+
+- **`backend` here is the execution backend, not a named LLM backend.** `process:claude` runs the
+  Claude CLI headless on whoever's login is on the installing machine — no API key, no backend
+  definition to ship, no secret to declare. This is the simplest thing that actually runs, and it
+  is why the example needs no fourth element.
+- **A named LLM backend is a separate, explicit thing** <Flags>Expert area</Flags> — an
+  `[[backends]]` list referencing an id in [[Models and backends|the LLM backend registry]], the
+  way a hand-written agent already can. Writing `backends = [{ backend = "gpt5" }]` here would
+  only resolve if a backend called `gpt5` already exists on the machine this lands on, or if the
+  *same bundle* also ships `llm/gpt5.toml` as a fourth element — the installer never creates one
+  for you, and it never invents compatibility between an agent and a backend it doesn't carry.
+- **`bin_tools` and `secrets` work the same way, by the same rule**: naming a tool or a secret
+  the agent wants does not make it appear. A tool has to be either this bundle's own
+  `tools/<name>.sh` (landed under the exact id `bin_tools` names, see below) or something the
+  operator already has; a secret is a name the install checks against what is set on the machine,
+  reported if it's missing, never created ([[Secrets]]).
+- **`project` is never written here.** The installer strips whatever a repository ships in that
+  field and fills in its own — the destination the operator chose, not the publisher's guess.
+
+## The dashboard
+
+`dashboards/research-board/` needs to carry `frontend/index.ts` and `backend/index.ts` — the same
+two files any [[Dashboards|hand-built dashboard]] runs on. There's no installer step that writes
+them for you: scaffold a throwaway dashboard once (`POST /api/dashboards/create`, or
+`/dashboards` in the control panel) and copy its `frontend/index.ts`, `frontend/index.html` and
+`backend/index.ts` into the bundle verbatim — they're generated, "do not edit" files, and the
+control panel rewrites them again on the installing machine the next time it lists the dashboard.
+
+**Ship both or ship neither.** A `dashboards/<name>/` directory missing either entry point isn't
+refused — the repository reader simply doesn't recognize it as a dashboard at all
+([`read_layout`](https://github.com/adi-family/mono/blob/main/crates/adi-marketplace/src/layout.rs)
+only reports an entry when both files are present). Address it anyway
+(`adi/research-assistant/dashboards/research-board`) and the refusal is "names no element the
+repository actually carries" — true, but not the reason, so get the two files right before
+anything else.
+
+Your own code lives in `frontend/modules/*.ts` and `backend/routes/*.ts`, exactly like a
+hand-built dashboard — one panel, two endpoints, plus a small server-side helper that is neither:
+
+```ts
+// backend/lib/panel.ts — calls this machine's *control panel* (adi-app), server-side only, never
+// from the browser. This is not the one-origin rule from "relative paths only": that rule is
+// about this dashboard addressing *itself*, and this is a request to a different, sibling
+// service. The control panel answers /api/* to its own origin or to a caller with no Origin
+// header at all (crates/adi-app/src/origin.rs) — which is what a request from this process looks
+// like, and a browser request from this dashboard's own page never could. Same pattern the
+// shipped agent-board dashboard uses for the same reason (backend/lib/panel.ts there, too).
+const BASES = [process.env.ADI_APP_URL, "http://127.0.0.1:8000", "http://app.adi"].filter(Boolean) as string[];
+
+export async function panel(path: string, body?: unknown): Promise<any> {
+  for (const base of BASES) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: body === undefined ? {} : { "content-type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+      if (res.ok) return await res.json();
+    } catch { /* try the next base */ }
+  }
+  throw new Error("the control panel is not answering");
+}
+```
+
+```ts
+// frontend/modules/brief.ts — a topic field, a status line, the brief once it's done.
+export default async function brief(ctx: any) {
+  const el = ctx.panel("Research brief");
+  el.innerHTML = `<input placeholder="topic" /><button>Go</button><pre></pre>`;
+  const [input, button, out] = [...el.children] as HTMLElement[];
+  (button as HTMLButtonElement).onclick = async () => {
+    out.textContent = "researching…";
+    const started = await ctx.api.post("/submit", { topic: (input as HTMLInputElement).value });
+    if (started.error) return void (out.textContent = started.error);
+    const done = await ctx.api.post("/status", { run_id: started.run_id });
+    out.textContent = done.error ?? done.brief;
+  };
+}
+```
+
+```ts
+// backend/routes/submit.ts — POST {topic}: launch the researcher, remember its run id.
+import { panel } from "../lib/panel.ts";
+
+export const method = "POST";
+export const path = "/submit";
+
+export default async (req: Request) => {
+  const { topic } = await req.json();
+  if (!topic?.trim()) return Response.json({ error: "give it a topic" }, { status: 400 });
+  const run = await panel("/api/agents/run", { name: "researcher", message: topic });
+  if (!run.run_id) return Response.json({ error: "researcher did not start" }, { status: 502 });
+  return Response.json({ stage: "researching", run_id: run.run_id });
+};
+```
+
+```ts
+// backend/routes/status.ts — POST {run_id}: where the pipeline is, and the result once it's done.
+// A real dashboard would make this non-blocking (poll, don't wait); this blocks until the
+// researcher's turn ends, which is enough to show the handoff without a second storage layer.
+import { panel } from "../lib/panel.ts";
+
+async function lastReply(name: string, run_id: string): Promise<string> {
+  for (let i = 0; i < 60; i++) {
+    const peek = await panel("/api/agents/run/peek", { name, run_id });
+    if (!peek.running) {
+      const last = [...peek.turns].reverse().find((t: any) => t.role === "assistant");
+      return last?.text ?? "";
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new Error("researcher did not finish in time");
+}
+
+export const method = "POST";
+export const path = "/status";
+
+export default async (req: Request) => {
+  const { run_id } = await req.json();
+  const findings = await lastReply("researcher", run_id);
+  const writer = await panel("/api/agents/run", { name: "writer", message: findings });
+  const brief = await lastReply("writer", writer.run_id);
+  return Response.json({ stage: "done", findings, brief });
+};
+```
+
+This is the whole of "connecting the parts," and it is **entirely this dashboard's own code**.
+Installing the bundle registers `researcher`, `writer` and `research-board` as three unrelated
+definitions; nothing about them sharing a repository wires one into another. The workflow —
+submit a topic, run the researcher, hand its answer to the writer, show the brief — is something
+the dashboard's backend author builds, including what "it's still running" and "it failed" look
+like on the page. `researcher` and `writer` are named by their **published** names above, which
+works for exactly as long as that's also what they're **installed** as — the next section is
+about when it isn't.
+
+### Published names and installed ids <Flags>Expert area</Flags>
+
+`agents/researcher.toml`'s published name is `researcher`, and it installs under that exact id if
+it's free — but an agent mints past a collision, same as a hand-created one, so a *second*
+install of this bundle, into a different project, lands as `researcher-2`. Nothing rewrites
+`submit.ts`'s hardcoded `"researcher"` to match: a structured reference inside the install
+itself — an agent's `bin_tools`, `backends[].backend`, `project` — gets resolved to what actually
+landed, but a name baked into TypeScript is not a structured reference the installer can see or
+touch. The second copy's dashboard, left as written above, would silently drive the **first**
+copy's researcher.
+
+There is no shipped feature that fixes this — no `ADI_BUNDLE_ID` environment variable, no runtime
+binding API. What you *can* do, because the control panel already answers `GET /api/marketplace`
+with exactly this mapping (the same JSON its own listing page renders from), is resolve it
+yourself at request time — a drop-in replacement for the `name: "researcher"` / `name: "writer"`
+literals in `submit.ts` and `status.ts` above:
+
+```ts
+// backend/lib/ids.ts — match the install that contains *this* dashboard (by its own directory
+// id, which backend/index.ts already knows as `ctx.dashboard`), then read off the id that
+// install actually landed the named element as. Falls back to the published name only when no
+// install can be matched at all — not the ordinary case, but the honest thing to do if it happens
+// rather than throwing.
+import { panel } from "./panel.ts";
+
+export async function elementId(dashboardId: string, kind: string, published: string): Promise<string> {
+  const state = await panel("/api/marketplace");
+  for (const app of state.apps ?? []) {
+    for (const install of app.bundle?.installs ?? []) {
+      const mine = install.elements.find((e: any) => e.kind === "dashboards" && e.id === dashboardId);
+      if (!mine) continue;
+      const hit = install.elements.find((e: any) => e.kind === kind && e.name === published);
+      if (hit?.id) return hit.id;
+    }
+  }
+  return published;
+}
+```
+
+`GET /api/marketplace` is the control panel's own internal listing API, not a published, versioned
+contract — it happens to carry exactly the fact a multi-install bundle needs, but it can change
+between releases in a way a documented API wouldn't. Worth the trade-off only once a bundle
+actually needs to support being installed more than once; the common case (one install, no
+collision) never needs this at all.
+
+## The manifest
+
+```json
+{
+  "name": "My starter bundles",
+  "bundles": [
+    {
+      "slug": "research-assistant",
+      "name": "Research assistant",
+      "description": "Two agents and a dashboard that hands one's output to the other.",
+      "repo": "https://github.com/you/research-assistant.git",
+      "commit": "9f2c1d4e5a6b7c8d9e0f1a2b3c4d5e6f70819a2b",
+      "elements": [
+        { "kind": "agent", "name": "researcher", "description": "Gathers findings on a topic." },
+        { "kind": "agent", "name": "writer", "description": "Turns findings into a brief." },
+        { "kind": "dashboard", "name": "research-board", "description": "Submit a topic, read the brief." }
+      ]
+    }
+  ]
+}
+```
+
+`repo` and `commit` are the two fields that matter — a full 40-hex `git rev-parse HEAD`, never a
+branch. `elements` is a **preview**, read by a listing before anything is cloned; it's advisory,
+not binding — what actually installs is read off the pinned commit's own tree, so an element you
+forget to preview still installs by address, just without a description on the listing. Note the
+manifest spells kinds **singular** (`agent`, `dashboard`) where an *address* spells them plural
+(`agents/researcher`, `dashboards/research-board`) — two different vocabularies that happen to
+agree on everything except this.
+
+## Package it
+
+```bash
+cd research-assistant
+git init -b main && git add -A && git commit -m "v1"
+git remote add origin https://github.com/you/research-assistant.git
+git push -u origin main
+git rev-parse HEAD   # the full 40-character hash — this is the commit field above
+```
+
+Host the manifest JSON anywhere over HTTPS — a gist, a raw GitHub file, a static site. That's the
+whole of publishing: no account, no submission queue, no build step.
+
+## Try it locally first <Flags>Expert area</Flags>
+
+Everything above can be verified end to end with no real hosting, using the `file://` scheme both
+a source and a `repo` are allowed in development:
+
+```bash
+export ADI_DIR="$(mktemp -d)"              # a disposable store — never your real one
+CLI=adi-mono                                # the installed CLI, or target/release/adi-mono
+
+cd research-assistant && git init -q -b main && git add -A && git commit -qm v1
+COMMIT=$(git rev-parse HEAD)
+cd ..
+
+cat > marketplace.json <<EOF
+{"bundles":[{"slug":"research-assistant","name":"Research assistant",
+  "repo":"file://$PWD/research-assistant","commit":"$COMMIT",
+  "elements":[{"kind":"agent","name":"researcher"},{"kind":"agent","name":"writer"},
+              {"kind":"dashboard","name":"research-board"}]}]}
+EOF
+
+"$CLI" marketplace add local-demo "file://$PWD/marketplace.json"
+"$CLI" marketplace sync
+"$CLI" marketplace apps
+"$CLI" marketplace install local-demo/research-assistant --new-project "Research demo"
+```
+
+Example output from that last line:
+
+```text
+registered project research-demo — installing in project research-demo
+local-demo/research-assistant — installed in project research-demo:
+  agents/researcher → researcher
+  agents/writer → writer
+  dashboards/research-board → research-board
+```
+
+## What lands, and how to turn it on
+
+Installing never runs anything — every kind here is inert on arrival for a different reason:
+
+| kind | inert because | turning it on |
+| --- | --- | --- |
+| agent | nothing runs a definition by existing | `adi-mono agents run researcher` |
+| dashboard | `archived_at` stamped, hive file parked | `adi-mono marketplace start research-board` |
+
+```bash
+"$CLI" marketplace start research-board
+```
+
+brings up both of its Bun services within a few seconds, at a `<host>.adi` address. The agents
+need no such step — `agents run`, or the dashboard's own `/submit` above, is the launch.
+
+## Missing secrets and name collisions <Flags>Enterprise interest</Flags>
+
+Nothing here declares a secret, so there's nothing to check it against — but it's worth knowing
+what would happen if it did: a declared secret the machine doesn't have **lands the agent
+anyway**, with a note on the install (`Installed.notes`, or a line in `marketplace apps`). It is
+never a blocker and never a prompt; the agent simply runs without it, exactly as a hand-attached
+one that was never set would.
+
+Collisions split two ways, and the split is about whether something else's **structured** field
+reads an id back out — `bin_tools`, `backends[].backend`, `project`:
+
+- An **agent, a dashboard, a trigger, or a hive service** mints past a collision like any other
+  store id — `researcher-2`, the collision case in the next section.
+- A **tool, an LLM/embedding backend, or a project scaffold** refuses outright on a global-scope
+  collision, because a silently-renamed id would point a sibling's reference at a stranger's
+  pre-existing thing of the same name. The fix is the same one that fixes a second copy of the
+  whole bundle: install into a project, where the rename is allowed and `bin_tools` /
+  `backends[].backend` / `project` are rewritten to match — never an unstructured reference like
+  the dashboard's hardcoded `"researcher"` above.
+
+## Keep v1 and v2 side by side <Flags>Enterprise interest</Flags>
+
+Install a second, independent copy — into its own project, because that's the only scope where a
+second copy doesn't collide:
+
+```bash
+"$CLI" marketplace install local-demo/research-assistant --new-project "Second copy"
+```
+
+```text
+registered project second-copy — installing in project second-copy
+local-demo/research-assistant — installed in project second-copy:
+  agents/researcher → researcher-2 (renamed)
+  agents/writer → writer-2 (renamed)
+  dashboards/research-board → research-board-2 (renamed)
+```
+
+Two installs, two ledgers, two clones, both currently standing at the same commit by coincidence
+— nothing links them, and nothing requires them to move together from here on. Publish v2 (a new
+commit, synced) and only one of them has to move:
+
+```bash
+"$CLI" marketplace update local-demo/research-assistant --project research-demo
+"$CLI" marketplace apps
+```
+
+```text
+    in research-demo: 3 of 3 elements, at <v2 commit>
+      ...
+    in second-copy: 3 of 3 elements, at <v1 commit>
+      ...
+      behind — `adi-mono marketplace update local-demo/research-assistant --project second-copy` moves it onto the current pin
+```
+
+`second-copy` stands exactly where it did — there is no whole-machine "the newest version is now
+everywhere." Install twice, let one age, update the other on purpose: that's the entire story.
+
+### A local edit blocks a fast-forward, per element <Flags>Expert area</Flags>
+
+Switch to `second-copy`, still behind at v1. Edit its `writer-2` by hand (in the control panel, or
+the file directly) and publish v3: `update --project second-copy` fast-forwards the siblings that
+weren't touched and leaves the edited one alone, reported rather than overwritten:
+
+```bash
+"$CLI" marketplace update local-demo/research-assistant --project second-copy
+```
+
+```text
+local-demo/research-assistant updated from <v1> to <v3>:
+  agents/researcher → researcher-2
+  agents/writer: edited since it was installed or last updated — left alone; update this element with --force to overwrite the edit and lose it
+  dashboards/research-board unchanged
+```
+
+The message says `--force`; the flag that actually applies to one element of a *bundle* address
+is `--force-element <kind>/<name>` (bare `--force` is the legacy single-dashboard bundle's own
+flag, and does nothing here). It overwrites that one element and nothing else — but only on the
+**same call** that moves the bundle's own pin:
+
+```bash
+"$CLI" marketplace update local-demo/research-assistant --project second-copy --force-element agents/writer
+```
+
+Run `update` again with nothing left to move and it short-circuits before any per-element logic
+runs at all — `--force-element` included — answering "already at the commit its marketplace
+pins" and touching nothing. There is no repair call for an element you meant to force and didn't;
+every `--force-element` you need has to be on the update that is actually about to move the pin.
+
+## Removing something <Flags>Expert area</Flags>
+
+There's no whole-bundle uninstall — each element goes by its own kind's ordinary path, including
+the dashboard (this is the general-bundle path; a legacy single-dashboard app still goes through
+Archive → Delete on the Dashboards page, unchanged from v1):
+
+```bash
+"$CLI" marketplace uninstall local-demo/research-assistant/agents/writer --project second-copy
+"$CLI" marketplace uninstall local-demo/research-assistant/dashboards/research-board --project second-copy
+```
+
+Each call drops one row from that scope's ledger; the other scope's install is untouched.
+Removing the **last** element an install carries removes that install's ledger and clone whole —
+`research-demo` keeps standing regardless, because scope is the key everything here hangs off.
+
+## What this doesn't do
+
+Worth stating plainly, because every one of these reads as an obvious feature until it's missing:
+
+- **No automatic orchestration.** Installing three elements from one repository never wires them
+  together; the dashboard's own code is the entire connection, as shown above.
+- **No general ID rewriting.** Only `bin_tools`, `backends[].backend` and `project` — the three
+  fields something else's manifest actually reads back by id — are rewritten on a collision.
+  `can_spawn`, a prompt that names a sibling, a shell command, a dashboard's TypeScript: none of
+  it is touched, ever.
+- **`can_spawn` has its own trap.** An agent's manifest may publish `can_spawn = ["writer"]` so
+  `researcher` can launch `writer` directly — but only a *human-run* install keeps it: a save made
+  from inside another agent's own turn (an agent installing a bundle on your behalf) strips
+  `can_spawn` on creation, the same guard that stops a run from widening its own allowlist.
+  Installing by hand from a terminal, or from the control panel, keeps it as published.
+- **No version picker.** A manifest names exactly one commit; a fresh install always takes the
+  currently cached one. Holding an old version is only ever a side effect of not updating yet.
+- **No whole-bundle transaction.** A five-element install that fails on its third element leaves
+  the first two landed, reported, not rolled back — by design, the same way a partial update is.
+- **No automatic cleanup for a `runner.docker` hive service.** Uninstalling drops the supervisor's
+  knowledge of it; the container itself survives until you `docker stop`/`docker rm` it yourself.
+
+## See also
+
+[[Marketplace]] for the installer's side of all of this — scopes, sources, the public ADI Store.
+[[Agents]], [[Tools]], [[Dashboards]] for each kind's own full contract. [[Secrets]] for what a
+declared-but-missing secret actually means at launch.
