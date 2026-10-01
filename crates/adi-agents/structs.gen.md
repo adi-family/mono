@@ -162,7 +162,7 @@ pub struct Agent<Args> {
 
 ### struct `PromptToken`
 
-One token of a prompt: the id the encoder produced, and the exact bytes it produced it from.
+A token ID and its display text.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,7 +175,7 @@ pub struct PromptToken {
 
 ### enum `Source`
 
-Where a piece of the conversation came from — which is what turns "8k tokens repeated" into something actionable, because the fix differs completely by source. Repetition in tool *output* is the agent re-reading something; in tool *input* it is a literal that wanted to be a variable; in the user's own text it is a prompt preamble that wanted to be a system prompt.
+Origin of a transcript segment.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -191,7 +191,7 @@ pub enum Source {
 
 ### enum `Shape`
 
-What a repeated run looks like, which is the whole basis for suggesting what to do about it.
+Content category used to suggest ways to reduce repetition.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,7 +239,7 @@ pub struct Repeat {
 
 ### struct `NearDuplicates`
 
-A group of segments that are nearly, but not exactly, the same thing.
+Segments grouped by similar token fingerprints; may include exact copies.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,7 +271,7 @@ pub struct TokenReport {
 
 ### struct `Options`
 
-Knobs, so the endpoint can widen the net without a rebuild.
+Exact-repeat reporting limits.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +283,7 @@ pub struct Options {
 
 ### struct `Segment`
 
-One piece of text that was sent, and what it was.
+Tokenized transcript segment.
 
 ```rust
 struct Segment {
@@ -299,7 +299,7 @@ struct Segment {
 
 ### struct `RawRepeat`
 
-One repeated run, as the suffix machinery sees it: a length, how often it occurs, and where. Token offsets, not text — `super` owns the mapping back to what a human reads.
+A repeated run in token offsets; the caller maps it back to transcript locations.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]

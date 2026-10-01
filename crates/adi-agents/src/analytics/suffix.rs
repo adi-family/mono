@@ -1,18 +1,8 @@
 //! Exact repeated runs in a stream of token ids.
 //!
-//! The question this answers is "what did we send more than once, and how much did saying it again
-//! cost?" — so the unit is a *maximal repeat*: the longest run that occurs in at least two places and
-//! cannot be extended left or right without losing one of them. Maximality is what keeps the report
-//! readable. A 200-token block that appears three times also contains a 199-token block that appears
-//! three times, and every suffix of it besides; without maximality the top of the list is one finding
-//! written out two hundred times.
-//!
-//! The machinery is the textbook one — suffix array, LCP array, then the LCP-interval stack walk —
-//! because the alternative (hash every window of every length) is the same answer computed worse.
-//! Everything here is generic over `&[u32]`: it never learns that the ids came from a tokenizer, and
-//! the caller never learns that a suffix array was involved.
-//!
-//! Where the textbook is, for anyone reading a line and wondering why it is written that way:
+//! Maximal repeats cannot extend left or right without losing an occurrence. Their candidates come
+//! from a suffix array and LCP-interval walk; selection then counts only unclaimed, disjoint copies.
+//! Algorithm references:
 //!
 //! - Suffix array by prefix doubling with a counting sort, and the LCP array —
 //!   <https://cp-algorithms.com/string/suffix-array.html>. [`sort_cyclic_shifts`] is that article's
@@ -24,17 +14,14 @@
 //!   *Replacing suffix trees with enhanced suffix arrays*, J. Discrete Algorithms 2(1), 2004,
 //!   <https://doi.org/10.1016/S1570-8667(03)00065-0>.
 //!
-//! What is *not* from the textbook is everything after the walk — non-overlapping occurrences,
-//! dropping a repeat that lies inside one already reported, the site cap. Those are about what makes
-//! a readable finding rather than about what makes a correct repeat, and each says so where it sits.
+//! Disjoint occurrence selection and the site cap are reporting rules, separate from those algorithms.
 
-/// The most occurrence offsets kept for one repeat. A repeat that shows up four thousand times is a
-/// finding at ten occurrences and the same finding at four thousand; the count is reported in full,
-/// only the list of *where* is bounded, and it is bounded because it is drawn.
+use std::collections::BinaryHeap;
+
+/// Cap displayed locations without truncating the occurrence count.
 const MAX_SITES: usize = 64;
 
-/// One repeated run, as the suffix machinery sees it: a length, how often it occurs, and where. Token
-/// offsets, not text — [`super`] owns the mapping back to what a human reads.
+/// A repeated run in token offsets; the caller maps it back to transcript locations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RawRepeat {
     /// Length of the repeated run, in tokens.
@@ -46,31 +33,47 @@ pub(super) struct RawRepeat {
 }
 
 impl RawRepeat {
-    /// What repeating it cost: every occurrence after the first is a run of tokens that carried no
-    /// information the model had not already been given.
+    /// Tokens in every counted occurrence after the first.
     pub(super) fn wasted(&self) -> usize {
         self.len * (self.count - 1)
     }
 }
 
-/// Every maximal repeat of at least `min_len` tokens, worst offender first.
+/// Up to `keep` maximal repeats of at least `min_len` tokens, greatest disjoint saving first.
 ///
-/// `keep` bounds the answer, not the search: all repeats are found, and the `keep` most wasteful are
-/// the ones described in full. The stream is expected to carry a unique separator between logically
-/// distinct pieces (see [`super::SEPARATOR_BASE`]) — that is what stops a "repeat" from being an
-/// artefact of two unrelated texts having been laid end to end.
+/// The caller provides positive token ids and unique separators between distinct pieces of text.
+/// Selected occurrences are disjoint within and across findings, so their savings can be summed.
 pub(super) fn maximal_repeats(s: &[u32], min_len: usize, keep: usize) -> Vec<RawRepeat> {
-    if s.len() < min_len * 2 || min_len == 0 || keep == 0 {
+    if min_len == 0 || min_len > s.len() / 2 || keep == 0 {
         return Vec::new();
     }
     let sa = suffix_array(s);
     let lcp = lcp_array(s, &sa);
 
-    // Every LCP-interval is a candidate: the suffixes it spans share a prefix, and that shared prefix
-    // is a repeat. The stack walk that enumerates the intervals in one pass is Abouelhoda–Kurtz–
-    // Ohlebusch's (see the module docs). Collected as (wasted, len, lo, hi) rather than materialized,
-    // because materializing every interval's occurrence list is quadratic and all but `keep` of them
-    // are about to be thrown away.
+    // Unique tokens (including segment separators) cannot belong to a repeat. Excluding them keeps
+    // the copy-count bound tight when many individually separated blocks share the same content.
+    let mut available = 0usize;
+    let mut group = 0usize;
+    for end in 1..=sa.len() {
+        if end == sa.len() || s[sa[end] as usize] != s[sa[group] as usize] {
+            if end - group > 1 {
+                available += end - group;
+            }
+            group = end;
+        }
+    }
+
+    // A prefix count of changes in preceding tokens makes left-maximality an O(1) interval query.
+    // Scanning each interval instead is quadratic on a stream of one repeated token.
+    let mut left_changes = vec![0usize; sa.len()];
+    let preceding = |offset: u32| (offset as usize).checked_sub(1).map(|i| s[i]);
+    for i in 1..sa.len() {
+        left_changes[i] =
+            left_changes[i - 1] + usize::from(preceding(sa[i - 1]) != preceding(sa[i]));
+    }
+
+    // LCP intervals are (saving upper bound, length, first suffix, last suffix). Bound the copy count
+    // by available space as well as raw matches: overlapping matches can otherwise inflate it to n².
     let mut found: Vec<(usize, usize, usize, usize)> = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
     for i in 0..=lcp.len() {
@@ -82,9 +85,11 @@ pub(super) fn maximal_repeats(s: &[u32], min_len: usize, keep: usize) -> Vec<Raw
             }
             stack.pop();
             // The interval spans sa[top_lo..=i]: that many suffixes share a prefix of `top_h` tokens.
-            if top_h >= min_len && left_maximal(s, &sa[top_lo..=i]) {
-                let count = i - top_lo + 1;
-                found.push((top_h * (count - 1), top_h, top_lo, i));
+            if top_h >= min_len && left_changes[i] != left_changes[top_lo] {
+                let count = (i - top_lo + 1).min(available / top_h);
+                if count >= 2 {
+                    found.push((top_h * (count - 1), top_h, top_lo, i));
+                }
             }
             lo = top_lo;
         }
@@ -93,109 +98,72 @@ pub(super) fn maximal_repeats(s: &[u32], min_len: usize, keep: usize) -> Vec<Raw
         }
     }
 
-    // Worst first, then materialize only as far down as `keep` survivors take us: a repeat that lies
-    // inside one already kept is the same waste counted twice (the long block and the path inside it),
-    // and reporting both would have the rail say the conversation wasted more than it has.
-    found.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    // Materialize lazily. A candidate may only win when its actual saving beats every remaining
+    // upper bound; limiting the old raw ranking before this step could discard the best finding.
+    let mut pending = BinaryHeap::from(found);
     let mut out: Vec<RawRepeat> = Vec::new();
     let mut claimed: Vec<(usize, usize)> = Vec::new();
-    for (_, len, lo, hi) in found {
-        if out.len() >= keep {
+    while let Some((_, len, lo, hi)) = pending.pop() {
+        if out.len() >= keep || available / 2 < min_len {
             break;
+        }
+        if len > available / 2 {
+            continue;
         }
         let mut starts: Vec<usize> = sa[lo..=hi].iter().map(|&x| x as usize).collect();
         starts.sort_unstable();
-        let starts = non_overlapping(&starts, len);
+        let starts = non_overlapping(&starts, len, &claimed);
         if starts.len() < 2 {
             continue;
         }
-        if starts.iter().any(|&st| covered(&claimed, st, len)) {
+        let exact = (len * (starts.len() - 1), len, lo, hi);
+        if pending.peek().is_some_and(|next| exact < *next) {
+            pending.push(exact);
             continue;
         }
+        available -= len * starts.len();
         claimed.extend(starts.iter().map(|&st| (st, st + len)));
+        claimed.sort_unstable();
         out.push(RawRepeat {
             len,
             count: starts.len(),
             starts: starts.into_iter().take(MAX_SITES).collect(),
         });
     }
-    // Materialization drops overlapping occurrences, so a repeat's cost is only final here.
-    out.sort_unstable_by_key(|r| std::cmp::Reverse(r.wasted()));
     out
 }
 
-/// Whether the run shared by these suffixes is *left*-maximal — whether the token before it differs
-/// somewhere. When every occurrence is preceded by the same token, this run is the tail of a longer
-/// repeat that the walk will report on its own, and reporting this one too says the same thing twice.
-fn left_maximal(s: &[u32], suffixes: &[u32]) -> bool {
-    let mut prev: Option<u32> = None;
-    for &start in suffixes {
-        let start = start as usize;
-        // A run at the very start of the stream has nothing before it to match, so nothing can extend
-        // leftward through every occurrence.
-        if start == 0 {
-            return true;
-        }
-        let before = s[start - 1];
-        match prev {
-            None => prev = Some(before),
-            Some(p) if p != before => return true,
-            Some(_) => {}
-        }
-    }
-    false
-}
-
-/// Thin `starts` down to occurrences that do not sit on top of each other.
-///
-/// A run of one repeated token matches itself at every offset; counted raw, "aaaa" would report three
-/// copies of "aaa" and claim two of them were wasted. Only occurrences that occupy distinct tokens
-/// were actually paid for twice.
-fn non_overlapping(starts: &[usize], len: usize) -> Vec<usize> {
+/// Greedily take the earliest unclaimed copy; equal-length intervals make this a maximum-size set.
+/// `starts` is sorted; `claimed` is sorted and disjoint.
+fn non_overlapping(starts: &[usize], len: usize, claimed: &[(usize, usize)]) -> Vec<usize> {
     let mut out: Vec<usize> = Vec::with_capacity(starts.len());
     let mut end = 0usize;
-    for (i, &st) in starts.iter().enumerate() {
-        if i == 0 || st >= end {
-            out.push(st);
-            end = st + len;
+    let mut claim = 0usize;
+    for &st in starts {
+        if st < end {
+            continue;
         }
+        while claim < claimed.len() && claimed[claim].1 <= st {
+            claim += 1;
+        }
+        if claim < claimed.len() && claimed[claim].0 < st + len {
+            continue;
+        }
+        out.push(st);
+        end = st + len;
     }
     out
-}
-
-/// Whether `[start, start + len)` lies mostly inside a range already spoken for by a repeat reported
-/// earlier (which, given the ordering, wasted more). Mostly rather than wholly: a repeat that shares
-/// all but a token or two with one already listed is not a second finding.
-fn covered(claimed: &[(usize, usize)], start: usize, len: usize) -> bool {
-    let end = start + len;
-    let mut inside = 0usize;
-    for &(cs, ce) in claimed {
-        let lo = start.max(cs);
-        let hi = end.min(ce);
-        if lo < hi {
-            inside += hi - lo;
-        }
-    }
-    inside * 10 >= len * 7
 }
 
 /// The suffix array of `s`: the start offsets of every suffix, in lexicographic order.
 ///
-/// Built by prefix doubling with a counting sort at each round — O(n log n), where the sort-based
-/// spelling of the same algorithm is O(n log² n). At a few hundred thousand tokens that is the
-/// difference between an endpoint that answers and one that is quietly given up on.
-///
-/// The algorithm sorts *cyclic shifts*, which agree with suffixes only when the stream ends in
-/// something unique and smallest — so a `0` terminator is appended here, and the caller guarantees
-/// (by construction, see [`super::TOKEN_BASE`]) that no real id is `0`.
+/// Prefix doubling with counting sort takes O(n log n). Cyclic shifts agree with suffixes after
+/// appending a unique smallest terminator; the caller reserves `0` for this purpose.
 fn suffix_array(s: &[u32]) -> Vec<u32> {
     let mut buf: Vec<u32> = Vec::with_capacity(s.len() + 1);
     buf.extend_from_slice(s);
     buf.push(0);
-    // The counting sort inside allocates one slot per *value*, so it must be handed a dense alphabet:
-    // ids that happen to be sparse — separators chosen near the top of the range, say — would
-    // otherwise ask for a table the size of their largest element rather than of the data. Ranking is
-    // order-preserving, so the terminator stays both smallest and unique.
+    // Compress sparse ids so counting-sort memory depends on input size, not the largest id.
     compress(&mut buf);
     let mut sa = sort_cyclic_shifts(&buf);
     // The first entry is the terminator's own suffix, which is not a suffix of `s`.
@@ -203,8 +171,7 @@ fn suffix_array(s: &[u32]) -> Vec<u32> {
     sa
 }
 
-/// Replace every value with its rank among the distinct values present, so the alphabet is exactly as
-/// large as the data is varied.
+/// Replace values with order-preserving dense ranks.
 fn compress(s: &mut [u32]) {
     let mut seen: Vec<u32> = s.to_vec();
     seen.sort_unstable();
@@ -282,11 +249,8 @@ fn sort_cyclic_shifts(s: &[u32]) -> Vec<u32> {
 
 /// The LCP array in Kasai's layout: `lcp[i]` is how many tokens `sa[i]` and `sa[i + 1]` share.
 ///
-/// Linear because it walks the suffixes in *stream* order rather than sorted order: dropping the
-/// first token of a suffix can shorten its overlap with its neighbour by at most one, so the match
-/// length carries over between steps instead of being recomputed. That is the whole trick of
-/// <https://doi.org/10.1007/3-540-48194-X_17>, and `k = k.saturating_sub(1)` at the bottom of the
-/// loop is where it is spent.
+/// Dropping the first token shortens the match by at most one, so carrying `k` forward keeps this
+/// linear (Kasai et al.; see module references).
 fn lcp_array(s: &[u32], sa: &[u32]) -> Vec<u32> {
     let n = sa.len();
     if n == 0 {
@@ -317,14 +281,11 @@ fn lcp_array(s: &[u32], sa: &[u32]) -> Vec<u32> {
 mod tests {
     use super::*;
 
-    /// Turn a byte string into a token stream in the shape the real caller produces: ids offset off
-    /// zero, so the terminator stays unique and smallest.
+    /// Reserve zero for the terminator, as the production caller does.
     fn stream(text: &str) -> Vec<u32> {
         text.bytes().map(|b| u32::from(b) + 1).collect()
     }
 
-    /// The suffix array is the sorted suffixes — checked against the brute-force answer, which is the
-    /// definition rather than a reimplementation.
     #[test]
     fn suffix_array_matches_a_plain_sort() {
         for text in ["banana", "mississippi", "aaaa", "abcabcabc", "a"] {
@@ -349,8 +310,6 @@ mod tests {
         }
     }
 
-    /// The whole point, end to end: a phrase said three times is found once, at its full length, with
-    /// all three sites — not as a pile of its own suffixes.
     #[test]
     fn finds_the_repeated_phrase_once_at_full_length() {
         let s = stream("the quick fox. XX. the quick fox. YY. the quick fox.");
@@ -366,8 +325,6 @@ mod tests {
         assert_eq!(top.wasted(), top.len * 2);
     }
 
-    /// Overlapping matches are not two copies of anything: "aaaa" contains one "aaa" that was paid
-    /// for, not two.
     #[test]
     fn overlapping_occurrences_do_not_count_as_waste() {
         let s = stream("aaaaaaaa");
@@ -381,15 +338,12 @@ mod tests {
         }
     }
 
-    /// A stream with nothing said twice reports nothing — the empty answer has to be reachable, or
-    /// every clean conversation grows a finding.
     #[test]
     fn a_stream_without_repeats_is_empty() {
         let s = stream("abcdefghijklmnop");
         assert!(maximal_repeats(&s, 4, 10).is_empty());
     }
 
-    /// A separator between two texts is unique, so no reported repeat may span one.
     #[test]
     fn repeats_never_span_a_separator() {
         let mut s = stream("hello world hello");
@@ -404,6 +358,87 @@ mod tests {
                     "repeat at {st} len {} crosses the separator at {sep}",
                     r.len
                 );
+            }
+        }
+    }
+    #[test]
+    fn oversized_minimum_returns_no_repeats() {
+        assert!(maximal_repeats(&stream("abcabc"), usize::MAX, 10).is_empty());
+    }
+
+    #[test]
+    fn keep_selects_the_largest_non_overlapping_saving() {
+        let repeats = maximal_repeats(&stream("aaaaaaaaaaXbcdefghiYbcdefghi"), 2, 1);
+        assert_eq!(repeats.len(), 1);
+        assert_eq!(repeats[0].len, 8);
+        assert_eq!(repeats[0].wasted(), 8);
+    }
+
+    #[test]
+    fn different_findings_do_not_claim_the_same_tokens() {
+        let repeats = maximal_repeats(&stream("abcdef#defghi$abcdefghi"), 4, 10);
+        let mut claimed = Vec::new();
+        for repeat in repeats {
+            for start in repeat.starts {
+                let end = start + repeat.len;
+                assert!(claimed.iter().all(|&(a, b)| end <= a || start >= b));
+                claimed.push((start, end));
+            }
+        }
+    }
+
+    #[test]
+    fn independent_occurrences_survive_an_overlap_with_another_finding() {
+        let s = stream("abcdefghijklmnopqrstuvwx#abcdefghijklmnopqrst$stuvwx%stuvwx");
+        let repeats = maximal_repeats(&s, 6, 10);
+        assert!(repeats.iter().any(|r| r.len == 20 && r.count == 2));
+        assert!(repeats.iter().any(|r| r.len == 6 && r.count == 2));
+    }
+
+    #[test]
+    fn site_cap_preserves_the_full_count() {
+        let s: Vec<u32> = (0..100).flat_map(|i| [1, 2, i + 3]).collect();
+        let repeats = maximal_repeats(&s, 2, 10);
+        assert_eq!(repeats.len(), 1);
+        assert_eq!(repeats[0].count, 100);
+        assert_eq!(repeats[0].starts.len(), MAX_SITES);
+        assert_eq!(repeats[0].wasted(), 198);
+    }
+
+    #[test]
+    fn top_saving_matches_exhaustive_maximal_substrings() {
+        for n in 2..=10 {
+            for bits in 0..1usize << n {
+                let s: Vec<u32> = (0..n).map(|i| 1 + ((bits >> i) & 1) as u32).collect();
+                let mut best = 0;
+                for len in 1..=n / 2 {
+                    for start in 0..=n - len {
+                        let pattern = &s[start..start + len];
+                        let sites: Vec<usize> = s
+                            .windows(len)
+                            .enumerate()
+                            .filter_map(|(i, window)| (window == pattern).then_some(i))
+                            .collect();
+                        let first = sites[0];
+                        let left = first == 0 || sites.iter().any(|&i| s[i - 1] != s[first - 1]);
+                        let right = sites.iter().any(|&i| i + len == n)
+                            || sites.iter().any(|&i| s[i + len] != s[first + len]);
+                        if !left || !right {
+                            continue;
+                        }
+                        let mut count = 0;
+                        let mut end = 0;
+                        for i in sites {
+                            if i >= end {
+                                count += 1;
+                                end = i + len;
+                            }
+                        }
+                        best = best.max(len * (count - 1));
+                    }
+                }
+                let repeats = maximal_repeats(&s, 1, 1);
+                assert_eq!(repeats.first().map_or(0, RawRepeat::wasted), best, "{s:?}");
             }
         }
     }
