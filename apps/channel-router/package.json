@@ -1,0 +1,21 @@
+{
+  "name": "adi-channel-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Channel router on Cloudflare Workers: webhooks from Telegram/Slack -> a Durable Object per node holding its outbound WebSocket -> POST /send back out, bot credentials never leaving the router.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.21",
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.2.0",
+    "wrangler": "^4.0.0"
+  }
+}

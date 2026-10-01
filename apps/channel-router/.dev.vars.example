@@ -1,0 +1,16 @@
+# Copy to `.dev.vars` for `wrangler dev` (git-ignored). In production these are set with
+# `wrangler secret put <NAME>` instead of living in a file.
+
+# Signs node tokens and link codes. Use a long random value: `openssl rand -hex 32`.
+ROUTER_SECRET="dev-only-change-me"
+
+# Gates POST /register -- a node holds this too (see docs/channels.md §8 for why that's
+# acceptable), it is not browser-facing. `openssl rand -hex 32`.
+ROUTER_ADMIN_SECRET="dev-only-change-me-too"
+
+# The one Telegram bot ADI runs (api.telegram.org -> BotFather). TELEGRAM_SECRET_TOKEN is the
+# `secret_token` set on this bot's `setWebhook` call, echoed back as
+# X-Telegram-Bot-Api-Secret-Token on every delivery -- that header, not an HMAC, is Telegram's
+# whole webhook-authenticity story.
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_SECRET_TOKEN=""
