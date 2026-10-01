@@ -1,0 +1,42 @@
+name: Elements
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'design/**'
+      - 'scripts/elements*'
+      - 'scripts/elements-tests/**'
+      - '.github/workflows/elements.yml'
+  pull_request:
+    paths:
+      - 'design/**'
+      - 'scripts/elements*'
+      - 'scripts/elements-tests/**'
+      - '.github/workflows/elements.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: scripts/elements-tests/package-lock.json
+      - name: Install test and build dependencies
+        run: |
+          npm ci --prefix scripts/elements-tests
+          npm install -g esbuild@0.28.0
+      - name: Install Chromium
+        run: scripts/elements-tests/node_modules/.bin/playwright install --with-deps chromium
+      - name: Type-check, build, and test behavior
+        run: scripts/elements.sh test
+      - name: Gallery smoke checks
+        run: node scripts/elements.test.mjs --shared

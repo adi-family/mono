@@ -21,6 +21,17 @@ class AdiButton extends AdiElement {
     `;
   }
 
+  override setup() {
+    // Links have no native disabled state; also suppress clicks aimed at the host.
+    const preventDisabledActivation = (event: Event) => {
+      if (!this.hasAttribute("disabled")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    this.addEventListener("click", preventDisabledActivation, { capture: true });
+    this.addEventListener("auxclick", preventDisabledActivation, { capture: true });
+  }
+
   override update() {
     const control = this.must<HTMLButtonElement | HTMLAnchorElement>(".btn");
     const size = this.getAttribute("size") === "sm" ? 14 : 16;
@@ -49,6 +60,8 @@ class AdiButton extends AdiElement {
     } else {
       control.href = this.attr("href");
       control.setAttribute("aria-disabled", String(disabled));
+      if (disabled) control.tabIndex = -1;
+      else control.removeAttribute("tabindex");
       if (this.hasAttribute("target")) control.target = this.attr("target");
     }
   }

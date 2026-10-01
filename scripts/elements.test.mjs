@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { launchElementsBrowser } from "./elements-browser.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const { values } = parseArgs({ options: {
@@ -15,18 +15,7 @@ const { values } = parseArgs({ options: {
   shared: { type: "boolean", default: false },
   screenshot: { type: "string" },
 } });
-let chromium;
-try {
-  ({ chromium } = await import("playwright"));
-} catch {
-  ({ chromium } = await import("../apps/docs/node_modules/playwright/index.mjs"));
-}
-const chrome = process.env.ELEMENTS_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const browser = await chromium.launch({
-  ...(existsSync(chrome) ? { executablePath: chrome } : {}),
-  headless: true,
-  args: ["--allow-file-access-from-files"],
-});
+const browser = await launchElementsBrowser();
 const scratch = await mkdtemp(join(tmpdir(), "adi-elements-test-"));
 try {
   const fixture = join(scratch, "index.html");

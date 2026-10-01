@@ -39,17 +39,20 @@ class AdiSegmented extends AdiElement {
       this.#choose(option.getAttribute("value") ?? "");
     });
 
-    // Match native radio groups: one tab stop with arrow-key selection.
+    // Arrow keys wrap selection and focus through enabled options.
     options.addEventListener("keydown", (event) => {
       const step = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
       if (!step) return;
       const options = this.options;
       const at = options.findIndex((o) => o.getAttribute("value") === this.value);
-      const next = options[(at + step + options.length) % options.length];
-      if (!next) return;
-      event.preventDefault();
-      this.#choose(next.getAttribute("value") ?? "");
-      next.focus();
+      for (let offset = 1; offset <= options.length; offset++) {
+        const next = options[(at + step * offset + options.length) % options.length];
+        if (!next || ("disabled" in next && next.disabled)) continue;
+        event.preventDefault();
+        this.#choose(next.getAttribute("value") ?? "");
+        next.focus();
+        break;
+      }
     });
   }
 

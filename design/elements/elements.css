@@ -155,7 +155,7 @@ a { color: inherit; text-decoration: none; }
 :host(adi-button[square][size="sm"]) .btn { width: 24px; height: 24px; }
 :host(adi-button[square]) .btn:hover { background: var(--bg-hover); color: var(--ink); }
 
-:host(adi-button[disabled]) .btn { opacity: .5; cursor: default; pointer-events: none; }
+:host(adi-button[disabled]) .btn { opacity: .5; cursor: default; }
 
 :host(adi-input) { display: inline-block; width: 200px; vertical-align: middle; }
 :host(adi-input[wide]) { display: block; width: 100%; }

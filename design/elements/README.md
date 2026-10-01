@@ -42,7 +42,8 @@ form reset restores their defaults, the `value` attribute supplies the starting 
 ```sh
 scripts/elements.sh build  # writes target/elements
 scripts/elements.sh check  # checks TypeScript separately
-node scripts/elements.test.mjs --shared  # browser regression checks (requires Playwright)
+scripts/elements.sh test   # type-checks, builds, and runs browser behavioral tests
+node scripts/elements.test.mjs --shared  # gallery/style smoke checks after building
 ```
 
 All element sources are TypeScript. Write relative imports with `.ts`, such as `./base.ts`.
@@ -53,6 +54,48 @@ point back to the TypeScript files. Builds skip type checking; `check` and CI ru
 Trunk runs the build through `crates/adi-webapp/Trunk.toml`, then copies `target/elements` into
 `dist/elements`. Pages load `/elements/adi-elements.js` from that output. Trunk watches `design/`
 for rebuilds; CI runs the type check before release builds.
+
+## Behavioral tests
+
+The suite uses Node's test runner and Playwright with a real headless Chromium browser, so
+Shadow DOM, native forms, focus, keyboard input, and dialogs behave as they do in the app.
+Requires Node 22+ and the build tools above. Install the small, dedicated test dependency set:
+
+```sh
+npm ci --prefix scripts/elements-tests
+scripts/elements-tests/node_modules/.bin/playwright install chromium
+scripts/elements.sh test
+```
+
+On macOS, an installed Google Chrome is used automatically. Set `ELEMENTS_CHROME` to use
+another Chrome/Chromium executable. Linux CI installs Playwright's Chromium with `--with-deps`.
+An existing `apps/docs` Playwright installation also works for local runs.
+
+Tests live in [`scripts/elements-tests`](../../scripts/elements-tests). Each named case has
+a fresh browser context and mounts only its own fixture. The suite loads built modules from
+local files, blocks HTTP requests, and needs no running app, API, credentials, or listening port.
+Clipboard calls are stubbed; file-picker events carry in-memory test files.
+
+Coverage includes form submission/reset and events, focus preservation, button and segmented
+keyboard interaction, composer send/stop/asap and attachments, question replies, table sorting
+and row actions, transcript reconciliation, modal closing/focus, dismissal, removal, and copying.
+The API-backed `adi-chat` and microphone integration are not covered by this behavioral suite.
+
+Run a focused case (still type-checks and rebuilds), or rerun an already built suite:
+
+```sh
+scripts/elements.sh test --test-name-pattern='segmented'
+node --test scripts/elements-tests/*.test.mjs
+```
+
+The `Elements` GitHub Actions workflow runs the behavioral suite and gallery smoke checks on
+pull requests and pushes to `main` that touch elements or their test/build infrastructure.
+
+To add a case, import `test` from `./helpers.mjs`, call `await mount(markup)`, interact through
+Playwright's `page` locators, then assert observable values and emitted events with
+`node:assert/strict`. Prefer actual clicks, typing, and key presses; use `page.evaluate` for
+public properties, event capture, and browser APIs that cannot receive real automation input.
+Uncaught browser errors fail the test automatically.
 
 ## The elements
 

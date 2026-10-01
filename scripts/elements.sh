@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build browser modules or check types in design/elements.
+# Build, type-check, or behavior-test design/elements.
 set -euo pipefail
 shopt -s nullglob
 
@@ -48,8 +48,14 @@ check() {
 case "${1:-}" in
   build) build "${2:-}" ;;
   check) check ;;
+  test)
+    shift
+    check
+    build
+    node --test "$@" "$ROOT"/scripts/elements-tests/*.test.mjs
+    ;;
   *)
-    echo "usage: scripts/elements.sh build [OUT] | check" >&2
+    echo "usage: scripts/elements.sh build [OUT] | check | test [NODE_TEST_OPTIONS]" >&2
     exit 2
     ;;
 esac

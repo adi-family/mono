@@ -1,0 +1,7 @@
+{
+  "name": "adi-elements-tests",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "devDependencies": { "playwright": "1.63.0" }
+}
