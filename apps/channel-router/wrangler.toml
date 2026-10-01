@@ -1,0 +1,38 @@
+# Cloudflare **Worker** config for the channel router (a Worker, not Pages, because a Durable
+# Object -- the held-open per-node WebSocket and its offline queue -- is the one piece of state
+# this design cannot do without, and Pages Functions cannot hold one; see docs/channels.md
+# "Decisions taken" #1).
+#
+# Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
+#   npx wrangler secret put ROUTER_SECRET
+#   npx wrangler secret put ROUTER_ADMIN_SECRET
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_SECRET_TOKEN
+#
+# Local:  npx wrangler dev   (reads secrets from .dev.vars -- see .dev.vars.example)
+# Deploy: Igor's call (ADI-MONO-124) -- not run from here.
+
+name = "adi-channel-router"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+# Shown to an operator building `t.me/<bot>?start=<code>`. Public (it's in the bot's own
+# profile URL), so it lives here rather than as a secret.
+TELEGRAM_BOT_USERNAME = "AdiBot"
+
+[[durable_objects.bindings]]
+name = "NODE_CONNECTION"
+class_name = "NodeConnection"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["NodeConnection"]
+
+[[d1_databases]]
+binding = "ROUTING_KEYS"
+database_name = "adi-channel-router-routing-keys"
+# Real id comes from `wrangler d1 create adi-channel-router-routing-keys` at deploy time
+# (ADI-MONO-124, Igor's call); local dev and tests don't need a real one.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
