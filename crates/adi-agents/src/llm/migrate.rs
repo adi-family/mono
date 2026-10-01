@@ -96,6 +96,12 @@ impl Plan {
 /// Everything [`crate::Agents::list`] and [`LlmBackends::list`] can return — a manifest that cannot
 /// be read is a manifest this must not plan around.
 pub fn plan(agents: &crate::Agents, registry: &LlmBackends) -> Result<Plan> {
+    plan_agents(agents.list()?, registry)
+}
+
+/// Plan only the definitions selected by the caller. The versioned migration uses its covered
+/// agents here; an explicit `llm migrate` still plans the whole store through [`plan`].
+pub(crate) fn plan_agents(agents: Vec<StoredAgent>, registry: &LlmBackends) -> Result<Plan> {
     let existing = registry.list()?;
     // Two indexes over what is already stored: by fingerprint, so an identical configuration reuses
     // a backend somebody already made rather than growing a near-duplicate; and by id, so a name
@@ -110,7 +116,7 @@ pub fn plan(agents: &crate::Agents, registry: &LlmBackends) -> Result<Plan> {
     }
 
     let mut plan = Plan::default();
-    for agent in agents.list()? {
+    for agent in agents {
         if !agent.manifest.backends.is_empty() {
             plan.skipped.push(Skip {
                 agent: agent.name.clone(),
@@ -389,8 +395,18 @@ mod tests {
 
         let backend = registry.get("glm").expect("get").expect("glm");
         assert_eq!(backend.manifest.model, "claude-opus-5");
-        assert_eq!(backend.manifest.settings.as_deref(), Some("~/.claude/settings.glm.json"));
-        assert_eq!(backend.manifest.params.get("effort").and_then(|v| v.as_str()), Some("high"));
+        assert_eq!(
+            backend.manifest.settings.as_deref(),
+            Some("~/.claude/settings.glm.json")
+        );
+        assert_eq!(
+            backend
+                .manifest
+                .params
+                .get("effort")
+                .and_then(|v| v.as_str()),
+            Some("high")
+        );
         // Copied, not moved: an agent resolving no row still has to run.
         assert_eq!(saved.manifest.backend, Some(Backend::HarnessClaudeSdk));
     }
@@ -405,7 +421,10 @@ mod tests {
             agents
                 .save(
                     name,
-                    agent(Backend::HarnessAdi, &[("provider", "zai".into()), ("model", "glm-5.2".into())]),
+                    agent(
+                        Backend::HarnessAdi,
+                        &[("provider", "zai".into()), ("model", "glm-5.2".into())],
+                    ),
                 )
                 .expect("save");
         }
@@ -426,7 +445,10 @@ mod tests {
             agents
                 .save(
                     name,
-                    agent(Backend::HarnessAdi, &[("provider", "zai".into()), ("model", model.into())]),
+                    agent(
+                        Backend::HarnessAdi,
+                        &[("provider", "zai".into()), ("model", model.into())],
+                    ),
                 )
                 .expect("save");
         }
@@ -457,7 +479,10 @@ mod tests {
         agents
             .save(
                 "a",
-                agent(Backend::HarnessAdi, &[("provider", "zai".into()), ("model", "glm-5.2".into())]),
+                agent(
+                    Backend::HarnessAdi,
+                    &[("provider", "zai".into()), ("model", "glm-5.2".into())],
+                ),
             )
             .expect("save");
 

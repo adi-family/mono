@@ -366,6 +366,30 @@ impl Awaits {
     /// # Errors
     /// [`Error::Config`] if the record can't be written.
     pub fn save(&self, record: &Await) -> Result<()> {
+        let _guard = self.mutation_lock()?;
+        self.write_record(record)
+    }
+
+    /// Serialize short record changes across the worker, app requests, and CLI processes. Checks
+    /// run outside this lock; their results are applied only if the observed record still exists
+    /// unchanged. The lock file stays in place so every opener locks the same inode.
+    fn mutation_lock(&self) -> Result<std::fs::File> {
+        let module = self.config.module(MODULE);
+        module.ensure_dir()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        let file = options.open(module.raw_path(".lock"))?;
+        file.lock()?;
+        Ok(file)
+    }
+
+    /// Called only while the mutation lock is held.
+    fn write_record(&self, record: &Await) -> Result<()> {
         let bytes = serde_json::to_vec(record)
             .map_err(|e| Error::Process(format!("couldn't encode an await: {e}")))?;
         self.config
@@ -380,10 +404,36 @@ impl Awaits {
     /// can reach the same await at the same moment, and exactly one of them gets `true`.
     #[must_use]
     pub fn claim(&self, id: &str) -> bool {
+        let Ok(_guard) = self.mutation_lock() else {
+            return false;
+        };
         self.config
             .module(MODULE)
             .remove_raw(&format!("{id}.{RECORD_EXT}"))
             .unwrap_or(false)
+    }
+
+    /// Replace or remove exactly the record a caller observed. Comparing and changing share the
+    /// lock: checking for existence before a separate save would still resurrect a cancellation,
+    /// and claiming by id alone would let an old check consume a newly edited await.
+    fn replace_current(&self, expected: &Await, replacement: Option<&Await>) -> Result<bool> {
+        let _guard = self.mutation_lock()?;
+        if self.get(&expected.id).as_ref() != Some(expected) {
+            return Ok(false);
+        }
+        if let Some(record) = replacement {
+            self.write_record(record)?;
+            Ok(true)
+        } else {
+            Ok(self
+                .config
+                .module(MODULE)
+                .remove_raw(&format!("{}.{RECORD_EXT}", expected.id))?)
+        }
+    }
+
+    fn claim_current(&self, expected: &Await) -> bool {
+        self.replace_current(expected, None).unwrap_or(false)
     }
 
     /// Drop every await belonging to a conversation — what *deleting* one takes with it. Returns how
@@ -603,10 +653,10 @@ pub fn follow_up(store: &Awaits, who: &Caller, req: &Request) -> String {
 /// ones it does have, since a run reaching for the wrong id usually holds a stale one.
 pub fn ignore(store: &Awaits, agent: &str, conv: &str, id: &str) -> Result<Await> {
     let found = mine(store, agent, conv, id)?;
-    if !store.claim(&found.id) {
+    if !store.claim_current(&found) {
         return Err(Error::Arguments(format!(
-            "await {id} fired before this reached it — there is nothing left to ignore, and the \
-             wake is already on its way into this conversation"
+            "await {id} changed or fired before this reached it — list the pending awaits again \
+             before deciding what to ignore"
         )));
     }
     Ok(found)
@@ -637,15 +687,16 @@ pub struct Change {
 /// rewriting the note so the woken turn reads the *reason* rather than the mechanics — all of it
 /// beats dropping the await and registering a replacement, which loses the wake in the gap.
 ///
-/// The record is claimed before it is rewritten, so an await that fires mid-change is reported as
-/// spent rather than quietly resurrected by the save.
+/// The observed record is replaced atomically, so an await that changes or fires mid-change is
+/// reported as stale rather than quietly overwritten or resurrected by the save.
 ///
 /// # Errors
 /// [`Error::Arguments`] when no such await is pending here, when the change leaves it with nothing
 /// to wake on, or when it names a pattern the bus could never match; [`Error::Config`] if the
 /// rewritten record can't be stored.
 pub fn update(store: &Awaits, agent: &str, conv: &str, id: &str, change: &Change) -> Result<Await> {
-    let mut record = mine(store, agent, conv, id)?;
+    let before = mine(store, agent, conv, id)?;
+    let mut record = before.clone();
     let now = now_unix();
     if let Some(note) = &change.note {
         record.note = note.trim().to_string();
@@ -689,13 +740,12 @@ pub fn update(store: &Awaits, agent: &str, conv: &str, id: &str, change: &Change
              too, or keep its events"
         )));
     }
-    if !store.claim(&record.id) {
+    if !store.replace_current(&before, Some(&record))? {
         return Err(Error::Arguments(format!(
-            "await {id} fired while this was being changed — it is spent, so register a new one \
-             with what you wanted instead"
+            "await {id} changed or fired while this was being edited — list the pending awaits \
+             again before applying the change"
         )));
     }
-    store.save(&record)?;
     Ok(record)
 }
 
@@ -775,7 +825,7 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
     for a in store.list() {
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
             if !a.expiry_wakes {
-                let _ = store.claim(&a.id);
+                let _ = store.claim_current(&a);
                 continue;
             }
             if let Some(w) = wake(agents, &store, &a, Cause::Expired, None) {
@@ -808,7 +858,7 @@ fn consider(agents: &Agents, store: &Awaits, a: &Await, cause: Cause<'_>) -> Opt
             if let (Cause::Timer, Some(every)) = (cause, a.every) {
                 let mut rearmed = a.clone();
                 rearmed.at = Some(now_unix().saturating_add(every.max(1)));
-                let _ = store.save(&rearmed);
+                let _ = store.replace_current(a, Some(&rearmed));
             }
             None
         }
@@ -824,7 +874,7 @@ fn wake(
     cause: Cause<'_>,
     check_output: Option<&str>,
 ) -> Option<Woken> {
-    if !store.claim(&a.id) {
+    if !store.claim_current(a) {
         return None;
     }
     let message = wake_message(a, cause, check_output);
@@ -1008,6 +1058,119 @@ mod tests {
             events: vec!["adi.tasks.*".into()],
             ..Request::default()
         }
+    }
+
+    /// Pause the real shell check until the test has changed its pending record. The files are
+    /// only synchronization: neither timing luck nor a live agent is needed to hit the race.
+    #[cfg(unix)]
+    fn during_timer_check<T>(
+        tag: &str,
+        passes: bool,
+        change: impl FnOnce(&Awaits, &Await) -> T,
+    ) -> (Awaits, Await, T, Option<Woken>) {
+        use std::time::{Duration, Instant};
+
+        let store = scratch(tag);
+        std::fs::create_dir_all(store.config().root()).unwrap();
+        let check = format!(
+            "touch started; while [ ! -f release ]; do sleep 0.01; done; exit {}",
+            i32::from(!passes)
+        );
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                every_seconds: Some(60),
+                check: Some(check),
+                cwd: store.config().root().display().to_string(),
+                ..Request::default()
+            },
+        )
+        .unwrap();
+        let worker_store = Awaits::with_config(store.config().clone());
+        let observed = saved.clone();
+        let worker = std::thread::spawn(move || {
+            let agents = Agents::with_config(worker_store.config().clone());
+            consider(&agents, &worker_store, &observed, Cause::Timer)
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !store.config().root().join("started").exists() {
+            assert!(Instant::now() < deadline, "the scratch check did not start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let changed = change(&store, &saved);
+        std::fs::write(store.config().root().join("release"), "").unwrap();
+        let woken = worker.join().unwrap();
+        (store, saved, changed, woken)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn regression_a_failed_timer_check_does_not_recreate_an_ignored_await() {
+        let (store, saved, ignored, _) =
+            during_timer_check("ignore-running", false, |store, saved| {
+                ignore(store, &saved.agent, &saved.conv, &saved.id)
+            });
+        ignored.expect("ignore succeeded while the check was running");
+        assert!(
+            store.get(&saved.id).is_none(),
+            "the check must not undo ignore"
+        );
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn regression_a_failed_timer_check_preserves_a_concurrent_update() {
+        let (store, saved, updated, _) =
+            during_timer_check("update-running", false, |store, saved| {
+                update(
+                    store,
+                    &saved.agent,
+                    &saved.conv,
+                    &saved.id,
+                    &Change {
+                        note: Some("new instructions".into()),
+                        check: Some("true".into()),
+                        after_seconds: Some(3600),
+                        ..Change::default()
+                    },
+                )
+            });
+        let updated = updated.expect("update succeeded while the check was running");
+        assert_eq!(
+            store.get(&saved.id),
+            Some(updated),
+            "a stale check cannot rearm the old record"
+        );
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn regression_a_passing_timer_check_does_not_claim_an_updated_await() {
+        let (store, saved, updated, woken) =
+            during_timer_check("update-passing", true, |store, saved| {
+                update(
+                    store,
+                    &saved.agent,
+                    &saved.conv,
+                    &saved.id,
+                    &Change {
+                        check: Some("false".into()),
+                        after_seconds: Some(3600),
+                        ..Change::default()
+                    },
+                )
+            });
+        let updated = updated.expect("update succeeded while the old check was running");
+        assert!(
+            woken.is_none(),
+            "the passing verdict belongs to the superseded check"
+        );
+        assert_eq!(store.get(&saved.id), Some(updated));
+        let _ = std::fs::remove_dir_all(store.config().root());
     }
 
     /// The rule an automatically registered wake stands on. `adi.agents.run.finished` fires for

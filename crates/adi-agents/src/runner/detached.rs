@@ -397,14 +397,7 @@ impl Runner for DetachedRunner {
     /// caught by it, and a genuine child — whose log was created microseconds before it started —
     /// is not.
     fn is_alive(&self, session: &dyn Session) -> bool {
-        let state = State::read(session);
-        let Some(pid) = state.pid else {
-            return false;
-        };
-        match state.started {
-            Some(started) => detached::pid_alive_as(pid, started),
-            None => detached::pid_alive(pid) && started_before_the_log_stopped(pid, session),
-        }
+        State::read(session).is_alive(session)
     }
 
     /// TERM, then KILL once `grace` is spent.
@@ -523,11 +516,11 @@ impl Runner for DetachedRunner {
         let mut cursor = cursor
             .and_then(|value| serde_json::from_value::<Cursor>(value.clone()).ok())
             .unwrap_or_default();
-        // A pid that no longer names a living process is what makes the log complete. A session
-        // with no pid at all was never started here, so there is nothing to have finished.
-        let done = State::read(session)
-            .pid
-            .is_some_and(|pid| !detached::pid_alive(pid));
+        // The reaper clears the pid, but the session remembers that it started. Use the same
+        // identity-aware liveness check as the run listing so a reused pid cannot hold its log
+        // open either. A session that never started still has no completion to announce.
+        let state = State::read(session);
+        let done = (state.pid.is_some() || session.has_started()) && !state.is_alive(session);
 
         let (bytes, offset) = read_after(session.log_path(), cursor.offset, done, whole);
         cursor.offset = offset;
@@ -590,6 +583,16 @@ struct State {
 }
 
 impl State {
+    fn is_alive(&self, session: &dyn Session) -> bool {
+        let Some(pid) = self.pid else {
+            return false;
+        };
+        match self.started {
+            Some(started) => detached::pid_alive_as(pid, started),
+            None => detached::pid_alive(pid) && started_before_the_log_stopped(pid, session),
+        }
+    }
+
     /// The slot's contents, or an empty state. A slot written by a different runner is not an
     /// error: it reads as "nothing of mine here", which is exactly what it is.
     fn read(session: &dyn Session) -> Self {
@@ -3712,6 +3715,97 @@ mod tests {
             .expect("events");
         assert!(next.events.is_empty(), "{:?}", next.events);
         assert_eq!(next.cursor, batch.cursor);
+    }
+
+    #[test]
+    fn a_reaped_child_finishes_and_keeps_its_unterminated_output() {
+        let session = FakeSession::new("reaped-events")
+            .started()
+            .with_state(json!({ "pid": 4321, "started": 111 }));
+        session.write_log("final answer without a newline");
+        forget_child(
+            session.state_writer().unwrap().as_ref(),
+            Spawned {
+                pid: 4321,
+                started: Some(111),
+            },
+            None,
+        );
+        assert_eq!(State::read(&session).pid, None);
+
+        let runner = DetachedRunner::new(Backend::ProcessClaude);
+        let batch = runner.events(&session, None).expect("completed events");
+        assert_eq!(
+            batch.events,
+            vec![
+                RunEvent::Answer {
+                    text: "final answer without a newline".into()
+                },
+                RunEvent::Finished {
+                    ok: true,
+                    error: None
+                },
+            ]
+        );
+        assert!(
+            runner
+                .events(&session, Some(&batch.cursor))
+                .unwrap()
+                .events
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_old_cleared_child_state_still_finishes() {
+        let session = FakeSession::new("legacy-cleared-events")
+            .started()
+            .with_state(json!({}));
+        session.write_log("old answer without a newline");
+        let batch = DetachedRunner::new(Backend::ProcessClaude)
+            .events(&session, None)
+            .unwrap();
+        assert!(batch.events.iter().any(|event| matches!(event,
+            RunEvent::Answer { text } if text == "old answer without a newline")));
+        assert!(
+            batch
+                .events
+                .iter()
+                .any(|event| matches!(event, RunEvent::Finished { .. }))
+        );
+    }
+
+    #[test]
+    fn a_reused_pid_does_not_keep_the_event_stream_open() {
+        let pid = std::process::id();
+        let started = detached::process_start_millis(pid).expect("current process start");
+        let session = FakeSession::new("reused-pid-events")
+            .started()
+            .with_state(json!({ "pid": pid, "started": started.saturating_sub(60_000) }));
+        session.write_log("completed answer without a newline");
+        let runner = DetachedRunner::new(Backend::ProcessClaude);
+        assert!(!runner.is_alive(&session));
+        let batch = runner.events(&session, None).unwrap();
+        assert!(
+            batch
+                .events
+                .iter()
+                .any(|event| matches!(event, RunEvent::Finished { .. }))
+        );
+        assert!(batch.events.iter().any(|event| matches!(event,
+            RunEvent::Answer { text } if text == "completed answer without a newline")));
+    }
+
+    #[test]
+    fn a_session_that_never_started_has_no_completion_event() {
+        let session = FakeSession::new("unstarted-events");
+        assert!(
+            DetachedRunner::new(Backend::ProcessClaude)
+                .events(&session, None)
+                .unwrap()
+                .events
+                .is_empty()
+        );
     }
 
     /// The adi loop's own event lines, and the cursor doing its job: a turn still writing hands

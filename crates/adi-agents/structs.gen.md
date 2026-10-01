@@ -834,7 +834,7 @@ enum Calls {
 
 ### struct `RunCtx`
 
-Where in the run one round sits, carried down into every provider's round fn for no reason but a failure report: which round this was out of how many, and where its sidecar file (the untruncated report a capped one in the error can point at) belongs.
+Where in the run one round sits, for failure reports and the identities of tool calls from providers that identify calls only by their position within a response.
 
 ```rust
 struct RunCtx<'a> {

@@ -158,7 +158,7 @@ pub(crate) fn run_turn(
     // that launched it are different processes sharing one directory, so the store *is* the channel.
     let store = crate::store::SessionStore::new(sessions_dir);
     let turns = store.turns(&agent.name, conv_id);
-    if turns.iter().all(|t| t.text.trim().is_empty()) {
+    if !turns.iter().any(has_content) {
         return Err(Error::Process(
             "the conversation has no messages to answer".to_string(),
         ));
@@ -216,8 +216,8 @@ pub(crate) fn probe(
 }
 
 struct ToolCall {
-    /// The provider's own id where it has one; a synthesized `call-N` where it doesn't (Gemini and
-    /// Ollama identify a call only by position, so the loop supplies what the transcript needs).
+    /// The provider's own id where it has one; a synthesized round-and-position id where it
+    /// doesn't, so Gemini and Ollama calls remain distinct across a turn's entire timeline.
     id: String,
     name: String,
     input: Value,
@@ -414,9 +414,8 @@ impl Calls {
     }
 }
 
-/// Where in the run one round sits, carried down into every provider's round fn for no reason
-/// but a failure report: which round this was out of how many, and where its sidecar file (the
-/// untruncated report a capped one in the error can point at) belongs.
+/// Where in the run one round sits, for failure reports and the identities of tool calls from
+/// providers that identify calls only by their position within a response.
 struct RunCtx<'a> {
     round: u64,
     max_rounds: u64,
@@ -432,6 +431,10 @@ impl<'a> RunCtx<'a> {
             max_rounds,
             session,
         }
+    }
+
+    fn tool_call_id(&self, index: usize) -> String {
+        format!("call-{}-{index}", self.round)
     }
 }
 
@@ -783,6 +786,10 @@ struct Said<'a> {
     images: Vec<Attachment>,
 }
 
+fn has_content(turn: &Turn) -> bool {
+    !turn.text.trim().is_empty() || !turn.images.is_empty() || !turn.steps.is_empty()
+}
+
 /// The transcript as messages, blank turns dropped and neighbours of the same role joined into one.
 ///
 /// Joining is not tidiness. A turn that heard a message while it was working records that message as
@@ -794,11 +801,8 @@ struct Said<'a> {
 /// its own is the whole message, and dropping it would send a request that answers a picture nobody
 /// attached.
 fn merged<'a>(turns: &'a [Turn], store: &crate::store::SessionStore) -> Vec<Said<'a>> {
-    let said = |turn: &Turn| {
-        !turn.text.trim().is_empty() || !turn.images.is_empty() || !turn.steps.is_empty()
-    };
     let mut out: Vec<Said<'a>> = Vec::with_capacity(turns.len());
-    for turn in turns.iter().filter(|t| said(t)) {
+    for turn in turns.iter().filter(|t| has_content(t)) {
         let words = words_of(turn, store);
         match out.last_mut() {
             Some(prev) if prev.role == turn.role => {
@@ -1186,7 +1190,12 @@ fn openai_round(
         run,
         secret: Some(&key),
     };
-    let resp = post_json(&url, &[("authorization", bearer.as_str())], &body, &http_ctx)?;
+    let resp = post_json(
+        &url,
+        &[("authorization", bearer.as_str())],
+        &body,
+        &http_ctx,
+    )?;
     let shape_error = || {
         provider_shape_error(
             dialect.provider,
@@ -1224,7 +1233,7 @@ fn openai_round(
                         id: c
                             .get("id")
                             .and_then(Value::as_str)
-                            .map_or_else(|| format!("call-{i}"), str::to_string),
+                            .map_or_else(|| run.tool_call_id(i), str::to_string),
                         name: f.get("name").and_then(Value::as_str)?.to_string(),
                         input: parse_arguments(f.get("arguments")),
                     })
@@ -1325,17 +1334,21 @@ fn gemini_round(
         secret: Some(&key),
     };
     let resp = post_json(&url, &[header], &body, &http_ctx)?;
-    let shape_error = || {
-        provider_shape_error(
-            "gemini",
-            model,
-            &url,
-            messages.len(),
-            run,
-            &resp,
-            Some(&key),
-        )
-    };
+    gemini_reply(args, model, messages.len(), run, &url, &key, &resp)
+}
+
+/// Decode the provider response separately from transport so event identity can be tested without
+/// contacting a model provider.
+fn gemini_reply(
+    args: &HarnessAdiArguments,
+    model: &str,
+    messages: usize,
+    run: &RunCtx<'_>,
+    url: &str,
+    key: &str,
+    resp: &Value,
+) -> Result<Reply> {
+    let shape_error = || provider_shape_error("gemini", model, url, messages, run, resp, Some(key));
 
     let candidate = resp
         .get("candidates")
@@ -1362,7 +1375,7 @@ fn gemini_round(
         // loop supplies one for the transcript and answers by name.
         if let Some(fc) = part.get("functionCall") {
             calls.push(ToolCall {
-                id: format!("call-{i}"),
+                id: run.tool_call_id(i),
                 name: fc
                     .get("name")
                     .and_then(Value::as_str)
@@ -1392,8 +1405,8 @@ fn gemini_round(
         text,
         calls,
         raw: json!({ "role": "model", "parts": parts }),
-        input_tokens: usage(&resp, &["usageMetadata", "promptTokenCount"]),
-        output_tokens: usage(&resp, &["usageMetadata", "candidatesTokenCount"]),
+        input_tokens: usage(resp, &["usageMetadata", "promptTokenCount"]),
+        output_tokens: usage(resp, &["usageMetadata", "candidatesTokenCount"]),
         finish_reason: candidate
             .get("finishReason")
             .and_then(Value::as_str)
@@ -1403,8 +1416,8 @@ fn gemini_round(
             .and_then(Value::as_str)
             .map(str::to_string),
         refusal: None,
-        secret: Some(key),
-        endpoint: url,
+        secret: Some(key.to_string()),
+        endpoint: url.to_string(),
     })
 }
 
@@ -1468,10 +1481,19 @@ fn ollama_round(
         secret: None,
     };
     let resp = post_json(&url, &[], &body, &http_ctx)?;
+    ollama_reply(model, messages.len(), run, &url, &resp)
+}
 
-    let message = resp.get("message").ok_or_else(|| {
-        provider_shape_error("ollama", model, &url, messages.len(), run, &resp, None)
-    })?;
+fn ollama_reply(
+    model: &str,
+    messages: usize,
+    run: &RunCtx<'_>,
+    url: &str,
+    resp: &Value,
+) -> Result<Reply> {
+    let message = resp
+        .get("message")
+        .ok_or_else(|| provider_shape_error("ollama", model, url, messages, run, resp, None))?;
     let text = message
         .get("content")
         .and_then(Value::as_str)
@@ -1487,7 +1509,7 @@ fn ollama_round(
                 .filter_map(|(i, c)| {
                     let f = c.get("function")?;
                     Some(ToolCall {
-                        id: format!("call-{i}"),
+                        id: run.tool_call_id(i),
                         name: f.get("name").and_then(Value::as_str)?.to_string(),
                         input: parse_arguments(f.get("arguments")),
                     })
@@ -1498,21 +1520,15 @@ fn ollama_round(
 
     if text.trim().is_empty() && calls.is_empty() {
         return Err(provider_shape_error(
-            "ollama",
-            model,
-            &url,
-            messages.len(),
-            run,
-            &resp,
-            None,
+            "ollama", model, url, messages, run, resp, None,
         ));
     }
     Ok(Reply {
         text,
         calls,
         raw: message.clone(),
-        input_tokens: usage(&resp, &["prompt_eval_count"]),
-        output_tokens: usage(&resp, &["eval_count"]),
+        input_tokens: usage(resp, &["prompt_eval_count"]),
+        output_tokens: usage(resp, &["eval_count"]),
         finish_reason: resp
             .get("done_reason")
             .and_then(Value::as_str)
@@ -1520,7 +1536,7 @@ fn ollama_round(
         response_id: None,
         refusal: None,
         secret: None,
-        endpoint: url,
+        endpoint: url.to_string(),
     })
 }
 
@@ -1573,7 +1589,12 @@ struct HttpCtx<'a> {
 /// POST `body` as JSON with the given extra headers, returning the decoded JSON response. A non-2xx
 /// status becomes a [`FailureReport`]: a sentence a person can act on, the provider's own body
 /// underneath it capped for the chat, and the whole thing uncapped in the run's log.
-fn post_json(url: &str, headers: &[(&str, &str)], body: &Value, ctx: &HttpCtx<'_>) -> Result<Value> {
+fn post_json(
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &Value,
+    ctx: &HttpCtx<'_>,
+) -> Result<Value> {
     ensure_provider();
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
@@ -1635,9 +1656,10 @@ fn http_status_error(
 /// two ways — `error.message` or a bare `error` string — so both are tried before falling back to
 /// reading the body whole.
 fn error_message(body: &Value) -> Option<String> {
-    let nested = body
-        .get("error")
-        .and_then(|e| e.as_str().or_else(|| e.get("message").and_then(Value::as_str)));
+    let nested = body.get("error").and_then(|e| {
+        e.as_str()
+            .or_else(|| e.get("message").and_then(Value::as_str))
+    });
     nested
         .or_else(|| body.get("message").and_then(Value::as_str))
         .map(str::trim)
@@ -1674,7 +1696,11 @@ fn context_limit(message: &str) -> ContextLimit {
 
 /// The one line a person reads for a rejected request: specific where the message names a
 /// diagnosable cause and a next move, honest about not knowing either where it doesn't.
-fn http_failure_sentence(provider: &str, status: reqwest::StatusCode, message: Option<&str>) -> String {
+fn http_failure_sentence(
+    provider: &str,
+    status: reqwest::StatusCode,
+    message: Option<&str>,
+) -> String {
     match message.map_or(ContextLimit::Unrelated, context_limit) {
         ContextLimit::TooSmall(Some(tokens)) => format!(
             "this backend can't hold this agent — its model holds {tokens} tokens and this \
@@ -2078,6 +2104,130 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         crate::store::SessionStore::new(dir)
+    }
+
+    #[test]
+    fn an_attachment_only_opening_reaches_provider_validation() {
+        let store = scratch("attachment-only-opening");
+        let agent = StoredAgent {
+            name: "viewer".into(),
+            manifest: crate::AgentManifest {
+                backend: Some(crate::Backend::HarnessAdi),
+                arguments: HarnessAdiArguments {
+                    provider: Some(HarnessProvider::Anthropic),
+                    model: Some("test-model".into()),
+                    // An environment name containing '=' cannot exist. Reaching this error
+                    // proves the turn survived validation without making any HTTP request.
+                    api_key_env: Some("ADI_TEST=MISSING_KEY".into()),
+                    ..HarnessAdiArguments::default()
+                },
+                ..crate::AgentManifest::default()
+            }
+            .to_stored()
+            .expect("stored manifest"),
+        };
+        for (name, media_type) in [("image.png", "image/png"), ("notes.txt", "text/plain")] {
+            let record = store
+                .create(&agent.name, crate::Backend::HarnessAdi, store.dir(), "")
+                .expect("create conversation");
+            let attachment = store
+                .put_attachment(name, media_type, b"fixture")
+                .expect("attachment");
+            store
+                .append_turn(
+                    &agent.name,
+                    &record.id,
+                    crate::store::user_turn_with("", vec![attachment]),
+                )
+                .expect("opening turn");
+            let error = run_turn(&agent, store.dir(), &record.id, &mut Vec::new())
+                .expect_err("the deliberately missing credential stops before HTTP");
+            assert!(
+                matches!(error, Error::Unsupported(ref message) if message.contains("ADI_TEST=MISSING_KEY")),
+                "{media_type} alone is a message, not an empty conversation: {error}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// Fold events emitted from actual provider response parsers, without network or credentials.
+    fn round_tool_history(provider: HarnessProvider) -> Vec<crate::progress::Step> {
+        let args = args_for(provider);
+        let mut log = Vec::new();
+        for (index, (name, path)) in [("Read", "first.txt"), ("Grep", "second.txt")]
+            .into_iter()
+            .enumerate()
+        {
+            let round = index as u64 + 1;
+            let run = RunCtx::new(round, 2, None);
+            let reply = match provider {
+                HarnessProvider::Gemini => gemini_reply(
+                    &args,
+                    "fixture-model",
+                    1,
+                    &run,
+                    "fixture://gemini",
+                    "fixture-key",
+                    &json!({
+                        "candidates": [{"content": {"parts": [{"functionCall": {
+                            "name": name, "args": {"path": path}
+                        }}]}}]
+                    }),
+                ),
+                HarnessProvider::Ollama => ollama_reply(
+                    "fixture-model",
+                    1,
+                    &run,
+                    "fixture://ollama",
+                    &json!({"message": {
+                        "role": "assistant", "content": "", "tool_calls": [{"function": {
+                            "name": name, "arguments": {"path": path}
+                        }}]
+                    }}),
+                ),
+                _ => unreachable!("the fixture covers providers without call ids"),
+            }
+            .expect("fixture reply");
+            let call = &reply.calls[0];
+            adi_events::tool_started(&mut log, &call.id, &call.name, &call.input);
+            adi_events::tool_finished(
+                &mut log,
+                &call.id,
+                &call.name,
+                &format!("result from round {round}"),
+                true,
+            );
+        }
+        adi_events::parse(&log).steps
+    }
+
+    fn assert_distinct_round_history(steps: &[crate::progress::Step]) {
+        use crate::progress::{Step, ToolStatus};
+        assert_eq!(
+            steps.len(),
+            2,
+            "both completed calls must remain: {steps:?}"
+        );
+        for (step, (name, path, output)) in steps.iter().zip([
+            ("Read", "first.txt", "result from round 1"),
+            ("Grep", "second.txt", "result from round 2"),
+        ]) {
+            assert!(
+                matches!(step, Step::Tool {name: actual, input, status: ToolStatus::Ok, output: result}
+                if actual == name && input.contains(path) && result == output),
+                "{step:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_tool_calls_keep_distinct_history_across_rounds() {
+        assert_distinct_round_history(&round_tool_history(HarnessProvider::Gemini));
+    }
+
+    #[test]
+    fn ollama_tool_calls_keep_distinct_history_across_rounds() {
+        assert_distinct_round_history(&round_tool_history(HarnessProvider::Ollama));
     }
 
     /// This loop is handed a conversation id, not a message: the launch's careful work of appending
@@ -2655,7 +2805,12 @@ mod tests {
             secret: None,
         };
         let status = reqwest::StatusCode::BAD_REQUEST;
-        let err = http_status_error(&ctx, "http://localhost:1337/v1/chat/completions", status, body);
+        let err = http_status_error(
+            &ctx,
+            "http://localhost:1337/v1/chat/completions",
+            status,
+            body,
+        );
         let text = err.to_string();
         let sentence = text.split("\n\n```").next().unwrap_or(&text);
 
@@ -2692,7 +2847,9 @@ mod tests {
         );
         let text = err.to_string();
         assert!(
-            text.contains("openai rejected the request (429 Too Many Requests): insufficient_quota"),
+            text.contains(
+                "openai rejected the request (429 Too Many Requests): insufficient_quota"
+            ),
             "{text}"
         );
     }

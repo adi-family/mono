@@ -36,6 +36,7 @@ mod goals;
 mod questions;
 mod queue;
 mod record;
+mod rename;
 mod session;
 mod transcript;
 
@@ -107,6 +108,17 @@ impl SessionStore {
     #[must_use]
     pub fn agent_dir(&self, agent: &str) -> PathBuf {
         self.dir.join(agent)
+    }
+
+    /// Move an idle agent's history and manifest together, rolling back ordinary I/O failures.
+    pub(crate) fn rename_agent(
+        &self,
+        from: &str,
+        to: &str,
+        manifest_from: &Path,
+        manifest_to: &Path,
+    ) -> Result<()> {
+        rename::agent(self, from, to, manifest_from, manifest_to)
     }
 
     /// Where the database lives.
@@ -424,7 +436,12 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns serialization and database errors.
-    pub fn pin_chain(&self, agent: &str, id: &str, chain: &crate::llm::PinnedChain) -> Result<bool> {
+    pub fn pin_chain(
+        &self,
+        agent: &str,
+        id: &str,
+        chain: &crate::llm::PinnedChain,
+    ) -> Result<bool> {
         let json = serde_json::to_string(chain).map_err(|e| Error::Arguments(e.to_string()))?;
         let changed = self
             .conn()?
@@ -1257,14 +1274,24 @@ mod tests {
             "a second resolution is refused, not applied",
         );
 
-        let stored = store.get("solver", &run.id).expect("get").chain.expect("pinned");
+        let stored = store
+            .get("solver", &run.id)
+            .expect("get")
+            .chain
+            .expect("pinned");
         assert_eq!(
             stored.entries.len(),
             3,
             "the chain the conversation started with is the one it keeps",
         );
-        assert_eq!(stored.at, 0, "a session that has never switched is on row 1");
-        assert_eq!(stored.current().map(|row| row.backend.as_str()), Some("anthropic"));
+        assert_eq!(
+            stored.at, 0,
+            "a session that has never switched is on row 1"
+        );
+        assert_eq!(
+            stored.current().map(|row| row.backend.as_str()),
+            Some("anthropic")
+        );
     }
 
     #[test]
@@ -1283,9 +1310,16 @@ mod tests {
             .expect("pin");
         assert!(store.move_chain_to("solver", &run.id, 1).expect("move"));
 
-        let stored = store.get("solver", &run.id).expect("get").chain.expect("pinned");
+        let stored = store
+            .get("solver", &run.id)
+            .expect("get")
+            .chain
+            .expect("pinned");
         assert_eq!(stored.at, 1);
-        assert_eq!(stored.current().map(|row| row.backend.as_str()), Some("codex"));
+        assert_eq!(
+            stored.current().map(|row| row.backend.as_str()),
+            Some("codex")
+        );
         assert_eq!(
             stored.entries.len(),
             3,
@@ -1294,7 +1328,11 @@ mod tests {
 
         let listed = store.list("solver");
         assert_eq!(
-            listed[0].chain.as_ref().and_then(|c| c.current()).map(|r| r.backend.as_str()),
+            listed[0]
+                .chain
+                .as_ref()
+                .and_then(|c| c.current())
+                .map(|r| r.backend.as_str()),
             Some("codex"),
             "a listing reads the position too, not just the list",
         );
