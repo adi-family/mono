@@ -359,7 +359,6 @@ async fn supervise(store: Triggers, spec: Spec, mut rx: watch::Receiver<bool>) {
             }
         };
 
-        store.clear_run_state(&spec.name);
         if stopped {
             break;
         }
@@ -372,6 +371,13 @@ async fn supervise(store: Triggers, spec: Spec, mut rx: watch::Receiver<bool>) {
         } else {
             restarts = restarts.saturating_add(1);
         }
+
+        // Published through the backoff rather than cleared: a code block that dies faster than
+        // anything polls would otherwise read as "not running" between relaunches instead of
+        // crash-looping — the one thing this count exists to surface in the UI.
+        state.restarts = restarts;
+        state.heartbeat_at = now_unix();
+        store.publish_run_state(&spec.name, &state);
 
         warn!(trigger = %spec.name, delay = ?backoff, restarts, "relaunching");
         if sleep_or_stop(backoff, &mut rx).await {
