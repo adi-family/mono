@@ -134,8 +134,12 @@ describe("link-code flow", () => {
   });
 
   it("rejects a forged link code -- the webhook still 200s, but nothing links", async () => {
+    fetchMock.mockClear();
     const res = await startUpdate(4243, "forged-code", 1);
     expect(res.status).toBe(200);
+    // ...and the chat is told why, rather than met with silence.
+    const sent = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/sendMessage"));
+    expect(JSON.parse(String((sent?.[1] as RequestInit).body)).text).toMatch(/expired or was already used/);
     const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
       .bind("telegram", "4243")
       .first();

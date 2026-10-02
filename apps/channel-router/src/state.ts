@@ -22,8 +22,11 @@
  * not one per deployment).
  */
 
-/** How long a link code stays valid -- one human clicking a link and sending one message. */
-export const LINK_CODE_TTL_SECONDS = 600;
+/** How long a link code stays valid -- one human clicking a link and sending one message. An
+ * hour, not minutes: the first live test lost two links to an operator who simply wasn't at the
+ * screen within ten. The code is a single-use 128-bit handle (router.ts), so the longer window
+ * buys a guesser nothing. */
+export const LINK_CODE_TTL_SECONDS = 60 * 60;
 
 /** How long a node token stays valid before it needs re-minting even absent a revoke -- long
  * enough that an always-connected node never notices, short enough that a token nobody ever

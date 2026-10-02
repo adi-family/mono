@@ -263,8 +263,15 @@ async function handleLinkAttempt(
 
   const payload = await consumeLinkCode(env, code, Math.floor(now / 1000));
   if (!payload || payload.provider !== providerId) {
-    // Invalid or expired code: still ack the webhook so the service doesn't retry it, the
-    // human just has to run `connect` again for a fresh one.
+    // Still ack the webhook so the service doesn't retry it -- but say so in the chat: silence
+    // here reads as "the bot is broken", and the human's only fix is a fresh `connect`.
+    await sendBestEffort(
+      adapter,
+      providerId,
+      routingKey,
+      env,
+      `That link has expired or was already used. Run \`adi-mono channels connect ${providerId}\` again for a fresh one.`,
+    );
     return json({ ok: true });
   }
 
@@ -281,17 +288,27 @@ async function handleLinkAttempt(
     .bind(providerId, routingKey, payload.node)
     .run();
 
-  // Telegram-only path (Slack links through the OAuth callback below, not a webhook /start):
-  // its credential is a plain Worker secret, so no connection is needed to resolve it.
-  const credential = await resolveCredential(providerId, env, null);
-  if (credential) {
-    try {
-      await adapter.send({ routingKey, text: "Linked. You can talk to the agent here now." }, credential);
-    } catch {
-      // The link itself succeeded; a failed welcome message isn't worth failing the webhook.
-    }
-  }
+  await sendBestEffort(adapter, providerId, routingKey, env, "Linked. You can talk to the agent here now.");
   return json({ ok: true });
+}
+
+/** A link attempt's answer in the chat itself. Telegram-only path (Slack links through the OAuth
+ * callback below, not a webhook /start): its credential is a plain Worker secret, so no connection
+ * is needed to resolve it. Never fails the webhook -- the link's outcome doesn't depend on it. */
+async function sendBestEffort(
+  adapter: ChannelAdapter,
+  providerId: string,
+  routingKey: string,
+  env: Env,
+  text: string,
+): Promise<void> {
+  const credential = await resolveCredential(providerId, env, null);
+  if (!credential) return;
+  try {
+    await adapter.send({ routingKey, text }, credential);
+  } catch {
+    // Best-effort by contract, see above.
+  }
 }
 
 /** `GET /link/<provider>` -- a real redirect-based install hop. Telegram links through its
