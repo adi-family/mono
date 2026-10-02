@@ -4,7 +4,7 @@
 
 > The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI.
 
-74 structs · 10 enums · 2 type aliases across 38 files.
+75 structs · 10 enums · 2 type aliases across 39 files.
 
 ## Index
 
@@ -36,6 +36,7 @@
 - [`src/lang/typescript.rs`](#srclangtypescriptrs) — `TypeScriptAnalyzer`
 - [`src/lib.rs`](#srclibrs) — `Indexer`
 - [`src/migrations/runner.rs`](#srcmigrationsrunnerrs) — `SqlMigration`
+- [`src/open_tests.rs`](#srcopen_testsrs) — `SmallEmbedder`
 - [`src/parser/treesitter/analyzers/base.rs`](#srcparsertreesitteranalyzersbasers) — `AnalyzerBase`
 - [`src/parser/treesitter/analyzers/generic.rs`](#srcparsertreesitteranalyzersgenericrs) — `GenericAnalyzer`
 - [`src/parser/treesitter/mod.rs`](#srcparsertreesittermodrs) — `TreeSitterParser`
@@ -761,6 +762,17 @@ pub struct SqlMigration {
     pub name: String,
     pub up_sql: String,
 }
+```
+
+---
+
+## `src/open_tests.rs`
+
+### struct `SmallEmbedder`
+
+```rust
+#[derive(Debug)]
+struct SmallEmbedder;
 ```
 
 ---

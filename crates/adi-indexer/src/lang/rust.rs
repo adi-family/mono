@@ -3,8 +3,7 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
-    tree_walking_analyzer,
+    WithDocCommentOpt, declaration, node_location, node_text, tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -58,9 +57,36 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     }
 }
 
-/// A brace opens a definition; a semicolon ends a trait method, a `const`, or a `use`.
+/// Use the body node rather than punctuation inside array types or const generic expressions.
 fn extract_function_signature(node: Node, source: &str) -> String {
-    signature_before(node, source, &["{", ";"])
+    let end = node
+        .child_by_field_name("body")
+        .map_or(node.end_byte(), |body| body.start_byte());
+    source[node.start_byte()..end]
+        .trim()
+        .trim_end_matches(';')
+        .trim_end()
+        .to_string()
+}
+
+/// Declared access relative to the containing module, not effective crate-level exports.
+fn extract_visibility(node: Node) -> Visibility {
+    let mut cursor = node.walk();
+    let Some(modifier) = node
+        .named_children(&mut cursor)
+        .find(|child| child.kind() == "visibility_modifier")
+    else {
+        return Visibility::Private;
+    };
+
+    match modifier.named_child(0).map(|child| child.kind()) {
+        None => Visibility::Public,
+        Some("crate") => Visibility::PublicCrate,
+        Some("super") => Visibility::PublicSuper,
+        Some("self") => Visibility::Private,
+        // The visibility enum has no arbitrary module-path restriction.
+        Some(_) => Visibility::Internal,
+    }
 }
 
 fn extract_rust_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
@@ -69,7 +95,7 @@ fn extract_rust_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
         "struct_item" => parse_rust_struct(node, source),
         "trait_item" => parse_rust_trait(node, source),
         "enum_item" => parse_rust_declaration(node, source, SymbolKind::Enum),
-        "mod_item" => parse_rust_declaration(node, source, SymbolKind::Module),
+        "mod_item" => parse_rust_module(node, source),
         "const_item" | "static_item" => parse_rust_declaration(node, source, SymbolKind::Constant),
         "type_item" => parse_rust_declaration(node, source, SymbolKind::Type),
         "macro_definition" => parse_rust_declaration(node, source, SymbolKind::Macro),
@@ -92,16 +118,13 @@ fn extract_rust_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
 }
 
 /// A Rust item named by its `name` field, preceded by its `///` block.
-///
-/// Visibility stays [`Visibility::Unknown`]: `pub` here is relative to a module path this walker
-/// doesn't track, so recording `pub` as "public" would claim more than the tree says.
 fn parse_rust_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
     declaration(
         node,
         source,
         kind,
         extract_doc_comment(node, source),
-        Some(Visibility::Unknown),
+        Some(extract_visibility(node)),
         None,
     )
 }
@@ -113,9 +136,17 @@ fn parse_rust_callable(node: Node, source: &str, kind: SymbolKind) -> Option<Par
         source,
         kind,
         extract_doc_comment(node, source),
-        Some(Visibility::Unknown),
+        Some(extract_visibility(node)),
         Some(extract_function_signature(node, source)),
     )
+}
+
+fn parse_rust_module(node: Node, source: &str) -> Option<ParsedSymbol> {
+    let mut children = Vec::new();
+    if let Some(body) = node.child_by_field_name("body") {
+        extract_rust_symbols(body, source, &mut children);
+    }
+    Some(parse_rust_declaration(node, source, SymbolKind::Module)?.with_children(children))
 }
 
 fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
@@ -132,6 +163,7 @@ fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
                         SymbolKind::Field,
                         node_location(child),
                     )
+                    .with_visibility(extract_visibility(child))
                     .with_doc_comment_opt(extract_doc_comment(child, source)),
                 );
             }
@@ -146,23 +178,26 @@ fn parse_rust_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
     if let Some(body) = node.child_by_field_name("body") {
         for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
-                && (child.kind() == "function_signature_item" || child.kind() == "function_item")
-                && let Some(method_name) = child.child_by_field_name("name")
+                && let Some(symbol) = parse_rust_associated_item(child, source)
             {
-                children.push(
-                    ParsedSymbol::new(
-                        node_text(method_name, source),
-                        SymbolKind::Method,
-                        node_location(child),
-                    )
-                    .with_signature(extract_function_signature(child, source))
-                    .with_doc_comment_opt(extract_doc_comment(child, source)),
-                );
+                // Trait members have the trait's access; Rust forbids explicit visibility here.
+                children.push(symbol.with_visibility(Visibility::Public));
             }
         }
     }
 
     Some(parse_rust_declaration(node, source, SymbolKind::Trait)?.with_children(children))
+}
+
+fn parse_rust_associated_item(node: Node, source: &str) -> Option<ParsedSymbol> {
+    match node.kind() {
+        "function_item" | "function_signature_item" => {
+            parse_rust_callable(node, source, SymbolKind::Method)
+        }
+        "associated_type" | "type_item" => parse_rust_declaration(node, source, SymbolKind::Type),
+        "const_item" => parse_rust_declaration(node, source, SymbolKind::Constant),
+        _ => None,
+    }
 }
 
 fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
@@ -185,18 +220,13 @@ fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     if let Some(body) = node.child_by_field_name("body") {
         for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
-                && child.kind() == "function_item"
-                && let Some(method_name) = child.child_by_field_name("name")
+                && let Some(mut symbol) = parse_rust_associated_item(child, source)
             {
-                symbols.push(
-                    ParsedSymbol::new(
-                        format!("{}::{}", type_name, node_text(method_name, source)),
-                        SymbolKind::Method,
-                        node_location(child),
-                    )
-                    .with_signature(extract_function_signature(child, source))
-                    .with_doc_comment_opt(extract_doc_comment(child, source)),
-                );
+                symbol.name = format!("{type_name}::{}", symbol.name);
+                if node.child_by_field_name("trait").is_some() {
+                    symbol.visibility = Visibility::Public;
+                }
+                symbols.push(symbol);
             }
         }
     }
@@ -358,6 +388,9 @@ fn extract_use_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
 
 fn extract_call_name(node: Node, source: &str) -> String {
     match node.kind() {
+        "generic_function" => node
+            .child_by_field_name("function")
+            .map_or_else(String::new, |function| extract_call_name(function, source)),
         "identifier" => node_text(node, source),
         "scoped_identifier" => node_text(node, source),
         "field_expression" => {

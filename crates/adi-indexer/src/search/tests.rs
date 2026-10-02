@@ -90,7 +90,9 @@ mod tests {
         assert_eq!(index.count(), 1);
 
         index.remove(1).unwrap();
-        // Note: usearch may not immediately reflect count changes
+        assert_eq!(index.count(), 0);
+        assert_eq!(index.get_vector(1).unwrap(), None);
+        assert!(index.search(&vector, 10).unwrap().is_empty());
     }
 
     #[test]
@@ -109,10 +111,46 @@ mod tests {
 
         // Reload and verify
         {
-            let _index = UsearchIndex::open(dir.path()).unwrap();
-            // The index should have loaded the saved vectors
-            // Note: exact count may vary based on usearch behavior
+            let index = UsearchIndex::open(dir.path()).unwrap();
+            assert_eq!(index.count(), 10);
+            let expected: Vec<f32> = (0..768).map(|j| (3 * j) as f32 / 768.0).collect();
+            assert_eq!(index.get_vector(3).unwrap(), Some(expected));
         }
+    }
+
+    #[test]
+    fn reopening_with_different_dimensions_is_rejected() {
+        let dir = tempdir().unwrap();
+        let index = UsearchIndex::with_config(dir.path(), 4, 16, 200, 100).unwrap();
+        index.add(1, &[1.0, 0.0, 0.0, 0.0]).unwrap();
+        index.save().unwrap();
+        drop(index);
+
+        let result = UsearchIndex::with_config(dir.path(), 8, 16, 200, 100);
+        assert!(
+            result.is_err(),
+            "loading must check the stored vector width"
+        );
+    }
+
+    #[test]
+    fn vectors_can_be_added_beyond_initial_capacity_and_after_reload() {
+        let dir = tempdir().unwrap();
+        let index = UsearchIndex::with_config(dir.path(), 4, 16, 200, 100).unwrap();
+        for id in 0..20_001 {
+            index.add(id, &[1.0, id as f32, 0.0, 0.0]).unwrap();
+        }
+        assert_eq!(index.count(), 20_001);
+        index.save().unwrap();
+        drop(index);
+
+        let index = UsearchIndex::with_config(dir.path(), 4, 16, 200, 100).unwrap();
+        index.add(20_001, &[0.0, 0.0, 1.0, 0.0]).unwrap();
+        assert_eq!(index.count(), 20_002);
+        assert_eq!(
+            index.get_vector(20_001).unwrap(),
+            Some(vec![0.0, 0.0, 1.0, 0.0])
+        );
     }
 
     #[test]

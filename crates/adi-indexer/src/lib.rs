@@ -84,8 +84,10 @@ pub mod watcher;
 mod cache_tests;
 #[cfg(test)]
 mod config_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "lang-rust"))]
 mod indexer_tests;
+#[cfg(all(test, feature = "lang-rust"))]
+mod open_tests;
 
 pub use analyzer::{
     AnalysisConfig, AnalysisMode, DeadCodeAnalyzer, DeadCodeFilter, DeadCodeReport,
@@ -151,6 +153,14 @@ impl Indexer {
         project_path: &Path,
         embedder: Arc<dyn Embedder>,
     ) -> Result<Self> {
+        Self::open_with_cache(project_path, embedder, GlobalCache::open()?)
+    }
+
+    fn open_with_cache(
+        project_path: &Path,
+        embedder: Arc<dyn Embedder>,
+        cache: GlobalCache,
+    ) -> Result<Self> {
         let config = Config::load(project_path)?;
         let adi_dir = project_path.join(".adi");
         let tree_dir = paths::index_dir(project_path);
@@ -161,8 +171,17 @@ impl Indexer {
 
         let storage = SqliteStorage::open(&tree_dir.join("index.sqlite"))?;
         let parser = parser::TreeSitterParser::new();
-        let index = search::usearch::UsearchIndex::open(&tree_dir.join("embeddings"))?;
-        let cache = GlobalCache::open()?;
+        let dimensions = match embedder.dimensions() {
+            0 => config.embedding.dimensions,
+            dimensions => dimensions,
+        };
+        let index = search::usearch::UsearchIndex::with_config(
+            &tree_dir.join("embeddings"),
+            dimensions as usize,
+            config.index.hnsw_m,
+            config.index.hnsw_ef_construction,
+            config.index.hnsw_ef_search,
+        )?;
 
         Ok(Self {
             project_path: project_path.to_path_buf(),

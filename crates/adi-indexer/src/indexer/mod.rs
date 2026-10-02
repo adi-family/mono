@@ -5,7 +5,7 @@
 use crate::cache::{CachedFileData, GlobalCache};
 use crate::config::Config;
 use crate::embed::Embedder;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::parser::Parser;
 use crate::search::VectorIndex;
 use crate::storage::{PendingRef, Storage};
@@ -14,6 +14,7 @@ use crate::types::{
     Status, Symbol, SymbolId, SymbolKind,
 };
 use ignore::WalkBuilder;
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -45,12 +46,13 @@ struct FileProcessResult {
 /// * 3 — references are stored unresolved as well as resolved, so the graph can be rebuilt
 ///   without reparsing. An index built by 2 has no `pending_refs` rows, and resolving from them
 ///   would empty its graph rather than restore it.
+/// * 4 — corrected language parsing, dialect-aware cache keys, and file selection.
 ///
 /// A swapped embedding model forces the same full pass independently of this number — see
 /// `index_project`'s own `model_changed` check — because the model is a property of the *run*,
 /// not of the pipeline's shape, and the same "an unchanged file is never reprocessed" rule that
 /// this constant exists to override would otherwise apply to it too.
-pub const PIPELINE_VERSION: u32 = 3;
+pub const PIPELINE_VERSION: u32 = 4;
 
 pub async fn index_project(
     project_path: &Path,
@@ -84,14 +86,16 @@ pub async fn index_project(
         );
     } else if model_changed {
         info!(
-            old_model = stored_status.as_ref().map_or("?", |s| s.embedding_model.as_str()),
+            old_model = stored_status
+                .as_ref()
+                .map_or("?", |s| s.embedding_model.as_str()),
             new_model = embedder.model_name(),
             "embedding backend changed — reindexing every file so the old model's vectors are \
              not silently mixed with the new one"
         );
     }
 
-    let walk = collect_files(project_path, config)?;
+    let walk = collect_files(project_path, config, parser.as_ref())?;
     let total = walk.files.len() as u64;
 
     info!("Found {} files to index", total);
@@ -160,39 +164,57 @@ pub async fn index_project(
     // have. Resolving from the stored unresolved references instead makes the graph a function of
     // the symbol table as it now stands, so it comes out the same whether one file changed or all
     // of them did.
-    let pending = storage.all_pending_refs()?;
-    let symbol_map = symbols_by_name(&storage)?;
-    info!("Resolving {} references...", pending.len());
-
-    let resolved_refs = resolve_references(&pending, &symbol_map);
-
-    info!("Storing {} resolved references...", resolved_refs.len());
-    storage.begin_transaction()?;
-    storage.replace_symbol_refs(&resolved_refs)?;
-    storage.commit_transaction()?;
+    let reference_count = rebuild_references(&storage)?;
 
     index.save()?;
 
-    // Update status
+    // A failed upgrade must remain eligible for a rebuild when the file becomes readable.
+    // Its old content hash cannot tell a later run that its parser/model is still outdated.
+    let complete = progress.errors.is_empty() && !walk.blind && walk.unreachable.is_empty();
+    let retain_previous = rebuild && !complete;
     let status = Status {
         indexed_files: progress.files_processed,
         indexed_symbols: progress.symbols_indexed,
-        embedding_dimensions: embedder.dimensions(),
-        embedding_model: embedder.model_name().to_string(),
+        embedding_dimensions: if retain_previous {
+            stored_status.as_ref().map_or(0, |s| s.embedding_dimensions)
+        } else {
+            embedder.dimensions()
+        },
+        embedding_model: if retain_previous {
+            stored_status
+                .as_ref()
+                .map_or_else(String::new, |s| s.embedding_model.clone())
+        } else {
+            embedder.model_name().to_string()
+        },
         last_indexed: Some(chrono_now()),
         storage_size_bytes: 0,
-        pipeline_version: PIPELINE_VERSION,
+        pipeline_version: if retain_previous {
+            stored_version
+        } else {
+            PIPELINE_VERSION
+        },
     };
     storage.update_status(&status)?;
 
     info!(
         "Indexing complete: {} files, {} symbols, {} references",
-        progress.files_processed,
-        progress.symbols_indexed,
-        resolved_refs.len()
+        progress.files_processed, progress.symbols_indexed, reference_count
     );
 
     Ok(progress)
+}
+
+fn rebuild_references(storage: &Arc<dyn Storage>) -> Result<usize> {
+    let pending = storage.all_pending_refs()?;
+    let resolved = resolve_references(&pending, &symbols_by_name(storage)?);
+    storage.begin_transaction()?;
+    if let Err(error) = storage.replace_symbol_refs(&resolved) {
+        let _ = storage.rollback_transaction();
+        return Err(error);
+    }
+    storage.commit_transaction()?;
+    Ok(resolved.len())
 }
 
 /// The references a file's parse produced, as rows to store against it.
@@ -295,7 +317,7 @@ fn find_target_symbol<'a>(
 pub async fn reindex_paths(
     project_path: &Path,
     paths: &[PathBuf],
-    _config: &Config,
+    config: &Config,
     storage: Arc<dyn Storage>,
     embedder: Arc<dyn Embedder>,
     parser: Arc<dyn Parser>,
@@ -304,44 +326,141 @@ pub async fn reindex_paths(
 ) -> Result<()> {
     info!("Re-indexing {} paths", paths.len());
 
-    storage.begin_transaction()?;
-
+    let mut requested = Vec::new();
     for path in paths {
-        // Remove old data for this file
-        if storage.file_exists(path)? {
-            if let Ok(file_info) = storage.get_file(path) {
-                // Remove symbols from vector index
-                for symbol in &file_info.symbols {
-                    let _ = index.remove(symbol.id.0);
-                }
-                storage.delete_symbols_for_file(file_info.file.id)?;
-            }
-            storage.delete_file(path)?;
+        let relative = if path.is_absolute() {
+            path.strip_prefix(project_path)
+                .map_err(|_| Error::InvalidPath(path.display().to_string()))?
+        } else {
+            path.as_path()
+        };
+        if relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(Error::InvalidPath(path.display().to_string()));
         }
-
-        // Re-process the file
-        let full_path = project_path.join(path);
-        if full_path.exists() {
-            let _ = process_file(
-                project_path,
-                &full_path,
-                &storage,
-                &embedder,
-                &parser,
-                &index,
-                &cache,
-                // The caller named these paths explicitly (the watcher saw them change), and
-                // the rows were just deleted above — there is nothing left to skip against.
-                true,
-            )
-            .await;
-        }
+        requested.push(
+            relative
+                .components()
+                .filter(|part| !matches!(part, std::path::Component::CurDir))
+                .collect::<PathBuf>(),
+        );
+    }
+    if requested.is_empty() {
+        return Ok(());
     }
 
-    storage.commit_transaction()?;
-    index.save()?;
+    let status = storage.get_status()?;
+    let ignore_rules_changed = requested.iter().any(|path| {
+        path.file_name()
+            .is_some_and(|name| name == ".gitignore" || name == ".ignore")
+    });
+    if status.pipeline_version != PIPELINE_VERSION
+        || status.embedding_model != embedder.model_name()
+        || ignore_rules_changed
+    {
+        let progress = index_project(
+            project_path,
+            config,
+            storage,
+            embedder,
+            parser,
+            index,
+            cache,
+        )
+        .await?;
+        return if progress.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Index(progress.errors.join("; ")))
+        };
+    }
 
-    Ok(())
+    // Reuse the full walk's eligibility rules, but only parse or remove requested paths.
+    // A directory event also covers its descendants, including files already deleted on disk.
+    let walk = collect_files(project_path, config, parser.as_ref())?;
+    let affected = |path: &Path| requested.iter().any(|changed| path.starts_with(changed));
+    let present: HashSet<&Path> = walk
+        .files
+        .iter()
+        .map(|path| path.strip_prefix(project_path).unwrap_or(path))
+        .collect();
+    let indexed = storage.indexed_files()?;
+    let mut errors = Vec::new();
+    storage.begin_transaction()?;
+    for file_path in &walk.files {
+        let relative = file_path.strip_prefix(project_path).unwrap_or(file_path);
+        if !affected(relative) {
+            continue;
+        }
+        match process_file(
+            project_path,
+            file_path,
+            &storage,
+            &embedder,
+            &parser,
+            &index,
+            &cache,
+            false,
+        )
+        .await
+        {
+            Ok(result) => {
+                if let Some(file_id) = result.file_id
+                    && let Err(error) =
+                        storage.replace_pending_refs(file_id, &pending_refs(&result.references))
+                {
+                    let _ = storage.rollback_transaction();
+                    return Err(error);
+                }
+            }
+            Err(error) => errors.push(format!("{}: {error}", file_path.display())),
+        }
+    }
+    storage.commit_transaction()?;
+
+    if !walk.blind {
+        let mut orphaned = Vec::new();
+        storage.begin_transaction()?;
+        for (id, path) in indexed {
+            if affected(&path)
+                && !present.contains(path.as_path())
+                && !walk
+                    .unreachable
+                    .iter()
+                    .any(|unreachable| project_path.join(&path).starts_with(unreachable))
+            {
+                match storage.delete_file_cascade(id) {
+                    Ok(symbols) => orphaned.extend(symbols),
+                    Err(error) => {
+                        let _ = storage.rollback_transaction();
+                        return Err(error);
+                    }
+                }
+            }
+        }
+        storage.commit_transaction()?;
+        for symbol in orphaned {
+            if let Err(error) = index.remove(symbol.0) {
+                warn!(
+                    "Could not remove embedding for symbol {}: {error}",
+                    symbol.0
+                );
+            }
+        }
+    }
+    rebuild_references(&storage)?;
+    index.save()?;
+    let mut status = storage.get_status()?;
+    status.last_indexed = Some(chrono_now());
+    storage.update_status(&status)?;
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Index(errors.join("; ")))
+    }
 }
 
 /// Drop what the walk did not reach.
@@ -463,16 +582,29 @@ fn errored_path(error: &ignore::Error) -> Option<&Path> {
     }
 }
 
-fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
+fn collect_files(project_path: &Path, config: &Config, parser: &dyn Parser) -> Result<Walk> {
     let mut files = Vec::new();
     let mut unreachable = Vec::new();
     let mut blind = false;
+    let ignore = configured_ignores(project_path, config)?;
 
     let mut builder = WalkBuilder::new(project_path);
     builder
         .hidden(true)
         .git_ignore(config.ignore.use_gitignore)
+        .git_global(config.ignore.use_gitignore)
+        .git_exclude(config.ignore.use_gitignore)
         .ignore(config.ignore.use_ignore_file);
+    let directory_ignore = ignore.clone();
+    builder.filter_entry(move |entry| {
+        entry.depth() == 0
+            || !directory_ignore
+                .matched(
+                    entry.path(),
+                    entry.file_type().is_some_and(|kind| kind.is_dir()),
+                )
+                .is_ignore()
+    });
 
     for entry in builder.build() {
         match entry {
@@ -484,7 +616,7 @@ fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
                 }
 
                 // Check if file should be ignored
-                if should_ignore(path, project_path, config) {
+                if ignore.matched_path_or_any_parents(path, false).is_ignore() {
                     continue;
                 }
 
@@ -499,7 +631,14 @@ fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
                 // Check language support
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     let lang = Language::from_extension(ext);
-                    if lang != Language::Unknown {
+                    if parser.supports(lang)
+                        && (config.parser.enabled_languages.is_empty()
+                            || config
+                                .parser
+                                .enabled_languages
+                                .iter()
+                                .any(|name| name.eq_ignore_ascii_case(lang.as_str())))
+                    {
                         files.push(path.to_path_buf());
                     }
                 }
@@ -523,24 +662,16 @@ fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
     })
 }
 
-fn should_ignore(path: &Path, project_path: &Path, config: &Config) -> bool {
-    let relative = path.strip_prefix(project_path).unwrap_or(path);
-    let path_str = relative.to_string_lossy();
-
+pub(crate) fn configured_ignores(project_path: &Path, config: &Config) -> Result<Gitignore> {
+    let mut builder = GitignoreBuilder::new(project_path);
     for pattern in &config.ignore.patterns {
-        if path_str.contains(pattern) {
-            return true;
-        }
-        // Simple glob matching for patterns ending with *
-        if pattern.ends_with('*') {
-            let prefix = &pattern[..pattern.len() - 1];
-            if path_str.starts_with(prefix) {
-                return true;
-            }
-        }
+        builder
+            .add_line(None, pattern)
+            .map_err(|error| Error::Config(error.to_string()))?;
     }
-
-    false
+    builder
+        .build()
+        .map_err(|error| Error::Config(error.to_string()))
 }
 
 async fn process_file(
@@ -579,7 +710,13 @@ async fn process_file(
     let language = Language::from_extension(ext);
 
     // Try global cache first
-    let cached = cache.get(&hash, embedder.model_name());
+    // Identical bytes can have different syntax in different languages or dialects (.ts/.tsx).
+    let cache_key = compute_hash(&format!(
+        "{hash}:{}:{}",
+        language.as_str(),
+        ext.to_ascii_lowercase()
+    ));
+    let cached = cache.get(&cache_key, embedder.model_name());
 
     let (parsed, cached_embeddings) = if let Some(cached_data) = cached {
         debug!("Global cache hit for: {}", relative_path.display());
@@ -601,7 +738,7 @@ async fn process_file(
                 references: Vec::new(),
             });
         }
-        let parsed = parser.parse(&content, language)?;
+        let parsed = parser.parse_for_path(&content, language, file_path)?;
         (parsed, None)
     };
 
@@ -729,7 +866,7 @@ async fn process_file(
         // Store to global cache if we computed fresh embeddings or had a cache miss
         if cached_embeddings.is_none() {
             let _ = cache.put(
-                &hash,
+                &cache_key,
                 &CachedFileData {
                     parsed: parsed.clone(),
                     embeddings: embeddings.clone(),
@@ -774,12 +911,11 @@ async fn process_file(
         let ref_byte = parsed_ref.location.start_byte;
         let containing_symbol = symbol_ranges
             .iter()
-            .filter(|(_, start, end)| ref_byte >= *start && ref_byte <= *end)
+            .filter(|(_, start, end)| ref_byte >= *start && ref_byte < *end)
             .min_by_key(|(_, start, end)| end - start);
 
-        if let Some((symbol_id, _, _)) = containing_symbol {
-            parsed_ref.containing_symbol_index = Some(symbol_id.0 as usize);
-        }
+        parsed_ref.containing_symbol_index =
+            containing_symbol.map(|(symbol_id, _, _)| symbol_id.0 as usize);
 
         references_with_context.push(parsed_ref);
     }

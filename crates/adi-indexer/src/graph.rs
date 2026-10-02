@@ -107,16 +107,12 @@ pub fn detect_cycles(id: SymbolId, storage: &Arc<dyn Storage>) -> Result<Vec<Vec
 
 /// Get usage statistics: how many times each symbol is referenced
 pub fn get_usage_stats(storage: &Arc<dyn Storage>) -> Result<Vec<(Symbol, u64)>> {
-    let tree = storage.get_tree()?;
     let mut stats: Vec<(Symbol, u64)> = Vec::new();
 
-    for file in &tree.files {
-        for symbol_node in &file.symbols {
-            let symbol = storage.get_symbol(symbol_node.id)?;
-            let count = storage.get_reference_count(symbol_node.id)?;
-            if count > 0 {
-                stats.push((symbol, count));
-            }
+    for symbol in storage.get_all_symbols()? {
+        let count = storage.get_reference_count(symbol.id)?;
+        if count > 0 {
+            stats.push((symbol, count));
         }
     }
 
@@ -126,7 +122,8 @@ pub fn get_usage_stats(storage: &Arc<dyn Storage>) -> Result<Vec<(Symbol, u64)>>
     Ok(stats)
 }
 
-/// Find the shortest path between two symbols in the call graph
+/// Find the shortest path between two symbols in the call graph.
+/// `max_depth` limits the number of edges, as in the transitive traversal functions.
 pub fn find_call_path(
     from_id: SymbolId,
     to_id: SymbolId,
@@ -141,14 +138,14 @@ pub fn find_call_path(
     visited.insert(from_id.0);
 
     while let Some((current_id, path)) = queue.pop_front() {
+        if current_id == to_id {
+            return Ok(Some(path));
+        }
+
         if let Some(max) = max_depth
             && path.len() > max
         {
             continue;
-        }
-
-        if current_id == to_id {
-            return Ok(Some(path));
         }
 
         let callees = storage.get_callees(current_id)?;
@@ -173,17 +170,14 @@ fn ends_of_graph(
     storage: &Arc<dyn Storage>,
     keep: impl Fn(bool, bool) -> bool,
 ) -> Result<Vec<Symbol>> {
-    let tree = storage.get_tree()?;
     let mut found: Vec<Symbol> = Vec::new();
 
-    for file in &tree.files {
-        for symbol_node in &file.symbols {
-            let is_called = !storage.get_callers(symbol_node.id)?.is_empty();
-            let calls = !storage.get_callees(symbol_node.id)?.is_empty();
+    for symbol in storage.get_all_symbols()? {
+        let is_called = !storage.get_callers(symbol.id)?.is_empty();
+        let calls = !storage.get_callees(symbol.id)?.is_empty();
 
-            if keep(is_called, calls) {
-                found.push(storage.get_symbol(symbol_node.id)?);
-            }
+        if keep(is_called, calls) {
+            found.push(symbol);
         }
     }
 
@@ -238,4 +232,138 @@ pub fn calculate_metrics(
         is_entry_point: direct_callers.is_empty() && !direct_callees.is_empty(),
         is_leaf: !direct_callers.is_empty() && direct_callees.is_empty(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::sqlite::SqliteStorage;
+    use crate::types::{
+        File, FileId, Language, Location, Reference, ReferenceKind, SymbolKind, Visibility,
+    };
+
+    fn fixture() -> (Arc<dyn Storage>, FileId, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let storage: Arc<dyn Storage> =
+            Arc::new(SqliteStorage::open(&dir.path().join("index.sqlite")).unwrap());
+        let file_id = storage
+            .insert_file(&File {
+                id: FileId(0),
+                path: "src/lib.rs".into(),
+                language: Language::Rust,
+                hash: "test".into(),
+                size: 100,
+                description: None,
+            })
+            .unwrap();
+        (storage, file_id, dir)
+    }
+
+    fn symbol(
+        storage: &Arc<dyn Storage>,
+        file_id: FileId,
+        name: &str,
+        parent_id: Option<SymbolId>,
+    ) -> SymbolId {
+        storage
+            .insert_symbol(&Symbol {
+                id: SymbolId(0),
+                name: name.into(),
+                kind: SymbolKind::Function,
+                file_id,
+                file_path: "src/lib.rs".into(),
+                parent_id,
+                location: location(),
+                signature: None,
+                description: None,
+                doc_comment: None,
+                visibility: Visibility::Private,
+                is_entry_point: false,
+                structure: None,
+            })
+            .unwrap()
+    }
+
+    fn location() -> Location {
+        Location {
+            start_line: 1,
+            start_col: 0,
+            end_line: 2,
+            end_col: 1,
+            start_byte: 0,
+            end_byte: 10,
+        }
+    }
+
+    fn edge(storage: &Arc<dyn Storage>, from: SymbolId, to: SymbolId) {
+        storage
+            .insert_reference(&Reference {
+                from_symbol_id: from,
+                to_symbol_id: to,
+                kind: ReferenceKind::Call,
+                location: location(),
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn shortest_path_depth_counts_edges_and_includes_the_boundary() {
+        let (storage, file_id, _dir) = fixture();
+        let a = symbol(&storage, file_id, "a", None);
+        let b = symbol(&storage, file_id, "b", None);
+        let c = symbol(&storage, file_id, "c", None);
+        edge(&storage, a, b);
+        edge(&storage, b, c);
+        edge(&storage, c, a);
+
+        assert!(find_call_path(a, c, &storage, Some(1)).unwrap().is_none());
+        let path = find_call_path(a, c, &storage, Some(2))
+            .unwrap()
+            .expect("two edges are within depth two");
+        assert_eq!(path.iter().map(|s| s.id).collect::<Vec<_>>(), vec![a, b, c]);
+        assert_eq!(
+            get_transitive_callees(a, &storage, Some(2)).unwrap().len(),
+            2
+        );
+    }
+
+    #[test]
+    fn shortest_path_to_self_needs_zero_edges() {
+        let (storage, file_id, _dir) = fixture();
+        let a = symbol(&storage, file_id, "a", None);
+        let path = find_call_path(a, a, &storage, Some(0))
+            .unwrap()
+            .expect("identity path exists at depth zero");
+        assert_eq!(path.len(), 1);
+        assert_eq!(path[0].id, a);
+    }
+
+    #[test]
+    fn graph_summaries_include_nested_symbols() {
+        let (storage, file_id, _dir) = fixture();
+        let parent = symbol(&storage, file_id, "module", None);
+        let entry = symbol(&storage, file_id, "entry", Some(parent));
+        let leaf = symbol(&storage, file_id, "leaf", Some(parent));
+        edge(&storage, entry, leaf);
+
+        let usage = get_usage_stats(&storage).unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!((usage[0].0.id, usage[0].1), (leaf, 1));
+        assert_eq!(
+            get_entry_points(&storage)
+                .unwrap()
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![entry]
+        );
+        assert_eq!(
+            get_leaf_nodes(&storage)
+                .unwrap()
+                .iter()
+                .map(|s| s.id)
+                .collect::<Vec<_>>(),
+            vec![leaf]
+        );
+    }
 }

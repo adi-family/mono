@@ -1,7 +1,7 @@
 // Global content-addressable cache in the indexer's module of the mono store.
 //
-// Stores parsed symbols and embeddings keyed by SHA256 of file content.
-// Shared across all projects and worktrees — same file content is indexed once.
+// Stores parsed symbols and embeddings keyed by SHA256 of content plus language/dialect.
+// Shared across all projects and worktrees — identical parse inputs are indexed once.
 
 use crate::error::{Error, Result};
 use crate::types::ParsedFile;
@@ -28,7 +28,8 @@ use tracing::debug;
 ///   includes the symbol's body.
 /// * 2 — the declaration is repeated after the body, so it keeps a meaningful share of the
 ///   pooled vector.
-pub const SCHEMA_VERSION: u32 = 2;
+/// * 3 — parser corrections change symbols, signatures, visibility, and their embeddings.
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Cached parsing + embedding results for a single file content hash.
 #[derive(Debug, Serialize, Deserialize)]

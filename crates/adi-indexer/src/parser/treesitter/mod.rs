@@ -4,6 +4,7 @@
 
 pub mod analyzers;
 
+use std::path::Path;
 use tree_sitter::Parser as TsParser;
 
 use crate::error::{Error, Result};
@@ -30,24 +31,34 @@ impl TreeSitterParser {
     fn analyzer_for(language: Language) -> Box<dyn LanguageAnalyzer> {
         lang::analyzer(language).unwrap_or_else(|| Box::new(GenericAnalyzer::new(language)))
     }
-}
 
-impl Default for TreeSitterParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+    fn grammar_for_path(language: Language, path: Option<&Path>) -> Result<tree_sitter::Language> {
+        #[cfg(feature = "lang-typescript")]
+        if language == Language::TypeScript
+            && path
+                .and_then(Path::extension)
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("tsx"))
+        {
+            return Ok(tree_sitter_typescript::LANGUAGE_TSX.into());
+        }
+        #[cfg(not(feature = "lang-typescript"))]
+        let _ = path;
 
-impl Parser for TreeSitterParser {
-    fn parse(&self, source: &str, language: Language) -> Result<ParsedFile> {
-        let ts_lang = lang::grammar(language).ok_or_else(|| {
+        lang::grammar(language).ok_or_else(|| {
             Error::UnsupportedLanguage(format!(
                 "{}: this build has no grammar for it (enable the lang-{} feature)",
                 language.as_str(),
                 language.as_str()
             ))
-        })?;
+        })
+    }
 
+    fn parse_with_grammar(
+        source: &str,
+        language: Language,
+        ts_lang: tree_sitter::Language,
+    ) -> Result<ParsedFile> {
         let mut parser = TsParser::new();
         parser
             .set_language(&ts_lang)
@@ -71,6 +82,26 @@ impl Parser for TreeSitterParser {
             symbols,
             references,
         })
+    }
+}
+
+impl Default for TreeSitterParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Parser for TreeSitterParser {
+    fn parse(&self, source: &str, language: Language) -> Result<ParsedFile> {
+        Self::parse_with_grammar(source, language, Self::grammar_for_path(language, None)?)
+    }
+
+    fn parse_for_path(&self, source: &str, language: Language, path: &Path) -> Result<ParsedFile> {
+        Self::parse_with_grammar(
+            source,
+            language,
+            Self::grammar_for_path(language, Some(path))?,
+        )
     }
 
     fn supports(&self, language: Language) -> bool {
@@ -98,6 +129,57 @@ mod tests {
         let parser = TreeSitterParser::new();
         assert!(!parser.supports(Language::Unknown));
         assert!(parser.parse("anything", Language::Unknown).is_err());
+    }
+
+    #[cfg(feature = "lang-typescript")]
+    #[test]
+    fn typescript_and_tsx_select_their_own_syntax() {
+        let cases = [
+            (
+                "view.tsx",
+                "export function View() { return <button onClick={() => save()}>Save</button>; }",
+                "save",
+            ),
+            (
+                "VIEW.TSX",
+                "export function View() { return <button onClick={() => save()}>Save</button>; }",
+                "save",
+            ),
+            (
+                "assertion.ts",
+                "function assertValue(value: unknown) { return <string>normalize(value); }",
+                "normalize",
+            ),
+        ];
+        for (path, source, call) in cases {
+            let mut tree_parser = TsParser::new();
+            tree_parser
+                .set_language(
+                    &TreeSitterParser::grammar_for_path(
+                        Language::TypeScript,
+                        Some(Path::new(path)),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            let tree = tree_parser.parse(source, None).unwrap();
+            assert!(
+                !tree.root_node().has_error(),
+                "wrong grammar for {path}: {}",
+                tree.root_node().to_sexp()
+            );
+
+            let parsed = TreeSitterParser::new()
+                .parse_for_path(source, Language::TypeScript, Path::new(path))
+                .unwrap();
+            assert_eq!(parsed.symbols.len(), 1);
+            assert!(
+                parsed
+                    .references
+                    .iter()
+                    .any(|reference| reference.name == call)
+            );
+        }
     }
 
     #[cfg(feature = "lang-rust")]

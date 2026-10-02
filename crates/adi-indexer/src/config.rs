@@ -97,30 +97,35 @@ impl Default for IgnoreConfig {
 
 impl Config {
     pub fn load(project_path: &Path) -> Result<Self> {
-        let mut config = Self::default();
-
         // User-level defaults from the indexer's module in the mono store.
         let user_config_path = Self::user_config_path();
-        if user_config_path.exists() {
-            let content = std::fs::read_to_string(&user_config_path)?;
-            let user_config: Config = toml::from_str(&content)?;
-            config = config.merge(user_config);
-        }
-
         // Load project-level config from .adi/config.toml
         let project_config_path = project_path.join(".adi/config.toml");
-        if project_config_path.exists() {
-            let content = std::fs::read_to_string(&project_config_path)?;
-            let project_config: Config = toml::from_str(&content)?;
-            config = config.merge(project_config);
-        }
+        Self::load_layers(&[&user_config_path, &project_config_path])
+    }
 
-        Ok(config)
+    pub(crate) fn load_layers(paths: &[&Path]) -> Result<Self> {
+        let mut config =
+            toml::Value::try_from(Self::default()).map_err(|e| Error::Config(e.to_string()))?;
+        for path in paths {
+            let content = match std::fs::read_to_string(path) {
+                Ok(content) => content,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let layer: toml::Value = toml::from_str(&content)?;
+            // Validate each file before merging so a later layer cannot hide invalid types.
+            let _: Self = layer.clone().try_into()?;
+            Self::merge_layer(&mut config, layer);
+        }
+        Ok(config.try_into()?)
     }
 
     pub fn save_project(&self, project_path: &Path) -> Result<()> {
-        let config_path = project_path.join(".adi/config.toml");
+        let config_dir = project_path.join(".adi");
+        let config_path = config_dir.join("config.toml");
         let content = toml::to_string_pretty(self).map_err(|e| Error::Config(e.to_string()))?;
+        std::fs::create_dir_all(config_dir)?;
         std::fs::write(&config_path, content)?;
         Ok(())
     }
@@ -135,34 +140,45 @@ impl Config {
         crate::paths::user_config_path()
     }
 
-    fn merge(mut self, other: Config) -> Self {
-        // Override with non-default values from other
-        if other.embedding.provider != EmbeddingConfig::default().provider {
-            self.embedding.provider = other.embedding.provider;
-        }
-        if other.embedding.model != EmbeddingConfig::default().model {
-            self.embedding.model = other.embedding.model;
-        }
-        if other.embedding.dimensions != EmbeddingConfig::default().dimensions {
-            self.embedding.dimensions = other.embedding.dimensions;
-        }
-        if other.embedding.api_key.is_some() {
-            self.embedding.api_key = other.embedding.api_key;
-        }
-        if other.embedding.api_base.is_some() {
-            self.embedding.api_base = other.embedding.api_base;
-        }
-        if other.parser.max_file_size != ParserConfig::default().max_file_size {
-            self.parser.max_file_size = other.parser.max_file_size;
-        }
-        if !other.parser.enabled_languages.is_empty() {
-            self.parser.enabled_languages = other.parser.enabled_languages;
-        }
-        if !other.ignore.patterns.is_empty()
-            && other.ignore.patterns != IgnoreConfig::default().patterns
+    fn merge_layer(config: &mut toml::Value, mut layer: toml::Value) {
+        // Custom ignore rules extend inherited rules in order (negation is order-sensitive).
+        // An explicit empty array clears them. Other arrays, such as enabled_languages,
+        // replace their inherited value, including when the new array is empty.
+        if let Some(patterns) = layer
+            .get_mut("ignore")
+            .and_then(|ignore| ignore.get_mut("patterns"))
+            .and_then(toml::Value::as_array_mut)
+            && !patterns.is_empty()
         {
-            self.ignore.patterns.extend(other.ignore.patterns);
+            let mut inherited = config
+                .get("ignore")
+                .and_then(|ignore| ignore.get("patterns"))
+                .and_then(toml::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            // save_project writes the effective rules, including their inherited prefix.
+            // Reusing that prefix preserves ordering without duplicating it on every reload.
+            if !patterns.starts_with(&inherited) {
+                inherited.append(patterns);
+                *patterns = inherited;
+            }
         }
-        self
+
+        fn overlay(base: &mut toml::Value, layer: toml::Value) {
+            match (base, layer) {
+                (toml::Value::Table(base), toml::Value::Table(layer)) => {
+                    for (key, value) in layer {
+                        if let Some(existing) = base.get_mut(&key) {
+                            overlay(existing, value);
+                        } else {
+                            base.insert(key, value);
+                        }
+                    }
+                }
+                (base, value) => *base = value,
+            }
+        }
+
+        overlay(config, layer);
     }
 }

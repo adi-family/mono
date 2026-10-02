@@ -256,6 +256,38 @@ mod tests {
     }
 
     #[test]
+    fn tree_preserves_nested_symbols_in_source_order() {
+        let (storage, _dir) = create_test_storage();
+        let file_id = storage.insert_file(&create_test_file()).unwrap();
+        let parent = storage
+            .insert_symbol(&create_test_symbol(file_id, "Worker", SymbolKind::Class))
+            .unwrap();
+        let mut later = create_test_symbol(file_id, "later", SymbolKind::Method);
+        later.parent_id = Some(parent);
+        later.location.start_line = 20;
+        let later_id = storage.insert_symbol(&later).unwrap();
+        let mut earlier = create_test_symbol(file_id, "earlier", SymbolKind::Method);
+        earlier.parent_id = Some(parent);
+        earlier.location.start_line = 10;
+        let earlier_id = storage.insert_symbol(&earlier).unwrap();
+        let mut nested = create_test_symbol(file_id, "nested", SymbolKind::Function);
+        nested.parent_id = Some(earlier_id);
+        nested.location.start_line = 11;
+        let nested_id = storage.insert_symbol(&nested).unwrap();
+
+        let tree = storage.get_tree().unwrap();
+        let roots = &tree.files[0].symbols;
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].id, parent);
+        let children = &roots[0].children;
+        assert_eq!(
+            children.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![earlier_id, later_id]
+        );
+        assert_eq!(children[0].children[0].id, nested_id);
+    }
+
+    #[test]
     fn test_get_status() {
         let (storage, _dir) = create_test_storage();
 

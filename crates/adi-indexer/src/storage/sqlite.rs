@@ -11,6 +11,7 @@ use crate::types::{
     SymbolId, SymbolKind, SymbolNode, SymbolUsage, Tree, Visibility,
 };
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -766,22 +767,33 @@ impl Storage for SqliteStorage {
         for (file_id, path, language) in files {
             let symbols: Vec<(i64, String, String, Option<i64>)> = rows(
                 &conn,
-                "SELECT id, name, kind, parent_id FROM symbols WHERE file_id = ?1 ORDER BY start_line",
+                "SELECT id, name, kind, parent_id FROM symbols WHERE file_id = ?1 ORDER BY start_line, start_col, id",
                 params![file_id.0],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
 
-            // Build tree structure
-            let symbol_nodes: Vec<SymbolNode> = symbols
-                .iter()
-                .filter(|(_, _, _, parent)| parent.is_none())
-                .map(|(id, name, kind, _)| SymbolNode {
-                    id: SymbolId(*id),
-                    name: name.clone(),
-                    kind: SymbolKind::parse(kind),
+            let mut children: HashMap<Option<i64>, Vec<SymbolNode>> = HashMap::new();
+            for (id, name, kind, parent) in symbols {
+                children.entry(parent).or_default().push(SymbolNode {
+                    id: SymbolId(id),
+                    name,
+                    kind: SymbolKind::parse(&kind),
                     children: vec![],
-                })
-                .collect();
+                });
+            }
+
+            fn build_children(
+                parent: Option<i64>,
+                children: &mut HashMap<Option<i64>, Vec<SymbolNode>>,
+            ) -> Vec<SymbolNode> {
+                let mut nodes = children.remove(&parent).unwrap_or_default();
+                for node in &mut nodes {
+                    node.children = build_children(Some(node.id.0), children);
+                }
+                nodes
+            }
+
+            let symbol_nodes = build_children(None, &mut children);
 
             nodes.push(FileNode {
                 path,

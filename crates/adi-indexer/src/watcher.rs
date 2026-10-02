@@ -159,28 +159,50 @@ fn should_index_path(path: &Path, project_path: &Path, config: &Config) -> bool 
         return false;
     }
 
-    // Only process files, not directories
-    if !path.is_file() {
+    if !path.starts_with(project_path) {
         return false;
     }
 
-    // Check against ignore patterns
-    if let Ok(relative_path) = path.strip_prefix(project_path) {
-        let ignore_builder = ignore::gitignore::GitignoreBuilder::new(project_path);
-
-        // Add patterns from config
-        let mut builder = ignore_builder;
-        for pattern in &config.ignore.patterns {
-            let _ = builder.add_line(None, pattern);
-        }
-
-        if let Ok(ignore) = builder.build() {
-            let matched = ignore.matched(relative_path, path.is_dir());
-            if matched.is_ignore() {
-                return false;
-            }
-        }
+    // Deleted files no longer satisfy is_file(); directory rename/removal events must also
+    // reach reindex_paths so it can remove the indexed descendants.
+    if let Ok(ignore) = crate::indexer::configured_ignores(project_path, config)
+        && ignore
+            .matched_path_or_any_parents(path, path.is_dir())
+            .is_ignore()
+    {
+        return false;
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deleted_files_and_directories_reach_the_reindexer() {
+        let project = tempfile::tempdir().unwrap();
+        let config = Config::default();
+        assert!(should_index_path(
+            &project.path().join("gone.rs"),
+            project.path(),
+            &config
+        ));
+        assert!(should_index_path(
+            &project.path().join("gone_directory"),
+            project.path(),
+            &config
+        ));
+        assert!(!should_index_path(
+            &project.path().join("target/gone.rs"),
+            project.path(),
+            &config
+        ));
+        assert!(!should_index_path(
+            &project.path().join(".adi/tree/index.sqlite"),
+            project.path(),
+            &config
+        ));
+    }
 }

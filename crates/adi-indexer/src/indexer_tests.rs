@@ -79,8 +79,8 @@ mod tests {
     /// of the walk means a test asserts about the files it wrote and nothing else.
     struct Fixture {
         project: TempDir,
-        /// Held, never read: dropping it would delete the index out from under `storage`.
-        _store: TempDir,
+        /// Dropping this directory would delete the index out from under `storage`.
+        store: TempDir,
         storage: Arc<dyn Storage>,
         index: Arc<RecordingIndex>,
         embedder: Arc<dyn Embedder>,
@@ -100,7 +100,7 @@ mod tests {
 
             Self {
                 project,
-                _store: store,
+                store,
                 storage: Arc::new(storage),
                 index: Arc::new(RecordingIndex::default()),
                 embedder: Arc::new(StubEmbedder),
@@ -154,6 +154,264 @@ mod tests {
         fn indexed(&self, relative: &str) -> bool {
             self.storage.file_exists(Path::new(relative)).unwrap()
         }
+
+        fn reindex(&self, paths: &[&str], config: &Config) -> Result<()> {
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap()
+                .block_on(crate::indexer::reindex_paths(
+                    self.project.path(),
+                    &paths
+                        .iter()
+                        .map(std::path::PathBuf::from)
+                        .collect::<Vec<_>>(),
+                    config,
+                    self.storage.clone(),
+                    self.embedder.clone(),
+                    self.parser.clone(),
+                    self.index.clone(),
+                    self.cache.clone(),
+                ))
+        }
+    }
+
+    #[test]
+    fn ignore_patterns_match_path_components_and_globs_not_substrings() {
+        let fixture = Fixture::new();
+        for path in [
+            "build.rs",
+            "src/targeting.rs",
+            "src/distribution.rs",
+            "target/out.rs",
+            "nested/build/out.rs",
+            "src/generated_api.rs",
+            "src/generated_keep.rs",
+        ] {
+            fixture.write(path, "fn example() {}\n");
+        }
+        let mut config = Config::default();
+        config
+            .ignore
+            .patterns
+            .extend(["**/generated_*.rs".into(), "!src/generated_keep.rs".into()]);
+        fixture.run(&config);
+        for path in [
+            "build.rs",
+            "src/targeting.rs",
+            "src/distribution.rs",
+            "src/generated_keep.rs",
+        ] {
+            assert!(fixture.indexed(path), "unexpectedly ignored {path}");
+        }
+        for path in [
+            "target/out.rs",
+            "nested/build/out.rs",
+            "src/generated_api.rs",
+        ] {
+            assert!(!fixture.indexed(path), "failed to ignore {path}");
+        }
+    }
+
+    #[test]
+    fn disabling_a_language_prunes_its_previous_index() {
+        let fixture = Fixture::new();
+        fixture.write("src/lib.rs", "fn present() {}\n");
+        fixture.run(&Config::default());
+        assert!(fixture.indexed("src/lib.rs"));
+        let mut config = Config::default();
+        config.parser.enabled_languages = vec!["python".into()];
+        let progress = fixture.run(&config);
+        assert_eq!(progress.files_total, 0);
+        assert!(!fixture.indexed("src/lib.rs"));
+    }
+
+    #[test]
+    fn unsupported_files_are_not_counted_as_indexed_work() {
+        let fixture = Fixture::new();
+        fixture.write("data.json", "{}");
+        let progress = fixture.run(&Config::default());
+        assert_eq!(progress.files_total, 0);
+        assert_eq!(progress.files_processed, 0);
+    }
+
+    #[test]
+    fn watch_updates_preserve_inbound_edges_and_replace_outbound_edges() {
+        let fixture = Fixture::new();
+        fixture.write("caller.rs", "fn caller() { changed(); }\n");
+        fixture.write("changed.rs", "fn changed() { previous(); }\n");
+        fixture.write("targets.rs", "fn previous() {}\nfn next() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+        fixture.write("changed.rs", "fn changed() { next(); }\n");
+        fixture
+            .reindex(&["changed.rs", "changed.rs"], &config)
+            .unwrap();
+        let changed = fixture.symbol("changed").unwrap();
+        let caller = fixture.symbol("caller").unwrap();
+        let next = fixture.symbol("next").unwrap();
+        assert_eq!(
+            fixture.storage.get_callers(changed.id).unwrap()[0].id,
+            caller.id
+        );
+        assert_eq!(
+            fixture.storage.get_callees(changed.id).unwrap()[0].id,
+            next.id
+        );
+        assert_eq!(fixture.storage.all_pending_refs().unwrap().len(), 2);
+        fixture.run(&config);
+        assert_eq!(
+            fixture.storage.get_callees(changed.id).unwrap()[0].id,
+            next.id
+        );
+    }
+
+    #[test]
+    fn watch_deleting_a_directory_removes_descendants_and_vectors() {
+        let fixture = Fixture::new();
+        fixture.write("nested/one.rs", "fn one() {}\n");
+        fixture.write("nested/two.rs", "fn two() {}\n");
+        fixture.write("keep.rs", "fn keep() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+        std::fs::remove_dir_all(fixture.project.path().join("nested")).unwrap();
+        fixture.reindex(&["nested"], &config).unwrap();
+        assert!(!fixture.indexed("nested/one.rs"));
+        assert!(!fixture.indexed("nested/two.rs"));
+        assert!(fixture.indexed("keep.rs"));
+        assert_eq!(fixture.index.count(), 1);
+    }
+
+    #[test]
+    fn watch_updates_honor_size_and_ignore_rules() {
+        let fixture = Fixture::new();
+        fixture.write("small.rs", "fn small() {}\n");
+        let mut config = Config::default();
+        fixture.run(&config);
+        fixture.write("target/new.rs", "fn ignored() {}\n");
+        config.parser.max_file_size = 5;
+        fixture
+            .reindex(&["small.rs", "target/new.rs"], &config)
+            .unwrap();
+        assert!(!fixture.indexed("small.rs"));
+        assert!(!fixture.indexed("target/new.rs"));
+        assert_eq!(fixture.index.count(), 0);
+    }
+
+    #[test]
+    fn changing_an_ignore_file_updates_eligibility_for_the_whole_tree() {
+        let fixture = Fixture::new();
+        fixture.write("keep.rs", "fn keep() {}\n");
+        fixture.write("gone.rs", "fn gone() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+        fixture.write(".ignore", "gone.rs\n");
+        fixture.reindex(&[".ignore"], &config).unwrap();
+        assert!(!fixture.indexed("gone.rs"));
+        assert!(fixture.indexed("keep.rs"));
+        fixture.delete(".ignore");
+        fixture.reindex(&[".ignore"], &config).unwrap();
+        assert!(fixture.indexed("gone.rs"));
+    }
+
+    #[test]
+    fn an_interrupted_pipeline_upgrade_is_retried_for_unchanged_files() {
+        #[derive(Debug)]
+        struct FailingParser;
+        impl Parser for FailingParser {
+            fn supports(&self, _: crate::types::Language) -> bool {
+                true
+            }
+            fn parse(
+                &self,
+                _: &str,
+                _: crate::types::Language,
+            ) -> Result<crate::types::ParsedFile> {
+                Err(crate::error::Error::Parser("temporary failure".into()))
+            }
+        }
+        let mut fixture = Fixture::new();
+        fixture.write("lib.rs", "fn original() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+        let original = fixture.symbol("original").unwrap();
+        let mut old_status = fixture.storage.get_status().unwrap();
+        old_status.pipeline_version -= 1;
+        fixture.storage.update_status(&old_status).unwrap();
+        fixture.cache = Arc::new(
+            GlobalCache::open_at(&fixture.store.path().join("cache_after_upgrade")).unwrap(),
+        );
+        fixture.parser = Arc::new(FailingParser);
+        assert_eq!(fixture.run(&config).errors.len(), 1);
+        fixture.parser = Arc::new(TreeSitterParser::new());
+        assert!(fixture.run(&config).errors.is_empty());
+        assert_ne!(
+            fixture.symbol("original").unwrap().id,
+            original.id,
+            "the failed pipeline upgrade was marked complete and never retried"
+        );
+        assert_eq!(
+            fixture.storage.get_status().unwrap().pipeline_version,
+            crate::indexer::PIPELINE_VERSION
+        );
+    }
+
+    #[test]
+    fn a_watch_read_error_preserves_the_last_good_file_and_is_reported() {
+        let fixture = Fixture::new();
+        fixture.write("valid.rs", "fn valid() {}\n");
+        let config = Config::default();
+        fixture.run(&config);
+        let before = fixture.symbol("valid").unwrap();
+        std::fs::write(fixture.project.path().join("valid.rs"), [0xff]).unwrap();
+        assert!(fixture.reindex(&["valid.rs"], &config).is_err());
+        assert_eq!(fixture.symbol("valid").unwrap().id, before.id);
+        fixture.write("valid.rs", "fn recovered() {}\n");
+        fixture.reindex(&["valid.rs"], &config).unwrap();
+        assert!(fixture.symbol("recovered").is_some());
+    }
+
+    #[test]
+    fn cached_parses_do_not_cross_language_boundaries() {
+        #[derive(Debug)]
+        struct LanguageParser;
+        impl Parser for LanguageParser {
+            fn supports(&self, _: crate::types::Language) -> bool {
+                true
+            }
+            fn parse(
+                &self,
+                _: &str,
+                language: crate::types::Language,
+            ) -> Result<crate::types::ParsedFile> {
+                Ok(crate::types::ParsedFile {
+                    language,
+                    symbols: vec![crate::types::ParsedSymbol::new(
+                        language.as_str(),
+                        crate::types::SymbolKind::Function,
+                        crate::types::Location {
+                            start_line: 0,
+                            start_col: 0,
+                            end_line: 0,
+                            end_col: 1,
+                            start_byte: 0,
+                            end_byte: 1,
+                        },
+                    )],
+                    references: vec![],
+                })
+            }
+        }
+        let mut fixture = Fixture::new();
+        fixture.parser = Arc::new(LanguageParser);
+        fixture.write("one.rs", "identical bytes");
+        fixture.run(&Config::default());
+        fixture.write("two.py", "identical bytes");
+        fixture.run(&Config::default());
+        assert!(fixture.symbol("rust").is_some());
+        assert!(
+            fixture.symbol("python").is_some(),
+            "a Python file reused the Rust parse"
+        );
     }
 
     /// A run walks the files that are there, so a deleted one is never looked at and no

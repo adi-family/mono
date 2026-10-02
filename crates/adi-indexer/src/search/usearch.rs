@@ -66,6 +66,12 @@ impl UsearchIndex {
             index
                 .load(index_path.to_str().unwrap_or(""))
                 .map_err(|e| Error::Index(format!("Failed to load index: {e}")))?;
+            if index.dimensions() != dimensions {
+                return Err(Error::Index(format!(
+                    "Stored vector dimension mismatch: expected {dimensions}, got {}",
+                    index.dimensions()
+                )));
+            }
         } else {
             // Reserve initial capacity for new index
             index
@@ -92,6 +98,16 @@ impl VectorIndex for UsearchIndex {
         }
 
         let index = self.index.lock().map_err(|e| Error::Index(e.to_string()))?;
+
+        // Loading restores the saved vectors without spare insertion capacity. Grow here so
+        // an incremental run can add symbols, and large fresh indexes can exceed the initial
+        // reservation. Removed slots are reused by usearch before another slot is needed.
+        if index.size() >= index.capacity() {
+            let capacity = index.capacity().saturating_mul(2).max(1);
+            index
+                .reserve(capacity)
+                .map_err(|e| Error::Index(format!("Failed to grow index capacity: {e}")))?;
+        }
 
         index
             .add(id as u64, vector)

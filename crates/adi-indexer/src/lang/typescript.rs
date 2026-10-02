@@ -23,14 +23,41 @@ tree_walking_analyzer!(
 
 fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     match node.kind() {
-        "function_declaration" | "function" => {
+        "function_declaration" | "generator_function_declaration" | "function" => {
             if let Some(name) = node.child_by_field_name("name") {
                 let name_text = node_text(name, source);
-                let sig = extract_function_signature(node, source);
+                let sig = extract_function_signature(node, source, &name_text);
                 symbols.push(
                     ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
                         .with_signature(sig),
                 );
+            }
+        }
+        "variable_declarator" => {
+            // Arrow functions and function expressions are named by the binding, not an
+            // optional internal function-expression name (`const run = function inner() {}`).
+            if let Some(name) = node.child_by_field_name("name")
+                && name.kind() == "identifier"
+                && let Some(value) = node.child_by_field_name("value")
+                && let Some(function) = function_value(value)
+            {
+                let name_text = node_text(name, source);
+                let signature = extract_function_signature(function, source, &name_text);
+                let mut children = Vec::new();
+                if let Some(body) = function.child_by_field_name("body") {
+                    extract_ts_symbols(body, source, &mut children);
+                }
+                symbols.push(
+                    ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
+                        .with_signature(signature)
+                        .with_children(children),
+                );
+            } else {
+                for i in 0..node.child_count() as u32 {
+                    if let Some(child) = node.child(i) {
+                        extract_ts_symbols(child, source, symbols);
+                    }
+                }
             }
         }
         "class_declaration" | "class" => {
@@ -154,16 +181,30 @@ fn import_source_or_text(node: Node, source: &str) -> String {
     node_text(node, source)
 }
 
-fn extract_function_signature(node: Node, source: &str) -> String {
-    let mut parts = Vec::new();
-    if let Some(name) = node.child_by_field_name("name") {
-        parts.push(node_text(name, source));
+fn function_value(mut node: Node) -> Option<Node> {
+    while node.kind() == "parenthesized_expression" {
+        node = node.named_child(0)?;
+    }
+    matches!(
+        node.kind(),
+        "arrow_function" | "function_expression" | "generator_function"
+    )
+    .then_some(node)
+}
+
+fn extract_function_signature(node: Node, source: &str, name: &str) -> String {
+    let mut parts = vec![name.to_string()];
+    if let Some(generics) = node.child_by_field_name("type_parameters") {
+        parts.push(node_text(generics, source));
     }
     if let Some(params) = node.child_by_field_name("parameters") {
         parts.push(node_text(params, source));
+    } else if let Some(param) = node.child_by_field_name("parameter") {
+        parts.push(format!("({})", node_text(param, source)));
     }
     if let Some(ret) = node.child_by_field_name("return_type") {
-        parts.push(format!(": {}", node_text(ret, source)));
+        // The type annotation already includes its leading colon.
+        parts.push(node_text(ret, source));
     }
     parts.join("")
 }
@@ -182,7 +223,7 @@ fn collect_ts_references(node: Node, source: &str, refs: &mut Vec<ParsedReferenc
                 }
             }
         }
-        "import_statement" => {
+        "import_statement" | "export_statement" => {
             if let Some(source_node) = node.child_by_field_name("source") {
                 let module = node_text(source_node, source)
                     .trim_matches(|c| c == '"' || c == '\'')

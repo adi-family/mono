@@ -99,8 +99,10 @@ lands in whichever came first, and is reported once.
 | user settings | `~/.adi/mono/indexer/config.toml` |
 | parse + embedding cache | `~/.adi/mono/indexer/cache/` |
 
-The cache is content-addressed by SHA-256 of the file bytes, and shared machine-wide: the same
-file across ten worktrees is parsed and embedded once. Embeddings in it carry the model name, so
+The cache is addressed by a SHA-256 key over the file content hash, language, and normalized
+extension, and shared machine-wide: the same file across ten worktrees is parsed and embedded
+once. Language and extension separate identical bytes parsed as different languages or as
+TypeScript versus TSX. Embeddings in it carry the model name, so
 changing models invalidates exactly the vectors it should and keeps the parse results.
 
 The index is derived state and is gitignored — rebuild it with `indexer index`.
@@ -169,6 +171,40 @@ A language with a grammar but no dedicated analyzer still indexes — `parser/tr
 analyzers/generic.rs` reads the node kinds that recur across languages. `adi-mono indexer
 languages` prints what the running binary actually carries.
 
+`.tsx` uses the TSX grammar; `.ts`, `.mts`, and `.cts` use the TypeScript grammar, which also
+supports TypeScript's angle-bracket type assertions. JavaScript and TypeScript function bindings
+such as `const handler = () => ...` are indexed under the binding name.
+
+`parser.enabled_languages` restricts indexing to the listed language names; an empty list enables
+all compiled grammars. Recognized extensions without a compiled grammar are skipped. Custom
+ignore patterns use gitignore syntax, including wildcards and negation: `build` excludes a
+directory named `build`, while `build.rs` remains eligible. Watch updates apply the same file
+selection rules as full indexing and rebuild references after updating or deleting files.
+Changing `.gitignore` or `.ignore` triggers a full eligibility refresh. A normal watch batch
+walks the project to apply those same rules, then reparses only affected files whose content
+changed.
+
+Configuration layers apply defaults, user settings, then project settings. Explicit values,
+including `false` and empty language lists, override earlier layers. Nonempty custom ignore
+lists extend inherited patterns in order; an explicit empty ignore list clears them.
+
+## Remaining limitations
+
+- Reference resolution matches names, with a fallback for qualified names; it does not perform
+  compiler-level scope or type resolution. Ambiguous names can produce extra graph edges.
+- Rust visibility records declared access, not effective exports. TypeScript export visibility,
+  class-field arrow methods, and functions wrapped in `as` or `satisfies` still need coverage.
+- Reading or parsing a changed file fails before its old rows are removed. Database failures
+  during replacement and failures between SQLite and vector-index writes still need stronger
+  recovery; those two stores do not share a transaction.
+- Configuration loading preserves embedding provider, storage backend, and batch-size settings,
+  but the default constructor still selects Candle and SQLite, and batching uses its own size
+  limits. Those fields do not select additional implementations.
+
+Regression tests run with `cargo test -p adi-indexer`. To exercise parsing, indexing, and search
+without the model runtime, use
+`cargo test -p adi-indexer --no-default-features --features all-languages`.
+
 ## What gets embedded
 
 The text standing in for a symbol is:
@@ -232,10 +268,7 @@ v3 plugin ABI. The move dropped all of that machinery:
 - `lib-migrations` became `migrations/runner.rs`, forward-only against SQLite;
 - `lib-cli-common::AdiUserDirs` became `paths.rs` over the mono store, so `$ADI_DIR` is honored.
 
-Two upstream behaviours survived the move and are worth knowing, each pinned by a test in
-`parser/tests.rs`:
-
-- the Rust analyzer never reads `pub` — every Rust symbol is stored with `Visibility::Unknown`,
-  which is why the dead-code analysis's public-symbol filter finds nothing to keep in a Rust
-  tree;
-- an inline `mod foo { … }` is indexed as a module and its body is not descended into.
+The Rust analyzer indexes inline module contents and records declared visibility, including
+`pub(crate)` and `pub(super)`. Declared visibility does not resolve effective exports through
+private ancestor modules or reexports. Traits and impls include associated constants and types
+as well as methods.
