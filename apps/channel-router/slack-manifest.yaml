@@ -25,6 +25,12 @@ features:
   bot_user:
     display_name: adi
     always_online: true
+  # Without the Messages tab Slack refuses a DM outright ("Sending messages to this app has been
+  # turned off"), and message.im never fires -- found in ADI-MONO-124's live test.
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
   assistant_view:
     assistant_description: Ask ADI anything. Replies land back in this thread.
 oauth_config:

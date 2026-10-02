@@ -61,6 +61,14 @@ pub fn handle(
         return Ok(());
     }
 
+    // Slack's `assistant_thread_started` (someone opened the assistant panel) arrives as a message
+    // with nothing in it. Launching a turn on that got a live "your message has no content" reply
+    // (ADI-MONO-124) — there is nothing to answer until the person actually says something.
+    if message.text.trim().is_empty() && message.attachments.is_empty() {
+        info!(connection = %connection.id, kind = %message.raw_kind, "empty message; nothing to dispatch");
+        return Ok(());
+    }
+
     // From here on an agent run is actually about to be launched or continued -- the provider's
     // own "thinking…" indicator (Slack's `assistant.threads.setStatus`; a no-op for Telegram) goes
     // up now, and comes back down once that turn ends (`turn::spawn`'s watcher).
@@ -284,6 +292,31 @@ mod tests {
         )
         .expect_err("no such agent");
         assert!(matches!(err, crate::error::Error::Agents(_)));
+    }
+
+    /// An empty message (Slack's `assistant_thread_started`) launches nothing — proved against a
+    /// target agent that doesn't exist, which a launch attempt would have turned into an error.
+    #[test]
+    fn an_empty_message_launches_nothing() {
+        let cfg = scratch("empty-message");
+        let connections = Connections::with_config(cfg.clone());
+        let agents = Agents::with_config(cfg);
+        let created = connections
+            .create(
+                "slack",
+                Target::Agent {
+                    agent: "ghost".into(),
+                },
+            )
+            .unwrap();
+        connections
+            .set_allowlist(&created.id, Allowlist::Open)
+            .unwrap();
+
+        let mut opened = message(&created.id, "D1:1.0", "u1", "  ");
+        opened.raw_kind = "assistant_thread_started".into();
+        handle(&connections, &agents, "http://127.0.0.1:1", "tok", &opened)
+            .expect("skipped before any launch is attempted");
     }
 
     /// The "thinking…" signal fires as soon as dispatch is about to launch or continue a run --
