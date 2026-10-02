@@ -5,6 +5,8 @@ import {
   verifyLinkCode,
   signNodeToken,
   verifyNodeToken,
+  encryptCredential,
+  decryptCredential,
   randomId,
   LINK_CODE_TTL_SECONDS,
   type LinkCodePayload,
@@ -66,6 +68,40 @@ describe("node token", () => {
     const token = await signNodeToken(tokenPayload({ t: 1_000_000 }), SECRET);
     // A month later, same token, still good -- §2: "the token does not rotate on reconnect."
     expect(await verifyNodeToken(token, SECRET, 1_000_000 + 30 * 24 * 60 * 60)).not.toBeNull();
+  });
+});
+
+describe("credential encryption", () => {
+  it("round-trips a credential", async () => {
+    const blob = await encryptCredential({ botToken: "xoxb-1" }, SECRET);
+    expect(await decryptCredential(blob, SECRET)).toEqual({ botToken: "xoxb-1" });
+  });
+
+  it("is never the plaintext -- the stored blob itself must not contain the secret", async () => {
+    const blob = await encryptCredential({ botToken: "xoxb-super-secret" }, SECRET);
+    expect(blob).not.toContain("xoxb-super-secret");
+  });
+
+  it("two encryptions of the same credential differ -- a fresh random iv each time", async () => {
+    const a = await encryptCredential({ botToken: "xoxb-1" }, SECRET);
+    const b = await encryptCredential({ botToken: "xoxb-1" }, SECRET);
+    expect(a).not.toBe(b);
+  });
+
+  it("rejects decryption under the wrong secret", async () => {
+    const blob = await encryptCredential({ botToken: "xoxb-1" }, SECRET);
+    expect(await decryptCredential(blob, "other-secret")).toBeNull();
+  });
+
+  it("rejects a tampered blob -- AES-GCM's own tag check catches it", async () => {
+    const blob = await encryptCredential({ botToken: "xoxb-1" }, SECRET);
+    const [iv, ciphertext] = blob.split(".");
+    expect(await decryptCredential(`${iv}.${ciphertext}x`, SECRET)).toBeNull();
+  });
+
+  it("rejects garbage", async () => {
+    expect(await decryptCredential("not-a-blob", SECRET)).toBeNull();
+    expect(await decryptCredential("", SECRET)).toBeNull();
   });
 });
 

@@ -8,6 +8,11 @@
 #   npx wrangler secret put ROUTER_ADMIN_SECRET
 #   npx wrangler secret put TELEGRAM_BOT_TOKEN
 #   npx wrangler secret put TELEGRAM_SECRET_TOKEN
+#   npx wrangler secret put SLACK_CLIENT_ID
+#   npx wrangler secret put SLACK_CLIENT_SECRET
+#   npx wrangler secret put SLACK_SIGNING_SECRET
+#
+# Slack app itself: create from slack-manifest.yaml (api.slack.com/apps -> "From a manifest").
 #
 # Local:  npx wrangler dev   (reads secrets from .dev.vars -- see .dev.vars.example)
 # Deploy: Igor's call (ADI-MONO-124) -- not run from here.

@@ -66,4 +66,7 @@ a stranger a bot exists here and is gated is worse than saying nothing.
   there is one token per `(node, provider)`, shared across every connection on that provider, not
   one per connection. That's also why `disconnect` only revokes the token once every connection on
   that provider is gone.
-- Slack isn't built yet — its card in the panel says "coming soon" until it ships.
+- Slack's install is OAuth, not a deep link: `connect`'s printed URL is "Add to Slack" — completing
+  it in a browser installs the app into that workspace and links it in one step, no `/start`
+  message to send. The connection's routing key is the Slack **workspace** (`team_id`), so one link
+  covers every channel the bot is invited into; who may talk still narrows per the usual allowlist.

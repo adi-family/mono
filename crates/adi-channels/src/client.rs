@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use adi_agents::Agents;
 use adi_events::Events;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
@@ -27,7 +28,16 @@ use tracing::{debug, info, warn};
 use crate::connection::Connections;
 use crate::error::{Error, Result};
 use crate::protocol::{NodeFrame, RouterFrame};
+use crate::tls;
 use crate::ws;
+
+/// What the socket this client reads and writes needs to be: a plain [`TcpStream`] for `ws://`
+/// (`wrangler dev`, and every test below), or `tls::connect`'s `TlsStream` wrapping one for
+/// `wss://` — one boxed trait object so `connect_and_serve` picks between them once, up front,
+/// rather than duplicating the read/dispatch loop per transport (the same shape `adi-hive`'s
+/// `proxy::ClientStream` uses for its own plain-vs-TLS front door).
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 
 /// How many delivered event ids are remembered for dedup across a reconnect (§2: "a node that
 /// disconnects mid-delivery gets the same event again on reconnect"). Comfortably past the
@@ -137,9 +147,14 @@ impl RouterClient {
     /// means the peer side ended it.
     async fn connect_and_serve(&self, shutdown: &mut watch::Receiver<bool>) -> Result<bool> {
         let (host, port) = parse_ws_url(&self.router_url)?;
-        let mut stream = TcpStream::connect((host.as_str(), port))
+        let tcp = TcpStream::connect((host.as_str(), port))
             .await
             .map_err(|e| Error::Protocol(format!("couldn't reach {host}:{port}: {e}")))?;
+        let mut stream: Box<dyn Stream> = if tls::wants_tls(&self.router_url) {
+            Box::new(tls::connect(tcp, &host).await?)
+        } else {
+            Box::new(tcp)
+        };
         let leftover = ws::connect(&mut stream, &host, "/subscribe", &self.node_token).await?;
         self.connected.store(true, Ordering::Relaxed);
         info!(provider = %self.provider, %host, port, "subscribed to the router");
@@ -190,7 +205,12 @@ impl RouterClient {
         }
     }
 
-    async fn handle_frame(&self, frame: RouterFrame, stream: &mut TcpStream, dedup: &mut DedupCache) {
+    async fn handle_frame(
+        &self,
+        frame: RouterFrame,
+        stream: &mut Box<dyn Stream>,
+        dedup: &mut DedupCache,
+    ) {
         match frame {
             RouterFrame::Ping => {
                 if let Err(e) = write_frame(stream, &NodeFrame::Pong).await {
@@ -243,7 +263,7 @@ impl RouterClient {
     }
 }
 
-async fn write_frame(stream: &mut TcpStream, frame: &NodeFrame) -> Result<()> {
+async fn write_frame(stream: &mut Box<dyn Stream>, frame: &NodeFrame) -> Result<()> {
     let text = serde_json::to_string(frame).unwrap_or_default();
     ws::write_text(stream, &text).await
 }

@@ -16,6 +16,14 @@ export interface Env {
   /** Public -- used to build `t.me/<bot>?start=<code>` install links. */
   TELEGRAM_BOT_USERNAME?: string;
 
+  /** The one Slack app ADI runs -- `api.slack.com/apps`. Unlike Telegram's single bot token,
+   * these two are the *app's* OAuth credentials; the bot token itself is per-workspace, minted
+   * at install time and held encrypted in the connection's own Durable Object (§4). */
+  SLACK_CLIENT_ID?: string;
+  SLACK_CLIENT_SECRET?: string;
+  /** Signs every webhook delivery (`X-Slack-Signature`); never the OAuth secret above. */
+  SLACK_SIGNING_SECRET?: string;
+
   /** One Durable Object per `(node id, provider)` -- see {@link doId}. */
   NODE_CONNECTION: DurableObjectNamespace;
   /** `provider, routing_key -> node_id`. The only thing queried before a node is known (§1). */
@@ -78,6 +86,12 @@ export interface Connection {
    * needs directly in the request, node-side (§5) is the only consumer. */
   threads: Record<string, string>;
   linked: boolean;
+  /** A per-connection credential, set at link time -- Slack's per-workspace bot token (§4: one
+   * app, many workspaces, each handing back its own token, unlike Telegram's single `env`
+   * secret). AES-GCM ciphertext under `ROUTER_SECRET` (`state.ts`'s `encryptCredential`), never
+   * plaintext in Durable Object storage -- decrypted only in `router.ts`, at the moment `/send`
+   * actually needs it. Absent for a provider (Telegram) whose credential lives in `env` instead. */
+  credential?: string;
 }
 
 /** What a node hands the router to post a reply -- the body of `POST /send`, and what an
@@ -105,13 +119,25 @@ export interface OutboundReply {
  */
 export interface ChannelAdapter {
   id: string;
-  verify(req: Request, env: Env): Promise<boolean>;
+  /** `now` is epoch seconds, from the router's own (possibly test-pinned) clock -- added for
+   * Slack, whose signature scheme (§4) includes a freshness window `verify` has to check itself;
+   * Telegram's own `verify` ignores it (a secret path segment carries no timestamp to check). */
+  verify(req: Request, env: Env, now: number): Promise<boolean>;
   routingKey(payload: unknown): string | null;
   normalize(payload: unknown, connection: string, env: Env): Promise<ChannelMessage[]>;
   send(reply: OutboundReply, credential: unknown): Promise<void>;
   /** Returns the link code if `payload` is a link attempt (e.g. Telegram's `/start <code>`),
    * else `null`. Absent entirely for a provider whose link flow is a real redirect (Slack). */
   extractLinkCode?(payload: unknown): string | null;
+  /** Returns Slack's `url_verification` challenge if `payload` is one, else `null` -- the
+   * webhook handler must echo it back verbatim instead of routing the payload anywhere. Absent
+   * for a provider with no such handshake (Telegram). */
+  challengeResponse?(payload: unknown): string | null;
+  /** An ephemeral provider-side indicator ("thinking…"), not a message -- Slack's
+   * `assistant.threads.setStatus` (§4, the Agents & AI Apps surface). `thread` is the
+   * connection's own thread key (§5: a channel id, or `channel:thread_ts`); absent for a
+   * provider with no such concept (Telegram). */
+  setThinking?(thread: string, credential: unknown, status: string): Promise<void>;
 }
 
 /** The Durable Object id for one `(node, provider)` pair.

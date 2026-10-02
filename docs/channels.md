@@ -506,6 +506,47 @@ actual `router.ts`/`do.ts` (built concurrently in a sibling worktree) rather tha
   ADI-MONO-120/124 names that route. (Closed by ADI-MONO-122: `POST /disconnect` now exists —
   see §1 — and `adi_channels::connect::disconnect` calls it before touching local state.)
 
+## ADI-MONO-123 implementation notes
+
+Built against ADI-MONO-120's actual `router.ts`/`do.ts`/`types.ts`, not guessed, the same way
+ADI-MONO-121 read them. Three corrections to the adapter interface this task's own Slack section
+needed but the original §4 text didn't yet carry, plus one explicit non-decision:
+
+- **`ChannelAdapter.verify` gained a third parameter, `now`** (epoch seconds). Slack's signature
+  scheme needs a freshness check Telegram's secret-path-segment check never did; `router.ts`
+  already threaded a test-pinnable `now` through everything else, so this is that same clock, one
+  level further in. Telegram's own `verify` implementation is unchanged — a function assigned to
+  a `ChannelAdapter`-typed object literal may declare fewer parameters than the interface does,
+  the same tolerance `extractLinkCode`'s optionality already relies on.
+- **`ChannelAdapter.challengeResponse` is new**, optional, the same shape `extractLinkCode`
+  already set: a uniform way to ask "is this payload actually Slack's one-time `url_verification`
+  handshake?" without hard-coding Slack's envelope shape into `router.ts` itself. Absent for
+  Telegram, which has no such handshake.
+- **`ChannelAdapter.setThinking` is new**, optional, for Slack's `assistant.threads.setStatus`
+  ("thinking…", the Agents & AI Apps surface this task's own scope names). `POST /send`'s body
+  grew a `status` field as an alternative to `text` — exactly one of the two, never both — so a
+  node can ask for the ephemeral indicator through the one path it already has to the provider.
+  Absent (so a no-op) for a provider with no such concept.
+- **`Connection` gained an optional `credential` field**, AES-GCM ciphertext under
+  `ROUTER_SECRET` (new `state.ts` functions `encryptCredential`/`decryptCredential` — a key
+  *derived* from the secret via a hashed label, not the raw HMAC key `sign`/`verify` already use
+  for tokens and link codes, so the two never share key material). §4's own text already said
+  Slack's token "lives in the DO's per-connection state"; this is that state, made concrete and
+  encrypted at rest as this task's scope explicitly asked for — never written to D1, decrypted
+  only in `router.ts` at the moment `/send` needs the plaintext, never returned to a node.
+- **Streaming (`chat.startStream`/`appendStream`/`stopStream`) was not built.** This task's own
+  brief named it conditionally — "if the spec calls for streaming" — and §5's reply model is
+  discrete whole-message posts (the run's final answer, or a mid-run `channel-reply` call), never
+  token-by-token delivery. Nothing in this document asks for streaming replies, so there was
+  nothing to build; `chat.postMessage` (one call per reply, same as Telegram's `sendMessage`) is
+  what `send` does.
+- **`sender.name` is the raw Slack user id, not a display name.** Resolving one would need a
+  `users.info` call authenticated with *that workspace's* bot token — which `normalize`'s own
+  signature (`payload, connection, env`) has no way to reach, unlike Telegram's single `env`
+  secret that `normalize` already closes over directly for its own `getFile` round trip. Flagged
+  as a known gap rather than silently worked around; closing it would mean widening `normalize`'s
+  signature to also take a resolved credential, which no other provider needs yet.
+
 ## Decisions taken
 
 Calls made here that the design brief left open:

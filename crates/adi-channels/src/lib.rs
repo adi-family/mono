@@ -25,6 +25,7 @@ pub mod reply;
 pub mod router_api;
 pub mod token;
 pub mod tool;
+mod tls;
 mod ws;
 
 pub use client::RouterClient;

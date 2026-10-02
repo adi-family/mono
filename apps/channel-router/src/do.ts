@@ -155,13 +155,21 @@ export class NodeConnection implements DurableObject {
    * replay: a connection already linked refuses a second attempt rather than silently moving
    * the chat it's bound to. */
   private async link(request: Request): Promise<Response> {
-    const { connection, routing_key } = (await request.json()) as { connection: string; routing_key: string };
+    const { connection, routing_key, credential } = (await request.json()) as {
+      connection: string;
+      routing_key: string;
+      /** Already encrypted by `router.ts` (`state.ts`'s `encryptCredential`) -- this object
+       * never sees the plaintext, same as every other field it stores. Absent for a provider
+       * (Telegram) whose credential lives in a Worker secret instead. */
+      credential?: string;
+    };
     const record = await this.ctx.storage.get<Connection>(`conn:${connection}`);
     if (!record) return Response.json({ ok: false, reason: "unknown connection" }, { status: 404 });
     if (record.linked) return Response.json({ ok: false, reason: "already linked" }, { status: 409 });
 
     record.linked = true;
     record.routing_key = routing_key;
+    if (credential) record.credential = credential;
     await this.ctx.storage.put(`conn:${connection}`, record);
     await this.ctx.storage.put(`route:${routing_key}`, connection);
 

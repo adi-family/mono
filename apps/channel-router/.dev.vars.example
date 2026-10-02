@@ -14,3 +14,11 @@ ROUTER_ADMIN_SECRET="dev-only-change-me-too"
 # whole webhook-authenticity story.
 TELEGRAM_BOT_TOKEN=""
 TELEGRAM_SECRET_TOKEN=""
+
+# The one Slack app ADI runs (api.slack.com/apps -> create from slack-manifest.yaml). Unlike
+# Telegram's single bot token, these are the *app's* OAuth credentials -- the bot token itself is
+# per-workspace, minted at "Add to Slack" time and held encrypted in that connection's own
+# Durable Object, never here. SLACK_SIGNING_SECRET verifies X-Slack-Signature on every webhook.
+SLACK_CLIENT_ID=""
+SLACK_CLIENT_SECRET=""
+SLACK_SIGNING_SECRET=""

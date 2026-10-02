@@ -1,6 +1,6 @@
-//! The Channels page: a card per service (`docs/channels.md` §7) — Telegram today, Slack
-//! ("coming soon" until ADI-MONO-123) — each showing its connections, a router-connection status
-//! pill, and the Connect dialog that registers a fresh one.
+//! The Channels page: a card per service (`docs/channels.md` §7) — Telegram and, since
+//! ADI-MONO-123, Slack — each showing its connections, a router-connection status pill, and the
+//! Connect dialog that registers a fresh one.
 //!
 //! Page-local, like [`super::embedding_backends_view`] beside it: nothing here rides the shell's
 //! 4s poll (there is no live-channel subscription for `/api/channels*` — see this crate's own
@@ -18,9 +18,12 @@ use crate::state::{ChannelsConsole, Flash, State};
 use crate::ui::{confirm, copy_row, field_hint, flash_view};
 
 /// The services this build knows about, in the order their cards show: id, label, and whether
-/// this build can actually connect one (`telegram` — `slack` is named here so its card exists
-/// and says "coming soon" rather than being invisible until ADI-MONO-123 ships it).
-const PROVIDERS: [(&str, &str, bool); 2] = [("telegram", "Telegram", true), ("slack", "Slack", false)];
+/// this build can actually connect one. Both are, now that ADI-MONO-123 has shipped Slack's
+/// adapter; the third element stays rather than collapsing to a plain id/label list, since a
+/// future provider still being built gets a card that says "coming soon" the same way Slack's
+/// used to.
+const PROVIDERS: [(&str, &str, bool); 2] =
+    [("telegram", "Telegram", true), ("slack", "Slack", true)];
 
 /// How often the Connect dialog polls `GET /api/channels/<id>` while waiting for `linked`.
 const LINK_POLL_MS: u32 = 2_000;

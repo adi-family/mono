@@ -330,4 +330,56 @@ describe("POST /send", () => {
       }),
     );
   });
+
+  it("posts to slack with the per-workspace bot token decrypted out of the connection", async () => {
+    const node = `node-slack-send-${Math.random()}`;
+    const registerRes = await handle(
+      new Request("https://router.example/register", {
+        method: "POST",
+        headers: { authorization: `Bearer ${env.ROUTER_ADMIN_SECRET}` },
+        body: JSON.stringify({ node, provider: "slack", target: { kind: "agent", agent: "a" } }),
+      }),
+      env,
+      NOW,
+    );
+    const { token, connection, link_code } = (await registerRes.json()) as {
+      token: string;
+      connection: string;
+      link_code: string;
+    };
+
+    fetchMock.mockImplementation(async (_url: string, _init?: RequestInit) =>
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-workspace-1", team: { id: "T0123" } }), {
+        status: 200,
+      }),
+    );
+    const linkRes = await handle(
+      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      env,
+      NOW,
+    );
+    expect(linkRes.status).toBe(200);
+
+    fetchMock.mockClear();
+    fetchMock.mockImplementation(async (_url: string, _init?: RequestInit) =>
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    );
+    const sendRes = await handle(
+      new Request("https://router.example/send", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ connection, text: "reply from the agent", thread: "C999" }),
+      }),
+      env,
+      NOW,
+    );
+    expect(sendRes.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://slack.com/api/chat.postMessage",
+      expect.objectContaining({
+        headers: expect.objectContaining({ authorization: "Bearer xoxb-workspace-1" }),
+        body: JSON.stringify({ channel: "C999", text: "reply from the agent" }),
+      }),
+    );
+  });
 });

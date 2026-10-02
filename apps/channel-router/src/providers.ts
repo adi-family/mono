@@ -6,10 +6,8 @@
  * Durable Object, never a Worker secret -- docs/channels.md §4), so there is no single
  * `resolveProvider` returning a common shape here; each adapter reads its own env fields.
  *
- * `telegram` is the only provider with a working adapter (ADI-MONO-120's scope). `slack` is
- * named here only so `enabledProviders`/`GET /health` already report the full roster shape
- * `docs/channels.md` §6 expects to grow into -- it has no adapter, so every route that needs
- * one 404s for it today (see `adapters/index.ts`).
+ * `telegram` and, since ADI-MONO-123, `slack` both have working adapters (see
+ * `adapters/index.ts`) -- each reports enabled once its own credentials are set, independently.
  */
 import type { Env } from "./types";
 
@@ -30,8 +28,7 @@ export const PROVIDERS: Record<string, ProviderDef> = {
   slack: {
     id: "slack",
     name: "Slack",
-    // Stub: no adapter exists yet (ADI-MONO-123), so never enabled regardless of env.
-    enabled: () => false,
+    enabled: (env) => Boolean(env.SLACK_CLIENT_ID && env.SLACK_CLIENT_SECRET && env.SLACK_SIGNING_SECRET),
   },
 };
 

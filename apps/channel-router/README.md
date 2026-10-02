@@ -36,9 +36,9 @@ happen before a node is even known.
 | --- | --- | --- | --- |
 | `GET /` · `GET /health` | GET | anyone | JSON: service name, enabled providers. |
 | `POST /webhook/<provider>` | POST | the service | Verify the service's signature, resolve the routing key to a node via the `routing_keys` D1 table, forward the event to that node's `NodeConnection` Durable Object. A `/start <code>` (Telegram) is a link attempt, not an ordinary message -- consumed here, never reaches `normalize`. Always `200`s once the signature checks out: delivery to the node isn't on this request's critical path. |
-| `GET /link/<provider>` | GET | the service's own install flow | A real redirect-based link hop (Slack's "Add to Slack"). Telegram links through its webhook instead, so this 404s for every provider built so far. |
+| `GET /link/<provider>` | GET | the service's own install flow | A real redirect-based link hop. Telegram links through its webhook instead, so this 404s for it; Slack's "Add to Slack" OAuth callback is the one real user -- it verifies the signed `state`, exchanges `code` for that workspace's bot token, and binds the routing key. |
 | `POST /subscribe` | POST | a node | Upgrade to WebSocket. `Authorization: Bearer <node-token>` (or `?token=`) identifies the `(node, provider)` Durable Object this socket belongs to. |
-| `POST /send` | POST | a node | `{ connection, text }`. Resolves the connection's chat/team id from its Durable Object and posts through the provider's own adapter with this deployment's credential -- the only path a reply takes; a bot token never reaches a node. |
+| `POST /send` | POST | a node | `{ connection, text }` or `{ connection, thread, status }`. Resolves the connection's chat/team id from its Durable Object and posts through the provider's own adapter with this deployment's credential (Telegram: a Worker secret; Slack: the connection's own encrypted bot token) -- the only path a reply takes; a bot token never reaches a node. `status` instead of `text` is an ephemeral provider-side indicator (Slack's `assistant.threads.setStatus`, "thinking…") rather than a message; a no-op for a provider with no such concept. |
 | `POST /register` | POST | a node, holding `ROUTER_ADMIN_SECRET` | Mint a node token (first call for a `(node, provider)` pair only -- later calls reuse it) plus a fresh pending connection and a signed link code. |
 | `POST /disconnect` | POST | a node | `{ connection }`. Drops the connection from its Durable Object and the D1 routing row, and revokes the node token too once nothing else on this `(node, provider)` still needs it (ADI-MONO-122, closing the gap flagged below). |
 
@@ -47,10 +47,16 @@ happen before a node is even known.
 The registry is [`src/providers.ts`](src/providers.ts); adapters are one file per service under
 [`src/adapters/`](src/adapters/).
 
-- **`telegram`** -- the only working adapter. `TELEGRAM_BOT_TOKEN` + `TELEGRAM_SECRET_TOKEN`
-  enable it; `TELEGRAM_BOT_USERNAME` (public) builds `t.me/<bot>?start=<code>` install links.
-- **`slack`** -- named in the registry, `enabled()` always `false`. No adapter file exists yet
-  (ADI-MONO-123); every route that needs one 404s for it until then.
+- **`telegram`** -- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_SECRET_TOKEN` enable it;
+  `TELEGRAM_BOT_USERNAME` (public) builds `t.me/<bot>?start=<code>` install links. One bot token,
+  a Worker secret, shared by every workspace -- sorry, every chat.
+- **`slack`** -- `SLACK_CLIENT_ID` + `SLACK_CLIENT_SECRET` + `SLACK_SIGNING_SECRET` enable it
+  (ADI-MONO-123, [`src/adapters/slack.ts`](src/adapters/slack.ts)). Unlike Telegram, the bot
+  token itself isn't one of these: Slack hands back a different token per workspace at "Add to
+  Slack" time, so it's stored encrypted inside that one connection's own Durable Object instead of
+  as a Worker secret (`state.ts`'s `encryptCredential`/`decryptCredential`). `slack-manifest.yaml`
+  is the app manifest -- paste it at `api.slack.com/apps` to create the real app in one step
+  (ADI-MONO-124, Igor's call).
 
 ## Configuration
 
@@ -61,6 +67,9 @@ The registry is [`src/providers.ts`](src/providers.ts); adapters are one file pe
 | `TELEGRAM_BOT_TOKEN` | secret | The one Telegram bot ADI runs. |
 | `TELEGRAM_SECRET_TOKEN` | secret | `secret_token` set at `setWebhook` time; echoed back on every delivery. |
 | `TELEGRAM_BOT_USERNAME` | var | Public -- builds the `t.me/<bot>?start=<code>` install link. |
+| `SLACK_CLIENT_ID` | secret | The Slack app's OAuth client id (public-ish, but kept a secret alongside its pair below for one `wrangler secret put` story). |
+| `SLACK_CLIENT_SECRET` | secret | Exchanges an OAuth `code` for a workspace's bot token. |
+| `SLACK_SIGNING_SECRET` | secret | Verifies `X-Slack-Signature` on every webhook delivery. |
 | `NODE_CONNECTION` | Durable Object binding | One `NodeConnection` object per `(node, provider)` pair. |
 | `ROUTING_KEYS` | D1 binding | `provider, routing_key -> node_id`. The only lookup that runs before a node is known. |
 
@@ -100,12 +109,16 @@ happens, it needs, analogous to oauth-router's `scripts/setup-cf.sh`:
 1. the Worker `adi-channel-router` deployed, with a `NodeConnection` Durable Object and a
    `routing_keys` D1 database (`wrangler d1 create adi-channel-router-routing-keys`, then the
    real `database_id` into `wrangler.toml`)
-2. `ROUTER_SECRET`, `ROUTER_ADMIN_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SECRET_TOKEN` set as
-   Worker secrets
+2. `ROUTER_SECRET`, `ROUTER_ADMIN_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SECRET_TOKEN`,
+   `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET` set as Worker secrets
 3. `hooks.withadi.dev` attached as a custom domain
 4. a real `@AdiBot` registered with Telegram, with `setWebhook` pointed at
    `https://hooks.withadi.dev/webhook/telegram` and a `secret_token` matching
    `TELEGRAM_SECRET_TOKEN`
+5. a real Slack app created from [`slack-manifest.yaml`](slack-manifest.yaml) at
+   `api.slack.com/apps`, its OAuth client id/secret and signing secret copied into the three
+   `SLACK_*` secrets above, and -- if this deployment's origin differs from
+   `hooks.withadi.dev` -- every URL inside the manifest updated to match before pasting it
 
 ## Security notes
 
@@ -121,9 +134,19 @@ happens, it needs, analogous to oauth-router's `scripts/setup-cf.sh`:
   webhook is refused with a generic `400`, never reaching the Durable Object.
 - **Bot credentials never leave the router.** `POST /send` is the only path a reply takes; a
   node never calls Telegram or Slack directly.
+- **Slack's per-workspace bot token is encrypted at rest.** Unlike Telegram's single Worker
+  secret, Slack hands back a different token per workspace at OAuth time, stored inside that
+  connection's own Durable Object -- `state.ts`'s `encryptCredential` (AES-GCM, a key derived
+  from `ROUTER_SECRET`, never the raw secret itself) runs before every `ctx.storage.put`, and
+  `decryptCredential` runs only in `router.ts`, at the moment `/send` actually needs the
+  plaintext. Never written to D1, never returned to a node.
 - **The allowlist is enforced on the node, not here** (docs/channels.md §5, §8) -- this router
   forwards every webhook for a linked routing key regardless of sender; a bug here can leak a
   message, never grant a reply from an agent a sender isn't allowed to talk to.
+- **Zero-copy, explicitly for Slack too** (docs/channels.md §8, and the
+  `slack-agentexchange-listing-2026` research report §4): message content lives only in the DO's
+  redelivery queue until acked, the same as every other provider -- nothing about Slack's
+  listing requirements needs this router to hold anything longer.
 
 ## ADI-MONO-122: `/disconnect` and the epoch counter
 
@@ -137,6 +160,40 @@ registered *after* the revoke, since that check only compares epoch numbers. Fix
 durable `epoch_counter` in the Durable Object's own storage that survives a token being deleted
 (unlike the token record itself) and always hands out one past the highest epoch this object has
 ever minted.
+
+## ADI-MONO-123: the Slack adapter
+
+`src/adapters/slack.ts`, plus what it needed from the rest of the router:
+
+- **`verify` gained a third `now` parameter.** Slack's signature scheme needs a freshness check
+  (reject a webhook whose `X-Slack-Request-Timestamp` is more than five minutes off) that
+  Telegram's secret-path-segment check never needed; `router.ts`'s `handleWebhook` already had
+  `now` (from `handle`'s own test-pinnable clock), so this is the same param, threaded one level
+  further. Telegram's own `verify` is unchanged -- a TS interface method may be implemented with
+  fewer parameters than it declares, same as `extractLinkCode`'s optionality.
+- **`challengeResponse` is new on `ChannelAdapter`**, the same "uniform optional hook" shape
+  `extractLinkCode` already set: Slack's one-time `url_verification` handshake has to be echoed
+  back verbatim (`{ challenge }`) rather than routed anywhere, and the webhook handler needs a
+  provider-neutral way to ask "is this that handshake?" without hard-coding Slack's envelope
+  shape into `router.ts` itself.
+- **`setThinking` is new on `ChannelAdapter`**, optional, absent for Telegram -- Slack's
+  `assistant.threads.setStatus` ("thinking…", the Agents & AI Apps surface). `POST /send`'s body
+  now accepts `{ connection, thread, status }` as an alternative to `{ connection, text }`; a
+  provider with no such concept just no-ops.
+- **`Connection` gained an optional `credential` field** -- Slack's per-workspace bot token,
+  AES-GCM ciphertext under `ROUTER_SECRET` (`state.ts`'s new `encryptCredential`/
+  `decryptCredential`), set by `do.ts`'s `link()` and read back only by `router.ts`'s
+  `resolveCredential`. Telegram's credential is still a plain Worker secret and never touches
+  this field.
+- **`resolveCredential` became `async` and takes the connection, not just `env`.** Telegram's
+  credential was always resolvable from `env` alone; Slack's lives inside the connection the
+  router already fetched for `/send`, so the function's shape had to widen to reach it -- every
+  call site (`handleLinkAttempt`, `handleSend`) now `await`s it.
+- **`GET /link/<provider>` is real now, for Slack.** ADI-MONO-120 left it 404ing for every
+  provider on purpose ("not built in this task"); this task is that task. The signed link code
+  rides as OAuth's own `state` param -- the same code `/register` already mints, reused directly
+  rather than wrapped in a second signature, since it already carries `(node, provider,
+  connection)` and an expiry.
 
 ## Corrections made to docs/channels.md while building this
 

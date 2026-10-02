@@ -78,14 +78,17 @@ dependencies = [
  "adi-tools",
  "base64 0.22.1",
  "rand 0.10.2",
+ "rcgen",
  "reqwest",
  "rustls",
  "schemars",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "uuid",
+ "webpki-roots",
 ]
 
 [[package]]

@@ -13,6 +13,13 @@
  *   Durable Object has on file, which is what makes a token "signed and expiring" (bad
  *   signature or stale epoch both fail the same way) while still being long-lived and not
  *   rotating on an ordinary reconnect (§2) -- only an explicit mint/revoke moves the epoch.
+ *
+ * A third thing lives here for the same reason the first two do (one key, `ROUTER_SECRET`,
+ * never duplicated): {@link encryptCredential}/{@link decryptCredential}, AES-GCM over a key
+ * derived from `ROUTER_SECRET` rather than reusing it directly as an HMAC key would -- Slack's
+ * per-workspace bot token (§4), which this router stores encrypted at rest in the owning
+ * connection's Durable Object instead of as a Worker secret (there is one token per workspace,
+ * not one per deployment).
  */
 
 /** How long a link code stays valid -- one human clicking a link and sending one message. */
@@ -61,6 +68,15 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
     "sign",
     "verify",
   ]);
+}
+
+/** A key for {@link encryptCredential}/{@link decryptCredential}, derived from `ROUTER_SECRET`
+ * by hashing it alongside a fixed label -- domain separation, not a KDF, but enough of one: it
+ * keeps the bytes an attacker would need to forge a node token or a link code (both HMAC over
+ * the raw secret) disjoint from the bytes that decrypt a stored credential. */
+async function credentialKey(secret: string): Promise<CryptoKey> {
+  const digest = await crypto.subtle.digest("SHA-256", enc.encode(`${secret}:credential`));
+  return crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
 }
 
 /** A URL-safe random id -- used for connection ids. */
@@ -139,4 +155,31 @@ export async function verifyNodeToken(
     return null;
   }
   return payload as NodeTokenPayload;
+}
+
+/** Encrypt a per-connection credential (Slack's per-workspace bot token) for storage in the
+ * owning Durable Object -- never plaintext at rest. `iv.ciphertext`, both base64url, the same
+ * two-part shape {@link sign} uses for a token. */
+export async function encryptCredential(credential: unknown, secret: string): Promise<string> {
+  const key = await credentialKey(secret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc.encode(JSON.stringify(credential)));
+  return `${bytesToB64url(iv)}.${bytesToB64url(new Uint8Array(ciphertext))}`;
+}
+
+/** The inverse of {@link encryptCredential}. `null` on any failure (wrong key, truncated blob,
+ * tampered ciphertext -- AES-GCM's own tag check catches that last one), same "fail closed,
+ * don't throw" posture {@link verify} already takes for a signature. */
+export async function decryptCredential(blob: string, secret: string): Promise<unknown | null> {
+  try {
+    const dot = blob.indexOf(".");
+    if (dot <= 0) return null;
+    const iv = b64urlToBytes(blob.slice(0, dot));
+    const ciphertext = b64urlToBytes(blob.slice(dot + 1));
+    const key = await credentialKey(secret);
+    const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    return JSON.parse(dec.decode(plaintext));
+  } catch {
+    return null;
+  }
 }

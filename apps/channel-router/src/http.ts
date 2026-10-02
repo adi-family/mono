@@ -22,6 +22,16 @@ export function problem(status: number, message: string): Response {
   });
 }
 
+/** A small HTML page -- the browser-facing end of a redirect-based install flow (Slack's OAuth
+ * callback, §4), which answers the human's tab directly rather than a service's webhook retry
+ * logic the way every other route here does. */
+export function html(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/html; charset=utf-8", "cache-control": NO_STORE },
+  });
+}
+
 /** Constant-time string compare -- used for the admin bearer and Telegram's secret token, so
  * neither is checked with a comparison whose timing leaks how much of it matched. */
 export function timingSafeEqual(a: string, b: string): boolean {

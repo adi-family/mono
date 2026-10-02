@@ -20,7 +20,7 @@ pub(crate) enum ChannelsCommand {
     /// Connect a service to an agent: register this node for it, print the install/link URL, and
     /// wait for the operator to actually complete the link.
     Connect {
-        /// `telegram` (today; `slack` once ADI-MONO-123 ships).
+        /// `telegram` or `slack`.
         provider: String,
         /// The agent this connection's messages run against.
         #[arg(long)]

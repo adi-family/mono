@@ -8,10 +8,9 @@
 //! a frame it **receives** is accepted whether or not the peer bothered to mask it, since nothing
 //! this side talks to has a reason to.
 //!
-//! `ws://` only — no TLS. The router's production listener is `wss://`, but the whole
-//! verification surface for this build is a locally run router (`wrangler dev`, or the fake one in
-//! this crate's own tests), which serves plain `ws://`. Needed again before Telegram/Slack go
-//! live against `hooks.withadi.dev` (ADI-MONO-124) — tracked, not forgotten.
+//! `ws://` only — no TLS of its own. `wss://` (needed before Telegram/Slack go live against
+//! `hooks.withadi.dev`, ADI-MONO-124) is `tls.rs`'s job: it wraps the `TcpStream` before any of
+//! this module ever sees it, so the handshake and framing below run unchanged over either.
 
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 

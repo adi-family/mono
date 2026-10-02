@@ -24,31 +24,33 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const NOW = 1_700_000_000;
+
 describe("telegram verify", () => {
   it("accepts the configured secret token header", async () => {
     const req = new Request("https://router.example/webhook/telegram", {
       headers: { "x-telegram-bot-api-secret-token": "webhook-secret" },
     });
-    expect(await telegramAdapter.verify(req, env())).toBe(true);
+    expect(await telegramAdapter.verify(req, env(), NOW)).toBe(true);
   });
 
   it("rejects a missing header", async () => {
     const req = new Request("https://router.example/webhook/telegram");
-    expect(await telegramAdapter.verify(req, env())).toBe(false);
+    expect(await telegramAdapter.verify(req, env(), NOW)).toBe(false);
   });
 
   it("rejects a wrong header", async () => {
     const req = new Request("https://router.example/webhook/telegram", {
       headers: { "x-telegram-bot-api-secret-token": "nope" },
     });
-    expect(await telegramAdapter.verify(req, env())).toBe(false);
+    expect(await telegramAdapter.verify(req, env(), NOW)).toBe(false);
   });
 
   it("rejects when the deployment has no secret configured", async () => {
     const req = new Request("https://router.example/webhook/telegram", {
       headers: { "x-telegram-bot-api-secret-token": "webhook-secret" },
     });
-    expect(await telegramAdapter.verify(req, env({ TELEGRAM_SECRET_TOKEN: undefined }))).toBe(false);
+    expect(await telegramAdapter.verify(req, env({ TELEGRAM_SECRET_TOKEN: undefined }), NOW)).toBe(false);
   });
 });
 

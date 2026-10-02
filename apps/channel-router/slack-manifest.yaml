@@ -1,0 +1,56 @@
+# Paste this at https://api.slack.com/apps -> "Create New App" -> "From a manifest" to create
+# the ADI Slack app in one step -- ADI-MONO-123 (docs/channels.md §4). Not run from here: Igor's
+# call (ADI-MONO-124), same as every other real-bot/app registration this repo touches.
+#
+# After creating the app from this manifest:
+#   1. "OAuth & Permissions" -> "Install to Workspace" is for internal testing only; the public
+#      flow is this router's own `GET /register` -> "Add to Slack" (src/adapters/slack.ts).
+#   2. Copy the app's Client ID / Client Secret / Signing Secret into this deployment's
+#      SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET (`wrangler secret put`,
+#      or `.dev.vars` locally -- see .dev.vars.example).
+#   3. Replace every `hooks.withadi.dev` below with this deployment's real origin if it differs.
+#   4. Socket Mode is deliberately off (`socket_mode_enabled: false`) -- the public Slack
+#      Marketplace does not allow it (slack-agentexchange-listing-2026 §3); this app only ever
+#      answers a signed HTTPS webhook.
+display_information:
+  name: ADI
+  description: One ADI agent, reachable from Slack.
+  long_description: >-
+    Connects one ADI agent to a Slack workspace. Mention the bot or message it directly and the
+    agent replies in the same thread; the run's final answer posts back automatically. ADI's
+    cloud relay never stores message content beyond the moment it takes to deliver it to your
+    own machine, which is where the agent actually runs.
+  background_color: "#1a1a1a"
+features:
+  bot_user:
+    display_name: adi
+    always_online: true
+  assistant_view:
+    assistant_description: Ask ADI anything. Replies land back in this thread.
+oauth_config:
+  redirect_urls:
+    - https://hooks.withadi.dev/link/slack
+  scopes:
+    bot:
+      # app_mention -- lets someone @-mention the bot in a channel.
+      - app_mentions:read
+      # The Agents & AI Apps surface (assistant_thread_started/_context_changed,
+      # assistant.threads.setStatus) -- slack-agentexchange-listing-2026 §3.
+      - assistant:write
+      # chat.postMessage -- the only path a reply takes (docs/channels.md §1/§4).
+      - chat:write
+      # message.im -- a direct message to the bot.
+      - im:history
+settings:
+  event_subscriptions:
+    request_url: https://hooks.withadi.dev/webhook/slack
+    bot_events:
+      - app_mention
+      - message.im
+      - assistant_thread_started
+      - assistant_thread_context_changed
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

@@ -20,10 +20,11 @@
  *   still needs it (§1 step 4 -- the gap ADI-MONO-120/121 both flagged, closed by ADI-MONO-122).
  */
 import { getAdapter, resolveCredential } from "./adapters/index";
+import { slackExchangeCode, slackInstallUrl, slackRedirectUri, SLACK_INSTALL_SUCCESS_HTML } from "./adapters/slack";
 import { telegramInstallUrl } from "./adapters/telegram";
-import { bearerToken, json, problem, timingSafeEqual } from "./http";
+import { bearerToken, html, json, problem, timingSafeEqual } from "./http";
 import { enabledProviders } from "./providers";
-import { verifyLinkCode, verifyNodeToken } from "./state";
+import { encryptCredential, verifyLinkCode, verifyNodeToken } from "./state";
 import { doId } from "./types";
 import type { ChannelAdapter, Connection, Env, OutboundReply, Target } from "./types";
 
@@ -44,7 +45,7 @@ export async function handle(request: Request, env: Env, now: number = Date.now(
   }
 
   if (request.method === "GET" && segments.length === 2 && segments[0] === "link") {
-    return handleLink(segments[1]);
+    return handleLink(segments[1], url, env, now);
   }
 
   if (request.method === "POST" && segments.length === 1 && segments[0] === "register") {
@@ -105,7 +106,12 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
   });
   const data = (await res.json()) as { token: string; connection: string; link_code: string };
 
-  const installUrl = body.provider === "telegram" ? telegramInstallUrl(env, data.link_code) : null;
+  const installUrl =
+    body.provider === "telegram"
+      ? telegramInstallUrl(env, data.link_code)
+      : body.provider === "slack"
+        ? slackInstallUrl(request.url, env, data.link_code)
+        : null;
   return json({ token: data.token, connection: data.connection, link_code: data.link_code, install_url: installUrl });
 }
 
@@ -114,7 +120,7 @@ async function handleWebhook(providerId: string, request: Request, env: Env, now
   const adapter = getAdapter(providerId);
   if (!adapter) return problem(404, `unknown or unsupported provider: ${providerId}`);
 
-  const verified = await adapter.verify(request, env);
+  const verified = await adapter.verify(request, env, Math.floor(now / 1000));
   if (!verified) return problem(400, "signature verification failed");
 
   let payload: unknown;
@@ -122,6 +128,13 @@ async function handleWebhook(providerId: string, request: Request, env: Env, now
     payload = await request.json();
   } catch {
     return problem(400, "expected a JSON body");
+  }
+
+  // Slack's one-time `url_verification` handshake: echoed back verbatim, never routed anywhere
+  // (its payload carries no routing key for `routingKey` to find either).
+  const challenge = adapter.challengeResponse?.(payload) ?? null;
+  if (challenge !== null) {
+    return json({ challenge });
   }
 
   const routingKey = adapter.routingKey(payload);
@@ -200,7 +213,9 @@ async function handleLinkAttempt(
     .bind(providerId, routingKey, payload.node)
     .run();
 
-  const credential = resolveCredential(providerId, env);
+  // Telegram-only path (Slack links through the OAuth callback below, not a webhook /start):
+  // its credential is a plain Worker secret, so no connection is needed to resolve it.
+  const credential = await resolveCredential(providerId, env, null);
   if (credential) {
     try {
       await adapter.send({ routingKey, text: "Linked. You can talk to the agent here now." }, credential);
@@ -212,12 +227,51 @@ async function handleLinkAttempt(
 }
 
 /** `GET /link/<provider>` -- a real redirect-based install hop. Telegram links through its
- * webhook instead (`extractLinkCode`), so this 404s for every provider built so far; it exists
- * for Slack's "Add to Slack" OAuth callback (§4), not built in this task. */
-function handleLink(providerId: string): Response {
+ * webhook instead (`extractLinkCode`), so this 404s for it; Slack's "Add to Slack" OAuth
+ * callback (§4) is the one real user of this route. */
+async function handleLink(providerId: string, url: URL, env: Env, now: number): Promise<Response> {
   const adapter = getAdapter(providerId);
   if (!adapter) return problem(404, `unknown or unsupported provider: ${providerId}`);
-  return problem(404, `${providerId} has no redirect-based link flow`);
+  if (providerId !== "slack") return problem(404, `${providerId} has no redirect-based link flow`);
+  return handleSlackOAuthCallback(url, env, now);
+}
+
+/** The callback leg of "Add to Slack": verify the signed link code riding in OAuth's own
+ * `state` param (exactly `oauth-router`'s own pattern, reused rather than reinvented -- §4),
+ * exchange `code` for this workspace's bot token, bind the routing key, and store the token
+ * encrypted in the connection's own Durable Object. There is no chat yet to send a welcome
+ * message into (Slack's routing key is a workspace, not a channel), so the browser tab itself
+ * carries the confirmation instead of a `send` call the way Telegram's webhook-driven link does. */
+async function handleSlackOAuthCallback(url: URL, env: Env, now: number): Promise<Response> {
+  const providerError = url.searchParams.get("error");
+  if (providerError) return problem(400, `slack authorization was not granted: ${providerError}`);
+
+  const stateToken = url.searchParams.get("state");
+  if (!stateToken) return problem(400, "missing state");
+  const payload = await verifyLinkCode(stateToken, env.ROUTER_SECRET, Math.floor(now / 1000));
+  if (!payload || payload.provider !== "slack") return problem(400, "invalid or expired state");
+
+  const code = url.searchParams.get("code");
+  if (!code) return problem(400, "missing code");
+
+  const exchanged = await slackExchangeCode(env, code, slackRedirectUri(url.toString()));
+  if (!exchanged.ok) return problem(502, `slack token exchange failed: ${exchanged.error}`);
+
+  const credential = await encryptCredential({ botToken: exchanged.botToken }, env.ROUTER_SECRET);
+  const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, "slack"));
+  const linkRes = await stub.fetch("https://do/internal/connection/link", {
+    method: "POST",
+    body: JSON.stringify({ connection: payload.connection, routing_key: exchanged.teamId, credential }),
+  });
+  const linkOk = linkRes.ok;
+  await linkRes.json(); // every response body must be drained, even unused -- see do.ts
+  if (!linkOk) return problem(409, "connection was already linked, or is unknown");
+
+  await env.ROUTING_KEYS.prepare("INSERT OR REPLACE INTO routing_keys (provider, routing_key, node_id) VALUES (?, ?, ?)")
+    .bind("slack", exchanged.teamId, payload.node)
+    .run();
+
+  return html(SLACK_INSTALL_SUCCESS_HTML);
 }
 
 /** `POST /subscribe` -- verify the node token, then forward the upgrade itself to the owning
@@ -240,6 +294,9 @@ interface SendBody {
   connection?: unknown;
   text?: unknown;
   thread?: unknown;
+  /** An ephemeral provider-side indicator ("thinking…"), not a message -- alternative to
+   * `text` (§4's `setThinking`, the Agents & AI Apps surface). Exactly one of the two is given. */
+  status?: unknown;
 }
 
 /** `POST /send` -- the only path a reply takes (§1): resolve the connection's chat/team id
@@ -257,8 +314,10 @@ async function handleSend(request: Request, env: Env, now: number): Promise<Resp
   } catch {
     return problem(400, "expected a JSON body");
   }
-  if (typeof body.connection !== "string" || typeof body.text !== "string") {
-    return problem(400, "expected { connection, text }");
+  const text = typeof body.text === "string" ? body.text : null;
+  const status = typeof body.status === "string" ? body.status : null;
+  if (typeof body.connection !== "string" || (text === null && status === null)) {
+    return problem(400, "expected { connection, text } or { connection, status }");
   }
 
   const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, payload.provider));
@@ -280,18 +339,21 @@ async function handleSend(request: Request, env: Env, now: number): Promise<Resp
   }
 
   const adapter = getAdapter(payload.provider);
-  const credential = adapter ? resolveCredential(payload.provider, env) : null;
+  const credential = adapter ? await resolveCredential(payload.provider, env, connection) : null;
   if (!adapter || !credential) {
     return problem(502, `provider ${payload.provider} is not configured on this deployment`);
   }
 
-  const reply: OutboundReply = {
-    routingKey: connection.routing_key,
-    text: body.text,
-    thread: typeof body.thread === "string" ? body.thread : undefined,
-  };
+  const thread = typeof body.thread === "string" ? body.thread : undefined;
   try {
-    await adapter.send(reply, credential);
+    if (status !== null) {
+      // Absent for a provider with no such concept (Telegram) -- a no-op, not a failure, the
+      // same tolerance the rest of this design gives an unrecognized optional thing.
+      if (thread) await adapter.setThinking?.(thread, credential, status);
+    } else {
+      const reply: OutboundReply = { routingKey: connection.routing_key, text: text!, thread };
+      await adapter.send(reply, credential);
+    }
   } catch (e) {
     return problem(502, `send failed: ${String(e)}`);
   }

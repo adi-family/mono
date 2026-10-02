@@ -30,15 +30,16 @@ describe("provider registry", () => {
     expect(enabledProviders(env({ TELEGRAM_SECRET_TOKEN: "s" }))).toEqual([]);
   });
 
-  it("slack is never enabled -- stub only, no adapter yet", () => {
+  it("slack is enabled once all three of its credentials are set", () => {
+    expect(enabledProviders(env({ SLACK_SIGNING_SECRET: "s" }))).toEqual([]);
     expect(
       enabledProviders(
-        env({
-          TELEGRAM_BOT_TOKEN: "t",
-          TELEGRAM_SECRET_TOKEN: "s",
-          SLACK_SIGNING_SECRET: "whatever",
-        } as Partial<Env> as Env),
+        env({ SLACK_CLIENT_ID: "id", SLACK_CLIENT_SECRET: "secret", SLACK_SIGNING_SECRET: "s" }),
       ),
-    ).toEqual(["telegram"]);
+    ).toEqual(["slack"]);
+  });
+
+  it("slack stays disabled with only some of its three credentials", () => {
+    expect(enabledProviders(env({ SLACK_CLIENT_ID: "id", SLACK_CLIENT_SECRET: "secret" }))).toEqual([]);
   });
 });
