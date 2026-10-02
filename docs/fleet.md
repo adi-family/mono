@@ -1183,10 +1183,12 @@ Each item ships with unit tests in the same file.
       J4). Reads and writes are not treated differently: a bare mutation follows the picker exactly
       as a bare read does.
 - [x] L3 The exemptions: `/api/health`, `/api/fleet` and `/api/fleet/*` (including the picker's own
-      `/api/fleet/nodes`), `/api/mesh*`, the update endpoints, and `/api/system*` (the System
-      page's service status, power switch, restart and diagnostics — task t105) stay local always,
-      called through `fetch::get_local`/`fetch::post_local` and left as plain `Sub::get`/`Sub::post`
-      in `subscriptions`.
+      `/api/fleet/nodes`), `/api/mesh*`, the update endpoints, `/api/system*` (the System
+      page's service status, power switch, restart and diagnostics — task t105), and
+      `/api/channels*` (ADI-MONO-122 — a connection belongs to whichever machine's node holds the
+      live socket to the channel router, which is always this one, however the picker is pointed)
+      stay local always, called through `fetch::get_local`/`fetch::post_local` and left as plain
+      `Sub::get`/`Sub::post` in `subscriptions`.
 - [x] L4 The picker itself, in the titlebar on every route: **This machine** first, then every
       paired node from `/api/fleet/nodes`, one radio; a locked node listed and disabled with the
       Fleet page named. `/api/fleet/nodes` added to the `App` shell's own `load`/`subscriptions`,

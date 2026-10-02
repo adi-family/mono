@@ -1,0 +1,413 @@
+//! The two HTTP calls a node makes to the router directly (everything else is the WebSocket):
+//! `POST /register` to mint a node token and a fresh connection, and `POST /send` to post a reply
+//! through one (`docs/channels.md` §1/§2). Blocking, like every other HTTP call this workspace
+//! makes from a synchronous context (see `adi-agents`' harness loop) — both calls happen off the
+//! tokio runtime (a webapp handler on the blocking pool, or the run-finished observer's own
+//! `spawn_blocking`), never inside it.
+//!
+//! The request/response shapes here are read off `apps/channel-router`'s own
+//! `src/router.ts`/`do.ts` (ADI-MONO-120), not guessed — this crate's tests still run only
+//! against a fake router (below), per this task's own instructions, but the fake one is shaped to
+//! match the real one's wire contract exactly.
+
+use serde::{Deserialize, Serialize};
+
+use crate::connection::{Allowlist, Target};
+use crate::error::{Error, Result};
+
+/// Install `ring` as the process-wide rustls provider, once — see `adi-agents`' harness loop for
+/// why this is called at each client build rather than once at start-up (there is no start-up here
+/// to rely on: a webapp handler runs on tokio's blocking pool, never `main`).
+fn ensure_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+}
+
+fn client() -> Result<reqwest::blocking::Client> {
+    ensure_provider();
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| Error::Http(e.to_string()))
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterRequest<'a> {
+    node: &'a str,
+    provider: &'a str,
+    target: &'a Target,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allowlist: Option<&'a Allowlist>,
+}
+
+/// What `/register` hands back: a node token (good for this `(node, provider)` forever, or until
+/// revoked), and a fresh connection — `do.ts`'s `register` creates both in the one call, on the
+/// router's own clock, so this crate's connect flow never mints a connection id of its own; it
+/// uses this one verbatim. `install_url` is `null` for a provider with no known way to build one
+/// from a bare code (every provider but Telegram, today). `install_url_group` (ADI-MONO-125) is
+/// Telegram's "add this bot to a group" twin of `install_url` -- `null` for every other provider.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Registered {
+    pub token: String,
+    pub connection: String,
+    pub link_code: String,
+    #[serde(default)]
+    pub install_url: Option<String>,
+    #[serde(default)]
+    pub install_url_group: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SendRequest<'a> {
+    connection: &'a str,
+    text: &'a str,
+    /// The provider thread key (§5: a chat id, or `channel:thread_ts`) -- needed for Slack's
+    /// `send` to know *which* channel in a team-wide routing key to post into; harmlessly ignored
+    /// by Telegram, whose routing key alone already names the chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetThinkingRequest<'a> {
+    connection: &'a str,
+    thread: &'a str,
+    status: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct DisconnectRequest<'a> {
+    connection: &'a str,
+}
+
+/// A thin client over the router's own two node-facing HTTP routes.
+#[derive(Debug, Clone)]
+pub struct RouterApi {
+    /// `http://host:port`, no trailing slash — `ws://`'s HTTP-scheme twin (see
+    /// [`crate::client::parse_ws_url`] for how the two are kept in step).
+    base_url: String,
+}
+
+impl RouterApi {
+    #[must_use]
+    pub fn new(base_url: impl Into<String>) -> Self {
+        let mut base_url = base_url.into();
+        while base_url.ends_with('/') {
+            base_url.pop();
+        }
+        Self { base_url }
+    }
+
+    /// Mint a node token for `(node_id, provider)` (first call only — later ones return the same
+    /// one) and a fresh connection pointed at `target`/`allowlist`. Registration is open to any
+    /// node since ADI-MONO-125 (rate-limited and capped instead of gated) — `admin_secret` is
+    /// this node's own copy of `ROUTER_ADMIN_SECRET`, `None` for a node with no such secret (the
+    /// ordinary case now), `Some` only for an operator's own trusted node that still holds one
+    /// and wants to skip those limits (§8: acceptable because it only ever gates minting, never
+    /// ordinary traffic).
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status or a
+    /// body that doesn't carry a `token`.
+    pub fn register(
+        &self,
+        node_id: &str,
+        provider: &str,
+        target: &Target,
+        allowlist: Option<&Allowlist>,
+        admin_secret: Option<&str>,
+    ) -> Result<Registered> {
+        let mut request = client()?.post(format!("{}/register", self.base_url));
+        if let Some(admin_secret) = admin_secret {
+            request = request.bearer_auth(admin_secret);
+        }
+        let response = request
+            .json(&RegisterRequest {
+                node: node_id,
+                provider,
+                target,
+                allowlist,
+            })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("register failed ({status}): {body}")));
+        }
+        response
+            .json()
+            .map_err(|e| Error::Router(format!("register response wasn't the expected shape: {e}")))
+    }
+
+    /// Post `text` back through `connection`, over the router's own credential for whichever
+    /// service the connection belongs to — the only path a reply ever takes (§1: "a node never
+    /// calls Telegram/Slack directly"). `thread` is the connection's own thread key (§5); some
+    /// providers (Slack) need it to know which channel in a workspace-wide routing key to post
+    /// into, others (Telegram) ignore it since the routing key alone already names the chat.
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
+    pub fn send(&self, node_token: &str, connection: &str, thread: Option<&str>, text: &str) -> Result<()> {
+        let response = client()?
+            .post(format!("{}/send", self.base_url))
+            .bearer_auth(node_token)
+            .json(&SendRequest { connection, text, thread })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("send failed ({status}): {body}")));
+        }
+        Ok(())
+    }
+
+    /// Ask the provider for an ephemeral "thinking…" indicator on `connection`'s `thread` (Slack's
+    /// `assistant.threads.setStatus`; a no-op for a provider with no such concept, like Telegram —
+    /// `apps/channel-router`'s own `/send` handler tolerates an adapter without `setThinking`).
+    /// `status` is the text to show; an empty string clears it.
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
+    pub fn set_thinking(&self, node_token: &str, connection: &str, thread: &str, status: &str) -> Result<()> {
+        let response = client()?
+            .post(format!("{}/send", self.base_url))
+            .bearer_auth(node_token)
+            .json(&SetThinkingRequest { connection, thread, status })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("set_thinking failed ({status_code}): {body}")));
+        }
+        Ok(())
+    }
+
+    /// Tell the router to drop `connection` — its Durable Object entry and the D1 routing row —
+    /// and revoke `node_token` too if nothing else on this `(node, provider)` still needs it
+    /// (`docs/channels.md` §1 step 4). Bearer `node_token` is this provider's own node token, not
+    /// `admin_secret` — the same credential [`Self::send`] uses.
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
+    pub fn disconnect(&self, node_token: &str, connection: &str) -> Result<()> {
+        let response = client()?
+            .post(format!("{}/disconnect", self.base_url))
+            .bearer_auth(node_token)
+            .json(&DisconnectRequest { connection })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("disconnect failed ({status}): {body}")));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write as _};
+    use std::net::TcpListener;
+
+    /// A fake router answering exactly the two routes this client calls, over a real loopback
+    /// socket — per this task's instructions, never the real `apps/channel-router`.
+    fn fake_router(status_and_body: impl Into<String>) -> String {
+        let status_and_body = status_and_body.into();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line
+                    .to_ascii_lowercase()
+                    .strip_prefix("content-length:")
+                {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+
+            let mut stream = stream;
+            stream.write_all(status_and_body.as_bytes()).unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    fn agent_target() -> Target {
+        Target::Agent {
+            agent: "adi-agent".into(),
+        }
+    }
+
+    #[test]
+    fn register_parses_the_token_and_connection_out_of_a_successful_response() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\"}";
+        let base = fake_router(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let registered = RouterApi::new(base)
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .expect("register");
+        assert_eq!(registered.token, "tok_123");
+        assert_eq!(registered.connection, "conn_abc");
+        assert_eq!(registered.link_code, "code_1");
+        assert_eq!(registered.install_url, None, "absent in this response");
+        assert_eq!(registered.install_url_group, None, "absent in this response");
+    }
+
+    /// ADI-MONO-125: open self-registration — a node with no admin secret at all still
+    /// registers, and sends no `Authorization` header for the router to even consider.
+    #[test]
+    fn register_with_no_admin_secret_sends_no_authorization_header() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\"}";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut saw_authorization = false;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if line.to_ascii_lowercase().starts_with("authorization:") {
+                    saw_authorization = true;
+                }
+            }
+            tx.send(saw_authorization).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream.try_clone().unwrap().write_all(response.as_bytes()).unwrap();
+        });
+
+        RouterApi::new(format!("http://{addr}"))
+            .register("node-1", "telegram", &agent_target(), None, None)
+            .expect("register");
+        assert!(!rx.recv().unwrap(), "no admin secret given -- no bearer sent");
+    }
+
+    #[test]
+    fn register_carries_an_install_url_when_the_router_sends_one() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\",\
+                     \"install_url\":\"https://t.me/AdiBot?start=code_1\"}";
+        let base = fake_router(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let registered = RouterApi::new(base)
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .expect("register");
+        assert_eq!(
+            registered.install_url,
+            Some("https://t.me/AdiBot?start=code_1".to_string())
+        );
+    }
+
+    #[test]
+    fn register_carries_an_install_url_group_when_the_router_sends_one() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\",\
+                     \"install_url_group\":\"https://t.me/AdiBot?startgroup=code_1\"}";
+        let base = fake_router(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let registered = RouterApi::new(base)
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .expect("register");
+        assert_eq!(
+            registered.install_url_group,
+            Some("https://t.me/AdiBot?startgroup=code_1".to_string())
+        );
+    }
+
+    #[test]
+    fn register_surfaces_a_non_2xx_as_a_router_error() {
+        let base = fake_router("HTTP/1.1 403 Forbidden\r\nContent-Length: 7\r\n\r\nrefused");
+        let err = RouterApi::new(base)
+            .register("node-1", "telegram", &agent_target(), None, Some("wrong-secret"))
+            .expect_err("should refuse");
+        assert!(matches!(err, Error::Router(msg) if msg.contains("refused")));
+    }
+
+    #[test]
+    fn send_succeeds_on_a_bare_200() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .send("node-token", "conn-1", None, "hello back")
+            .expect("send");
+    }
+
+    #[test]
+    fn send_carries_a_thread_when_one_is_given() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .send("node-token", "conn-1", Some("C123"), "hello back")
+            .expect("send");
+    }
+
+    #[test]
+    fn set_thinking_succeeds_on_a_bare_200() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .set_thinking("node-token", "conn-1", "C123", "thinking…")
+            .expect("set_thinking");
+    }
+
+    #[test]
+    fn set_thinking_surfaces_a_non_2xx_as_a_router_error() {
+        let base = fake_router("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 7\r\n\r\nrefused");
+        let err = RouterApi::new(base)
+            .set_thinking("node-token", "conn-1", "C123", "thinking…")
+            .expect_err("should refuse");
+        assert!(matches!(err, Error::Router(msg) if msg.contains("refused")));
+    }
+
+    #[test]
+    fn disconnect_succeeds_on_a_bare_200() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .disconnect("node-token", "conn-1")
+            .expect("disconnect");
+    }
+
+    #[test]
+    fn disconnect_surfaces_a_non_2xx_as_a_router_error() {
+        let base = fake_router("HTTP/1.1 404 Not Found\r\nContent-Length: 7\r\n\r\nno such");
+        let err = RouterApi::new(base)
+            .disconnect("node-token", "conn-1")
+            .expect_err("should refuse");
+        assert!(matches!(err, Error::Router(msg) if msg.contains("no such")));
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_base_url_is_tolerated() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(format!("{base}/"))
+            .send("node-token", "conn-1", None, "hi")
+            .expect("send");
+    }
+}

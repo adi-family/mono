@@ -54,6 +54,12 @@ adi-facts = { workspace = true }
 # app a reader installs from a manifest is reachable from a shell, wherever that shell is.
 adi-marketplace = { workspace = true }
 
+# The `channels` command group (docs/channels.md §7): connect/list/route/allow/disconnect over
+# this node's own `/api/channels/*` (`adi_channels::node_api`) — never the router directly, and
+# never this crate's own HTTP stack either; `adi-marketplace` above already justified blocking
+# reqwest + rustls in this binary, and this reuses it rather than pulling a second copy.
+adi-channels = { workspace = true }
+
 clap = { workspace = true }
 # `mesh invite` draws its token as a QR (see `src/qr.rs`). Encoder only — the decoder is the
 # browser client's problem, and this binary never reads an image.

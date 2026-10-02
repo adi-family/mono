@@ -4,11 +4,12 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 25 enums across 20 files.
+5 structs · 26 enums across 21 files.
 
 ## Index
 
 - [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `AwaitsCommand`, `RunRow`
+- [`src/channels.rs`](#srcchannelsrs) — `ChannelsCommand`
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/embeddings.rs`](#srcembeddingsrs) — `EmbeddingsCommand`
@@ -268,6 +269,60 @@ struct RunRow {
     message: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     result_head: String,
+}
+```
+
+---
+
+## `src/channels.rs`
+
+### enum `ChannelsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum ChannelsCommand {
+    Connect {
+        provider: String,
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        qr: bool,
+        #[arg(long, conflicts_with = "qr")]
+        no_qr: bool,
+        #[arg(long, default_value_t = 600)]
+        timeout_secs: u64,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Route {
+        id: String,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long, conflicts_with = "resume")]
+        pause: bool,
+        #[arg(long, conflicts_with = "pause")]
+        resume: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Allow {
+        id: String,
+        #[arg(long, conflicts_with = "mode")]
+        add: Option<String>,
+        #[arg(long, value_parser = ["open", "owner_only"], conflicts_with = "add")]
+        mode: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Disconnect {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 ```
 
@@ -1037,6 +1092,10 @@ enum Command {
     Marketplace {
         #[command(subcommand)]
         command: MarketplaceCommand,
+    },
+    Channels {
+        #[command(subcommand)]
+        command: ChannelsCommand,
     },
     Events {
         #[command(subcommand)]

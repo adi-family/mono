@@ -4,11 +4,12 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-17 structs · 1 enum · 2 type aliases across 10 files.
+18 structs · 1 enum · 2 type aliases across 11 files.
 
 ## Index
 
 - [`src/awaits.rs`](#srcawaitsrs) — `Posted`
+- [`src/channels.rs`](#srcchannelsrs) — `Live`
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
@@ -29,6 +30,22 @@ One published event, owned — the observer runs on the dispatcher's tick and mu
 
 ```rust
 type Posted = (String, String);
+```
+
+---
+
+## `src/channels.rs`
+
+### struct `Live`
+
+The running sockets, by provider. Cheap to hold in `App`; everything here is behind the async mutex, the same shape `crate::MeshCtl` already uses for its own single long-lived task.
+
+```rust
+#[derive(Debug, Default)]
+pub struct Live {
+    shutdowns: Mutex<HashMap<String, watch::Sender<bool>>>,
+    connected: std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
 ```
 
 ---
@@ -128,6 +145,8 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
+    channels: Connections,
+    channels_live: channels::Live,
     mesh: MeshCtl,
     dist: Option<PathBuf>,
     start: Instant,

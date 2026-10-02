@@ -1,0 +1,25 @@
+# Copy to `.dev.vars` for `wrangler dev` (git-ignored). In production these are set with
+# `wrangler secret put <NAME>` instead of living in a file.
+
+# Signs node tokens and link codes. Use a long random value: `openssl rand -hex 32`.
+ROUTER_SECRET="dev-only-change-me"
+
+# Optional operator path for POST /register (ADI-MONO-125: registration is open to any node now,
+# rate-limited and capped instead of gated -- see docs/channels.md §1/§8). A node holding this
+# skips both limits; it is not browser-facing. `openssl rand -hex 32`.
+ROUTER_ADMIN_SECRET="dev-only-change-me-too"
+
+# The one Telegram bot ADI runs (api.telegram.org -> BotFather). TELEGRAM_SECRET_TOKEN is the
+# `secret_token` set on this bot's `setWebhook` call, echoed back as
+# X-Telegram-Bot-Api-Secret-Token on every delivery -- that header, not an HMAC, is Telegram's
+# whole webhook-authenticity story.
+TELEGRAM_BOT_TOKEN=""
+TELEGRAM_SECRET_TOKEN=""
+
+# The one Slack app ADI runs (api.slack.com/apps -> create from slack-manifest.yaml). Unlike
+# Telegram's single bot token, these are the *app's* OAuth credentials -- the bot token itself is
+# per-workspace, minted at "Add to Slack" time and held encrypted in that connection's own
+# Durable Object, never here. SLACK_SIGNING_SECRET verifies X-Slack-Signature on every webhook.
+SLACK_CLIENT_ID=""
+SLACK_CLIENT_SECRET=""
+SLACK_SIGNING_SECRET=""

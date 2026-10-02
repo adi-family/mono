@@ -28,6 +28,9 @@ server = [
     "dep:adi-tasks",
     "dep:adi-tools",
     "dep:adi-agents",
+    # The node side of Channels (docs/channels.md): the connection store, dispatch, and the
+    # router client the /api/channels/* handlers operate on.
+    "dep:adi-channels",
     # The knowledge base. Native-only (it compiles SQLite in and, with its default features, the
     # embedding model), which is exactly why it sits behind this feature and never reaches wasm.
     "dep:adi-knowledge",
@@ -87,6 +90,7 @@ adi-db = { workspace = true, optional = true }
 adi-tasks = { workspace = true, optional = true }
 adi-tools = { workspace = true, optional = true }
 adi-agents = { workspace = true, optional = true }
+adi-channels = { workspace = true, optional = true }
 adi-knowledge = { workspace = true, optional = true }
 adi-embeddings = { workspace = true, optional = true }
 adi-events = { workspace = true, optional = true }

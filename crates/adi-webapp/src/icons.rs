@@ -81,6 +81,8 @@ pub(crate) enum Icon {
     ExternalLink,
     /// The rerender overlay — watching the page change.
     Rerenders,
+    /// Channels — one agent reachable from Telegram/Slack.
+    Channels,
 }
 
 impl Icon {
@@ -125,6 +127,7 @@ impl Icon {
             Icon::Bug => Lucide::Bug,
             Icon::ExternalLink => Lucide::ArrowUpRight,
             Icon::Rerenders => Lucide::Eye,
+            Icon::Channels => Lucide::Radio,
         }
     }
 }
@@ -155,6 +158,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,
         Route::Fleet => Icon::Node,
+        Route::Channels => Icon::Channels,
         Route::SharedAssets => Icon::Cloud,
         Route::System => Icon::Power,
         // Reached from the Store rail rather than the explorer, so this icon is a fallback.

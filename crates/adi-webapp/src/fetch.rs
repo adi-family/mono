@@ -6,8 +6,10 @@ use std::collections::BTreeMap;
 use adi_webapp_api::types::{
     Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef,
     AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
-    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError,
-    CloseGoal, Dashboard, DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
+    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel, AnswerRun,
+    ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
+    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, ConnectChannel, Dashboard,
+    DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
     DirListing, EmbeddingBackendRef, EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
@@ -18,9 +20,10 @@ use adi_webapp_api::types::{
     LlmCallDetail, LlmCallRef, LlmCalls, LlmQuery, LlmSummary, MarketplaceDone, MarketplaceState,
     MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
     NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
-    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode, ReleaseResponse,
-    RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent,
+    NewWorkspace, NodeServiceRef, PauseChannel, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode,
+    ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
+    RouteChannel, ReviewRun, RunAgent,
     RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
     SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
     SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
@@ -203,6 +206,49 @@ pub async fn test_embedding_backend(draft: SaveEmbeddingBackend) -> Result<TestR
         &TestEmbeddingBackend { id: String::new(), draft: Some(draft) },
     )
     .await
+}
+
+// Channels (`docs/channels.md` §7): always local, never the panel-wide source picker's target
+// (`docs/fleet.md` §14's L3) — a connection belongs to whichever machine's node holds the live
+// socket to the router, which is always this one, however the picker is pointed.
+
+pub async fn channels() -> Result<ChannelsState, String> {
+    get_local("/api/channels").await
+}
+
+/// One connection, for the Connect dialog's own poll on `linked`.
+pub async fn channel(id: &str) -> Result<ChannelConnectionDto, String> {
+    get_local(&format!("/api/channels/{id}")).await
+}
+
+pub async fn channel_status() -> Result<ChannelProviderStatus, String> {
+    get_local("/api/channels/status").await
+}
+
+pub async fn connect_channel(
+    provider: String,
+    target: ChannelTargetDto,
+) -> Result<ChannelConnected, String> {
+    post_local("/api/channels/connect", &ConnectChannel { provider, target }).await
+}
+
+pub async fn route_channel(id: String, target: ChannelTargetDto) -> Result<ChannelsState, String> {
+    post_local("/api/channels/route", &RouteChannel { id, target }).await
+}
+
+pub async fn pause_channel(id: String, paused: bool) -> Result<ChannelsState, String> {
+    post_local("/api/channels/pause", &PauseChannel { id, paused }).await
+}
+
+pub async fn allow_channel(
+    id: String,
+    allowlist: ChannelAllowlistDto,
+) -> Result<ChannelsState, String> {
+    post_local("/api/channels/allow", &AllowChannel { id, allowlist }).await
+}
+
+pub async fn disconnect_channel(id: String) -> Result<ChannelsState, String> {
+    post_local("/api/channels/disconnect", &ChannelRef { id }).await
 }
 
 // Mesh: every endpoint returns the fresh MeshState so the page updates in one round-trip.

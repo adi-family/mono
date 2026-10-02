@@ -3,6 +3,7 @@
 
 mod agents;
 mod analytics;
+mod channels;
 pub(crate) mod dashboards;
 mod db;
 mod elements;
@@ -78,6 +79,7 @@ pub(crate) use agents::{
     load_agent_into_form, open_run_answerable_untracked, poll_watch, reset_chat_home,
 };
 pub(crate) use analytics::analytics_view;
+pub(crate) use channels::channels_view;
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
 pub(crate) use elements::elements_view;

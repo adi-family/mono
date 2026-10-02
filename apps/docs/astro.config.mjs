@@ -95,6 +95,7 @@ export default defineConfig({
 						{ label: 'DNS and the front door', link: '/dns/' },
 						{ label: 'Dashboards', link: '/dashboards/' },
 						{ label: 'Marketplace', link: '/marketplace/' },
+						{ label: 'Building a marketplace bundle', link: '/marketplace-bundles/' },
 						{ label: 'Fleet', link: '/fleet/' },
 						{ label: 'Mesh', link: '/mesh/' },
 					],

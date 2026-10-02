@@ -55,8 +55,13 @@ pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
     Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLifecycle, RunLimits,
     RunOverrides, SecretAttachment, Sent, SpawnPolicy, StoredAgent, StoredAgentManifest,
-    UNVERSIONED, contains_json_null, event_catalog,
+    UNVERSIONED, contains_json_null,
 };
+
+/// The whole platform event catalog — task + agent + channel events. Re-exported from
+/// `adi-channels` rather than `adi-agents` now: it is the lowest crate that can see every
+/// producer (see `adi_channels::events`' own module doc).
+pub use adi_channels::event_catalog;
 
 pub use adi_db::{ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo};
 

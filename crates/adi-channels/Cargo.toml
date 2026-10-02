@@ -1,0 +1,54 @@
+[package]
+name = "adi-channels"
+description = "The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+adi-events = { workspace = true }
+adi-agents = { workspace = true }
+adi-tools = { workspace = true }
+# A node token (docs/channels.md §1) is stored in the reserved scope the fleet's own node
+# passwords use — never injected into an agent run's environment, see src/token.rs.
+adi-secrets = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+# The one place a bot token never is: this crate only ever holds a node token, over HTTP to the
+# router (`/register`, `/send`). rustls rather than native-tls, same reason as everywhere else in
+# this workspace — see the root manifest's note on `rustls-no-provider`.
+reqwest = { workspace = true, features = ["blocking"] }
+rustls = { workspace = true }
+# `wss://` for the router socket itself (src/tls.rs) — the deployed router is https-only
+# (ADI-MONO-124), so this is required before go-live, not merely available. Same feature set
+# `adi-hive` already picks for its own TLS (ring, no cmake/C toolchain; tls12 for a peer that
+# hasn't moved to 1.3 yet).
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+# The trust anchors for that handshake — a compiled-in Mozilla root set, not the OS trust store,
+# so a build is reproducible and needs no platform cert API (unlike `rustls-platform-verifier`,
+# which `reqwest` picks for browser-facing OAuth and which this socket has no reason to match).
+webpki-roots = "1"
+
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "sync", "macros"] }
+tracing = { workspace = true }
+
+uuid = { workspace = true }
+# The websocket handshake's `Sec-WebSocket-Key`/frame masks (see src/ws.rs).
+rand = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }
+# A throwaway self-signed leaf for src/tls.rs's own handshake tests — the same crate `adi-hive`
+# mints its front-door certificate with.
+rcgen = { workspace = true }
+
+[lints]
+workspace = true

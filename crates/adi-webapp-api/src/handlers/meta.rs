@@ -66,12 +66,12 @@ fn default_bin_tools(tools: &Tools) -> Vec<String> {
 }
 
 /// The seed system prompt: the static base plus an **Events** section generated from the live
-/// [`adi_agents::event_catalog`], so the agent's orientation always lists exactly the events the
+/// [`adi_channels::event_catalog`], so the agent's orientation always lists exactly the events the
 /// stack currently publishes, each with a concrete example — and points at the reflected JSON
 /// Schema for the exact structure, rather than carrying a hand-written copy that drifts.
 fn default_prompt(cfg: &Config) -> String {
     let mut events = String::new();
-    for e in adi_agents::event_catalog() {
+    for e in adi_channels::event_catalog() {
         events.push_str(&format!(
             "- `{}` — {} · example `{}`\n",
             e.name, e.summary, e.example

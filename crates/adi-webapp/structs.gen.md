@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-102 structs · 34 enums · 5 type aliases across 44 files.
+103 structs · 34 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -48,7 +48,7 @@
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
@@ -102,6 +102,7 @@ pub(crate) enum Icon {
     Bug,
     ExternalLink,
     Rerenders,
+    Channels,
 }
 ```
 
@@ -1666,6 +1667,7 @@ pub(crate) enum Route {
     PortsManager,
     Mesh,
     Fleet,
+    Channels,
     System,
     SharedAssets,
     StoreFile,
@@ -2423,6 +2425,31 @@ pub(crate) struct EmbeddingsConsole {
     pub(crate) busy: RwSignal<bool>,
     pub(crate) testing: RwSignal<bool>,
     pub(crate) test_result: RwSignal<Option<TestResultDto>>,
+}
+```
+
+### struct `ChannelsConsole`
+
+Everything the Channels page holds that isn't on the server: the connection list, the router-connection status pill's own data, and the Connect dialog's form (`docs/channels.md` §7). Page-local, like `EmbeddingsConsole` beside it and for the same reason — nothing here rides the shell's 4s poll, so it is fetched once when the page opens.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct ChannelsConsole {
+    pub(crate) connections: RwSignal<Option<ChannelsState>>,
+    pub(crate) status: RwSignal<BTreeMap<String, bool>>,
+    pub(crate) agents: RwSignal<Option<AgentsState>>,
+    pub(crate) error: RwSignal<Option<String>>,
+    pub(crate) connect_provider: RwSignal<String>,
+    pub(crate) connect_agent: RwSignal<String>,
+    pub(crate) connect_open_allowlist: RwSignal<bool>,
+    pub(crate) connect_busy: RwSignal<bool>,
+    pub(crate) connect_result: RwSignal<Option<ChannelConnected>>,
+    pub(crate) connect_linked: RwSignal<bool>,
+    pub(crate) editing_route: RwSignal<String>,
+    pub(crate) route_agent: RwSignal<String>,
+    pub(crate) editing_allow: RwSignal<String>,
+    pub(crate) allow_mode: RwSignal<String>,
+    pub(crate) allow_senders: RwSignal<String>,
 }
 ```
 

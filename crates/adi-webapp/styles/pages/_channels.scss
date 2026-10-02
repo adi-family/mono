@@ -1,0 +1,50 @@
+// Page-local styles for `src/pages/channels.rs`: one card per service (`docs/channels.md` §7).
+// A service card is a genuinely detachable thing (§5 — the same reason the Fleet page's pairing
+// block is one), so it is a card: a hairline, the large radius, no fill. Shared components
+// (status pills, fields, forms) live in adi-css; this is only the card frame and its rows.
+
+@use "../../../adi-css/scss/mixins" as *;
+
+.adi-channels-card {
+  @include card;
+  margin-top: 32px;
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 18px 16px;
+  }
+}
+
+// One connection within a card: its state and actions on one line, a second line of detail
+// under it (or, in its place, whichever inline editor "Change agent"/"Who may talk" opened).
+.adi-channels-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+
+  &:last-child {
+    border-bottom: 0;
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  &__note {
+    margin-top: 4px;
+    color: var(--ink-3);
+    font-size: var(--fs-small);
+  }
+}
