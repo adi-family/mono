@@ -16,7 +16,10 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
 
-        assert_eq!(config.embedding.provider, "candle");
+        assert_eq!(
+            config.embedding.provider,
+            EmbeddingConfig::default().provider
+        );
         assert_eq!(
             config.embedding.model,
             "jinaai/jina-embeddings-v2-base-code"
@@ -30,7 +33,14 @@ mod tests {
     fn test_default_embedding_config() {
         let config = EmbeddingConfig::default();
 
-        assert_eq!(config.provider, "candle");
+        assert_eq!(
+            config.provider,
+            if cfg!(feature = "candle") {
+                "candle"
+            } else {
+                "none"
+            }
+        );
         assert_eq!(config.dimensions, 768);
     }
 
@@ -74,7 +84,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let config = load_project(dir.path()).unwrap();
 
-        assert_eq!(config.embedding.provider, "candle");
+        assert_eq!(
+            config.embedding.provider,
+            EmbeddingConfig::default().provider
+        );
     }
 
     #[test]
@@ -177,7 +190,10 @@ dimensions = 512
         // Should have the overridden value
         assert_eq!(config.embedding.dimensions, 512);
         // But keep defaults for others
-        assert_eq!(config.embedding.provider, "candle");
+        assert_eq!(
+            config.embedding.provider,
+            EmbeddingConfig::default().provider
+        );
     }
 
     #[test]
@@ -384,6 +400,9 @@ use_ignore_file = true
 
         // Should fall back to defaults
         let config = load_project(dir.path()).unwrap();
-        assert_eq!(config.embedding.provider, "candle");
+        assert_eq!(
+            config.embedding.provider,
+            EmbeddingConfig::default().provider
+        );
     }
 }

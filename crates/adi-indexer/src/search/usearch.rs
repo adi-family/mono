@@ -88,6 +88,28 @@ impl UsearchIndex {
 }
 
 impl VectorIndex for UsearchIndex {
+    fn reload(&self) -> Result<()> {
+        if self.path.exists() {
+            let index = self
+                .index
+                .lock()
+                .map_err(|error| Error::Index(error.to_string()))?;
+            let path = self
+                .path
+                .to_str()
+                .ok_or_else(|| Error::InvalidPath(self.path.display().to_string()))?;
+            index
+                .load(path)
+                .map_err(|error| Error::Index(format!("Failed to reload index: {error}")))?;
+            if index.dimensions() != self.dimensions {
+                return Err(Error::Index(
+                    "Stored vector dimensions changed; reopen the index with a matching embedder"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
     fn add(&self, id: i64, vector: &[f32]) -> Result<()> {
         if vector.len() != self.dimensions {
             return Err(Error::Index(format!(
@@ -163,12 +185,32 @@ impl VectorIndex for UsearchIndex {
 
     fn save(&self) -> Result<()> {
         let index = self.index.lock().map_err(|e| Error::Index(e.to_string()))?;
-
-        index
-            .save(self.path.to_str().unwrap_or(""))
-            .map_err(|e| Error::Index(format!("Failed to save index: {e}")))?;
-
-        Ok(())
+        // A torn in-place save would corrupt the previously durable vectors, which the
+        // pending-update journal cannot reconstruct. Replace only after writing a full file.
+        static NEXT_SAVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let temporary = self.path.with_extension(format!(
+            "idx.{}.{}.tmp",
+            std::process::id(),
+            NEXT_SAVE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let result = (|| {
+            let path = temporary
+                .to_str()
+                .ok_or_else(|| Error::InvalidPath(temporary.display().to_string()))?;
+            index
+                .save(path)
+                .map_err(|error| Error::Index(format!("Failed to save index: {error}")))?;
+            std::fs::File::open(&temporary)?.sync_all()?;
+            std::fs::rename(&temporary, &self.path)?;
+            if let Some(parent) = self.path.parent() {
+                std::fs::File::open(parent)?.sync_all()?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        result
     }
 
     fn count(&self) -> usize {

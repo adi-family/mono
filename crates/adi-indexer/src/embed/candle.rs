@@ -7,18 +7,13 @@
 //! Custom `JinaBert` implementation with QK-norm support, which candle-transformers lacks.
 //! The jina-embeddings-v2-base-code model requires QK-norm for correct attention scores.
 
-use super::Embedder;
 use super::error::{EmbedError, Result};
+use super::{CANDLE_DIMENSIONS as DIMENSIONS, CANDLE_MODEL_ID as MODEL_ID, Embedder};
 use candle_core::{D, DType, Device, IndexOp, Module, Tensor};
 use candle_nn::{LayerNorm, Linear, VarBuilder, layer_norm, linear, linear_no_bias};
 use candle_transformers::models::jina_bert::Config;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
-
-/// Exposed so `adi-embeddings` can validate a `candle` backend's declared model against the one
-/// this runtime actually produces, without loading it — see `docs/embedding-backends.md`.
-pub const MODEL_ID: &str = "jinaai/jina-embeddings-v2-base-code";
-pub const DIMENSIONS: u32 = 768;
 
 /// Tokens per symbol, past which the text is truncated.
 ///

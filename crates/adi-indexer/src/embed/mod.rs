@@ -15,7 +15,12 @@ pub use config::EmbeddingConfig;
 pub use error::{EmbedError, Result};
 
 #[cfg(feature = "candle")]
-pub use candle::{CandleEmbedder, DIMENSIONS as CANDLE_DIMENSIONS, MODEL_ID as CANDLE_MODEL_ID};
+pub use candle::CandleEmbedder;
+
+/// The one model and vector width implemented by the built-in Candle runtime.
+/// Available without the feature so configuration can be checked before model loading.
+pub const CANDLE_MODEL_ID: &str = "jinaai/jina-embeddings-v2-base-code";
+pub const CANDLE_DIMENSIONS: u32 = 768;
 
 /// A source of text embeddings.
 pub trait Embedder: std::fmt::Debug + Send + Sync {
@@ -30,10 +35,10 @@ pub trait Embedder: std::fmt::Debug + Send + Sync {
     fn model_name(&self) -> &str;
 }
 
-/// The embedder a build without `candle` gets: it never embeds, and says so.
+/// The embedder selected by `embedding.provider = "none"`: it never embeds, and says so.
 ///
-/// Indexing still runs (parse, symbols, references, FTS) — only the vector half is missing,
-/// and `search` degrades to full-text ranking rather than failing.
+/// Indexing still runs (parse, symbols, references, FTS). Use `search_symbols` for text search;
+/// semantic `search` reports that embeddings are unavailable.
 #[derive(Debug, Default)]
 pub struct NoEmbedder;
 
@@ -43,7 +48,7 @@ impl Embedder for NoEmbedder {
             return Ok(vec![]);
         }
         Err(EmbedError::Unavailable(
-            "this build has no embedder — rebuild adi-indexer with the `candle` feature for semantic search".to_string(),
+            "semantic embeddings are disabled — select embedding.provider = \"candle\" in a build with the `candle` feature, or supply an embedder".to_string(),
         ))
     }
 

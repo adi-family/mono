@@ -393,13 +393,8 @@ fn extract_call_name(node: Node, source: &str) -> String {
             .map_or_else(String::new, |function| extract_call_name(function, source)),
         "identifier" => node_text(node, source),
         "scoped_identifier" => node_text(node, source),
-        "field_expression" => {
-            if let Some(field) = node.child_by_field_name("field") {
-                node_text(field, source)
-            } else {
-                String::new()
-            }
-        }
+        // Keep the receiver: `object.helper()` is not evidence of a call to a free `helper`.
+        "field_expression" => node_text(node, source),
         _ => node_text(node, source),
     }
 }

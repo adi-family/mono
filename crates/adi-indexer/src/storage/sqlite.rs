@@ -4,7 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::migrations::migrations;
-use crate::storage::{PendingRef, Storage, StructureRow};
+use crate::storage::{PendingRef, Storage, StructureRow, VectorUpdate};
 use crate::structure::Structure;
 use crate::types::{
     File, FileId, FileInfo, FileNode, Language, Location, Reference, ReferenceKind, Status, Symbol,
@@ -89,7 +89,9 @@ impl SqliteStorage {
         let conn = Connection::open(path)?;
 
         // WAL so a reader (a search) and the writer (an indexing run) don't block each other.
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;",
+        )?;
 
         Self::run_migrations(&conn)?;
 
@@ -891,12 +893,88 @@ impl Storage for SqliteStorage {
         self.transaction_stmt("ROLLBACK")
     }
 
+    fn begin_file_savepoint(&self) -> Result<()> {
+        self.transaction_stmt("SAVEPOINT indexer_file")
+    }
+
+    fn release_file_savepoint(&self) -> Result<()> {
+        self.transaction_stmt("RELEASE indexer_file")
+    }
+
+    fn rollback_file_savepoint(&self) -> Result<()> {
+        self.lock()?
+            .execute_batch("ROLLBACK TO indexer_file; RELEASE indexer_file")?;
+        Ok(())
+    }
+
+    fn queue_vector_update(&self, symbol_id: SymbolId, vector: Option<&[f32]>) -> Result<()> {
+        let vector = vector.map(serde_json::to_string).transpose()?;
+        self.lock()?.execute(
+            "INSERT OR REPLACE INTO vector_updates (symbol_id, vector) VALUES (?1, ?2)",
+            params![symbol_id.0, vector],
+        )?;
+        Ok(())
+    }
+
+    fn pending_vector_updates(&self) -> Result<Vec<VectorUpdate>> {
+        let conn = self.lock()?;
+        let mut stmt =
+            conn.prepare("SELECT symbol_id, vector FROM vector_updates ORDER BY symbol_id")?;
+        // Corrupt journal rows must fail the replay, never disappear through rows()'s filter.
+        let entries = stmt.query_map([], |row| {
+            Ok((SymbolId(row.get(0)?), row.get::<_, Option<String>>(1)?))
+        })?;
+        entries
+            .map(|entry| {
+                let (symbol_id, vector) = entry?;
+                Ok(VectorUpdate {
+                    symbol_id,
+                    vector: vector.map(|json| serde_json::from_str(&json)).transpose()?,
+                })
+            })
+            .collect()
+    }
+
+    fn acknowledge_vector_updates(&self, symbols: &[SymbolId]) -> Result<()> {
+        let mut conn = self.lock()?;
+        let transaction = conn.transaction()?;
+        {
+            let mut stmt =
+                transaction.prepare("DELETE FROM vector_updates WHERE symbol_id = ?1")?;
+            for symbol in symbols {
+                stmt.execute(params![symbol.0])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     fn indexed_files(&self) -> Result<Vec<(FileId, PathBuf)>> {
         let conn = self.lock()?;
 
         rows(&conn, "SELECT id, path FROM files", [], |row| {
             Ok((FileId(row.get(0)?), PathBuf::from(row.get::<_, String>(1)?)))
         })
+    }
+
+    fn set_references_dirty(&self, dirty: bool) -> Result<()> {
+        self.lock()?.execute(
+            "INSERT OR REPLACE INTO status (key, value) VALUES ('references_dirty', ?1)",
+            params![if dirty { "1" } else { "0" }],
+        )?;
+        Ok(())
+    }
+
+    fn references_dirty(&self) -> Result<bool> {
+        let value: Option<String> = self
+            .lock()?
+            .query_row(
+                "SELECT value FROM status WHERE key = 'references_dirty'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(value.as_deref() == Some("1"))
     }
 
     fn delete_file_cascade(&self, id: FileId) -> Result<Vec<SymbolId>> {
@@ -909,9 +987,8 @@ impl Storage for SqliteStorage {
             |row| Ok(SymbolId(row.get(0)?)),
         )?;
 
-        // Nothing turns `PRAGMA foreign_keys` on, so the schema's ON DELETE CASCADE never runs
-        // and every dependent row has to be named here. The FTS tables are the exception — they
-        // are kept in step by triggers, which do fire on the deletes below.
+        // Name the derived rows explicitly as well as enabling foreign-key cascades. FTS
+        // stays in step through triggers, and pending_refs cascades with the symbols.
         conn.execute(
             "DELETE FROM symbol_refs WHERE from_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1) \
              OR to_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",

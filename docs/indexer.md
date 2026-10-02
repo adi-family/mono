@@ -137,8 +137,10 @@ a working session had lost 41% of the graph.
 
 Keeping the unresolved form makes the graph a function of the symbol table as it stands rather
 than of which files a run happened to touch. Resolution reads every `pending_refs` row and
-rewrites `symbol_refs` whole; on this tree that is 92k rows in and 213k edges out, and it is why a
-run resolves the same graph whether one file changed or all of them did.
+rewrites `symbol_refs` whole, so a run resolves the same graph whether one file changed or all
+of them did. It prefers the nearest lexical scope, respects qualified names, and leaves
+ambiguous candidates unresolved instead of linking all matching names. A unique project-level
+name remains a fallback when no lexical declaration is available.
 
 The cost is disk: roughly 80% on top of the index, for rows that duplicate what the source already
 says. A code index that quietly forgets edges is worse.
@@ -174,6 +176,9 @@ languages` prints what the running binary actually carries.
 `.tsx` uses the TSX grammar; `.ts`, `.mts`, and `.cts` use the TypeScript grammar, which also
 supports TypeScript's angle-bracket type assertions. JavaScript and TypeScript function bindings
 such as `const handler = () => ...` are indexed under the binding name.
+Callable class fields and bindings wrapped in `as` or `satisfies` are included. Direct exports,
+same-file export aliases, and named or anonymous default exports record public visibility;
+nested declarations keep their own visibility.
 
 `parser.enabled_languages` restricts indexing to the listed language names; an empty list enables
 all compiled grammars. Recognized extensions without a compiled grammar are skipped. Custom
@@ -188,18 +193,40 @@ Configuration layers apply defaults, user settings, then project settings. Expli
 including `false` and empty language lists, override earlier layers. Nonempty custom ignore
 lists extend inherited patterns in order; an explicit empty ignore list clears them.
 
+The built-in runtime accepts `embedding.provider = "candle"` or `"none"`. Candle currently
+supports `jinaai/jina-embeddings-v2-base-code` at 768 dimensions. Unsupported providers, models,
+dimensions, and storage backends fail before model loading; SQLite is the implemented backend.
+Builds without Candle default to `none`, and an explicit Candle request errors. A supplied
+embedder overrides provider/model selection. `embedding.batch_size` must be positive and caps
+the number of texts per call, alongside the padded-area and 64-text safety limits.
+
+## Failure recovery
+
+Each file's symbols, pending references, and vector-update journal share a SQLite savepoint.
+A database or embedding failure rolls back the file replacement, preserving its previous rows
+and vectors. Invalid embedding counts, dimensions, or nonfinite values also fail the file,
+so a subsequent run can retry it without another source edit.
+
+Vector updates are replayed after their SQLite transaction commits. The native index is written
+to a temporary file, synced, and atomically renamed; the journal is acknowledged in one database
+transaction only after that save succeeds. SQLite uses full synchronization. A project writer
+lock covers loading, replay, and saving, and each writer reloads the saved vector snapshot so
+independently opened handles cannot overwrite one another's updates. A busy writer returns a
+lock error; callers can retry.
+
+Opening an index replays outstanding vector writes and repairs a call graph marked dirty by an
+interrupted checkpoint. Ordinary indexing and watch updates perform the same recovery first.
+
 ## Remaining limitations
 
-- Reference resolution matches names, with a fallback for qualified names; it does not perform
-  compiler-level scope or type resolution. Ambiguous names can produce extra graph edges.
-- Rust visibility records declared access, not effective exports. TypeScript export visibility,
-  class-field arrow methods, and functions wrapped in `as` or `satisfies` still need coverage.
-- Reading or parsing a changed file fails before its old rows are removed. Database failures
-  during replacement and failures between SQLite and vector-index writes still need stronger
-  recovery; those two stores do not share a transaction.
-- Configuration loading preserves embedding provider, storage backend, and batch-size settings,
-  but the default constructor still selects Candle and SQLite, and batching uses its own size
-  limits. Those fields do not select additional implementations.
+- Reference resolution does not infer receiver types, follow import aliases, select overloads,
+  evaluate conditional compilation, or read package manifests. Unknown receivers and ambiguous
+  names remain unresolved, so a missing graph edge is not proof that a symbol is unused.
+- Rust visibility records declared access, not effective exports through private ancestors or
+  reexports. TypeScript destructured bindings, CommonJS exports, namespace export scoping, and
+  cross-module reexport aliases need richer analysis.
+- Recovery covers committed updates and interrupted writes, not arbitrary disk corruption or
+  manually deleted database/index files; rebuilding remains the recovery path for those cases.
 
 Regression tests run with `cargo test -p adi-indexer`. To exercise parsing, indexing, and search
 without the model runtime, use

@@ -31,6 +31,13 @@ pub struct PendingRef {
     pub location: Location,
 }
 
+/// A durable vector-index update. `None` removes a key, including a deleted symbol's key.
+#[derive(Debug)]
+pub struct VectorUpdate {
+    pub symbol_id: SymbolId,
+    pub vector: Option<Vec<f32>>,
+}
+
 /// One symbol's structural fingerprint, with just enough alongside it to name the symbol in a
 /// report.
 ///
@@ -143,6 +150,18 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     fn begin_transaction(&self) -> Result<()>;
     fn commit_transaction(&self) -> Result<()>;
     fn rollback_transaction(&self) -> Result<()>;
+
+    /// Nest a file replacement inside the indexing run's transaction.
+    fn begin_file_savepoint(&self) -> Result<()>;
+    fn release_file_savepoint(&self) -> Result<()>;
+    fn rollback_file_savepoint(&self) -> Result<()>;
+
+    /// Write alongside the symbol rows; acknowledge only after the vector index is saved.
+    fn queue_vector_update(&self, symbol_id: SymbolId, vector: Option<&[f32]>) -> Result<()>;
+    fn pending_vector_updates(&self) -> Result<Vec<VectorUpdate>>;
+    fn acknowledge_vector_updates(&self, symbols: &[SymbolId]) -> Result<()>;
+    fn set_references_dirty(&self, dirty: bool) -> Result<()>;
+    fn references_dirty(&self) -> Result<bool>;
 
     /// Every file the index holds, by id and stored path.
     ///

@@ -130,6 +130,22 @@ impl Config {
         Ok(())
     }
 
+    /// Validate settings shared by built-in and caller-supplied embedding runtimes.
+    pub(crate) fn validate_runtime(&self) -> Result<()> {
+        if self.storage.backend != "sqlite" {
+            return Err(Error::Config(format!(
+                "unsupported storage.backend {:?}; the indexer supports only \"sqlite\"",
+                self.storage.backend
+            )));
+        }
+        if self.embedding.batch_size == 0 {
+            return Err(Error::Config(
+                "embedding.batch_size must be greater than zero".into(),
+            ));
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn user_dir() -> PathBuf {
         crate::paths::module_dir()

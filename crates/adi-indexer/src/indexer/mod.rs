@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE file for details
 
+#[cfg(all(test, feature = "lang-rust"))]
+mod recovery_tests;
+mod resolution;
+
 use crate::cache::{CachedFileData, GlobalCache};
 use crate::config::Config;
 use crate::embed::Embedder;
@@ -10,26 +14,20 @@ use crate::parser::Parser;
 use crate::search::VectorIndex;
 use crate::storage::{PendingRef, Storage};
 use crate::types::{
-    File, FileId, IndexProgress, Language, Location, ParsedReference, ParsedSymbol, Reference,
-    Status, Symbol, SymbolId, SymbolKind,
+    File, FileId, IndexProgress, Language, Location, ParsedReference, ParsedSymbol, Status, Symbol,
+    SymbolId, SymbolKind,
 };
 use ignore::WalkBuilder;
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-/// Result from processing a single file
+/// Number of symbols stored by a file replacement (zero when unchanged).
 struct FileProcessResult {
-    /// The file's row, when this call actually (re)wrote it. `None` for a file skipped as
-    /// unchanged — whose references are already stored, and must not be replaced with the empty
-    /// set this call returns.
-    file_id: Option<FileId>,
     symbols_count: usize,
-    /// Unresolved references found in the file
-    references: Vec<ParsedReference>,
 }
 
 /// What the indexing pipeline stores, as a number the index carries so it can tell whether it
@@ -47,12 +45,108 @@ struct FileProcessResult {
 ///   without reparsing. An index built by 2 has no `pending_refs` rows, and resolving from them
 ///   would empty its graph rather than restore it.
 /// * 4 — corrected language parsing, dialect-aware cache keys, and file selection.
+/// * 5 — scoped reference resolution, exported/callable symbols, and retryable file writes.
 ///
 /// A swapped embedding model forces the same full pass independently of this number — see
 /// `index_project`'s own `model_changed` check — because the model is a property of the *run*,
 /// not of the pipeline's shape, and the same "an unchanged file is never reprocessed" rule that
 /// this constant exists to override would otherwise apply to it too.
-pub const PIPELINE_VERSION: u32 = 4;
+pub const PIPELINE_VERSION: u32 = 5;
+
+/// Serialize loading, replay, and saving across independently opened project handles.
+pub(crate) fn lock_project(project_path: &Path) -> Result<std::fs::File> {
+    let directory = project_path.join(".adi/tree");
+    std::fs::create_dir_all(&directory)?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join("write.lock"))?;
+    fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+        Error::Index(format!(
+            "Could not acquire project index writer lock: {error}"
+        ))
+    })?;
+    Ok(file)
+}
+
+/// Recover derived stores before use. The caller must hold the project writer lock.
+pub(crate) fn recover_index(storage: &dyn Storage, index: &dyn VectorIndex) -> Result<()> {
+    index.reload()?;
+    if storage.references_dirty()? {
+        rebuild_references(storage)?;
+    }
+    flush_vector_updates(storage, index)
+}
+
+/// Roll back any write scope abandoned by an early return.
+struct WriteGuard<'a> {
+    storage: &'a dyn Storage,
+    file: bool,
+    active: bool,
+}
+
+impl<'a> WriteGuard<'a> {
+    fn begin(storage: &'a dyn Storage, file: bool) -> Result<Self> {
+        if file {
+            storage.begin_file_savepoint()?;
+        } else {
+            storage.begin_transaction()?;
+        }
+        Ok(Self {
+            storage,
+            file,
+            active: true,
+        })
+    }
+    fn commit(mut self) -> Result<()> {
+        if self.file {
+            self.storage.release_file_savepoint()?;
+        } else {
+            self.storage.commit_transaction()?;
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for WriteGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let result = if self.file {
+                self.storage.rollback_file_savepoint()
+            } else {
+                self.storage.rollback_transaction()
+            };
+            if let Err(error) = result {
+                warn!("Failed to roll back index writes: {error}");
+            }
+        }
+    }
+}
+
+/// Replay committed vector changes. Repeating a partially applied batch is safe: keys are
+/// removed before insertion, and the journal is acknowledged only after a successful save.
+pub(crate) fn flush_vector_updates(storage: &dyn Storage, index: &dyn VectorIndex) -> Result<()> {
+    let updates = storage.pending_vector_updates()?;
+    if updates.is_empty() {
+        return Ok(());
+    }
+    for update in &updates {
+        index.remove(update.symbol_id.0)?;
+        if let Some(vector) = &update.vector {
+            index.add(update.symbol_id.0, vector)?;
+        }
+    }
+    index.save()?;
+    storage.acknowledge_vector_updates(
+        &updates
+            .iter()
+            .map(|update| update.symbol_id)
+            .collect::<Vec<_>>(),
+    )
+}
 
 pub async fn index_project(
     project_path: &Path,
@@ -64,6 +158,10 @@ pub async fn index_project(
     cache: Arc<GlobalCache>,
 ) -> Result<IndexProgress> {
     info!("Starting project indexing: {}", project_path.display());
+
+    config.validate_runtime()?;
+    let _project_lock = lock_project(project_path)?;
+    recover_index(storage.as_ref(), index.as_ref())?;
 
     let stored_status = storage.get_status().ok();
     let stored_version = stored_status.as_ref().map_or(0, |s| s.pipeline_version);
@@ -108,7 +206,7 @@ pub async fn index_project(
     };
 
     // Phase 1: Index all symbols
-    storage.begin_transaction()?;
+    let mut transaction = WriteGuard::begin(storage.as_ref(), false)?;
 
     for file_path in &walk.files {
         match process_file(
@@ -117,20 +215,14 @@ pub async fn index_project(
             &storage,
             &embedder,
             &parser,
-            &index,
             &cache,
             rebuild,
+            config.embedding.batch_size,
         )
         .await
         {
             Ok(result) => {
                 progress.symbols_indexed += result.symbols_count as u64;
-
-                // Only for a file this run rewrote: a skipped file's references are already
-                // stored, and `result.references` is empty for it.
-                if let Some(file_id) = result.file_id {
-                    storage.replace_pending_refs(file_id, &pending_refs(&result.references))?;
-                }
             }
             Err(e) => {
                 warn!("Error processing {}: {}", file_path.display(), e);
@@ -143,14 +235,14 @@ pub async fn index_project(
 
         // Periodic checkpoint: flush to disk to reduce memory pressure
         if progress.files_processed.is_multiple_of(200) {
-            storage.commit_transaction()?;
-            index.save()?;
-            storage.begin_transaction()?;
+            transaction.commit()?;
+            flush_vector_updates(storage.as_ref(), index.as_ref())?;
+            transaction = WriteGuard::begin(storage.as_ref(), false)?;
             info!("Checkpoint at {} files", progress.files_processed);
         }
     }
 
-    storage.commit_transaction()?;
+    transaction.commit()?;
 
     let pruned = prune_departed_files(project_path, &walk, &storage, &index)?;
     if pruned > 0 {
@@ -164,9 +256,9 @@ pub async fn index_project(
     // have. Resolving from the stored unresolved references instead makes the graph a function of
     // the symbol table as it now stands, so it comes out the same whether one file changed or all
     // of them did.
-    let reference_count = rebuild_references(&storage)?;
+    let reference_count = rebuild_references(storage.as_ref())?;
 
-    index.save()?;
+    flush_vector_updates(storage.as_ref(), index.as_ref())?;
 
     // A failed upgrade must remain eligible for a rebuild when the file becomes readable.
     // Its old content hash cannot tell a later run that its parser/model is still outdated.
@@ -205,15 +297,13 @@ pub async fn index_project(
     Ok(progress)
 }
 
-fn rebuild_references(storage: &Arc<dyn Storage>) -> Result<usize> {
+fn rebuild_references(storage: &dyn Storage) -> Result<usize> {
     let pending = storage.all_pending_refs()?;
-    let resolved = resolve_references(&pending, &symbols_by_name(storage)?);
-    storage.begin_transaction()?;
-    if let Err(error) = storage.replace_symbol_refs(&resolved) {
-        let _ = storage.rollback_transaction();
-        return Err(error);
-    }
-    storage.commit_transaction()?;
+    let resolved = resolution::resolve_references(&pending, &storage.get_all_symbols()?);
+    let transaction = WriteGuard::begin(storage, false)?;
+    storage.replace_symbol_refs(&resolved)?;
+    storage.set_references_dirty(false)?;
+    transaction.commit()?;
     Ok(resolved.len())
 }
 
@@ -235,85 +325,6 @@ fn pending_refs(references: &[ParsedReference]) -> Vec<PendingRef> {
         .collect()
 }
 
-/// Every indexed symbol, by name — the table resolution answers against.
-///
-/// Built from storage rather than from what this run parsed, because a name is resolved against
-/// the whole index and an incremental run parses almost none of it.
-///
-/// One candidate per name *per file*, later declaration winning, which is not an obvious rule and
-/// is kept because it is the one the index already used: resolution built its map by inserting
-/// each parsed symbol under its name, so a file declaring the name twice kept only the last. Every
-/// same-named symbol being a candidate instead is a defensible graph and a different one — it
-/// linked 58% more edges here — and changing what an edge means is not this pass's business.
-fn symbols_by_name(storage: &Arc<dyn Storage>) -> Result<HashMap<String, Vec<SymbolId>>> {
-    let mut per_file: HashMap<(String, FileId), SymbolId> = HashMap::new();
-    for symbol in storage.get_all_symbols()? {
-        per_file.insert((symbol.name, symbol.file_id), symbol.id);
-    }
-
-    let mut map: HashMap<String, Vec<SymbolId>> = HashMap::new();
-    for ((name, _), id) in per_file {
-        map.entry(name).or_default().push(id);
-    }
-    Ok(map)
-}
-
-/// Turn stored references into edges, against the symbol table as it now stands.
-fn resolve_references(
-    references: &[PendingRef],
-    symbol_map: &HashMap<String, Vec<SymbolId>>,
-) -> Vec<Reference> {
-    let mut resolved = Vec::new();
-
-    for pending in references {
-        let target_ids = find_target_symbol(&pending.target_name, symbol_map);
-
-        if target_ids.is_empty() {
-            debug!("Could not resolve reference: {}", pending.target_name);
-            continue;
-        }
-
-        // Overloads and same-named symbols in different modules both land here; an edge to each is
-        // the existing behaviour, and a caller reading the graph filters by what it knows.
-        for target_id in target_ids {
-            if pending.from_symbol_id == *target_id {
-                continue;
-            }
-
-            resolved.push(Reference {
-                from_symbol_id: pending.from_symbol_id,
-                to_symbol_id: *target_id,
-                kind: pending.kind,
-                location: pending.location.clone(),
-            });
-        }
-    }
-
-    resolved
-}
-
-/// The symbols a written name could mean.
-///
-/// A qualified name (`foo::bar`) falls back to its last component, which is how a reference
-/// written through a module path still finds the item it names.
-fn find_target_symbol<'a>(
-    name: &str,
-    symbol_map: &'a HashMap<String, Vec<SymbolId>>,
-) -> &'a [SymbolId] {
-    if let Some(ids) = symbol_map.get(name) {
-        return ids;
-    }
-
-    let short_name = name.rsplit("::").next().unwrap_or(name);
-    if short_name != name
-        && let Some(ids) = symbol_map.get(short_name)
-    {
-        return ids;
-    }
-
-    &[]
-}
-
 pub async fn reindex_paths(
     project_path: &Path,
     paths: &[PathBuf],
@@ -326,6 +337,9 @@ pub async fn reindex_paths(
 ) -> Result<()> {
     info!("Re-indexing {} paths", paths.len());
 
+    config.validate_runtime()?;
+    let project_lock = lock_project(project_path)?;
+    recover_index(storage.as_ref(), index.as_ref())?;
     let mut requested = Vec::new();
     for path in paths {
         let relative = if path.is_absolute() {
@@ -360,6 +374,7 @@ pub async fn reindex_paths(
         || status.embedding_model != embedder.model_name()
         || ignore_rules_changed
     {
+        drop(project_lock);
         let progress = index_project(
             project_path,
             config,
@@ -388,7 +403,7 @@ pub async fn reindex_paths(
         .collect();
     let indexed = storage.indexed_files()?;
     let mut errors = Vec::new();
-    storage.begin_transaction()?;
+    let transaction = WriteGuard::begin(storage.as_ref(), false)?;
     for file_path in &walk.files {
         let relative = file_path.strip_prefix(project_path).unwrap_or(file_path);
         if !affected(relative) {
@@ -400,29 +415,20 @@ pub async fn reindex_paths(
             &storage,
             &embedder,
             &parser,
-            &index,
             &cache,
             false,
+            config.embedding.batch_size,
         )
         .await
         {
-            Ok(result) => {
-                if let Some(file_id) = result.file_id
-                    && let Err(error) =
-                        storage.replace_pending_refs(file_id, &pending_refs(&result.references))
-                {
-                    let _ = storage.rollback_transaction();
-                    return Err(error);
-                }
-            }
+            Ok(_) => {}
             Err(error) => errors.push(format!("{}: {error}", file_path.display())),
         }
     }
-    storage.commit_transaction()?;
+    transaction.commit()?;
 
     if !walk.blind {
-        let mut orphaned = Vec::new();
-        storage.begin_transaction()?;
+        let transaction = WriteGuard::begin(storage.as_ref(), false)?;
         for (id, path) in indexed {
             if affected(&path)
                 && !present.contains(path.as_path())
@@ -431,27 +437,16 @@ pub async fn reindex_paths(
                     .iter()
                     .any(|unreachable| project_path.join(&path).starts_with(unreachable))
             {
-                match storage.delete_file_cascade(id) {
-                    Ok(symbols) => orphaned.extend(symbols),
-                    Err(error) => {
-                        let _ = storage.rollback_transaction();
-                        return Err(error);
-                    }
+                for symbol in storage.delete_file_cascade(id)? {
+                    storage.queue_vector_update(symbol, None)?;
+                    storage.set_references_dirty(true)?;
                 }
             }
         }
-        storage.commit_transaction()?;
-        for symbol in orphaned {
-            if let Err(error) = index.remove(symbol.0) {
-                warn!(
-                    "Could not remove embedding for symbol {}: {error}",
-                    symbol.0
-                );
-            }
-        }
+        transaction.commit()?;
     }
-    rebuild_references(&storage)?;
-    index.save()?;
+    rebuild_references(storage.as_ref())?;
+    flush_vector_updates(storage.as_ref(), index.as_ref())?;
     let mut status = storage.get_status()?;
     status.last_indexed = Some(chrono_now());
     storage.update_status(&status)?;
@@ -532,21 +527,16 @@ fn prune_departed_files(
         );
     }
 
-    storage.begin_transaction()?;
-    let mut orphaned: Vec<SymbolId> = Vec::new();
+    let transaction = WriteGuard::begin(storage.as_ref(), false)?;
     for (id, path) in &departed {
         debug!("Pruning {}: no longer in the tree", path.display());
-        orphaned.extend(storage.delete_file_cascade(*id)?);
-    }
-    storage.commit_transaction()?;
-
-    // Only once the rows are committed: a vector removed for a symbol still in the index is a
-    // symbol that silently stops answering semantic search.
-    for symbol in orphaned {
-        if let Err(e) = index.remove(symbol.0) {
-            debug!("Could not remove embedding for symbol {}: {e}", symbol.0);
+        for symbol in storage.delete_file_cascade(*id)? {
+            storage.queue_vector_update(symbol, None)?;
+            storage.set_references_dirty(true)?;
         }
     }
+    transaction.commit()?;
+    flush_vector_updates(storage.as_ref(), index.as_ref())?;
 
     Ok(departed.len())
 }
@@ -680,9 +670,9 @@ async fn process_file(
     storage: &Arc<dyn Storage>,
     embedder: &Arc<dyn Embedder>,
     parser: &Arc<dyn Parser>,
-    index: &Arc<dyn VectorIndex>,
     cache: &Arc<GlobalCache>,
     rebuild: bool,
+    batch_size: usize,
 ) -> Result<FileProcessResult> {
     let relative_path = file_path.strip_prefix(project_path).unwrap_or(file_path);
     debug!("Processing: {}", relative_path.display());
@@ -698,11 +688,7 @@ async fn process_file(
         && existing_hash == hash
     {
         debug!("File unchanged, skipping: {}", relative_path.display());
-        return Ok(FileProcessResult {
-            file_id: None,
-            symbols_count: 0,
-            references: Vec::new(),
-        });
+        return Ok(FileProcessResult { symbols_count: 0 });
     }
 
     // Detect language
@@ -732,15 +718,13 @@ async fn process_file(
     } else {
         // Cache miss — parse from scratch
         if !parser.supports(language) {
-            return Ok(FileProcessResult {
-                file_id: None,
-                symbols_count: 0,
-                references: Vec::new(),
-            });
+            return Ok(FileProcessResult { symbols_count: 0 });
         }
         let parsed = parser.parse_for_path(&content, language, file_path)?;
         (parsed, None)
     };
+
+    let savepoint = WriteGuard::begin(storage.as_ref(), true)?;
 
     // Create/update file record
     let file = File {
@@ -752,21 +736,12 @@ async fn process_file(
         description: None,
     };
 
-    // Remove old data if exists
     if storage.file_exists(relative_path)? {
-        if let Ok(old_file) = storage.get_file(relative_path) {
-            for symbol in &old_file.symbols {
-                if let Err(e) = index.remove(symbol.id.0) {
-                    debug!(
-                        "Could not remove embedding for symbol {} ({}): {}. This is expected if the index was rebuilt.",
-                        symbol.id.0, symbol.name, e
-                    );
-                }
-            }
-            storage.delete_references_for_file(old_file.file.id)?;
-            storage.delete_symbols_for_file(old_file.file.id)?;
+        let old_file = storage.get_file(relative_path)?;
+        for symbol in storage.delete_file_cascade(old_file.file.id)? {
+            storage.queue_vector_update(symbol, None)?;
+            storage.set_references_dirty(true)?;
         }
-        storage.delete_file(relative_path)?;
     }
 
     let file_id = storage.insert_file(&file)?;
@@ -852,19 +827,23 @@ async fn process_file(
     // Get embeddings: from cache or compute fresh
     if !texts_to_embed.is_empty() {
         let embeddings = if let Some(ref cached_emb) = cached_embeddings {
-            if cached_emb.len() == texts_to_embed.len() {
+            if valid_embeddings(
+                cached_emb,
+                texts_to_embed.len(),
+                embedder.dimensions() as usize,
+            ) {
                 // Cache hit with matching embedding count — use directly
                 cached_emb.clone()
             } else {
                 debug!("Cached embedding count mismatch, recomputing");
-                compute_embeddings(embedder, &texts_to_embed)?
+                compute_embeddings(embedder, &texts_to_embed, batch_size)?
             }
         } else {
-            compute_embeddings(embedder, &texts_to_embed)?
+            compute_embeddings(embedder, &texts_to_embed, batch_size)?
         };
 
-        // Store to global cache if we computed fresh embeddings or had a cache miss
-        if cached_embeddings.is_none() {
+        // Replace stale or malformed cached batches with the successful result.
+        {
             let _ = cache.put(
                 &cache_key,
                 &CachedFileData {
@@ -876,31 +855,11 @@ async fn process_file(
             );
         }
 
-        // Add embeddings to per-project vector index
+        // Journal vector writes in the same savepoint as the symbols. NoEmbedder produces
+        // empty vectors intentionally; those symbols remain searchable through FTS.
         for ((symbol_id, _), embedding) in texts_to_embed.iter().zip(&embeddings) {
-            // A batch that failed to embed left empty vectors behind; adding one is a
-            // guaranteed dimension error, and warning about it says nothing the batch's own
-            // warning did not already say.
-            if embedding.is_empty() {
-                continue;
-            }
-            if let Err(e) = index.add(symbol_id.0, embedding) {
-                let error_msg = format!("{e}");
-                if error_msg.to_lowercase().contains("duplicate") {
-                    debug!("Duplicate key for symbol {}, re-adding", symbol_id.0);
-                    let _ = index.remove(symbol_id.0);
-                    if let Err(e2) = index.add(symbol_id.0, embedding) {
-                        warn!(
-                            "Failed to re-add embedding for symbol {}: {}",
-                            symbol_id.0, e2
-                        );
-                    }
-                } else {
-                    warn!(
-                        "Failed to add embedding for symbol {}: {}",
-                        symbol_id.0, error_msg
-                    );
-                }
+            if !embedding.is_empty() {
+                storage.queue_vector_update(*symbol_id, Some(embedding))?;
             }
         }
     }
@@ -920,11 +879,11 @@ async fn process_file(
         references_with_context.push(parsed_ref);
     }
 
-    Ok(FileProcessResult {
-        file_id: Some(file_id),
-        symbols_count,
-        references: references_with_context,
-    })
+    storage.replace_pending_refs(file_id, &pending_refs(&references_with_context))?;
+    storage.set_references_dirty(true)?;
+    savepoint.commit()?;
+
+    Ok(FileProcessResult { symbols_count })
 }
 
 /// The padded size of one embedding call, in characters.
@@ -946,7 +905,11 @@ const MAX_BATCH: usize = 64;
 fn compute_embeddings(
     embedder: &Arc<dyn Embedder>,
     texts_to_embed: &[(SymbolId, String)],
+    batch_size: usize,
 ) -> Result<Vec<Vec<f32>>> {
+    if embedder.dimensions() == 0 {
+        return Ok(vec![vec![]; texts_to_embed.len()]);
+    }
     let mut embeddings = Vec::with_capacity(texts_to_embed.len());
     let mut batch: Vec<&str> = Vec::new();
     let mut widest = 0usize;
@@ -954,8 +917,11 @@ fn compute_embeddings(
     for (_, text) in texts_to_embed {
         // What this text would cost if it joined: every member padded to the new widest.
         let padded_area = widest.max(text.len()) * (batch.len() + 1);
-        if !batch.is_empty() && (batch.len() >= MAX_BATCH || padded_area > MAX_BATCH_PADDED_CHARS) {
-            embeddings.extend(embed_batch(embedder, &batch));
+        if !batch.is_empty()
+            && (batch.len() >= batch_size.clamp(1, MAX_BATCH)
+                || padded_area > MAX_BATCH_PADDED_CHARS)
+        {
+            embeddings.extend(embed_batch(embedder, &batch)?);
             batch.clear();
             widest = 0;
         }
@@ -963,24 +929,28 @@ fn compute_embeddings(
         batch.push(text.as_str());
     }
     if !batch.is_empty() {
-        embeddings.extend(embed_batch(embedder, &batch));
+        embeddings.extend(embed_batch(embedder, &batch)?);
     }
 
     Ok(embeddings)
 }
 
-/// One `embed` call, yielding an empty vector per text if it fails.
-///
-/// A failed batch costs those symbols their searchability, not their place in the index — they
-/// are already stored, and the caller skips empty vectors when populating the vector index.
-fn embed_batch(embedder: &Arc<dyn Embedder>, batch: &[&str]) -> Vec<Vec<f32>> {
-    match embedder.embed(batch) {
-        Ok(embeddings) => embeddings,
-        Err(e) => {
-            warn!("Failed to generate embeddings: {}", e);
-            vec![vec![]; batch.len()]
-        }
+fn valid_embeddings(embeddings: &[Vec<f32>], count: usize, dimensions: usize) -> bool {
+    embeddings.len() == count
+        && embeddings.iter().all(|vector| {
+            vector.len() == dimensions && vector.iter().all(|value| value.is_finite())
+        })
+}
+
+/// A malformed or failed batch rolls back its file and remains eligible for a retry.
+fn embed_batch(embedder: &Arc<dyn Embedder>, batch: &[&str]) -> Result<Vec<Vec<f32>>> {
+    let embeddings = embedder.embed(batch)?;
+    if !valid_embeddings(&embeddings, batch.len(), embedder.dimensions() as usize) {
+        return Err(Error::Embedding(
+            "Embedding batch returned invalid vector count, dimensions, or values".into(),
+        ));
     }
+    Ok(embeddings)
 }
 
 /// How much of a symbol's source goes into its embedding, in bytes.
@@ -1098,7 +1068,7 @@ mod tests {
             .collect();
 
         let dynamic: Arc<dyn Embedder> = embedder.clone();
-        let embeddings = compute_embeddings(&dynamic, &texts).unwrap();
+        let embeddings = compute_embeddings(&dynamic, &texts, MAX_BATCH).unwrap();
         assert_eq!(
             embeddings.len(),
             texts.len(),

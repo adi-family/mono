@@ -4,7 +4,7 @@
 
 > The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI.
 
-75 structs · 10 enums · 2 type aliases across 39 files.
+79 structs · 11 enums · 3 type aliases across 41 files.
 
 ## Index
 
@@ -22,7 +22,9 @@
 - [`src/embed/mod.rs`](#srcembedmodrs) — `NoEmbedder`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/graph.rs`](#srcgraphrs) — `SymbolMetrics`
-- [`src/indexer/mod.rs`](#srcindexermodrs) — `FileProcessResult`, `Walk`
+- [`src/indexer/mod.rs`](#srcindexermodrs) — `FileProcessResult`, `WriteGuard`, `Walk`
+- [`src/indexer/recovery_tests.rs`](#srcindexerrecovery_testsrs) — `RecoveryEmbedder`
+- [`src/indexer/resolution.rs`](#srcindexerresolutionrs) — `ScopeKey`, `Lookup`, `Resolver`
 - [`src/lang/cpp.rs`](#srclangcpprs) — `InternalSymbolKind`, `InternalReferenceKind`, `InternalLocation`, `InternalSymbol`, `InternalReference`, `CppAnalyzer`
 - [`src/lang/csharp.rs`](#srclangcsharprs) — `CSharpAnalyzer`
 - [`src/lang/go.rs`](#srclanggors) — `GoAnalyzer`
@@ -42,7 +44,7 @@
 - [`src/parser/treesitter/mod.rs`](#srcparsertreesittermodrs) — `TreeSitterParser`
 - [`src/search/usearch.rs`](#srcsearchusearchrs) — `UsearchIndex`
 - [`src/storage/mmap.rs`](#srcstoragemmaprs) — `Header`, `EmbeddingStore`, `EmbeddingIterator`
-- [`src/storage/mod.rs`](#srcstoragemodrs) — `PendingRef`, `StructureRow`
+- [`src/storage/mod.rs`](#srcstoragemodrs) — `PendingRef`, `VectorUpdate`, `StructureRow`
 - [`src/storage/sqlite.rs`](#srcstoragesqliters) — `SqliteStorage`
 - [`src/structure.rs`](#srcstructurers) — `Structure`
 - [`src/types.rs`](#srctypesrs) — `SymbolId`, `FileId`, `Visibility`, `SymbolKind`, `Location`, `Symbol`, `File`, `FileInfo`, `SearchResult`, `Tree`, `FileNode`, `SymbolNode`, `Status`, `IndexProgress`, `Language`, `ReferenceKind`, `ParsedReference`, `Reference`, `SymbolUsage`, `ParsedSymbol`, `ParsedFile`
@@ -427,7 +429,7 @@ pub type Result<T> = std::result::Result<T, EmbedError>;
 
 ### struct `NoEmbedder`
 
-The embedder a build without `candle` gets: it never embeds, and says so.
+The embedder selected by `embedding.provider = "none"`: it never embeds, and says so.
 
 ```rust
 #[derive(Debug, Default)]
@@ -507,13 +509,23 @@ pub struct SymbolMetrics {
 
 ### struct `FileProcessResult`
 
-Result from processing a single file
+Number of symbols stored by a file replacement (zero when unchanged).
 
 ```rust
 struct FileProcessResult {
-    file_id: Option<FileId>,
     symbols_count: usize,
-    references: Vec<ParsedReference>,
+}
+```
+
+### struct `WriteGuard`
+
+Roll back any write scope abandoned by an early return.
+
+```rust
+struct WriteGuard<'a> {
+    storage: &'a dyn Storage,
+    file: bool,
+    active: bool,
 }
 ```
 
@@ -526,6 +538,52 @@ struct Walk {
     files: Vec<PathBuf>,
     unreachable: Vec<PathBuf>,
     blind: bool,
+}
+```
+
+---
+
+## `src/indexer/recovery_tests.rs`
+
+### struct `RecoveryEmbedder`
+
+```rust
+#[derive(Debug)]
+struct RecoveryEmbedder;
+```
+
+---
+
+## `src/indexer/resolution.rs`
+
+### type `ScopeKey`
+
+```rust
+type ScopeKey = (FileId, Option<SymbolId>, String);
+```
+
+### enum `Lookup`
+
+```rust
+enum Lookup {
+    Absent,
+    Unresolved,
+    Resolved(usize),
+}
+```
+
+### struct `Resolver`
+
+```rust
+struct Resolver<'a> {
+    symbols: &'a [Symbol],
+    by_id: HashMap<SymbolId, usize>,
+    by_file: HashMap<FileId, usize>,
+    scopes: HashMap<ScopeKey, Vec<usize>>,
+    global: HashMap<String, Vec<usize>>,
+    qualified: HashMap<Vec<String>, Vec<usize>>,
+    declared: HashMap<Vec<String>, Vec<usize>>,
+    paths: Vec<Vec<String>>,
 }
 ```
 
@@ -885,6 +943,18 @@ pub struct PendingRef {
     pub target_name: String,
     pub kind: ReferenceKind,
     pub location: Location,
+}
+```
+
+### struct `VectorUpdate`
+
+A durable vector-index update. `None` removes a key, including a deleted symbol's key.
+
+```rust
+#[derive(Debug)]
+pub struct VectorUpdate {
+    pub symbol_id: SymbolId,
+    pub vector: Option<Vec<f32>>,
 }
 ```
 

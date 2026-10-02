@@ -1,10 +1,11 @@
 //! TypeScript/JavaScript language analyzer implementation.
 
+use std::collections::HashSet;
 use tree_sitter::{Node, Tree};
 
 use super::common::{node_location, node_text, tree_walking_analyzer};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -23,14 +24,30 @@ tree_walking_analyzer!(
 
 fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     match node.kind() {
-        "function_declaration" | "generator_function_declaration" | "function" => {
+        "program" => {
+            let start = symbols.len();
+            extract_children(node, source, symbols);
+            // An export list can precede its declaration. Resolve only names declared in this
+            // module; reexports from another module must not mark a same-named local public.
+            let names = local_export_names(node, source);
+            for symbol in &mut symbols[start..] {
+                if names.contains(&symbol.name) {
+                    symbol.visibility = Visibility::Public;
+                }
+            }
+        }
+        "function_declaration"
+        | "generator_function_declaration"
+        | "function_signature"
+        | "function" => {
             if let Some(name) = node.child_by_field_name("name") {
-                let name_text = node_text(name, source);
-                let sig = extract_function_signature(node, source, &name_text);
-                symbols.push(
-                    ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-                        .with_signature(sig),
-                );
+                symbols.push(callable_symbol(
+                    node,
+                    node,
+                    &node_text(name, source),
+                    SymbolKind::Function,
+                    source,
+                ));
             }
         }
         "variable_declarator" => {
@@ -38,50 +55,46 @@ fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
             // optional internal function-expression name (`const run = function inner() {}`).
             if let Some(name) = node.child_by_field_name("name")
                 && name.kind() == "identifier"
-                && let Some(value) = node.child_by_field_name("value")
-                && let Some(function) = function_value(value)
             {
-                let name_text = node_text(name, source);
-                let signature = extract_function_signature(function, source, &name_text);
-                let mut children = Vec::new();
-                if let Some(body) = function.child_by_field_name("body") {
-                    extract_ts_symbols(body, source, &mut children);
-                }
-                symbols.push(
-                    ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-                        .with_signature(signature)
-                        .with_children(children),
-                );
-            } else {
-                for i in 0..node.child_count() as u32 {
-                    if let Some(child) = node.child(i) {
-                        extract_ts_symbols(child, source, symbols);
+                let name = node_text(name, source);
+                let value = node.child_by_field_name("value").map(unwrap_expression);
+                if let Some(function) = value.and_then(function_value) {
+                    symbols.push(callable_symbol(
+                        function,
+                        node,
+                        &name,
+                        SymbolKind::Function,
+                        source,
+                    ));
+                } else if let Some(class) = value.filter(|value| value.kind() == "class") {
+                    let mut symbol = class_symbol(class, &name, source);
+                    symbol.location = node_location(node);
+                    symbols.push(symbol);
+                } else {
+                    let kind = if node
+                        .parent()
+                        .and_then(|parent| parent.child_by_field_name("kind"))
+                        .is_some_and(|kind| kind.kind() == "const")
+                    {
+                        SymbolKind::Constant
+                    } else {
+                        SymbolKind::Variable
+                    };
+                    let mut children = Vec::new();
+                    if let Some(value) = value {
+                        extract_ts_symbols(value, source, &mut children);
                     }
+                    symbols.push(
+                        ParsedSymbol::new(name, kind, node_location(node)).with_children(children),
+                    );
                 }
+            } else {
+                extract_children(node, source, symbols);
             }
         }
-        "class_declaration" | "class" => {
+        "class_declaration" | "abstract_class_declaration" | "class" => {
             if let Some(name) = node.child_by_field_name("name") {
-                let name_text = node_text(name, source);
-                let mut children = Vec::new();
-                if let Some(body) = node.child_by_field_name("body") {
-                    for i in 0..body.child_count() as u32 {
-                        if let Some(child) = body.child(i)
-                            && child.kind() == "method_definition"
-                            && let Some(method_name) = child.child_by_field_name("name")
-                        {
-                            children.push(ParsedSymbol::new(
-                                node_text(method_name, source),
-                                SymbolKind::Method,
-                                node_location(child),
-                            ));
-                        }
-                    }
-                }
-                symbols.push(
-                    ParsedSymbol::new(name_text, SymbolKind::Class, node_location(node))
-                        .with_children(children),
-                );
+                symbols.push(class_symbol(node, &node_text(name, source), source));
             }
         }
         "interface_declaration" => {
@@ -146,23 +159,147 @@ fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
                     node_location(node),
                 ));
             } else {
-                // Recurse into the export so e.g. `export class Foo`
-                // still emits a Class symbol.
-                for i in 0..node.child_count() as u32 {
-                    if let Some(child) = node.child(i) {
-                        extract_ts_symbols(child, source, symbols);
+                let start = symbols.len();
+                if let Some(value) = node.child_by_field_name("value") {
+                    let value = unwrap_expression(value);
+                    // A default identifier exports an existing binding. The program pass
+                    // marks it public; inventing another symbol would duplicate its identity.
+                    if value.kind() != "identifier" {
+                        let name = value
+                            .child_by_field_name("name")
+                            .map_or_else(|| "default".to_string(), |name| node_text(name, source));
+                        if let Some(function) = function_value(value) {
+                            symbols.push(callable_symbol(
+                                function,
+                                value,
+                                &name,
+                                SymbolKind::Function,
+                                source,
+                            ));
+                        } else if value.kind() == "class" {
+                            symbols.push(class_symbol(value, &name, source));
+                        } else {
+                            let mut children = Vec::new();
+                            extract_ts_symbols(value, source, &mut children);
+                            symbols.push(
+                                ParsedSymbol::new(
+                                    "default",
+                                    SymbolKind::Constant,
+                                    node_location(value),
+                                )
+                                .with_children(children),
+                            );
+                        }
+                    }
+                } else {
+                    extract_children(node, source, symbols);
+                }
+                for symbol in &mut symbols[start..] {
+                    symbol.visibility = Visibility::Public;
+                }
+            }
+        }
+        _ => extract_children(node, source, symbols),
+    }
+}
+
+fn extract_children(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
+    for child in node.named_children(&mut node.walk()) {
+        extract_ts_symbols(child, source, symbols);
+    }
+}
+
+fn callable_symbol(
+    function: Node,
+    location: Node,
+    name: &str,
+    kind: SymbolKind,
+    source: &str,
+) -> ParsedSymbol {
+    let mut children = Vec::new();
+    if let Some(body) = function.child_by_field_name("body") {
+        extract_ts_symbols(body, source, &mut children);
+    }
+    ParsedSymbol::new(name, kind, node_location(location))
+        .with_signature(extract_function_signature(function, source, name))
+        .with_children(children)
+}
+
+fn class_symbol(node: Node, name: &str, source: &str) -> ParsedSymbol {
+    let mut children = Vec::new();
+    if let Some(body) = node.child_by_field_name("body") {
+        for member in body.named_children(&mut body.walk()) {
+            let Some(name) = member
+                .child_by_field_name("name")
+                .or_else(|| member.child_by_field_name("property"))
+            else {
+                continue;
+            };
+            let function = match member.kind() {
+                "method_definition" | "method_signature" | "abstract_method_signature" => {
+                    Some(member)
+                }
+                "public_field_definition" | "field_definition" => {
+                    member.child_by_field_name("value").and_then(function_value)
+                }
+                _ => None,
+            };
+            if let Some(function) = function {
+                children.push(
+                    callable_symbol(
+                        function,
+                        member,
+                        &node_text(name, source),
+                        SymbolKind::Method,
+                        source,
+                    )
+                    .with_visibility(member_visibility(member, name, source)),
+                );
+            }
+        }
+    }
+    ParsedSymbol::new(name, SymbolKind::Class, node_location(node)).with_children(children)
+}
+
+fn member_visibility(node: Node, name: Node, source: &str) -> Visibility {
+    if name.kind() == "private_property_identifier" {
+        return Visibility::Private;
+    }
+    for modifier in node.named_children(&mut node.walk()) {
+        if modifier.kind() == "accessibility_modifier" {
+            return match node_text(modifier, source).as_str() {
+                "private" => Visibility::Private,
+                "protected" => Visibility::Protected,
+                _ => Visibility::Public,
+            };
+        }
+    }
+    Visibility::Public
+}
+
+fn local_export_names(program: Node, source: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for export in program.named_children(&mut program.walk()) {
+        if export.kind() != "export_statement" || export.child_by_field_name("source").is_some() {
+            continue;
+        }
+        if let Some(value) = export.child_by_field_name("value") {
+            let value = unwrap_expression(value);
+            if value.kind() == "identifier" {
+                names.insert(node_text(value, source));
+            }
+        }
+        for clause in export.named_children(&mut export.walk()) {
+            if clause.kind() == "export_clause" {
+                for specifier in clause.named_children(&mut clause.walk()) {
+                    if let Some(name) = specifier.child_by_field_name("name") {
+                        names.insert(node_text(name, source));
                     }
                 }
             }
         }
-        _ => {
-            for i in 0..node.child_count() as u32 {
-                if let Some(child) = node.child(i) {
-                    extract_ts_symbols(child, source, symbols);
-                }
-            }
-        }
     }
+    names
 }
 
 /// Pull the source module string out of an `import_statement` or
@@ -181,10 +318,26 @@ fn import_source_or_text(node: Node, source: &str) -> String {
     node_text(node, source)
 }
 
-fn function_value(mut node: Node) -> Option<Node> {
-    while node.kind() == "parenthesized_expression" {
-        node = node.named_child(0)?;
+fn unwrap_expression(mut node: Node) -> Node {
+    loop {
+        let child = match node.kind() {
+            "parenthesized_expression"
+            | "as_expression"
+            | "satisfies_expression"
+            | "non_null_expression" => node.named_child(0),
+            // Angle-bracket assertions put their type arguments before the expression.
+            "type_assertion" => node.named_child(1),
+            _ => None,
+        };
+        match child {
+            Some(child) => node = child,
+            None => return node,
+        }
     }
+}
+
+fn function_value(node: Node) -> Option<Node> {
+    let node = unwrap_expression(node);
     matches!(
         node.kind(),
         "arrow_function" | "function_expression" | "generator_function"

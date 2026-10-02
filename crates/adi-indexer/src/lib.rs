@@ -132,36 +132,101 @@ pub struct Indexer {
 impl Indexer {
     /// Open (creating if absent) the index for `project_path`.
     ///
-    /// With the `candle` feature this loads the jina embedding model — a few seconds on first
-    /// call, and a download on the very first run ever. Without it, indexing and FTS search
-    /// work and semantic search reports that this build has no embedder.
+    /// Reads configuration before loading its selected embedding runtime. `candle` loads the
+    /// fixed Jina code model; `none` enables indexing and FTS without model downloads. Defaults
+    /// to `candle` when compiled with that feature, and `none` otherwise.
     pub async fn open(project_path: &Path) -> Result<Self> {
-        #[cfg(feature = "candle")]
-        let embedder: Arc<dyn Embedder> = Arc::new(
-            embed::CandleEmbedder::new()
-                .map_err(|e| Error::Config(format!("Candle embedder init: {e}")))?,
-        );
-        #[cfg(not(feature = "candle"))]
-        let embedder: Arc<dyn Embedder> = Arc::new(embed::NoEmbedder);
-
-        Self::open_with_embedder(project_path, embedder).await
+        let config = Config::load(project_path)?;
+        let embedder = Self::configured_embedder(&config)?;
+        Self::open_configured(project_path, config, embedder, GlobalCache::open()?)
     }
 
     /// Open the index with an embedder you supply — what the tests use, and the seam for any
-    /// other embedding source.
+    /// other embedding source. Its model and width take precedence over embedding configuration.
     pub async fn open_with_embedder(
         project_path: &Path,
         embedder: Arc<dyn Embedder>,
     ) -> Result<Self> {
-        Self::open_with_cache(project_path, embedder, GlobalCache::open()?)
+        let config = Config::load(project_path)?;
+        config.validate_runtime()?;
+        Self::open_configured(project_path, config, embedder, GlobalCache::open()?)
     }
 
+    #[cfg(all(test, feature = "lang-rust"))]
     fn open_with_cache(
         project_path: &Path,
         embedder: Arc<dyn Embedder>,
         cache: GlobalCache,
     ) -> Result<Self> {
         let config = Config::load(project_path)?;
+        Self::open_configured(project_path, config, embedder, cache)
+    }
+
+    fn configured_embedder(config: &Config) -> Result<Arc<dyn Embedder>> {
+        config.validate_runtime()?;
+        match config.embedding.provider.as_str() {
+            "none" => {
+                if config.embedding.dimensions == 0 {
+                    return Err(Error::Config(
+                        "embedding.dimensions must be greater than zero for the vector index"
+                            .into(),
+                    ));
+                }
+                Ok(Arc::new(embed::NoEmbedder))
+            }
+            "candle" => {
+                if config.embedding.model != embed::CANDLE_MODEL_ID {
+                    return Err(Error::Config(format!(
+                        "unsupported embedding.model {:?} for candle; this runtime implements only {:?}",
+                        config.embedding.model,
+                        embed::CANDLE_MODEL_ID
+                    )));
+                }
+                if config.embedding.dimensions != embed::CANDLE_DIMENSIONS {
+                    return Err(Error::Config(format!(
+                        "embedding.dimensions must be {} for the candle model {:?}",
+                        embed::CANDLE_DIMENSIONS,
+                        embed::CANDLE_MODEL_ID
+                    )));
+                }
+                #[cfg(feature = "candle")]
+                {
+                    Ok(Arc::new(embed::CandleEmbedder::new().map_err(|error| {
+                        Error::Config(format!("Candle embedder init: {error}"))
+                    })?))
+                }
+                #[cfg(not(feature = "candle"))]
+                {
+                    Err(Error::Config(
+                        "embedding.provider = \"candle\" requires a build with the `candle` feature; select \"none\" for FTS-only indexing".into(),
+                    ))
+                }
+            }
+            provider => Err(Error::Config(format!(
+                "unsupported embedding.provider {provider:?}; built-in providers are \"candle\" and \"none\"; use open_with_embedder for another runtime"
+            ))),
+        }
+    }
+
+    fn open_configured(
+        project_path: &Path,
+        config: Config,
+        embedder: Arc<dyn Embedder>,
+        cache: GlobalCache,
+    ) -> Result<Self> {
+        config.validate_runtime()?;
+        let dimensions = match embedder.dimensions() {
+            0 => config.embedding.dimensions,
+            dimensions => dimensions,
+        };
+        if dimensions == 0 {
+            return Err(Error::Config(
+                "embedding.dimensions must be greater than zero for the vector index".into(),
+            ));
+        }
+        // Serialize handle creation and recovery with indexing, so opening cannot replay a
+        // journal against an older native vector snapshot while another run commits changes.
+        let _project_lock = indexer::lock_project(project_path)?;
         let adi_dir = project_path.join(".adi");
         let tree_dir = paths::index_dir(project_path);
 
@@ -171,10 +236,6 @@ impl Indexer {
 
         let storage = SqliteStorage::open(&tree_dir.join("index.sqlite"))?;
         let parser = parser::TreeSitterParser::new();
-        let dimensions = match embedder.dimensions() {
-            0 => config.embedding.dimensions,
-            dimensions => dimensions,
-        };
         let index = search::usearch::UsearchIndex::with_config(
             &tree_dir.join("embeddings"),
             dimensions as usize,
@@ -182,6 +243,7 @@ impl Indexer {
             config.index.hnsw_ef_construction,
             config.index.hnsw_ef_search,
         )?;
+        indexer::recover_index(&storage, &index)?;
 
         Ok(Self {
             project_path: project_path.to_path_buf(),

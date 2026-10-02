@@ -13,7 +13,7 @@ use std::path::Path;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EmbeddingConfig {
-    /// Provider name (e.g., "fastembed")
+    /// Built-in provider: `candle` or `none`. Supplied embedders select their own runtime.
     pub provider: String,
     /// Model identifier
     pub model: String,
@@ -30,9 +30,14 @@ pub struct EmbeddingConfig {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            provider: "candle".to_string(),
-            model: "jinaai/jina-embeddings-v2-base-code".to_string(),
-            dimensions: 768,
+            provider: if cfg!(feature = "candle") {
+                "candle"
+            } else {
+                "none"
+            }
+            .to_string(),
+            model: super::CANDLE_MODEL_ID.to_string(),
+            dimensions: super::CANDLE_DIMENSIONS,
             batch_size: 32,
             api_key: None,
             api_base: None,
@@ -99,7 +104,14 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = EmbeddingConfig::default();
-        assert_eq!(config.provider, "candle");
+        assert_eq!(
+            config.provider,
+            if cfg!(feature = "candle") {
+                "candle"
+            } else {
+                "none"
+            }
+        );
         assert_eq!(config.dimensions, 768);
     }
 

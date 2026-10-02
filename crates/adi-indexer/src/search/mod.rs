@@ -14,6 +14,8 @@ use crate::types::{File, SearchResult, Symbol, SymbolId};
 use std::sync::Arc;
 
 pub trait VectorIndex: std::fmt::Debug + Send + Sync {
+    /// Refresh the last durable snapshot while the caller holds the project writer lock.
+    fn reload(&self) -> Result<()>;
     fn add(&self, id: i64, vector: &[f32]) -> Result<()>;
     fn remove(&self, id: i64) -> Result<()>;
     fn search(&self, query: &[f32], limit: usize) -> Result<Vec<(i64, f32)>>;

@@ -226,7 +226,27 @@ mod tests {
                 .filter(|r| r.kind == ReferenceKind::Call)
                 .map(|r| r.name.as_str())
                 .collect();
-            assert_eq!(calls, ["helper", "render", "Thing::build"]);
+            assert_eq!(calls, ["helper", "obj.render", "Thing::build"]);
+        }
+
+        #[test]
+        fn method_calls_keep_receivers_separate_from_free_functions() {
+            use crate::types::ReferenceKind;
+
+            let parsed = parse(
+                "struct Thing; impl Thing { fn run(&self) { object.helper(); self.helper(); helper(); self.generic::<u8>(); } }",
+                Language::Rust,
+            );
+            let calls: Vec<_> = parsed
+                .references
+                .iter()
+                .filter(|reference| reference.kind == ReferenceKind::Call)
+                .map(|reference| reference.name.as_str())
+                .collect();
+            assert_eq!(
+                calls,
+                ["object.helper", "self.helper", "helper", "self.generic"]
+            );
         }
 
         #[test]

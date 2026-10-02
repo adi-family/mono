@@ -29,7 +29,8 @@ use tracing::debug;
 /// * 2 — the declaration is repeated after the body, so it keeps a meaningful share of the
 ///   pooled vector.
 /// * 3 — parser corrections change symbols, signatures, visibility, and their embeddings.
-pub const SCHEMA_VERSION: u32 = 3;
+/// * 4 — export visibility, wrapped callables, fields, and receiver-qualified references.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Cached parsing + embedding results for a single file content hash.
 #[derive(Debug, Serialize, Deserialize)]

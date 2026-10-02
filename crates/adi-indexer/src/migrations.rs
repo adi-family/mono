@@ -15,7 +15,22 @@ pub fn migrations() -> Vec<SqlMigration> {
         migration_v2(),
         migration_v3(),
         migration_v4(),
+        migration_v5(),
     ]
+}
+
+/// V5: Vector writes are committed with symbols and replayed until the index is saved.
+fn migration_v5() -> SqlMigration {
+    SqlMigration::new(
+        5,
+        "durable_vector_updates",
+        r"
+        CREATE TABLE vector_updates (
+            symbol_id INTEGER PRIMARY KEY,
+            vector TEXT
+        );
+        ",
+    )
 }
 
 /// V1: Initial schema - files, symbols, `symbol_refs`, status, FTS

@@ -16,6 +16,7 @@ mod tests {
     use crate::types::{IndexProgress, Symbol};
     use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
@@ -43,15 +44,29 @@ mod tests {
     #[derive(Debug, Default)]
     struct RecordingIndex {
         vectors: Mutex<HashMap<i64, Vec<f32>>>,
+        saved: Mutex<HashMap<i64, Vec<f32>>>,
+        fail_add: AtomicBool,
+        fail_save: AtomicBool,
+        fail_remove: AtomicBool,
     }
 
     impl VectorIndex for RecordingIndex {
+        fn reload(&self) -> Result<()> {
+            *self.vectors.lock().unwrap() = self.saved.lock().unwrap().clone();
+            Ok(())
+        }
         fn add(&self, id: i64, vector: &[f32]) -> Result<()> {
+            if self.fail_add.swap(false, Ordering::SeqCst) {
+                return Err(crate::Error::Index("injected add failure".into()));
+            }
             self.vectors.lock().unwrap().insert(id, vector.to_vec());
             Ok(())
         }
 
         fn remove(&self, id: i64) -> Result<()> {
+            if self.fail_remove.swap(false, Ordering::SeqCst) {
+                return Err(crate::Error::Index("injected remove failure".into()));
+            }
             self.vectors.lock().unwrap().remove(&id);
             Ok(())
         }
@@ -65,6 +80,10 @@ mod tests {
         }
 
         fn save(&self) -> Result<()> {
+            if self.fail_save.swap(false, Ordering::SeqCst) {
+                return Err(crate::Error::Index("injected save failure".into()));
+            }
+            *self.saved.lock().unwrap() = self.vectors.lock().unwrap().clone();
             Ok(())
         }
 
@@ -126,6 +145,10 @@ mod tests {
         /// A run with a specific embedder, for the tests where the point is what happens when
         /// the one the fixture started with is not the one this run gets.
         fn run_with_embedder(&self, config: &Config, embedder: Arc<dyn Embedder>) -> IndexProgress {
+            self.try_run(config, embedder).unwrap()
+        }
+
+        fn try_run(&self, config: &Config, embedder: Arc<dyn Embedder>) -> Result<IndexProgress> {
             let index: Arc<dyn VectorIndex> = self.index.clone();
 
             tokio::runtime::Builder::new_current_thread()
@@ -140,7 +163,6 @@ mod tests {
                     index,
                     self.cache.clone(),
                 ))
-                .unwrap()
         }
 
         fn symbol(&self, name: &str) -> Option<Symbol> {
@@ -173,6 +195,205 @@ mod tests {
                     self.cache.clone(),
                 ))
         }
+    }
+
+    #[test]
+    fn failed_symbol_insert_rolls_back_the_whole_file_replacement() {
+        for watched in [false, true] {
+            let fixture = Fixture::new();
+            fixture.write("original.rs", "fn original() {}\n");
+            fixture.write("caller.rs", "fn caller() { original(); }\n");
+            let config = Config::default();
+            fixture.run(&config);
+            let before = fixture.symbol("original").unwrap();
+            let connection =
+                rusqlite::Connection::open(fixture.store.path().join("index.sqlite")).unwrap();
+            connection.execute_batch("CREATE TRIGGER fail_symbol BEFORE INSERT ON symbols WHEN NEW.name = 'blocked' BEGIN SELECT RAISE(FAIL, 'injected insert failure'); END;").unwrap();
+            fixture.write("original.rs", "fn partial() {}\nfn blocked() {}\n");
+            if watched {
+                assert!(fixture.reindex(&["original.rs"], &config).is_err());
+            } else {
+                assert_eq!(fixture.run(&config).errors.len(), 1);
+            }
+            assert_eq!(
+                fixture
+                    .symbol("original")
+                    .expect("old file survives SQL failure")
+                    .id,
+                before.id
+            );
+            assert!(fixture.symbol("partial").is_none());
+            assert!(fixture.index.get_vector(before.id.0).unwrap().is_some());
+            assert_eq!(fixture.storage.get_callers(before.id).unwrap().len(), 1);
+            connection
+                .execute_batch("DROP TRIGGER fail_symbol")
+                .unwrap();
+            fixture.reindex(&["original.rs"], &config).unwrap();
+            assert!(fixture.symbol("blocked").is_some());
+        }
+    }
+
+    #[test]
+    fn vector_add_failures_are_reported_and_retried_without_source_edits() {
+        let fixture = Fixture::new();
+        let config = Config::default();
+        fixture.write("lib.rs", "fn before() {}\n");
+        fixture.run(&config);
+        fixture.write("lib.rs", "fn after() {}\n");
+        fixture.index.fail_add.store(true, Ordering::SeqCst);
+        assert!(fixture.try_run(&config, fixture.embedder.clone()).is_err());
+        fixture.run(&config);
+        let after = fixture.symbol("after").unwrap();
+        assert!(fixture.index.get_vector(after.id.0).unwrap().is_some());
+        assert_eq!(fixture.index.count(), 1);
+    }
+
+    #[test]
+    fn unsaved_vector_updates_survive_reopening_and_are_replayed() {
+        let mut fixture = Fixture::new();
+        let config = Config::default();
+        fixture.write("lib.rs", "fn before() {}\n");
+        fixture.run(&config);
+        fixture.write("lib.rs", "fn after() {}\n");
+        fixture.index.fail_save.store(true, Ordering::SeqCst);
+        assert!(fixture.try_run(&config, fixture.embedder.clone()).is_err());
+        *fixture.index.vectors.lock().unwrap() = fixture.index.saved.lock().unwrap().clone();
+        fixture.storage =
+            Arc::new(SqliteStorage::open(&fixture.store.path().join("index.sqlite")).unwrap());
+        fixture.run(&config);
+        let after = fixture.symbol("after").unwrap();
+        assert!(
+            fixture.index.get_vector(after.id.0).unwrap().is_some(),
+            "unchanged file must recover its unsaved vector"
+        );
+        assert_eq!(
+            fixture.index.count(),
+            1,
+            "the old vector must not survive replay"
+        );
+    }
+
+    #[test]
+    fn vector_deletion_failures_remain_retryable_after_the_file_row_is_gone() {
+        let fixture = Fixture::new();
+        let config = Config::default();
+        fixture.write("gone.rs", "fn gone() {}\n");
+        fixture.run(&config);
+        fixture.delete("gone.rs");
+        fixture.index.fail_remove.store(true, Ordering::SeqCst);
+        assert!(fixture.try_run(&config, fixture.embedder.clone()).is_err());
+        fixture.run(&config);
+        assert_eq!(fixture.index.count(), 0);
+    }
+
+    #[test]
+    fn failed_or_malformed_embeddings_preserve_the_previous_file_and_retry() {
+        #[derive(Debug)]
+        struct BadEmbedder(usize);
+        impl Embedder for BadEmbedder {
+            fn embed(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+                match self.0 {
+                    0 => Err(EmbedError::Embedding("temporary backend failure".into())),
+                    1 => Ok(vec![]),
+                    2 => Ok(vec![vec![1.0; 3]; texts.len()]),
+                    3 => Ok(vec![vec![f32::NAN; 4]; texts.len()]),
+                    _ => Ok(vec![vec![1.0; 4]; texts.len() + 1]),
+                }
+            }
+            fn dimensions(&self) -> u32 {
+                4
+            }
+            fn model_name(&self) -> &'static str {
+                "stub"
+            }
+        }
+        for failure in 0..5 {
+            let fixture = Fixture::new();
+            let config = Config::default();
+            fixture.write("lib.rs", "fn before() {}\n");
+            fixture.run(&config);
+            let before = fixture.symbol("before").unwrap();
+            fixture.write("lib.rs", "fn after() {}\n");
+            let progress = fixture.run_with_embedder(&config, Arc::new(BadEmbedder(failure)));
+            assert_eq!(progress.errors.len(), 1);
+            assert_eq!(fixture.symbol("before").unwrap().id, before.id);
+            assert!(fixture.index.get_vector(before.id.0).unwrap().is_some());
+            assert!(fixture.storage.pending_vector_updates().unwrap().is_empty());
+            fixture.run(&config);
+            let after = fixture.symbol("after").unwrap();
+            assert_eq!(
+                fixture.index.get_vector(after.id.0).unwrap().unwrap(),
+                vec![0.5; 4]
+            );
+        }
+    }
+
+    #[test]
+    fn configured_batch_size_reaches_the_embedding_backend() {
+        #[derive(Debug, Default)]
+        struct Batches(Mutex<Vec<usize>>);
+        impl Embedder for Batches {
+            fn embed(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+                self.0.lock().unwrap().push(texts.len());
+                Ok(vec![vec![1.0; 4]; texts.len()])
+            }
+            fn dimensions(&self) -> u32 {
+                4
+            }
+            fn model_name(&self) -> &'static str {
+                "batches"
+            }
+        }
+        let fixture = Fixture::new();
+        use std::fmt::Write;
+        let mut source = String::new();
+        for i in 0..10 {
+            writeln!(source, "fn function_{i}() {{}}").unwrap();
+        }
+        fixture.write("lib.rs", &source);
+        let batches = Arc::new(Batches::default());
+        let mut config = Config::default();
+        config.embedding.batch_size = 3;
+        assert!(
+            fixture
+                .run_with_embedder(&config, batches.clone())
+                .errors
+                .is_empty()
+        );
+        assert_eq!(*batches.0.lock().unwrap(), vec![3, 3, 3, 1]);
+    }
+
+    #[test]
+    fn recovery_repairs_a_graph_left_dirty_by_an_interrupted_checkpoint() {
+        let fixture = Fixture::new();
+        fixture.write("lib.rs", "fn target() {}\nfn caller() { target(); }\n");
+        fixture.run(&Config::default());
+        let target = fixture.symbol("target").unwrap();
+        fixture.storage.replace_symbol_refs(&[]).unwrap();
+        fixture.storage.set_references_dirty(true).unwrap();
+        let _lock = crate::indexer::lock_project(fixture.project.path()).unwrap();
+        crate::indexer::recover_index(fixture.storage.as_ref(), fixture.index.as_ref()).unwrap();
+        assert_eq!(fixture.storage.get_callers(target.id).unwrap().len(), 1);
+        assert!(!fixture.storage.references_dirty().unwrap());
+    }
+
+    #[test]
+    fn concurrent_writers_are_rejected_without_mutating_the_index() {
+        let fixture = Fixture::new();
+        fixture.write("lib.rs", "fn original() {}\n");
+        fixture.run(&Config::default());
+        let original = fixture.symbol("original").unwrap();
+        let lock = crate::indexer::lock_project(fixture.project.path()).unwrap();
+        fixture.write("lib.rs", "fn after() {}\n");
+        assert!(
+            fixture
+                .try_run(&Config::default(), fixture.embedder.clone())
+                .is_err()
+        );
+        assert_eq!(fixture.symbol("original").unwrap().id, original.id);
+        drop(lock);
+        fixture.run(&Config::default());
+        assert!(fixture.symbol("after").is_some());
     }
 
     #[test]
