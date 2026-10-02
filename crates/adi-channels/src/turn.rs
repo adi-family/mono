@@ -10,6 +10,8 @@
 //! for exactly the run it cares about: its own listing is also what records the run's ending, so
 //! every other `run.finished` consumer still hears about it.
 
+use std::collections::HashSet;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use adi_agents::store::Turn;
@@ -39,32 +41,60 @@ pub struct Watch {
     pub thread: String,
     pub router_url: String,
     pub node_token: String,
-    /// Unix milliseconds the message was dispatched — an assistant turn recorded before this
-    /// answered something earlier, not this message.
+    /// The message's own text, to find the user turn it became among others recorded since.
+    pub text: String,
+    /// Unix milliseconds the message was dispatched — no turn recorded before this is its own.
     pub since_ms: u64,
+}
+
+/// Assistant turns already posted, as `(run, recorded-at)`. Two messages a queue merged into one
+/// turn both find that turn's answer; the first watcher to get here posts it, the other stays
+/// quiet — one turn, one reply.
+static POSTED: Mutex<Option<HashSet<(String, u64)>>> = Mutex::new(None);
+
+/// Claim an answer for posting; `false` if another watcher already did.
+fn claim(run_id: &str, at: u64) -> bool {
+    POSTED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_or_insert_with(HashSet::new)
+        .insert((run_id.to_string(), at))
 }
 
 /// What one look at the run decided.
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
     Wait,
-    /// The turn is over; post this (if anything) and stop.
-    Done(Option<String>),
+    /// The turn is over; post this answer (text, and when it was recorded) if any, and stop.
+    Done(Option<(String, u64)>),
 }
 
 /// One look. `state` is `None` when the run is no longer listed at all (deleted under us).
-fn step(state: Option<RunLifecycle>, turns: &[Turn], since_ms: u64) -> Step {
-    let Some(state) = state else {
-        return Step::Done(None);
-    };
-    if state == RunLifecycle::Running {
-        return Step::Wait;
-    }
-    turns
+///
+/// The answer is anchored on the message's *own* user turn — the first one recorded since dispatch
+/// carrying its text, or failing that the first one recorded since dispatch at all (a queue that
+/// merged messages) — and is the first settled assistant turn after it. Never "the newest
+/// assistant turn": two quick messages are two turns, and by the time a backed-off watcher looks
+/// again the second may have finished too (ADI-MONO-124, live: both replies carried the second
+/// answer). The run's state only matters while there's no answer yet — once there is, the run may
+/// well be `Running` again on the *next* message.
+fn step(state: Option<RunLifecycle>, turns: &[Turn], since_ms: u64, text: &str) -> Step {
+    let mine = |t: &&Turn| t.role == "user" && !t.pending && t.at >= since_ms;
+    let own = turns
         .iter()
-        .rev()
-        .find(|t| t.role == "assistant" && !t.pending && t.at >= since_ms)
-        .map_or(Step::Wait, |t| Step::Done(Some(t.text.clone())))
+        .position(|t| mine(&t) && t.text.trim() == text.trim())
+        .or_else(|| turns.iter().position(|t| mine(&t)));
+    let answer = own.and_then(|i| {
+        turns[i + 1..]
+            .iter()
+            .find(|t| t.role == "assistant" && !t.pending)
+            .map(|t| (t.text.clone(), t.at))
+    });
+    match (answer, state) {
+        (Some(answer), _) => Step::Done(Some(answer)),
+        (None, None) => Step::Done(None),
+        (None, Some(_)) => Step::Wait,
+    }
 }
 
 /// Watch on a thread of its own and return at once — [`crate::dispatch::handle`] runs on the
@@ -97,11 +127,12 @@ fn run(agents: &Agents, watch: &Watch) {
             .into_iter()
             .find(|r| r.run_id == watch.run_id)
             .map(|r| r.state);
-        let turns = match state {
-            Some(RunLifecycle::Running) | None => Vec::new(),
-            Some(_) => agents.transcript(&agent, &watch.run_id),
+        let turns = if state.is_some() {
+            agents.transcript(&agent, &watch.run_id)
+        } else {
+            Vec::new()
         };
-        match step(state, &turns, watch.since_ms) {
+        match step(state, &turns, watch.since_ms, &watch.text) {
             Step::Done(answer) => break answer,
             Step::Wait if state.is_some_and(|s| s != RunLifecycle::Running) => {
                 let since = *stopped_since.get_or_insert_with(Instant::now);
@@ -112,6 +143,7 @@ fn run(agents: &Agents, watch: &Watch) {
             Step::Wait => stopped_since = None,
         }
     };
+    let answer = answer.and_then(|(text, at)| claim(&watch.run_id, at).then_some(text));
     post(watch, answer.as_deref());
 }
 
@@ -138,48 +170,82 @@ mod tests {
         serde_json::from_value(serde_json::json!({ "role": role, "text": text, "at": at })).unwrap()
     }
 
-    #[test]
-    fn a_running_turn_is_waited_on() {
-        let turns = [turn("assistant", "old answer", 10)];
-        assert_eq!(step(Some(RunLifecycle::Running), &turns, 5), Step::Wait);
+    fn done(text: &str, at: u64) -> Step {
+        Step::Done(Some((text.to_string(), at)))
     }
 
     #[test]
-    fn a_stopped_turn_posts_the_newest_assistant_text_since_dispatch() {
+    fn a_turn_with_no_answer_yet_is_waited_on() {
+        let turns = [turn("user", "hi", 10)];
+        assert_eq!(step(Some(RunLifecycle::Running), &turns, 5, "hi"), Step::Wait);
+        // Stopped but nothing said yet still waits — the grace period in `run` decides when to quit.
+        assert_eq!(step(Some(RunLifecycle::Finished), &turns, 5, "hi"), Step::Wait);
+    }
+
+    /// The bug the first live test of this watcher hit: "afafa" then "afa" a second apart, two
+    /// turns, and both replies carried "afa" because the first watcher took the newest answer.
+    #[test]
+    fn two_quick_messages_in_one_thread_each_get_their_own_answer() {
         let turns = [
-            turn("user", "first", 1),
-            turn("assistant", "first answer", 2),
-            turn("user", "second", 20),
-            turn("assistant", "second answer", 25),
+            turn("user", "aaa", 1),
+            turn("assistant", "you said aaa", 2),
+            turn("user", "afafa", 28_968),
+            turn("assistant", "you said afafa", 30_154),
+            turn("user", "afa", 31_113),
+            turn("assistant", "you said afa", 32_651),
         ];
+        // The first message's watcher, dispatched at 28_900, looking only after both turns ended —
+        // and while a third turn may already be running.
         assert_eq!(
-            step(Some(RunLifecycle::Finished), &turns, 20),
-            Step::Done(Some("second answer".into()))
+            step(Some(RunLifecycle::Running), &turns, 28_900, "afafa"),
+            done("you said afafa", 30_154)
         );
-        // `Waiting` (an await or a queued message holds the run) still ends *this* turn.
         assert_eq!(
-            step(Some(RunLifecycle::Waiting), &turns, 20),
-            Step::Done(Some("second answer".into()))
+            step(Some(RunLifecycle::Finished), &turns, 31_050, "afa"),
+            done("you said afa", 32_651)
         );
     }
 
-    /// The follow-up case `run.finished` could never answer: the run already has an answer from
-    /// an earlier turn, and that one must not be re-posted for the new message.
+    /// Dispatched while the first turn is still running: the second message's user turn is only
+    /// recorded when its own turn starts, so until then it has no answer — even though an
+    /// assistant turn newer than its dispatch (the first message's answer) already exists.
+    #[test]
+    fn a_queued_message_does_not_take_the_answer_of_the_turn_ahead_of_it() {
+        let turns = [turn("user", "one", 100), turn("assistant", "you said one", 300)];
+        assert_eq!(step(Some(RunLifecycle::Waiting), &turns, 200, "two"), Step::Wait);
+    }
+
     #[test]
     fn an_answer_from_before_dispatch_is_not_this_messages_answer() {
         let turns = [turn("user", "first", 1), turn("assistant", "first answer", 2)];
-        assert_eq!(step(Some(RunLifecycle::Finished), &turns, 20), Step::Wait);
+        assert_eq!(step(Some(RunLifecycle::Finished), &turns, 20, "second"), Step::Wait);
     }
 
     #[test]
     fn a_still_streaming_turn_is_not_an_answer() {
         let mut streaming = turn("assistant", "half a sent", 30);
         streaming.pending = true;
-        assert_eq!(step(Some(RunLifecycle::Finished), &[streaming], 20), Step::Wait);
+        let turns = [turn("user", "hi", 25), streaming];
+        assert_eq!(step(Some(RunLifecycle::Running), &turns, 20, "hi"), Step::Wait);
+    }
+
+    /// A queue that merged two messages into one turn: neither text matches the merged user turn
+    /// exactly, both watchers anchor on it, both find the one answer — and only the first to claim
+    /// it posts, so the chat gets one reply for one turn rather than two copies.
+    #[test]
+    fn a_merged_turn_is_answered_once() {
+        let turns = [turn("user", "one\n\ntwo", 500), turn("assistant", "you said both", 600)];
+        let first = step(Some(RunLifecycle::Finished), &turns, 400, "one");
+        let second = step(Some(RunLifecycle::Finished), &turns, 450, "two");
+        assert_eq!(first, done("you said both", 600));
+        assert_eq!(second, first);
+        let run = format!("merged-{}", std::process::id());
+        assert!(claim(&run, 600), "first watcher posts");
+        assert!(!claim(&run, 600), "second watcher stays quiet");
     }
 
     #[test]
     fn a_run_that_vanished_ends_the_watch_with_nothing_to_say() {
-        assert_eq!(step(None, &[], 20), Step::Done(None));
+        assert_eq!(step(None, &[], 20, "hi"), Step::Done(None));
     }
 }

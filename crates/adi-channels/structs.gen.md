@@ -523,6 +523,7 @@ pub struct Watch {
     pub thread: String,
     pub router_url: String,
     pub node_token: String,
+    pub text: String,
     pub since_ms: u64,
 }
 ```
@@ -535,7 +536,7 @@ What one look at the run decided.
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
     Wait,
-    Done(Option<String>),
+    Done(Option<(String, u64)>),
 }
 ```
 

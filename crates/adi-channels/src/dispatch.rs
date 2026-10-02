@@ -108,6 +108,7 @@ pub fn handle(
                 thread: message.thread.clone(),
                 router_url: router_url.to_string(),
                 node_token: node_token.to_string(),
+                text: message.text.clone(),
                 since_ms,
             },
         );
