@@ -5798,12 +5798,15 @@ pub struct ConnectChannel {
 
 /// The answer to a connect: the new, still-unlinked connection, plus the install/link URL to show
 /// the operator — `t.me/<bot>?start=<code>` for Telegram. Empty for a provider the router has no
-/// way to build one for from a bare code.
+/// way to build one for from a bare code. `install_url_group` (ADI-MONO-125) is Telegram's
+/// "add to a group" twin of `install_url`, empty for every other provider.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelConnected {
     pub connection: ChannelConnectionDto,
     #[serde(default)]
     pub install_url: String,
+    #[serde(default)]
+    pub install_url_group: String,
 }
 
 /// Request body naming one connection — `/pause`, `/disconnect`, and the `GET /api/channels/<id>`

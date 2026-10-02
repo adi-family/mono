@@ -6,7 +6,9 @@
 export interface Env {
   /** HMAC key that signs node tokens and link codes (this router's `STATE_SECRET`-equivalent). */
   ROUTER_SECRET: string;
-  /** Bearer required by `POST /register`. Gates minting, not ordinary traffic (§8). */
+  /** Optional bearer for `POST /register` (ADI-MONO-125: registration itself is open to any
+   * node now, rate-limited and capped instead of gated -- see `do.ts`/`rate_limiter.ts`). An
+   * operator who holds this skips both limits; it never gates ordinary traffic (§8). */
   ROUTER_ADMIN_SECRET: string;
 
   /** The one Telegram bot ADI runs. */
@@ -26,6 +28,9 @@ export interface Env {
 
   /** One Durable Object per `(node id, provider)` -- see {@link doId}. */
   NODE_CONNECTION: DurableObjectNamespace;
+  /** One Durable Object per client IP -- `POST /register`'s open-registration rate limit
+   * (ADI-MONO-125, `rate_limiter.ts`). */
+  REGISTER_LIMITER: DurableObjectNamespace;
   /** `provider, routing_key -> node_id`. The only thing queried before a node is known (§1). */
   ROUTING_KEYS: D1Database;
 }

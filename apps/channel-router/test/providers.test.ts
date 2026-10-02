@@ -8,6 +8,7 @@ function env(overrides: Partial<Env> = {}): Env {
     ROUTER_SECRET: "s",
     ROUTER_ADMIN_SECRET: "a",
     NODE_CONNECTION: undefined as never,
+    REGISTER_LIMITER: undefined as never,
     ROUTING_KEYS: undefined as never,
     ...overrides,
   };

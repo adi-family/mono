@@ -345,3 +345,10 @@ export async function slackExchangeCode(
  * channel), so the tab itself carries the confirmation instead. */
 export const SLACK_INSTALL_SUCCESS_HTML =
   "<!doctype html><title>Connected to ADI</title><p>Linked. You can close this tab and go back to Slack.</p>";
+
+/** What a browser sees when "Add to Slack" lands on a workspace another node already owns --
+ * "first install wins" (ADI-MONO-125), same wording Telegram's chat reply uses for the same
+ * situation. */
+export const SLACK_ALREADY_CONNECTED_HTML =
+  "<!doctype html><title>Already connected</title>" +
+  "<p>This workspace is already connected to another ADI. Its owner has to disconnect it first.</p>";

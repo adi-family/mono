@@ -58,12 +58,15 @@ struct ConnectionsView {
 /// one for from a bare code. Named apart from [`crate::connect::Connected`] (what `connect::connect`
 /// itself returns, one layer closer to the store) since this is the HTTP response shape, not that
 /// one — the two happen to carry the same two fields today, but nothing here should be read as a
-/// promise they always will.
+/// promise they always will. `install_url_group` (ADI-MONO-125) is Telegram's "add to a group"
+/// twin of `install_url`, empty for every other provider.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConnectResponse {
     pub connection: ConnectionView,
     #[serde(default)]
     pub install_url: String,
+    #[serde(default)]
+    pub install_url_group: String,
 }
 
 #[derive(Debug, Serialize)]

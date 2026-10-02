@@ -17,6 +17,13 @@ import type { Allowlist, ChannelMessage, Connection, Env, Target } from "./types
  * long enough to overflow this has bigger problems than one dropped event. */
 const MAX_SPOOL = 100;
 
+/** How many never-linked connections one `(node, provider)` pair may hold at once, when
+ * `register`'s caller isn't the admin bearer (ADI-MONO-125's open self-registration) --
+ * generous enough that a node juggling several in-flight connects never notices, bounded so an
+ * open `/register` can't be used to spam pending connections onto one node forever. A *linked*
+ * connection never counts against this -- only ones still waiting on Start/Allow. */
+const MAX_PENDING_CONNECTIONS = 20;
+
 type QueuedFrame =
   | {
       id: string;
@@ -41,6 +48,9 @@ interface RegisterRequest {
   allowlist?: Allowlist;
   /** Epoch seconds, from the router's own (possibly test-pinned) clock. */
   now?: number;
+  /** Whether to enforce {@link MAX_PENDING_CONNECTIONS} -- `false` for the admin-bearer path,
+   * which `router.ts` already decided doesn't need this (ADI-MONO-125). */
+  enforce_pending_cap?: boolean;
 }
 
 export class NodeConnection implements DurableObject {
@@ -103,6 +113,17 @@ export class NodeConnection implements DurableObject {
     // read as "signed in the future" the moment that pinned clock runs the freshness check.
     const now = typeof body.now === "number" ? body.now : Math.floor(Date.now() / 1000);
 
+    if (body.enforce_pending_cap) {
+      const existing = await this.ctx.storage.list<Connection>({ prefix: "conn:" });
+      let pending = 0;
+      for (const connection of existing.values()) {
+        if (!connection.linked) pending++;
+      }
+      if (pending >= MAX_PENDING_CONNECTIONS) {
+        return Response.json({ error: "too many pending connections on this node" }, { status: 429 });
+      }
+    }
+
     let token = await this.getToken();
     if (!token) {
       // Strictly past every epoch this object has ever minted -- including one revoked by
@@ -153,7 +174,16 @@ export class NodeConnection implements DurableObject {
 
   /** Consume a verified link code against the pending connection it names. Idempotent against
    * replay: a connection already linked refuses a second attempt rather than silently moving
-   * the chat it's bound to. */
+   * the chat it's bound to.
+   *
+   * `router.ts` already refused this call entirely if `routing_key` belongs to a *different*
+   * node's own D1 row (ADI-MONO-125, "first install wins") -- the only case left for this object
+   * to handle itself is the same node relinking a routing key one of its *own* earlier
+   * connections already held, which must still work (no `/disconnect` required first). When
+   * that happens, the earlier connection is unlinked here rather than left behind: this DO's own
+   * `route:<routing_key>` key can only ever point at one connection, so leaving the old one
+   * marked `linked` with no route reaching it would be a ghost no `disconnect` call could ever
+   * find by routing key again. */
   private async link(request: Request): Promise<Response> {
     const { connection, routing_key, credential } = (await request.json()) as {
       connection: string;
@@ -166,6 +196,16 @@ export class NodeConnection implements DurableObject {
     const record = await this.ctx.storage.get<Connection>(`conn:${connection}`);
     if (!record) return Response.json({ ok: false, reason: "unknown connection" }, { status: 404 });
     if (record.linked) return Response.json({ ok: false, reason: "already linked" }, { status: 409 });
+
+    const previousId = await this.ctx.storage.get<string>(`route:${routing_key}`);
+    if (previousId && previousId !== connection) {
+      const previous = await this.ctx.storage.get<Connection>(`conn:${previousId}`);
+      if (previous) {
+        previous.linked = false;
+        previous.routing_key = null;
+        await this.ctx.storage.put(`conn:${previousId}`, previous);
+      }
+    }
 
     record.linked = true;
     record.routing_key = routing_key;

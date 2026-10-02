@@ -14,6 +14,7 @@ function env(overrides: Partial<Env> = {}): Env {
     SLACK_CLIENT_SECRET: "client-secret",
     SLACK_SIGNING_SECRET: SECRET,
     NODE_CONNECTION: undefined as never,
+    REGISTER_LIMITER: undefined as never,
     ROUTING_KEYS: undefined as never,
     ...overrides,
   };

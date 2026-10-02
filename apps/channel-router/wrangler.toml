@@ -5,7 +5,8 @@
 #
 # Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
 #   bun x wrangler secret put ROUTER_SECRET
-#   bun x wrangler secret put ROUTER_ADMIN_SECRET
+#   bun x wrangler secret put ROUTER_ADMIN_SECRET  # optional operator path (ADI-MONO-125):
+#                                                   # POST /register works without it, rate-limited
 #   bun x wrangler secret put TELEGRAM_BOT_TOKEN
 #   bun x wrangler secret put TELEGRAM_SECRET_TOKEN
 #   bun x wrangler secret put SLACK_CLIENT_ID
@@ -38,9 +39,17 @@ TELEGRAM_BOT_USERNAME = "withadi_bot"
 name = "NODE_CONNECTION"
 class_name = "NodeConnection"
 
+[[durable_objects.bindings]]
+name = "REGISTER_LIMITER"
+class_name = "RegisterLimiter"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["NodeConnection"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RegisterLimiter"]
 
 [[d1_databases]]
 binding = "ROUTING_KEYS"

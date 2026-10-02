@@ -34,13 +34,23 @@ describe("health", () => {
 });
 
 describe("POST /register", () => {
-  it("401s without a bearer", async () => {
+  it("open self-registration (ADI-MONO-125): no bearer at all still succeeds", async () => {
     const res = await handle(
-      new Request("https://router.example/register", { method: "POST", body: "{}" }),
+      new Request("https://router.example/register", {
+        method: "POST",
+        headers: { "cf-connecting-ip": `ip-${Math.random()}` },
+        body: JSON.stringify({
+          node: `node-open-${Math.random()}`,
+          provider: "telegram",
+          target: { kind: "agent", agent: "a" },
+        }),
+      }),
       env,
       NOW,
     );
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { token: string };
+    expect(body.token.length).toBeGreaterThan(0);
   });
 
   it("401s the wrong admin secret", async () => {
@@ -85,13 +95,31 @@ describe("POST /register", () => {
       NOW,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { token: string; connection: string; link_code: string; install_url: string };
+    const body = (await res.json()) as {
+      token: string;
+      connection: string;
+      link_code: string;
+      install_url: string;
+      install_url_group: string;
+    };
     expect(body.token.length).toBeGreaterThan(0);
     expect(body.connection.length).toBeGreaterThan(0);
     // Telegram's own limit on a deep link's `start` parameter; anything else is silently dropped
     // and the link never completes (ADI-MONO-124 found this against the real bot).
     expect(body.link_code).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(body.install_url).toBe(`https://t.me/TestAdiBot?start=${body.link_code}`);
+    // "Add to a group" (ADI-MONO-125) -- the same code, Telegram's other deep-link verb.
+    expect(body.install_url_group).toBe(`https://t.me/TestAdiBot?startgroup=${body.link_code}`);
+  });
+
+  it("has no install_url_group for a provider with no such concept", async () => {
+    const res = await handle(
+      registerRequest({ node: `node-no-group-${Math.random()}`, provider: "slack", target: { kind: "agent", agent: "a" } }),
+      env,
+      NOW,
+    );
+    const body = (await res.json()) as { install_url_group: string | null };
+    expect(body.install_url_group).toBeNull();
   });
 
   it("reuses the same node token across two connections, but mints a fresh connection/code each time", async () => {
@@ -106,6 +134,64 @@ describe("POST /register", () => {
     expect(second.token).toBe(first.token);
     expect(second.connection).not.toBe(first.connection);
     expect(second.link_code).not.toBe(first.link_code);
+  });
+
+  it("rate-limits open registration per IP, but the admin bearer is exempt", async () => {
+    const ip = `ip-${Math.random()}`;
+    const openRequest = () =>
+      handle(
+        new Request("https://router.example/register", {
+          method: "POST",
+          headers: { "cf-connecting-ip": ip },
+          body: JSON.stringify({
+            node: `node-ratelimit-${Math.random()}`,
+            provider: "telegram",
+            target: { kind: "agent", agent: "a" },
+          }),
+        }),
+        env,
+        NOW,
+      );
+    for (let i = 0; i < 10; i++) {
+      expect((await openRequest()).status).toBe(200);
+    }
+    expect((await openRequest()).status).toBe(429);
+
+    // The same IP, but with the admin bearer, is never throttled.
+    const res = await handle(
+      registerRequest({ node: `node-ratelimit-admin-${Math.random()}`, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("caps pending connections per node for open registration, but not for the admin bearer", async () => {
+    const node = `node-pending-cap-${Math.random()}`;
+    // A fresh IP per call -- this test is about the per-node cap, not the per-IP rate limit
+    // above, and the two must not interfere with each other.
+    const openRequest = () =>
+      handle(
+        new Request("https://router.example/register", {
+          method: "POST",
+          headers: { "cf-connecting-ip": `ip-${Math.random()}` },
+          body: JSON.stringify({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+        }),
+        env,
+        NOW,
+      );
+    for (let i = 0; i < 20; i++) {
+      expect((await openRequest()).status).toBe(200);
+    }
+    expect((await openRequest()).status).toBe(429);
+
+    // The admin bearer, against the very same (already-capped) node, is unaffected.
+    const res = await handle(
+      registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(200);
   });
 });
 
@@ -297,8 +383,11 @@ describe("Slack install + OAuth link", () => {
       )
     ).json()) as { link_code: string };
 
+    // Unique to this test -- isolatedStorage is off for this whole suite, so a hardcoded team id
+    // shared with another test file's own Slack link would collide on the D1 row.
+    const teamId = `T-LINK-${Math.random()}`;
     const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: "T0123" } }), { status: 200 }),
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-1", team: { id: teamId } }), { status: 200 }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -315,7 +404,7 @@ describe("Slack install + OAuth link", () => {
     );
 
     const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
-      .bind("slack", "T0123")
+      .bind("slack", teamId)
       .first<{ node_id: string }>();
     expect(row?.node_id).toBe(node);
   });
@@ -327,6 +416,60 @@ describe("Slack install + OAuth link", () => {
       NOW,
     );
     expect(res.status).toBe(400);
+  });
+
+  it("first install wins: a second node's OAuth callback for an already-connected workspace is refused", async () => {
+    const firstNode = `node-slack-steal-first-${Math.random()}`;
+    const { link_code: firstCode } = (await (
+      await handle(
+        registerRequest({ node: firstNode, provider: "slack", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
+    ).json()) as { link_code: string };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, access_token: "xoxb-first", team: { id: "T-STEAL" } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const firstLink = await handle(
+      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(firstCode)}`),
+      env,
+      NOW,
+    );
+    expect(firstLink.status).toBe(200);
+
+    const secondNode = `node-slack-steal-second-${Math.random()}`;
+    const { link_code: secondCode } = (await (
+      await handle(
+        registerRequest({ node: secondNode, provider: "slack", target: { kind: "agent", agent: "a" } }),
+        env,
+        NOW,
+      )
+    ).json()) as { link_code: string };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, access_token: "xoxb-second", team: { id: "T-STEAL" } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const secondLink = await handle(
+      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(secondCode)}`),
+      env,
+      NOW,
+    );
+    expect(secondLink.status).toBe(200);
+    expect(await secondLink.text()).toContain("already connected to another ADI");
+
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("slack", "T-STEAL")
+      .first<{ node_id: string }>();
+    expect(row?.node_id).toBe(firstNode);
   });
 
   it("502s when slack's token exchange fails", async () => {

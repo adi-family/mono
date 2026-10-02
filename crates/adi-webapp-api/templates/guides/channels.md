@@ -17,10 +17,11 @@ Every verb below needs `adi-app` running on this machine — it's the process ho
 socket to the router, and `connect`'s wait on `linked` is waiting on that socket, not on a file.
 
 - Connect a service: `{{cli}} channels connect <telegram|slack> --agent <agent>` — registers the
-  connection, prints the install/link URL (for Telegram, `t.me/<bot>?start=<code>`), and blocks
-  until the operator completes the link (or `--timeout-secs`, default 600, runs out — the
-  connection is kept either way, so re-run to keep waiting). Panel: `/settings/channels` →
-  the service's card → **Connect**.
+  connection, prints the install/link URL (for Telegram, `t.me/<bot>?start=<code>`; Telegram also
+  prints a second link, `?startgroup=<code>`, to add the bot to a group instead of messaging it
+  directly), and blocks until the operator completes the link (or `--timeout-secs`, default 600,
+  runs out — the connection is kept either way, so re-run to keep waiting). Panel:
+  `/settings/channels` → the service's card → **Connect**.
 - List connections: `{{cli}} channels list`, or `GET /api/channels`.
 - Change which agent a connection targets: `{{cli}} channels route <id> --agent <agent>`.
 - Pause or resume delivery without disconnecting: `{{cli}} channels route <id> --pause` /
@@ -70,3 +71,8 @@ a stranger a bot exists here and is gated is worse than saying nothing.
   it in a browser installs the app into that workspace and links it in one step, no `/start`
   message to send. The connection's routing key is the Slack **workspace** (`team_id`), so one link
   covers every channel the bot is invited into; who may talk still narrows per the usual allowlist.
+- In a Telegram group, the bot runs in privacy mode: it only sees messages that `@mention` it (or
+  reply to one of its own messages), not every message in the group — and it only replies to those.
+- Linking a chat/workspace that's already connected to another ADI is refused, not reassigned —
+  "first install wins". The person is told why (in the chat, or on Slack's OAuth callback page) and
+  pointed at disconnecting it first if that's actually what they want.

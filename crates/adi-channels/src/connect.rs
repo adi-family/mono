@@ -24,20 +24,24 @@ use crate::token;
 /// What a successful connect hands back: the new (unlinked) connection row, mirrored locally
 /// under the id the router minted for it, and the install URL to show the operator — already the
 /// whole `t.me/<bot>?start=<code>` for Telegram, `None` for a provider with no known way to build
-/// one from a bare code.
+/// one from a bare code. `install_url_group` (ADI-MONO-125) is Telegram's "add to a group" twin
+/// of `install_url`, `None` for every other provider.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Connected {
     pub connection: Connection,
     pub install_url: Option<String>,
+    pub install_url_group: Option<String>,
 }
 
 /// Where the router is, and how this node proves it may mint a token — the two facts
 /// [`connect`] needs about the router itself, grouped so the function reads as "the node, the
-/// target, the router" rather than five same-shaped strings in a row.
+/// target, the router" rather than five same-shaped strings in a row. `admin_secret` is `None`
+/// for the ordinary case since ADI-MONO-125 (open self-registration — no admin secret to hold),
+/// `Some` only for an operator's own node that still wants to skip the rate limit/pending cap.
 #[derive(Debug, Clone, Copy)]
 pub struct Router<'a> {
     pub url: &'a str,
-    pub admin_secret: &'a str,
+    pub admin_secret: Option<&'a str>,
 }
 
 /// `adi-mono channels connect <svc> --agent <a>` / `POST /api/channels/connect`
@@ -75,6 +79,7 @@ pub fn connect(
     Ok(Connected {
         connection,
         install_url: registered.install_url,
+        install_url_group: registered.install_url_group,
     })
 }
 
@@ -198,7 +203,7 @@ mod tests {
             &cfg,
             Router {
                 url: &base,
-                admin_secret: "admin-secret",
+                admin_secret: None,
             },
             "telegram",
             Target::Agent {
@@ -241,7 +246,7 @@ mod tests {
             &cfg,
             Router {
                 url: &base,
-                admin_secret: "admin-secret",
+                admin_secret: None,
             },
             "telegram",
             Target::Agent {

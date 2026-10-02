@@ -59,25 +59,26 @@ pub struct RouterClient {
 
 ### struct `Connected`
 
-What a successful connect hands back: the new (unlinked) connection row, mirrored locally under the id the router minted for it, and the install URL to show the operator — already the whole `t.me/<bot>?start=<code>` for Telegram, `None` for a provider with no known way to build one from a bare code.
+What a successful connect hands back: the new (unlinked) connection row, mirrored locally under the id the router minted for it, and the install URL to show the operator — already the whole `t.me/<bot>?start=<code>` for Telegram, `None` for a provider with no known way to build one from a bare code. `install_url_group` (ADI-MONO-125) is Telegram's "add to a group" twin of `install_url`, `None` for every other provider.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
 pub struct Connected {
     pub connection: Connection,
     pub install_url: Option<String>,
+    pub install_url_group: Option<String>,
 }
 ```
 
 ### struct `Router`
 
-Where the router is, and how this node proves it may mint a token — the two facts `connect` needs about the router itself, grouped so the function reads as "the node, the target, the router" rather than five same-shaped strings in a row.
+Where the router is, and how this node proves it may mint a token — the two facts `connect` needs about the router itself, grouped so the function reads as "the node, the target, the router" rather than five same-shaped strings in a row. `admin_secret` is `None` for the ordinary case since ADI-MONO-125 (open self-registration — no admin secret to hold), `Some` only for an operator's own node that still wants to skip the rate limit/pending cap.
 
 ```rust
 #[derive(Debug, Clone, Copy)]
 pub struct Router<'a> {
     pub url: &'a str,
-    pub admin_secret: &'a str,
+    pub admin_secret: Option<&'a str>,
 }
 ```
 
@@ -320,7 +321,7 @@ struct ConnectionsView {
 
 ### struct `ConnectResponse`
 
-What `POST /api/channels/connect` answers: the new, still-unlinked connection, and the install/link URL to show the operator — empty for a provider the router has no way to build one for from a bare code. Named apart from `crate::connect::Connected` (what `connect::connect` itself returns, one layer closer to the store) since this is the HTTP response shape, not that one — the two happen to carry the same two fields today, but nothing here should be read as a promise they always will.
+What `POST /api/channels/connect` answers: the new, still-unlinked connection, and the install/link URL to show the operator — empty for a provider the router has no way to build one for from a bare code. Named apart from `crate::connect::Connected` (what `connect::connect` itself returns, one layer closer to the store) since this is the HTTP response shape, not that one — the two happen to carry the same two fields today, but nothing here should be read as a promise they always will. `install_url_group` (ADI-MONO-125) is Telegram's "add to a group" twin of `install_url`, empty for every other provider.
 
 ```rust
 #[derive(Debug, Clone, Deserialize)]
@@ -328,6 +329,8 @@ pub struct ConnectResponse {
     pub connection: ConnectionView,
     #[serde(default)]
     pub install_url: String,
+    #[serde(default)]
+    pub install_url_group: String,
 }
 ```
 
@@ -450,7 +453,7 @@ struct RegisterRequest<'a> {
 
 ### struct `Registered`
 
-What `/register` hands back: a node token (good for this `(node, provider)` forever, or until revoked), and a fresh connection — `do.ts`'s `register` creates both in the one call, on the router's own clock, so this crate's connect flow never mints a connection id of its own; it uses this one verbatim. `install_url` is `null` for a provider with no known way to build one from a bare code (every provider but Telegram, today).
+What `/register` hands back: a node token (good for this `(node, provider)` forever, or until revoked), and a fresh connection — `do.ts`'s `register` creates both in the one call, on the router's own clock, so this crate's connect flow never mints a connection id of its own; it uses this one verbatim. `install_url` is `null` for a provider with no known way to build one from a bare code (every provider but Telegram, today). `install_url_group` (ADI-MONO-125) is Telegram's "add this bot to a group" twin of `install_url` -- `null` for every other provider.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -460,6 +463,8 @@ pub struct Registered {
     pub link_code: String,
     #[serde(default)]
     pub install_url: Option<String>,
+    #[serde(default)]
+    pub install_url_group: Option<String>,
 }
 ```
 

@@ -142,6 +142,7 @@ fn connect(
     )?;
     let id = connected.connection.id.clone();
     let install_url = connected.install_url.clone();
+    let install_url_group = connected.install_url_group.clone();
 
     if !json {
         if install_url.is_empty() {
@@ -152,6 +153,10 @@ fn connect(
         } else {
             println!("Connection {id} — complete the link at:");
             println!("  {install_url}");
+            if !install_url_group.is_empty() {
+                println!("Or add it to a group:");
+                println!("  {install_url_group}");
+            }
             if qr || (!no_qr && std::io::stdout().is_terminal()) {
                 match crate::qr::terminal(&install_url) {
                     Ok(code) => {
@@ -176,6 +181,7 @@ fn connect(
         print_json(&serde_json::json!({
             "connection": id,
             "install_url": install_url,
+            "install_url_group": install_url_group,
             "linked": linked,
         }));
         return Ok(());

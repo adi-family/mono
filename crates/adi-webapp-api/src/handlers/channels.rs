@@ -51,16 +51,17 @@ pub fn channel(store: &Connections, id: &str) -> Response {
 
 /// `POST /api/channels/connect` — register this node for the provider (minting/reusing its node
 /// token) and mirror the fresh, unlinked connection the router created in the same call.
-/// `router_url`/`admin_secret` name where and how to reach the router. The allowlist starts at
-/// the router's own default (owner-only) — `docs/channels.md` §7 has "who may talk" as a
-/// separate step (`adi-mono channels allow`), not part of connect's own request.
+/// `router_url`/`admin_secret` name where and how to reach the router — `admin_secret` is `None`
+/// for the ordinary node (ADI-MONO-125: registration is open, not admin-gated, any more). The
+/// allowlist starts at the router's own default (owner-only) — `docs/channels.md` §7 has "who may
+/// talk" as a separate step (`adi-mono channels allow`), not part of connect's own request.
 #[must_use]
 pub fn connect_channel(
     connections: &Connections,
     secrets: &Secrets,
     config: &adi_config::Config,
     router_url: &str,
-    admin_secret: &str,
+    admin_secret: Option<&str>,
     body: &[u8],
 ) -> Response {
     let req = require!(body, ConnectChannel);
@@ -79,6 +80,7 @@ pub fn connect_channel(
         Ok(connected) => ok_json(&ChannelConnected {
             connection: connection_dto(connected.connection),
             install_url: connected.install_url.unwrap_or_default(),
+            install_url_group: connected.install_url_group.unwrap_or_default(),
         }),
         Err(e) => Response::from(&e),
     }

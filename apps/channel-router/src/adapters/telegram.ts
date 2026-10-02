@@ -10,7 +10,9 @@
  *   has to happen now, not whenever the node eventually fetches it.
  * - `extractLinkCode`: Telegram's own "link" is just another webhook -- `/start <code>` arrives
  *   as an ordinary `message` update, so there's no separate `GET /link/telegram` route; the
- *   webhook handler asks every adapter this instead.
+ *   webhook handler asks every adapter this instead. In a group this is `/start@<bot> <code>`
+ *   (the regex below already strips the optional `@<bot>` mention), whether a human typed it or
+ *   Telegram sent it automatically after a `?startgroup=<code>` link added the bot (ADI-MONO-125).
  * - `send`: `POST .../sendMessage` with the one bot token this deployment holds.
  * - `setThinking`: `sendChatAction` with `action: "typing"` -- Telegram's own "thinking…"
  *   equivalent. There's no call to cancel it (it fades on its own after a few seconds, and
@@ -181,4 +183,14 @@ export const telegramAdapter: ChannelAdapter = {
 export function telegramInstallUrl(env: Env, code: string): string | null {
   if (!env.TELEGRAM_BOT_USERNAME) return null;
   return `https://t.me/${env.TELEGRAM_BOT_USERNAME}?start=${code}`;
+}
+
+/** The "add this bot to a group" twin of {@link telegramInstallUrl} (ADI-MONO-125):
+ * `?startgroup=<code>` instead of `?start=<code>` drives Telegram's own "Add to Group" picker,
+ * after which Telegram delivers the exact same `/start <code>` message to the group it was added
+ * to -- nothing on the webhook side changes, this is purely a second URL to offer alongside the
+ * first. */
+export function telegramGroupInstallUrl(env: Env, code: string): string | null {
+  if (!env.TELEGRAM_BOT_USERNAME) return null;
+  return `https://t.me/${env.TELEGRAM_BOT_USERNAME}?startgroup=${code}`;
 }

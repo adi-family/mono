@@ -45,7 +45,8 @@ struct RegisterRequest<'a> {
 /// revoked), and a fresh connection — `do.ts`'s `register` creates both in the one call, on the
 /// router's own clock, so this crate's connect flow never mints a connection id of its own; it
 /// uses this one verbatim. `install_url` is `null` for a provider with no known way to build one
-/// from a bare code (every provider but Telegram, today).
+/// from a bare code (every provider but Telegram, today). `install_url_group` (ADI-MONO-125) is
+/// Telegram's "add this bot to a group" twin of `install_url` -- `null` for every other provider.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Registered {
     pub token: String,
@@ -53,6 +54,8 @@ pub struct Registered {
     pub link_code: String,
     #[serde(default)]
     pub install_url: Option<String>,
+    #[serde(default)]
+    pub install_url_group: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,8 +100,11 @@ impl RouterApi {
     }
 
     /// Mint a node token for `(node_id, provider)` (first call only — later ones return the same
-    /// one) and a fresh connection pointed at `target`/`allowlist`. Bearer `admin_secret` is this
-    /// node's own copy of `ROUTER_ADMIN_SECRET` (§8: acceptable because it gates minting, not
+    /// one) and a fresh connection pointed at `target`/`allowlist`. Registration is open to any
+    /// node since ADI-MONO-125 (rate-limited and capped instead of gated) — `admin_secret` is
+    /// this node's own copy of `ROUTER_ADMIN_SECRET`, `None` for a node with no such secret (the
+    /// ordinary case now), `Some` only for an operator's own trusted node that still holds one
+    /// and wants to skip those limits (§8: acceptable because it only ever gates minting, never
     /// ordinary traffic).
     ///
     /// # Errors
@@ -110,11 +116,13 @@ impl RouterApi {
         provider: &str,
         target: &Target,
         allowlist: Option<&Allowlist>,
-        admin_secret: &str,
+        admin_secret: Option<&str>,
     ) -> Result<Registered> {
-        let response = client()?
-            .post(format!("{}/register", self.base_url))
-            .bearer_auth(admin_secret)
+        let mut request = client()?.post(format!("{}/register", self.base_url));
+        if let Some(admin_secret) = admin_secret {
+            request = request.bearer_auth(admin_secret);
+        }
+        let response = request
             .json(&RegisterRequest {
                 node: node_id,
                 provider,
@@ -255,12 +263,51 @@ mod tests {
             body.len()
         ));
         let registered = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, "admin-secret")
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
             .expect("register");
         assert_eq!(registered.token, "tok_123");
         assert_eq!(registered.connection, "conn_abc");
         assert_eq!(registered.link_code, "code_1");
         assert_eq!(registered.install_url, None, "absent in this response");
+        assert_eq!(registered.install_url_group, None, "absent in this response");
+    }
+
+    /// ADI-MONO-125: open self-registration — a node with no admin secret at all still
+    /// registers, and sends no `Authorization` header for the router to even consider.
+    #[test]
+    fn register_with_no_admin_secret_sends_no_authorization_header() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\"}";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut saw_authorization = false;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if line.to_ascii_lowercase().starts_with("authorization:") {
+                    saw_authorization = true;
+                }
+            }
+            tx.send(saw_authorization).unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            stream.try_clone().unwrap().write_all(response.as_bytes()).unwrap();
+        });
+
+        RouterApi::new(format!("http://{addr}"))
+            .register("node-1", "telegram", &agent_target(), None, None)
+            .expect("register");
+        assert!(!rx.recv().unwrap(), "no admin secret given -- no bearer sent");
     }
 
     #[test]
@@ -272,7 +319,7 @@ mod tests {
             body.len()
         ));
         let registered = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, "admin-secret")
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
             .expect("register");
         assert_eq!(
             registered.install_url,
@@ -281,10 +328,27 @@ mod tests {
     }
 
     #[test]
+    fn register_carries_an_install_url_group_when_the_router_sends_one() {
+        let body = "{\"token\":\"tok_123\",\"connection\":\"conn_abc\",\"link_code\":\"code_1\",\
+                     \"install_url_group\":\"https://t.me/AdiBot?startgroup=code_1\"}";
+        let base = fake_router(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ));
+        let registered = RouterApi::new(base)
+            .register("node-1", "telegram", &agent_target(), None, Some("admin-secret"))
+            .expect("register");
+        assert_eq!(
+            registered.install_url_group,
+            Some("https://t.me/AdiBot?startgroup=code_1".to_string())
+        );
+    }
+
+    #[test]
     fn register_surfaces_a_non_2xx_as_a_router_error() {
         let base = fake_router("HTTP/1.1 403 Forbidden\r\nContent-Length: 7\r\n\r\nrefused");
         let err = RouterApi::new(base)
-            .register("node-1", "telegram", &agent_target(), None, "wrong-secret")
+            .register("node-1", "telegram", &agent_target(), None, Some("wrong-secret"))
             .expect_err("should refuse");
         assert!(matches!(err, Error::Router(msg) if msg.contains("refused")));
     }

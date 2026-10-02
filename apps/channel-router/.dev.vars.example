@@ -4,8 +4,9 @@
 # Signs node tokens and link codes. Use a long random value: `openssl rand -hex 32`.
 ROUTER_SECRET="dev-only-change-me"
 
-# Gates POST /register -- a node holds this too (see docs/channels.md §8 for why that's
-# acceptable), it is not browser-facing. `openssl rand -hex 32`.
+# Optional operator path for POST /register (ADI-MONO-125: registration is open to any node now,
+# rate-limited and capped instead of gated -- see docs/channels.md §1/§8). A node holding this
+# skips both limits; it is not browser-facing. `openssl rand -hex 32`.
 ROUTER_ADMIN_SECRET="dev-only-change-me-too"
 
 # The one Telegram bot ADI runs (api.telegram.org -> BotFather). TELEGRAM_SECRET_TOKEN is the

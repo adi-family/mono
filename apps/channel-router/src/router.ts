@@ -9,8 +9,10 @@
  *   is handled before `normalize` ever sees it.
  * - `GET /link/<provider>` -- a real redirect-based install flow (Slack's "Add to Slack").
  *   Nobody needs it yet: Telegram links through its webhook instead.
- * - `POST /register` -- admin-gated, mints a node token (first time only) and a fresh
- *   connection + link code.
+ * - `POST /register` -- open to any node (ADI-MONO-125: a friend's install can't hold
+ *   `ROUTER_ADMIN_SECRET`), under a per-IP rate limit and a per-node cap on pending connections;
+ *   an operator's own `ROUTER_ADMIN_SECRET` bearer skips both. Mints a node token (first time
+ *   only) and a fresh connection + link code.
  * - `POST /subscribe` -- a node's WebSocket upgrade, forwarded to its DO once the bearer node
  *   token checks out.
  * - `POST /send` -- a node's outbound reply, authenticated the same way, resolved to a chat id
@@ -20,8 +22,14 @@
  *   still needs it (§1 step 4 -- the gap ADI-MONO-120/121 both flagged, closed by ADI-MONO-122).
  */
 import { getAdapter, resolveCredential } from "./adapters/index";
-import { slackExchangeCode, slackInstallUrl, slackRedirectUri, SLACK_INSTALL_SUCCESS_HTML } from "./adapters/slack";
-import { telegramInstallUrl } from "./adapters/telegram";
+import {
+  slackExchangeCode,
+  slackInstallUrl,
+  slackRedirectUri,
+  SLACK_ALREADY_CONNECTED_HTML,
+  SLACK_INSTALL_SUCCESS_HTML,
+} from "./adapters/slack";
+import { telegramGroupInstallUrl, telegramInstallUrl } from "./adapters/telegram";
 import { bearerToken, html, json, problem, timingSafeEqual } from "./http";
 import { enabledProviders } from "./providers";
 import { encryptCredential, LINK_CODE_TTL_SECONDS, randomId, verifyLinkCode, verifyNodeToken } from "./state";
@@ -76,12 +84,24 @@ interface RegisterBody {
 }
 
 /** `POST /register` -- mint a node token (first call for this `(node, provider)` only) and a
- * fresh pending connection + link code, behind `ROUTER_ADMIN_SECRET` (§1 step 1, §8). */
+ * fresh pending connection + link code (§1 step 1, §8).
+ *
+ * Open to any node since ADI-MONO-125: a friend's own install can't hold `ROUTER_ADMIN_SECRET`,
+ * only *we* can, so requiring it here would mean nobody but our own node could ever connect a
+ * chat. `ROUTER_ADMIN_SECRET` is kept as an optional operator path that skips the two limits
+ * below entirely (a wrong bearer still 401s -- that path is all-or-nothing, never a silent
+ * downgrade to the constrained one). Without it, a registration is still real work (it mints a
+ * token and a pending connection), so it's throttled per IP and capped per node -- neither of
+ * which protects anything a *link* would also protect, since linking still needs pressing
+ * Start/Allow from the chat/workspace itself (§1 step 3); this is purely about not letting the
+ * open door be used to spam pending connections or tokens. */
 async function handleRegister(request: Request, env: Env, now: number): Promise<Response> {
+  // Checked before the body is even parsed, same as the original admin-only gate did: a bearer
+  // naming itself the admin path either is one or 401s outright, regardless of what the body
+  // turns out to hold.
   const admin = bearerToken(request);
-  if (!admin || !timingSafeEqual(admin, env.ROUTER_ADMIN_SECRET)) {
-    return problem(401, "missing or invalid admin bearer");
-  }
+  const isAdmin = admin !== null && timingSafeEqual(admin, env.ROUTER_ADMIN_SECRET);
+  if (admin !== null && !isAdmin) return problem(401, "invalid admin bearer");
 
   let body: RegisterBody;
   try {
@@ -94,6 +114,12 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
   if (!getAdapter(body.provider)) return problem(404, `unknown or unsupported provider: ${body.provider}`);
   if (!body.target) return problem(400, "missing target");
 
+  if (!isAdmin) {
+    const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+    const allowed = await checkRegisterRateLimit(env, ip, Math.floor(now / 1000));
+    if (!allowed) return problem(429, "too many registration attempts -- try again shortly");
+  }
+
   const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, body.node, body.provider));
   const res = await stub.fetch("https://do/internal/register", {
     method: "POST",
@@ -103,8 +129,13 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
       target: body.target,
       allowlist: body.allowlist,
       now: Math.floor(now / 1000),
+      enforce_pending_cap: !isAdmin,
     }),
   });
+  if (res.status === 429) {
+    await res.json(); // every DO response body must be drained, even unused -- see do.ts
+    return problem(429, "too many pending connections on this node -- link or disconnect one first");
+  }
   const data = (await res.json()) as { token: string; connection: string; link_code: string };
   data.link_code = await shortenLinkCode(env, data.link_code, Math.floor(now / 1000));
 
@@ -114,7 +145,55 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
       : body.provider === "slack"
         ? slackInstallUrl(request.url, env, data.link_code)
         : null;
-  return json({ token: data.token, connection: data.connection, link_code: data.link_code, install_url: installUrl });
+  // Telegram's own second deep link -- "add this bot to a group" instead of "message it
+  // directly" -- which Telegram resolves to the same `/start <code>` the webhook already
+  // handles (ADI-MONO-125: no routing change needed, only a second URL to offer).
+  const installUrlGroup = body.provider === "telegram" ? telegramGroupInstallUrl(env, data.link_code) : null;
+  return json({
+    token: data.token,
+    connection: data.connection,
+    link_code: data.link_code,
+    install_url: installUrl,
+    install_url_group: installUrlGroup,
+  });
+}
+
+/** A per-IP sliding-window throttle on open (non-admin) registrations -- a Durable Object
+ * counter, not Workers' native Rate Limiting binding, because the binding can't be given the
+ * test-pinned clock every other time-sensitive check in this router already takes (see
+ * `rate_limiter.ts`). */
+async function checkRegisterRateLimit(env: Env, ip: string, nowSeconds: number): Promise<boolean> {
+  const stub = env.REGISTER_LIMITER.get(env.REGISTER_LIMITER.idFromName(ip));
+  const res = await stub.fetch("https://do/check", { method: "POST", body: JSON.stringify({ now: nowSeconds }) });
+  const { allowed } = (await res.json()) as { allowed: boolean };
+  return allowed;
+}
+
+/** Who (if anyone) already owns `(provider, routing_key)` in D1 -- read-only, used to decide
+ * *before* touching the owning Durable Object whether a link attempt is a steal (ADI-MONO-125:
+ * "first install wins"). */
+async function routingKeyOwner(env: Env, provider: string, routingKey: string): Promise<string | null> {
+  const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+    .bind(provider, routingKey)
+    .first<{ node_id: string }>();
+  return row?.node_id ?? null;
+}
+
+/** Bind `(provider, routing_key)` to `node` in D1, one atomic statement: a conditional upsert
+ * that only ever replaces a row it already owns, so a race against another node's own claim
+ * landing between {@link routingKeyOwner}'s read and this write fails closed rather than
+ * silently overwriting it (ADI-MONO-125). Returns whether `node` ended up the owner -- `true`
+ * for a fresh key or one `node` already held, `false` if someone else got there first. */
+async function claimRoutingKey(env: Env, provider: string, routingKey: string, node: string): Promise<boolean> {
+  await env.ROUTING_KEYS.prepare(
+    `INSERT INTO routing_keys (provider, routing_key, node_id) VALUES (?, ?, ?)
+     ON CONFLICT(provider, routing_key) DO UPDATE SET node_id = excluded.node_id
+     WHERE routing_keys.node_id = excluded.node_id`,
+  )
+    .bind(provider, routingKey, node)
+    .run();
+  const owner = await routingKeyOwner(env, provider, routingKey);
+  return owner === node;
 }
 
 /** Park a signed link code in D1 under a short random handle and return the handle -- see
@@ -275,6 +354,22 @@ async function handleLinkAttempt(
     return json({ ok: true });
   }
 
+  // First install wins (ADI-MONO-125): check who already owns this routing key *before* ever
+  // touching the Durable Object, so a steal attempt leaves no DO state to clean up. A node
+  // relinking a chat it already owns (no disconnect in between) still passes this -- the owner
+  // check below only has teeth against a *different* node.
+  const existingOwner = await routingKeyOwner(env, providerId, routingKey);
+  if (existingOwner && existingOwner !== payload.node) {
+    await sendBestEffort(
+      adapter,
+      providerId,
+      routingKey,
+      env,
+      "This chat is already connected to another ADI. Its owner has to disconnect it first.",
+    );
+    return json({ ok: true });
+  }
+
   const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, providerId));
   const linkRes = await stub.fetch("https://do/internal/connection/link", {
     method: "POST",
@@ -284,11 +379,20 @@ async function handleLinkAttempt(
   await linkRes.json(); // every response body must be drained, even unused -- see do.ts
   if (!linkOk) return json({ ok: true }); // unknown or already-linked connection -- no-op
 
-  await env.ROUTING_KEYS.prepare("INSERT OR REPLACE INTO routing_keys (provider, routing_key, node_id) VALUES (?, ?, ?)")
-    .bind(providerId, routingKey, payload.node)
-    .run();
-
-  await sendBestEffort(adapter, providerId, routingKey, env, "Linked. You can talk to the agent here now.");
+  // Re-checked, not just re-written: the read above and this write aren't one transaction, so a
+  // second node's own link could in principle land in between. `claimRoutingKey` only ever
+  // replaces a row it already owns, so the rare loser here gets told the truth instead of
+  // silently taking over a chat the other node's DO now also believes is linked to it.
+  const claimed = await claimRoutingKey(env, providerId, routingKey, payload.node);
+  await sendBestEffort(
+    adapter,
+    providerId,
+    routingKey,
+    env,
+    claimed
+      ? "Linked. You can talk to the agent here now."
+      : "This chat is already connected to another ADI. Its owner has to disconnect it first.",
+  );
   return json({ ok: true });
 }
 
@@ -342,6 +446,13 @@ async function handleSlackOAuthCallback(url: URL, env: Env, now: number): Promis
   const exchanged = await slackExchangeCode(env, code, slackRedirectUri(url.toString()));
   if (!exchanged.ok) return problem(502, `slack token exchange failed: ${exchanged.error}`);
 
+  // First install wins (ADI-MONO-125), same check as Telegram's webhook-driven link, before the
+  // Durable Object (and the already-spent OAuth code) commit this workspace to a connection.
+  const existingOwner = await routingKeyOwner(env, "slack", exchanged.teamId);
+  if (existingOwner && existingOwner !== payload.node) {
+    return html(SLACK_ALREADY_CONNECTED_HTML);
+  }
+
   const credential = await encryptCredential({ botToken: exchanged.botToken }, env.ROUTER_SECRET);
   const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, "slack"));
   const linkRes = await stub.fetch("https://do/internal/connection/link", {
@@ -352,11 +463,8 @@ async function handleSlackOAuthCallback(url: URL, env: Env, now: number): Promis
   await linkRes.json(); // every response body must be drained, even unused -- see do.ts
   if (!linkOk) return problem(409, "connection was already linked, or is unknown");
 
-  await env.ROUTING_KEYS.prepare("INSERT OR REPLACE INTO routing_keys (provider, routing_key, node_id) VALUES (?, ?, ?)")
-    .bind("slack", exchanged.teamId, payload.node)
-    .run();
-
-  return html(SLACK_INSTALL_SUCCESS_HTML);
+  const claimed = await claimRoutingKey(env, "slack", exchanged.teamId, payload.node);
+  return html(claimed ? SLACK_INSTALL_SUCCESS_HTML : SLACK_ALREADY_CONNECTED_HTML);
 }
 
 /** `POST /subscribe` -- verify the node token, then forward the upgrade itself to the owning

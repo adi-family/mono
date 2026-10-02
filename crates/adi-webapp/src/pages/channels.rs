@@ -346,7 +346,14 @@ fn connect_dialog(state: State, console: ChannelsConsole, provider: &'static str
         <adi_ui::Modal open=open title=format!("Connect {label}") width="max-w-lg">
             {move || match console.connect_result.get() {
                 None => connect_form(state, console, provider).into_any(),
-                Some(result) => connect_waiting(console, label, result.install_url, result.connection.id).into_any(),
+                Some(result) => connect_waiting(
+                    console,
+                    label,
+                    result.install_url,
+                    result.install_url_group,
+                    result.connection.id,
+                )
+                    .into_any(),
             }}
         </adi_ui::Modal>
     }
@@ -397,9 +404,17 @@ fn connect_form(state: State, console: ChannelsConsole, provider: &'static str) 
 }
 
 /// Phase 2: the install/link URL, and a wait on `linked`.
-fn connect_waiting(console: ChannelsConsole, label: &'static str, install_url: String, id: String) -> AnyView {
+fn connect_waiting(
+    console: ChannelsConsole,
+    label: &'static str,
+    install_url: String,
+    install_url_group: String,
+    id: String,
+) -> AnyView {
     let field = NodeRef::new();
+    let group_field = NodeRef::new();
     let url_for_link = install_url.clone();
+    let group_url_for_link = install_url_group.clone();
     view! {
         <div class="adi-panel__body">
             <p>"Connection "<code class="adi-mono">{id}</code>" created."</p>
@@ -420,6 +435,19 @@ fn connect_waiting(console: ChannelsConsole, label: &'static str, install_url: S
                             <a href=url_for_link.clone() target="_blank" rel="noreferrer">{url_for_link.clone()}</a>
                         </div>
                     </div>
+                    // Telegram's "add this bot to a group" twin of the link above
+                    // (ADI-MONO-125) -- empty for every other provider.
+                    {(!install_url_group.is_empty()).then(move || view! {
+                        <div class="adi-field">
+                            <span class="adi-field__label">"Or add it to a group"</span>
+                            {copy_row(group_field, move || install_url_group.clone())}
+                            <div class="adi-field__note">
+                                <a href=group_url_for_link.clone() target="_blank" rel="noreferrer">
+                                    {group_url_for_link.clone()}
+                                </a>
+                            </div>
+                        </div>
+                    })}
                 }
                 .into_any()
             }}

@@ -22,9 +22,10 @@ use tracing::info;
 const ROUTER_URL_ENV: &str = "ADI_CHANNEL_ROUTER_URL";
 const DEFAULT_ROUTER_URL: &str = "http://127.0.0.1:8787";
 
-/// This node's copy of the router's `ROUTER_ADMIN_SECRET` (`docs/channels.md` §1/§8) — gates
-/// minting a node token, never ordinary traffic. Empty by default, which will fail `/register`
-/// against any router that actually checks it; there is nothing to default it to safely.
+/// This node's copy of the router's `ROUTER_ADMIN_SECRET` (`docs/channels.md` §1/§8) — an
+/// optional operator path since ADI-MONO-125 made `POST /register` open to any node (rate-limited
+/// and capped instead of gated). Absent by default: an ordinary node has no such secret at all
+/// and registers under the open path's limits instead, which is the point.
 const ROUTER_ADMIN_SECRET_ENV: &str = "ADI_CHANNEL_ROUTER_ADMIN_SECRET";
 
 #[must_use]
@@ -32,9 +33,13 @@ pub fn router_url() -> String {
     std::env::var(ROUTER_URL_ENV).unwrap_or_else(|_| DEFAULT_ROUTER_URL.to_string())
 }
 
+/// `None` unless an operator has actually set the env var to a non-empty value — an empty
+/// string is treated the same as absent, not as "the admin secret is the empty string".
 #[must_use]
-pub fn router_admin_secret() -> String {
-    std::env::var(ROUTER_ADMIN_SECRET_ENV).unwrap_or_default()
+pub fn router_admin_secret() -> Option<String> {
+    std::env::var(ROUTER_ADMIN_SECRET_ENV)
+        .ok()
+        .filter(|s| !s.is_empty())
 }
 
 /// The running sockets, by provider. Cheap to hold in `App`; everything here is behind the async

@@ -52,7 +52,7 @@ one file per service.
 | `GET /link/<provider>?code=<link-code>` | GET | the service's own install flow (Telegram's `/start` deep link; Slack's OAuth redirect) | Verify the signed link code, record the routing key → node binding, tell the node (over its WebSocket) that a new chat/workspace is attached. For Telegram this *is* the bot receiving `/start <code>` as an ordinary message, handled like any other webhook with one extra step; for Slack it is the callback leg of "Add to Slack". |
 | `POST /subscribe` | POST | a node | Upgrade to WebSocket. `Authorization: Bearer <node-token>` (query param `?token=` for clients that cannot set a header on the upgrade request) identifies which Durable Object this node is subscribing to. |
 | `POST /send` | POST | a node | `{ "connection": "<id>", "text": "…", … }` (§3). Looks up which service/chat the connection maps to from the DO's own state, calls that provider's credential, posts to the service. This is the **only** path a reply takes — a node never calls Telegram/Slack directly, so a bot token never leaves the router. |
-| `POST /register` | POST | a human operator (CLI/panel, not a node) | Mint a node token for a new connection (§2). Requires the router's own operator credential (`ROUTER_ADMIN_SECRET`, analogous to `STATE_SECRET`), not a service's. (ADI-MONO-120 reads "for a new connection" literally: the response is `{ token, connection, link_code }` — a fresh pending connection and the signed link code for it, not just the token. A repeat call for a `(node, provider)` that already has a token returns that same token, per §1 step 4 below, alongside a new connection + code.) |
+| `POST /register` | POST | a human operator (CLI/panel, not a node) | Mint a node token for a new connection (§2). Open to any node (ADI-MONO-125: a friend's own install can't hold our operator credential), under a per-IP rate limit and a per-node cap on pending connections. `ROUTER_ADMIN_SECRET` (analogous to `STATE_SECRET`) is kept as an optional operator bearer that skips both limits — a wrong bearer still 401s, it never silently falls back to the open path. (ADI-MONO-120 reads "for a new connection" literally: the response is `{ token, connection, link_code, install_url, install_url_group }` — a fresh pending connection and the signed link code for it, not just the token; `install_url_group` is Telegram's "add to a group" deep link, `null` for every other provider (ADI-MONO-125). A repeat call for a `(node, provider)` that already has a token returns that same token, per §1 step 4 below, alongside a new connection + code.) |
 | `POST /disconnect` | POST | a node | `{ connection }`, bearer the node token. Drops the connection from its Durable Object and the D1 `routing_keys` row, and revokes the node token too once nothing else on this `(node, provider)` still needs it (§1 step 4). Added by ADI-MONO-122 — see below. |
 
 ADI-MONO-120 shipped without a `/disconnect` route on purpose: its own build order (§9) named
@@ -64,6 +64,33 @@ token would still pass `/internal/token/check` against a connection registered a
 epoch number, different token string, and the check only compares the number). Fixed with a
 durable `epoch_counter` in the Durable Object's storage that survives the token record itself
 being deleted and always hands out one past the highest epoch ever minted there.
+
+**ADI-MONO-125: open self-registration, and first install wins.** Two gaps found once Channels
+went live to real people, not just our own test node:
+
+- **`POST /register` no longer requires `ROUTER_ADMIN_SECRET`.** A friend's own install has no
+  way to hold our operator credential, so gating minting on it meant only our own node could
+  ever connect a chat — the opposite of "one ADI agent, reachable from Telegram, Slack, and
+  whatever comes after them" for anyone but us. Registration is real work (it mints a token and a
+  pending connection) even though it grants nothing by itself — linking still needs pressing
+  Start/Allow from the chat/workspace itself (§1 step 3), which is the actual access-control
+  boundary — so it's throttled instead of gated: a per-IP sliding-window rate limit and a per-node
+  cap on never-linked connections, both Durable Object counters (not Workers' native Rate Limiting
+  binding, which can't be given the test-pinned clock every other time-sensitive check here
+  already takes). `ROUTER_ADMIN_SECRET` still exists as an optional operator bearer that skips
+  both limits outright; a bearer that's present but wrong still 401s rather than silently falling
+  back to the throttled path.
+- **First install wins.** `router.ts`'s D1 write for a routing key used to be a bare
+  `INSERT OR REPLACE`, so a second node completing a link for a chat/team id another node already
+  owned would silently steal it — the old node's connection stayed `linked: true` with no route
+  left reaching it. A link attempt now checks who (if anyone) already owns the routing key
+  *before* touching the owning Durable Object, and refuses — telling the person why, in the chat
+  (Telegram) or on the OAuth callback page (Slack): "This chat/workspace is already connected to
+  another ADI. Its owner has to disconnect it first." The same node relinking a routing key one of
+  its *own* earlier connections already held still works with no `/disconnect` required first —
+  the Durable Object's own `link()` releases that earlier connection cleanly (unlinked, not left
+  behind as a ghost) rather than refusing the attempt, since the owner check above only has teeth
+  against a genuinely different node.
 
 **Storage.** One Durable Object per `(node, provider)` pair, keyed by both —
 ``idFromName(`${provider}:${nodeId}`)``. (This corrects an inconsistency in the original text,
@@ -97,19 +124,23 @@ No KV, no R2. The signing key for link codes and node tokens (`STATE_SECRET`-equ
 ### Node subscribe / token lifecycle
 
 1. An operator runs `adi-mono channels connect <svc> --agent <a>` (§7). The node calls
-   `POST /register` on the router (bearer `ROUTER_ADMIN_SECRET`, which is itself a secret the node
-   holds — see §8 for why this is acceptable) and gets back a **node token**: an opaque,
-   signed-and-expiring bearer good for one `(node id, provider)` pair. It is stored locally in
-   `adi-secrets` under a reserved scope (the same mechanism a fleet node's password uses — never
-   injected into an agent run's environment).
+   `POST /register` on the router and gets back a **node token**: an opaque, signed-and-expiring
+   bearer good for one `(node id, provider)` pair. Registration is open to any node (ADI-MONO-125:
+   rate-limited per IP and capped per node on pending connections, rather than gated) — a node
+   holding `ROUTER_ADMIN_SECRET` skips both, see §8, but nothing here requires it any more. The
+   token is stored locally in `adi-secrets` under a reserved scope (the same mechanism a fleet
+   node's password uses — never injected into an agent run's environment).
 2. The node opens `POST /subscribe` with that token and keeps the WebSocket open (§2 of the wire
    protocol, below) for as long as the connection exists. A dropped socket reconnects with the
    same token; the token does not rotate on reconnect.
 3. The *first* inbound message for a not-yet-linked chat is a link code, not ordinary traffic:
-   the human who ran `connect` is shown `t.me/<bot>?start=<code>` (or Slack's "Add to Slack" URL,
-   whose OAuth `state` carries the same signed code). Following it binds that chat/workspace's
-   routing key to this node inside the DO and in the `routing_keys` table. From then on every
-   webhook for that routing key forwards to this node.
+   the human who ran `connect` is shown `t.me/<bot>?start=<code>` (or, for a Telegram group,
+   `t.me/<bot>?startgroup=<code>` — ADI-MONO-125, Telegram resolves it to the same `/start <code>`
+   the webhook already handles once the bot is added; or Slack's "Add to Slack" URL, whose OAuth
+   `state` carries the same signed code). Following it binds that chat/workspace's routing key to
+   this node inside the DO and in the `routing_keys` table — refused, with an explanation, if that
+   routing key is already bound to a *different* node ("first install wins", ADI-MONO-125). From
+   then on every webhook for that routing key forwards to this node.
 4. **Revocation** is `adi-mono channels disconnect`: the node tells the router to drop the
    connection (erases the DO's entry and the D1 row) and discards its local copy of the thread
    map. The node token itself is revoked the same call if no other connection on this node still
@@ -422,9 +453,25 @@ target handling, not a new axis the store needs to track twice.
   or send on a different node's connections, and a Telegram token cannot open a Slack socket. It
   is a bearer, not a signed claim the node can inspect; the router is the only party that resolves
   it, same posture as a session cookie.
-- **`ROUTER_ADMIN_SECRET` gates minting, not ordinary traffic.** Only `POST /register` needs it;
-  `/subscribe` and `/send` run on the node token alone, so a compromised node token exposes one
-  node's connections, never the ability to mint more.
+- **`POST /register` is open, not admin-gated** (ADI-MONO-125) — a friend's own install can't
+  hold `ROUTER_ADMIN_SECRET`, only an operator's own node does, so requiring it would mean nobody
+  but us could ever connect a chat. Registration mints a token and a pending connection, but
+  grants nothing by itself: the actual access-control boundary is linking (§1 step 3), which still
+  needs pressing Start/Allow from the chat/workspace itself, not anything `/register` hands back.
+  What's left to protect is resource use, not access — a per-IP rate limit and a per-node cap on
+  never-linked connections, both Durable Object counters, cover that. `ROUTER_ADMIN_SECRET` is
+  kept as an optional bearer that skips both (an operator's own node, which has no need to be
+  throttled against itself); `/subscribe` and `/send` still run on the node token alone, so a
+  compromised node token exposes one node's connections, never the ability to mint more.
+- **First install wins** (ADI-MONO-125). A link is refused, not silently reassigned, when its
+  routing key (chat id, team id) is already bound to a *different* node — checked against the D1
+  `routing_keys` table before the owning Durable Object is ever touched, so there is no DO state
+  to unwind on a refusal. The person is told why, in the chat (Telegram) or on the OAuth callback
+  page (Slack), rather than met with the silence an unlinked chat gets elsewhere in this design —
+  this is the one case where saying something is strictly better than staying quiet, since the
+  alternative is a chat that looks connected but silently talks to someone else's agent. The same
+  node relinking a routing key one of its own earlier connections already held is not a steal and
+  still succeeds, with that earlier connection released cleanly rather than left behind.
 - **Signature checks are mandatory and provider-specific** (§4) and run before `normalize` touches
   the body — an unverified webhook is refused with the generic `400` a provider's retry logic
   already knows how to handle, never shown to the DO.

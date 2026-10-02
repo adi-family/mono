@@ -7,6 +7,7 @@ import { handle } from "./router";
 import type { Env } from "./types";
 
 export { NodeConnection } from "./do";
+export { RegisterLimiter } from "./rate_limiter";
 
 export default {
   fetch(request: Request, env: Env): Promise<Response> {

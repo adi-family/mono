@@ -1240,13 +1240,14 @@ async fn channels_connect(app: &App, body: &[u8]) -> Response {
     let secrets = app.secrets.clone();
     let config = connections.config().clone();
     let body = body.to_vec();
+    let admin_secret = channels::router_admin_secret();
     let response = blocking(move || {
         handlers::connect_channel(
             &connections,
             &secrets,
             &config,
             &channels::router_url(),
-            &channels::router_admin_secret(),
+            admin_secret.as_deref(),
             &body,
         )
     })

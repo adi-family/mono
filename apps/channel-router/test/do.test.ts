@@ -161,6 +161,104 @@ describe("link-code flow", () => {
   });
 });
 
+describe("first install wins (ADI-MONO-125)", () => {
+  it("refuses a second node's /start for a chat another node already linked, and says why", async () => {
+    const firstNode = `node-steal-first-${Math.random()}`;
+    const { link_code: firstCode } = await register(firstNode);
+    await startUpdate(20_000, firstCode, 1);
+
+    const secondNode = `node-steal-second-${Math.random()}`;
+    const { link_code: secondCode } = await register(secondNode);
+    fetchMock.mockClear();
+    const res = await startUpdate(20_000, secondCode, 2);
+    expect(res.status).toBe(200);
+
+    const sent = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/sendMessage"));
+    expect(JSON.parse(String((sent?.[1] as RequestInit).body)).text).toMatch(
+      /already connected to another ADI/,
+    );
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "20000")
+      .first<{ node_id: string }>();
+    expect(row?.node_id).toBe(firstNode);
+  });
+
+  it("lets the same node relink a chat it already owns, without a /disconnect first", async () => {
+    const node = `node-relink-same-${Math.random()}`;
+    const first = await register(node);
+    await startUpdate(21_000, first.link_code, 1);
+
+    // A second connection on the *same* node, linked against the *same* chat -- no disconnect
+    // in between.
+    const second = await register(node);
+    const res = await startUpdate(21_000, second.link_code, 2);
+    expect(res.status).toBe(200);
+
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "21000")
+      .first<{ node_id: string }>();
+    expect(row?.node_id).toBe(node);
+
+    // The first connection is cleanly released, not left behind as a ghost still claiming
+    // `linked: true` for a routing key that no longer reaches it.
+    const sendRes = await handle(
+      new Request("https://router.example/send", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: first.connection, text: "hi" }),
+      }),
+      env,
+      NOW,
+    );
+    expect(sendRes.status).toBe(404); // unlinked, not a steal victim
+  });
+
+  it("lets a chat be relinked to a different node after a /disconnect", async () => {
+    const firstNode = `node-disconnect-relink-first-${Math.random()}`;
+    const first = await register(firstNode);
+    await startUpdate(22_000, first.link_code, 1);
+
+    const disconnectRes = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: first.connection }),
+      }),
+      env,
+      NOW,
+    );
+    expect(disconnectRes.status).toBe(200);
+
+    const secondNode = `node-disconnect-relink-second-${Math.random()}`;
+    const second = await register(secondNode);
+    const res = await startUpdate(22_000, second.link_code, 2);
+    expect(res.status).toBe(200);
+
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "22000")
+      .first<{ node_id: string }>();
+    expect(row?.node_id).toBe(secondNode);
+  });
+});
+
+describe("Telegram 'Add to a group' (ADI-MONO-125)", () => {
+  it("links from /start@<bot> <code>, the form Telegram sends in a group", async () => {
+    const node = `node-group-${Math.random()}`;
+    const { link_code } = await register(node);
+
+    const res = await webhook({
+      update_id: 1,
+      message: { message_id: 1, chat: { id: 23_000 }, text: `/start@TestAdiBot ${link_code}` },
+    });
+    expect(res.status).toBe(200);
+
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "23000")
+      .first<{ node_id: string }>();
+    expect(row?.node_id).toBe(node);
+  });
+});
+
 describe("routing", () => {
   it("delivers an ordinary message for a linked chat to the node over its socket", async () => {
     const node = `node-route-${Math.random()}`;
@@ -474,8 +572,12 @@ describe("POST /send", () => {
       link_code: string;
     };
 
+    // A team id unique to this test -- isolatedStorage is off for this whole suite (see
+    // vitest.config.ts), so a hardcoded one shared with another test file's own Slack link would
+    // collide on the D1 routing_keys row (and, since ADI-MONO-125, get refused as a steal).
+    const teamId = `T-SEND-${Math.random()}`;
     fetchMock.mockImplementation(async (_url: string, _init?: RequestInit) =>
-      new Response(JSON.stringify({ ok: true, access_token: "xoxb-workspace-1", team: { id: "T0123" } }), {
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-workspace-1", team: { id: teamId } }), {
         status: 200,
       }),
     );
