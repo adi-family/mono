@@ -88,7 +88,9 @@ describe("POST /register", () => {
     const body = (await res.json()) as { token: string; connection: string; link_code: string; install_url: string };
     expect(body.token.length).toBeGreaterThan(0);
     expect(body.connection.length).toBeGreaterThan(0);
-    expect(body.link_code.length).toBeGreaterThan(0);
+    // Telegram's own limit on a deep link's `start` parameter; anything else is silently dropped
+    // and the link never completes (ADI-MONO-124 found this against the real bot).
+    expect(body.link_code).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(body.install_url).toBe(`https://t.me/TestAdiBot?start=${body.link_code}`);
   });
 

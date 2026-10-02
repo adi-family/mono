@@ -24,7 +24,8 @@ import { slackExchangeCode, slackInstallUrl, slackRedirectUri, SLACK_INSTALL_SUC
 import { telegramInstallUrl } from "./adapters/telegram";
 import { bearerToken, html, json, problem, timingSafeEqual } from "./http";
 import { enabledProviders } from "./providers";
-import { encryptCredential, verifyLinkCode, verifyNodeToken } from "./state";
+import { encryptCredential, LINK_CODE_TTL_SECONDS, randomId, verifyLinkCode, verifyNodeToken } from "./state";
+import type { LinkCodePayload } from "./state";
 import { doId } from "./types";
 import type { ChannelAdapter, ChannelMessage, Connection, Env, OutboundReply, Target } from "./types";
 
@@ -105,6 +106,7 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
     }),
   });
   const data = (await res.json()) as { token: string; connection: string; link_code: string };
+  data.link_code = await shortenLinkCode(env, data.link_code, Math.floor(now / 1000));
 
   const installUrl =
     body.provider === "telegram"
@@ -113,6 +115,33 @@ async function handleRegister(request: Request, env: Env, now: number): Promise<
         ? slackInstallUrl(request.url, env, data.link_code)
         : null;
   return json({ token: data.token, connection: data.connection, link_code: data.link_code, install_url: installUrl });
+}
+
+/** Park a signed link code in D1 under a short random handle and return the handle -- see
+ * migrations/0002_link_codes.sql for why Telegram can't carry the signed code itself. Expired
+ * rows are swept here rather than on a schedule: every register is a natural moment to. */
+async function shortenLinkCode(env: Env, signed: string, nowSecs: number): Promise<string> {
+  const handle = randomId();
+  await env.ROUTING_KEYS.batch([
+    env.ROUTING_KEYS.prepare("DELETE FROM link_codes WHERE expires_at < ?").bind(nowSecs),
+    env.ROUTING_KEYS.prepare("INSERT INTO link_codes (handle, signed, expires_at) VALUES (?, ?, ?)").bind(
+      handle,
+      signed,
+      nowSecs + LINK_CODE_TTL_SECONDS,
+    ),
+  ]);
+  return handle;
+}
+
+/** The inverse of {@link shortenLinkCode}, and single-use: the row is deleted as it is read, so a
+ * link code can't be replayed inside its TTL the way a bare signed code could. The signed code is
+ * still verified -- D1 holding a row is not, on its own, proof the router minted it. */
+async function consumeLinkCode(env: Env, handle: string, nowSecs: number): Promise<LinkCodePayload | null> {
+  const row = await env.ROUTING_KEYS.prepare("DELETE FROM link_codes WHERE handle = ? RETURNING signed")
+    .bind(handle)
+    .first<{ signed: string }>();
+  if (!row) return null;
+  return verifyLinkCode(row.signed, env.ROUTER_SECRET, nowSecs);
 }
 
 /** `POST /webhook/<provider>` -- §1's webhook row, §4's `verify`/`routingKey`/`normalize`. */
@@ -232,7 +261,7 @@ async function handleLinkAttempt(
 ): Promise<Response> {
   if (!code) return json({ ok: true }); // a bare /start with no code -- nothing to link yet
 
-  const payload = await verifyLinkCode(code, env.ROUTER_SECRET, Math.floor(now / 1000));
+  const payload = await consumeLinkCode(env, code, Math.floor(now / 1000));
   if (!payload || payload.provider !== providerId) {
     // Invalid or expired code: still ack the webhook so the service doesn't retry it, the
     // human just has to run `connect` again for a fresh one.
@@ -287,7 +316,7 @@ async function handleSlackOAuthCallback(url: URL, env: Env, now: number): Promis
 
   const stateToken = url.searchParams.get("state");
   if (!stateToken) return problem(400, "missing state");
-  const payload = await verifyLinkCode(stateToken, env.ROUTER_SECRET, Math.floor(now / 1000));
+  const payload = await consumeLinkCode(env, stateToken, Math.floor(now / 1000));
   if (!payload || payload.provider !== "slack") return problem(400, "invalid or expired state");
 
   const code = url.searchParams.get("code");

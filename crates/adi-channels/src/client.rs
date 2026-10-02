@@ -76,16 +76,19 @@ impl DedupCache {
 }
 
 /// `ws://host:port` (or `http://`/`https://`, read the same way) split into what [`TcpStream`]
-/// needs. `wss://`/`https://` are parsed but not yet connected with TLS — see the crate-level note
-/// on `ws.rs`.
+/// needs. A URL without a port gets its scheme's default — the deployed router is plain
+/// `https://hooks.withadi.dev`, and only `wrangler dev` ever had one spelled out.
 pub(crate) fn parse_ws_url(url: &str) -> Result<(String, u16)> {
-    let without_scheme = url
-        .split_once("://")
-        .map_or(url, |(_, rest)| rest);
+    let (scheme, without_scheme) = url.split_once("://").unwrap_or(("", url));
     let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
-    let (host, port) = host_port
-        .rsplit_once(':')
-        .ok_or_else(|| Error::Protocol(format!("{url} has no port")))?;
+    let Some((host, port)) = host_port.rsplit_once(':') else {
+        let port = match scheme {
+            "https" | "wss" => 443,
+            "http" | "ws" => 80,
+            _ => return Err(Error::Protocol(format!("{url} has no port and no scheme to default one from"))),
+        };
+        return Ok((host_port.to_string(), port));
+    };
     let port = port
         .parse()
         .map_err(|_| Error::Protocol(format!("{url} has an invalid port")))?;
@@ -297,8 +300,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_ws_url_rejects_a_url_with_no_port() {
-        assert!(parse_ws_url("ws://127.0.0.1").is_err());
+    fn parse_ws_url_defaults_the_port_from_the_scheme() {
+        assert_eq!(
+            parse_ws_url("https://hooks.withadi.dev").unwrap(),
+            ("hooks.withadi.dev".to_string(), 443)
+        );
+        assert_eq!(
+            parse_ws_url("wss://hooks.withadi.dev/subscribe").unwrap(),
+            ("hooks.withadi.dev".to_string(), 443)
+        );
+        assert_eq!(
+            parse_ws_url("ws://127.0.0.1").unwrap(),
+            ("127.0.0.1".to_string(), 80)
+        );
+    }
+
+    #[test]
+    fn parse_ws_url_rejects_a_url_with_neither_port_nor_scheme() {
+        assert!(parse_ws_url("127.0.0.1").is_err());
     }
 
     #[test]

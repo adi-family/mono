@@ -125,6 +125,14 @@ describe("link-code flow", () => {
     void connection;
   });
 
+  it("spends the link code on use -- its D1 row is gone afterwards", async () => {
+    const { link_code } = await register(`node-spent-${Math.random()}`);
+    const pending = () => env.ROUTING_KEYS.prepare("SELECT 1 FROM link_codes WHERE handle = ?").bind(link_code).first();
+    expect(await pending()).not.toBeNull();
+    await startUpdate(4244, link_code, 1);
+    expect(await pending()).toBeNull();
+  });
+
   it("rejects a forged link code -- the webhook still 200s, but nothing links", async () => {
     const res = await startUpdate(4243, "forged-code", 1);
     expect(res.status).toBe(200);
