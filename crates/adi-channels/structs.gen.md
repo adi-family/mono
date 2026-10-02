@@ -4,7 +4,7 @@
 
 > The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
 
-15 structs · 7 enums · 2 type aliases across 9 files.
+25 structs · 7 enums · 2 type aliases across 10 files.
 
 ## Index
 
@@ -14,8 +14,9 @@
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/finished.rs`](#srcfinishedrs) — `EventObserver`
 - [`src/message.rs`](#srcmessagers) — `Sender`, `AttachmentKind`, `Attachment`, `ChannelMessage`
+- [`src/node_api.rs`](#srcnode_apirs) — `ConnectionView`, `ConnectionsView`, `ConnectResponse`, `ConnectBody`, `RefBody`, `RouteBody`, `PauseBody`, `AllowBody`, `NodeApi`
 - [`src/protocol.rs`](#srcprotocolrs) — `RouterFrame`, `NodeFrame`
-- [`src/router_api.rs`](#srcrouter_apirs) — `RegisterRequest`, `Registered`, `SendRequest`, `RouterApi`
+- [`src/router_api.rs`](#srcrouter_apirs) — `RegisterRequest`, `Registered`, `SendRequest`, `DisconnectRequest`, `RouterApi`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -47,6 +48,7 @@ pub struct RouterClient {
     pub connections: Connections,
     pub agents: Agents,
     pub events: Events,
+    pub connected: Arc<AtomicBool>,
 }
 ```
 
@@ -284,6 +286,112 @@ pub struct ChannelMessage {
 
 ---
 
+## `src/node_api.rs`
+
+### struct `ConnectionView`
+
+One connection, as the node's API answers it (`docs/channels.md` §5), flattened for the wire — mirrors `adi_webapp_api::types::ChannelConnectionDto`, which this crate can't depend on (that crate depends on this one).
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectionView {
+    pub id: String,
+    pub provider: String,
+    #[serde(default)]
+    pub routing_key: String,
+    pub target: Target,
+    pub allowlist: Allowlist,
+    pub paused: bool,
+    pub linked: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `ConnectionsView`
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+struct ConnectionsView {
+    connections: Vec<ConnectionView>,
+}
+```
+
+### struct `ConnectResponse`
+
+What `POST /api/channels/connect` answers: the new, still-unlinked connection, and the install/link URL to show the operator — empty for a provider the router has no way to build one for from a bare code. Named apart from `crate::connect::Connected` (what `connect::connect` itself returns, one layer closer to the store) since this is the HTTP response shape, not that one — the two happen to carry the same two fields today, but nothing here should be read as a promise they always will.
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnectResponse {
+    pub connection: ConnectionView,
+    #[serde(default)]
+    pub install_url: String,
+}
+```
+
+### struct `ConnectBody`
+
+```rust
+#[derive(Debug, Serialize)]
+struct ConnectBody<'a> {
+    provider: &'a str,
+    target: &'a Target,
+}
+```
+
+### struct `RefBody`
+
+```rust
+#[derive(Debug, Serialize)]
+struct RefBody<'a> {
+    id: &'a str,
+}
+```
+
+### struct `RouteBody`
+
+```rust
+#[derive(Debug, Serialize)]
+struct RouteBody<'a> {
+    id: &'a str,
+    target: &'a Target,
+}
+```
+
+### struct `PauseBody`
+
+```rust
+#[derive(Debug, Serialize)]
+struct PauseBody<'a> {
+    id: &'a str,
+    paused: bool,
+}
+```
+
+### struct `AllowBody`
+
+```rust
+#[derive(Debug, Serialize)]
+struct AllowBody<'a> {
+    id: &'a str,
+    allowlist: &'a Allowlist,
+}
+```
+
+### struct `NodeApi`
+
+This node's own small HTTP API, over whatever port `crate::node_port` names.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct NodeApi {
+    base_url: String,
+}
+```
+
+---
+
 ## `src/protocol.rs`
 
 ### enum `RouterFrame`
@@ -361,6 +469,15 @@ pub struct Registered {
 struct SendRequest<'a> {
     connection: &'a str,
     text: &'a str,
+}
+```
+
+### struct `DisconnectRequest`
+
+```rust
+#[derive(Debug, Serialize)]
+struct DisconnectRequest<'a> {
+    connection: &'a str,
 }
 ```
 

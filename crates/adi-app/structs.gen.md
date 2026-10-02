@@ -44,6 +44,7 @@ The running sockets, by provider. Cheap to hold in `App`; everything here is beh
 #[derive(Debug, Default)]
 pub struct Live {
     shutdowns: Mutex<HashMap<String, watch::Sender<bool>>>,
+    connected: std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 ```
 

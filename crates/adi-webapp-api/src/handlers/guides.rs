@@ -103,6 +103,11 @@ pub const GUIDES: &[Guide] = &[
         summary: "the shared SQLite database — storing data agents and dashboards both read",
         body: include_str!("../../templates/guides/db.md"),
     },
+    Guide {
+        file: "channels.md",
+        summary: "connecting Telegram/Slack to an agent, and posting back mid-run",
+        body: include_str!("../../templates/guides/channels.md"),
+    },
 ];
 
 /// The directory guides live in: `~/.adi/mono/guides`.

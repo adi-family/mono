@@ -61,6 +61,11 @@ struct SendRequest<'a> {
     text: &'a str,
 }
 
+#[derive(Debug, Serialize)]
+struct DisconnectRequest<'a> {
+    connection: &'a str,
+}
+
 /// A thin client over the router's own two node-facing HTTP routes.
 #[derive(Debug, Clone)]
 pub struct RouterApi {
@@ -133,6 +138,28 @@ impl RouterApi {
             let status = response.status();
             let body = response.text().unwrap_or_default();
             return Err(Error::Router(format!("send failed ({status}): {body}")));
+        }
+        Ok(())
+    }
+
+    /// Tell the router to drop `connection` — its Durable Object entry and the D1 routing row —
+    /// and revoke `node_token` too if nothing else on this `(node, provider)` still needs it
+    /// (`docs/channels.md` §1 step 4). Bearer `node_token` is this provider's own node token, not
+    /// `admin_secret` — the same credential [`Self::send`] uses.
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
+    pub fn disconnect(&self, node_token: &str, connection: &str) -> Result<()> {
+        let response = client()?
+            .post(format!("{}/disconnect", self.base_url))
+            .bearer_auth(node_token)
+            .json(&DisconnectRequest { connection })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("disconnect failed ({status}): {body}")));
         }
         Ok(())
     }
@@ -232,6 +259,23 @@ mod tests {
         RouterApi::new(base)
             .send("node-token", "conn-1", "hello back")
             .expect("send");
+    }
+
+    #[test]
+    fn disconnect_succeeds_on_a_bare_200() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .disconnect("node-token", "conn-1")
+            .expect("disconnect");
+    }
+
+    #[test]
+    fn disconnect_surfaces_a_non_2xx_as_a_router_error() {
+        let base = fake_router("HTTP/1.1 404 Not Found\r\nContent-Length: 7\r\n\r\nno such");
+        let err = RouterApi::new(base)
+            .disconnect("node-token", "conn-1")
+            .expect_err("should refuse");
+        assert!(matches!(err, Error::Router(msg) if msg.contains("no such")));
     }
 
     #[test]

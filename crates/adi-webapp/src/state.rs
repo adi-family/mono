@@ -7,10 +7,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
     AgentBackendRowDto, AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState,
-    AgentStep, AgentTokens, AgentsState, AllAgentRuns, DashboardsState, DbExecResult,
-    DbQueryResult, DbState, DbTablesState, DirListing, EmbeddingBackendDto, EmbeddingBackendsDto,
-    FileEntry, FleetDashboards, FleetNodes, FleetState, Health, HiveState, KnowledgeBaseDto,
-    KnowledgeNoteDto, KnowledgeNotes,
+    AgentStep, AgentTokens, AgentsState, AllAgentRuns, ChannelAllowlistDto, ChannelConnected,
+    ChannelConnectionDto, ChannelTargetDto, ChannelsState,
+    DashboardsState, DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing,
+    EmbeddingBackendDto, EmbeddingBackendsDto, FileEntry, FleetDashboards, FleetNodes, FleetState,
+    Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
     KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
     MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState,
@@ -2134,6 +2135,126 @@ impl EmbeddingsConsole {
         self.base_url.set(backend.base_url.clone());
         self.api_key_env.set(backend.api_key_env.clone());
         self.fallbacks.set(backend.fallbacks.join(", "));
+    }
+}
+
+/// Everything the Channels page holds that isn't on the server: the connection list, the
+/// router-connection status pill's own data, and the Connect dialog's form (`docs/channels.md`
+/// §7). Page-local, like [`EmbeddingsConsole`] beside it and for the same reason — nothing here
+/// rides the shell's 4s poll, so it is fetched once when the page opens.
+///
+/// `Copy`, like every other per-page console in this module.
+#[derive(Clone, Copy)]
+pub(crate) struct ChannelsConsole {
+    pub(crate) connections: RwSignal<Option<ChannelsState>>,
+    /// Whether each provider's socket to the router is actually open right now
+    /// (`GET /api/channels/status`) — the router-connection pill on each card.
+    pub(crate) status: RwSignal<BTreeMap<String, bool>>,
+    pub(crate) agents: RwSignal<Option<AgentsState>>,
+    pub(crate) error: RwSignal<Option<String>>,
+
+    /// Which service's Connect dialog is open — a provider id, or empty for none. The one
+    /// signal that opens a card's dialog; see `pages::channels`'s own note on why this (and not
+    /// one `RwSignal<bool>` per card) is what's threaded through.
+    pub(crate) connect_provider: RwSignal<String>,
+    pub(crate) connect_agent: RwSignal<String>,
+    /// `false` (the default, "only me") or `true` ("anyone in this chat/workspace").
+    pub(crate) connect_open_allowlist: RwSignal<bool>,
+    pub(crate) connect_busy: RwSignal<bool>,
+    /// Set once `connect` has actually registered the connection — the dialog's second phase
+    /// (the install/link URL, and waiting for `linked`) renders only once this is `Some`.
+    pub(crate) connect_result: RwSignal<Option<ChannelConnected>>,
+    pub(crate) connect_linked: RwSignal<bool>,
+
+    /// The connection whose target is being edited inline ("Change agent"), or empty for none.
+    pub(crate) editing_route: RwSignal<String>,
+    pub(crate) route_agent: RwSignal<String>,
+
+    /// The connection whose allowlist is being edited inline ("Who may talk"), or empty for none.
+    pub(crate) editing_allow: RwSignal<String>,
+    /// `"owner_only"` · `"open"` · `"list"`.
+    pub(crate) allow_mode: RwSignal<String>,
+    /// Comma-separated sender ids, only read when [`allow_mode`](Self::allow_mode) is `"list"`.
+    pub(crate) allow_senders: RwSignal<String>,
+}
+
+impl ChannelsConsole {
+    pub(crate) fn new() -> Self {
+        Self {
+            connections: RwSignal::new(None),
+            status: RwSignal::new(BTreeMap::new()),
+            agents: RwSignal::new(None),
+            error: RwSignal::new(None),
+            connect_provider: RwSignal::new(String::new()),
+            connect_agent: RwSignal::new(String::new()),
+            connect_open_allowlist: RwSignal::new(false),
+            connect_busy: RwSignal::new(false),
+            connect_result: RwSignal::new(None),
+            connect_linked: RwSignal::new(false),
+            editing_route: RwSignal::new(String::new()),
+            route_agent: RwSignal::new(String::new()),
+            editing_allow: RwSignal::new(String::new()),
+            allow_mode: RwSignal::new(String::new()),
+            allow_senders: RwSignal::new(String::new()),
+        }
+    }
+
+    /// Open `provider`'s Connect dialog, blank — called by the card's own Connect button.
+    pub(crate) fn open_connect(self, provider: &str) {
+        self.connect_provider.set(provider.to_string());
+        self.connect_agent.set(String::new());
+        self.connect_open_allowlist.set(false);
+        self.connect_result.set(None);
+        self.connect_linked.set(false);
+    }
+
+    /// Close the Connect dialog, wherever it was — the scrim, Escape, the × or a submit that
+    /// finished. The connection itself (if one was made) is never undone by closing this; only
+    /// the dialog's own transient state goes.
+    pub(crate) fn close_connect(self) {
+        self.connect_provider.set(String::new());
+        self.connect_agent.set(String::new());
+        self.connect_open_allowlist.set(false);
+        self.connect_result.set(None);
+        self.connect_linked.set(false);
+    }
+
+    /// Open the inline "Change agent" editor for `connection`, pre-filled with its current
+    /// target when that target is an agent (the only kind this build dispatches to).
+    pub(crate) fn start_edit_route(self, connection: &ChannelConnectionDto) {
+        self.editing_route.set(connection.id.clone());
+        self.route_agent.set(match &connection.target {
+            ChannelTargetDto::Agent { agent } => agent.clone(),
+            ChannelTargetDto::Trigger { .. } | ChannelTargetDto::AppRoute { .. } => String::new(),
+        });
+    }
+
+    pub(crate) fn cancel_edit_route(self) {
+        self.editing_route.set(String::new());
+    }
+
+    /// Open the inline "Who may talk" editor for `connection`, pre-filled from its current
+    /// allowlist.
+    pub(crate) fn start_edit_allow(self, connection: &ChannelConnectionDto) {
+        self.editing_allow.set(connection.id.clone());
+        match &connection.allowlist {
+            ChannelAllowlistDto::OwnerOnly => {
+                self.allow_mode.set("owner_only".to_string());
+                self.allow_senders.set(String::new());
+            }
+            ChannelAllowlistDto::Open => {
+                self.allow_mode.set("open".to_string());
+                self.allow_senders.set(String::new());
+            }
+            ChannelAllowlistDto::List { sender_ids } => {
+                self.allow_mode.set("list".to_string());
+                self.allow_senders.set(sender_ids.join(", "));
+            }
+        }
+    }
+
+    pub(crate) fn cancel_edit_allow(self) {
+        self.editing_allow.set(String::new());
     }
 }
 

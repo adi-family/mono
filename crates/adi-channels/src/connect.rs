@@ -9,13 +9,11 @@
 //! and callable straight from a webapp handler (`adi-webapp-api` handlers run on tokio's blocking
 //! pool, never inside the runtime itself).
 //!
-//! **Open item: the router has no named disconnect route.** `docs/channels.md` §1's route table
-//! lists `/`, `/webhook/<provider>`, `/link/<provider>`, `/subscribe`, `/send`, `/register` —
-//! nothing for tearing a connection down, even though §1's prose says disconnect "tells the router
-//! to drop the connection," and `apps/channel-router`'s own build (ADI-MONO-120) confirms the gap
-//! is still open, not just unwritten in the spec. [`disconnect`] therefore only removes this
-//! node's own state (the connection row, and the provider's node token once nothing else needs
-//! it); telling the router is left for whichever of ADI-MONO-120/124 names that route.
+//! [`disconnect`] tells the router first (`POST /disconnect`, added by ADI-MONO-122 once
+//! ADI-MONO-120/121 both flagged the gap — see `docs/channels.md` §1 step 4) and only then drops
+//! this node's own state (the connection row, and the provider's node token once nothing else
+//! needs it) — the router's own entry and the D1 routing row are the authoritative record of
+//! whether a chat/workspace still reaches this node, so they go first.
 
 use crate::connection::{Allowlist, Connection, Connections, Target};
 use crate::error::{Error, Result};
@@ -80,16 +78,28 @@ pub fn connect(
     })
 }
 
-/// `adi-mono channels disconnect <id>` / `POST /api/channels/disconnect` — drop the connection,
-/// and the provider's node token too if nothing else on this node still uses that provider.
+/// `adi-mono channels disconnect <id>` / `POST /api/channels/disconnect` — tell the router to
+/// drop the connection (its Durable Object entry and the D1 routing row), then drop it here too,
+/// and the provider's node token once nothing else on this node still uses that provider.
 ///
 /// # Errors
 /// [`Error::NotFound`] if `id` names no connection; otherwise whatever
-/// [`Connections::remove`]/[`list`](Connections::list) or [`token::remove`] return.
-pub fn disconnect(connections: &Connections, secrets: &adi_secrets::Secrets, id: &str) -> Result<()> {
+/// [`RouterApi::disconnect`], [`Connections::remove`]/[`list`](Connections::list), or
+/// [`token::remove`] return. A router failure aborts before any local state is touched — the
+/// alternative (dropping it locally regardless) would desync this node's mirror from the
+/// router's own record of whether the chat/workspace still reaches here.
+pub fn disconnect(
+    connections: &Connections,
+    secrets: &adi_secrets::Secrets,
+    router_url: &str,
+    id: &str,
+) -> Result<()> {
     let connection = connections
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
+    if let Some(token) = token::load(secrets, &connection.manifest.provider)? {
+        RouterApi::new(router_url).disconnect(&token, id)?;
+    }
     connections.remove(id)?;
     let provider_still_used = connections
         .list()?
@@ -139,6 +149,35 @@ mod tests {
                 body.len()
             );
             stream.try_clone().unwrap().write_all(response.as_bytes()).unwrap();
+        });
+        format!("http://{addr}")
+    }
+
+    /// A fake router that answers every request it gets with a bare `200 {}` — for a test that
+    /// calls `disconnect` (and therefore `POST /disconnect`) more than once against the same
+    /// `router_url`.
+    fn fake_router_ok_forever() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    if h == "\r\n" {
+                        break;
+                    }
+                }
+                stream
+                    .try_clone()
+                    .unwrap()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                    .unwrap();
+            }
         });
         format!("http://{addr}")
     }
@@ -224,6 +263,7 @@ mod tests {
         let cfg = scratch("disconnect");
         let connections = Connections::with_config(cfg.clone());
         let secrets = adi_secrets::Secrets::with_config(cfg);
+        let router_url = fake_router_ok_forever();
         token::save(&secrets, "telegram", "tok_1").unwrap();
         let a = connections
             .create("telegram", Target::Agent { agent: "a".into() })
@@ -233,16 +273,52 @@ mod tests {
             .unwrap();
 
         // Two connections share the provider — removing one leaves the token in place.
-        disconnect(&connections, &secrets, &a.id).unwrap();
+        disconnect(&connections, &secrets, &router_url, &a.id).unwrap();
         assert_eq!(token::load(&secrets, "telegram").unwrap(), Some("tok_1".into()));
 
         // Removing the last one drops the token too.
-        disconnect(&connections, &secrets, &b.id).unwrap();
+        disconnect(&connections, &secrets, &router_url, &b.id).unwrap();
         assert_eq!(token::load(&secrets, "telegram").unwrap(), None);
 
         assert!(
-            matches!(disconnect(&connections, &secrets, &a.id), Err(Error::NotFound(_))),
+            matches!(
+                disconnect(&connections, &secrets, &router_url, &a.id),
+                Err(Error::NotFound(_))
+            ),
             "already gone"
         );
+    }
+
+    /// A connection created without ever being `connect`ed through the router (no saved token
+    /// for its provider) still disconnects cleanly — nothing to tell the router, so `disconnect`
+    /// never calls it.
+    #[test]
+    fn disconnect_with_no_saved_token_skips_the_router_call() {
+        let cfg = scratch("disconnect-no-token");
+        let connections = Connections::with_config(cfg.clone());
+        let secrets = adi_secrets::Secrets::with_config(cfg);
+        let a = connections
+            .create("telegram", Target::Agent { agent: "a".into() })
+            .unwrap();
+
+        disconnect(&connections, &secrets, "http://127.0.0.1:1", &a.id).unwrap();
+        assert!(connections.get(&a.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn disconnect_aborts_and_keeps_local_state_when_the_router_call_fails() {
+        let cfg = scratch("disconnect-router-fails");
+        let connections = Connections::with_config(cfg.clone());
+        let secrets = adi_secrets::Secrets::with_config(cfg);
+        token::save(&secrets, "telegram", "tok_1").unwrap();
+        let a = connections
+            .create("telegram", Target::Agent { agent: "a".into() })
+            .unwrap();
+
+        // Nothing listening on this port -- the request can't even be sent.
+        let err = disconnect(&connections, &secrets, "http://127.0.0.1:1", &a.id).unwrap_err();
+        assert!(matches!(err, Error::Router(_) | Error::Http(_)));
+        assert!(connections.get(&a.id).unwrap().is_some(), "local state untouched");
+        assert_eq!(token::load(&secrets, "telegram").unwrap(), Some("tok_1".into()));
     }
 }

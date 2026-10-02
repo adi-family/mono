@@ -19,6 +19,7 @@ a later run of the agent picks up the changes.
 | `agents.md` | define or run an agent |
 | `secrets.md` | store a secret, connect Gmail/Google via OAuth, or send a create form |
 | `db.md` | store data that outlives a run, or that another agent or a dashboard reads |
+| `channels.md` | connect Telegram/Slack to an agent, or post back mid-run |
 
 Everything is under the mono store at `~/.adi/mono` and browsable in the control panel at
 `http://app.adi`. Prefer the `{{cli}}` CLI and the `/api/*` endpoints over editing store files by

@@ -247,3 +247,63 @@ describe("POST /send -- auth", () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe("POST /disconnect -- auth", () => {
+  it("401s a missing token", async () => {
+    const res = await handle(
+      new Request("https://router.example/disconnect", { method: "POST", body: "{}" }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("401s an invalid token", async () => {
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: "Bearer garbage" },
+        body: "{}",
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it("400s a well-authenticated request missing { connection }", async () => {
+    const node = `node-disconnect-shape-${Math.random()}`;
+    const { token } = (await (
+      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+    ).json()) as { token: string };
+
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: "{}",
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("404s a valid token against an unknown connection", async () => {
+    const node = `node-disconnect-unknown-${Math.random()}`;
+    const { token } = (await (
+      await handle(registerRequest({ node, provider: "telegram", target: { kind: "agent", agent: "a" } }), env, NOW)
+    ).json()) as { token: string };
+
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ connection: "no-such-connection" }),
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(404);
+  });
+});

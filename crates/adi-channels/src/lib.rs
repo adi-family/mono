@@ -17,6 +17,7 @@ pub mod error;
 pub mod events;
 pub mod finished;
 pub mod message;
+pub mod node_api;
 pub mod node_id;
 pub mod node_port;
 pub mod protocol;

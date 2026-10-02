@@ -53,12 +53,17 @@ one file per service.
 | `POST /subscribe` | POST | a node | Upgrade to WebSocket. `Authorization: Bearer <node-token>` (query param `?token=` for clients that cannot set a header on the upgrade request) identifies which Durable Object this node is subscribing to. |
 | `POST /send` | POST | a node | `{ "connection": "<id>", "text": "…", … }` (§3). Looks up which service/chat the connection maps to from the DO's own state, calls that provider's credential, posts to the service. This is the **only** path a reply takes — a node never calls Telegram/Slack directly, so a bot token never leaves the router. |
 | `POST /register` | POST | a human operator (CLI/panel, not a node) | Mint a node token for a new connection (§2). Requires the router's own operator credential (`ROUTER_ADMIN_SECRET`, analogous to `STATE_SECRET`), not a service's. (ADI-MONO-120 reads "for a new connection" literally: the response is `{ token, connection, link_code }` — a fresh pending connection and the signed link code for it, not just the token. A repeat call for a `(node, provider)` that already has a token returns that same token, per §1 step 4 below, alongside a new connection + code.) |
+| `POST /disconnect` | POST | a node | `{ connection }`, bearer the node token. Drops the connection from its Durable Object and the D1 `routing_keys` row, and revokes the node token too once nothing else on this `(node, provider)` still needs it (§1 step 4). Added by ADI-MONO-122 — see below. |
 
-This table has no `/disconnect` route, even though §7's CLI table below describes
-`adi-mono channels disconnect` telling the router to drop the DO entry and the D1 row.
-ADI-MONO-120's own build order (§9) names exactly the six routes above and nothing else, so this
-is a real gap, intentionally left for whichever task adds `adi-mono channels disconnect` to
-close, not fixed here.
+ADI-MONO-120 shipped without a `/disconnect` route on purpose: its own build order (§9) named
+exactly six routes and nothing else, leaving this one flagged but unbuilt for whichever task
+added `adi-mono channels disconnect`. ADI-MONO-122 is that task, and closes the gap with the row
+above. Closing it also exposed a real bug `state.ts`'s own doc had already promised wouldn't
+exist — `register`'s epoch was hardcoded to `1` for every freshly minted token, so a revoked
+token would still pass `/internal/token/check` against a connection registered afterward (same
+epoch number, different token string, and the check only compares the number). Fixed with a
+durable `epoch_counter` in the Durable Object's storage that survives the token record itself
+being deleted and always hands out one past the highest epoch ever minted there.
 
 **Storage.** One Durable Object per `(node, provider)` pair, keyed by both —
 ``idFromName(`${provider}:${nodeId}`)``. (This corrects an inconsistency in the original text,
@@ -498,7 +503,8 @@ actual `router.ts`/`do.ts` (built concurrently in a sibling worktree) rather tha
   spec text: `do.ts` has no `/internal/disconnect`, and `router.ts` exposes none either.
   `adi_channels::connect::disconnect` only drops this node's local state (the connection row, and
   the node token once the provider has none left); telling the router is left for whichever of
-  ADI-MONO-120/124 names that route.
+  ADI-MONO-120/124 names that route. (Closed by ADI-MONO-122: `POST /disconnect` now exists —
+  see §1 — and `adi_channels::connect::disconnect` calls it before touching local state.)
 
 ## Decisions taken
 

@@ -92,6 +92,7 @@ dependencies = [
 name = "adi-cli"
 version = "0.1.0"
 dependencies = [
+ "adi-channels",
  "adi-config",
  "adi-core",
  "adi-embeddings",

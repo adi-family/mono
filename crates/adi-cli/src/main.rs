@@ -3,6 +3,7 @@
 //! platform actions by running this binary.
 
 mod agents;
+mod channels;
 mod db;
 mod dns;
 mod embeddings;
@@ -28,6 +29,7 @@ use adi_core::{Adi, Service, VERSION};
 use clap::{Parser, Subcommand};
 
 use crate::agents::{AgentsCommand, run_agents};
+use crate::channels::{ChannelsCommand, run_channels};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::embeddings::{EmbeddingsCommand, run_embeddings};
@@ -219,6 +221,14 @@ enum Command {
     Marketplace {
         #[command(subcommand)]
         command: MarketplaceCommand,
+    },
+    /// Channels commands: connect Telegram/Slack to an agent, list connections, change where one
+    /// goes and who may talk to it, disconnect (`docs/channels.md` §7). Needs `adi-app` running
+    /// on this machine — every verb here calls its `/api/channels/*`, the same endpoints the
+    /// `/settings/channels` panel calls.
+    Channels {
+        #[command(subcommand)]
+        command: ChannelsCommand,
     },
     /// Event bus commands: publish platform events and peek at the spool.
     Events {
@@ -442,6 +452,14 @@ fn main() {
         // Like `mesh`: the marketplace's state is its own module under the store.
         Command::Marketplace { command } => {
             if let Err(e) = run_marketplace(command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Like `mesh`/`marketplace`: no `adi` facade — every verb calls `adi-app`'s own
+        // `/api/channels/*` rather than touching platform state directly.
+        Command::Channels { command } => {
+            if let Err(e) = run_channels(command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -711,5 +729,19 @@ mod tests {
             } if spec == "adi/crm"
         ));
         assert!(Cli::try_parse_from(["adi-mono", "marketplace"]).is_err());
+    }
+
+    #[test]
+    fn the_channels_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `channels.rs`; this pins the wiring — that
+        // `adi-mono channels …` reaches it at all.
+        let cli = Cli::try_parse_from(["adi-mono", "channels", "list", "--json"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Channels {
+                command: ChannelsCommand::List { json: true }
+            }
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "channels"]).is_err());
     }
 }

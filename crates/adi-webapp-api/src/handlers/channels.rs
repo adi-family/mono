@@ -1,17 +1,18 @@
 //! `/api/channels/*` (`docs/channels.md` §7) — the node's own small API over
 //! [`adi_channels::Connections`], which both `/settings/channels` and `adi-mono channels` (both
 //! ADI-MONO-122, not this crate) call. Connecting and disconnecting also talk to the router
-//! (`POST /register`), so those two take the extra context (`adi_secrets::Secrets`, the admin
-//! secret, this node's `adi_config::Config`, and the router's base URL) the others don't need.
+//! (`POST /register`, `POST /disconnect`), so those two take the extra context
+//! (`adi_secrets::Secrets`, the admin secret or node token, this node's `adi_config::Config`, and
+//! the router's base URL) the others don't need.
 
 use adi_channels::connection::{Allowlist, Connections, Target};
 use adi_channels::error::Error as ChannelsError;
 use adi_secrets::Secrets;
 
 use crate::types::{
-    AllowChannel, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelRef,
-    ChannelReplyRequest, ChannelTargetDto, ChannelsState, ConnectChannel, PauseChannel,
-    RouteChannel,
+    AllowChannel, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto,
+    ChannelProviderStatus, ChannelRef, ChannelReplyRequest, ChannelTargetDto, ChannelsState,
+    ConnectChannel, PauseChannel, RouteChannel,
 };
 
 use super::response::{FromBody, Response, error, mutate, ok_json};
@@ -26,6 +27,15 @@ pub fn channels(store: &Connections) -> Response {
         }),
         Err(e) => Response::from(&e),
     }
+}
+
+/// `GET /api/channels/status` — the router-connection pill's own data: whether each provider's
+/// socket is actually open right now. `connected` is computed by the caller (`adi-app`'s
+/// `channels::Live::is_connected`, a fact this crate has no way to reach on its own) and handed
+/// in already built.
+#[must_use]
+pub fn channel_status(connected: std::collections::BTreeMap<String, bool>) -> Response {
+    ok_json(&ChannelProviderStatus { connected })
 }
 
 /// `GET /api/channels/<id>` — one connection, for the connect flow's own poll on `linked`
@@ -104,13 +114,18 @@ pub fn allow_channel(store: &Connections, body: &[u8]) -> Response {
     )
 }
 
-/// `POST /api/channels/disconnect` — drop the connection, and the provider's node token too if
-/// nothing else on this node still uses it.
+/// `POST /api/channels/disconnect` — tell the router to drop the connection, then drop it here
+/// too, and the provider's node token once nothing else on this node still uses it.
 #[must_use]
-pub fn disconnect_channel(connections: &Connections, secrets: &Secrets, body: &[u8]) -> Response {
+pub fn disconnect_channel(
+    connections: &Connections,
+    secrets: &Secrets,
+    router_url: &str,
+    body: &[u8],
+) -> Response {
     mutate(
         body,
-        |req: ChannelRef| adi_channels::connect::disconnect(connections, secrets, &req.id),
+        |req: ChannelRef| adi_channels::connect::disconnect(connections, secrets, router_url, &req.id),
         || channels(connections),
     )
 }

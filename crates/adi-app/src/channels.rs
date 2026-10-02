@@ -8,6 +8,8 @@
 //! guess at a port nobody promised.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use adi_agents::Agents;
 use adi_channels::{Connections, RouterClient};
@@ -40,6 +42,11 @@ pub fn router_admin_secret() -> String {
 #[derive(Debug, Default)]
 pub struct Live {
     shutdowns: Mutex<HashMap<String, watch::Sender<bool>>>,
+    /// Whether each provider's socket is actually open right now — a plain `std::sync::Mutex`,
+    /// not the `tokio` one above, so the panel's router-connection pill (`GET /api/channels/status`,
+    /// read from [`crate::dispatch`]'s synchronous, blocking-pool handler) never needs an `.await`
+    /// of its own to read it.
+    connected: std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Live {
@@ -57,6 +64,11 @@ impl Live {
             return;
         }
         let (tx, rx) = watch::channel(false);
+        let connected = Arc::new(AtomicBool::new(false));
+        self.connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(provider.to_string(), connected.clone());
         let client = RouterClient {
             router_url: router_url(),
             provider: provider.to_string(),
@@ -64,6 +76,7 @@ impl Live {
             connections,
             agents,
             events,
+            connected,
         };
         tokio::spawn(client.run(rx));
         info!(provider, "channel router client started");
@@ -75,6 +88,10 @@ impl Live {
     pub async fn stop(&self, provider: &str) {
         if let Some(tx) = self.shutdowns.lock().await.remove(provider) {
             let _ = tx.send(true);
+            self.connected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(provider);
             info!(provider, "channel router client stopped");
         }
     }
@@ -86,5 +103,17 @@ impl Live {
         for tx in self.shutdowns.lock().await.values() {
             let _ = tx.send(true);
         }
+    }
+
+    /// Whether `provider`'s socket to the router is actually open right now — `false` for a
+    /// provider with no running client at all, same as one whose client hasn't finished its first
+    /// handshake yet. What `GET /api/channels/status` answers with, one entry per provider.
+    #[must_use]
+    pub fn is_connected(&self, provider: &str) -> bool {
+        self.connected
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(provider)
+            .is_some_and(|c| c.load(Ordering::Relaxed))
     }
 }

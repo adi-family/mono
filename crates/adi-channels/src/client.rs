@@ -14,6 +14,8 @@
 //! they run against) only exercise `GET`.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use adi_agents::Agents;
@@ -92,6 +94,10 @@ pub struct RouterClient {
     pub connections: Connections,
     pub agents: Agents,
     pub events: Events,
+    /// Set `true` for as long as the socket is actually open, `false` the instant it drops or
+    /// before the first connect — what `adi-app`'s `channels::Live::is_connected` (and so the
+    /// panel's router-connection pill) reads.
+    pub connected: Arc<AtomicBool>,
 }
 
 impl RouterClient {
@@ -100,7 +106,11 @@ impl RouterClient {
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         let mut backoff = BACKOFF_START;
         loop {
-            match self.connect_and_serve(&mut shutdown).await {
+            let outcome = self.connect_and_serve(&mut shutdown).await;
+            // Every path out of `connect_and_serve` means the socket is no longer up, whether it
+            // ever got there or not — set unconditionally rather than only on the error arms.
+            self.connected.store(false, Ordering::Relaxed);
+            match outcome {
                 Ok(true) => break, // told to shut down
                 Ok(false) => {
                     // A clean close or a dropped socket: reconnect from the start of the backoff,
@@ -131,6 +141,7 @@ impl RouterClient {
             .await
             .map_err(|e| Error::Protocol(format!("couldn't reach {host}:{port}: {e}")))?;
         let leftover = ws::connect(&mut stream, &host, "/subscribe", &self.node_token).await?;
+        self.connected.store(true, Ordering::Relaxed);
         info!(provider = %self.provider, %host, port, "subscribed to the router");
 
         let mut reader = ws::Reader::new(leftover);
@@ -390,6 +401,7 @@ mod tests {
 
         let (router_url, server) = spawn_fake_router(message_for(&created.id)).await;
 
+        let connected = Arc::new(AtomicBool::new(false));
         let client = RouterClient {
             router_url,
             provider: "telegram".into(),
@@ -397,6 +409,7 @@ mod tests {
             connections,
             agents: Agents::with_config(cfg.clone()),
             events: Events::with_config(cfg),
+            connected: connected.clone(),
         };
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let handle = tokio::spawn(client.run(shutdown_rx));
@@ -405,8 +418,16 @@ mod tests {
             .await
             .expect("the fake router timed out waiting for the client's frames")
             .unwrap();
+        assert!(
+            connected.load(Ordering::Relaxed),
+            "the flag flips true the moment the handshake completes"
+        );
         let _ = shutdown_tx.send(true);
         let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(
+            !connected.load(Ordering::Relaxed),
+            "and false again once the client has shut down"
+        );
 
         // The client's frames are masked (§5.1); `ws::Reader` unmasks either way (see its own
         // doc), so feeding the raw bytes straight back through it is the actual decode, not a

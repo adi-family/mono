@@ -40,6 +40,7 @@ happen before a node is even known.
 | `POST /subscribe` | POST | a node | Upgrade to WebSocket. `Authorization: Bearer <node-token>` (or `?token=`) identifies the `(node, provider)` Durable Object this socket belongs to. |
 | `POST /send` | POST | a node | `{ connection, text }`. Resolves the connection's chat/team id from its Durable Object and posts through the provider's own adapter with this deployment's credential -- the only path a reply takes; a bot token never reaches a node. |
 | `POST /register` | POST | a node, holding `ROUTER_ADMIN_SECRET` | Mint a node token (first call for a `(node, provider)` pair only -- later calls reuse it) plus a fresh pending connection and a signed link code. |
+| `POST /disconnect` | POST | a node | `{ connection }`. Drops the connection from its Durable Object and the D1 routing row, and revokes the node token too once nothing else on this `(node, provider)` still needs it (ADI-MONO-122, closing the gap flagged below). |
 
 ## Providers
 
@@ -123,6 +124,19 @@ happens, it needs, analogous to oauth-router's `scripts/setup-cf.sh`:
 - **The allowlist is enforced on the node, not here** (docs/channels.md §5, §8) -- this router
   forwards every webhook for a linked routing key regardless of sender; a bug here can leak a
   message, never grant a reply from an agent a sender isn't allowed to talk to.
+
+## ADI-MONO-122: `/disconnect` and the epoch counter
+
+ADI-MONO-120 shipped without a disconnect route on purpose (see below); ADI-MONO-122 closes
+that gap with `POST /disconnect` (auth and shape above) plus one fix it required: `register`'s
+epoch was hardcoded to `1` for every freshly minted token, which `state.ts`'s own doc already
+promised wasn't the plan ("minting or revoking bumps the epoch the owning Durable Object has on
+file") but nothing before this task ever revoked anything to notice. A revoked-but-still-
+correctly-signed token would otherwise pass `/internal/token/check` against a connection
+registered *after* the revoke, since that check only compares epoch numbers. Fixed with a
+durable `epoch_counter` in the Durable Object's own storage that survives a token being deleted
+(unlike the token record itself) and always hands out one past the highest epoch this object has
+ever minted.
 
 ## Corrections made to docs/channels.md while building this
 

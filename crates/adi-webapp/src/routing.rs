@@ -105,6 +105,9 @@ pub(crate) enum Route {
     Mesh,
     /// The paired remote adi nodes — `<service>.<node>.n.adi` (`/settings/fleet`).
     Fleet,
+    /// One ADI agent, reachable from Telegram/Slack (`docs/channels.md`) — a card per service,
+    /// connect/pause/who-may-talk/disconnect (`/settings/channels`).
+    Channels,
     /// Service status, the platform power switch, a restart, updates and a diagnostic report —
     /// the web twin of the mac app's menu-bar window (`/settings/system`). Always about *this*
     /// machine, never the panel-wide source picker's target (`docs/fleet.md` §14's L3).
@@ -124,7 +127,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 25] = [
+    pub(crate) const NAV: [Route; 26] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -148,21 +151,23 @@ impl Route {
         Route::Fleet,
         Route::LlmBackends,
         Route::EmbeddingBackends,
+        Route::Channels,
         Route::SharedAssets,
         Route::System,
     ];
 
-    /// The eight pages Settings gathers, in the order the explorer nests them and the Settings
+    /// The nine pages Settings gathers, in the order the explorer nests them and the Settings
     /// landing page ([`crate::pages::settings_view`]) lists them. The explorer's own
     /// `GLOBAL_SCOPES` and the landing page both read off this rather than each writing the
-    /// eight out — one list, the way [`NAV`] is for the ⌘K menu.
-    pub(crate) const SETTINGS: [Route; 8] = [
+    /// nine out — one list, the way [`NAV`] is for the ⌘K menu.
+    pub(crate) const SETTINGS: [Route; 9] = [
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
         Route::Fleet,
         Route::LlmBackends,
         Route::EmbeddingBackends,
+        Route::Channels,
         Route::SharedAssets,
         Route::System,
     ];
@@ -201,6 +206,7 @@ impl Route {
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
             "/settings/fleet" => Route::Fleet,
+            "/settings/channels" => Route::Channels,
             "/settings/llm-backends" => Route::LlmBackends,
             "/settings/embedding-backends" => Route::EmbeddingBackends,
             "/settings/shared-assets" => Route::SharedAssets,
@@ -237,6 +243,7 @@ impl Route {
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
             Route::Fleet => "/extended/settings/fleet",
+            Route::Channels => "/extended/settings/channels",
             Route::LlmBackends => "/extended/settings/llm-backends",
             Route::EmbeddingBackends => "/extended/settings/embedding-backends",
             Route::SharedAssets => "/extended/settings/shared-assets",
@@ -272,6 +279,7 @@ impl Route {
             Route::PortsManager => "Ports manager",
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
+            Route::Channels => "Channels",
             Route::LlmBackends => "LLM backends",
             Route::EmbeddingBackends => "Embedding backends",
             Route::SharedAssets => "Shared assets",
@@ -309,6 +317,7 @@ impl Route {
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",
             Route::Fleet => "Paired devices and what they may reach",
+            Route::Channels => "Telegram, Slack — connect a service to an agent",
             Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
             Route::EmbeddingBackends => "How indexer, knowledge and facts turn text into a vector",
             Route::SharedAssets => "Serve the webapp bundle from a shared CDN cache",

@@ -69,6 +69,8 @@ export class NodeConnection implements DurableObject {
         return this.getConnection(request);
       case "/internal/deliver":
         return this.deliver(request);
+      case "/internal/disconnect":
+        return this.disconnect(request);
       default:
         return new Response("not found", { status: 404 });
     }
@@ -91,8 +93,9 @@ export class NodeConnection implements DurableObject {
   // -- /internal/register -------------------------------------------------------------------
 
   /** Mint a node token if this `(node, provider)` doesn't have one yet (one token, shared by
-   * every connection on this provider -- §1), register a new pending connection, and mint a
-   * link code for it. */
+   * every connection on this provider -- §1, with a strictly increasing epoch so a re-mint after
+   * `/internal/disconnect` revoked the previous one never collides with it -- see the epoch
+   * counter below), register a new pending connection, and mint a link code for it. */
   private async register(request: Request): Promise<Response> {
     const body = (await request.json()) as RegisterRequest;
     // The caller's clock (router.ts's `handle(..., now)`), not this object's own -- a test
@@ -102,7 +105,14 @@ export class NodeConnection implements DurableObject {
 
     let token = await this.getToken();
     if (!token) {
-      const epoch = 1;
+      // Strictly past every epoch this object has ever minted -- including one revoked by
+      // `/internal/disconnect` and since deleted, whose own epoch this counter (unlike "token"
+      // itself) survives being revoked specifically so a re-mint never reuses it. Without that,
+      // a revoked-but-still-correctly-signed token would pass `/internal/token/check` against a
+      // *later* connection on the same `(node, provider)`, since that check only compares epoch
+      // numbers, not token strings.
+      const epoch = ((await this.ctx.storage.get<number>("epoch_counter")) ?? 0) + 1;
+      await this.ctx.storage.put("epoch_counter", epoch);
       const signed = await signNodeToken(
         { node: body.node, provider: body.provider, epoch, t: now },
         this.env.ROUTER_SECRET,
@@ -189,6 +199,33 @@ export class NodeConnection implements DurableObject {
     const { message } = (await request.json()) as { message: ChannelMessage };
     await this.enqueue({ id: message.id, needsAck: true, frame: { type: "event", id: message.id, message } });
     return Response.json({ ok: true });
+  }
+
+  // -- /internal/disconnect --------------------------------------------------------------------
+
+  /** Drop a connection outright -- `adi-mono channels disconnect` (§1 step 4), the gap
+   * ADI-MONO-120/121 both flagged and this task closes. Revokes the one token this `(node,
+   * provider)` pair holds too, but only once this was the last connection using it -- a node
+   * holds one token per provider shared across every connection on it, never one per
+   * connection. */
+  private async disconnect(request: Request): Promise<Response> {
+    const { connection } = (await request.json()) as { connection: string };
+    const record = await this.ctx.storage.get<Connection>(`conn:${connection}`);
+    if (!record) return Response.json({ ok: false, reason: "unknown connection" }, { status: 404 });
+
+    await this.ctx.storage.delete(`conn:${connection}`);
+    if (record.routing_key) {
+      await this.ctx.storage.delete(`route:${record.routing_key}`);
+    }
+
+    const remaining = await this.ctx.storage.list({ prefix: "conn:" });
+    let tokenRevoked = false;
+    if (remaining.size === 0) {
+      await this.ctx.storage.delete("token");
+      tokenRevoked = true;
+    }
+
+    return Response.json({ ok: true, routing_key: record.routing_key, token_revoked: tokenRevoked });
   }
 
   private async enqueue(entry: QueuedFrame): Promise<void> {

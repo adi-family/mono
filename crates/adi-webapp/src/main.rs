@@ -54,7 +54,8 @@ use wasm_bindgen_futures::spawn_local;
 
 use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
-    agents_view, analytics_view, chat_home_view, dashboards_view, database_view, elements_view,
+    agents_view, analytics_view, channels_view, chat_home_view, dashboards_view, database_view,
+    elements_view,
     embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, live_graph_view,
     live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir, load_store_file,
     market_view, marketplace_view, mesh_view, meta_view, onboarding_view,
@@ -68,8 +69,9 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, EmbeddingsConsole, FilesState, Flash,
-    FleetForm, Form, HookLogView, KnowledgeConsole, LlmBackendsForm, MarketplaceForm, MeshForm,
+    AgentsForm, AgentsWatch, ChannelsConsole, DashboardsForm, DbConsole, EmbeddingsConsole,
+    FilesState, Flash, FleetForm, Form, HookLogView, KnowledgeConsole, LlmBackendsForm,
+    MarketplaceForm, MeshForm,
     MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status,
     TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
     refresh_fleet_dashboards,
@@ -1107,6 +1109,10 @@ fn App() -> impl IntoView {
     // nothing on it rides the shell's 4s poll.
     let embeddings_console = EmbeddingsConsole::new();
 
+    // The Channels page's own console — page-local for the same reason (`docs/channels.md` §7):
+    // no live-channel subscription for `/api/channels*`.
+    let channels_console = ChannelsConsole::new();
+
     let managed_only = RwSignal::new(true);
 
     // What the Global Analytics chart's bars measure: false counts runs, true adds up what they
@@ -1497,6 +1503,7 @@ fn App() -> impl IntoView {
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
                         Route::Fleet => fleet_view(state, fleet_form),
+                        Route::Channels => channels_view(state, channels_console),
                         Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
                         Route::EmbeddingBackends => embedding_backends_view(state, embeddings_console),
                         Route::SharedAssets => shared_assets_view(state),

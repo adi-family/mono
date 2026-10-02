@@ -15,6 +15,9 @@
  *   token checks out.
  * - `POST /send` -- a node's outbound reply, authenticated the same way, resolved to a chat id
  *   through the connection's DO record and posted with the provider's own credential.
+ * - `POST /disconnect` -- a node tearing a connection down: drops the DO's entry and the D1
+ *   routing row, and revokes the node token too once nothing else on this `(node, provider)`
+ *   still needs it (§1 step 4 -- the gap ADI-MONO-120/121 both flagged, closed by ADI-MONO-122).
  */
 import { getAdapter, resolveCredential } from "./adapters/index";
 import { telegramInstallUrl } from "./adapters/telegram";
@@ -54,6 +57,10 @@ export async function handle(request: Request, env: Env, now: number = Date.now(
 
   if (request.method === "POST" && segments.length === 1 && segments[0] === "send") {
     return handleSend(request, env, now);
+  }
+
+  if (request.method === "POST" && segments.length === 1 && segments[0] === "disconnect") {
+    return handleDisconnect(request, env, now);
   }
 
   return problem(404, "not found");
@@ -289,4 +296,62 @@ async function handleSend(request: Request, env: Env, now: number): Promise<Resp
     return problem(502, `send failed: ${String(e)}`);
   }
   return json({ ok: true });
+}
+
+interface DisconnectBody {
+  connection?: unknown;
+}
+
+/** `POST /disconnect` -- tear a connection down (§1 step 4): the DO drops its own entry, this
+ * handler drops the D1 routing row the DO can't reach itself, and the node token is revoked too
+ * once the DO reports nothing else on this `(node, provider)` still needs it. */
+async function handleDisconnect(request: Request, env: Env, now: number): Promise<Response> {
+  const token = bearerToken(request);
+  if (!token) return problem(401, "missing node token");
+
+  const payload = await verifyNodeToken(token, env.ROUTER_SECRET, Math.floor(now / 1000));
+  if (!payload) return problem(401, "invalid or expired node token");
+
+  let body: DisconnectBody;
+  try {
+    body = await request.json();
+  } catch {
+    return problem(400, "expected a JSON body");
+  }
+  if (typeof body.connection !== "string" || !body.connection) {
+    return problem(400, "expected { connection }");
+  }
+
+  const stub = env.NODE_CONNECTION.get(doId(env.NODE_CONNECTION, payload.node, payload.provider));
+
+  // Same posture as /send: a token whose epoch the DO no longer recognizes (already revoked by
+  // an earlier disconnect) must not be able to act on a connection registered after that, even
+  // though its signature and freshness both still check out.
+  const checkRes = await stub.fetch("https://do/internal/token/check", {
+    method: "POST",
+    body: JSON.stringify({ epoch: payload.epoch }),
+  });
+  const { valid } = (await checkRes.json()) as { valid: boolean };
+  if (!valid) return problem(401, "node token no longer valid");
+
+  const disconnectRes = await stub.fetch("https://do/internal/disconnect", {
+    method: "POST",
+    body: JSON.stringify({ connection: body.connection }),
+  });
+  if (!disconnectRes.ok) {
+    await disconnectRes.json(); // every response body must be drained, even unused -- see do.ts
+    return problem(404, "unknown connection");
+  }
+  const { routing_key, token_revoked } = (await disconnectRes.json()) as {
+    routing_key: string | null;
+    token_revoked: boolean;
+  };
+
+  if (routing_key) {
+    await env.ROUTING_KEYS.prepare("DELETE FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind(payload.provider, routing_key)
+      .run();
+  }
+
+  return json({ ok: true, revoked: token_revoked });
 }

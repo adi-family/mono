@@ -5847,6 +5847,15 @@ pub struct ChannelReplyRequest {
     pub text: String,
 }
 
+/// `GET /api/channels/status` — whether each provider's socket to the router is actually open
+/// right now, keyed by provider id. A provider absent from the map has no running client at all
+/// (never connected, same as this node holding no connection on it) — the panel's
+/// router-connection pill reads `false` either way.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChannelProviderStatus {
+    pub connected: BTreeMap<String, bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -15,7 +15,11 @@ interface RegisterResult {
   install_url: string;
 }
 
-async function register(node: string, target: Record<string, unknown> = { kind: "agent", agent: "a" }): Promise<RegisterResult> {
+async function register(
+  node: string,
+  target: Record<string, unknown> = { kind: "agent", agent: "a" },
+  now = NOW,
+): Promise<RegisterResult> {
   const res = await handle(
     new Request("https://router.example/register", {
       method: "POST",
@@ -23,7 +27,7 @@ async function register(node: string, target: Record<string, unknown> = { kind: 
       body: JSON.stringify({ node, provider: "telegram", target }),
     }),
     env,
-    NOW,
+    now,
   );
   expect(res.status).toBe(200);
   return res.json();
@@ -193,6 +197,111 @@ describe("offline queueing and redelivery", () => {
     const redelivered = await nextFrame(ws2);
     // The acked "first" is gone; the unacked "second" comes back on reconnect.
     expect((redelivered.message as { text: string }).text).toBe("second");
+  });
+});
+
+describe("POST /disconnect", () => {
+  it("drops the connection and the D1 routing row, and revokes the token once it was the last connection", async () => {
+    const node = `node-disconnect-ok-${Math.random()}`;
+    const { token, connection, link_code } = await register(node);
+    await startUpdate(10_000, link_code, 1);
+
+    const row = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "10000")
+      .first();
+    expect(row).not.toBeNull();
+
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ connection }),
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, revoked: true });
+
+    const rowAfter = await env.ROUTING_KEYS.prepare("SELECT node_id FROM routing_keys WHERE provider = ? AND routing_key = ?")
+      .bind("telegram", "10000")
+      .first();
+    expect(rowAfter).toBeNull();
+
+    // The connection is gone -- a /send against it 404s, same as "never linked".
+    const sendRes = await handle(
+      new Request("https://router.example/send", {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ connection, text: "hi" }),
+      }),
+      env,
+      NOW,
+    );
+    expect(sendRes.status).toBe(401); // the token itself was revoked, caught before the connection lookup
+  });
+
+  it("keeps the token alive when another connection on the same (node, provider) still uses it", async () => {
+    const node = `node-disconnect-shared-${Math.random()}`;
+    const first = await register(node);
+    const second = await register(node);
+    expect(second.token).toBe(first.token);
+
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: first.connection }),
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, revoked: false });
+
+    // The token still works, e.g. against the surviving connection.
+    const checkRes = await handle(
+      new Request("https://router.example/send", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: second.connection, text: "hi" }),
+      }),
+      env,
+      NOW,
+    );
+    expect(checkRes.status).toBe(404); // unlinked, not 401 -- the token itself is still valid
+  });
+
+  it("a revoked token can't act on a connection registered after it", async () => {
+    const node = `node-disconnect-revoked-${Math.random()}`;
+    const first = await register(node);
+    await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: first.connection }),
+      }),
+      env,
+      NOW,
+    );
+
+    // A fresh token was minted once the old one was revoked -- a later `now` so its signed
+    // payload (node/provider/epoch/t) actually differs from the revoked one's, not just its
+    // storage state (signing is a pure function of the payload, so an identical payload at the
+    // same instant would otherwise re-mint byte-for-byte the same token).
+    const second = await register(node, { kind: "agent", agent: "a" }, NOW + 5000);
+    expect(second.token).not.toBe(first.token);
+
+    const res = await handle(
+      new Request("https://router.example/disconnect", {
+        method: "POST",
+        headers: { authorization: `Bearer ${first.token}` },
+        body: JSON.stringify({ connection: second.connection }),
+      }),
+      env,
+      NOW,
+    );
+    expect(res.status).toBe(401);
   });
 });
 

@@ -760,6 +760,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         trigger_supervisor,
         events,
         channels,
+        channels_live,
         start,
         ..
     } = app;
@@ -1081,6 +1082,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // Channels (docs/channels.md §7). `connect`/`disconnect` are async routes (they talk to
         // the router) — see `async_route` below.
         ("GET", "/api/channels") => handlers::channels(channels),
+        ("GET", "/api/channels/status") => handlers::channel_status(channels_provider_status(
+            channels,
+            channels_live,
+        )),
         ("POST", "/api/channels/route") => handlers::route_channel(channels, &req.body),
         ("POST", "/api/channels/pause") => handlers::pause_channel(channels, &req.body),
         ("POST", "/api/channels/allow") => handlers::allow_channel(channels, &req.body),
@@ -1205,6 +1210,27 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
     handlers::mesh(false)
 }
 
+/// `GET /api/channels/status`'s own data: one entry per provider this node holds a connection
+/// on, true only once that provider's live socket has actually completed its handshake with the
+/// router.
+fn channels_provider_status(
+    channels: &Connections,
+    channels_live: &channels::Live,
+) -> std::collections::BTreeMap<String, bool> {
+    channels
+        .list()
+        .unwrap_or_default()
+        .iter()
+        .map(|c| c.manifest.provider.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|provider| {
+            let connected = channels_live.is_connected(&provider);
+            (provider, connected)
+        })
+        .collect()
+}
+
 /// `POST /api/channels/connect` (`docs/channels.md` §7): register this node for the provider
 /// (minting/refreshing its node token — a blocking HTTP call, run off the runtime through
 /// [`blocking`]) and create a fresh connection. On success, starts this node's live socket for
@@ -1258,9 +1284,12 @@ async fn channels_disconnect(app: &App, body: &[u8]) -> Response {
 
     let connections = app.channels.clone();
     let secrets = app.secrets.clone();
+    let router_url = channels::router_url();
     let body = body.to_vec();
-    let response =
-        blocking(move || handlers::disconnect_channel(&connections, &secrets, &body)).await;
+    let response = blocking(move || {
+        handlers::disconnect_channel(&connections, &secrets, &router_url, &body)
+    })
+    .await;
 
     if response.status == 200
         && let Some(provider) = provider
