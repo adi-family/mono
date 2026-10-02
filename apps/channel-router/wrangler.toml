@@ -24,7 +24,7 @@ compatibility_date = "2025-06-01"
 [vars]
 # Shown to an operator building `t.me/<bot>?start=<code>`. Public (it's in the bot's own
 # profile URL), so it lives here rather than as a secret.
-TELEGRAM_BOT_USERNAME = "AdiBot"
+TELEGRAM_BOT_USERNAME = "withadi_bot"
 
 [[durable_objects.bindings]]
 name = "NODE_CONNECTION"
@@ -32,7 +32,7 @@ class_name = "NodeConnection"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["NodeConnection"]
+new_sqlite_classes = ["NodeConnection"]
 
 [[d1_databases]]
 binding = "ROUTING_KEYS"
