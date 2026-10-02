@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.26.0 — 2026-10-02
+
 ### Added
 
 - **Channels: talk to an agent from Telegram or Slack.** `/settings/channels` → a service's card
