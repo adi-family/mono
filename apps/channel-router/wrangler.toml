@@ -4,22 +4,30 @@
 # "Decisions taken" #1).
 #
 # Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
-#   npx wrangler secret put ROUTER_SECRET
-#   npx wrangler secret put ROUTER_ADMIN_SECRET
-#   npx wrangler secret put TELEGRAM_BOT_TOKEN
-#   npx wrangler secret put TELEGRAM_SECRET_TOKEN
-#   npx wrangler secret put SLACK_CLIENT_ID
-#   npx wrangler secret put SLACK_CLIENT_SECRET
-#   npx wrangler secret put SLACK_SIGNING_SECRET
+#   bun x wrangler secret put ROUTER_SECRET
+#   bun x wrangler secret put ROUTER_ADMIN_SECRET
+#   bun x wrangler secret put TELEGRAM_BOT_TOKEN
+#   bun x wrangler secret put TELEGRAM_SECRET_TOKEN
+#   bun x wrangler secret put SLACK_CLIENT_ID
+#   bun x wrangler secret put SLACK_CLIENT_SECRET
+#   bun x wrangler secret put SLACK_SIGNING_SECRET
 #
 # Slack app itself: create from slack-manifest.yaml (api.slack.com/apps -> "From a manifest").
 #
-# Local:  npx wrangler dev   (reads secrets from .dev.vars -- see .dev.vars.example)
-# Deploy: Igor's call (ADI-MONO-124) -- not run from here.
+# Local:  bun x wrangler dev   (reads secrets from .dev.vars -- see .dev.vars.example)
+# Deploy: bun x wrangler d1 migrations apply adi-channel-router-routing-keys --remote \
+#           && bun x wrangler deploy
+#         (node >= 22; first deployed to hooks.withadi.dev in ADI-MONO-124)
 
 name = "adi-channel-router"
 main = "src/index.ts"
 compatibility_date = "2025-06-01"
+
+# custom_domain, not a zone pattern route: only a custom domain creates the DNS record and the
+# certificate. A pattern route for a hostname with no record deploys green into NXDOMAIN.
+routes = [
+  { pattern = "hooks.withadi.dev", custom_domain = true },
+]
 
 [vars]
 # Shown to an operator building `t.me/<bot>?start=<code>`. Public (it's in the bot's own
@@ -37,7 +45,7 @@ new_sqlite_classes = ["NodeConnection"]
 [[d1_databases]]
 binding = "ROUTING_KEYS"
 database_name = "adi-channel-router-routing-keys"
-# Real id comes from `wrangler d1 create adi-channel-router-routing-keys` at deploy time
-# (ADI-MONO-124, Igor's call); local dev and tests don't need a real one.
-database_id = "00000000-0000-0000-0000-000000000000"
+# Created with `wrangler d1 create` in ADI-MONO-124. Only read on --remote; local dev and tests
+# get their own SQLite under .wrangler/state whatever this says.
+database_id = "952242e4-9373-4357-9bf9-41c08297a5ca"
 migrations_dir = "migrations"
