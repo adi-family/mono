@@ -4,7 +4,7 @@
 
 > The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
 
-26 structs · 7 enums · 2 type aliases across 10 files.
+27 structs · 8 enums · 2 type aliases across 11 files.
 
 ## Index
 
@@ -17,6 +17,7 @@
 - [`src/node_api.rs`](#srcnode_apirs) — `ConnectionView`, `ConnectionsView`, `ConnectResponse`, `ConnectBody`, `RefBody`, `RouteBody`, `PauseBody`, `AllowBody`, `NodeApi`
 - [`src/protocol.rs`](#srcprotocolrs) — `RouterFrame`, `NodeFrame`
 - [`src/router_api.rs`](#srcrouter_apirs) — `RegisterRequest`, `Registered`, `SendRequest`, `SetThinkingRequest`, `DisconnectRequest`, `RouterApi`
+- [`src/turn.rs`](#srcturnrs) — `Watch`, `Step`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -502,6 +503,39 @@ A thin client over the router's own two node-facing HTTP routes.
 #[derive(Debug, Clone)]
 pub struct RouterApi {
     base_url: String,
+}
+```
+
+---
+
+## `src/turn.rs`
+
+### struct `Watch`
+
+Everything one watch needs, owned, so it can move onto its own thread.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Watch {
+    pub agent: String,
+    pub run_id: String,
+    pub connection: String,
+    pub thread: String,
+    pub router_url: String,
+    pub node_token: String,
+    pub since_ms: u64,
+}
+```
+
+### enum `Step`
+
+What one look at the run decided.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    Wait,
+    Done(Option<String>),
 }
 ```
 

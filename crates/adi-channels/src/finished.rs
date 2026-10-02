@@ -1,9 +1,13 @@
-//! The auto-post-back: a channel-opened run's answer, posted to the router without anybody
-//! asking (`docs/channels.md` §5). This is an [`EventObserver`] the same shape
-//! `adi-triggers::dispatch::EventObserver` already is — composed alongside `adi-agents`' own
-//! `awaits::start` observer in `adi-app`'s one event dispatcher, rather than draining the shared
-//! event spool a second time (`adi-triggers`' own dispatcher is explicit that a second drainer
-//! would race it for records; see its module doc).
+//! The auto-post-back of a question: a channel-opened run that stops to ask something gets the
+//! question posted to the router without anybody asking (`docs/channels.md` §5). This is an
+//! [`EventObserver`] the same shape `adi-triggers::dispatch::EventObserver` already is — composed
+//! alongside `adi-agents`' own `awaits::start` observer in `adi-app`'s one event dispatcher, rather
+//! than draining the shared event spool a second time (`adi-triggers`' own dispatcher is explicit
+//! that a second drainer would race it for records; see its module doc).
+//!
+//! A turn's *answer* is not posted from here any more: `adi.agents.run.finished` fires once per run
+//! and only when somebody lists it, which left every follow-up message unanswered — see
+//! [`crate::turn`], which owns the answer and the "thinking…" clear now.
 
 use std::sync::Arc;
 
@@ -22,7 +26,6 @@ use crate::token;
 /// no other reason to take `adi-triggers` as a dependency.
 pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
 
-const RUN_FINISHED: &str = "adi.agents.run.finished";
 /// `adi_agents::events::QUESTION_ASKED`'s exact spelling, copied rather than imported: that
 /// module is private to `adi-agents` and nothing re-exports the constant at its crate root (only
 /// the [`AgentQuestionAsked`] payload type is public). If `adi-agents` ever renames the event,
@@ -33,11 +36,10 @@ const QUESTION_ASKED: &str = "adi.agents.question.asked";
 /// Build the observer `adi-app` composes into its event dispatcher. `router_url` is the one this
 /// node's client already subscribes through — see `RouterApi`'s own note on its assumed shape.
 ///
-/// Matches only [`RUN_FINISHED`] and [`QUESTION_ASKED`]; everything else is ignored immediately,
-/// which is what "return promptly" (the dispatcher's own contract on an observer) means in
-/// practice. The actual lookup-and-post happens on a detached thread, never on the dispatcher's
-/// own tick — a slow or unreachable router must not stall the trigger/await delivery that shares
-/// this one drain.
+/// Matches only [`QUESTION_ASKED`]; everything else is ignored immediately, which is what "return
+/// promptly" (the dispatcher's own contract on an observer) means in practice. The actual
+/// lookup-and-post happens on a detached thread, never on the dispatcher's own tick — a slow or
+/// unreachable router must not stall the trigger/await delivery that shares this one drain.
 #[must_use]
 pub fn observer(
     connections: Connections,
@@ -46,7 +48,7 @@ pub fn observer(
     router_url: String,
 ) -> EventObserver {
     Arc::new(move |record: &EventRecord| {
-        if record.name != RUN_FINISHED && record.name != QUESTION_ASKED {
+        if record.name != QUESTION_ASKED {
             return;
         }
         let connections = connections.clone();
@@ -64,70 +66,34 @@ pub fn observer(
     })
 }
 
-/// The run id a `RUN_FINISHED`/`QUESTION_ASKED` payload belongs to — read before anything else,
-/// since clearing the "thinking…" indicator (below) has to happen even for a run that ended with
-/// nothing worth posting back.
-fn run_id_of(payload: &str) -> Result<String> {
-    let value: serde_json::Value = serde_json::from_str(payload)
-        .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
-    Ok(value
+/// The run id a [`QUESTION_ASKED`] payload belongs to.
+fn run_id_of(value: &serde_json::Value) -> String {
+    value
         .get("run_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default()
-        .to_string())
+        .to_string()
 }
 
-/// What ended up being said — for a [`RUN_FINISHED`] that's the full answer (never the
-/// notification's own truncated `result_head`, per §5), for a [`QUESTION_ASKED`] it's the
-/// question itself. `None` if there's nothing worth posting (no assistant turn yet, or an empty
-/// question) — not necessarily an error; [`post_back`] still clears "thinking…" either way.
-///
-/// Reads the payload as a bare [`serde_json::Value`] rather than `adi_agents::AgentRunFinished`/
-/// `AgentQuestionAsked`: those types derive `Serialize` only (nothing inside `adi-agents` itself
-/// ever needs to parse its own events back), and adding `Deserialize` there for this one caller
-/// is more than this task's own crate boundary asks for.
-fn said(agents: &Agents, name: &str, payload: &str, run_id: &str) -> Result<Option<String>> {
-    let value: serde_json::Value = serde_json::from_str(payload)
-        .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
-    let field = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or_default();
-
-    match name {
-        RUN_FINISHED => {
-            let Some(agent) = agents.get(field("agent"))? else {
-                return Ok(None);
-            };
-            Ok(agents
-                .transcript(&agent, run_id)
-                .into_iter()
-                .rev()
-                .find(|t| t.role == "assistant")
-                .map(|t| t.text))
-        }
-        _ if name == QUESTION_ASKED => {
-            let question = field("question");
-            if question.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some(question.to_string()))
-        }
-        _ => Ok(None),
-    }
-}
-
-/// `"thinking…"`'s own cleared state — `set_thinking`'s `status` is free text, but an empty
-/// string is what every adapter treats as "nothing to show" (Slack: clears
-/// `assistant.threads.setStatus`; Telegram: `setThinking` no-ops rather than sending anything).
-const THINKING_CLEARED: &str = "";
-
+/// Reads the payload as a bare [`serde_json::Value`] rather than `adi_agents::AgentQuestionAsked`:
+/// that type derives `Serialize` only (nothing inside `adi-agents` itself ever needs to parse its
+/// own events back), and adding `Deserialize` there for this one caller is more than this crate's
+/// boundary asks for. `agents` is unused now that answers are [`crate::turn`]'s, and kept so
+/// `adi-app`'s composition doesn't change shape.
 fn post_back(
     connections: &Connections,
-    agents: &Agents,
+    _agents: &Agents,
     secrets: &Secrets,
     router_url: &str,
     name: &str,
     payload: &str,
 ) -> Result<()> {
-    let run_id = run_id_of(payload)?;
+    if name != QUESTION_ASKED {
+        return Ok(());
+    }
+    let value: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
+    let run_id = run_id_of(&value);
     if run_id.is_empty() {
         return Ok(());
     }
@@ -140,39 +106,25 @@ fn post_back(
     if connection.manifest.paused {
         return Ok(());
     }
+    let question = value.get("question").and_then(|v| v.as_str()).unwrap_or_default();
+    if question.trim().is_empty() {
+        return Ok(());
+    }
     let Some(token) = token::load(secrets, &connection.manifest.provider)? else {
         warn!(
             connection = %connection.id,
             provider = %connection.manifest.provider,
-            "no node token on file for this provider; can't post the answer back"
+            "no node token on file for this provider; can't post the question back"
         );
         return Ok(());
     };
-    let router = RouterApi::new(router_url);
-
-    if name == RUN_FINISHED {
-        // The dispatcher that launched this run signalled "thinking…" the moment it dispatched
-        // (see `dispatch::handle`); the run is done either way (success or failure) by the time
-        // this fires, so the indicator has nothing left to wait on and is cleared unconditionally,
-        // independent of whether there's an answer worth posting below.
-        if let Err(e) = router.set_thinking(&token, &connection.id, &thread, THINKING_CLEARED) {
-            warn!(connection = %connection.id, error = %e, "couldn't clear the \"thinking…\" indicator");
-        }
-    }
-
-    let Some(text) = said(agents, name, payload, &run_id)? else {
-        return Ok(());
-    };
-    if text.trim().is_empty() {
-        return Ok(());
-    }
-    router.send(&token, &connection.id, Some(&thread), &text)
+    RouterApi::new(router_url).send(&token, &connection.id, Some(&thread), question)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adi_agents::{AgentQuestionAsked, AgentRunFinished};
+    use adi_agents::AgentQuestionAsked;
     use crate::connection::Target;
     use std::time::Duration;
 
@@ -244,15 +196,13 @@ mod tests {
         let secrets = Secrets::with_config(cfg);
 
         let record = EventRecord {
-            name: RUN_FINISHED.to_string(),
-            payload: serde_json::to_string(&AgentRunFinished {
+            name: QUESTION_ASKED.to_string(),
+            payload: serde_json::to_string(&AgentQuestionAsked {
                 agent: "solver".into(),
+                conv: "no-such-run".into(),
                 run_id: "no-such-run".into(),
-                terminal_reason: Some("completed".into()),
-                is_error: false,
-                duration_ms: None,
-                cost_micro_usd: None,
-                result_head: "done".into(),
+                ask: "q1".into(),
+                question: "which backend?".into(),
             })
             .unwrap(),
             emitted_at: 1,
@@ -305,55 +255,6 @@ mod tests {
             .unwrap(),
         )
         .expect("paused connections are skipped, not errored");
-    }
-
-    /// `RUN_FINISHED` clears "thinking…" unconditionally, even when there's no assistant answer
-    /// to post — an agent with no transcript (here, one that was never even created) is exactly
-    /// the shape a failed run with no output takes from this crate's own point of view.
-    #[test]
-    fn run_finished_clears_thinking_even_with_no_answer_to_post() {
-        let cfg = scratch("clear-no-answer");
-        let connections = Connections::with_config(cfg.clone());
-        let agents = Agents::with_config(cfg.clone());
-        let secrets = Secrets::with_config(cfg);
-        let created = connections
-            .create(
-                "slack",
-                Target::Agent {
-                    agent: "solver".into(),
-                },
-            )
-            .unwrap();
-        connections.bind_thread(&created.id, "C1", "run-1").unwrap();
-        token::save(&secrets, "slack", "tok").unwrap();
-
-        let (router_url, rx) = spawn_capturing_router();
-        post_back(
-            &connections,
-            &agents,
-            &secrets,
-            &router_url,
-            RUN_FINISHED,
-            &serde_json::to_string(&AgentRunFinished {
-                agent: "solver".into(),
-                run_id: "run-1".into(),
-                terminal_reason: Some("error".into()),
-                is_error: true,
-                duration_ms: None,
-                cost_micro_usd: None,
-                result_head: "boom".into(),
-            })
-            .unwrap(),
-        )
-        .expect("clearing thinking with nothing to post is not an error");
-
-        let body = rx.recv_timeout(Duration::from_secs(5)).expect("one request");
-        assert!(body.contains("\"status\":\"\""), "got: {body}");
-        assert!(body.contains("\"thread\":\"C1\""), "got: {body}");
-        assert!(
-            rx.recv_timeout(Duration::from_millis(100)).is_err(),
-            "no second request -- there was nothing to say"
-        );
     }
 
     /// `QUESTION_ASKED` never touches the "thinking…" indicator — the run isn't finished, just

@@ -13,7 +13,7 @@ use crate::message::ChannelMessage;
 use crate::router_api::RouterApi;
 
 /// The text handed to `setThinking` the moment a message is actually dispatched to an agent run —
-/// cleared (an empty string) once that run finishes, by [`crate::finished::observer`]. Never seen
+/// cleared (an empty string) once that turn ends, by [`crate::turn`]'s watcher. Never seen
 /// by a provider with no such concept (Telegram's own `setThinking` ignores the text entirely and
 /// just starts `sendChatAction`).
 const THINKING_STATUS: &str = "thinking…";
@@ -63,7 +63,7 @@ pub fn handle(
 
     // From here on an agent run is actually about to be launched or continued -- the provider's
     // own "thinking…" indicator (Slack's `assistant.threads.setStatus`; a no-op for Telegram) goes
-    // up now, and comes back down once that run finishes (`finished::observer`'s `post_back`).
+    // up now, and comes back down once that turn ends (`turn::spawn`'s watcher).
     if let Err(e) = RouterApi::new(router_url).set_thinking(
         node_token,
         &connection.id,
@@ -78,7 +78,8 @@ pub fn handle(
         user: message.sender.name.clone(),
     };
 
-    match connections.thread_run(&connection.id, &message.thread)? {
+    let since_ms = adi_agents::store::now_ms();
+    let run_id = match connections.thread_run(&connection.id, &message.thread)? {
         Some(run_id) => match agents.reply_as(
             agent,
             &run_id,
@@ -87,16 +88,31 @@ pub fn handle(
             std::slice::from_ref(&from),
             QueueMode::Regular,
         ) {
-            Ok(_sent) => Ok(()),
+            Ok(_sent) => Some(run_id),
             // The conversation this thread pointed at is gone (deleted, or this is a fresh store) —
             // open a new one rather than failing the whole message, and re-point the thread at it.
             Err(adi_agents::Error::NotFound(_)) => {
-                start_and_bind(connections, agents, &connection, agent, message, &from)
+                start_and_bind(connections, agents, &connection, agent, message, &from)?
             }
-            Err(e) => Err(e.into()),
+            Err(e) => return Err(e.into()),
         },
-        None => start_and_bind(connections, agents, &connection, agent, message, &from),
+        None => start_and_bind(connections, agents, &connection, agent, message, &from)?,
+    };
+    if let Some(run_id) = run_id {
+        crate::turn::spawn(
+            agents.clone(),
+            crate::turn::Watch {
+                agent: agent.clone(),
+                run_id,
+                connection: connection.id.clone(),
+                thread: message.thread.clone(),
+                router_url: router_url.to_string(),
+                node_token: node_token.to_string(),
+                since_ms,
+            },
+        );
     }
+    Ok(())
 }
 
 /// Whether `sender_id` may talk to `connection`'s target — claiming the first sender as the owner
@@ -130,7 +146,7 @@ fn is_allowed(
 }
 
 /// Open a fresh run for `message`'s text and bind its thread, for either a never-seen thread or
-/// one whose previous conversation no longer exists.
+/// one whose previous conversation no longer exists. The run id, for the backends that keep one.
 fn start_and_bind(
     connections: &Connections,
     agents: &Agents,
@@ -138,7 +154,7 @@ fn start_and_bind(
     agent: &str,
     message: &ChannelMessage,
     from: &Marker,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let launch = agents.launch(
         agent,
         &message.text,
@@ -154,10 +170,10 @@ fn start_and_bind(
             "a pty-backed agent has no conversation id to bind a channel thread to; the reply \
              (if any) will never reach the router"
         );
-        return Ok(());
+        return Ok(None);
     };
     connections.bind_thread(&connection.id, &message.thread, &run_id)?;
-    Ok(())
+    Ok(Some(run_id))
 }
 
 /// The conversation id a launch opened, for the backends that keep one. `None` for a pty launch,
