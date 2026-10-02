@@ -580,6 +580,29 @@ Two gaps the above flagged, both closed without widening `normalize`:
   can never collide on the same short Slack user id. A lookup failure just leaves `normalize`'s
   own raw-id guess standing; it never fails the webhook.
 
+## ADI-MONO-124: what going live found
+
+The router is live at `https://hooks.withadi.dev` (see `apps/channel-router/README.md`). The
+first real test, a Telegram DM and a Slack workspace against a test node built from this branch,
+found five things no local test could reach:
+
+- **A turn's answer can't hang off `adi.agents.run.finished`.** That event is published once per
+  run, ever (`record_outcome` writes only where `outcome IS NULL`), so every follow-up message in a
+  thread, which is a `reply_as` turn on the same run, went unanswered. It is also published lazily,
+  by whoever next lists the agent's runs, so on a node with no panel open even the first answer sat
+  unposted. `adi_channels::turn` now watches each run `dispatch::handle` starts or continues, and
+  posts the answer to *that message's own turn*. It anchors on the message's user turn, never on
+  "the newest answer": two quick messages are two turns, and a backed-off watcher can look only
+  after both have finished. It also clears "thinking…". `finished::observer` keeps only
+  `question.asked`.
+- **An empty message launches nothing.** Slack's `assistant_thread_started` (someone opened the
+  assistant panel) arrives as a `ChannelMessage` with no text, and the agent answered it with
+  "your message is empty". `dispatch::handle` skips a message with neither text nor attachments.
+- **`parse_ws_url` needed a default port.** `https://hooks.withadi.dev` has none, and every
+  subscribe failed with "has no port". The scheme now decides: 443 for https/wss, 80 for http/ws.
+- **Slack refuses DMs without the Messages tab.** `slack-manifest.yaml` gains `app_home`.
+- **Telegram link codes**: the 64-char limit and a one-hour TTL, both covered in the router README.
+
 ## Decisions taken
 
 Calls made here that the design brief left open:

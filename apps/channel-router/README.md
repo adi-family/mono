@@ -104,27 +104,42 @@ request that created it -- exactly `do.ts`'s subscribe/queue path -- hits a know
 incompatibility with that isolation in this pool version. Every test already uses a freshly
 randomised node id per connection, so sharing storage across tests within a file costs nothing.
 
-## Standing it up on a Cloudflare account
+## Deployed: `https://hooks.withadi.dev` (ADI-MONO-124)
 
-Not done by this task (ADI-MONO-120 is build-and-test only -- see docs/channels.md §9,
-ADI-MONO-124 is the deploy step and needs Igor's sign-off: a real bot, a real domain). When it
-happens, it needs, analogous to oauth-router's `scripts/setup-cf.sh`:
+Live on the withadi.dev Cloudflare account since 2026-10-02, Telegram (`@withadi_bot`) and Slack
+both enabled and tested end to end against a real node. What is there:
 
-1. the Worker `adi-channel-router` deployed, with a `NodeConnection` Durable Object and a
-   `routing_keys` D1 database (`wrangler d1 create adi-channel-router-routing-keys`, then the
-   real `database_id` into `wrangler.toml`)
-2. `ROUTER_SECRET`, `ROUTER_ADMIN_SECRET`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_SECRET_TOKEN`,
-   `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET` set as Worker secrets
-3. `hooks.withadi.dev` attached as a custom domain
-4. a real `@AdiBot` registered with Telegram, with `setWebhook` pointed at
-   `https://hooks.withadi.dev/webhook/telegram` and a `secret_token` matching
-   `TELEGRAM_SECRET_TOKEN`
-5. a real Slack app created from [`slack-manifest.yaml`](slack-manifest.yaml) at
-   `api.slack.com/apps`, its OAuth client id/secret and signing secret copied into the three
-   `SLACK_*` secrets above, and -- if this deployment's origin differs from
-   `hooks.withadi.dev` -- every URL inside the manifest updated to match before pasting it
+- Worker `adi-channel-router`, `hooks.withadi.dev` as a **custom domain** (`routes` in
+  `wrangler.toml`). A zone pattern route would not create the DNS record and would deploy green
+  into NXDOMAIN.
+- D1 `adi-channel-router-routing-keys` (`952242e4-…`), migrations 0001 and 0002 applied `--remote`.
+- `NodeConnection` as a **SQLite-backed** Durable Object (`new_sqlite_classes`): it is the only
+  kind a free-plan account can create, and a class can't switch backend once it's deployed.
+- Secrets set on the Worker, never in the repo: `ROUTER_SECRET`, `ROUTER_ADMIN_SECRET`,
+  `TELEGRAM_SECRET_TOKEN` (generated with `openssl rand -hex 32`, also kept on hetzner-adi as
+  `CHANNEL_ROUTER_<NAME>` in `adi-mono secrets`), `TELEGRAM_BOT_TOKEN`, and the three `SLACK_*`.
+- Telegram `setWebhook` → `https://hooks.withadi.dev/webhook/telegram` with `secret_token`.
 
-## Security notes
+Redeploy (node ≥ 22; the Cloudflare token needs Workers *and* D1 edit):
+
+```bash
+bun x wrangler d1 migrations apply adi-channel-router-routing-keys --remote && bun x wrangler deploy
+```
+
+A node points at it with `ADI_CHANNEL_ROUTER_URL=https://hooks.withadi.dev` and
+`ADI_CHANNEL_ROUTER_ADMIN_SECRET`.
+
+What the first live test found, none of it reachable by the local suite:
+
+- **Telegram drops a long `start` parameter.** The limit is 64 chars of `[A-Za-z0-9_-]`, and the
+  signed link code (~200 chars, with a dot) never arrived. `/register` now hands out a 22-char
+  random handle and parks the signed code in D1 (`link_codes`, migration 0002). The webhook and
+  the Slack OAuth callback consume it once.
+- **Ten minutes was too short.** The operator wasn't at the screen in time, twice, and an expired
+  `/start` was acked in silence. TTL is now an hour, and a dead code is answered in the chat.
+- Node-side fixes from the same test are in `docs/channels.md` under "ADI-MONO-124".
+
+## Security notes## Security notes
 
 - **Signed, expiring tokens, no session store** -- same posture as oauth-router's `state`: a
   node token and a link code are both HMAC-signed over `ROUTER_SECRET` and carry their own
