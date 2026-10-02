@@ -32,9 +32,12 @@ export class RegisterLimiter implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const { now } = (await request.json()) as CheckRequest;
 
-    const windowStart = (await this.ctx.storage.get<number>("window_start")) ?? now;
+    // No stored start means a new window -- it has to be written here, not defaulted to `now`
+    // on every read, or the window never expires and the count only ever grows. A missing start
+    // with a stored count (an object written before this fix) is reset the same way.
+    const windowStart = await this.ctx.storage.get<number>("window_start");
     let count = (await this.ctx.storage.get<number>("count")) ?? 0;
-    if (now - windowStart >= WINDOW_SECONDS) {
+    if (windowStart === undefined || now - windowStart >= WINDOW_SECONDS) {
       await this.ctx.storage.put("window_start", now);
       count = 0;
     }

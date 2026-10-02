@@ -166,6 +166,29 @@ describe("POST /register", () => {
     expect(res.status).toBe(200);
   });
 
+  it("lets a throttled IP register again once the window has passed", async () => {
+    const ip = `ip-${Math.random()}`;
+    const openRequest = (now: number) =>
+      handle(
+        new Request("https://router.example/register", {
+          method: "POST",
+          headers: { "cf-connecting-ip": ip },
+          body: JSON.stringify({
+            node: `node-ratelimit-window-${Math.random()}`,
+            provider: "telegram",
+            target: { kind: "agent", agent: "a" },
+          }),
+        }),
+        env,
+        now,
+      );
+    for (let i = 0; i < 10; i++) {
+      expect((await openRequest(NOW)).status).toBe(200);
+    }
+    expect((await openRequest(NOW + 59_000)).status).toBe(429);
+    expect((await openRequest(NOW + 60_000)).status).toBe(200);
+  });
+
   it("caps pending connections per node for open registration, but not for the admin bearer", async () => {
     const node = `node-pending-cap-${Math.random()}`;
     // A fresh IP per call -- this test is about the per-node cap, not the per-IP rate limit
