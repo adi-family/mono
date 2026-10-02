@@ -35,7 +35,6 @@ use crate::{Agents, Sent};
 /// why it is worth saying out loud.
 #[derive(Debug, Clone)]
 pub struct Settled {
-    /// The ask's id.
     pub id: String,
     pub agent: String,
     pub conv: String,

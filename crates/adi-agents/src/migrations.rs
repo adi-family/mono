@@ -30,7 +30,7 @@
 //! shared backends before it can point any agent at one, and a per-agent runner would have had to
 //! invent them 80 times.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -81,10 +81,8 @@ pub const STEPS: [Step; 3] = [
     },
 ];
 
-/// What one agent needs, if anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
-    /// The agent's name.
     pub agent: String,
     /// The shape it is in now.
     pub from: u32,
@@ -127,7 +125,6 @@ impl Plan {
     }
 }
 
-/// What applying it did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Applied {
     /// The steps that ran, by name.
@@ -174,7 +171,8 @@ pub fn plan(agents: &crate::Agents) -> Result<Plan> {
                 .collect(),
         });
     }
-    plan.pending.sort_by(|a, b| a.from.cmp(&b.from).then(a.agent.cmp(&b.agent)));
+    plan.pending
+        .sort_by(|a, b| a.from.cmp(&b.from).then(a.agent.cmp(&b.agent)));
     Ok(plan)
 }
 
@@ -202,7 +200,7 @@ pub fn apply(agents: &crate::Agents, registry: &LlmBackends) -> Result<Applied> 
             // 0 → 1 has no body on purpose: the shape is already what version 1 describes, and the
             // step exists to write that down. The stamp below is the whole of it.
             1 => {}
-            2 => run_llm_backends(agents, registry, &mut applied)?,
+            2 => run_llm_backends(agents, registry, &covered, &mut applied)?,
             3 => run_runtime(agents, registry, &covered, &mut applied)?,
             // A step added to STEPS without a body should say so loudly rather than silently stamp
             // agents it never touched.
@@ -239,9 +237,22 @@ pub fn apply(agents: &crate::Agents, registry: &LlmBackends) -> Result<Applied> 
 fn run_llm_backends(
     agents: &crate::Agents,
     registry: &LlmBackends,
+    covered: &[&Pending],
     applied: &mut Applied,
 ) -> Result<()> {
-    let plan = llm_migrate::plan(agents, registry)?;
+    // A current agent may deliberately have no chain, and a future definition must never be
+    // rewritten by this binary. Only agents actually covered by this step may produce a move or
+    // a new backend, even when some other agent makes the step necessary for the store.
+    let names: BTreeSet<&str> = covered
+        .iter()
+        .map(|pending| pending.agent.as_str())
+        .collect();
+    let selected = agents
+        .list()?
+        .into_iter()
+        .filter(|agent| names.contains(agent.name.as_str()))
+        .collect();
+    let plan = llm_migrate::plan_agents(selected, registry)?;
     let created: Vec<&str> = plan
         .moves
         .iter()
@@ -327,7 +338,6 @@ fn run_runtime(
                     ),
                 );
             }
-            // Either they agree, or the file never had one to disagree with.
             (_, Some(_)) => {
                 let mut manifest = agent.manifest;
                 manifest.backend = None;
@@ -421,7 +431,6 @@ mod tests {
             .backend
     }
 
-    /// Put a backend in the store, so a chain naming it has a head to take a runtime from.
     fn backend(agents: &crate::Agents, id: &str, runtime: Backend) -> LlmBackends {
         let registry = LlmBackends::with_config(agents.config().clone());
         registry
@@ -510,8 +519,6 @@ mod tests {
         assert!(plan.ahead.is_empty());
     }
 
-    /// The other half of the same rule: a definition that already says what it is only gets the
-    /// steps above it, not the whole chain again.
     #[test]
     fn a_stamped_agent_only_gets_the_steps_above_it() {
         let agents = scratch("a_stamped_agent_only_gets_the_steps_above_it");
@@ -581,7 +588,8 @@ mod tests {
 
     #[test]
     fn an_agent_that_was_migrated_by_hand_is_stamped_without_being_rewritten() {
-        let agents = scratch("an_agent_that_was_migrated_by_hand_is_stamped_without_being_rewritten");
+        let agents =
+            scratch("an_agent_that_was_migrated_by_hand_is_stamped_without_being_rewritten");
         let registry = backend(&agents, "anthropic", Backend::HarnessClaudeSdk);
         // The state this store was actually in: `llm migrate` was run before versions existed, so
         // the agent has its chain but no stamp.
@@ -602,17 +610,19 @@ mod tests {
         );
     }
 
-    /// The whole of the third step, on the shape it was written for: the runtime leaves the file,
-    /// and reading the agent back answers with the one on the backend it starts on.
     #[test]
     fn the_runtime_leaves_a_chained_agent_and_comes_back_from_its_first_backend() {
-        let agents = scratch("the_runtime_leaves_a_chained_agent_and_comes_back_from_its_first_backend");
+        let agents =
+            scratch("the_runtime_leaves_a_chained_agent_and_comes_back_from_its_first_backend");
         let registry = backend(&agents, "anthropic", Backend::HarnessClaudeSdk);
         let mut manifest = legacy("opus").to_stored().expect("stored");
         manifest.arguments.remove("model");
         manifest.backends = vec![AgentBackendEntry::new("anthropic")];
         agents.save_migrated("chained", manifest, 2).expect("seed");
-        assert_eq!(stored_runtime(&agents, "chained"), Some(Backend::HarnessClaudeSdk));
+        assert_eq!(
+            stored_runtime(&agents, "chained"),
+            Some(Backend::HarnessClaudeSdk)
+        );
 
         let applied = apply(&agents, &registry).expect("apply");
         assert_eq!(applied.steps, vec!["runtime"]);
@@ -620,9 +630,17 @@ mod tests {
         assert!(applied.held.is_empty());
 
         assert_eq!(stored_runtime(&agents, "chained"), None, "off the file");
-        let saved = agents.get("chained").expect("get").expect("present").manifest;
+        let saved = agents
+            .get("chained")
+            .expect("get")
+            .expect("present")
+            .manifest;
         assert_eq!(saved.version, 3);
-        assert_eq!(saved.backend, Some(Backend::HarnessClaudeSdk), "and back on the read");
+        assert_eq!(
+            saved.backend,
+            Some(Backend::HarnessClaudeSdk),
+            "and back on the read"
+        );
     }
 
     /// An agent that asks no LLM backend anything — a `pty:claude` one — has nothing to derive a
@@ -640,7 +658,11 @@ mod tests {
         assert_eq!(applied.agents, 1);
         assert!(applied.held.is_empty(), "there is nothing to decide");
 
-        let saved = agents.get("driver").expect("get").expect("present").manifest;
+        let saved = agents
+            .get("driver")
+            .expect("get")
+            .expect("present")
+            .manifest;
         assert_eq!(saved.version, MANIFEST_VERSION);
         assert_eq!(stored_runtime(&agents, "driver"), Some(Backend::PtyClaude));
         assert_eq!(saved.backend, Some(Backend::PtyClaude));
@@ -651,7 +673,8 @@ mod tests {
     /// named.
     #[test]
     fn an_agent_whose_runtime_disagrees_with_its_first_backend_is_held_back() {
-        let agents = scratch("an_agent_whose_runtime_disagrees_with_its_first_backend_is_held_back");
+        let agents =
+            scratch("an_agent_whose_runtime_disagrees_with_its_first_backend_is_held_back");
         let registry = backend(&agents, "glm", Backend::HarnessAdi);
         let mut manifest = legacy("opus").to_stored().expect("stored");
         manifest.arguments.remove("model");
@@ -667,7 +690,10 @@ mod tests {
 
         let saved = agents.get("split").expect("get").expect("present").manifest;
         assert_eq!(saved.version, 2, "left where it was, for a human to settle");
-        assert_eq!(stored_runtime(&agents, "split"), Some(Backend::HarnessClaudeSdk));
+        assert_eq!(
+            stored_runtime(&agents, "split"),
+            Some(Backend::HarnessClaudeSdk)
+        );
     }
 
     /// A chain whose first row names a backend that was deleted: the chain cannot say what the
@@ -684,9 +710,16 @@ mod tests {
         let applied = apply(&agents, &registry).expect("apply");
         assert_eq!(applied.agents, 0);
         assert!(applied.held.contains_key("orphan"));
-        let saved = agents.get("orphan").expect("get").expect("present").manifest;
+        let saved = agents
+            .get("orphan")
+            .expect("get")
+            .expect("present")
+            .manifest;
         assert_eq!(saved.version, 2);
-        assert_eq!(stored_runtime(&agents, "orphan"), Some(Backend::HarnessClaudeSdk));
+        assert_eq!(
+            stored_runtime(&agents, "orphan"),
+            Some(Backend::HarnessClaudeSdk)
+        );
     }
 
     #[test]
@@ -701,18 +734,87 @@ mod tests {
 
         let plan = plan(&agents).expect("plan");
         assert!(plan.pending.is_empty(), "nothing to do to it");
-        assert_eq!(plan.ahead.get("from-the-future"), Some(&(MANIFEST_VERSION + 7)));
+        assert_eq!(
+            plan.ahead.get("from-the-future"),
+            Some(&(MANIFEST_VERSION + 7))
+        );
 
         // Carried onto the result too, because the boot path never asks for a plan: an old binary
         // opening a store a newer one has migrated has to be able to say so from `apply` alone.
         let applied = apply(&agents, &registry).expect("apply");
-        assert_eq!(applied.ahead.get("from-the-future"), Some(&(MANIFEST_VERSION + 7)));
-        let saved = agents.get("from-the-future").expect("get").expect("present");
+        assert_eq!(
+            applied.ahead.get("from-the-future"),
+            Some(&(MANIFEST_VERSION + 7))
+        );
+        let saved = agents
+            .get("from-the-future")
+            .expect("get")
+            .expect("present");
         assert_eq!(
             saved.manifest.version,
             MANIFEST_VERSION + 7,
             "its version was not walked backwards"
         );
+    }
+
+    #[test]
+    fn migrating_a_legacy_agent_leaves_current_chainless_agents_untouched() {
+        let agents = scratch("legacy-beside-current-chainless");
+        let registry = LlmBackends::with_config(agents.config().clone());
+        agents
+            .save_migrated("old", legacy("opus").to_stored().expect("stored"), 1)
+            .expect("seed legacy");
+        agents
+            .save("current", legacy("sonnet"))
+            .expect("seed current");
+        let path = agents.dir().join("current.toml");
+        let before = std::fs::read(&path).expect("read current");
+
+        let applied = apply(&agents, &registry).expect("apply");
+
+        assert_eq!(applied.agents, 1);
+        assert_eq!(
+            agents
+                .get("old")
+                .expect("get")
+                .expect("present")
+                .manifest
+                .version,
+            MANIFEST_VERSION,
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read current after migration"),
+            before,
+            "a current agent's deliberate lack of a chain must survive another agent's migration",
+        );
+        assert_eq!(registry.list().expect("backends").len(), 1);
+    }
+
+    #[test]
+    fn migrating_a_legacy_agent_preserves_future_chainless_definitions_verbatim() {
+        let agents = scratch("legacy-beside-future-chainless");
+        let registry = LlmBackends::with_config(agents.config().clone());
+        agents
+            .save_migrated("old", legacy("opus").to_stored().expect("stored"), 1)
+            .expect("seed legacy");
+        let path = agents.dir().join("future.toml");
+        let before = format!(
+            "# Written by a newer binary.\nversion = {}\nbackend = \"process:codex\"\n\
+             future_only = \"must survive\"\n[arguments]\nmodel = \"future-model\"\n",
+            MANIFEST_VERSION + 7,
+        );
+        std::fs::write(&path, &before).expect("seed future definition");
+
+        let applied = apply(&agents, &registry).expect("apply");
+
+        assert_eq!(applied.agents, 1);
+        assert_eq!(applied.ahead.get("future"), Some(&(MANIFEST_VERSION + 7)));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read future after migration"),
+            before,
+            "an excluded future definition must retain its unknown fields and original formatting",
+        );
+        assert_eq!(registry.list().expect("backends").len(), 1);
     }
 
     #[test]
@@ -736,7 +838,6 @@ mod tests {
         assert_eq!(store_version(&agents).expect("mixed"), UNVERSIONED);
     }
 
-    /// What `adi-app` does as it opens the store: no plan, no flag, and nothing left behind.
     #[test]
     fn booting_brings_the_store_forward_and_a_second_boot_is_quiet() {
         let agents = scratch("booting_brings_the_store_forward_and_a_second_boot_is_quiet");
@@ -747,7 +848,12 @@ mod tests {
         let applied = on_boot(&agents).expect("boot");
         assert_eq!(applied.agents, 1);
         assert_eq!(
-            agents.get("old").expect("get").expect("present").manifest.version,
+            agents
+                .get("old")
+                .expect("get")
+                .expect("present")
+                .manifest
+                .version,
             MANIFEST_VERSION
         );
         assert_eq!(on_boot(&agents).expect("second boot").agents, 0);

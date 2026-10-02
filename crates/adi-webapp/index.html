@@ -33,9 +33,11 @@
 <link data-trunk rel="scss" href="styles/main.scss" />
 <!-- adi-ui's @font-face rules resolve against the dist root, so the files have to land there. -->
 <link data-trunk rel="copy-dir" href="../adi-ui/fonts" />
-<!-- The design system as custom elements (`design/elements`), copied verbatim so the module
-     graph keeps the relative imports it was written with. Loaded below as one ES module. -->
-<link data-trunk rel="copy-dir" href="../../design/elements" />
+<!-- The design system as custom elements (`design/elements`), as `scripts/elements.sh build`
+     leaves them in target/elements — the Trunk.toml hook runs it first. One file out per file in,
+     so the module graph keeps the relative imports it was written with. Loaded below as one ES
+     module. -->
+<link data-trunk rel="copy-dir" href="../../target/elements" />
 <!-- Copied verbatim (no content hash) so the manifest, the worker and the icons keep the
      stable URLs the browser and the manifest above expect. -->
 <link data-trunk rel="copy-file" href="manifest.webmanifest" />

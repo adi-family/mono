@@ -47,7 +47,6 @@ use crate::error::{Error, Result};
 use crate::llm::LLM_MODULE;
 use crate::llm::backend::LimitClass;
 
-/// The database file, under the `llm/` module directory.
 const DB_FILE: &str = "holds.db";
 
 /// Applied to every connection, in this order. `busy_timeout` must lead: switching journal mode
@@ -110,10 +109,8 @@ impl HoldKey {
     }
 }
 
-/// One recorded hold.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hold {
-    /// What it is recorded against.
     #[serde(flatten)]
     pub key: HoldKey,
     /// Why it is held — which decides whether a run reroutes or asks.
@@ -132,7 +129,6 @@ pub struct Hold {
 }
 
 impl Hold {
-    /// Whether this is still blocking at `now`.
     #[must_use]
     pub fn blocks_at(&self, now: u64) -> bool {
         self.until > now
@@ -160,14 +156,12 @@ pub fn clock(unix_seconds: u64) -> String {
     format!("{hours:02}:{minutes:02} UTC")
 }
 
-/// The hold store.
 #[derive(Debug, Clone)]
 pub struct Holds {
     path: PathBuf,
 }
 
 impl Holds {
-    /// Open the store under a config root.
     #[must_use]
     pub fn with_config(config: &Config) -> Self {
         Self {
@@ -181,7 +175,6 @@ impl Holds {
         Self { path: path.into() }
     }
 
-    /// Where the database lives.
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
@@ -595,7 +588,6 @@ mod tests {
         assert_eq!(hold.describe(), "limited until 14:00 UTC");
     }
 
-    /// Every class survives the round trip through its stored name, including the default.
     #[test]
     fn classes_round_trip_through_the_store() {
         let store = scratch("classes");

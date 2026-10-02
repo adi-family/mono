@@ -58,7 +58,6 @@ const TOOL: &str = "Bash";
 /// One command that was run, and what it actually produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Ran {
-    /// The command, as written.
     pub(crate) command: String,
     /// Its combined stdout and stderr, truncated and prefixed with `(exit N)` on a non-zero
     /// status — byte for byte what the `Bash` tool would have returned for the same command.
@@ -102,7 +101,6 @@ pub(crate) fn run(commands: &[String], spec: &RunSpec, agent_dir: &Path, conv: &
         .collect()
 }
 
-/// One command, through the conversation's shell.
 fn run_one(command: &str, spec: &RunSpec, shell: &Shell) -> Ran {
     let start = shell.start_dir(&spec.cwd);
     let script = shell.script(command);
@@ -303,8 +301,6 @@ mod tests {
         }
     }
 
-    /// The whole promise of the feature: the command is executed and what comes back is what it
-    /// printed. A stub, a prediction, or an echo of the command would pass a weaker test.
     #[test]
     #[cfg(unix)]
     fn a_command_really_runs_and_its_real_output_comes_back() {
@@ -416,8 +412,6 @@ mod tests {
         assert!(block.contains("Title: probe the auth flow"));
     }
 
-    /// Nothing run, nothing appended — an agent with no prelude must get exactly the message that
-    /// was typed.
     #[test]
     fn no_commands_means_no_block() {
         assert!(block(&[], 0).is_none());

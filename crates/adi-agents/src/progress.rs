@@ -146,11 +146,8 @@ pub struct BackendCapabilities {
     pub answerable: bool,
     /// Produces streaming text output (a pane, or a log tail).
     pub live_text: bool,
-    /// Surfaces structured tool-call steps.
     pub tool_steps: bool,
-    /// Surfaces model thinking/reasoning steps.
     pub thinking: bool,
-    /// Reports per-turn metrics (tokens / cost / duration).
     pub metrics: bool,
     /// A message to it may carry images — what decides whether a composer offers to attach one.
     #[serde(default)]

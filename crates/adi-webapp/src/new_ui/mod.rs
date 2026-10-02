@@ -42,7 +42,7 @@ use adi_ui::Lucide;
 use leptos::{ev, prelude::*};
 
 use crate::launcher::Action;
-use crate::{icons, routing, ui};
+use crate::{icons, menu, pwa, rerenders, routing, ui};
 use background::Appearance;
 use palette::Item;
 use shell::{Island, Shell, TopBar};
@@ -104,12 +104,19 @@ pub(crate) fn action() -> Action {
     }
 }
 
+/// Leave for another document of this app — the control panel's pages live outside this screen.
+fn go(href: String) {
+    let _ = window().location().set_href(&href);
+}
+
 /// The palette's commands, as they stand right now.
 fn commands(
     wall: background::Wallpaper,
     desk: Desk,
+    apps: apps::Apps,
     home: arrange::Arrange,
     sites: sites::Sites,
+    can_install: RwSignal<bool>,
 ) -> Vec<Item> {
     let now = wall.choice.get().appearance;
     let mut items = vec![
@@ -158,6 +165,72 @@ fn commands(
         }),
     );
     items.push(Item::new(
+        "System",
+        "About adi",
+        "The version and this machine",
+        Lucide::Info,
+        move || desk.open(Win::About),
+    ));
+    if can_install.get() {
+        items.push(Item::new(
+            "System",
+            "Install app",
+            "Run adi in its own window",
+            Lucide::Download,
+            pwa::install,
+        ));
+    }
+    if let Some(on) = rerenders::is_on() {
+        let (title, subtitle) = if on {
+            ("Hide rerenders", "Stop flashing DOM changes")
+        } else {
+            ("Show rerenders", "Debug: highlight every DOM rebuild and patch")
+        };
+        items.push(Item::new("Developer", title, subtitle, Lucide::Activity, rerenders::toggle));
+    }
+    // The long lists last, so the short commands above stay in sight with nothing typed. Every
+    // app the home screen can open is a few keys away however full the screen — or hidden from it.
+    let listed = sites.list.with(|s| apps::openable(apps, s));
+    items.extend(listed.into_iter().map(|app| {
+        let place = app.machine.clone().unwrap_or_else(|| "This machine".into());
+        Item::new("Apps", app.name.clone(), place, Lucide::AppWindow, move || {
+            desk.open_app(app.clone())
+        })
+    }));
+    // The control panel, which this screen does not replace yet: its front page, pairing, and
+    // each of its pages by name — `menu::rows`' list, from [`routing::Route::NAV`], so a page
+    // added there shows up here too.
+    items.push(Item::new(
+        "Extended",
+        "Open extended",
+        "The control panel",
+        Lucide::Layers,
+        || go(routing::BASE.into()),
+    ));
+    items.push(Item::new(
+        "Extended",
+        "Pair new device",
+        "Mint an invite and show its QR on Fleet",
+        Lucide::QrCode,
+        // The panel mints on arrival (`menu::consume_pair_intent`); the URL carries only the intent.
+        || {
+            go(format!(
+                "{}?{}=1",
+                routing::Route::Fleet.path(),
+                menu::PAIR_INTENT
+            ))
+        },
+    ));
+    items.extend(routing::Route::NAV.into_iter().map(|r| {
+        Item::new(
+            "Extended",
+            r.title(),
+            r.blurb(),
+            icons::route_icon(r).lucide(),
+            move || go(r.path().into()),
+        )
+    }));
+    items.push(Item::new(
         "New UI",
         "Turn off new UI",
         "Back to the current chat",
@@ -193,6 +266,8 @@ pub(crate) fn NewUi() -> impl IntoView {
     let home = arrange::Arrange::load();
     let sites = sites::Sites::load();
     let palette_open = RwSignal::new(false);
+    // Once per mounted app (see `pwa::installable`); this screen is mounted instead of `Home`.
+    let can_install = pwa::installable();
 
     // Back and forward change the address without a reload; the window it names comes forward.
     let pop = window_event_listener(ev::popstate, move |_| desk.arrive(&routing::current_path()));
@@ -293,6 +368,6 @@ pub(crate) fn NewUi() -> impl IntoView {
         </Show>
         <Island shell desk palette=palette_open light=light/>
         <sites::AddSite sites fleet light=light/>
-        <palette::Palette items=move || commands(wall, desk, home, sites) light=light open=palette_open/>
+        <palette::Palette items=move || commands(wall, desk, apps, home, sites, can_install) light=light open=palette_open/>
     }
 }

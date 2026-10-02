@@ -232,7 +232,7 @@ pub(super) fn conn(path: &Path) -> Result<Rc<Connection>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let connection = Connection::open(path).map_err(|e| sql_err("open", e))?;
+        let mut connection = Connection::open(path).map_err(|e| sql_err("open", e))?;
         connection
             .execute_batch(PRAGMAS)
             .map_err(|e| sql_err("configure", e))?;
@@ -242,6 +242,11 @@ pub(super) fn conn(path: &Path) -> Result<Rc<Connection>> {
         for statement in MIGRATIONS {
             let _ = connection.execute(statement, []);
         }
+        // Every explicit transaction in the store reads before it writes. Reserve the writer
+        // before taking that read snapshot: a deferred transaction cannot upgrade a stale WAL
+        // snapshot, and SQLite returns BUSY immediately instead of honoring busy_timeout.
+        // Ordinary read queries remain concurrent; only these write transactions wait here.
+        connection.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         let connection = Rc::new(connection);
         cache
             .borrow_mut()
@@ -257,7 +262,6 @@ pub(super) fn forget_connections() {
     CONNS.with(|cache| cache.borrow_mut().clear());
 }
 
-/// A stored error, named after what was being attempted.
 pub(super) fn sql_err(doing: &str, e: rusqlite::Error) -> Error {
     Error::Session(format!("couldn't {doing} the session database: {e}"))
 }

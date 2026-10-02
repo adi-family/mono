@@ -8,7 +8,6 @@
 
 use crate::progress::{Step, TurnMetrics};
 
-/// One thing that happened during a turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEvent {
     /// An item on the turn's timeline: something said mid-turn, a reasoning block, or a tool call

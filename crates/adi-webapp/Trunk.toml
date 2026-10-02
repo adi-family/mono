@@ -4,6 +4,13 @@
 target = "index.html"
 dist = "dist"
 
+# Build the TypeScript elements into target/elements for index.html to copy.
+# Type checking runs separately through scripts/elements.sh check and CI.
+[[hooks]]
+stage = "pre_build"
+command = "bash"
+command_arguments = ["-c", "\"$TRUNK_SOURCE_DIR/../../scripts/elements.sh\" build"]
+
 # Watch the webapp, the shared design system AND the token file, so editing any of them
 # hot-reloads too.
 #

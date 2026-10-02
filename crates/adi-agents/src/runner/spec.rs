@@ -9,7 +9,6 @@ use std::path::PathBuf;
 
 use adi_tools::ToolHelp;
 
-/// One run's materialized context.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSpec {
     /// Stable identity of the credential this turn runs on, never its secret value.

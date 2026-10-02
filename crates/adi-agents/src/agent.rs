@@ -8,7 +8,6 @@ use crate::error::{Error, Result};
 
 pub type RawAgentArguments = BTreeMap<String, serde_json::Value>;
 
-/// The key every backend's arguments spell their system prompt under.
 const SYSTEM_PROMPT: &str = "system_prompt";
 
 /// The manifest shape this binary writes, and the highest one it knows how to read.
@@ -375,8 +374,6 @@ pub fn contains_json_null(value: &serde_json::Value) -> bool {
     }
 }
 
-/// Validate an agent name before it is joined onto the store path as `<name>.toml`, mapping a
-/// rejection onto [`Error::InvalidName`].
 pub(crate) fn validate_name(name: &str) -> Result<()> {
     adi_config::validate_name(name, Error::InvalidName)
 }
@@ -521,8 +518,6 @@ mod tests {
         assert_eq!(back.secrets, manifest.secrets);
     }
 
-    /// An agent definition written before `can_spawn` existed still loads, and a save of it does
-    /// not grow a line nobody asked for.
     #[test]
     fn an_agent_definition_from_before_can_spawn_still_loads() {
         let older = "backend = \"harness:adi\"\nstarred = false\ncreated_at = 1\nupdated_at = 2\n";
@@ -533,8 +528,6 @@ mod tests {
         assert!(!text.contains("can_spawn"), "{text}");
     }
 
-    /// Both fields are omit-when-default, so every agent definition written before knowledge
-    /// existed still loads — and does not grow two lines of noise when saved again.
     #[test]
     fn an_agent_definition_from_before_knowledge_still_loads() {
         let older = "backend = \"harness:adi\"\nstarred = false\ncreated_at = 1\nupdated_at = 2\n";

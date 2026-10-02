@@ -102,7 +102,6 @@ impl SetBy {
     }
 }
 
-/// One goal, open or closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Goal {
     /// Unique across the store — see the module note on why it is not scoped to its conversation.
@@ -368,8 +367,6 @@ pub(super) fn forget_agent(conn: &Connection, agent: &str) -> usize {
     .unwrap_or(0)
 }
 
-// ---- internals ---------------------------------------------------------------------
-
 /// The columns [`from_row`] reads, in its order.
 const COLUMNS: &str = "id, agent, session, text, state, set_by, created_at, last_nudge_at, \
                        nudges, closed_at, note";
@@ -425,7 +422,6 @@ mod tests {
             .id
     }
 
-    /// The round trip: a goal outlives the turn that set it, so it has to come back as written.
     #[test]
     fn a_goal_is_open_until_one_of_the_two_verbs_closes_it() {
         let store = scratch("round-trip");
@@ -586,7 +582,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Rewording is for a goal still being worked toward. A closed one is the record of a decision.
     #[test]
     fn editing_leaves_a_closed_goal_as_it_was_decided() {
         let store = scratch("edit");
@@ -613,7 +608,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Deleting a conversation takes its goals, so nothing nudges a chat that is gone.
     #[test]
     fn deleting_a_session_takes_its_goals() {
         let store = scratch("cascade");
@@ -629,7 +623,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Deleting the agent takes what nothing can nudge any more, and leaves the history.
     #[test]
     fn deleting_an_agent_forgets_only_what_is_still_open() {
         let store = scratch("forget-agent");

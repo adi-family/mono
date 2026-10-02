@@ -21,7 +21,6 @@ pub(super) const LOG_SUFFIX: &str = "log";
 pub struct SessionRecord {
     /// The session id — minted at creation, and the name every file it owns is prefixed with.
     pub id: String,
-    /// The agent this session belongs to.
     pub agent: String,
     /// Which engine ran it — a label carried with the session, not a place it is kept.
     pub backend: Backend,
@@ -144,7 +143,6 @@ pub struct RunOutcome {
     pub noted_at: u64,
 }
 
-/// How much of the answer travels with the outcome.
 const MAX_RESULT_HEAD: usize = 400;
 
 impl RunOutcome {
@@ -275,7 +273,6 @@ pub(super) fn log_path(dir: &Path, id: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// The id is not just unique, it is *ordered* — and it carries its own start time.
     #[test]
     fn an_id_sorts_by_and_remembers_when_it_was_minted() {
         let first = new_id();

@@ -1,4 +1,4 @@
-//! The switch that puts the HTML chat (`<adi-chat>`, `design/elements/chat.js`) in the chat home's
+//! The switch that puts the HTML chat (`<adi-chat>`, `design/elements/chat.ts`) in the chat home's
 //! centre in place of the Leptos transcript — per browser, off by default, while the element
 //! catches up with everything the Leptos one does.
 //!

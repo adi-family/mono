@@ -39,7 +39,6 @@ use crate::llm::holds::HoldKey;
 /// One row of an agent's list: a backend, plus what this agent changes about it.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AgentBackendEntry {
-    /// The id of the backend used as the base. Every row has one.
     pub backend: String,
     /// What this agent changes about it — the model and the dials, in the same flat shape the
     /// agent form already uses. Optional; a row with none is the backend exactly as defined.
@@ -82,14 +81,11 @@ pub enum StartAt {
 /// trip through the record's JSON column. See [`PinnedChain`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedBackend {
-    /// The base backend's id.
     pub backend: String,
     /// Its 1-based position in the agent's *configured* list, kept through rotation so a notice can
     /// say which row it came from.
     pub row: usize,
-    /// What a human calls this backend.
     pub label: String,
-    /// The runner that answers the turn.
     pub runtime: Backend,
     /// Who is paying — the shared hold key's first half. See [`LlmBackendManifest::credential`].
     pub credential: String,
@@ -99,9 +95,7 @@ pub struct ResolvedBackend {
     pub context_tokens: u64,
     /// The full argument patch this row lays onto the agent: model, connection facts, dials.
     pub arguments: BTreeMap<String, serde_json::Value>,
-    /// How this backend says it is out.
     pub limit_rules: Vec<LimitRule>,
-    /// The cheap request that asks whether it is back.
     pub probe: Option<Probe>,
     /// Whether a conversation can be moved onto (or off) this row at all — false for the pty
     /// runtimes, which keep no transcript. See [`LlmBackendManifest::is_replayable`].
@@ -346,7 +340,6 @@ impl PinnedChain {
         self.entries.get(self.at)
     }
 
-    /// Where `backend` sits in this pin, if it is in it at all.
     #[must_use]
     pub fn position(&self, backend: &str) -> Option<usize> {
         self.entries.iter().position(|entry| entry.backend == backend)
@@ -525,7 +518,6 @@ mod tests {
         assert!(chain.missing.is_empty());
     }
 
-    /// Row 1's overrides are laid over the backend's own fields, and nothing else is.
     #[test]
     fn a_row_override_beats_the_backend_and_leaves_its_neighbours_alone() {
         let chain = ResolvedChain::resolve(&rows(), &three(), None, None).expect("resolve");
@@ -537,7 +529,6 @@ mod tests {
         assert!(!chain.entries[1].arguments.contains_key("thinking"));
     }
 
-    /// Picking row 3 means 3, then 1, then 2 — the rest still follows behind it.
     #[test]
     fn start_at_rotates_and_keeps_everything_behind_it() {
         let chain = ResolvedChain::resolve(
@@ -626,7 +617,6 @@ mod tests {
         assert_eq!(chain.entries.len(), 2);
         assert_eq!(chain.entries[0].model, "claude-opus-5");
         assert_eq!(chain.entries[1].model, "claude-sonnet-5");
-        // Same subscription, different model — so the two hold keys differ in the model alone.
         assert_eq!(chain.entries[0].credential, chain.entries[1].credential);
         assert_ne!(chain.entries[0].hold_key(), chain.entries[1].hold_key());
         // A bare id resolves to the first row using it; a row number picks the other.
@@ -718,7 +708,6 @@ mod tests {
     #[test]
     fn a_chain_that_steps_down_in_context_warns_once_per_smaller_row() {
         let chain = ResolvedChain::resolve(&rows(), &three(), None, None).expect("resolve");
-        // anthropic 200k, codex 400k, glm 128k — only glm is smaller than something above it.
         let warnings = chain.context_shrink_warnings();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert_eq!(warnings[0].0, "glm");

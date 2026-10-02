@@ -42,7 +42,6 @@ use crate::llm::classify::classify;
 /// [`crate::backends::harness::adi_loop`]'s ten-minute round budget for.
 const TEST_TIMEOUT_MS: u64 = 45_000;
 
-/// What a test found, and how long it took.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestResult {
     pub verdict: TestVerdict,
@@ -85,12 +84,15 @@ impl TestResult {
 /// out and a failure worth showing as-is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestVerdict {
-    /// It answered.
     Answered,
     /// Read against the backend's own limit rules: still out, in the provider's own words.
-    RateLimited { reason: String },
+    RateLimited {
+        reason: String,
+    },
     /// Failed for a reason that is not a limit — the provider's, or the CLI's, own error text.
-    Failed { error: String },
+    Failed {
+        error: String,
+    },
 }
 
 impl TestVerdict {
@@ -137,14 +139,20 @@ pub fn test_manifest(config: &Config, manifest: &LlmBackendManifest) -> TestResu
         Err((credential, text)) => {
             let found = classify(&text, &manifest.limit_rules, None, now_unix());
             let verdict = if found.class.holds() {
-                TestVerdict::RateLimited { reason: found.evidence }
+                TestVerdict::RateLimited {
+                    reason: found.evidence,
+                }
             } else {
                 TestVerdict::Failed { error: text }
             };
             (verdict, credential)
         }
     };
-    TestResult { verdict, elapsed_ms, credential }
+    TestResult {
+        verdict,
+        elapsed_ms,
+        credential,
+    }
 }
 
 /// [`Probe::default`]'s own prompt, kept as a `'static` literal so [`test_prompt`] can hand back a
@@ -181,9 +189,11 @@ fn ask(
     prompt: &str,
 ) -> std::result::Result<String, (String, String)> {
     match &manifest.runtime {
-        Backend::HarnessAdi => crate::backends::harness::adi_loop::probe(&manifest.arguments(), model, prompt)
-            .map(|_| String::new())
-            .map_err(|e| (String::new(), e.to_string())),
+        Backend::HarnessAdi => {
+            crate::backends::harness::adi_loop::probe(&manifest.arguments(), model, prompt)
+                .map(|_| String::new())
+                .map_err(|e| (String::new(), e.to_string()))
+        }
         // All three run the `claude` CLI; a pty backend's live session and a harness backend's
         // scoped turn are both beside the point here, so every one of them gets the same plain
         // `--print` ask instead.
@@ -226,7 +236,11 @@ fn ask(
             String::new(),
             format!(
                 "{} is not a runtime this build knows how to test",
-                if other.is_empty() { "(no runtime set)" } else { other }
+                if other.is_empty() {
+                    "(no runtime set)"
+                } else {
+                    other
+                }
             ),
         )),
     }
@@ -279,11 +293,24 @@ fn resolve_credential(
     config: &Config,
     manifest: &LlmBackendManifest,
 ) -> std::result::Result<Credential, String> {
-    if let Some(settings) = manifest.settings.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        return Ok(Credential { description: format!("settings file {settings}"), env: None });
+    if let Some(settings) = manifest
+        .settings
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(Credential {
+            description: format!("settings file {settings}"),
+            env: None,
+        });
     }
     let secrets = Secrets::with_config(config.clone());
-    if let Some(name) = manifest.api_key_env.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(name) = manifest
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         return match secrets.reveal(None, name) {
             Ok(Some(value)) => Ok(Credential {
                 description: format!("api_key_env {name}"),
@@ -306,7 +333,10 @@ fn resolve_credential(
                 env: None,
             }),
         },
-        None => Ok(Credential { description: format!("ambient {} login", manifest.runtime), env: None }),
+        None => Ok(Credential {
+            description: format!("ambient {} login", manifest.runtime),
+            env: None,
+        }),
     }
 }
 
@@ -354,13 +384,13 @@ fn codex_argv(model: &str, prompt: &str) -> Vec<String> {
         argv.extend(["--model".to_string(), model.to_string()]);
     }
     argv.extend([
+        "--ask-for-approval".to_string(),
+        "never".to_string(),
         "exec".to_string(),
         "--color".to_string(),
         "never".to_string(),
         "--sandbox".to_string(),
         "read-only".to_string(),
-        "--ask-for-approval".to_string(),
-        "never".to_string(),
         "--skip-git-repo-check".to_string(),
         "--json".to_string(),
         run_prompt(prompt),
@@ -391,7 +421,11 @@ fn read_codex(output: &std::process::Output) -> std::result::Result<(), String> 
 
 fn run_prompt(prompt: &str) -> String {
     let prompt = prompt.trim();
-    if prompt.is_empty() { "ok".to_string() } else { prompt.to_string() }
+    if prompt.is_empty() {
+        "ok".to_string()
+    } else {
+        prompt.to_string()
+    }
 }
 
 /// Spawn the vendor CLI on the same `PATH` a real run gets, not whatever this process inherited.
@@ -404,7 +438,9 @@ fn run_with_env(
     argv: &[String],
     env: &[(String, String)],
 ) -> std::result::Result<std::process::Output, String> {
-    let (program, rest) = argv.split_first().expect("argv always starts with the program");
+    let (program, rest) = argv
+        .split_first()
+        .expect("argv always starts with the program");
     let mut cmd = Command::new(program);
     cmd.args(rest)
         .env("PATH", crate::launch::run_path(None, &[]))
@@ -461,7 +497,10 @@ mod tests {
     /// which is what makes it safe to run as an ordinary unit test.
     #[test]
     fn an_unset_runtime_fails_by_name_rather_than_being_asked_anything() {
-        let result = test_manifest(&scratch_config("unset-runtime"), &manifest(Backend::default()));
+        let result = test_manifest(
+            &scratch_config("unset-runtime"),
+            &manifest(Backend::default()),
+        );
         assert!(
             matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("no runtime set")),
             "{result:?}"
@@ -475,12 +514,14 @@ mod tests {
         let m = manifest(Backend::HarnessAdi);
         let (prompt, model) = test_prompt(&m);
         assert_eq!(prompt, DEFAULT_TEST_PROMPT);
-        assert_eq!(DEFAULT_TEST_PROMPT, Probe::default().prompt, "the two must not drift apart");
+        assert_eq!(
+            DEFAULT_TEST_PROMPT,
+            Probe::default().prompt,
+            "the two must not drift apart"
+        );
         assert_eq!(model, "does-not-matter");
     }
 
-    /// A probe's own model overrides the backend's — the cheap-model override a recovery probe would
-    /// use is exactly what a human testing the backend should spend, too.
     #[test]
     fn a_probes_own_model_and_prompt_win_over_the_backends() {
         let m = LlmBackendManifest {
@@ -542,20 +583,30 @@ mod tests {
                 "--model",
                 "claude-opus-5",
                 "--settings",
-                &format!("{}/.claude/settings.glm.json", std::env::var("HOME").unwrap()),
+                &format!(
+                    "{}/.claude/settings.glm.json",
+                    std::env::var("HOME").unwrap()
+                ),
                 "--",
                 "ok",
             ]
         );
     }
 
-    /// No model and no settings still asks something: both flags are simply absent, exactly as an
-    /// agent with no override runs on the runtime's own default.
     #[test]
     fn claude_argv_omits_absent_model_and_settings() {
         assert_eq!(
             claude_argv("", None, ""),
-            ["claude", "--print", "--output-format", "text", "--tools", "", "--", "ok"]
+            [
+                "claude",
+                "--print",
+                "--output-format",
+                "text",
+                "--tools",
+                "",
+                "--",
+                "ok"
+            ]
         );
     }
 
@@ -569,18 +620,37 @@ mod tests {
                 "codex",
                 "--model",
                 "gpt-5-codex",
+                "--ask-for-approval",
+                "never",
                 "exec",
                 "--color",
                 "never",
                 "--sandbox",
                 "read-only",
-                "--ask-for-approval",
-                "never",
                 "--skip-git-repo-check",
                 "--json",
                 "ok",
             ]
         );
+    }
+
+    /// Codex accepts approval policy on the root command, not on its `exec` subcommand. Keep this
+    /// contract independent of a locally installed CLI or an authenticated provider.
+    #[test]
+    fn codex_test_approval_policy_precedes_the_exec_subcommand() {
+        for model in ["", "gpt-5-codex"] {
+            let argv = codex_argv(model, "ok");
+            let exec = argv.iter().position(|arg| arg == "exec").expect("exec");
+            let approval = argv
+                .iter()
+                .position(|arg| arg == "--ask-for-approval")
+                .expect("approval policy");
+            assert_eq!(argv[approval + 1], "never");
+            assert!(
+                approval + 1 < exec,
+                "--ask-for-approval belongs before exec: {argv:?}",
+            );
+        }
     }
 
     /// A settings file is the whole credential — nothing to look up, so a scratch store with no
@@ -593,7 +663,10 @@ mod tests {
         };
         let credential = resolve_credential(&scratch_config("settings-credential"), &m)
             .expect("a settings file is enough");
-        assert_eq!(credential.description, "settings file ~/.claude/settings.glm.json");
+        assert_eq!(
+            credential.description,
+            "settings file ~/.claude/settings.glm.json"
+        );
         assert!(credential.env.is_none());
     }
 
@@ -611,8 +684,6 @@ mod tests {
         assert!(err.contains("SOME_MISSING_KEY"), "{err}");
     }
 
-    /// A named `api_key_env` backed by a secret of the same name is injected under that name —
-    /// exactly the env var the backend said it reads its key from.
     #[test]
     fn a_named_api_key_env_backed_by_a_secret_is_injected_under_its_own_name() {
         let config = scratch_config("api-key-env-secret");
@@ -625,7 +696,10 @@ mod tests {
         };
         let credential = resolve_credential(&config, &m).expect("the secret answers to that name");
         assert_eq!(credential.description, "api_key_env MY_KEY");
-        assert_eq!(credential.env, Some(("MY_KEY".to_string(), "s3cr3t".to_string())));
+        assert_eq!(
+            credential.env,
+            Some(("MY_KEY".to_string(), "s3cr3t".to_string()))
+        );
     }
 
     /// The bug this whole module exists to fix: a claude backend naming no credential of its own
@@ -640,7 +714,10 @@ mod tests {
             .expect("set");
         let credential = resolve_credential(&config, &manifest(Backend::HarnessClaudeSdk))
             .expect("the global secret answers");
-        assert_eq!(credential.description, "global secret CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(
+            credential.description,
+            "global secret CLAUDE_CODE_OAUTH_TOKEN"
+        );
         assert_eq!(
             credential.env,
             Some(("CLAUDE_CODE_OAUTH_TOKEN".to_string(), "tok".to_string()))
@@ -652,9 +729,13 @@ mod tests {
     /// login as legitimate, so this runs on it rather than refusing a request that might yet
     /// succeed against a CLI already logged in on this host.
     #[test]
-    fn a_claude_backend_naming_nothing_with_no_global_secret_runs_on_ambient_login_instead_of_refusing() {
-        let credential = resolve_credential(&scratch_config("claude-no-secret"), &manifest(Backend::PtyClaude))
-            .expect("ambient login is a legitimate credential, not an error");
+    fn a_claude_backend_naming_nothing_with_no_global_secret_runs_on_ambient_login_instead_of_refusing()
+     {
+        let credential = resolve_credential(
+            &scratch_config("claude-no-secret"),
+            &manifest(Backend::PtyClaude),
+        )
+        .expect("ambient login is a legitimate credential, not an error");
         assert_eq!(
             credential.description,
             "ambient pty:claude login (no CLAUDE_CODE_OAUTH_TOKEN secret set)"
@@ -666,8 +747,11 @@ mod tests {
     /// CLIs must never be checked against each other's secret.
     #[test]
     fn a_codex_backend_naming_nothing_checks_openai_api_key_not_the_claude_token() {
-        let credential = resolve_credential(&scratch_config("codex-ambient"), &manifest(Backend::ProcessCodex))
-            .expect("ambient login is a legitimate credential");
+        let credential = resolve_credential(
+            &scratch_config("codex-ambient"),
+            &manifest(Backend::ProcessCodex),
+        )
+        .expect("ambient login is a legitimate credential");
         assert_eq!(
             credential.description,
             "ambient process:codex login (no OPENAI_API_KEY secret set)"
@@ -683,10 +767,15 @@ mod tests {
             elapsed_ms: 42,
             credential: "global secret CLAUDE_CODE_OAUTH_TOKEN".to_string(),
         };
-        assert_eq!(answered.message(), "answered in 42ms via global secret CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(
+            answered.message(),
+            "answered in 42ms via global secret CLAUDE_CODE_OAUTH_TOKEN"
+        );
 
         let failed = TestResult {
-            verdict: TestVerdict::Failed { error: "Not logged in".to_string() },
+            verdict: TestVerdict::Failed {
+                error: "Not logged in".to_string(),
+            },
             elapsed_ms: 12,
             credential: "global secret CLAUDE_CODE_OAUTH_TOKEN".to_string(),
         };

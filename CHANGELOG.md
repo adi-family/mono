@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **Channels: talk to an agent from Telegram or Slack.** `/settings/channels` → a service's card
+  → **Connect**: pick an agent and who may talk, then link a chat (Telegram: `t.me/<bot>?start=…`,
+  or add the bot to a group) or workspace ("Add to Slack"). The agent's run answers back in the
+  same chat automatically, and `adi-mono channels connect/list/route/allow/disconnect` does the
+  same from a shell. Linking a chat/workspace already connected to another ADI is refused, not
+  silently reassigned.
+
 ## 1.25.0 — 2026-09-30
 
 ### Added

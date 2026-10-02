@@ -109,7 +109,6 @@ impl Serialize for Backend {
     }
 }
 
-/// Deserialize from the bare wire string, mapping known values onto named variants.
 impl<'de> Deserialize<'de> for Backend {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(Self::from(String::deserialize(deserializer)?))

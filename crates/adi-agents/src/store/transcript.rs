@@ -153,8 +153,6 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         images: Vec::new(),
         steps: content.steps.clone(),
         metrics: content.metrics.clone(),
-        // Nothing stamps an answer: a marker says who put a message *into* the conversation, and
-        // the engine is not one of the things that can.
         markers: Vec::new(),
     }
 }
@@ -534,6 +532,82 @@ mod tests {
         super::super::db::forget_connections();
         let _ = std::fs::remove_dir_all(&dir);
         SessionStore::new(dir)
+    }
+
+    #[test]
+    fn regression_appending_waits_for_another_sessions_writer() {
+        use std::cell::RefCell;
+        use std::sync::mpsc::{Receiver, Sender, channel};
+        use std::time::Duration;
+
+        enum Attempt {
+            Waiting,
+            Finished(std::result::Result<(), String>),
+        }
+        thread_local! {
+            static RETRY: RefCell<Option<(Sender<Attempt>, Receiver<()>)>> = const { RefCell::new(None) };
+        }
+        fn retry_after_writer_exits(_: i32) -> bool {
+            RETRY.with(|retry| {
+                let retry = retry.borrow();
+                let (events, release) = retry.as_ref().expect("installed on this worker");
+                let _ = events.send(Attempt::Waiting);
+                release.recv_timeout(Duration::from_secs(5)).is_ok()
+            })
+        }
+
+        let store = scratch("writer-contention");
+        let first = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "first")
+            .unwrap();
+        let second = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "second")
+            .unwrap();
+        let conn = super::super::db::conn(&store.db_path()).unwrap();
+        let (ready_tx, ready_rx) = channel();
+        let (start_tx, start_rx) = channel();
+        let (events_tx, events_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let worker_store = store.clone();
+        let second_id = second.id.clone();
+        let worker = std::thread::spawn(move || {
+            // Open before the other connection takes its lock: schema initialization is not
+            // the operation under test. The busy handler releases the writer without sleeps.
+            let conn = super::super::db::conn(&worker_store.db_path()).unwrap();
+            RETRY.with(|retry| *retry.borrow_mut() = Some((events_tx.clone(), release_rx)));
+            conn.busy_handler(Some(retry_after_writer_exits)).unwrap();
+            ready_tx.send(()).unwrap();
+            start_rx.recv().unwrap();
+            let result = worker_store
+                .append_turn("chat", &second_id, user_turn("must survive contention"))
+                .map_err(|error| error.to_string());
+            events_tx.send(Attempt::Finished(result)).unwrap();
+        });
+        ready_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        conn.execute(
+            "UPDATE sessions SET title = 'writing' WHERE id = ?1",
+            [&first.id],
+        )
+        .unwrap();
+        start_tx.send(()).unwrap();
+        let attempt = events_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        conn.execute_batch("COMMIT").unwrap();
+        let _ = release_tx.send(());
+        let result = match attempt {
+            Attempt::Finished(result) => result,
+            Attempt::Waiting => match events_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
+                Attempt::Finished(result) => result,
+                Attempt::Waiting => panic!("the writer has already released its lock"),
+            },
+        };
+        worker.join().unwrap();
+        result.expect("a different conversation's short write must not reject this turn");
+        assert_eq!(
+            store.turns("chat", &second.id)[0].text,
+            "must survive contention"
+        );
+        let _ = std::fs::remove_dir_all(store.dir());
     }
 
     /// A turn taken *from a view* and handed back to be committed arrives still flagged. Recording it

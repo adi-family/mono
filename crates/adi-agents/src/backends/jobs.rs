@@ -176,7 +176,6 @@ mod tests {
         dir
     }
 
-    /// Run a job's check the way the await worker does, and say whether it fired.
     fn check(job: &Job) -> (bool, String) {
         let out = Command::new("sh")
             .arg("-c")
@@ -215,7 +214,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The half that is easy to leave out: a job still running must *not* wake anybody.
     #[cfg(unix)]
     #[test]
     fn a_running_job_does_not_wake_its_conversation() {

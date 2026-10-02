@@ -39,7 +39,6 @@ use crate::error::Result;
 /// full agent processes, each with its own model calls and tool children.
 pub const DEFAULT_MAX_CONCURRENT_RUNS: u32 = 3;
 
-/// The file the limits live in, within the [sessions module](crate::Agents::limits).
 const SETTINGS_FILE: &str = "settings.toml";
 
 /// The `sessions/settings.toml` shape: how many runs may be live at once, overall and per project.
@@ -95,8 +94,6 @@ pub enum SpawnPolicy {
 }
 
 impl SpawnPolicy {
-    /// Whether this policy actually blocks a launch outside the caller's `can_spawn`, rather than
-    /// only noting it.
     #[must_use]
     pub fn is_enforce(self) -> bool {
         matches!(self, Self::Enforce)

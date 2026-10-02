@@ -85,7 +85,6 @@ impl HumanRunner {
         Self
     }
 
-    /// Mark the seat occupied, or vacated, leaving everything else in the slot alone.
     fn set_open(session: &dyn Session, open: bool) -> Result<()> {
         let mut state = State::of(session);
         state.open = open;
@@ -125,9 +124,6 @@ impl Runner for HumanRunner {
     /// by the previous turn is handled on read.
     fn send(&self, spec: &RunSpec, session: &dyn Session, _message: &str) -> Result<()> {
         let mut state = State::of(session);
-        // Composed on the first turn and kept. Through the one composer every runner here uses, so
-        // what the person reads is the string a real run of this agent is handed — which is the
-        // whole claim the feature makes.
         if state.prompt.is_none() {
             state.prompt = super::prompt::compose(spec, None);
         }
@@ -250,9 +246,6 @@ mod tests {
         }
     }
 
-    /// The seat is empty until somebody is sent to it, occupied while they are there, and empty
-    /// again once the turn is stopped. Every listing in the app reads this to decide whether the run
-    /// is in flight.
     #[test]
     fn a_seat_is_taken_by_send_and_given_up_by_stop() {
         let (dir, store) = store("seat");

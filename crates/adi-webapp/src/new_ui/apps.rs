@@ -408,6 +408,58 @@ fn framed(t: &Tile) -> Vec<(String, String, String, Size)> {
         .collect()
 }
 
+/// What pressing a tile with somewhere to go opens.
+fn tile_app(
+    id: &str,
+    name: &str,
+    machine: Option<String>,
+    href: &str,
+    favicon: Option<String>,
+    icon: Option<String>,
+) -> AppRef {
+    AppRef {
+        key: machine
+            .as_ref()
+            .map_or_else(|| id.to_string(), |m| format!("{m}/{id}")),
+        name: name.to_string(),
+        machine,
+        url: href.to_string(),
+        favicon,
+        icon,
+    }
+}
+
+/// What pressing a website's tile opens.
+fn site_app(site: &Site, key: &str, name: &str, href: &str) -> AppRef {
+    AppRef {
+        key: format!("site/{key}"),
+        name: name.to_string(),
+        machine: site.machine.clone(),
+        url: href.to_string(),
+        favicon: favicon(href),
+        icon: None,
+    }
+}
+
+/// Everything the home screen could open with one press — hidden ones included, since the palette
+/// is how to reach an app taken off the screen — in the order the listing gives them. An app that
+/// needs a grant first, or has nowhere to go, is left out. Tracked.
+pub(super) fn openable(apps: Apps, sites: &[Site]) -> Vec<AppRef> {
+    let mut out: Vec<AppRef> = Vec::new();
+    for (_, tiles) in apps.sections() {
+        for t in tiles {
+            if let Some(href) = &t.href {
+                out.push(tile_app(&t.id, &t.name, t.machine.clone(), href, t.favicon, t.icon));
+            }
+        }
+    }
+    out.extend(sites.iter().filter_map(|s| {
+        let href = s.url()?;
+        Some(site_app(s, &s.key(), &s.name(), &href))
+    }));
+    out
+}
+
 /// The widget beside the grid: its id, name and address.
 #[derive(Clone, PartialEq)]
 struct Half {
@@ -936,14 +988,7 @@ fn site_tile(
         Some(m) => format!("{name} on {m}"),
         None => name.clone(),
     };
-    let app = AppRef {
-        key: format!("site/{key}"),
-        name: name.clone(),
-        machine: site.machine.clone(),
-        url: href.clone(),
-        favicon: favicon(&href),
-        icon: None,
-    };
+    let app = site_app(&site, &key, &name, &href);
     let for_menu = app.clone();
     view! {
         <a
@@ -1002,16 +1047,7 @@ fn tile(
         widgets: _,
     } = t;
     if let Some(href) = href {
-        let app = AppRef {
-            key: machine
-                .as_ref()
-                .map_or_else(|| id.clone(), |m| format!("{m}/{id}")),
-            name: name.clone(),
-            machine,
-            url: href.clone(),
-            favicon: favicon.clone(),
-            icon: icon.clone(),
-        };
+        let app = tile_app(&id, &name, machine, &href, favicon.clone(), icon.clone());
         // Opens in the app window. Still a real link to the app underneath, so a modified or
         // middle click does what it does on any link — a tab of its own — and is left alone.
         let for_menu = app.clone();

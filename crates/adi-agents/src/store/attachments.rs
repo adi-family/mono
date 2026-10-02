@@ -87,7 +87,6 @@ const TYPES: [(&str, &str); 4] = [
 /// The image types a message may carry — the wire names, for error messages and validation.
 pub const MEDIA_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
-/// The directory attachments live in, under the store's root.
 const DIR: &str = "attachments";
 
 /// One attached image, as a message carries it.
@@ -365,8 +364,6 @@ mod tests {
         (dir, conn)
     }
 
-    /// A scratch directory that removes itself — the store's own tests use `temp_dir` by hand, and
-    /// this is the same idea kept local to the module.
     mod tempdir {
         use std::path::{Path, PathBuf};
 
@@ -416,8 +413,6 @@ mod tests {
         assert_eq!(get(&conn, &saved.id).expect("row").name, "shot.png");
     }
 
-    /// A file that is not an image is stored like any other — under its own extension, so whatever
-    /// opens it by path can tell what it is looking at.
     #[test]
     fn a_file_is_stored_under_the_extension_it_arrived_with() {
         let (dir, conn) = store();
@@ -434,10 +429,8 @@ mod tests {
             "{:?}",
             path(dir.path(), &saved),
         );
-        // A name with no extension, and one whose extension is not something to put in a path.
         let plain = put(&conn, dir.path(), "notes", "text/plain", b"hi").expect("put");
         assert!(path(dir.path(), &plain).ends_with(format!("{}.bin", plain.id)));
-        // And the row still names the file it wrote, which is what a later sweep unlinks by.
         assert!(path(dir.path(), &saved).exists());
         assert_eq!(delete_for_session(&conn, dir.path(), "", ""), 2);
         assert!(!path(dir.path(), &saved).exists());
@@ -451,14 +444,11 @@ mod tests {
         let huge = vec![0u8; MAX_BYTES + 1];
         assert!(put(&conn, dir.path(), "big.png", "image/png", &huge).is_err());
         assert!(put(&conn, dir.path(), "empty.png", "image/png", b"").is_err());
-        // The same bytes as a file are under the file cap, and stored.
         assert!(put(&conn, dir.path(), "big.pdf", "application/pdf", &huge).is_ok());
         let too_big = vec![0u8; MAX_FILE_BYTES + 1];
         assert!(put(&conn, dir.path(), "huge.pdf", "application/pdf", &too_big).is_err());
     }
 
-    /// Claiming is what makes a conversation's delete take its images with it — and what keeps the
-    /// sweep off the ones that were actually sent.
     #[test]
     fn a_claimed_attachment_belongs_to_its_conversation_and_an_unclaimed_one_is_swept() {
         let (dir, conn) = store();
@@ -466,10 +456,8 @@ mod tests {
         let abandoned = put(&conn, dir.path(), "draft.png", "image/png", b"b").expect("put");
         claim(&conn, "chatty", "conv-1", std::slice::from_ref(&sent.id));
 
-        // Now, with nothing old: the sent one is claimed and the draft is too young to sweep.
         assert_eq!(sweep_unclaimed(&conn, dir.path(), now_ms()), 0);
 
-        // A day and a second later, the draft is nobody's.
         assert_eq!(
             sweep_unclaimed(&conn, dir.path(), now_ms() + UNCLAIMED_TTL_MS + 1000),
             1
@@ -482,7 +470,6 @@ mod tests {
         assert!(!path(dir.path(), &sent).exists());
     }
 
-    /// An id that no longer names a row is one fewer image, not a failure — see [`resolve`].
     #[test]
     fn resolving_drops_what_is_gone_and_keeps_the_order() {
         let (dir, conn) = store();

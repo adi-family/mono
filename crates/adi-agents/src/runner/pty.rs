@@ -37,7 +37,6 @@ const INTERRUPT: &str = "C-c";
 /// message; it is an unsent draft sitting in somebody's input box.
 const SUBMIT: &str = "Enter";
 
-/// A live terminal session for one engine.
 #[derive(Debug, Clone)]
 pub struct PtyRunner {
     backend: Backend,
@@ -350,8 +349,6 @@ mod tests {
         .replace(['(', ')', '#'], "-")
     }
 
-    /// The capability question a caller is supposed to ask, and the two answers that make
-    /// `as_terminal()` worth having.
     #[test]
     fn a_pty_is_a_terminal_and_reports_no_events() {
         let runner = PtyRunner::new(Backend::PtyClaude);
@@ -533,7 +530,6 @@ mod tests {
         let _ = adi_pty::stop(&name);
     }
 
-    /// A pane that will not take the hint is closed under it, and `forced` says so.
     #[cfg(unix)]
     #[test]
     fn a_pane_that_ignores_the_interrupt_is_closed() {

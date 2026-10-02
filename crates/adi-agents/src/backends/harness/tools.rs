@@ -43,7 +43,6 @@ pub(crate) struct Ctx<'a> {
     /// The conversation's shell — where its last command left off, and what it exported. Held here
     /// because it belongs to the conversation rather than to any one call (see [`super::shell`]).
     pub shell: Shell,
-    /// The agent this turn belongs to.
     pub agent: &'a str,
     /// The conversation this turn belongs to — where a wake is delivered.
     pub conv: &'a str,
@@ -347,9 +346,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// function pointers.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ToolDeclaration {
-    /// The name a call writes.
     pub name: String,
-    /// The sentence the model is given about when to reach for it.
     pub description: String,
     /// The JSON Schema `object` describing the call's arguments.
     pub schema: Value,
@@ -428,8 +425,6 @@ pub(crate) fn execute(
         )),
     }
 }
-
-// ---- the tools ---------------------------------------------------------------------
 
 fn read(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
     let path = resolve(arg_str(input, "path")?, cwd);
@@ -916,9 +911,6 @@ fn report(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     )
 }
 
-// ---- shared helpers ----------------------------------------------------------------
-
-/// A relative path means "in the directory this run is about"; an absolute one means itself.
 fn resolve(path: &str, cwd: &Path) -> PathBuf {
     let p = Path::new(path);
     if p.is_absolute() {
@@ -1642,8 +1634,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// What the model wrote reaches the store intact, and what it gets back tells it the one thing
-    /// it has to do next: stop.
     #[test]
     fn ask_records_the_question_and_tells_the_turn_to_end() {
         let chat = Conversation::open("records");
@@ -1728,7 +1718,6 @@ mod tests {
         );
     }
 
-    /// The malformed cases, each answered in the voice of the tool rather than as a failed turn.
     #[test]
     fn a_malformed_ask_explains_itself_to_the_model() {
         let chat = Conversation::open("malformed");

@@ -1,30 +1,8 @@
-//! What a conversation spent its context on, and what it spent twice.
+//! Local transcript token estimates and repeated-content analysis.
 //!
-//! A turn's [`TurnMetrics`](crate::progress::TurnMetrics) says how many tokens it cost. That is the bill, not the itemization: it
-//! cannot say that the same forty-line file arrived six times, or that one absolute path was spelled
-//! out in ninety separate tool calls. This module does the itemization — it re-reads the transcript,
-//! tokenizes it, and reports the runs of tokens that were sent more than once.
-//!
-//! # Why a real tokenizer
-//!
-//! Because the answer is a *cost*, and characters are not what is billed. A repeated ASCII path and a
-//! repeated stretch of CJK differ by several times in tokens per character, so ranking findings by
-//! character count would order them by the wrong quantity and confidently recommend fixing the
-//! cheaper one. [`tiktoken_rs`] is used, with its ranks compiled in — no model is loaded, nothing is
-//! fetched, and the analysis works on a machine with no network.
-//!
-//! It is, however, **`OpenAI`'s** BPE, and an agent here may be talking to any provider. Every family's
-//! tokenizer is a byte-level BPE trained on broadly similar text, so the counts are close and — much
-//! more to the point — the *ordering* of findings is stable across them: the block that dominates the
-//! waste under one encoding dominates it under all of them. So the number is reported as an estimate,
-//! under the name of the encoding that produced it, and never as the provider's own accounting.
-//!
-//! # What counts as "sent"
-//!
-//! Everything that goes into the model's context on the next turn: what the user said, what the agent
-//! said, what it thought, the arguments it passed to a tool, and — the one that actually dominates —
-//! what the tool handed back. A queued message is excluded: it has been typed, not asked, and has
-//! cost nothing yet.
+//! Uses the bundled `o200k_base` tokenizer; counts are not provider billing or a
+//! reconstruction of the full model context. Includes messages, thinking, and tool
+//! input/output, excluding queued messages. Exact and near-duplicate estimates overlap.
 
 mod suffix;
 
@@ -36,43 +14,24 @@ use tiktoken_rs::CoreBPE;
 use crate::progress::Step;
 use crate::store::Turn;
 
-/// The encoding whose ranks the counts are in, reported alongside them so a number is never mistaken
-/// for a particular provider's own billing.
+/// Encoding used for token estimates.
 pub const ENCODING: &str = "o200k_base";
 
-/// Real token ids are shifted up by one so that `0` is free to terminate the stream — the suffix
-/// array needs a smallest, unique sentinel and must not find it among the data.
+/// Reserve zero for the suffix array terminator.
 const TOKEN_BASE: u32 = 1;
 
-/// One token of a prompt: the id the encoder produced, and the exact bytes it produced it from.
-///
-/// The pair is the point. A count alone cannot show that a leading space belongs to the *next*
-/// word, that a heading cost four tokens, or that a path was shredded into nine — and those are the
-/// things somebody reading a prompt to find what is wrong with it is looking for.
+/// A token ID and its display text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromptToken {
     pub id: u32,
     /// The token's text, newlines and leading spaces included.
     pub text: String,
-    /// Whether this is a chat template's own control token rather than content.
-    ///
-    /// Always `false` from [`split`], and honestly so: what this crate composes is a *prompt*, and
-    /// the wrapper around it — the role markers, the tool envelope — is added by each provider's
-    /// API from the JSON body [`adi_loop`](crate::backends::harness::adi_loop) sends. There is no
-    /// point in this pipeline where a rendered chat template exists to be split, and inventing the
-    /// seams would be showing a reader tokens nobody is charged for.
+    /// Always false: provider chat-template control tokens are not part of this text.
     pub special: bool,
 }
 
-/// Split `text` into the tokens a model is charged for.
-///
-/// The same encoder [`analyze`] counts with, so a prompt shown here and a prompt counted there
-/// cannot disagree — and it stays on this side of the wire, because the ranks are a megabyte and a
-/// half and a browser has no business carrying them to render a page.
-///
-/// A byte run that is not valid UTF-8 on its own — a token that is half of an emoji, which is
-/// ordinary — comes back through `from_utf8_lossy` rather than being dropped: the boundary is real
-/// and worth drawing even where the fragment is unreadable alone.
+/// Split text with the same estimated encoding as [`analyze`].
+/// Individual tokens may contain partial UTF-8 characters, decoded lossily for display.
 #[must_use]
 pub fn split(text: &str) -> Vec<PromptToken> {
     let bpe = tiktoken_rs::o200k_base_singleton();
@@ -89,35 +48,25 @@ pub fn split(text: &str) -> Vec<PromptToken> {
         .collect()
 }
 
-/// Shortest run worth reporting, in tokens. Below roughly this length every conversation repeats
-/// itself constantly and means nothing by it: `", "`, `def `, a closing brace. The floor is what makes
-/// the list findings rather than a histogram of English.
+/// Minimum repeated length; suppresses common punctuation and short phrases.
 pub const DEFAULT_MIN_REPEAT: usize = 12;
 
-/// How many repeats to describe. The tail is long and each entry costs less than the one above it.
+/// Maximum number of exact repeats reported.
 pub const DEFAULT_MAX_REPEATS: usize = 40;
 
-/// The most tokens analyzed. A very long conversation is truncated to its most recent segments rather
-/// than refused: the recent context is what a reader can still act on, and the alternative is an
-/// endpoint that gets slower until it is abandoned.
+/// Maximum tokens analyzed, retaining the most recent content.
 pub const MAX_ANALYZED_TOKENS: usize = 400_000;
 
-/// A segment must be at least this long to be compared against other segments for near-duplication.
-/// Short segments are near-duplicates of each other constantly — two one-line shell commands differing
-/// in a flag are "95% similar" and worth nothing as a finding.
+/// Minimum segment size for near-duplicate comparisons.
 const MIN_NEAR_DUP_TOKENS: usize = 120;
 
-/// How many of a segment's shingles have to differ before two segments are called different things.
-/// In bits of a 64-bit simhash: 0 is identical, and unrelated text sits near 32.
+/// Maximum Hamming distance between 64-bit simhash fingerprints.
 const NEAR_DUP_DISTANCE: u32 = 6;
 
 /// Tokens per shingle when fingerprinting a segment for near-duplication.
 const SHINGLE: usize = 5;
 
-/// Where a piece of the conversation came from — which is what turns "8k tokens repeated" into
-/// something actionable, because the fix differs completely by source. Repetition in tool *output* is
-/// the agent re-reading something; in tool *input* it is a literal that wanted to be a variable; in
-/// the user's own text it is a prompt preamble that wanted to be a system prompt.
+/// Origin of a transcript segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Source {
@@ -125,16 +74,12 @@ pub enum Source {
     User,
     /// The agent's answer, or something it said mid-turn.
     Agent,
-    /// A reasoning block.
     Thinking,
-    /// The arguments a tool was called with.
     ToolInput,
-    /// What a tool handed back.
     ToolOutput,
 }
 
 impl Source {
-    /// The word the rail puts on it.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -147,14 +92,12 @@ impl Source {
     }
 }
 
-/// What a repeated run looks like, which is the whole basis for suggesting what to do about it.
+/// Content category used to suggest ways to reduce repetition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
-    /// A filesystem path — the textbook case for a variable, or for a working directory the agent is
-    /// told once.
+    /// A filesystem path.
     Path,
-    /// A URL.
     Url,
     /// A long opaque literal: a hash, a key, an id.
     Literal,
@@ -165,8 +108,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    /// What to do about a repeat of this shape, in the imperative, or nothing when the shape does not
-    /// imply a fix on its own. A hint that fires on everything is one nobody reads.
+    /// Suggested action, when the content category implies one.
     #[must_use]
     pub fn hint(self) -> Option<&'static str> {
         match self {
@@ -198,7 +140,6 @@ pub struct Site {
 pub struct Repeat {
     /// The repeated text itself, trimmed for display (see [`preview`]).
     pub preview: String,
-    /// Its length in tokens.
     pub tokens: usize,
     /// How many times it was sent (non-overlapping occurrences).
     pub count: usize,
@@ -209,12 +150,7 @@ pub struct Repeat {
     pub sites: Vec<Site>,
 }
 
-/// A group of segments that are nearly, but not exactly, the same thing.
-///
-/// The case exact repeats cannot see: a file read, edited, and read again is not one repeated run — it
-/// is six large blocks that differ in a line each, so the shared parts are shorter than the floor and
-/// scattered. As a group it is obvious, and it is usually the largest single thing a long agent run
-/// spends its context on.
+/// Segments grouped by similar token fingerprints; may include exact copies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NearDuplicates {
     pub preview: String,
@@ -222,7 +158,7 @@ pub struct NearDuplicates {
     pub count: usize,
     /// Tokens in the group's largest member — roughly what one copy costs.
     pub tokens: usize,
-    /// Tokens in every member after the first: what near-repeating cost.
+    /// Estimated repetition: combined tokens minus the largest member.
     pub wasted: usize,
     pub sites: Vec<Site>,
 }
@@ -230,27 +166,23 @@ pub struct NearDuplicates {
 /// The itemization of one conversation's context.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReport {
-    /// The encoding the counts are in.
     pub encoding: String,
     /// Every token analyzed, across every source.
     pub total: usize,
-    /// The total, split by where it came from — ordered, so the rail renders it without re-deciding.
+    /// Tokens by source, largest first.
     pub by_source: Vec<(Source, usize)>,
-    /// True when the conversation was longer than [`MAX_ANALYZED_TOKENS`] and only its recent end was
-    /// analyzed. Everything else here then describes that end, not the whole.
+    /// Whether older content was omitted. All report fields describe the retained suffix.
     pub truncated: bool,
     /// Repeated runs, worst first.
     pub repeats: Vec<Repeat>,
-    /// Tokens attributable to repetition — the sum over [`Repeat::wasted`], which the deduplication in
-    /// the search keeps from double-counting nested findings.
+    /// Sum of exact-repeat savings, without overlapping occurrences.
     pub wasted: usize,
-    /// Groups of near-identical segments, worst first. Counted apart from [`TokenReport::wasted`]:
-    /// their overlap with the exact repeats is real, and adding the two would claim a conversation
-    /// wasted more than it sent.
+    /// Similar segments, largest estimated repetition first.
+    /// Overlaps exact repeats; do not add to [`TokenReport::wasted`].
     pub near_duplicates: Vec<NearDuplicates>,
 }
 
-/// Knobs, so the endpoint can widen the net without a rebuild.
+/// Exact-repeat reporting limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub min_repeat_tokens: usize,
@@ -266,38 +198,23 @@ impl Default for Options {
     }
 }
 
-/// One piece of text that was sent, and what it was.
+/// Tokenized transcript segment.
 struct Segment {
     site: Site,
     tokens: Vec<u32>,
     text: String,
 }
 
-/// Itemize a conversation: tokenize its transcript, then report what it sent twice.
-///
-/// Cost is dominated by the tokenizer, which is linear; the repeat search is `O(n log n)` on top. On a
-/// long conversation this is tens of milliseconds, which is why it is a request the reader makes and
-/// not something folded into the one-second poll.
+/// Count transcript tokens by source and find repeated content within the recent token budget.
 #[must_use]
 pub fn analyze(turns: &[Turn], opts: Options) -> TokenReport {
-    let bpe = tiktoken_rs::o200k_base_singleton();
-    let mut segments = segments_of(turns, bpe);
-    let total: usize = segments.iter().map(|s| s.tokens.len()).sum();
+    analyze_with_limit(turns, opts, MAX_ANALYZED_TOKENS)
+}
 
-    let mut truncated = false;
-    let mut kept = 0usize;
-    let mut first = 0usize;
-    for (i, seg) in segments.iter().enumerate().rev() {
-        if kept + seg.tokens.len() > MAX_ANALYZED_TOKENS {
-            first = i + 1;
-            truncated = true;
-            break;
-        }
-        kept += seg.tokens.len();
-    }
-    if truncated {
-        segments.drain(..first);
-    }
+fn analyze_with_limit(turns: &[Turn], opts: Options, max_tokens: usize) -> TokenReport {
+    let bpe = tiktoken_rs::o200k_base_singleton();
+    let (segments, truncated) = segments_of(turns, bpe, max_tokens);
+    let total: usize = segments.iter().map(|s| s.tokens.len()).sum();
 
     let mut by_source: HashMap<Source, usize> = HashMap::new();
     for seg in &segments {
@@ -321,102 +238,88 @@ pub fn analyze(turns: &[Turn], opts: Options) -> TokenReport {
     }
 }
 
-/// Everything the transcript sent to the model, in order, one segment per distinct piece of text.
-fn segments_of(turns: &[Turn], bpe: &CoreBPE) -> Vec<Segment> {
-    let mut out: Vec<Segment> = Vec::new();
-    let mut push = |site: Site, text: &str| {
-        let text = text.trim();
-        if text.is_empty() {
-            return;
+/// Retain the most recent tokens without tokenizing older segments once the budget is filled.
+fn segments_of(turns: &[Turn], bpe: &CoreBPE, max_tokens: usize) -> (Vec<Segment>, bool) {
+    let mut out = Vec::new();
+    let mut remaining = max_tokens;
+    let mut truncated = false;
+    for (site, text) in segment_texts(turns).rev() {
+        if remaining == 0 {
+            truncated = true;
+            break;
         }
-        let tokens = bpe.encode_ordinary(text);
-        if tokens.is_empty() {
-            return;
-        }
-        out.push(Segment {
-            site,
-            tokens,
-            text: text.to_string(),
-        });
-    };
-
-    for (t, turn) in turns.iter().enumerate() {
-        // Typed, not asked — a queued message has cost nothing yet, and counting it would report a
-        // context larger than the one the model has actually been given.
-        if turn.queued {
-            continue;
-        }
-        let source = if turn.role == "user" {
-            Source::User
+        let mut tokens = bpe.encode_ordinary(text);
+        let text = if tokens.len() > remaining {
+            tokens.drain(..tokens.len() - remaining);
+            tokens.shrink_to_fit();
+            truncated = true;
+            // The boundary can split a UTF-8 character; only the preview uses this decoded text.
+            String::from_utf8_lossy(&bpe.decode_bytes(&tokens).unwrap_or_default()).into_owned()
         } else {
-            Source::Agent
+            text.to_string()
         };
-        push(
-            Site {
-                turn: t,
-                step: None,
-                source,
-                tool: String::new(),
-            },
-            &turn.text,
-        );
-        for (s, step) in turn.steps.iter().enumerate() {
-            match step {
-                Step::Message { text } => push(
-                    Site {
-                        turn: t,
-                        step: Some(s),
-                        source: Source::Agent,
-                        tool: String::new(),
-                    },
-                    text,
-                ),
-                Step::Thinking { text } => push(
-                    Site {
-                        turn: t,
-                        step: Some(s),
-                        source: Source::Thinking,
-                        tool: String::new(),
-                    },
-                    text,
-                ),
-                Step::Tool {
-                    name,
-                    input,
-                    output,
-                    ..
-                } => {
-                    push(
-                        Site {
-                            turn: t,
-                            step: Some(s),
-                            source: Source::ToolInput,
-                            tool: name.clone(),
-                        },
-                        input,
-                    );
-                    push(
-                        Site {
-                            turn: t,
-                            step: Some(s),
-                            source: Source::ToolOutput,
-                            tool: name.clone(),
-                        },
-                        output,
-                    );
-                }
-            }
+        remaining -= tokens.len();
+        out.push(Segment { site, tokens, text });
+        if truncated {
+            break;
         }
     }
-    out
+    out.reverse();
+    (out, truncated)
 }
 
-/// Lay the segments end to end and ask the suffix machinery what occurs twice.
-///
-/// The segments are separated by ids that appear exactly once each, chosen just above the highest real
-/// token so the counting sort's alphabet stays the size of a vocabulary rather than the size of
-/// `u32`. Being unique, a separator cannot be part of any repeat — which is what confines a finding to
-/// one piece of text instead of letting it straddle the seam between two unrelated ones.
+/// Transcript text in chronological order; queued messages are excluded.
+fn segment_texts(turns: &[Turn]) -> impl DoubleEndedIterator<Item = (Site, &str)> {
+    turns
+        .iter()
+        .enumerate()
+        .filter(|(_, turn)| !turn.queued)
+        .flat_map(|(t, turn)| {
+            let site = move |step, source, tool: &str| Site {
+                turn: t,
+                step,
+                source,
+                tool: tool.to_string(),
+            };
+            let steps = turn
+                .steps
+                .iter()
+                .enumerate()
+                .flat_map(move |(s, step)| match step {
+                    Step::Message { text } => [
+                        Some((site(Some(s), Source::Agent, ""), text.as_str())),
+                        None,
+                    ],
+                    Step::Thinking { text } => [
+                        Some((site(Some(s), Source::Thinking, ""), text.as_str())),
+                        None,
+                    ],
+                    Step::Tool {
+                        name,
+                        input,
+                        output,
+                        ..
+                    } => [
+                        Some((site(Some(s), Source::ToolInput, name), input.as_str())),
+                        Some((site(Some(s), Source::ToolOutput, name), output.as_str())),
+                    ],
+                })
+                .flatten();
+            let source = if turn.role == "user" {
+                Source::User
+            } else {
+                Source::Agent
+            };
+            // Assistant text is the final answer, after its thinking and tool calls.
+            steps.chain(std::iter::once((
+                site(None, source, ""),
+                turn.text.as_str(),
+            )))
+        })
+        .filter(|(_, text)| !text.is_empty())
+}
+
+/// Unique separators prevent repeats from crossing segment boundaries.
 fn find_repeats(segments: &[Segment], bpe: &CoreBPE, opts: Options) -> Vec<Repeat> {
     if segments.is_empty() {
         return Vec::new();
@@ -450,9 +353,7 @@ fn find_repeats(segments: &[Segment], bpe: &CoreBPE, opts: Options) -> Vec<Repea
                 .iter()
                 .map(|t| t.saturating_sub(TOKEN_BASE))
                 .collect();
-            // A repeat can end mid-character (BPE splits multi-byte codepoints), so the bytes are
-            // decoded lossily rather than dropped — a preview with one replacement character still
-            // identifies the text; nothing at all does not.
+            // A repeat boundary can split a UTF-8 character.
             let text = bpe
                 .decode_bytes(&ids)
                 .map(|b| String::from_utf8_lossy(&b).into_owned())
@@ -477,12 +378,7 @@ fn find_repeats(segments: &[Segment], bpe: &CoreBPE, opts: Options) -> Vec<Repea
         .collect()
 }
 
-/// Group segments that say almost the same thing.
-///
-/// Fingerprint each large segment with a simhash over its token shingles, then cluster by Hamming
-/// distance — the same trick the code index uses to find copy-paste, applied to what a conversation
-/// sent rather than to what a file contains. Greedy single-pass clustering: the first member of a
-/// group is its representative, which is enough when the threshold is this tight.
+/// Greedy simhash clustering, using each group's first segment as its representative.
 fn find_near_duplicates(segments: &[Segment]) -> Vec<NearDuplicates> {
     let big: Vec<usize> = (0..segments.len())
         .filter(|&i| segments[i].tokens.len() >= MIN_NEAR_DUP_TOKENS)
@@ -526,23 +422,17 @@ fn find_near_duplicates(segments: &[Segment]) -> Vec<NearDuplicates> {
     out
 }
 
-/// A 64-bit simhash over the token stream's shingles: each shingle votes on every bit, and the sign of
-/// each column becomes the fingerprint. Two texts that share most of their shingles agree on most
-/// bits, however far apart the shared parts sit.
-///
-/// The scheme is Charikar's (<https://doi.org/10.1145/509907.509965>, §3), as used for near-duplicate
-/// web pages — the same construction the code index fingerprints symbol shapes with.
+/// Simhash over token shingles: each shingle votes on each fingerprint bit.
+/// Based on Charikar, §3: <https://doi.org/10.1145/509907.509965>.
 fn simhash(tokens: &[u32]) -> u64 {
     let mut acc = [0i32; 64];
     for window in tokens.windows(SHINGLE.min(tokens.len().max(1))) {
-        // FNV-1a over the shingle's ids — cheap, and well-mixed enough for a vote per bit. The two
-        // constants are FNV's own 64-bit offset basis and prime
-        // (<https://datatracker.ietf.org/doc/html/draft-eastlake-fnv>, tables 1 and 2), not knobs.
+        // FNV-1a over little-endian token IDs.
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &t in window {
             for byte in t.to_le_bytes() {
                 h ^= u64::from(byte);
-                h = h.wrapping_mul(0x1000_0000_01b3);
+                h = h.wrapping_mul(0x0100_0000_01b3);
             }
         }
         for (b, slot) in acc.iter_mut().enumerate() {
@@ -559,40 +449,35 @@ fn simhash(tokens: &[u32]) -> u64 {
         .fold(0u64, |h, (b, _)| h | 1 << b)
 }
 
-/// The most characters of a repeat shown in the rail. Long enough to recognize what it is, short
-/// enough that forty findings still read as a list.
+/// Maximum preview characters, excluding the truncation marker.
 const PREVIEW_CHARS: usize = 160;
 
-/// A repeat as a single readable line: whitespace collapsed (a re-sent file is mostly indentation, and
-/// indentation is not what identifies it) and cut to [`PREVIEW_CHARS`].
+/// Collapse whitespace and limit previews to [`PREVIEW_CHARS`].
 fn preview(text: &str) -> String {
     let mut out = String::with_capacity(PREVIEW_CHARS + 1);
     let mut space = false;
+    let mut chars = 0;
     for ch in text.trim().chars() {
         if ch.is_whitespace() {
             space = !out.is_empty();
             continue;
         }
-        if space {
+        if space && chars < PREVIEW_CHARS {
             out.push(' ');
+            chars += 1;
             space = false;
         }
-        if out.chars().count() >= PREVIEW_CHARS {
+        if chars == PREVIEW_CHARS {
             out.push('\u{2026}');
             break;
         }
         out.push(ch);
+        chars += 1;
     }
     out
 }
 
-/// Classify a repeat by what it looks like, which is what decides whether there is anything to
-/// suggest doing about it.
-///
-/// The test is over the words a repeat *contains*, not over the whole of it. A repeated path almost
-/// never arrives alone — it comes with the flag before it and the line number after — and a rule that
-/// demanded the entire run be nothing but a path would classify the actual finding, every time, as
-/// ordinary prose.
+/// Detect paths and literals within larger repeated phrases, such as shell commands.
 fn shape_of(text: &str) -> Shape {
     let t = text.trim();
     if t.contains('\n') {
@@ -611,8 +496,7 @@ fn shape_of(text: &str) -> Shape {
     Shape::Phrase
 }
 
-/// Whether a word is a filesystem path: rooted or relative, and deep enough that it was not just a
-/// sentence with a slash in it.
+/// Require two slashes to avoid classifying ordinary prose as a path.
 fn is_path(word: &str) -> bool {
     let w = word.trim_end_matches([':', ')', ']', '.']);
     let rooted =
@@ -620,9 +504,7 @@ fn is_path(word: &str) -> bool {
     (rooted || w.contains('/')) && w.matches('/').count() >= 2 && !w.contains("//")
 }
 
-/// Whether a word is a long opaque literal — a hash, a key, an id. Digit density is what separates one
-/// from a long identifier somebody chose: `deploy_worker_pool` is meant to be read, `a3f19c8b0e` is
-/// not.
+/// Distinguish opaque IDs from readable identifiers by length and digit density.
 fn is_opaque_literal(word: &str) -> bool {
     let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
     if w.len() < 16
@@ -659,8 +541,70 @@ mod tests {
         }
     }
 
-    /// The headline case: one long path spelled out in every tool call. It should come back as a
-    /// single finding, counted once per call, and classified as the thing a variable would fix.
+    #[test]
+    fn truncated_totals_match_the_retained_sources() {
+        let recent = user_turn("recent question");
+        let limit = split(&recent.text).len();
+        let report = analyze_with_limit(
+            &[user_turn("an older question"), recent],
+            Options::default(),
+            limit,
+        );
+        assert!(report.truncated);
+        assert_eq!(report.total, limit);
+        assert_eq!(report.by_source, vec![(Source::User, limit)]);
+    }
+
+    #[test]
+    fn an_oversized_segment_keeps_its_recent_tokens() {
+        let turns = [user_turn("alpha beta gamma delta epsilon zeta")];
+        let report = analyze_with_limit(&turns, Options::default(), 3);
+        assert!(report.truncated);
+        assert_eq!(report.total, 3);
+        assert_eq!(report.by_source, vec![(Source::User, 3)]);
+        let bpe = tiktoken_rs::o200k_base_singleton();
+        let (segments, _) = segments_of(&turns, bpe, 3);
+        let full = bpe.encode_ordinary(&turns[0].text);
+        assert_eq!(segments[0].tokens, full[full.len() - 3..]);
+        assert_eq!(segments[0].site.turn, 0);
+    }
+
+    #[test]
+    fn an_exact_budget_is_not_truncated() {
+        let turns = [user_turn("exact budget")];
+        let limit = split(&turns[0].text).len();
+        assert!(!analyze_with_limit(&turns, Options::default(), limit).truncated);
+        assert!(!analyze_with_limit(&[], Options::default(), 0).truncated);
+        let empty = analyze_with_limit(&turns, Options::default(), 0);
+        assert!(empty.truncated);
+        assert_eq!(empty.total, 0);
+        assert!(empty.by_source.is_empty());
+    }
+
+    #[test]
+    fn truncation_keeps_the_final_answer_after_its_tools() {
+        let answer = "the final answer";
+        let limit = split(answer).len();
+        let report = analyze_with_limit(
+            &[assistant_with(
+                vec![tool("Read", "file.rs", "some output")],
+                answer,
+            )],
+            Options::default(),
+            limit,
+        );
+        assert!(report.truncated);
+        assert_eq!(report.by_source, vec![(Source::Agent, limit)]);
+    }
+
+    #[test]
+    fn whitespace_is_counted_like_the_prompt_view() {
+        for text in ["  indented text\n", " \n\t  "] {
+            let report = analyze(&[user_turn(text)], Options::default());
+            assert_eq!(report.total, split(text).len(), "{text:?}");
+        }
+    }
+
     #[test]
     fn a_path_repeated_across_tool_calls_is_one_finding() {
         let path = "/Users/someone/projects/service/crates/api/src/handlers/agents.rs";
@@ -685,8 +629,6 @@ mod tests {
         assert!(report.wasted >= hit.wasted);
     }
 
-    /// A conversation that never says the same thing twice must produce an empty report — otherwise
-    /// the rail grows a finding on every clean run and the panel stops meaning anything.
     #[test]
     fn a_conversation_without_repetition_reports_none() {
         let turns = vec![
@@ -702,8 +644,6 @@ mod tests {
         assert!(report.total > 0, "tokens are still counted");
     }
 
-    /// Queued messages have been typed, not asked. Counting them would report a context the model has
-    /// not been given.
     #[test]
     fn queued_messages_are_not_counted() {
         let mut queued = user_turn("this one is still waiting in the queue");
@@ -714,8 +654,6 @@ mod tests {
         assert_eq!(with_queue.total, without.total);
     }
 
-    /// Totals are split by where the text came from, and tool output — the part nobody types and
-    /// everybody pays for — is attributed to the tool rather than to the agent.
     #[test]
     fn totals_are_attributed_to_their_source() {
         let turns = vec![
@@ -744,7 +682,6 @@ mod tests {
         );
     }
 
-    /// The case exact repeats cannot see: the same file read three times with an edit in between.
     #[test]
     fn nearly_identical_reads_are_grouped() {
         let body = (0..200)
@@ -764,16 +701,7 @@ mod tests {
         assert_eq!(report.near_duplicates[0].count, 2);
     }
 
-    /// Run the analysis over a real transcript and print what it found and how long it took.
-    ///
-    /// Ignored by default because it needs a file this machine may not have. It exists because the
-    /// only thing that can make this feature bad is latency on a *large* conversation, and a
-    /// synthetic transcript is exactly the input that never exercises it:
-    ///
-    /// ```text
-    /// ADI_TRANSCRIPT=~/.adi/mono/sessions/<agent>/<id>.transcript.jsonl \
-    ///   cargo test -p adi-agents -- --ignored --nocapture profile_a_real_transcript
-    /// ```
+    /// Set `ADI_TRANSCRIPT` to a JSONL transcript and run with `--ignored --nocapture`.
     #[test]
     #[ignore = "needs a transcript on this machine; set ADI_TRANSCRIPT"]
     fn profile_a_real_transcript() {
@@ -804,11 +732,23 @@ mod tests {
         assert!(!turns.is_empty(), "the transcript parsed as no turns");
     }
 
-    /// A preview is one line, whatever the repeat was.
     #[test]
     fn previews_are_a_single_line() {
         let p = preview("  first line\n\n\tsecond    line  ");
         assert_eq!(p, "first line second line");
+    }
+
+    #[test]
+    fn previews_respect_the_character_limit_at_whitespace() {
+        let full = "é".repeat(PREVIEW_CHARS);
+        assert_eq!(preview(&full), full);
+        assert_eq!(preview(&format!("{full} next")), format!("{full}…"));
+    }
+
+    #[test]
+    fn simhash_uses_the_standard_fnv1a_prime() {
+        // One token is one shingle: the fingerprint is FNV-1a of four zero bytes.
+        assert_eq!(simhash(&[0]), 0x4d25_767f_9dce_13f5);
     }
 
     #[test]

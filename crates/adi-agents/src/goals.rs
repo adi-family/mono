@@ -371,7 +371,6 @@ mod tests {
         run_id
     }
 
-    /// What the conversation has been told, newest last.
     fn said_to(agents: &Agents, name: &str, conv: &str) -> Vec<String> {
         agents
             .sessions()
@@ -381,8 +380,6 @@ mod tests {
             .collect()
     }
 
-    /// The whole point, end to end: a chat that stopped with a goal open is asked about it, in the
-    /// conversation, through the ordinary delivery path.
     #[test]
     fn a_quiet_conversation_with_an_open_goal_is_asked_about_it() {
         let agents = scratch("asked");
@@ -503,7 +500,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(agents.config().root());
     }
 
-    /// Closing is what stops the asking — the only thing that does.
     #[test]
     fn a_closed_goal_stops_the_nudges() {
         let agents = scratch("closed");

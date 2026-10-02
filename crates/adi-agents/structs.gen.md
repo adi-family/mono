@@ -162,7 +162,7 @@ pub struct Agent<Args> {
 
 ### struct `PromptToken`
 
-One token of a prompt: the id the encoder produced, and the exact bytes it produced it from.
+A token ID and its display text.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -175,7 +175,7 @@ pub struct PromptToken {
 
 ### enum `Source`
 
-Where a piece of the conversation came from — which is what turns "8k tokens repeated" into something actionable, because the fix differs completely by source. Repetition in tool *output* is the agent re-reading something; in tool *input* it is a literal that wanted to be a variable; in the user's own text it is a prompt preamble that wanted to be a system prompt.
+Origin of a transcript segment.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -191,7 +191,7 @@ pub enum Source {
 
 ### enum `Shape`
 
-What a repeated run looks like, which is the whole basis for suggesting what to do about it.
+Content category used to suggest ways to reduce repetition.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,7 +239,7 @@ pub struct Repeat {
 
 ### struct `NearDuplicates`
 
-A group of segments that are nearly, but not exactly, the same thing.
+Segments grouped by similar token fingerprints; may include exact copies.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -271,7 +271,7 @@ pub struct TokenReport {
 
 ### struct `Options`
 
-Knobs, so the endpoint can widen the net without a rebuild.
+Exact-repeat reporting limits.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -283,7 +283,7 @@ pub struct Options {
 
 ### struct `Segment`
 
-One piece of text that was sent, and what it was.
+Tokenized transcript segment.
 
 ```rust
 struct Segment {
@@ -299,7 +299,7 @@ struct Segment {
 
 ### struct `RawRepeat`
 
-One repeated run, as the suffix machinery sees it: a length, how often it occurs, and where. Token offsets, not text — `super` owns the mapping back to what a human reads.
+A repeated run in token offsets; the caller maps it back to transcript locations.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -315,8 +315,6 @@ pub(super) struct RawRepeat {
 ## `src/arguments.rs`
 
 ### struct `PtyClaudeArguments`
-
-Arguments accepted by the interactive `pty:claude` backend.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -340,8 +338,6 @@ pub struct PtyClaudeArguments {
 ```
 
 ### struct `ProcessClaudeArguments`
-
-Arguments accepted by the headless `process:claude` backend.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -374,8 +370,6 @@ pub struct ProcessClaudeArguments {
 
 ### struct `PtyCodexArguments`
 
-Arguments accepted by the interactive `pty:codex` backend.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -400,8 +394,6 @@ pub struct PtyCodexArguments {
 ```
 
 ### struct `ProcessCodexArguments`
-
-Arguments accepted by the headless `process:codex` backend.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -713,8 +705,6 @@ pub struct Change {
 
 ### struct `CheckOutcome`
 
-What running an await's check produced.
-
 ```rust
 struct CheckOutcome {
     passed: bool,
@@ -790,8 +780,6 @@ pub(crate) struct Spawned {
 
 ### struct `ToolCall`
 
-One tool call the model asked for.
-
 ```rust
 struct ToolCall {
     id: String,
@@ -846,7 +834,7 @@ enum Calls {
 
 ### struct `RunCtx`
 
-Where in the run one round sits, carried down into every provider's round fn for no reason but a failure report: which round this was out of how many, and where its sidecar file (the untruncated report a capped one in the error can point at) belongs.
+Where in the run one round sits, for failure reports and the identities of tool calls from providers that identify calls only by their position within a response.
 
 ```rust
 struct RunCtx<'a> {
@@ -895,8 +883,6 @@ struct Said<'a> {
 ```
 
 ### struct `Encoded`
-
-One image, ready to go into a request body.
 
 ```rust
 struct Encoded {
@@ -1438,8 +1424,6 @@ pub enum SimBlock {
 
 ### struct `SimResult`
 
-What one call returned.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SimResult {
@@ -1732,8 +1716,6 @@ pub struct PinnedChain {
 
 ### struct `Classification`
 
-What a failure turned out to be.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Classification {
@@ -1799,8 +1781,6 @@ pub struct HoldKey {
 
 ### struct `Hold`
 
-One recorded hold.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hold {
@@ -1817,8 +1797,6 @@ pub struct Hold {
 ```
 
 ### struct `Holds`
-
-The hold store.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -1875,8 +1853,6 @@ pub struct Plan {
 ## `src/llm/ondemand.rs`
 
 ### struct `TestResult`
-
-What a test found, and how long it took.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2075,8 +2051,6 @@ pub enum Marker {
 
 ### struct `Stamp`
 
-A file's identity: two cheap `stat` fields that together change whenever its bytes do.
-
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
@@ -2086,8 +2060,6 @@ struct Stamp {
 ```
 
 ### struct `Entry`
-
-One remembered parse, plus when it was last handed out (for eviction).
 
 ```rust
 #[derive(Debug)]
@@ -2099,8 +2071,6 @@ struct Entry<T> {
 ```
 
 ### struct `Memo`
-
-A bounded map from file path to its parsed contents.
 
 ```rust
 #[derive(Debug)]
@@ -2131,8 +2101,6 @@ pub struct Step {
 
 ### struct `Pending`
 
-What one agent needs, if anything.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
@@ -2156,8 +2124,6 @@ pub struct Plan {
 ```
 
 ### struct `Applied`
-
-What applying it did.
 
 ```rust
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2665,8 +2631,6 @@ struct Cursor {
 
 ### enum `RunEvent`
 
-One thing that happened during a turn.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunEvent {
@@ -2796,8 +2760,6 @@ pub struct Section<'a> {
 
 ### struct `PtyRunner`
 
-A live terminal session for one engine.
-
 ```rust
 #[derive(Debug, Clone)]
 pub struct PtyRunner {
@@ -2822,8 +2784,6 @@ struct State {
 ## `src/runner/spec.rs`
 
 ### struct `RunSpec`
-
-One run's materialized context.
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
@@ -2942,8 +2902,6 @@ pub enum SetBy {
 
 ### struct `Goal`
 
-One goal, open or closed.
-
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Goal {
@@ -2995,8 +2953,6 @@ pub struct SessionStore {
 ## `src/store/questions.rs`
 
 ### struct `Question`
-
-One thing a run wants to know.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

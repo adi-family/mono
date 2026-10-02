@@ -240,7 +240,6 @@ mod tests {
         assert_eq!(resolve(&config, &manifest(None, None), None), root);
     }
 
-    /// The whole point of L1: a project agent belongs in its project, with nobody spelling the path.
     #[test]
     fn a_project_agent_starts_in_its_project() {
         let (config, root) = store();

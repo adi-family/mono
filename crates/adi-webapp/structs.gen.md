@@ -487,8 +487,8 @@ One command.
 ```rust
 pub(super) struct Item {
     section: &'static str,
-    title: &'static str,
-    subtitle: &'static str,
+    title: String,
+    subtitle: String,
     icon: Lucide,
     run: Callback<()>,
 }

@@ -49,19 +49,16 @@ pub const MAX_QUESTIONS: usize = 4;
 /// The longest an option label may be before it stops being a button and starts being a paragraph.
 const MAX_LABEL: usize = 80;
 
-/// One thing a run wants to know.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     /// A two-or-three word tag for the decision — "Auth method", "Rollout". Shown as a chip beside
     /// the question so a listing of pending asks reads without opening any of them.
     #[serde(default)]
     pub header: String,
-    /// The question itself, as it is put to the person.
     pub question: String,
     /// The answers worth offering as one tap. Empty means free text only.
     #[serde(default)]
     pub options: Vec<Choice>,
-    /// Whether more than one option may be picked.
     #[serde(default)]
     pub multi_select: bool,
 }
@@ -134,7 +131,6 @@ pub struct Ask {
 }
 
 impl Ask {
-    /// Whether this ask is still waiting on someone.
     #[must_use]
     pub fn pending(&self) -> bool {
         self.answer.is_none()
@@ -277,7 +273,6 @@ pub(super) fn register(conn: &Connection, agent: &str, conv: &str, req: &Request
             }
         }
     }
-    // A deadline nobody set an answer for is a deadline that can only pass in silence.
     if req.after_seconds.is_some() && req.defaults.iter().all(|d| d.trim().is_empty()) {
         return Err(Error::Arguments(
             "`after_seconds` needs `defaults` — a deadline is what to do when nobody answers, so \
@@ -481,9 +476,6 @@ pub(super) fn forget_agent(conn: &Connection, agent: &str) -> usize {
     .unwrap_or(0)
 }
 
-// ---- internals ---------------------------------------------------------------------
-
-/// Read one row back by id, inside whatever transaction is open.
 fn load_one(conn: &Connection, agent: &str, conv: &str, id: &str) -> Result<Option<Ask>> {
     conn.query_row(
         "SELECT json, answer FROM questions WHERE agent = ?1 AND session = ?2 AND id = ?3",
@@ -678,8 +670,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// One ask at a time. A turn that asks twice is a turn that should have asked once with two
-    /// questions, and it hears exactly that.
     #[test]
     fn a_second_ask_is_refused_while_the_first_is_open() {
         let store = scratch("one-at-a-time");
@@ -704,8 +694,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// The unattended case: nobody answers, the deadline passes, and the run gets on with the
-    /// assumption it named rather than waiting for ever.
     #[test]
     fn an_overdue_ask_comes_back_with_its_default() {
         let store = scratch("overdue");
@@ -840,8 +828,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Deleting the *agent* takes the questions nobody can answer any more, and leaves the settled
-    /// ones where the transcript that explains them still is.
     #[test]
     fn deleting_an_agent_forgets_only_what_is_still_waiting() {
         let store = scratch("forget-agent");
@@ -881,8 +867,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Deleting a conversation takes its questions with it, so the inbox cannot offer to answer
-    /// something that no longer exists.
     #[test]
     fn deleting_a_session_takes_its_questions() {
         let store = scratch("cascade");
