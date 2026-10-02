@@ -165,6 +165,48 @@ describe("telegram send", () => {
   });
 });
 
+describe("telegram setThinking", () => {
+  it("sends a typing chat action for a bare chat thread", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await telegramAdapter.setThinking!("555", { botToken: "bot-token" }, "thinking…");
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe("https://api.telegram.org/botbot-token/sendChatAction");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({ chat_id: "555", action: "typing" });
+  });
+
+  it("includes message_thread_id for a forum topic's thread key", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await telegramAdapter.setThinking!("555:7", { botToken: "bot-token" }, "thinking…");
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      chat_id: "555",
+      action: "typing",
+      message_thread_id: 7,
+    });
+  });
+
+  it("is a no-op when clearing -- there's no cancel call to make", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await telegramAdapter.setThinking!("555", { botToken: "bot-token" }, "");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when telegram rejects the chat action", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("bad", { status: 400 })));
+    await expect(
+      telegramAdapter.setThinking!("555", { botToken: "bot-token" }, "thinking…"),
+    ).rejects.toThrow();
+  });
+});
+
 describe("telegramInstallUrl", () => {
   it("builds the t.me deep link", () => {
     expect(telegramInstallUrl(env(), "abc123")).toBe("https://t.me/AdiBot?start=abc123");

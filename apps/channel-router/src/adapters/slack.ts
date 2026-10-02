@@ -18,6 +18,11 @@
  *   workspaces, each handing back its own token at OAuth time, unlike Telegram's one shared
  *   secret). `setThinking`: `assistant.threads.setStatus`, the Agents & AI Apps "thinking…"
  *   indicator.
+ * - `resolveSenderName`: `users.info`, closing the gap ADI-MONO-123 flagged and left --
+ *   `normalize` has no credential to reach, so `router.ts` calls this afterwards, once it has
+ *   fetched the connection and resolved its bot token anyway. Cached in-memory, keyed by the bot
+ *   token and sender id together (so two workspaces never collide on the same short Slack user
+ *   id), for `SENDER_NAME_CACHE_TTL_MS`.
  * - install/link: real OAuth (`GET /link/slack` *is* used here, unlike Telegram) -- see
  *   `slackInstallUrl`/`slackExchangeCode`, called from `router.ts` rather than through the
  *   `ChannelAdapter` interface, same precedent `telegramInstallUrl` already set.
@@ -32,12 +37,25 @@ export interface SlackCredential {
 /** The bot scopes this app asks for at install time -- see `slack-manifest.yaml`'s
  * `oauth_config.scopes.bot`, which must list exactly these. `app_mentions:read` for the
  * `app_mention` event, `assistant:write` for the Agents & AI Apps surface (`assistant_thread_*`
- * events, `assistant.threads.setStatus`), `chat:write` to reply, `im:history` for `message.im`. */
-const SLACK_BOT_SCOPES = ["app_mentions:read", "assistant:write", "chat:write", "im:history"];
+ * events, `assistant.threads.setStatus`), `chat:write` to reply, `im:history` for `message.im`,
+ * `users:read` for `resolveSenderName`'s `users.info` call. */
+const SLACK_BOT_SCOPES = ["app_mentions:read", "assistant:write", "chat:write", "im:history", "users:read"];
 
 /** How far a webhook's `X-Slack-Request-Timestamp` may drift from this router's own clock before
  * `verify` refuses it -- Slack's own documented replay window. */
 const SIGNATURE_MAX_AGE_SECONDS = 300;
+
+/** How long a resolved display name is trusted before `resolveSenderName` asks `users.info`
+ * again -- long enough that a chatty thread doesn't re-resolve on every message, short enough
+ * that a renamed account catches up the same day. */
+const SENDER_NAME_CACHE_TTL_MS = 10 * 60 * 1000;
+
+/** In-memory only -- a cold start just means the next message re-resolves (§8: zero-copy, this
+ * holds nothing a redeploy or eviction couldn't lose for free). Keyed by `<bot token>:<user id>`
+ * rather than the user id alone: two different workspaces each have their own bot token, so this
+ * can never hand one workspace's cached name back for another's (Enterprise Grid shared-channel)
+ * same-looking id. */
+const senderNameCache = new Map<string, { name: string; expiresAt: number }>();
 
 interface SlackEventBase {
   type: string;
@@ -231,7 +249,34 @@ export const slackAdapter: ChannelAdapter = {
       throw new Error(`slack assistant.threads.setStatus failed: ${data.error ?? res.status}`);
     }
   },
+
+  async resolveSenderName(senderId: string, credential: unknown): Promise<string | null> {
+    const { botToken } = credential as SlackCredential;
+    const cacheKey = `${botToken}:${senderId}`;
+    const cached = senderNameCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.name;
+
+    const name = await usersInfo(botToken, senderId);
+    if (name) senderNameCache.set(cacheKey, { name, expiresAt: Date.now() + SENDER_NAME_CACHE_TTL_MS });
+    return name;
+  },
 };
+
+/** The one network call `resolveSenderName` makes -- `users.info`, the display name a human
+ * actually goes by (`profile.display_name`, falling back to `profile.real_name` for a workspace
+ * member who never set one) rather than the raw id `normalize` had to settle for on its own. */
+async function usersInfo(botToken: string, userId: string): Promise<string | null> {
+  const res = await fetch(`https://slack.com/api/users.info?user=${encodeURIComponent(userId)}`, {
+    headers: { authorization: `Bearer ${botToken}` },
+  });
+  const data = (await res.json()) as {
+    ok: boolean;
+    user?: { profile?: { display_name?: string; real_name?: string } };
+  };
+  if (!res.ok || !data.ok) return null;
+  const name = data.user?.profile?.display_name || data.user?.profile?.real_name;
+  return name && name.length > 0 ? name : null;
+}
 
 /** The inverse of `threadKey` -- a channel, or a `channel:thread_ts` pair. */
 function splitThread(thread: string): [string, string | undefined] {

@@ -64,43 +64,60 @@ pub fn observer(
     })
 }
 
-/// What ended up being said, and which run it belongs to — for a [`RUN_FINISHED`] that's the full
-/// answer (never the notification's own truncated `result_head`, per §5), for a
-/// [`QUESTION_ASKED`] it's the question itself.
+/// The run id a `RUN_FINISHED`/`QUESTION_ASKED` payload belongs to — read before anything else,
+/// since clearing the "thinking…" indicator (below) has to happen even for a run that ended with
+/// nothing worth posting back.
+fn run_id_of(payload: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
+    Ok(value
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string())
+}
+
+/// What ended up being said — for a [`RUN_FINISHED`] that's the full answer (never the
+/// notification's own truncated `result_head`, per §5), for a [`QUESTION_ASKED`] it's the
+/// question itself. `None` if there's nothing worth posting (no assistant turn yet, or an empty
+/// question) — not necessarily an error; [`post_back`] still clears "thinking…" either way.
 ///
 /// Reads the payload as a bare [`serde_json::Value`] rather than `adi_agents::AgentRunFinished`/
 /// `AgentQuestionAsked`: those types derive `Serialize` only (nothing inside `adi-agents` itself
 /// ever needs to parse its own events back), and adding `Deserialize` there for this one caller
 /// is more than this task's own crate boundary asks for.
-fn said(agents: &Agents, name: &str, payload: &str) -> Result<Option<(String, String)>> {
+fn said(agents: &Agents, name: &str, payload: &str, run_id: &str) -> Result<Option<String>> {
     let value: serde_json::Value = serde_json::from_str(payload)
         .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
     let field = |key: &str| value.get(key).and_then(|v| v.as_str()).unwrap_or_default();
 
     match name {
         RUN_FINISHED => {
-            let run_id = field("run_id");
             let Some(agent) = agents.get(field("agent"))? else {
                 return Ok(None);
             };
-            let answer = agents
+            Ok(agents
                 .transcript(&agent, run_id)
                 .into_iter()
                 .rev()
                 .find(|t| t.role == "assistant")
-                .map(|t| t.text);
-            Ok(answer.map(|text| (run_id.to_string(), text)))
+                .map(|t| t.text))
         }
         _ if name == QUESTION_ASKED => {
             let question = field("question");
             if question.is_empty() {
                 return Ok(None);
             }
-            Ok(Some((field("run_id").to_string(), question.to_string())))
+            Ok(Some(question.to_string()))
         }
         _ => Ok(None),
     }
 }
+
+/// `"thinking…"`'s own cleared state — `set_thinking`'s `status` is free text, but an empty
+/// string is what every adapter treats as "nothing to show" (Slack: clears
+/// `assistant.threads.setStatus`; Telegram: `setThinking` no-ops rather than sending anything).
+const THINKING_CLEARED: &str = "";
 
 fn post_back(
     connections: &Connections,
@@ -110,16 +127,14 @@ fn post_back(
     name: &str,
     payload: &str,
 ) -> Result<()> {
-    let Some((run_id, text)) = said(agents, name, payload)? else {
-        return Ok(());
-    };
-    if text.trim().is_empty() {
+    let run_id = run_id_of(payload)?;
+    if run_id.is_empty() {
         return Ok(());
     }
     // A run with no connection pointed at it is an ordinary (non-channel) conversation that just
     // happens to share the event bus — the overwhelming majority of runs, so this is the expected
     // path, not an error.
-    let Some(connection) = connections.find_by_run(&run_id)? else {
+    let Some((connection, thread)) = connections.find_by_run(&run_id)? else {
         return Ok(());
     };
     if connection.manifest.paused {
@@ -133,7 +148,25 @@ fn post_back(
         );
         return Ok(());
     };
-    RouterApi::new(router_url).send(&token, &connection.id, &text)
+    let router = RouterApi::new(router_url);
+
+    if name == RUN_FINISHED {
+        // The dispatcher that launched this run signalled "thinking…" the moment it dispatched
+        // (see `dispatch::handle`); the run is done either way (success or failure) by the time
+        // this fires, so the indicator has nothing left to wait on and is cleared unconditionally,
+        // independent of whether there's an answer worth posting below.
+        if let Err(e) = router.set_thinking(&token, &connection.id, &thread, THINKING_CLEARED) {
+            warn!(connection = %connection.id, error = %e, "couldn't clear the \"thinking…\" indicator");
+        }
+    }
+
+    let Some(text) = said(agents, name, payload, &run_id)? else {
+        return Ok(());
+    };
+    if text.trim().is_empty() {
+        return Ok(());
+    }
+    router.send(&token, &connection.id, Some(&thread), &text)
 }
 
 #[cfg(test)]
@@ -161,6 +194,44 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         false
+    }
+
+    /// A fake router that accepts any number of requests in sequence, 200s every one, and hands
+    /// each request's raw body back over a channel — enough to tell which of `/send`'s two shapes
+    /// (`{..., status}` vs `{..., text}`) `post_back` actually sent, and in what order. Per this
+    /// task's own instructions, never the real `apps/channel-router`.
+    fn spawn_capturing_router() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let mut content_length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; content_length];
+                std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+                let _ = tx.send(String::from_utf8_lossy(&body).to_string());
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+            }
+        });
+        (format!("http://{addr}"), rx)
     }
 
     /// A run with no connection pointed at it (the ordinary case: almost every run on the
@@ -234,6 +305,97 @@ mod tests {
             .unwrap(),
         )
         .expect("paused connections are skipped, not errored");
+    }
+
+    /// `RUN_FINISHED` clears "thinking…" unconditionally, even when there's no assistant answer
+    /// to post — an agent with no transcript (here, one that was never even created) is exactly
+    /// the shape a failed run with no output takes from this crate's own point of view.
+    #[test]
+    fn run_finished_clears_thinking_even_with_no_answer_to_post() {
+        let cfg = scratch("clear-no-answer");
+        let connections = Connections::with_config(cfg.clone());
+        let agents = Agents::with_config(cfg.clone());
+        let secrets = Secrets::with_config(cfg);
+        let created = connections
+            .create(
+                "slack",
+                Target::Agent {
+                    agent: "solver".into(),
+                },
+            )
+            .unwrap();
+        connections.bind_thread(&created.id, "C1", "run-1").unwrap();
+        token::save(&secrets, "slack", "tok").unwrap();
+
+        let (router_url, rx) = spawn_capturing_router();
+        post_back(
+            &connections,
+            &agents,
+            &secrets,
+            &router_url,
+            RUN_FINISHED,
+            &serde_json::to_string(&AgentRunFinished {
+                agent: "solver".into(),
+                run_id: "run-1".into(),
+                terminal_reason: Some("error".into()),
+                is_error: true,
+                duration_ms: None,
+                cost_micro_usd: None,
+                result_head: "boom".into(),
+            })
+            .unwrap(),
+        )
+        .expect("clearing thinking with nothing to post is not an error");
+
+        let body = rx.recv_timeout(Duration::from_secs(5)).expect("one request");
+        assert!(body.contains("\"status\":\"\""), "got: {body}");
+        assert!(body.contains("\"thread\":\"C1\""), "got: {body}");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "no second request -- there was nothing to say"
+        );
+    }
+
+    /// `QUESTION_ASKED` never touches the "thinking…" indicator — the run isn't finished, just
+    /// paused on a question, so there's nothing yet to clear.
+    #[test]
+    fn question_asked_never_calls_set_thinking() {
+        let cfg = scratch("question-no-clear");
+        let connections = Connections::with_config(cfg.clone());
+        let agents = Agents::with_config(cfg.clone());
+        let secrets = Secrets::with_config(cfg);
+        let created = connections
+            .create(
+                "slack",
+                Target::Agent {
+                    agent: "solver".into(),
+                },
+            )
+            .unwrap();
+        connections.bind_thread(&created.id, "C1", "run-1").unwrap();
+        token::save(&secrets, "slack", "tok").unwrap();
+
+        let (router_url, rx) = spawn_capturing_router();
+        post_back(
+            &connections,
+            &agents,
+            &secrets,
+            &router_url,
+            QUESTION_ASKED,
+            &serde_json::to_string(&AgentQuestionAsked {
+                agent: "solver".into(),
+                conv: "run-1".into(),
+                run_id: "run-1".into(),
+                ask: "q1".into(),
+                question: "which backend?".into(),
+            })
+            .unwrap(),
+        )
+        .expect("posts the question back");
+
+        let body = rx.recv_timeout(Duration::from_secs(5)).expect("one request");
+        assert!(body.contains("\"text\":\"which backend?\""), "got: {body}");
+        assert!(!body.contains("\"status\""), "got: {body}");
     }
 
     #[test]

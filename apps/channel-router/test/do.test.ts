@@ -19,12 +19,13 @@ async function register(
   node: string,
   target: Record<string, unknown> = { kind: "agent", agent: "a" },
   now = NOW,
+  provider = "telegram",
 ): Promise<RegisterResult> {
   const res = await handle(
     new Request("https://router.example/register", {
       method: "POST",
       headers: { authorization: `Bearer ${env.ROUTER_ADMIN_SECRET}` },
-      body: JSON.stringify({ node, provider: "telegram", target }),
+      body: JSON.stringify({ node, provider, target }),
     }),
     env,
     now,
@@ -167,6 +168,119 @@ describe("routing", () => {
     expect(frame.type).toBe("event");
     expect((frame.message as { text: string; provider: string }).text).toBe("hello agent");
     expect((frame.message as { provider: string }).provider).toBe("telegram");
+  });
+});
+
+async function signedSlackRequest(bodyObj: unknown, now = NOW): Promise<Request> {
+  const body = JSON.stringify(bodyObj);
+  const timestamp = String(Math.floor(now / 1000));
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(env.SLACK_SIGNING_SECRET!),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(`v0:${timestamp}:${body}`));
+  const hex = Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+  return new Request("https://router.example/webhook/slack", {
+    method: "POST",
+    headers: { "x-slack-signature": `v0=${hex}`, "x-slack-request-timestamp": timestamp },
+    body,
+  });
+}
+
+async function slackWebhook(bodyObj: unknown, now = NOW): Promise<Response> {
+  const res = await handle(await signedSlackRequest(bodyObj, now), env, now);
+  await res.clone().text(); // drain the body -- see do.ts's note on isolated storage
+  return res;
+}
+
+describe("Slack sender name resolution", () => {
+  it("resolves a sender's display name through users.info before delivering the event", async () => {
+    const node = `node-slack-sender-${Math.random()}`;
+    const { token, link_code } = await register(node, { kind: "agent", agent: "a" }, NOW, "slack");
+
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-sender-test", team: { id: "T-SENDER" } }), {
+        status: 200,
+      }),
+    );
+    const linkRes = await handle(
+      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      env,
+      NOW,
+    );
+    expect(linkRes.status).toBe(200);
+
+    const ws = await subscribe(token);
+    await nextFrame(ws); // the "linked" frame, queued at link time
+
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).startsWith("https://slack.com/api/users.info")
+        ? new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Resolved Name" } } }), {
+            status: 200,
+          })
+        : new Response("{}", { status: 200 }),
+    );
+
+    const next = nextFrame(ws);
+    const res = await slackWebhook({
+      type: "event_callback",
+      event_id: "Ev-sender-1",
+      team_id: "T-SENDER",
+      event: { type: "app_mention", user: "U-RAW", text: "hi", channel: "C1" },
+    });
+    expect(res.status).toBe(200);
+
+    const frame = await next;
+    expect((frame.message as { sender: { id: string; name: string } }).sender).toEqual({
+      id: "U-RAW",
+      name: "Resolved Name",
+    });
+  });
+
+  it("falls back to the raw sender id when users.info fails -- never drops the event over it", async () => {
+    const node = `node-slack-sender-fail-${Math.random()}`;
+    const { token, link_code } = await register(node, { kind: "agent", agent: "a" }, NOW, "slack");
+
+    fetchMock.mockImplementation(async () =>
+      new Response(JSON.stringify({ ok: true, access_token: "xoxb-sender-fail", team: { id: "T-SENDER-FAIL" } }), {
+        status: 200,
+      }),
+    );
+    await handle(
+      new Request(`https://router.example/link/slack?code=oauth-code&state=${encodeURIComponent(link_code)}`),
+      env,
+      NOW,
+    );
+
+    const ws = await subscribe(token);
+    await nextFrame(ws); // the "linked" frame
+
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).startsWith("https://slack.com/api/users.info")
+        ? new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 200 })
+        : new Response("{}", { status: 200 }),
+    );
+
+    const next = nextFrame(ws);
+    const res = await slackWebhook({
+      type: "event_callback",
+      event_id: "Ev-sender-2",
+      team_id: "T-SENDER-FAIL",
+      event: { type: "app_mention", user: "U-RAW-2", text: "hi", channel: "C1" },
+    });
+    expect(res.status).toBe(200);
+
+    const frame = await next;
+    expect((frame.message as { sender: { id: string; name: string } }).sender).toEqual({
+      id: "U-RAW-2",
+      name: "U-RAW-2",
+    });
   });
 });
 

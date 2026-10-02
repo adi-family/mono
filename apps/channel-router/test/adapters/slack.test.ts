@@ -291,6 +291,78 @@ describe("slack setThinking", () => {
   });
 });
 
+describe("slack resolveSenderName", () => {
+  it("resolves users.info's display_name", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Igor" } } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const name = await slackAdapter.resolveSenderName!("U-dname-1", { botToken: "xoxb-dname" });
+    expect(name).toBe("Igor");
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(calledUrl).toBe("https://slack.com/api/users.info?user=U-dname-1");
+    expect((init as RequestInit).headers).toMatchObject({ authorization: "Bearer xoxb-dname" });
+  });
+
+  it("falls back to real_name when display_name was never set", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "", real_name: "Igor Realname" } } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const name = await slackAdapter.resolveSenderName!("U-rname-1", { botToken: "xoxb-rname" });
+    expect(name).toBe("Igor Realname");
+  });
+
+  it("is null on a slack-side error, leaving the caller's own fallback standing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ok: false, error: "user_not_found" }), { status: 200 })),
+    );
+    expect(await slackAdapter.resolveSenderName!("U-err-1", { botToken: "xoxb-err" })).toBeNull();
+  });
+
+  it("caches a resolved name -- a second lookup for the same token+id makes no second request", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Cached Carl" } } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = await slackAdapter.resolveSenderName!("U-cache-1", { botToken: "xoxb-cache" });
+    const second = await slackAdapter.resolveSenderName!("U-cache-1", { botToken: "xoxb-cache" });
+    expect(first).toBe("Cached Carl");
+    expect(second).toBe("Cached Carl");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("never shares a cached name across two different workspaces' bot tokens", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace A's Carl" } } }), {
+          status: 200,
+        }),
+      ),
+    );
+    await slackAdapter.resolveSenderName!("U-cross-1", { botToken: "xoxb-cross-a" });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ok: true, user: { profile: { display_name: "Workspace B's Carl" } } }), {
+          status: 200,
+        }),
+      ),
+    );
+    const fromB = await slackAdapter.resolveSenderName!("U-cross-1", { botToken: "xoxb-cross-b" });
+    expect(fromB).toBe("Workspace B's Carl");
+  });
+});
+
 describe("slackInstallUrl", () => {
   it("builds the OAuth v2 authorize URL with the link code as state", () => {
     const url = slackInstallUrl("https://router.example/register", env(), "code123");

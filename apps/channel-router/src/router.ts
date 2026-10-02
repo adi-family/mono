@@ -26,7 +26,7 @@ import { bearerToken, html, json, problem, timingSafeEqual } from "./http";
 import { enabledProviders } from "./providers";
 import { encryptCredential, verifyLinkCode, verifyNodeToken } from "./state";
 import { doId } from "./types";
-import type { ChannelAdapter, Connection, Env, OutboundReply, Target } from "./types";
+import type { ChannelAdapter, ChannelMessage, Connection, Env, OutboundReply, Target } from "./types";
 
 /**
  * Route a request. `now` (epoch ms) is injected so tests can pin the clock, matching
@@ -167,6 +167,9 @@ async function handleWebhook(providerId: string, request: Request, env: Env, now
   if (!connection) return json({ ok: true });
 
   const messages = await adapter.normalize(payload, connection, env);
+  if (adapter.resolveSenderName && messages.length > 0) {
+    await resolveSenderNames(adapter, stub, connection, env, providerId, messages);
+  }
   for (const message of messages) {
     const deliverRes = await stub.fetch("https://do/internal/deliver", {
       method: "POST",
@@ -179,6 +182,42 @@ async function handleWebhook(providerId: string, request: Request, env: Env, now
   // socket isn't on this request's critical path (§1: a slow 200 earns more retries than a
   // fast one, not fewer).
   return json({ ok: true });
+}
+
+/** `normalize` has no credential to reach (it takes `env`, not a resolved secret -- §4 of
+ * ADI-MONO-123's own implementation notes flags exactly this gap for Slack), so this runs right
+ * after it, once the connection and its credential are in hand anyway: fetch the connection
+ * record this webhook already resolved an id for, resolve its credential (a cheap no-op for
+ * Telegram, whose credential lives in `env` instead -- {@link resolveCredential} already handles
+ * both), and let the adapter's own cached `resolveSenderName` fill in every message's
+ * `sender.name` in place. Best-effort -- a lookup failure just leaves `normalize`'s own guess
+ * (the raw sender id) standing, never fails the webhook. */
+async function resolveSenderNames(
+  adapter: ChannelAdapter,
+  stub: DurableObjectStub,
+  connectionId: string,
+  env: Env,
+  providerId: string,
+  messages: ChannelMessage[],
+): Promise<void> {
+  const getRes = await stub.fetch("https://do/internal/connection/get", {
+    method: "POST",
+    body: JSON.stringify({ connection: connectionId }),
+  });
+  const { connection: record } = (await getRes.json()) as { connection: Connection | null };
+  if (!record) return;
+  const credential = await resolveCredential(providerId, env, record);
+  if (!credential) return;
+
+  for (const message of messages) {
+    try {
+      const name = await adapter.resolveSenderName!(message.sender.id, credential);
+      if (name) message.sender.name = name;
+    } catch {
+      // Leave normalize's own guess standing -- a display name is a nicety, not something worth
+      // failing a webhook delivery over.
+    }
+  }
 }
 
 /** A `/start <code>` (or, later, a real `GET /link/<provider>` callback) consuming a signed

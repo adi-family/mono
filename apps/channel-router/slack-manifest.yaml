@@ -41,6 +41,8 @@ oauth_config:
       - chat:write
       # message.im -- a direct message to the bot.
       - im:history
+      # users.info -- resolving a sender id to a display name (sender.name).
+      - users:read
 settings:
   event_subscriptions:
     request_url: https://hooks.withadi.dev/webhook/slack

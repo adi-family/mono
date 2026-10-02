@@ -4,7 +4,7 @@
 
 > The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
 
-25 structs · 7 enums · 2 type aliases across 10 files.
+26 structs · 7 enums · 2 type aliases across 10 files.
 
 ## Index
 
@@ -16,7 +16,7 @@
 - [`src/message.rs`](#srcmessagers) — `Sender`, `AttachmentKind`, `Attachment`, `ChannelMessage`
 - [`src/node_api.rs`](#srcnode_apirs) — `ConnectionView`, `ConnectionsView`, `ConnectResponse`, `ConnectBody`, `RefBody`, `RouteBody`, `PauseBody`, `AllowBody`, `NodeApi`
 - [`src/protocol.rs`](#srcprotocolrs) — `RouterFrame`, `NodeFrame`
-- [`src/router_api.rs`](#srcrouter_apirs) — `RegisterRequest`, `Registered`, `SendRequest`, `DisconnectRequest`, `RouterApi`
+- [`src/router_api.rs`](#srcrouter_apirs) — `RegisterRequest`, `Registered`, `SendRequest`, `SetThinkingRequest`, `DisconnectRequest`, `RouterApi`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -469,6 +469,19 @@ pub struct Registered {
 struct SendRequest<'a> {
     connection: &'a str,
     text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread: Option<&'a str>,
+}
+```
+
+### struct `SetThinkingRequest`
+
+```rust
+#[derive(Debug, Serialize)]
+struct SetThinkingRequest<'a> {
+    connection: &'a str,
+    thread: &'a str,
+    status: &'a str,
 }
 ```
 

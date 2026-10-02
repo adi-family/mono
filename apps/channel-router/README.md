@@ -49,14 +49,18 @@ The registry is [`src/providers.ts`](src/providers.ts); adapters are one file pe
 
 - **`telegram`** -- `TELEGRAM_BOT_TOKEN` + `TELEGRAM_SECRET_TOKEN` enable it;
   `TELEGRAM_BOT_USERNAME` (public) builds `t.me/<bot>?start=<code>` install links. One bot token,
-  a Worker secret, shared by every workspace -- sorry, every chat.
+  a Worker secret, shared by every workspace -- sorry, every chat. `setThinking` is
+  `sendChatAction` with `action: "typing"` -- there's no cancel call, so clearing (`status: ""`)
+  is a no-op.
 - **`slack`** -- `SLACK_CLIENT_ID` + `SLACK_CLIENT_SECRET` + `SLACK_SIGNING_SECRET` enable it
   (ADI-MONO-123, [`src/adapters/slack.ts`](src/adapters/slack.ts)). Unlike Telegram, the bot
   token itself isn't one of these: Slack hands back a different token per workspace at "Add to
   Slack" time, so it's stored encrypted inside that one connection's own Durable Object instead of
   as a Worker secret (`state.ts`'s `encryptCredential`/`decryptCredential`). `slack-manifest.yaml`
   is the app manifest -- paste it at `api.slack.com/apps` to create the real app in one step
-  (ADI-MONO-124, Igor's call).
+  (ADI-MONO-124, Igor's call). `resolveSenderName` (a follow-up to ADI-MONO-123) calls
+  `users.info` to turn a sender id into a display name, cached in-memory for ten minutes --
+  `users:read` is the scope it needs, now in both the bot scope list and the manifest.
 
 ## Configuration
 
@@ -194,6 +198,29 @@ ever minted.
   rides as OAuth's own `state` param -- the same code `/register` already mints, reused directly
   rather than wrapped in a second signature, since it already carries `(node, provider,
   connection)` and an expiry.
+
+## ADI-MONO-123 follow-up: `resolveSenderName`
+
+Closes the one gap ADI-MONO-123's own notes above flagged rather than fixed:
+
+- **`ChannelAdapter.resolveSenderName` is new**, the same uniform-optional-hook shape as
+  `setThinking`/`challengeResponse`. `router.ts`'s webhook handler calls it right after
+  `normalize` for every message `normalize` produced, once it has fetched the connection and
+  resolved its credential anyway (the same lookup `/send` already does) -- so `normalize` itself
+  never had to widen its own signature to reach a credential, the option ADI-MONO-123 had
+  declined.
+- **Slack's implementation is `users.info`**, cached in-memory keyed by `<bot token>:<sender
+  id>` for ten minutes (zero-copy: nothing but an id and a resolved name is ever held, and the
+  keying means two workspaces never collide on the same short user id). `users:read` is the new
+  scope this needs -- added to both `SLACK_BOT_SCOPES` and `slack-manifest.yaml`. Telegram has no
+  implementation; its `sender.name` already comes for free off the update itself.
+- A lookup failure (no credential yet, a Slack API error) just leaves `normalize`'s own raw-id
+  guess standing on `sender.name` -- it never fails the webhook delivery over a display name.
+
+The node side's own follow-up (actually calling `setThinking` when dispatching, and clearing it
+when a run finishes) lives in `crates/adi-channels` and is documented in `docs/channels.md`'s own
+"ADI-MONO-123 follow-up" section, not here -- this router's own half of that (the `/send` `status`
+field, Slack's `setThinking`) was already built in ADI-MONO-123 itself.
 
 ## Corrections made to docs/channels.md while building this
 

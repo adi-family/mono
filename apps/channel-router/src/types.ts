@@ -138,6 +138,14 @@ export interface ChannelAdapter {
    * connection's own thread key (§5: a channel id, or `channel:thread_ts`); absent for a
    * provider with no such concept (Telegram). */
   setThinking?(thread: string, credential: unknown, status: string): Promise<void>;
+  /** Resolve a sender id to a display name, using the same per-connection credential `send`
+   * does -- `normalize` itself has no credential to reach (it takes `env`, not a resolved
+   * secret; §4 of ADI-MONO-123's own implementation notes flags exactly this), so `router.ts`
+   * calls this separately, after `normalize`, once it has fetched the connection and resolved
+   * its credential anyway. `null` if the lookup fails or the id doesn't resolve -- the caller
+   * then leaves `sender.name` as `normalize` already set it (Telegram never implements this;
+   * its `sender.name` already comes for free off the update itself). */
+  resolveSenderName?(senderId: string, credential: unknown): Promise<string | null>;
 }
 
 /** The Durable Object id for one `(node, provider)` pair.

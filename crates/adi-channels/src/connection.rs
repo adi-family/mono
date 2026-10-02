@@ -365,17 +365,20 @@ impl Connections {
         self.save(&mut connection)
     }
 
-    /// The connection whose thread map names `run_id`, if any — what the auto-post-back
-    /// (`docs/channels.md` §5, "the run's final answer posts back automatically") and the
-    /// `channel-reply` tool both resolve a run id through, since neither is handed a connection id
-    /// directly.
+    /// The connection whose thread map names `run_id`, if any, paired with the provider thread key
+    /// itself — what the auto-post-back (`docs/channels.md` §5, "the run's final answer posts back
+    /// automatically") and the `channel-reply` tool both resolve a run id through, since neither is
+    /// handed a connection id (or a thread key) directly. The thread key matters past the
+    /// connection id alone: it's what `RouterApi::send`/`set_thinking` need to tell Slack which
+    /// channel in a workspace-wide routing key a reply or a "thinking…" status belongs to.
     ///
     /// # Errors
     /// [`Error::Config`] on a listing failure.
-    pub fn find_by_run(&self, run_id: &str) -> Result<Option<Connection>> {
+    pub fn find_by_run(&self, run_id: &str) -> Result<Option<(Connection, String)>> {
         for connection in self.list()? {
-            if connection.manifest.threads.values().any(|r| r == run_id) {
-                return Ok(Some(connection));
+            if let Some((thread, _)) = connection.manifest.threads.iter().find(|(_, r)| *r == run_id) {
+                let thread = thread.clone();
+                return Ok(Some((connection, thread)));
             }
         }
         Ok(None)
@@ -491,8 +494,9 @@ mod tests {
             store.thread_run(&created.id, "chat-1").unwrap(),
             Some("run-1".to_string())
         );
-        let found = store.find_by_run("run-1").unwrap().expect("found");
+        let (found, thread) = store.find_by_run("run-1").unwrap().expect("found");
         assert_eq!(found.id, created.id);
+        assert_eq!(thread, "chat-1");
         assert!(store.find_by_run("no-such-run").unwrap().is_none());
     }
 

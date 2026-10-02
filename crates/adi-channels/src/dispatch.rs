@@ -10,17 +10,33 @@ use tracing::{info, warn};
 use crate::connection::{Connection, Connections, Target};
 use crate::error::Result;
 use crate::message::ChannelMessage;
+use crate::router_api::RouterApi;
+
+/// The text handed to `setThinking` the moment a message is actually dispatched to an agent run —
+/// cleared (an empty string) once that run finishes, by [`crate::finished::observer`]. Never seen
+/// by a provider with no such concept (Telegram's own `setThinking` ignores the text entirely and
+/// just starts `sendChatAction`).
+const THINKING_STATUS: &str = "thinking…";
 
 /// Handle one inbound message: enforce the allowlist, then run or reply on the target it names.
 /// Silent, by design, on everything `docs/channels.md` §5/§8 says must be silent — a paused
 /// connection, a disallowed sender, a target this build doesn't dispatch to yet
 /// ([`Target::Trigger`]/[`Target::AppRoute`]/[`Target::Unknown`], §6: "skipped, not refused").
 ///
+/// `router_url`/`node_token` are only for the "thinking…" signal below — best-effort, logged and
+/// swallowed on failure rather than failing the whole dispatch over a UX nicety.
+///
 /// # Errors
 /// [`Error::NotFound`] if `message.connection` names no connection this node holds (a message for
 /// a connection the router still thinks is live after this node dropped it); otherwise whatever
 /// the store or the agent launch itself returns.
-pub fn handle(connections: &Connections, agents: &Agents, message: &ChannelMessage) -> Result<()> {
+pub fn handle(
+    connections: &Connections,
+    agents: &Agents,
+    router_url: &str,
+    node_token: &str,
+    message: &ChannelMessage,
+) -> Result<()> {
     let connection = connections.require(&message.connection)?;
     if connection.manifest.paused {
         info!(connection = %connection.id, "connection is paused; dropping inbound message");
@@ -43,6 +59,18 @@ pub fn handle(connections: &Connections, agents: &Agents, message: &ChannelMessa
             "sender is not on the allowlist; staying silent"
         );
         return Ok(());
+    }
+
+    // From here on an agent run is actually about to be launched or continued -- the provider's
+    // own "thinking…" indicator (Slack's `assistant.threads.setStatus`; a no-op for Telegram) goes
+    // up now, and comes back down once that run finishes (`finished::observer`'s `post_back`).
+    if let Err(e) = RouterApi::new(router_url).set_thinking(
+        node_token,
+        &connection.id,
+        &message.thread,
+        THINKING_STATUS,
+    ) {
+        warn!(connection = %connection.id, error = %e, "couldn't signal the \"thinking…\" indicator");
     }
 
     let from = Marker::From {
@@ -157,6 +185,41 @@ mod tests {
         adi_config::Config::with_root(root)
     }
 
+    /// A fake router that accepts one request, 200s it, and hands its raw body back over a
+    /// channel -- enough to see what `set_thinking` actually sent. Per this task's own
+    /// instructions, never the real `apps/channel-router`.
+    fn spawn_capturing_router() -> (String, std::sync::mpsc::Receiver<String>) {
+        use std::io::{BufRead, BufReader, Write as _};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            std::io::Read::read_exact(&mut reader, &mut body).unwrap();
+            let _ = tx.send(String::from_utf8_lossy(&body).to_string());
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        });
+        (format!("http://{addr}"), rx)
+    }
+
     fn message(connection: &str, thread: &str, sender: &str, text: &str) -> ChannelMessage {
         ChannelMessage {
             v: 1,
@@ -198,10 +261,52 @@ mod tests {
         let err = handle(
             &connections,
             &agents,
+            "http://127.0.0.1:1",
+            "tok",
             &message(&created.id, "chat-1", "u1", "hi"),
         )
         .expect_err("no such agent");
         assert!(matches!(err, crate::error::Error::Agents(_)));
+    }
+
+    /// The "thinking…" signal fires as soon as dispatch is about to launch or continue a run --
+    /// before the launch itself, and regardless of whether that launch goes on to succeed (a
+    /// missing agent here, same as the test above, just observed through the router call it makes
+    /// on the way rather than its own return value).
+    #[test]
+    fn dispatching_to_an_agent_signals_thinking_before_the_launch_itself_runs() {
+        let cfg = scratch("thinking-signal");
+        let connections = Connections::with_config(cfg.clone());
+        let agents = Agents::with_config(cfg);
+        let created = connections
+            .create(
+                "slack",
+                Target::Agent {
+                    agent: "ghost".into(),
+                },
+            )
+            .unwrap();
+        connections
+            .set_allowlist(&created.id, Allowlist::Open)
+            .unwrap();
+
+        let (router_url, rx) = spawn_capturing_router();
+        let err = handle(
+            &connections,
+            &agents,
+            &router_url,
+            "tok",
+            &message(&created.id, "C1", "u1", "hi"),
+        )
+        .expect_err("ghost still doesn't exist");
+        assert!(matches!(err, crate::error::Error::Agents(_)));
+
+        let body = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("one request");
+        assert!(body.contains("\"status\":\"thinking"), "got: {body}");
+        assert!(body.contains("\"thread\":\"C1\""), "got: {body}");
+        assert!(body.contains(&format!("\"connection\":\"{}\"", created.id)), "got: {body}");
     }
 
     #[test]
@@ -222,6 +327,8 @@ mod tests {
         handle(
             &connections,
             &agents,
+            "http://127.0.0.1:1",
+            "tok",
             &message(&created.id, "chat-1", "u1", "hi"),
         )
         .expect("paused connections are skipped, not errored");
@@ -244,6 +351,8 @@ mod tests {
         handle(
             &connections,
             &agents,
+            "http://127.0.0.1:1",
+            "tok",
             &message(&created.id, "chat-1", "u1", "hi"),
         )
         .expect("a target this build doesn't dispatch to is skipped, not refused");

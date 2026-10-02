@@ -249,8 +249,16 @@ impl RouterClient {
                 let connections = self.connections.clone();
                 let agents = self.agents.clone();
                 let provider = self.provider.clone();
+                let router_url = self.router_url.clone();
+                let node_token = self.node_token.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    crate::dispatch::handle(&connections, &agents, &message)
+                    crate::dispatch::handle(
+                        &connections,
+                        &agents,
+                        &router_url,
+                        &node_token,
+                        &message,
+                    )
                 })
                 .await;
                 match result {

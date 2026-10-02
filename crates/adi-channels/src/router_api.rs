@@ -59,6 +59,18 @@ pub struct Registered {
 struct SendRequest<'a> {
     connection: &'a str,
     text: &'a str,
+    /// The provider thread key (§5: a chat id, or `channel:thread_ts`) -- needed for Slack's
+    /// `send` to know *which* channel in a team-wide routing key to post into; harmlessly ignored
+    /// by Telegram, whose routing key alone already names the chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thread: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetThinkingRequest<'a> {
+    connection: &'a str,
+    thread: &'a str,
+    status: &'a str,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,21 +135,45 @@ impl RouterApi {
 
     /// Post `text` back through `connection`, over the router's own credential for whichever
     /// service the connection belongs to — the only path a reply ever takes (§1: "a node never
-    /// calls Telegram/Slack directly").
+    /// calls Telegram/Slack directly"). `thread` is the connection's own thread key (§5); some
+    /// providers (Slack) need it to know which channel in a workspace-wide routing key to post
+    /// into, others (Telegram) ignore it since the routing key alone already names the chat.
     ///
     /// # Errors
     /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
-    pub fn send(&self, node_token: &str, connection: &str, text: &str) -> Result<()> {
+    pub fn send(&self, node_token: &str, connection: &str, thread: Option<&str>, text: &str) -> Result<()> {
         let response = client()?
             .post(format!("{}/send", self.base_url))
             .bearer_auth(node_token)
-            .json(&SendRequest { connection, text })
+            .json(&SendRequest { connection, text, thread })
             .send()
             .map_err(|e| Error::Http(e.to_string()))?;
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().unwrap_or_default();
             return Err(Error::Router(format!("send failed ({status}): {body}")));
+        }
+        Ok(())
+    }
+
+    /// Ask the provider for an ephemeral "thinking…" indicator on `connection`'s `thread` (Slack's
+    /// `assistant.threads.setStatus`; a no-op for a provider with no such concept, like Telegram —
+    /// `apps/channel-router`'s own `/send` handler tolerates an adapter without `setThinking`).
+    /// `status` is the text to show; an empty string clears it.
+    ///
+    /// # Errors
+    /// [`Error::Http`] if the request can't be sent; [`Error::Router`] on a non-2xx status.
+    pub fn set_thinking(&self, node_token: &str, connection: &str, thread: &str, status: &str) -> Result<()> {
+        let response = client()?
+            .post(format!("{}/send", self.base_url))
+            .bearer_auth(node_token)
+            .json(&SetThinkingRequest { connection, thread, status })
+            .send()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !response.status().is_success() {
+            let status_code = response.status();
+            let body = response.text().unwrap_or_default();
+            return Err(Error::Router(format!("set_thinking failed ({status_code}): {body}")));
         }
         Ok(())
     }
@@ -257,8 +293,33 @@ mod tests {
     fn send_succeeds_on_a_bare_200() {
         let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
         RouterApi::new(base)
-            .send("node-token", "conn-1", "hello back")
+            .send("node-token", "conn-1", None, "hello back")
             .expect("send");
+    }
+
+    #[test]
+    fn send_carries_a_thread_when_one_is_given() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .send("node-token", "conn-1", Some("C123"), "hello back")
+            .expect("send");
+    }
+
+    #[test]
+    fn set_thinking_succeeds_on_a_bare_200() {
+        let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+        RouterApi::new(base)
+            .set_thinking("node-token", "conn-1", "C123", "thinking…")
+            .expect("set_thinking");
+    }
+
+    #[test]
+    fn set_thinking_surfaces_a_non_2xx_as_a_router_error() {
+        let base = fake_router("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 7\r\n\r\nrefused");
+        let err = RouterApi::new(base)
+            .set_thinking("node-token", "conn-1", "C123", "thinking…")
+            .expect_err("should refuse");
+        assert!(matches!(err, Error::Router(msg) if msg.contains("refused")));
     }
 
     #[test]
@@ -282,7 +343,7 @@ mod tests {
     fn a_trailing_slash_on_the_base_url_is_tolerated() {
         let base = fake_router("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
         RouterApi::new(format!("{base}/"))
-            .send("node-token", "conn-1", "hi")
+            .send("node-token", "conn-1", None, "hi")
             .expect("send");
     }
 }

@@ -12,6 +12,10 @@
  *   as an ordinary `message` update, so there's no separate `GET /link/telegram` route; the
  *   webhook handler asks every adapter this instead.
  * - `send`: `POST .../sendMessage` with the one bot token this deployment holds.
+ * - `setThinking`: `sendChatAction` with `action: "typing"` -- Telegram's own "thinking…"
+ *   equivalent. There's no call to cancel it (it fades on its own after a few seconds, and
+ *   posting a message to the chat ends it regardless), so a clearing call (`status === ""`) is
+ *   a no-op rather than a second request.
  */
 import type { ChannelAdapter, ChannelMessage, Env, OutboundReply } from "../types";
 import { timingSafeEqual } from "../http";
@@ -152,6 +156,22 @@ export const telegramAdapter: ChannelAdapter = {
     });
     if (!res.ok) {
       throw new Error(`telegram sendMessage failed: http ${res.status}`);
+    }
+  },
+
+  async setThinking(thread: string, credential: unknown, status: string) {
+    if (!status) return; // nothing to cancel -- see the module doc's note on sendChatAction
+    const { botToken } = credential as TelegramCredential;
+    const [chatId, messageThreadId] = thread.split(":");
+    const body: Record<string, unknown> = { chat_id: chatId, action: "typing" };
+    if (messageThreadId) body.message_thread_id = Number(messageThreadId);
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new Error(`telegram sendChatAction failed: http ${res.status}`);
     }
   },
 };

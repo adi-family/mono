@@ -30,7 +30,7 @@ pub fn handle(
     run_id: &str,
     text: &str,
 ) -> Result<()> {
-    let connection = connections
+    let (connection, thread) = connections
         .find_by_run(run_id)?
         .ok_or_else(|| Error::NotFound(run_id.to_string()))?;
     if connection.manifest.paused {
@@ -42,7 +42,7 @@ pub fn handle(
             connection.manifest.provider
         ))
     })?;
-    RouterApi::new(router_url).send(&node_token, &connection.id, text)
+    RouterApi::new(router_url).send(&node_token, &connection.id, Some(&thread), text)
 }
 
 #[cfg(test)]

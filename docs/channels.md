@@ -547,6 +547,39 @@ needed but the original §4 text didn't yet carry, plus one explicit non-decisio
   as a known gap rather than silently worked around; closing it would mean widening `normalize`'s
   signature to also take a resolved credential, which no other provider needs yet.
 
+## ADI-MONO-123 follow-up: "thinking…" wiring and the sender-name gap
+
+Two gaps the above flagged, both closed without widening `normalize`:
+
+- **The node now actually sends `setThinking`.** ADI-MONO-123 built the router's half of this
+  (`/send`'s `status` field, Slack's `assistant.threads.setStatus`) but nothing on the node side
+  ever called it. `adi_channels::dispatch::handle` now signals `"thinking…"` the moment a message
+  is actually dispatched to an agent run (after the allowlist/pause/target checks, before the
+  launch itself — best-effort, a failed signal never fails the dispatch), and
+  `adi_channels::finished`'s run-finished observer clears it (an empty `status`) unconditionally
+  once that run ends, success or failure, independent of whether there's an answer worth posting.
+  Telegram gained the equivalent: `setThinking` is now defined for it too, `sendChatAction` with
+  `action: "typing"` — there's no call to cancel a Telegram typing indicator (it fades on its own,
+  or a posted message ends it), so clearing is a no-op rather than a second request.
+- **This exposed a real bug: `RouterApi::send` never carried a `thread`.** `/send`'s body has
+  always accepted `{ connection, thread, text }` (`router.ts`, since ADI-MONO-123's own Slack
+  work), but the node's own client only ever sent `{ connection, text }` — meaning every post-back
+  and every `channel-reply` call was already silently broken for Slack (`send` throws without a
+  channel to address) and happened to work for Telegram only because its `routingKey` already
+  names the chat on its own. Fixed by threading the thread key through: `Connections::find_by_run`
+  now returns `(Connection, thread)` instead of just the connection, and both `finished::post_back`
+  and `reply::handle` pass it to `RouterApi::send`.
+- **Slack's `sender.name` is now a resolved display name.** Not by widening `normalize` (the
+  option ADI-MONO-123 declined) — `ChannelAdapter` gained one more uniform optional hook,
+  `resolveSenderName(senderId, credential)`, the same shape `setThinking`/`challengeResponse`
+  already set. `router.ts`'s webhook handler calls it right after `normalize`, once it has fetched
+  the connection and resolved its credential anyway (the same two facts `/send` already needed).
+  Slack's implementation is `users.info` (new `users:read` scope, `slack-manifest.yaml` and the
+  bot scope list both updated), cached in-memory keyed by `<bot token>:<sender id>` for ten
+  minutes — zero-copy (nothing but an id and a name is held), and the keying means two workspaces
+  can never collide on the same short Slack user id. A lookup failure just leaves `normalize`'s
+  own raw-id guess standing; it never fails the webhook.
+
 ## Decisions taken
 
 Calls made here that the design brief left open:
