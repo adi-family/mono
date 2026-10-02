@@ -140,6 +140,20 @@ const RELOAD_INTERVAL: Duration = Duration::from_secs(5);
 /// After an accept error, pause briefly so a persistent failure cannot spin the loop hot.
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
+/// The first pause before trying the gateway port again after it would not bind, doubling up to
+/// [`BIND_RETRY_MAX`]. Short at first because the commonest holder is this install's *previous*
+/// process, still closing its sockets while launchd starts the new one.
+const BIND_RETRY_FIRST: Duration = Duration::from_millis(500);
+
+/// The longest pause between bind attempts. A holder that is not leaving soon is another install
+/// (see [`listen`]); once it goes, the fleet comes back within this long, without a restart.
+const BIND_RETRY_MAX: Duration = Duration::from_secs(15);
+
+/// How many failed bind attempts pass between the reminders [`listen`] logs at `warn`. At
+/// [`BIND_RETRY_MAX`] apart that is one line every ten minutes — enough to find in the log without
+/// burying everything else in it.
+const BIND_RETRY_WARN_EVERY: u32 = 40;
+
 /// The zone a node's own services live in locally (`nosh.adi`), and therefore the host a service
 /// *name* off the wire is resolved as. `docs/fleet.md` §1: the same service the fleet addresses
 /// as `nosh.laptop-b.n.adi` is `nosh.adi` on the node itself.
@@ -965,6 +979,93 @@ pub async fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
     TcpListener::bind(addr).await
 }
 
+/// Bind the calling side and serve it until shutdown — retrying the bind for as long as it fails.
+///
+/// The gateway's port is fixed per install, so it is only ever free to *one* process, and losing
+/// it once used to mean losing the whole fleet until the next restart: the front door kept
+/// forwarding `*.n.adi` to whoever did hold it. Two holders are common enough to design for —
+/// this install's previous process during a restart, and a second install on the same machine
+/// whose gateway predates per-flavour ports and so binds this one's (an `ADI Dev.app` older than
+/// the flavour field did exactly that on every reboot it won the race). Either way the cure is the
+/// holder leaving, and this takes the port the moment it does.
+///
+/// What the holder answers in the meantime is not ours to change: an older install's gateway is
+/// paired with nobody, so every node reads as "not paired" until this one binds.
+pub async fn listen(addr: SocketAddr, gateway: Arc<Gateway>, mut shutdown: watch::Receiver<bool>) {
+    let Some(listener) = bind_retrying(addr, BIND_RETRY_FIRST, BIND_RETRY_MAX, &mut shutdown).await
+    else {
+        return;
+    };
+    serve(listener, gateway, shutdown).await;
+}
+
+/// [`bind`] until it succeeds, pausing `first`, doubling up to `max`, between attempts. `None`
+/// when shutdown is signalled first. Split from [`listen`] so the retry is testable without an
+/// endpoint behind it.
+async fn bind_retrying(
+    addr: SocketAddr,
+    first: Duration,
+    max: Duration,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Option<TcpListener> {
+    let mut delay = first;
+    let mut failures: u32 = 0;
+    loop {
+        if *shutdown.borrow() {
+            return None;
+        }
+        match bind(addr).await {
+            Ok(listener) => {
+                if failures == 0 {
+                    info!(%addr, "mesh gateway listening for *.n.adi");
+                } else {
+                    info!(%addr, failures, "mesh gateway bound after the port came free; *.n.adi is reachable again");
+                }
+                return Some(listener);
+            }
+            Err(e) => {
+                failures = failures.saturating_add(1);
+                if failures == 1 {
+                    warn!(
+                        %addr,
+                        error = %e,
+                        hint = %bind_hint(addr, &e),
+                        "mesh gateway could not bind; no node is reachable from here until it does — retrying"
+                    );
+                } else if failures % BIND_RETRY_WARN_EVERY == 0 {
+                    warn!(%addr, error = %e, failures, "mesh gateway still cannot bind; still retrying");
+                } else {
+                    debug!(%addr, error = %e, failures, "mesh gateway bind retry failed");
+                }
+            }
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                // A dropped sender is a shutdown too: nobody is left to say otherwise.
+                if changed.is_err() || *shutdown.borrow() {
+                    return None;
+                }
+            }
+            () = tokio::time::sleep(delay) => {}
+        }
+        delay = (delay * 2).min(max);
+    }
+}
+
+/// What to tell the operator about a failed gateway bind, beyond the OS error itself.
+fn bind_hint(addr: SocketAddr, e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::AddrInUse {
+        format!(
+            "another process holds {addr} and the front door is forwarding *.n.adi to it — \
+             `lsof -nP -iTCP:{port} -sTCP:LISTEN` names it; a second ADI install built before \
+             per-flavour gateway ports is the usual one (rebuild it, or stop its mesh)",
+            port = addr.port()
+        )
+    } else {
+        format!("binding {addr} failed for a reason other than the port being taken")
+    }
+}
+
 /// Accept loop for the calling side: a task per connection until shutdown.
 pub async fn serve(
     listener: TcpListener,
@@ -1608,6 +1709,65 @@ mod tests {
 
     use super::*;
     use crate::fleet::Grant;
+
+    /// A gateway port somebody else holds: free one, so the test owns a real address.
+    fn held_port() -> (std::net::TcpListener, SocketAddr) {
+        let holder = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+        let addr = holder.local_addr().expect("its address");
+        (holder, addr)
+    }
+
+    /// The reboot race: the port is taken when the gateway starts, and the gateway takes it as
+    /// soon as the holder lets go — no restart in between.
+    #[tokio::test]
+    async fn a_taken_gateway_port_is_bound_once_it_comes_free() {
+        let (holder, addr) = held_port();
+        let (_tx, mut rx) = watch::channel(false);
+        let retrying = tokio::spawn(async move {
+            bind_retrying(
+                addr,
+                Duration::from_millis(10),
+                Duration::from_millis(20),
+                &mut rx,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !retrying.is_finished(),
+            "still waiting while the port is held"
+        );
+        drop(holder);
+        let listener = tokio::time::timeout(Duration::from_secs(5), retrying)
+            .await
+            .expect("bound once the holder let go")
+            .expect("the task did not panic")
+            .expect("not shut down");
+        assert_eq!(listener.local_addr().expect("bound"), addr);
+    }
+
+    /// Retrying never outlives the daemon: a shutdown mid-wait ends it with nothing bound.
+    #[tokio::test]
+    async fn retrying_a_taken_port_ends_on_shutdown() {
+        let (_holder, addr) = held_port();
+        let (tx, mut rx) = watch::channel(false);
+        let retrying = tokio::spawn(async move {
+            bind_retrying(
+                addr,
+                Duration::from_secs(60),
+                Duration::from_secs(60),
+                &mut rx,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tx.send(true).expect("a receiver is alive");
+        let outcome = tokio::time::timeout(Duration::from_secs(5), retrying)
+            .await
+            .expect("shutdown ended the wait")
+            .expect("the task did not panic");
+        assert!(outcome.is_none(), "nothing is bound after a shutdown");
+    }
 
     // -- fixtures -------------------------------------------------------------------------
 
@@ -2269,7 +2429,10 @@ mod tests {
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
 
         let text = String::from_utf8_lossy(&reply[1..]).to_string();
-        assert!(text.starts_with("HTTP/1.1 503 Service Unavailable\r\n"), "{text}");
+        assert!(
+            text.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "{text}"
+        );
         assert!(upstream.is_none());
         assert_eq!(
             *node.woken.lock().unwrap_or_else(PoisonError::into_inner),

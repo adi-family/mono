@@ -26,6 +26,11 @@ use crate::{client, dns, host, identity, join, protocol, relay, ticket};
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
 const TICKET_RELAY_WAIT: Duration = Duration::from_secs(8);
 
+/// How long [`Daemon::stop`] waits for its tasks, all together, before aborting the stragglers.
+/// Its caller holds the control panel's mesh lock across the wait, so an unbounded one wedges
+/// every mesh call behind a single task that missed the shutdown signal.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
 /// A running mesh: the bound endpoint, a shutdown switch, and the supervised tasks. Dropping
 /// it aborts the tasks (and the endpoint); prefer [`stop`](Self::stop) for a clean teardown.
 #[derive(Debug)]
@@ -98,8 +103,13 @@ impl Daemon {
         // The node side's demand awareness: the same tick a routes-only front door runs, picking
         // up a phase the supervising hive just published or a wake left behind for it
         // (`crates/adi-hive/src/shared.rs`). Independent of whether the gateway's listener below
-        // ever binds — the node side needs it whether or not this machine calls anyone.
-        tasks.push(tokio::spawn(adi_hive::demand::bridge(gateway.demand())));
+        // ever binds — the node side needs it whether or not this machine calls anyone. The bridge
+        // is written for a hive's whole life and never looks at a shutdown signal; this daemon has
+        // a shorter one, so it is ended from outside.
+        tasks.push(tokio::spawn(until_shutdown(
+            adi_hive::demand::bridge(gateway.demand()),
+            rx.clone(),
+        )));
 
         let host_cfg = Arc::new(cfg.host.clone());
         tasks.push(tokio::spawn(host::serve(
@@ -110,22 +120,13 @@ impl Daemon {
         )));
 
         // The calling side. A gateway that cannot bind is a lost fleet, not a lost mesh: the
-        // forwards and the host role keep running, and the front door's own "no gateway" page
-        // explains the rest.
-        let addr = gateway::configured_addr();
-        match gateway::bind(addr).await {
-            Ok(listener) => {
-                info!(%addr, "mesh gateway listening for *.n.adi");
-                tasks.push(tokio::spawn(gateway::serve(
-                    listener,
-                    Arc::clone(&gateway),
-                    rx.clone(),
-                )));
-            }
-            Err(e) => {
-                warn!(%addr, error = %e, "mesh gateway could not bind; no node is reachable from here")
-            }
-        }
+        // forwards and the host role keep running meanwhile, and the listener keeps trying the
+        // port until whoever holds it lets go — see [`gateway::listen`] for who that usually is.
+        tasks.push(tokio::spawn(gateway::listen(
+            gateway::configured_addr(),
+            Arc::clone(&gateway),
+            rx.clone(),
+        )));
 
         // Independently of the listener: the *node* side reads the same snapshots, so a machine
         // that only serves peers still picks up a new pairing without a restart.
@@ -176,16 +177,43 @@ impl Daemon {
         join::join_on(&self.endpoint, token).await
     }
 
-    /// Signal every task to stop, wait for them, clear the published ticket, and close the
-    /// endpoint. After this, nothing from this daemon is left running.
+    /// Signal every task to stop, wait for them (for [`STOP_GRACE`] at most, aborting whatever
+    /// is still running after it), clear the published ticket, and close the endpoint. After
+    /// this, nothing from this daemon is left running.
     pub async fn stop(self) {
         let _ = self.shutdown.send(true);
         ticket::clear_published();
-        for task in self.tasks {
-            let _ = task.await;
-        }
+        join_or_abort(self.tasks, STOP_GRACE).await;
         self.endpoint.close().await;
     }
+}
+
+/// Run `task` until shutdown is signalled (or its sender is gone), whichever comes first.
+async fn until_shutdown<F>(task: F, mut shutdown: watch::Receiver<bool>)
+where
+    F: std::future::Future<Output = ()>,
+{
+    tokio::select! {
+        () = task => {}
+        _ = shutdown.wait_for(|stop| *stop) => {}
+    }
+}
+
+/// Await every task, sharing one `grace` between them, and abort the ones still running after it.
+/// Returns how many had to be aborted.
+async fn join_or_abort(tasks: Vec<JoinHandle<()>>, grace: Duration) -> usize {
+    let deadline = tokio::time::Instant::now() + grace;
+    let mut aborted = 0;
+    for mut task in tasks {
+        if tokio::time::timeout_at(deadline, &mut task).await.is_err() {
+            task.abort();
+            aborted += 1;
+        }
+    }
+    if aborted > 0 {
+        warn!(aborted, "adi-mesh: tasks ignored shutdown and were aborted");
+    }
+    aborted
 }
 
 /// Bind an endpoint just long enough to learn this machine's current address, and return
@@ -233,5 +261,39 @@ async fn wait_for_relay_addr(endpoint: &Endpoint) -> EndpointAddr {
             return addr;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The regression behind a mesh stop that never returned: a task with no shutdown of its own
+    /// (the demand bridge is an endless tick) has to end when the daemon's signal flips.
+    #[tokio::test]
+    async fn a_task_that_never_ends_stops_on_shutdown() {
+        let (tx, rx) = watch::channel(false);
+        let task = tokio::spawn(until_shutdown(std::future::pending::<()>(), rx));
+        tx.send(true).expect("a receiver is alive");
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .expect("the wrapped task ended")
+            .expect("it was not aborted");
+    }
+
+    /// And whatever still ignores the signal cannot hold `stop` hostage past its grace.
+    #[tokio::test]
+    async fn stop_aborts_what_outlives_its_grace() {
+        let tasks = vec![
+            tokio::spawn(async {}),
+            tokio::spawn(std::future::pending::<()>()),
+        ];
+        let aborted = tokio::time::timeout(
+            Duration::from_secs(5),
+            join_or_abort(tasks, Duration::from_millis(50)),
+        )
+        .await
+        .expect("the join is bounded by its grace");
+        assert_eq!(aborted, 1, "only the task that never ends is aborted");
     }
 }
