@@ -96,7 +96,22 @@ done
 # The identity, straight from the binary that will enforce it at runtime. Read it from the
 # host slice — the per-triple builds are identical here, and this runs before `lipo`.
 HOST_TRIPLE="$([ "$(uname -m)" = "arm64" ] && echo aarch64-apple-darwin || echo x86_64-apple-darwin)"
-eval "$("$ROOT/target/$HOST_TRIPLE/release/adi-mono" --flavor "$FLAVOR" flavor --env)"
+# ADI_* variables override a flavour field by field, which is what lets a one-off build rename one.
+# But a build started from inside a *running* install — an agent run, a hive service — inherits
+# that install's whole identity, and when it is another flavour those values are not overrides,
+# they are the other install: `--flavor dev` run from a release agent session assembled "ADI.app"
+# serving .adi from ~/.adi, with only ADIFlavor saying dev. Drop them in that case.
+flavor_env=()
+if [ -n "${ADI_FLAVOR:-}" ] && [ "$ADI_FLAVOR" != "$FLAVOR" ]; then
+    echo "    note: ignoring the ADI_* identity this shell inherited from the '$ADI_FLAVOR' install"
+    for key in $(compgen -e); do
+        case "$key" in
+            ADI_VERSION) ;;
+            ADI_*) flavor_env+=(-u "$key") ;;
+        esac
+    done
+fi
+eval "$(env ${flavor_env[@]+"${flavor_env[@]}"} "$ROOT/target/$HOST_TRIPLE/release/adi-mono" --flavor "$FLAVOR" flavor --env)"
 APP_NAME="$ADI_APP_NAME"
 APP="$BUILD/$APP_NAME.app"
 echo "    flavor:  $ADI_FLAVOR ($APP_NAME, .$ADI_DOMAIN, ~/$ADI_DIR)"
