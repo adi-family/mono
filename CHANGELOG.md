@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.27.0 — 2026-10-03
+
 ### Fixed
 
 - **A run that finishes a turn still waiting on something no longer leaves its launcher blind.**
@@ -40,6 +42,21 @@ extraction script cares about.
   understating a run that spent most of its life waiting between turns by whatever multiple the
   wait was. `duration_ms` is now `finished_at - started_at`; the engine's own figure moved to a new
   `active_ms` field.
+- **The code index could lose or corrupt data if indexing crashed mid-file.** A database write
+  that failed partway through a file's update, or a crash between writing the symbol tables and
+  the vector index, used to leave old rows removed without their replacements landing, or a
+  vector file out of step with what SQLite recorded. A file's symbols, pending references, and
+  vector-update journal now share one savepoint that rolls back whole on failure; vector writes
+  are journaled and replayed only after their SQLite transaction commits, written to a temporary
+  file and synced in; and opening the index repairs anything an interrupted run left outstanding,
+  so a retry picks the file up cleanly instead of compounding the damage.
+- **Reference resolution could link a call to any same-named declaration in the project, and
+  missed real TypeScript exports.** Matching names alone, with no notion of where a reference was
+  written, could draw an edge to the wrong symbol; resolution now prefers the nearest lexical
+  scope and respects qualified names, leaving a genuinely ambiguous reference unresolved rather
+  than guessing (falling back to a unique project-level name only when nothing lexical covers
+  it). TypeScript indexing also now covers callable class fields, bindings wrapped in `as` or
+  `satisfies`, and export visibility for direct exports, same-file aliases, and default exports.
 
 ### Changed
 
