@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-146 structs · 41 enums · 5 type aliases across 57 files.
+147 structs · 41 enums · 5 type aliases across 57 files.
 
 ## Index
 
@@ -26,7 +26,7 @@
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
@@ -611,6 +611,8 @@ pub struct Await {
     pub expiry_wakes: bool,
     #[serde(default)]
     pub created_at: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fails: u32,
 }
 ```
 
@@ -627,6 +629,9 @@ pub enum Cause<'a> {
     },
     Timer,
     Expired,
+    Dead {
+        job_id: &'a str,
+    },
 }
 ```
 
@@ -1225,7 +1230,26 @@ pub struct AgentRunFinished {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+}
+```
+
+### struct `AgentRunIdle`
+
+`adi.agents.run.idle` — a turn ended and left the run waiting rather than finished (ADI-MONO-129): a pending await, a queued message still behind it, or an unanswered question are all going to move this conversation again on their own, and this says so on the bus the moment a listing notices it, the same way `AgentRunFinished` says the opposite.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunIdle {
+    pub agent: String,
+    pub run_id: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_awaits: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_head: String,
 }
@@ -1993,6 +2017,7 @@ pub enum Woke {
     Event,
     Timer,
     Expired,
+    Dead,
 }
 ```
 
@@ -3120,6 +3145,8 @@ pub struct RunOutcome {
     pub cost_micro_usd: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]

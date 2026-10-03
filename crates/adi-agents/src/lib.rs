@@ -76,8 +76,9 @@ pub use backends::harness::tools::ToolDeclaration;
 pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentGoalClosed, AgentGoalNudged, AgentGoalSet, AgentQuestionAnswered,
-    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunReported, AgentRunStarted,
-    AgentRunStopped, AgentSaved, AgentSpawnRefused, RUN_REPORTED, event_catalog, event_types,
+    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunIdle, AgentRunReported,
+    AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused, RUN_REPORTED, event_catalog,
+    event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
@@ -2144,7 +2145,8 @@ impl Agents {
                 metrics: None,
             }),
         );
-        let mut outcome = store::RunOutcome::of(None, &text, store::now_ms());
+        let mut outcome =
+            store::RunOutcome::of(None, &text, store::started_at(run_id), store::now_ms());
         outcome.terminal_reason = Some(LAUNCH_FAILED.to_string());
         outcome.is_error = true;
         // Only the writer announces, as everywhere else an ending is recorded: the record settles
@@ -2160,7 +2162,8 @@ impl Agents {
                     run_id: run_id.to_string(),
                     terminal_reason: outcome.terminal_reason.clone(),
                     is_error: true,
-                    duration_ms: None,
+                    duration_ms: outcome.duration_ms,
+                    active_ms: None,
                     cost_micro_usd: None,
                     result_head: outcome.result_head.clone(),
                 },
@@ -2405,6 +2408,7 @@ impl Agents {
         for run in &mut runs {
             run.state = pending.state_of(run.running, &run.run_id);
         }
+        self.note_idle_runs(agent, &store, &runs);
         runs
     }
 
@@ -2481,8 +2485,12 @@ impl Agents {
             };
             let session = store.session(&agent.name, &run.run_id);
             let content = live_content(runner.as_ref(), &session, false);
-            let outcome =
-                store::RunOutcome::of(content.metrics.as_ref(), &content.text, store::now_ms());
+            let outcome = store::RunOutcome::of(
+                content.metrics.as_ref(),
+                &content.text,
+                run.started_at,
+                store::now_ms(),
+            );
             // Only the writer announces. A database error is not a reason to hold a listing up:
             // the run stays outcome-less and the next look tries again.
             if store
@@ -2501,12 +2509,58 @@ impl Agents {
                         terminal_reason: outcome.terminal_reason.clone(),
                         is_error: outcome.is_error,
                         duration_ms: outcome.duration_ms,
+                        active_ms: outcome.active_ms,
                         cost_micro_usd: outcome.cost_micro_usd,
                         result_head: outcome.result_head.clone(),
                     },
                 );
             }
             run.outcome = Some(outcome);
+        }
+    }
+
+    /// Publish `adi.agents.run.idle` for every run this listing finds waiting on something of its
+    /// own — a pending await, a queued message, or an unanswered question — once per turn it stays
+    /// that way (ADI-MONO-129 (1)).
+    ///
+    /// Hung off the same listing [`note_finished`] is, and for the same reason: there is no reaper,
+    /// so a run's idle state is noticed the first time anybody looks, which in practice is within
+    /// half a second of the turn that left it there. `adi.agents.run.finished` still only ever means
+    /// *really* finished (ADI-MONO-101) — this is the event for the state that distinction otherwise
+    /// left a launcher blind to. `agents run`'s auto-registered wake matches both.
+    ///
+    /// Gated through [`SessionStore::note_idle`] rather than fired for every `Waiting` row on every
+    /// listing: the app polls this twice a second, and a run can sit waiting on a 10-minute poll for
+    /// a long time without anything about it having changed.
+    fn note_idle_runs(&self, agent: &StoredAgent, store: &SessionStore, runs: &[RunInfo]) {
+        let pending = awaits::Awaits::with_config(self.config.clone());
+        for run in runs.iter().filter(|r| r.state == RunLifecycle::Waiting) {
+            let turn = store.turn_count(&agent.name, &run.run_id);
+            if !store
+                .note_idle(&agent.name, &run.run_id, turn)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let pending_awaits: Vec<String> = pending
+                .for_conversation(&agent.name, &run.run_id)
+                .iter()
+                .map(awaits::Await::describe)
+                .collect();
+            let result_head = store
+                .last_turn(&agent.name, &run.run_id)
+                .map(|turn| store::head(&turn.text))
+                .unwrap_or_default();
+            self.emit(
+                "adi.agents.run.idle",
+                &AgentRunIdle {
+                    agent: agent.name.clone(),
+                    run_id: run.run_id.clone(),
+                    state: "waiting".to_string(),
+                    pending_awaits,
+                    result_head,
+                },
+            );
         }
     }
 
@@ -3709,7 +3763,12 @@ mod tests {
         let runs = store.runs(&agent);
         let outcome = runs[0].outcome.as_ref().expect("outcome");
         assert_eq!(outcome.result_head, "DONE");
-        assert_eq!(outcome.duration_ms, Some(5));
+        assert_eq!(outcome.active_ms, Some(5), "the engine's own tiny figure");
+        assert!(
+            outcome.duration_ms.is_some_and(|ms| ms < 5_000),
+            "wall clock from the session's own start, not the engine's claim: {:?}",
+            outcome.duration_ms
+        );
         assert!(!outcome.is_error);
     }
 
@@ -7290,6 +7349,66 @@ mod tests {
                 .iter()
                 .any(|e| e.record.name == "adi.agents.run.finished"),
             "now it really is",
+        );
+    }
+
+    /// ADI-MONO-129 (1): the launcher's blind spot `adi.agents.run.idle` exists to close. Published
+    /// the first time a listing finds the run waiting, carrying what it is waiting on — and not
+    /// republished on the next listing that finds it waiting on the very same thing, since the app
+    /// polls this twice a second and the point is a signal, not a flood.
+    #[test]
+    fn an_idle_run_publishes_its_own_event_once_per_turn() {
+        let store = scratch("idle-event");
+        store.save("watcher", spec("process:claude")).expect("save");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::ProcessClaude, "/tmp", "watch the build")
+            .expect("create")
+            .id;
+
+        let pending = awaits::Awaits::with_config(store.config().clone());
+        awaits::register(
+            &pending,
+            "watcher",
+            &conv,
+            &awaits::Request {
+                note: "the build".into(),
+                every_seconds: Some(30),
+                check: Some("true".into()),
+                ..awaits::Request::default()
+            },
+        )
+        .expect("register");
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs[0].state, RunLifecycle::Waiting);
+        let bus = adi_events::Events::with_config(store.config().clone());
+        let events = bus.drain().expect("drain");
+        let idle = events
+            .iter()
+            .find(|e| e.record.name == "adi.agents.run.idle")
+            .expect("published the first time this was noticed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&idle.record.payload).expect("json payload");
+        assert_eq!(payload["agent"], "watcher");
+        assert_eq!(payload["run_id"], conv);
+        assert_eq!(payload["state"], "waiting");
+        assert_eq!(payload["pending_awaits"].as_array().expect("array").len(), 1);
+        // `drain` only reads the spool — consuming a record, the same as any other reader of the
+        // bus, is a separate call.
+        bus.remove(&idle.path).expect("remove");
+
+        // Nothing changed since — still the same turn, still the same await — so nothing new is
+        // published for it.
+        let runs_again = store.runs(&agent);
+        assert_eq!(runs_again[0].state, RunLifecycle::Waiting);
+        assert!(
+            bus.drain()
+                .expect("drain")
+                .iter()
+                .all(|e| e.record.name != "adi.agents.run.idle"),
+            "the same idle turn is not announced twice"
         );
     }
 

@@ -700,16 +700,20 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
     if let Some(id) = arg_id(input, "update") {
         return change_await(id, input, ctx);
     }
+    let check = input
+        .get("check")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let Some(check) = &check {
+        refuse_exited_job(check, ctx)?;
+    }
     let req = Request {
         note: arg_str(input, "note")?.to_string(),
         events: string_list(input, "events"),
         when: string_map(input, "when")?,
         after_seconds: arg_u64(input, "after_seconds"),
         every_seconds: arg_u64(input, "every_seconds"),
-        check: input
-            .get("check")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        check,
         expires_in_seconds: arg_u64(input, "expires_in_seconds"),
         cwd: ctx.cwd.display().to_string(),
     };
@@ -719,6 +723,31 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
         "registered await {} — waking {}. Finish this turn; you will be woken with your note.",
         registered.id,
         registered.describe()
+    ))
+}
+
+/// Refuse a check that is still naming a job [`jobs::start`] has already finished (ADI-MONO-129
+/// (3)).
+///
+/// `background` already registered this job's own wake, so a hand-written check watching the same
+/// job by id has nothing left to report once that job is gone — and, worse, if it is wrong the way
+/// the bug behind this was, a check that can never agree parks the run until the await's own
+/// `expires_at`, which may be days off. Caught here, before the await is ever stored, rather than
+/// left for the garbage collection [`awaits::tick`] does for one that slips through some other way
+/// (an `update`, or a check copied from one await into another).
+fn refuse_exited_job(check: &str, ctx: &Ctx<'_>) -> std::result::Result<(), String> {
+    let Some(job) = jobs::referenced_in(ctx.agent_dir, ctx.conv, check) else {
+        return Ok(());
+    };
+    if !jobs::has_exited(&job) {
+        return Ok(());
+    }
+    Err(format!(
+        "job {} has already exited, and a background job wakes you itself when it ends — a check \
+         still watching it by hand is redundant now and may never be asked again. Read its log \
+         directly if you need what it said: {}",
+        job.id,
+        job.log.display()
     ))
 }
 
@@ -745,6 +774,13 @@ fn drop_awaits(ids: &[String], ctx: &Ctx<'_>) -> std::result::Result<String, Str
 /// Change a wake in place. Omit-to-keep throughout: a field the model did not name is a field it
 /// said nothing about, which is what makes "leave everything, just move the deadline" expressible.
 fn change_await(id: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let check = input
+        .get("check")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let Some(check) = check.as_deref().filter(|c| !c.is_empty()) {
+        refuse_exited_job(check, ctx)?;
+    }
     let change = awaits::Change {
         note: input
             .get("note")
@@ -757,10 +793,7 @@ fn change_await(id: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<S
         },
         after_seconds: arg_u64(input, "after_seconds"),
         every_seconds: arg_u64(input, "every_seconds"),
-        check: input
-            .get("check")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        check,
         expires_in_seconds: arg_u64(input, "expires_in_seconds"),
     };
     let changed =
@@ -1551,6 +1584,55 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].note, "check the deploy");
         assert_eq!(pending[0].cwd, dir.display().to_string());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADI-MONO-129 (3): `background` already arranged a wake for a job's own ending — a hand-written
+    /// check still naming that job after it has exited is refused, with the log path to read instead.
+    #[cfg(unix)]
+    #[test]
+    fn await_refuses_a_check_still_watching_a_job_that_has_already_exited() {
+        let dir = scratch("await-dead-job");
+        let ctx = ctx_in(&dir, "await-dead-job");
+
+        let job = jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &dir, "exit 0").expect("start");
+        for _ in 0..100 {
+            if job.exit.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(job.exit.exists(), "the job settles");
+
+        let err = await_wake(
+            &json!({
+                "note": "watching it myself",
+                "every_seconds": 60,
+                "check": format!("tail -c 100 {}", job.log.display()),
+            }),
+            &ctx,
+        )
+        .expect_err("refused — the job already has its own wake");
+        assert!(err.contains(&job.id), "{err}");
+        assert!(err.contains("already exited"), "{err}");
+
+        // A live job is a different matter: it has not reported anything yet, so there is nothing
+        // redundant about asking after it.
+        let running = jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &dir, "sleep 30").expect("start");
+        await_wake(
+            &json!({
+                "note": "watching it myself",
+                "every_seconds": 60,
+                "check": format!("tail -c 100 {}", running.log.display()),
+            }),
+            &ctx,
+        )
+        .expect("a running job's own check is not refused");
+        let _ = Command::new("kill")
+            .arg("-9")
+            .arg(running.pid.to_string())
+            .status();
 
         let _ = std::fs::remove_dir_all(&dir);
     }

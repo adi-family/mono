@@ -73,6 +73,7 @@ use serde_json::Value;
 
 use crate::Agents;
 use crate::backends::harness::tools::wait_with_timeout;
+use crate::backends::jobs;
 use crate::error::{Error, Result};
 use crate::marker::{Marker, Woke};
 
@@ -96,6 +97,14 @@ const MAX_CHECK_OUTPUT: usize = 4_000;
 /// conversation's awaits don't sit in the store for ever; reaching it drops the await quietly
 /// (see [`Await::expiry_wakes`]).
 const DEFAULT_LIFETIME_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// How many consecutive "not yet"s from a poll's own check are worth a warning (ADI-MONO-129).
+///
+/// Not an action on its own — [`tick`] still leaves the await registered — only a signal, logged
+/// once per await rather than every tick, that whatever this is waiting for may never come. A check
+/// that can never read "yes" — the bug this exists for inverted one — would otherwise sit unnoticed
+/// until [`Await::expires_at`], which may be days off.
+const STALE_CHECK_FAILURES: u32 = 50;
 
 /// A registered wake: who to wake, on what, and how to be sure.
 ///
@@ -153,6 +162,17 @@ pub struct Await {
     /// When it was registered, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,
+    /// Consecutive times a timer candidate's [`check`](Self::check) has said "not yet". Reset by
+    /// [`update`] and whenever the check passes (the await is gone by then, so nothing is left to
+    /// reset). What lets [`tick`] flag a poll whose check may never agree, well before
+    /// [`expires_at`](Self::expires_at) — see [`STALE_CHECK_FAILURES`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fails: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Await {
@@ -258,15 +278,23 @@ pub enum Cause<'a> {
     Timer,
     /// The await ran out of time without ever firing.
     Expired,
+    /// Its subject had already ended, so it was retired without its own check ever being asked
+    /// (ADI-MONO-129 (2)) — a background job it watched, by id.
+    Dead {
+        /// The job's id, for the wake message.
+        job_id: &'a str,
+    },
 }
 
 impl Cause<'_> {
-    /// The word the check reads as `$ADI_CAUSE`.
+    /// The word the check reads as `$ADI_CAUSE`. Unreachable for [`Cause::Dead`], whose check never
+    /// runs — kept here anyway so this stays the one place every cause names itself.
     fn tag(&self) -> &'static str {
         match self {
             Self::Event { .. } => "event",
             Self::Timer => "timer",
             Self::Expired => "expired",
+            Self::Dead { .. } => "dead",
         }
     }
 }
@@ -563,6 +591,7 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         ),
         expiry_wakes: req.expires_in_seconds.is_some(),
         created_at: now,
+        fails: 0,
     };
     store.save(&record)?;
     Ok(record)
@@ -697,6 +726,9 @@ pub struct Change {
 pub fn update(store: &Awaits, agent: &str, conv: &str, id: &str, change: &Change) -> Result<Await> {
     let before = mine(store, agent, conv, id)?;
     let mut record = before.clone();
+    // Whatever this await was failing to see is being reconsidered right along with it — a changed
+    // check or deadline deserves a fresh count, not one carried over from the condition it replaced.
+    record.fails = 0;
     let now = now_unix();
     if let Some(note) = &change.note {
         record.note = note.trim().to_string();
@@ -817,12 +849,22 @@ pub fn on_event(agents: &Agents, name: &str, payload: &str) -> Vec<Woken> {
 /// Consider every await whose deadline has come due, and retire the ones that have run out of time.
 /// Called by the app on its own clock — once a second is plenty, since the coarsest thing here is a
 /// whole second.
+///
+/// Garbage collection (ADI-MONO-129 (2)) rides along here rather than waiting for `at`: an await
+/// whose subject already ended is worth retiring the moment that is noticed, whatever its own
+/// schedule says, which is exactly the one a broken check would otherwise never reach on its own.
 #[must_use]
 pub fn tick(agents: &Agents) -> Vec<Woken> {
     let store = Awaits::with_config(agents.config().clone());
     let now = now_unix();
     let mut woken = Vec::new();
     for a in store.list() {
+        if let Some(job) = dead_job_subject(agents, &a) {
+            if let Some(w) = wake(agents, &store, &a, Cause::Dead { job_id: &job.id }, None) {
+                woken.push(w);
+            }
+            continue;
+        }
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
             if !a.expiry_wakes {
                 let _ = store.claim_current(&a);
@@ -842,6 +884,21 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
     woken
 }
 
+/// The background job `a`'s own [`check`](Await::check) names, if that job has already exited.
+///
+/// A job already wakes its conversation on its own when it ends ([`jobs::done_check`]); an await
+/// that still names the same job by id in a hand-written check is at best a second wake for
+/// something already covered, and at worst — a check that can never read "yes" once the job is gone,
+/// which is the bug this exists for — a run parked until [`Await::expires_at`] on a wake that was
+/// never coming. Scoped to `a`'s own agent and conversation, the same as everything else an await
+/// touches.
+fn dead_job_subject(agents: &Agents, a: &Await) -> Option<jobs::Job> {
+    let check = a.check.as_deref()?;
+    let agent_dir = agents.sessions().agent_dir(&a.agent);
+    let job = jobs::referenced_in(&agent_dir, &a.conv, check)?;
+    jobs::has_exited(&job).then_some(job)
+}
+
 /// Put one candidate to the await's check, and wake it if the check agrees (or there is none).
 ///
 /// A check that says "not yet" re-arms a polling deadline and leaves everything else alone — the
@@ -858,6 +915,20 @@ fn consider(agents: &Agents, store: &Awaits, a: &Await, cause: Cause<'_>) -> Opt
             if let (Cause::Timer, Some(every)) = (cause, a.every) {
                 let mut rearmed = a.clone();
                 rearmed.at = Some(now_unix().saturating_add(every.max(1)));
+                rearmed.fails = rearmed.fails.saturating_add(1);
+                // Logged once per await on the way past the threshold, not on every tick after it —
+                // the point is a signal worth a human's attention, not a line repeated for as long as
+                // the await stays stuck.
+                if rearmed.fails == STALE_CHECK_FAILURES {
+                    tracing::warn!(
+                        await_id = %rearmed.id,
+                        agent = %rearmed.agent,
+                        conv = %rearmed.conv,
+                        fails = rearmed.fails,
+                        "an await's check has failed repeatedly on its own schedule — whatever it is \
+                         waiting for may never come"
+                    );
+                }
                 let _ = store.replace_current(a, Some(&rearmed));
             }
             None
@@ -906,14 +977,16 @@ fn wake_marker(a: &Await, cause: Cause<'_>) -> Marker {
             Cause::Event { .. } => Woke::Event,
             Cause::Timer => Woke::Timer,
             Cause::Expired => Woke::Expired,
+            Cause::Dead { .. } => Woke::Dead,
         },
         event: match cause {
             Cause::Event { name, .. } => name.to_string(),
             _ => String::new(),
         },
         // An await with a check only ever wakes when the check passed, so this says there *was*
-        // one — never that it failed, which is a wake that does not happen.
-        check: a.check.is_some(),
+        // one — never that it failed, which is a wake that does not happen. `Dead` is the one
+        // exception: the whole point of it is that the check was *not* asked, so it never passed.
+        check: a.check.is_some() && !matches!(cause, Cause::Dead { .. }),
     }
 }
 
@@ -942,6 +1015,14 @@ fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> Stri
             let _ = writeln!(
                 text,
                 "It expired without ever firing; nothing you were waiting for happened in time."
+            );
+        }
+        Cause::Dead { job_id } => {
+            let _ = writeln!(
+                text,
+                "Retired without asking your check: job {job_id} had already exited. Its own wake \
+                 already told you (or would have) — this one was redundant, and its check may have \
+                 been unable to ever say so itself."
             );
         }
     }
@@ -1233,6 +1314,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            fails: 0,
         };
         assert!(!a.wants("adi.agents.run.finished", "not json at all"));
         assert!(!a.wants("adi.agents.run.finished", "[]"));
@@ -1663,6 +1745,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            fails: 0,
         };
         let outcome = run_check(&a, "sleep 30", Cause::Timer, 200);
         assert!(!outcome.passed, "a killed check must never wake a run");
@@ -1689,6 +1772,7 @@ mod tests {
             expires_at: None,
             expiry_wakes: false,
             created_at: 0,
+            fails: 0,
         };
         let text = wake_message(
             &a,
@@ -1750,6 +1834,24 @@ mod tests {
             },
             "and its tag carries no check it never had"
         );
+
+        let dead = wake_message(&a, Cause::Dead { job_id: "job-1-0" }, None);
+        assert!(dead.contains("job-1-0"), "{dead}");
+        assert!(dead.contains("already exited"), "{dead}");
+        assert!(
+            !dead.contains("your check printed"),
+            "a check that was never asked has nothing to report: {dead}"
+        );
+        assert_eq!(
+            wake_marker(&a, Cause::Dead { job_id: "job-1-0" }),
+            Marker::AwaitWoken {
+                id: "w-42".into(),
+                cause: Woke::Dead,
+                event: String::new(),
+                check: false,
+            },
+            "retired, not passed — even though this await had a check"
+        );
     }
 
     /// The form the tool's description now leads with: a script on a schedule, no events at all.
@@ -1796,6 +1898,92 @@ mod tests {
         assert_eq!(store.forget_conversation("watcher", "conv-1"), 2);
         assert!(store.for_conversation("watcher", "conv-1").is_empty());
         assert_eq!(store.for_conversation("watcher", "conv-2").len(), 1);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-MONO-129 (2): the exact shape of the bug it was filed over — a background job wakes its
+    /// conversation on its own, and a hand-written await is still out there watching the same job by
+    /// a check that can never agree. `tick` must not wait for that check; the job having already
+    /// exited is enough on its own.
+    #[cfg(unix)]
+    #[test]
+    fn tick_retires_an_await_still_watching_a_job_that_has_already_exited() {
+        use crate::backends::shell::Shell;
+
+        let store = scratch("dead-job");
+        let agents = Agents::with_config(store.config().clone());
+        let agent_dir = agents.sessions().agent_dir("watcher");
+        let shell = Shell::new(&agent_dir, "conv-1");
+        let job = jobs::start(&agent_dir, "conv-1", &shell, &agent_dir, "exit 0").expect("start");
+        for _ in 0..100 {
+            if job.exit.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(job.exit.exists(), "the job settles");
+
+        // Inverted on purpose, echoing the real bug: this check can only ever say "not yet" once
+        // the job is actually done.
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "watching the job by hand".into(),
+                every_seconds: Some(600),
+                check: Some(format!(
+                    "grep -q 'exit=' {} && exit 1; exit 0",
+                    job.log.display()
+                )),
+                cwd: agent_dir.display().to_string(),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let woken = tick(&agents);
+        assert_eq!(woken.len(), 1, "the dead job is found on its own, not on `at`");
+        assert_eq!(woken[0].id, saved.id);
+        assert_eq!(woken[0].cause, "dead");
+        assert!(
+            store.get(&saved.id).is_none(),
+            "retired rather than left pending for its own bad check to never agree with"
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A poll's own failure count is what lets a run that will never see its check agree be noticed
+    /// well before `expires_at` — see [`STALE_CHECK_FAILURES`].
+    #[test]
+    fn a_polls_failing_check_counts_its_own_failures() {
+        let store = scratch("fails");
+        let agents = Agents::with_config(store.config().clone());
+        let saved = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "never".into(),
+                every_seconds: Some(1),
+                check: Some("exit 1".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+        assert_eq!(saved.fails, 0, "nothing has failed yet");
+
+        for n in 1..=5 {
+            let woken = consider(&agents, &store, &store.get(&saved.id).unwrap(), Cause::Timer);
+            assert!(woken.is_none(), "the check never agrees");
+            assert_eq!(
+                store.get(&saved.id).expect("still pending").fails,
+                n,
+                "every not-yet counts"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

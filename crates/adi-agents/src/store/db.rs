@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     title         TEXT,
     chain         TEXT,
     chain_at      INTEGER NOT NULL DEFAULT 0,
+    idle_notified_turn INTEGER,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -207,6 +208,12 @@ const MIGRATIONS: &[&str] = &[
     // NULL for every message ever queued before this existed, and read back the same as `regular`
     // — see `QueueMode`.
     "ALTER TABLE queue ADD COLUMN mode TEXT",
+    // How many turns were recorded the last time this run's idle state (ADI-MONO-129) was
+    // announced on the bus, so a listing that keeps finding it still waiting does not keep
+    // publishing `adi.agents.run.idle` for it tick after tick. NULL for every session ever opened
+    // before this existed and for one that has never yet ended a turn still waiting — both read as
+    // "not announced", which is the truth for them.
+    "ALTER TABLE sessions ADD COLUMN idle_notified_turn INTEGER",
 ];
 
 // One connection per thread per database.

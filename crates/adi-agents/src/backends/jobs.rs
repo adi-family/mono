@@ -140,6 +140,60 @@ pub(crate) fn done_check(job: &Job) -> String {
     )
 }
 
+/// Whether `job` has exited — its sentinel is on disk, however it ended.
+///
+/// Unlike [`done_check`], this asks nothing of a pid: a job reconstructed by [`referenced_in`] was
+/// never started by this process and carries no pid worth asking `kill -0` about. The sentinel is
+/// the only part of a job's ending that outlives the turn that started it, so it is the only part
+/// anything can still read once that turn is long over.
+#[must_use]
+pub(crate) fn has_exited(job: &Job) -> bool {
+    job.exit.exists()
+}
+
+/// The job `text` names, if it names one of `conv`'s own — found among the files [`start`] leaves
+/// behind, since nothing else remembers a job once the turn that started it has ended.
+///
+/// This is what lets an await's own hand-written `check` be recognized as still watching a job
+/// [`start`] already arranged a wake for (ADI-MONO-129): job ids (`job-<millis>-<seq>`) are specific
+/// enough that a substring match is exact in practice, and a job this conversation never started has
+/// no file here to match against in the first place.
+#[must_use]
+pub(crate) fn referenced_in(agent_dir: &Path, conv: &str, text: &str) -> Option<Job> {
+    known(agent_dir, conv)
+        .into_iter()
+        .find(|job| text.contains(&job.id))
+}
+
+/// Every job `conv` has ever started, newest id first.
+///
+/// `pid` is unknown — these are rebuilt from the log file [`start`] left behind, not from a live
+/// handle — and left `0`. Nothing here asks it to answer `kill -0`; [`has_exited`] reads the
+/// sentinel alone, which is the only thing a job this far removed from its own turn can still prove.
+fn known(agent_dir: &Path, conv: &str) -> Vec<Job> {
+    let prefix = format!("{conv}.");
+    let mut jobs: Vec<Job> = std::fs::read_dir(agent_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let id = name.strip_prefix(&prefix)?.strip_suffix(".log")?;
+            if !id.starts_with("job-") {
+                return None;
+            }
+            Some(Job {
+                id: id.to_string(),
+                log: agent_dir.join(format!("{conv}.{id}.log")),
+                exit: agent_dir.join(format!("{conv}.{id}.exit")),
+                pid: 0,
+            })
+        })
+        .collect();
+    jobs.sort_by(|a, b| b.id.cmp(&a.id));
+    jobs
+}
+
 /// One `sh` word, single-quoted. These paths are ours rather than the model's, but they carry a
 /// session id and an agent name, and an agent name is free text.
 fn quote(path: &Path) -> String {
@@ -309,6 +363,54 @@ mod tests {
             Some(std::fs::canonicalize(&elsewhere).expect("real")),
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What ADI-MONO-129's GC and Await-tool guard both lean on: a hand-written check that names a
+    /// finished job's id is recognized as still watching it, even though nothing here started the
+    /// process it is asking about.
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_jobs_id_is_found_in_a_hand_written_check() {
+        let dir = scratch("referenced");
+        let shell = Shell::new(&dir, "conv-1");
+        let job = start(&dir, "conv-1", &shell, &dir, "exit 0").expect("start");
+        settle(&job);
+
+        let found = referenced_in(&dir, "conv-1", &format!("tail -f {}; exit 0", job.log.display()))
+            .expect("the job's own log path names it");
+        assert_eq!(found.id, job.id);
+        assert!(has_exited(&found));
+
+        assert!(
+            referenced_in(&dir, "conv-1", "echo nothing to do with any job").is_none(),
+            "text that names no job finds none"
+        );
+        assert!(
+            referenced_in(&dir, "conv-2", &job.log.display().to_string()).is_none(),
+            "scoped to the conversation that actually started it"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A job still running is found the same way, but does not read as exited — the GC sweep must
+    /// leave a live job's await alone.
+    #[cfg(unix)]
+    #[test]
+    fn a_running_jobs_id_is_found_but_not_marked_exited() {
+        let dir = scratch("referenced-running");
+        let shell = Shell::new(&dir, "conv-1");
+        let job = start(&dir, "conv-1", &shell, &dir, "sleep 30").expect("start");
+
+        let found =
+            referenced_in(&dir, "conv-1", &format!("job id: {}", job.id)).expect("found by id");
+        assert!(!has_exited(&found), "still running");
+
+        let _ = Command::new("kill")
+            .arg("-9")
+            .arg(job.pid.to_string())
+            .status();
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -129,8 +129,21 @@ pub struct RunOutcome {
     /// Cost in micro-dollars (1e-6 USD), as the engine reported it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_micro_usd: Option<u64>,
+    /// How long the run actually took, wall clock: [`noted_at`](Self::noted_at) minus when it
+    /// started. Always known once an outcome exists, because both ends of it are the platform's own
+    /// clock rather than anything an engine has to agree to report.
+    ///
+    /// ADI-MONO-131: this used to be the engine's own figure, which is what [`active_ms`](Self::active_ms)
+    /// holds now. A run that spends most of its life waiting between turns — on a pending await,
+    /// most often — has an `active_ms` far smaller than this, and that gap is the whole point of the
+    /// split: conflating "how long it took" with "how long a model was actually thinking" understated
+    /// a run's real duration by whatever multiple the wait was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// What the engine itself reported for its own active time — `duration_ms`'s entire meaning
+    /// before ADI-MONO-131. `None` from an engine that reports no such thing, same as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_turns: Option<u64>,
     /// The opening of the run's answer — enough to tell a run that did the work from one that
@@ -152,20 +165,32 @@ impl RunOutcome {
     /// when it was noticed — and that record must not be read as *it went fine*. `false` here is
     /// "nobody knows", which is the one case worth opening the log for; a caller that flattens it
     /// to a word should say so rather than pick the optimistic one.
+    ///
+    /// Asked of [`active_ms`](Self::active_ms), not [`duration_ms`](Self::duration_ms): the latter is
+    /// wall clock and the platform's own, so it is always known and would make this always `true`.
     #[must_use]
     pub fn is_reported(&self) -> bool {
         self.terminal_reason.is_some()
             || self.is_error
-            || self.duration_ms.is_some()
+            || self.active_ms.is_some()
             || self.cost_micro_usd.is_some()
             || self.num_turns.is_some()
     }
 
-    /// The outcome of a finished run, from whatever its engine reported and what it said.
+    /// The outcome of a finished run, from whatever its engine reported, what it said, and the two
+    /// moments — [`started_at`](super::SessionRecord::started_at) and `noted_at` — that give it a
+    /// wall-clock [`duration_ms`](Self::duration_ms) whether or not the engine reported one of its
+    /// own.
     #[must_use]
-    pub fn of(metrics: Option<&crate::progress::TurnMetrics>, answer: &str, noted_at: u64) -> Self {
+    pub fn of(
+        metrics: Option<&crate::progress::TurnMetrics>,
+        answer: &str,
+        started_at: u64,
+        noted_at: u64,
+    ) -> Self {
         let mut outcome = Self {
             result_head: head(answer),
+            duration_ms: Some(noted_at.saturating_sub(started_at)),
             noted_at,
             ..Self::default()
         };
@@ -173,7 +198,7 @@ impl RunOutcome {
             outcome.terminal_reason = m.terminal_reason.clone();
             outcome.is_error = m.is_error;
             outcome.cost_micro_usd = m.cost_micro_usd;
-            outcome.duration_ms = m.duration_ms;
+            outcome.active_ms = m.duration_ms;
             outcome.num_turns = m.num_turns;
         }
         outcome
@@ -181,7 +206,7 @@ impl RunOutcome {
 }
 
 /// `text`'s first [`MAX_RESULT_HEAD`] characters, cut on a character boundary and marked when cut.
-fn head(text: &str) -> String {
+pub(crate) fn head(text: &str) -> String {
     let text = text.trim();
     let mut out: String = text.chars().take(MAX_RESULT_HEAD).collect();
     if out.chars().count() < text.chars().count() {
@@ -259,7 +284,7 @@ pub(super) fn new_id() -> String {
 }
 
 /// The unix-millis start time encoded in a session id, or 0 if it can't be parsed.
-pub(super) fn started_at(id: &str) -> u64 {
+pub(crate) fn started_at(id: &str) -> u64 {
     id.split_once('-')
         .and_then(|(ms, _)| ms.parse().ok())
         .unwrap_or(0)
@@ -285,5 +310,40 @@ mod tests {
         );
         assert_eq!(started_at("not-an-id"), 0);
         assert_eq!(started_at("nodashesatall"), 0);
+    }
+
+    /// ADI-MONO-131: a run that spent most of its life waiting between turns reports that wait as
+    /// its duration — the engine's own (much smaller) figure moves to `active_ms` instead of being
+    /// read as the whole of it.
+    #[test]
+    fn duration_is_wall_clock_and_active_ms_is_the_engines_own_figure() {
+        let metrics = crate::progress::TurnMetrics {
+            duration_ms: Some(65_823),
+            ..crate::progress::TurnMetrics::default()
+        };
+        let outcome = RunOutcome::of(Some(&metrics), "done", 1_791_049_219_000, 1_791_049_408_000);
+        assert_eq!(
+            outcome.duration_ms,
+            Some(189_000),
+            "the whole 3m09s the run actually took"
+        );
+        assert_eq!(
+            outcome.active_ms,
+            Some(65_823),
+            "the engine's own figure, not discarded, just no longer the headline"
+        );
+    }
+
+    /// A wall clock is always known, even for a run whose engine said nothing at all about its own
+    /// timing — unlike `active_ms`, which is exactly the signal `is_reported` is asked about.
+    #[test]
+    fn duration_is_known_even_with_no_engine_metrics_at_all() {
+        let outcome = RunOutcome::of(None, "The run could not start: no such binary", 100, 140);
+        assert_eq!(outcome.duration_ms, Some(40));
+        assert_eq!(outcome.active_ms, None);
+        assert!(
+            !outcome.is_reported(),
+            "duration_ms is always there and must not make this look like a reported ending"
+        );
     }
 }

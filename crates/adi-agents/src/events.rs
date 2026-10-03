@@ -104,7 +104,8 @@ pub struct AgentRunStopped {
 /// to care without opening anything.
 ///
 /// Published when the ending is **noticed**, which for a run nobody was watching is later than when
-/// it happened; [`duration_ms`](Self::duration_ms) is the run's own, not the wait.
+/// it happened — [`duration_ms`](Self::duration_ms) counts from when the run actually started, not
+/// from when anybody looked.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct AgentRunFinished {
     /// The agent's name.
@@ -118,13 +119,50 @@ pub struct AgentRunFinished {
     /// Whether the engine called it a failure. The one field a trigger can match on without
     /// knowing any engine's vocabulary.
     pub is_error: bool,
-    /// How long the run took, in milliseconds, as the engine reported it.
+    /// How long the run actually took, wall clock, in milliseconds (ADI-MONO-131). A run that spent
+    /// most of its life waiting between turns — a pending await, most often — has this far larger
+    /// than [`active_ms`](Self::active_ms), and that gap is not a bug: this is "how long it took",
+    /// `active_ms` is "how long a model was actually thinking".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// What the engine itself reported for its own active time — `duration_ms`'s entire meaning
+    /// before ADI-MONO-131. Absent from an engine that reports no such thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
     /// What it cost, in micro-dollars (1e-6 USD).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_micro_usd: Option<u64>,
     /// The opening of what it answered — enough to tell work from a refusal in a notification.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+}
+
+/// `adi.agents.run.idle` — a turn ended and left the run waiting rather than finished (ADI-MONO-129):
+/// a pending await, a queued message still behind it, or an unanswered question are all going to
+/// move this conversation again on their own, and this says so on the bus the moment a listing
+/// notices it, the same way [`AgentRunFinished`] says the opposite.
+///
+/// `run.finished` only ever means *really* finished — ADI-MONO-101's distinction stays exactly what
+/// it was. This exists because that distinction had a blind spot: a launcher's auto-registered wake
+/// matched `run.finished` alone, so a run that ended its turn still waiting on something that was
+/// never coming (a dead await, most often) left nothing to tell its launcher so. Matching this event
+/// too is what closes that — see `adi-cli`'s `agents run`.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunIdle {
+    /// The agent's name.
+    pub agent: String,
+    /// The run that is waiting.
+    pub run_id: String,
+    /// Always `"waiting"` — spelled out rather than implied, so a subscriber matching on this field
+    /// does not have to know this event is only ever published for that one state.
+    pub state: String,
+    /// One line per pending await, in [`Await::describe`](crate::awaits::Await::describe)'s own
+    /// words — what a launcher reads to tell a run waiting on its own background job from one parked
+    /// on something that will never come.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_awaits: Vec<String>,
+    /// The opening of what the turn said before it left the run waiting — same shape as
+    /// [`AgentRunFinished::result_head`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_head: String,
 }
@@ -337,9 +375,23 @@ pub fn event_types() -> Vec<EventType> {
                 run_id: "r-1a2b3c".into(),
                 terminal_reason: Some("completed".into()),
                 is_error: false,
-                duration_ms: Some(23_169),
+                duration_ms: Some(189_423),
+                active_ms: Some(23_169),
                 cost_micro_usd: Some(2_137_364),
                 result_head: "Filed three tasks and left a note on the scope.".into(),
+            },
+        ),
+        EventType::of(
+            "adi.agents.run.idle",
+            "A turn ended and left the run waiting — on a pending await, a queued message, or an \
+             unanswered question — rather than really finished.",
+            schema::<AgentRunIdle>(),
+            &AgentRunIdle {
+                agent: "my-agent".into(),
+                run_id: "r-1a2b3c".into(),
+                state: "waiting".into(),
+                pending_awaits: vec!["in 600s, then every 600s, if the check passes".into()],
+                result_head: "Started the migration in the background.".into(),
             },
         ),
         EventType::of(

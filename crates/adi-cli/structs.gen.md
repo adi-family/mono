@@ -147,8 +147,10 @@ pub(crate) enum AgentsCommand {
         command: AwaitsCommand,
     },
     Runs {
-        #[arg(long)]
+        #[arg(value_name = "AGENT")]
         agent: Option<String>,
+        #[arg(long = "agent", value_name = "AGENT", conflicts_with = "agent")]
+        agent_flag: Option<String>,
         #[arg(long)]
         status: Option<String>,
         #[arg(long)]
@@ -264,6 +266,8 @@ struct RunRow {
     terminal_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cost_micro_usd: Option<u64>,
     message: String,
@@ -840,7 +844,7 @@ pub(crate) enum KnowledgeCommand {
         query: String,
         #[arg(long = "base")]
         bases: Vec<String>,
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, visible_alias = "top", default_value_t = 10)]
         limit: usize,
         #[arg(long)]
         text: bool,

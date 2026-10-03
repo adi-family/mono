@@ -12,9 +12,11 @@
 //! delete it after [`spawn_child`] returns — the one piece of layout that a caller cannot own.
 
 use std::fs::File;
-use std::io::{Read as _, Seek as _, SeekFrom};
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
+
+use adi_config::now_unix;
 
 use crate::error::{Error, Result};
 
@@ -32,9 +34,19 @@ pub(crate) struct Spawned {
     pub(crate) started: Option<u64>,
 }
 
-/// Spawn one detached child of a run: `argv` writing its combined stdout+stderr to `log` (created
-/// fresh, so a re-used slot's previous output is replaced), its PID recorded at `<run_id>.pid`, and
-/// a reaper thread that drops the PID file once the child exits. Returns the child's identity.
+/// Spawn one detached child of a run: `argv` writing its combined stdout+stderr to `log`, its PID
+/// recorded at `<run_id>.pid`, and a reaper thread that drops the PID file once the child exits.
+/// Returns the child's identity.
+///
+/// `log` is truncated fresh for this child — parsing one turn's stream (see
+/// [`claude_stream`](super::claude_stream), [`codex_stream`](super::codex_stream)) and incrementally
+/// tailing a live one both assume it holds exactly this child's output, from byte zero. What the
+/// *previous* occupant of this slot wrote is not lost to that: [`archive_previous_turn`] moves it
+/// aside first, so an agent's whole run survives across turns even though any one turn's own log
+/// does not (ADI-MONO-130). Each turn's own log is bookended with its own wall-clock start and end,
+/// written by this function and the reaper below, so recovering one's timeline never again has to
+/// fall back to run-id epochs, a job's `.exit` sentinel, and file mtimes the way the run this was
+/// filed over did.
 ///
 /// `on_exit` runs on that same reaper thread once the child is gone. It is how a caller marks the
 /// run finished in its own records without having to poll for the ending — and it is the caller's,
@@ -59,7 +71,9 @@ pub(crate) fn spawn_child(
     run_env: &[(String, String)],
     on_exit: impl FnOnce(Spawned) + Send + 'static,
 ) -> Result<Spawned> {
-    let log_file = File::create(log)?;
+    archive_previous_turn(dir, run_id, log);
+    let mut log_file = File::create(log)?;
+    let _ = writeln!(log_file, "=== turn started: unix {} ===", now_unix());
     let errlog = log_file.try_clone()?;
     let (program, command_args) = argv
         .split_first()
@@ -102,15 +116,58 @@ pub(crate) fn spawn_child(
     // anybody wants the ending. The PID file goes, and `on_exit` lets the layer that owns the run
     // strike its own record of the child at the same moment; the log and metadata stay as history.
     let reaper_pid_file = pid_file.clone();
+    let reaper_log = log.to_path_buf();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let status = child.wait();
         if read_pid(&reaper_pid_file) == Some(pid) {
             let _ = std::fs::remove_file(reaper_pid_file);
         }
+        stamp_turn_ended(&reaper_log, status.as_ref().ok());
         on_exit(spawned);
     });
 
     Ok(spawned)
+}
+
+/// Move a slot's existing log aside before [`spawn_child`] truncates it for a fresh turn
+/// (ADI-MONO-130), so a run's earlier turns are never simply gone — only no longer the file
+/// [`log_path`](crate::store::SessionStore::log_path) names.
+///
+/// Named by the moment it is archived, in milliseconds: the one wall-clock boundary both the turn
+/// that just ended and the one about to start agree on, and this module has no reason to keep a
+/// turn counter of its own. Skipped for a missing log — the common case of a slot that has never
+/// run — so a conversation's very first turn does not leave a stray file sitting beside it.
+fn archive_previous_turn(dir: &Path, run_id: &str, log: &Path) {
+    if !log.exists() {
+        return;
+    }
+    let archived = dir.join(format!("{run_id}.{}.log", now_millis()));
+    let _ = std::fs::rename(log, archived);
+}
+
+/// Append this turn's own ending to its own log, right where [`spawn_child`] opened it with the
+/// start (ADI-MONO-130) — so a turn's log is self-contained however it is later recovered, archived
+/// beside its siblings or read live mid-turn. Best-effort: a log that cannot be opened for appending
+/// (the slot was deleted out from under a run no human is watching, say) is not worth failing a
+/// reaper thread over.
+fn stamp_turn_ended(log: &Path, status: Option<&ExitStatus>) {
+    let Ok(mut file) = std::fs::OpenOptions::new().append(true).open(log) else {
+        return;
+    };
+    let how = status.map_or_else(
+        || "unknown — the child could not be waited on".to_string(),
+        ExitStatus::to_string,
+    );
+    let _ = writeln!(file, "=== turn ended: unix {} ({how}) ===", now_unix());
+}
+
+/// The current moment in unix milliseconds, for naming an archived turn's log — second resolution
+/// would collide if two turns ever began inside the same second, which a fast-looping agent can.
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
 }
 
 /// The last `max_bytes` of a log, as much of it as is whole lines: a cut lands mid-line, so the
@@ -398,6 +455,79 @@ mod tests {
         std::fs::write(&log, "line one\nline two\n").unwrap();
         assert_eq!(tail_of(&log, 1024).as_deref(), Some("line one\nline two"));
         assert_eq!(tail_of(&log, 13).as_deref(), Some("line two"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Wait up to a few seconds for a predicate to come true, for a reaper thread's write that
+    /// lands after `child.wait()` returns rather than synchronously with `spawn_child`.
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("condition never became true");
+    }
+
+    /// ADI-MONO-130: the bug this was filed over. A second turn into the same slot must not erase
+    /// the first — it goes to its own side-by-side file instead, bookended with its own start and
+    /// end, so a run's whole timeline survives turn after turn without anybody reaching for run-id
+    /// epochs or file mtimes to reconstruct it.
+    #[test]
+    fn a_second_turn_archives_the_first_instead_of_erasing_it() {
+        let dir = scratch_dir("archive");
+        let log = dir.join("run-1.log");
+        let exit_now = vec!["/bin/sh".to_string(), "-c".to_string(), "echo first".to_string()];
+
+        spawn_child(&dir, "run-1", &log, &dir, "", &exit_now, &[], |_| {}).expect("first turn");
+        wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
+        let first_turn = std::fs::read_to_string(&log).expect("first turn's log");
+        assert!(first_turn.contains("turn started"), "{first_turn}");
+        assert!(first_turn.contains("first"), "{first_turn}");
+
+        let exit_again = vec!["/bin/sh".to_string(), "-c".to_string(), "echo second".to_string()];
+        spawn_child(&dir, "run-1", &log, &dir, "", &exit_again, &[], |_| {}).expect("second turn");
+        wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
+        let second_turn = std::fs::read_to_string(&log).expect("second turn's log");
+        assert!(
+            second_turn.contains("second") && !second_turn.contains("first"),
+            "the live slot is the new turn alone: {second_turn}"
+        );
+
+        let archived: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with("run-1.") && name != "run-1.log")
+            .filter(|name| name.ends_with(".log"))
+            .collect();
+        assert_eq!(archived.len(), 1, "exactly the first turn went aside: {archived:?}");
+        let kept = std::fs::read_to_string(dir.join(&archived[0])).expect("archived log");
+        assert_eq!(kept, first_turn, "archived whole, markers and all");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A conversation's very first turn has nothing to archive — there is no earlier occupant of the
+    /// slot — and must not leave a stray file beside it for that reason alone.
+    #[test]
+    fn a_first_turn_archives_nothing() {
+        let dir = scratch_dir("archive-first");
+        let log = dir.join("run-1.log");
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+
+        spawn_child(&dir, "run-1", &log, &dir, "", &argv, &[], |_| {}).expect("spawn");
+        wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
+
+        let others: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read dir")
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "run-1.log" && name != "run-1.pid")
+            .collect();
+        assert!(others.is_empty(), "nothing archived yet: {others:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

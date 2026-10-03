@@ -250,9 +250,13 @@ pub(crate) enum AgentsCommand {
     /// through logs. Listing is also what *notices* an ending, so running this is what publishes
     /// `adi.agents.run.finished` for anything that stopped since the last look.
     Runs {
-        /// Only this agent's runs.
-        #[arg(long)]
+        /// Only this agent's runs — same as `--agent`, which still works for a script that already
+        /// passes it that way.
+        #[arg(value_name = "AGENT")]
         agent: Option<String>,
+        /// Only this agent's runs.
+        #[arg(long = "agent", value_name = "AGENT", conflicts_with = "agent")]
+        agent_flag: Option<String>,
         /// `running`, `waiting` (a turn ended but a pending await, a queued message, or an
         /// unanswered question means it will move again on its own — see ADI-MONO-101), `failed`
         /// (the engine called it an error), `done` (finished without one), or `unknown` (stopped
@@ -741,11 +745,13 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         AgentsCommand::Awaits { command } => run_awaits(&store, command)?,
         AgentsCommand::Runs {
             agent,
+            agent_flag,
             status,
             since,
             limit,
             json,
         } => {
+            let agent = agent.or(agent_flag);
             let cutoff = match since.as_deref().map(parse_since).transpose()? {
                 Some(window) => now_ms().saturating_sub(window),
                 None => 0,
@@ -1118,8 +1124,13 @@ struct RunRow {
     /// on: `api_error` and `aborted_tools` are both failures wanting opposite responses.
     #[serde(skip_serializing_if = "Option::is_none")]
     terminal_reason: Option<String>,
+    /// Wall clock (ADI-MONO-131): when it was noticed finished minus when it started. See
+    /// `active_ms` for how long a model was actually thinking inside that span.
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
+    /// The engine's own figure — `duration_ms`'s entire meaning before ADI-MONO-131.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cost_micro_usd: Option<u64>,
     message: String,
@@ -1147,6 +1158,7 @@ impl RunRow {
             },
             terminal_reason: outcome.as_ref().and_then(|o| o.terminal_reason.clone()),
             duration_ms: outcome.as_ref().and_then(|o| o.duration_ms),
+            active_ms: outcome.as_ref().and_then(|o| o.active_ms),
             cost_micro_usd: outcome.as_ref().and_then(|o| o.cost_micro_usd),
             message: title(&run.message),
             result_head: outcome.map(|o| o.result_head).unwrap_or_default(),
@@ -1164,7 +1176,11 @@ impl RunRow {
         println!("  run: {}", self.run_id);
         let mut facts = Vec::new();
         if let Some(ms) = self.duration_ms {
-            facts.push(format!("{:.1}s", ms as f64 / 1000.0));
+            let active = self
+                .active_ms
+                .map(|ms| format!(", {:.1}s active", ms as f64 / 1000.0))
+                .unwrap_or_default();
+            facts.push(format!("{:.1}s{active}", ms as f64 / 1000.0));
         }
         if let Some(micro) = self.cost_micro_usd {
             facts.push(format!("${:.2}", micro as f64 / 1_000_000.0));
@@ -1378,16 +1394,19 @@ fn created_by_for_save() -> String {
 /// and poll — which nothing made it do, so mostly it didn't. Here the launch answers with a wake
 /// already registered, and the turn is free to end.
 ///
-/// Three events, not one (ADI-MONO-101): the run finishing for real, the run choosing to hand back
-/// an interim report on purpose (the `Report` tool), or the run stopping to ask a person something.
-/// A launcher that only heard the first would sit silent through the second, and never relay the
-/// third to whoever actually has to answer it. The event name carried in the wake says which of the
-/// three it was — [`crate::awaits::on_event`] hands it over verbatim — and its payload carries the
-/// rest.
+/// Four events, not one (ADI-MONO-101, ADI-MONO-129): the run finishing for real, the run choosing
+/// to hand back an interim report on purpose (the `Report` tool), the run stopping to ask a person
+/// something, or a turn ending and leaving the run waiting on something of its own rather than
+/// really finished. A launcher that only heard the first would sit silent through the rest — and,
+/// for the last one, would never hear at all: before ADI-MONO-129 nothing told it a run had ended a
+/// turn still parked on a pending await, so a run stuck on one that was never going to fire (a dead
+/// background job, most often) left its launcher waiting right along with it. The event name carried
+/// in the wake says which of the four it was — [`crate::awaits::on_event`] hands it over verbatim —
+/// and its payload carries the rest.
 ///
-/// The `when` filter is what makes each one a wake rather than a false alarm: all three of these
+/// The `when` filter is what makes each one a wake rather than a false alarm: all four of these
 /// event names are published for every run on the machine, and the launcher wants exactly the one
-/// it started. `run_id` is spelled the same way across all three payloads for exactly this reason —
+/// it started. `run_id` is spelled the same way across all four payloads for exactly this reason —
 /// see `AgentQuestionAsked::run_id` in `adi-agents`.
 fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> Option<String> {
     let who = awaits::caller()?;
@@ -1398,18 +1417,21 @@ fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> O
         &awaits::Request {
             note: format!(
                 "You started agent {agent} (run {run_id}) with:\n\n{message}\n\nThis wake fires on \
-                 any of three things: the run finishing for real, the run sending you an interim \
-                 report on purpose (`adi.agents.run.reported`), or the run stopping to ask a person \
-                 something (`adi.agents.question.asked`). The event name above this note says which \
-                 one happened, and its payload carries the rest. On a question, relay it to whoever \
-                 needs to answer it — `adi-mono agents answer {agent} {run_id} <reply>...` — rather \
-                 than answering it yourself. `adi-mono agents runs --agent {agent}` has the full \
-                 picture either way."
+                 any of four things: the run finishing for real, the run sending you an interim \
+                 report on purpose (`adi.agents.run.reported`), the run stopping to ask a person \
+                 something (`adi.agents.question.asked`), or a turn ending with the run still waiting \
+                 on something of its own (`adi.agents.run.idle` — a pending await most often, and the \
+                 payload names which). The event name above this note says which one happened, and \
+                 its payload carries the rest. On a question, relay it to whoever needs to answer it \
+                 — `adi-mono agents answer {agent} {run_id} <reply>...` — rather than answering it \
+                 yourself. On an idle turn, look at what it is waiting on before deciding whether to \
+                 leave it be. `adi-mono agents runs --agent {agent}` has the full picture either way."
             ),
             events: vec![
                 "adi.agents.run.finished".to_string(),
                 "adi.agents.run.reported".to_string(),
                 "adi.agents.question.asked".to_string(),
+                "adi.agents.run.idle".to_string(),
             ],
             when: [
                 ("agent".to_string(), agent.to_string()),
@@ -1592,7 +1614,48 @@ fn await_run(store: &Agents, name: &str, run_id: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser as _;
+
     use super::*;
+
+    /// A parser for this group alone, so a test states argv the way a user types it without
+    /// carrying the whole top-level CLI's required arguments.
+    #[derive(Debug, clap::Parser)]
+    struct Harness {
+        #[command(subcommand)]
+        command: AgentsCommand,
+    }
+
+    fn parse(args: &[&str]) -> AgentsCommand {
+        Harness::try_parse_from(std::iter::once("agents").chain(args.iter().copied()))
+            .expect("parses")
+            .command
+    }
+
+    /// ADI-MONO-132: `adi-mono agents runs frontend-2` reads naturally and now parses — the
+    /// positional and `--agent` both land on the same filter, and asking for both at once is
+    /// refused rather than silently picking one.
+    #[test]
+    fn runs_accepts_the_agent_name_positionally_or_as_a_flag() {
+        let AgentsCommand::Runs { agent, agent_flag, .. } = parse(&["runs", "frontend-2"]) else {
+            panic!("expected runs");
+        };
+        assert_eq!(agent.as_deref(), Some("frontend-2"));
+        assert_eq!(agent_flag, None);
+
+        let AgentsCommand::Runs { agent, agent_flag, .. } =
+            parse(&["runs", "--agent", "frontend-2"])
+        else {
+            panic!("expected runs");
+        };
+        assert_eq!(agent, None);
+        assert_eq!(agent_flag.as_deref(), Some("frontend-2"));
+
+        assert!(
+            Harness::try_parse_from(["agents", "runs", "one", "--agent", "two"]).is_err(),
+            "naming it twice is a mistake worth refusing, not guessing between"
+        );
+    }
 
     /// `$ADI_AGENT` set (a turn) records `agent:<name>`; unset (a person at a terminal, or a script)
     /// records `human` — the simpler of the two rules `created_by_for_save` exists to state, next to

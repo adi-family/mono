@@ -2694,8 +2694,14 @@ pub struct AgentRunOutcome {
     /// Cost in micro-dollars (1e-6 USD).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_micro_usd: Option<u64>,
+    /// How long the run actually took, wall clock (ADI-MONO-131) — not the engine's own figure,
+    /// which is [`active_ms`](Self::active_ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    /// What the engine itself reported for its own active time — `duration_ms`'s entire meaning
+    /// before ADI-MONO-131.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_turns: Option<u64>,
     /// The opening of what the run answered.

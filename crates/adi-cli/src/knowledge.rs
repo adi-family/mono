@@ -135,7 +135,7 @@ pub(crate) enum KnowledgeCommand {
         /// A base to search. Repeat for more.
         #[arg(long = "base")]
         bases: Vec<String>,
-        #[arg(long, default_value_t = 10)]
+        #[arg(long, visible_alias = "top", default_value_t = 10)]
         limit: usize,
         /// Search by word instead of by meaning — no model, no network.
         #[arg(long)]
@@ -720,6 +720,18 @@ mod tests {
         assert!(bases.is_empty(), "no --base means every readable base");
         assert_eq!(limit, 10);
         assert!(!text, "meaning, not words, unless --text is asked for");
+    }
+
+    /// ADI-MONO-132: `adi-facts search` already spells this `--top`, and the two search CLIs ought
+    /// to agree — `--limit` stays the canonical name here (it is what `list` also uses), with `--top`
+    /// accepted alongside it rather than instead of it.
+    #[test]
+    fn top_is_accepted_as_an_alias_for_limit() {
+        let KnowledgeCommand::Search { limit, .. } = parse(&["search", "how do I deploy", "--top", "5"])
+        else {
+            panic!("expected search");
+        };
+        assert_eq!(limit, 5);
     }
 
     #[test]

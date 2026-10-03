@@ -20,6 +20,33 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **A run that finishes a turn still waiting on something no longer leaves its launcher blind.**
+  A run that ended a turn holding a pending await, a queued message, or an unanswered question —
+  `waiting`, not `finished` — now publishes its own `adi.agents.run.idle` event, once per turn it
+  stays that way, carrying what it is waiting on. Launching an agent's automatic wake now matches
+  this alongside the run finishing or asking a question, so a run parked on an await that can never
+  fire is heard about rather than sitting unnoticed until someone goes looking. A background job's
+  own hand-written check that still names it after it has already exited is now retired on its own
+  (its wake was redundant from the moment the job ended), and the `Await` tool refuses a new check
+  written the same way, pointing at the job's own wake instead.
+- **A run's session log keeps every turn.** It used to be overwritten at the start of each new
+  turn, so only the last one survived; earlier turns are now moved aside to their own file
+  (`<run>.<unix-ms>.log`) before the next turn starts, and every turn's own log is now bookended
+  with its wall-clock start and end.
+- **A run's reported duration is wall clock again.** `adi.agents.run.finished`, `adi-mono agents
+  runs`, and the panel's run data used to show only the engine's own figure for its last turn —
+  understating a run that spent most of its life waiting between turns by whatever multiple the
+  wait was. `duration_ms` is now `finished_at - started_at`; the engine's own figure moved to a new
+  `active_ms` field.
+
+### Changed
+
+- `adi-mono agents runs <agent>` now takes the agent name positionally, same as `--agent`.
+- `adi-mono knowledge search --top N` is now accepted as an alias for `--limit`, matching
+  `adi-facts search --top`.
+
 ## 1.26.0 — 2026-10-02
 
 ### Added

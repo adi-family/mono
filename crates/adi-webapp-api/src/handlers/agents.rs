@@ -1639,6 +1639,7 @@ fn agent_run_outcome(outcome: adi_agents::store::RunOutcome) -> AgentRunOutcome 
         is_error: outcome.is_error,
         cost_micro_usd: outcome.cost_micro_usd,
         duration_ms: outcome.duration_ms,
+        active_ms: outcome.active_ms,
         num_turns: outcome.num_turns,
         result_head: outcome.result_head,
         noted_at: outcome.noted_at,

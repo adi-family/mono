@@ -56,6 +56,7 @@ pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
 pub use queue::{QueueMode, QueuedMessage};
+pub(crate) use record::{head, started_at};
 pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
 pub use transcript::{TranscriptPage, Turn, assistant_turn, user_turn, user_turn_with};
@@ -525,6 +526,33 @@ impl SessionStore {
                 rusqlite::params![agent, id, json],
             )
             .map_err(|e| db::sql_err("record a run's outcome in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Record that this run's idle state (ADI-MONO-129's `adi.agents.run.idle`) has been announced
+    /// as of `turn`, the number of turns recorded when it was noticed. Returns whether this call is
+    /// the one that changed it.
+    ///
+    /// Gated on `turn` rather than on a plain "already told" flag, which is what
+    /// [`record_outcome`](Self::record_outcome) can get away with and this cannot: a run that
+    /// wakes, works, and ends its next turn still
+    /// waiting is idle *again*, and worth a fresh event, not silence because some earlier turn's
+    /// idle was already announced. Keyed on the same race `record_outcome` settles — the app's poll
+    /// and a CLI listing can both be looking at the same idle run at once.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn note_idle(&self, agent: &str, id: &str, turn: usize) -> Result<bool> {
+        let turn = i64::try_from(turn).unwrap_or(i64::MAX);
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET idle_notified_turn = ?3
+                 WHERE agent = ?1 AND id = ?2
+                   AND (idle_notified_turn IS NULL OR idle_notified_turn != ?3)",
+                rusqlite::params![agent, id, turn],
+            )
+            .map_err(|e| db::sql_err("record a run's idle notice in", e))?;
         Ok(changed > 0)
     }
 

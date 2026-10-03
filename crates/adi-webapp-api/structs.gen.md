@@ -2440,6 +2440,8 @@ pub struct AgentRunOutcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub num_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub result_head: String,

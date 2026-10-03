@@ -70,6 +70,11 @@ pub enum Woke {
     Timer,
     /// It gave up: nothing it was waiting for happened before its deadline.
     Expired,
+    /// It was retired without its check ever agreeing: the background job it watched had already
+    /// exited, which the job's own wake already covers (ADI-MONO-129). A check that cannot tell —
+    /// the bug this exists for inverted one — would otherwise have parked the run until
+    /// [`Await::expires_at`](crate::awaits::Await::expires_at), which may be days off.
+    Dead,
 }
 
 impl Woke {
@@ -78,6 +83,7 @@ impl Woke {
             Self::Event => "event",
             Self::Timer => "timer",
             Self::Expired => "expired",
+            Self::Dead => "dead",
         }
     }
 
@@ -86,6 +92,7 @@ impl Woke {
             "event" => Some(Self::Event),
             "timer" => Some(Self::Timer),
             "expired" => Some(Self::Expired),
+            "dead" => Some(Self::Dead),
             _ => None,
         }
     }

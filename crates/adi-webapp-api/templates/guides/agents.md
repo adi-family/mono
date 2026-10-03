@@ -136,12 +136,17 @@ question you ask the store rather than a stack of logs.
   carrying the verdict. Subscribe a trigger to it and a 3am failure reaches you without anything
   polling for one (see `triggers.md`). Note it is a *different* event from `adi.agents.run.stopped`,
   which means somebody stopped it.
+- `adi.agents.run.idle` (ADI-MONO-129) is published when a turn ends and leaves the run `waiting`
+  rather than `finished` — once per turn it stays that way, not on every poll that still finds it
+  there. It carries what the run is waiting on (its pending awaits, in their own words) and the
+  opening of what the turn said, so a subscriber can tell a run waiting on its own background job
+  from one parked on an await that is never going to fire.
 - Launching another agent (`{{cli}} agents run … --wait` aside, which blocks the turn) registers a
   wake for you automatically — see `awaits.md` / the `Await` tool. That wake fires on any of
-  **three** events: `adi.agents.run.finished` (it really ended), `adi.agents.run.reported` (it told
-  you something on purpose), or `adi.agents.question.asked` (it needs a person, and you should
-  relay the question rather than answer it yourself). The event name carried in the wake says
-  which.
+  **four** events: `adi.agents.run.finished` (it really ended), `adi.agents.run.reported` (it told
+  you something on purpose), `adi.agents.question.asked` (it needs a person, and you should relay
+  the question rather than answer it yourself), or `adi.agents.run.idle` (a turn ended and left it
+  waiting on something of its own). The event name carried in the wake says which.
 - The ending is noticed by whoever looks first — the panel's poll, this command, a trigger's child
   — and written down exactly once, so the event does not repeat.
 - `unknown` means the run stopped without leaving anything an engine parser could read. That is the
