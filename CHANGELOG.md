@@ -20,6 +20,16 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.27.1 — 2026-10-03
+
+### Fixed
+
+- **The release build compiles again.** `turn_marker()` in adi-webapp-api didn't cover the
+  `Woke::Dead` variant added alongside it, failing with `E0004` on macOS, Linux and Windows and
+  publishing nothing for `v1.27.0`. The match now covers it.
+- `v1.27.0`'s release workflow never published anything, so 1.27.1 is the first release to carry
+  1.27.0's changes, in addition to the fix above.
+
 ## 1.27.0 — 2026-10-03
 
 ### Fixed
