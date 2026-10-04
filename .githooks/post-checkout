@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#
+# post-checkout — keep this checkout's cargo `target/` out of Spotlight (scripts/target-noindex.sh).
+#
+# Runs after a clone's first checkout once hooks are installed, on every branch switch, and in each
+# new `git worktree add` — which is how a fresh worktree gets its own `target/` excluded before its
+# first build fills it. Once `target` is the symlink this is a single `stat`.
+#
+# Never fails the checkout: an exclusion that could not be applied is retried next time.
+"$(git rev-parse --show-toplevel)/scripts/target-noindex.sh" || true

@@ -25,6 +25,10 @@ ADI_VERSION="$("$repo_root/scripts/version.sh")"
 export ADI_VERSION
 echo "==> version: $ADI_VERSION"
 
+# Before the build fills target/, not after: an hour of fresh build output is an hour of Spotlight
+# indexing it (scripts/target-noindex.sh).
+scripts/target-noindex.sh
+
 if ! command -v trunk >/dev/null 2>&1; then
   echo "error: 'trunk' is not installed. Install it with:  brew install trunk" >&2
   echo "       (or: cargo install trunk)" >&2

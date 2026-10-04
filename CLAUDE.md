@@ -15,6 +15,12 @@ wait, so from the inside it reads as a slow compiler rather than a queue.
 | `~/adi-family/target` | every `cargo` you run here, `scripts/build-app.sh`, packaging, and the `dev-api` service (`cargo run -p adi-app`) |
 | `~/.cache/adi/target-trunk` | **only** the two `trunk serve` services, `dev-ui` and `ui-playground` — `CARGO_TARGET_DIR` is set on them in `~/.adi/mono/projects/adi/.adi/hive.yaml` (*not* `~/adi-family/.adi/hive.yaml`, which does not exist, whatever `devui`'s help says) |
 
+**On macOS, `target` is a symlink to `target.noindex/`**, so Spotlight leaves the build output alone
+(`scripts/target-noindex.sh`, applied by the post-checkout hook, `scripts/install-hooks.sh` and
+`scripts/build-app.sh`). Every `target/…` path below still resolves. `cargo clean` removes only the
+link; the next run of the script deletes the orphaned `target.noindex/` and relinks, or
+`rm -rf target.noindex` for a full clean right away.
+
 Consequences worth knowing before they surprise you:
 
 - `cargo build -p adi-webapp --target wasm32-unknown-unknown` from the repo root builds in

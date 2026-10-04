@@ -1,5 +1,7 @@
 # Build artifacts
 /target
+# Where target/ really lives on macOS, kept out of Spotlight (scripts/target-noindex.sh).
+/target.noindex
 **/*.rs.bk
 
 # macOS app build output (assembled .app bundle + packaged .dmg)

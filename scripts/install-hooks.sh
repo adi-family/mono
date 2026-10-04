@@ -17,6 +17,9 @@ chmod +x .githooks/* 2>/dev/null || true
 git config core.hooksPath .githooks
 
 echo "hooks installed: core.hooksPath = .githooks"
+# The post-checkout hook does this on every later checkout; this clone's first one has already
+# happened, so do it now.
+scripts/target-noindex.sh
 for hook in .githooks/*; do
     [ -f "$hook" ] || continue
     echo "  $(basename "$hook")"
