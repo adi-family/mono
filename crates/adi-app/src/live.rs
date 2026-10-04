@@ -13,7 +13,9 @@
 //!   watcher per tick;
 //! * the result is sent only when it **differs from the last one sent** — a settled page costs
 //!   nothing on the wire;
-//! * a topic with no watchers is not computed at all, so closing a page really does stop its work.
+//! * a topic with no watchers is not computed at all, so closing a page really does stop its work;
+//! * but its last answer is kept for a while ([`LINGER`]), so going back to a page — or reloading
+//!   it — paints at once from what was last known while the fresh read runs.
 //!
 //! Only reads are watchable ([`watchable`]) — a subscription can never reach a mutation.
 
@@ -55,6 +57,22 @@ const MAX_WATCHES: usize = 64;
 /// How many undelivered messages a connection may bank up before it is dropped. A client not
 /// reading its socket is not a client to keep buffering for; the browser reconnects.
 const QUEUE: usize = 256;
+
+/// How long a topic nobody watches any more keeps its last answer.
+///
+/// Leaving a page and coming back is the common case — and so is reloading it, or opening the
+/// panel again — and each one used to be a cold read of everything the page shows, because the
+/// last watcher leaving threw the topic away. Most reads are quick, but some walk the whole store
+/// (`/api/agents/runs/all` is every run of every agent), and on a machine busy with disk the same
+/// read measured anywhere from 85 ms to over 20 s. The Analytics page drew nothing until it came
+/// back. Kept, the page gets the last answer immediately and the fresh one the moment it is ready.
+/// A kept topic is not recomputed while nobody watches it, so this costs memory, never work.
+const LINGER: Duration = Duration::from_secs(10 * 60);
+
+/// The most unwatched topics kept at once; past it the longest-unwatched go first. A topic is one
+/// answer, and the largest are a few megabytes, so this bounds what a long session of opening and
+/// closing chats can leave behind.
+const MAX_LINGERING: usize = 32;
 
 /// How long a read may be outstanding before the topic is offered again.
 ///
@@ -172,6 +190,8 @@ struct Topic {
     due: Instant,
     /// When the outstanding read was started, if there is one — see [`STALE`].
     computing: Option<Instant>,
+    /// When the last watcher left, while nobody watches it — see [`LINGER`].
+    unwatched_since: Option<Instant>,
 }
 
 /// Every connection and every topic, behind one lock.
@@ -179,6 +199,42 @@ struct Topic {
 struct Inner {
     topics: HashMap<String, Topic>,
     conns: HashMap<u64, mpsc::Sender<Arc<String>>>,
+}
+
+impl Inner {
+    /// Stop `id` watching every topic `keep` does not name. A topic left with nobody watching is
+    /// set aside rather than dropped, answer and all — see [`LINGER`].
+    fn release(&mut self, id: u64, keep: impl Fn(&str) -> bool, now: Instant) {
+        for (key, topic) in &mut self.topics {
+            if !keep(key) && topic.watchers.remove(&id) && topic.watchers.is_empty() {
+                topic.unwatched_since = Some(now);
+            }
+        }
+        self.prune(now);
+    }
+
+    /// Forget what has gone unwatched for longer than [`LINGER`], and the longest-unwatched of
+    /// whatever is still kept beyond [`MAX_LINGERING`].
+    fn prune(&mut self, now: Instant) {
+        self.topics.retain(|_, topic| {
+            topic
+                .unwatched_since
+                .is_none_or(|since| now.saturating_duration_since(since) <= LINGER)
+        });
+        let mut idle: Vec<(Instant, String)> = self
+            .topics
+            .iter()
+            .filter_map(|(key, topic)| topic.unwatched_since.map(|since| (since, key.clone())))
+            .collect();
+        if idle.len() <= MAX_LINGERING {
+            return;
+        }
+        idle.sort_unstable();
+        let excess = idle.len() - MAX_LINGERING;
+        for (_, key) in idle.into_iter().take(excess) {
+            self.topics.remove(&key);
+        }
+    }
 }
 
 /// The live channel's shared state.
@@ -205,15 +261,13 @@ impl Hub {
         (id, rx)
     }
 
-    /// Drop a connection, and with it any topic it was the last watcher of — which is what makes
-    /// a closed tab stop costing anything.
+    /// Drop a connection. A topic it was the last watcher of stops being computed — which is what
+    /// makes a closed tab stop costing anything — and keeps its last answer for the next tab to
+    /// open it (see [`LINGER`]).
     fn detach(&self, id: u64) {
         let mut inner = self.lock();
         inner.conns.remove(&id);
-        inner.topics.retain(|_, topic| {
-            topic.watchers.remove(&id);
-            !topic.watchers.is_empty()
-        });
+        inner.release(id, |_| false, Instant::now());
     }
 
     /// Replace what one connection watches.
@@ -253,13 +307,23 @@ impl Hub {
                 last: None,
                 due: now,
                 computing: None,
+                unwatched_since: None,
             });
             // Already watching it: nothing to send, the topic's own schedule carries on.
             if !topic.watchers.insert(id) {
                 continue;
             }
+            let was_unwatched = topic.unwatched_since.take().is_some();
             match &topic.last {
-                Some(message) => snapshots.push(Arc::clone(message)),
+                Some(message) => {
+                    snapshots.push(Arc::clone(message));
+                    // Kept from a page somebody left, so it may be minutes old: shown at once, and
+                    // asked again at once rather than a whole interval later.
+                    if was_unwatched && topic.computing.is_none() {
+                        topic.computing = Some(now);
+                        fresh.push((key, watch));
+                    }
+                }
                 None if topic.computing.is_none() => {
                     topic.computing = Some(now);
                     fresh.push((key, watch));
@@ -270,21 +334,20 @@ impl Hub {
         }
 
         // Whatever this connection no longer names, it no longer watches.
-        inner.topics.retain(|key, topic| {
-            if !keys.contains(key) {
-                topic.watchers.remove(&id);
-            }
-            !topic.watchers.is_empty()
-        });
+        inner.release(id, |key| keys.contains(key), now);
         (snapshots, fresh)
     }
 
-    /// The topics that have come due, marked as computing so the next tick passes them by.
+    /// The topics that have come due, marked as computing so the next tick passes them by. Nobody
+    /// watching means nobody is waiting for it, so a kept topic is never due — and this, run on
+    /// every tick, is also where the ones kept too long are let go.
     fn take_due(&self, now: Instant) -> Vec<(String, Watch)> {
         let mut inner = self.lock();
+        inner.prune(now);
         inner
             .topics
             .iter_mut()
+            .filter(|(_, topic)| !topic.watchers.is_empty())
             .filter(|(_, topic)| {
                 let free = match topic.computing {
                     None => true,
@@ -305,7 +368,7 @@ impl Hub {
     fn publish(&self, key: &str, message: String) {
         let mut inner = self.lock();
         let Some(topic) = inner.topics.get_mut(key) else {
-            return; // the last watcher left while the read was out
+            return; // let go while the read was out (see `LINGER`)
         };
         topic.computing = None;
         topic.due = Instant::now() + topic.every;
@@ -767,14 +830,68 @@ mod tests {
         );
         assert_eq!(hub.lock().topics.len(), 2);
 
-        // Navigating away: the new list replaces the old one wholesale.
-        hub.subscribe(a, vec![watch("GET", "/api/tasks", "")]);
-        assert_eq!(hub.lock().topics.len(), 1);
+        let health = watch("GET", "/api/health", "").key();
+        let tasks = watch("GET", "/api/tasks", "").key();
+        hub.publish(&health, message(&health, 200, "{}"));
+        hub.publish(&tasks, message(&tasks, 200, "{}"));
 
-        // And closing the tab leaves nothing behind.
+        // Navigating away: the new list replaces the old one wholesale, and what it no longer
+        // names is no longer computed.
+        hub.subscribe(a, vec![watch("GET", "/api/tasks", "")]);
+        let due: Vec<String> = hub
+            .take_due(Instant::now() + SLOW)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(due, vec![tasks]);
+
+        // And closing the tab stops the rest of it.
         hub.detach(a);
-        assert!(hub.lock().topics.is_empty());
         assert!(hub.lock().conns.is_empty());
+        assert!(hub.take_due(Instant::now() + STALE + SLOW).is_empty());
+        // What it last showed is kept for the next tab, but not for ever.
+        assert_eq!(hub.lock().topics.len(), 2);
+        hub.take_due(Instant::now() + LINGER + SLOW);
+        assert!(hub.lock().topics.is_empty());
+    }
+
+    #[test]
+    fn going_back_to_a_page_paints_from_what_was_last_known() {
+        let hub = Hub::default();
+        let read = watch("GET", "/api/agents/runs/all", "");
+        let key = read.key();
+        let (a, _rx_a) = hub.attach();
+        hub.subscribe(a, vec![read.clone()]);
+        hub.publish(&key, message(&key, 200, "{\"runs\":1}"));
+        hub.detach(a);
+
+        // The page opened again — another tab, a reload, or the same tab navigating back.
+        let (b, _rx_b) = hub.attach();
+        let (snapshots, fresh) = hub.subscribe(b, vec![read]);
+        assert_eq!(snapshots.len(), 1, "the last answer, straight away");
+        assert_eq!(
+            fresh.len(),
+            1,
+            "and a fresh read of it, at once rather than an interval out"
+        );
+    }
+
+    #[test]
+    fn what_is_kept_unwatched_is_bounded() {
+        let hub = Hub::default();
+        let (a, _rx_a) = hub.attach();
+        let reads: Vec<Watch> = (0..MAX_LINGERING + 5)
+            .map(|n| {
+                watch(
+                    "POST",
+                    "/api/agents/run/peek",
+                    &format!("{{\"run_id\":\"{n}\"}}"),
+                )
+            })
+            .collect();
+        hub.subscribe(a, reads);
+        hub.detach(a);
+        assert_eq!(hub.lock().topics.len(), MAX_LINGERING);
     }
 
     #[test]

@@ -1579,7 +1579,7 @@ async fn serve_embedded(
     if rel != "index.html"
         && let Some(file) = WEBAPP.get_file(rel)
     {
-        return http::write_response(stream, 200, "OK", content_type(rel), file.contents()).await;
+        return write_build_file(stream, rel, file.contents()).await;
     }
     if let Some(index) = WEBAPP.get_file("index.html") {
         let html = "text/html; charset=utf-8";
@@ -1601,13 +1601,37 @@ async fn serve_from_disk(stream: &mut TcpStream, dir: &Path, rel: &str) -> anyho
     if is_safe_rel(rel)
         && let Ok(bytes) = tokio::fs::read(dir.join(rel)).await
     {
-        return http::write_response(stream, 200, "OK", content_type(rel), &bytes).await;
+        return write_build_file(stream, rel, &bytes).await;
     }
     if let Ok(bytes) = tokio::fs::read(dir.join("index.html")).await {
         let html = "text/html; charset=utf-8";
         return http::write_response(stream, 200, "OK", html, &bytes).await;
     }
     http::write_html(stream, 200, &placeholder_html()).await
+}
+
+/// Serve one file of the webapp's build — for a year if its name says which bytes it holds.
+async fn write_build_file(stream: &mut TcpStream, rel: &str, body: &[u8]) -> anyhow::Result<()> {
+    if is_content_addressed(rel) {
+        http::write_immutable(stream, content_type(rel), body).await
+    } else {
+        http::write_response(stream, 200, "OK", content_type(rel), body).await
+    }
+}
+
+/// Whether a build file's own name carries the hash of its bytes: Trunk's `<name>-<hash>.<ext>`,
+/// as in `adi-webapp-7fde788d5e37b14c_bg.wasm` or `main-42001df2ba433658.css`.
+///
+/// Judged on the file name alone. wasm-bindgen's `snippets/<crate>-<hash>/inline0.js` carries a
+/// hash in its *directory*, which names the crate rather than the bytes, so it stays `no-store`;
+/// so do `sw.js`, the elements and every other unhashed file, which a new build rewrites in place.
+/// The hash is at least 12 hex digits because Trunk prints it without leading zeros.
+fn is_content_addressed(rel: &str) -> bool {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let stem = name.split('.').next().unwrap_or(name);
+    let stem = stem.strip_suffix("_bg").unwrap_or(stem);
+    stem.rsplit_once('-')
+        .is_some_and(|(_, hash)| hash.len() >= 12 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// Reject path traversal: `rel` has its leading `/` stripped already, so joining it to the
@@ -1706,6 +1730,28 @@ mod tests {
 
     /// What may be shared and what may not. The distinction is the whole safety argument for
     /// coalescing: a read repeated is the same read, a mutation repeated is a second mutation.
+    #[test]
+    fn only_a_build_file_named_by_its_hash_is_cached() {
+        // Trunk's own names, including a hash printed without its leading zero.
+        assert!(is_content_addressed("adi-webapp-7fde788d5e37b14c_bg.wasm"));
+        assert!(is_content_addressed("adi-webapp-7fde788d5e37b14c.js"));
+        assert!(is_content_addressed("adi-webapp-81b3a4fdd05fb69_bg.wasm"));
+        assert!(is_content_addressed("main-42001df2ba433658.css"));
+        // The shell, and every file a new build rewrites under the same name.
+        assert!(!is_content_addressed("index.html"));
+        assert!(!is_content_addressed("sw.js"));
+        assert!(!is_content_addressed("rerenders.js"));
+        assert!(!is_content_addressed("elements/adi-elements.js"));
+        assert!(!is_content_addressed("manifest.webmanifest"));
+        // A hash in the directory names the crate, not these bytes.
+        assert!(!is_content_addressed(
+            "snippets/adi-webapp-723bd312eb4d940f/inline0.js"
+        ));
+        // Too short, or not hex, to be a content hash.
+        assert!(!is_content_addressed("icon-192.png"));
+        assert!(!is_content_addressed("mark-maskable.svg"));
+    }
+
     #[test]
     fn only_reads_are_shareable() {
         assert!(shared_read_key(&request("GET", "/api/agents", "")).is_some());

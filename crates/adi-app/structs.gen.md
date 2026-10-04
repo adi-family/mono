@@ -97,6 +97,7 @@ struct Topic {
     last: Option<Arc<String>>,
     due: Instant,
     computing: Option<Instant>,
+    unwatched_since: Option<Instant>,
 }
 ```
 

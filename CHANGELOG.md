@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **The control panel opens much faster, and a page you return to paints at once.** Over plain
+  `http://app.adi` (no service worker there) the 14 MB wasm bundle was served `no-store`, so every
+  open downloaded and compiled it from scratch. Files whose names carry their own content hash are
+  now cached for a year; `index.html`, which names them, is still never cached, so a new build
+  still loads straight away. The live channel also used to drop a page's data the moment nobody
+  was looking at it, which made every return a cold read. On a machine busy with disk, the
+  Analytics charts sat empty for anywhere from 85 ms to over 20 s waiting on the full run history.
+  The last answer is now kept for up to ten minutes and sent the moment the page subscribes,
+  followed by a fresh one as soon as it is read. Nothing is recomputed while nobody is watching.
+
 ## 1.27.1 — 2026-10-03
 
 ### Fixed

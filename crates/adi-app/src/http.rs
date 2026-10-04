@@ -172,11 +172,42 @@ pub async fn write_response(
     content_type: &str,
     body: &[u8],
 ) -> anyhow::Result<()> {
+    write_with_cache(stream, status, reason, content_type, "no-store", body).await
+}
+
+/// Write a build file whose name carries the hash of its own bytes — cached for a year.
+///
+/// The panel's wasm bundle is 14 MB, and over plain `http://app.adi` the browser withholds the
+/// service worker that would otherwise keep it (not a secure context — see the webapp's
+/// `index.html`), so the HTTP cache is the only one there is. Served `no-store` like everything
+/// else, every open of the panel downloaded it again and compiled it from scratch, which on a
+/// machine busy with disk was seconds before the first frame. Nothing is lost by keeping it: a new
+/// build is a new name, and the `index.html` that names it is still never cached.
+///
+/// # Errors
+/// Fails if the socket write fails.
+pub async fn write_immutable(
+    stream: &mut TcpStream,
+    content_type: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let cache = "public, max-age=31536000, immutable";
+    write_with_cache(stream, 200, "OK", content_type, cache, body).await
+}
+
+async fn write_with_cache(
+    stream: &mut TcpStream,
+    status: u16,
+    reason: &str,
+    content_type: &str,
+    cache_control: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: {content_type}\r\n\
          Content-Length: {len}\r\n\
-         Cache-Control: no-store\r\n\
+         Cache-Control: {cache_control}\r\n\
          Connection: close\r\n\
          \r\n",
         len = body.len(),
