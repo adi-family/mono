@@ -144,7 +144,10 @@ fn report_nudged(nudged: &[goals::Nudged]) {
 mod tests {
     use super::*;
 
+    use adi_agents::AgentRunFinished;
     use adi_agents::awaits::{Awaits, Request};
+    use adi_events::Event;
+    use adi_tasks::TaskDeleted;
 
     fn scratch(tag: &str) -> adi_config::Config {
         let root = std::env::temp_dir().join(format!(
@@ -190,11 +193,7 @@ mod tests {
         .expect("register");
 
         let observer = start(agents);
-        observer(&EventRecord {
-            name: "adi.tasks.created".into(),
-            payload: r#"{"id":"t1"}"#.into(),
-            emitted_at: 0,
-        });
+        observer(&TaskDeleted::new("t1").to_record().expect("task event"));
 
         // The event one goes almost at once; the timer one waits out its second plus a sweep.
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -228,7 +227,7 @@ mod tests {
             "conv-1",
             &Request {
                 note: "the agent you started ended".into(),
-                events: vec!["adi.agents.run.finished".into()],
+                events: vec![AgentRunFinished::NAME.into()],
                 when: [("run_id".to_string(), "r-42".to_string())]
                     .into_iter()
                     .collect(),
@@ -237,10 +236,10 @@ mod tests {
         )
         .expect("register");
 
-        let finished = |run_id: &str| EventRecord {
-            name: "adi.agents.run.finished".into(),
-            payload: format!(r#"{{"agent":"worker","run_id":"{run_id}","is_error":false}}"#),
-            emitted_at: 0,
+        let finished = |run_id: &str| {
+            AgentRunFinished::new(run_id, "worker", false)
+                .to_record()
+                .expect("run-finished record")
         };
         let observer = start(agents);
 

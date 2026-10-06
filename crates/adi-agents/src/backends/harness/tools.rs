@@ -847,16 +847,14 @@ fn ask(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     // Announced on the bus rather than delivered anywhere: this crate has no idea who is watching,
     // and a trigger subscribed to `adi.agents.question.**` is how the question reaches a phone.
     // Best-effort — a question nobody was told about is still a question that got written down.
-    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit(
-        crate::events::QUESTION_ASKED,
-        serde_json::to_string(&crate::events::AgentQuestionAsked {
+    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit_event(
+        &crate::events::AgentQuestionAsked {
             agent: ctx.agent.to_string(),
             conv: ctx.conv.to_string(),
             run_id: ctx.conv.to_string(),
             ask: asked.id.clone(),
             question: asked.headline(),
-        })
-        .unwrap_or_default(),
+        },
     );
 
     let deadline = match asked.deadline {
@@ -928,14 +926,12 @@ fn parse_question(value: &Value) -> std::result::Result<crate::store::Question, 
 /// whether the conversation is still going, only who has been told about it.
 fn report(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let text = arg_str(input, "text")?;
-    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit(
-        crate::events::RUN_REPORTED,
-        serde_json::to_string(&crate::events::AgentRunReported {
+    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit_event(
+        &crate::events::AgentRunReported {
             agent: ctx.agent.to_string(),
             run_id: ctx.conv.to_string(),
             report: text.trim().to_string(),
-        })
-        .unwrap_or_default(),
+        },
     );
     Ok(
         "reported — whoever is watching this run (if anyone registered a wake for it) has been \
@@ -1266,6 +1262,8 @@ fn collect(drain: Option<Drain>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AgentRunFinished;
+    use adi_events::Event;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("adi-tools-{name}-{}", std::process::id()));
@@ -1647,7 +1645,7 @@ mod tests {
         let registered = await_wake(
             &json!({
                 "note": "the run you started ended",
-                "events": ["adi.agents.run.finished"],
+                "events": [AgentRunFinished::NAME],
                 "when": { "run_id": "r-42" },
             }),
             &ctx,
@@ -1671,10 +1669,7 @@ mod tests {
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
         assert_eq!(pending.len(), 1, "changed in place, not registered again");
         assert_eq!(pending[0].note, "why I am waiting");
-        assert_eq!(
-            pending[0].events,
-            vec!["adi.agents.run.finished".to_string()]
-        );
+        assert_eq!(pending[0].events, vec![AgentRunFinished::NAME.to_string()]);
         assert!(
             pending[0].expiry_wakes,
             "a deadline it named is one it hears about"

@@ -75,10 +75,10 @@ pub use backend::Backend;
 pub use backends::harness::tools::ToolDeclaration;
 pub use error::{Error, Result};
 pub use events::{
-    AgentDeleted, AgentGoalClosed, AgentGoalNudged, AgentGoalSet, AgentQuestionAnswered,
-    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunIdle, AgentRunReported,
-    AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused, RUN_REPORTED, event_catalog,
-    event_types,
+    AgentDeleted, AgentGoalClosed, AgentGoalGivenUp, AgentGoalMet, AgentGoalNudged, AgentGoalSet,
+    AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunIdle,
+    AgentRunReported, AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused,
+    RUN_REPORTED, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
@@ -662,12 +662,9 @@ impl Agents {
         if needs_runtime(&manifest) {
             hydrate_runtime(&mut manifest, &self.backend_catalog()?);
         }
-        self.emit(
-            "adi.agents.saved",
-            &AgentSaved {
-                agent: name.to_string(),
-            },
-        );
+        self.emit_event(&AgentSaved {
+            agent: name.to_string(),
+        });
         Ok(Agent {
             name: name.to_string(),
             manifest,
@@ -705,12 +702,9 @@ impl Agents {
         arguments::validate_builtin(&manifest)?;
         llm::validate_rows(&manifest.backends)?;
         file.save(&manifest)?;
-        self.emit(
-            "adi.agents.saved",
-            &AgentSaved {
-                agent: name.to_string(),
-            },
-        );
+        self.emit_event(&AgentSaved {
+            agent: name.to_string(),
+        });
         Ok(())
     }
 
@@ -725,39 +719,33 @@ impl Agents {
             enforced,
             "agent-to-agent launch outside can_spawn"
         );
-        self.emit(
-            "adi.agents.spawn.refused",
-            &AgentSpawnRefused {
-                caller: caller.to_string(),
-                target: target.to_string(),
-                run_id: run_id.to_string(),
-                enforced,
-            },
-        );
+        self.emit_event(&AgentSpawnRefused {
+            caller: caller.to_string(),
+            target: target.to_string(),
+            run_id: run_id.to_string(),
+            enforced,
+        });
     }
 
     /// Announce that a question is settled, so whatever told a person about it can say so too.
     pub(crate) fn emit_answered(&self, ask: &Ask, by: AnsweredBy) {
-        self.emit(
-            events::QUESTION_ANSWERED,
-            &AgentQuestionAnswered {
-                agent: ask.agent.clone(),
-                conv: ask.conv.clone(),
-                ask: ask.id.clone(),
-                by: match by {
-                    AnsweredBy::Human => "human".to_string(),
-                    AnsweredBy::Default => "default".to_string(),
-                },
+        self.emit_event(&AgentQuestionAnswered {
+            agent: ask.agent.clone(),
+            conv: ask.conv.clone(),
+            ask: ask.id.clone(),
+            by: match by {
+                AnsweredBy::Human => "human".to_string(),
+                AnsweredBy::Default => "default".to_string(),
             },
-        );
+        });
     }
 
     /// Publish an `adi.agents.*` event onto the shared bus. Best-effort and fire-and-forget: this
     /// registry neither knows nor cares whether anything subscribes, and a spool failure must
     /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
     /// so a scratch store stays isolated.
-    fn emit(&self, event: &str, payload: &impl serde::Serialize) {
-        adi_events::Events::with_config(self.config.clone()).emit_json(event, payload);
+    fn emit_event(&self, event: &impl adi_events::Event) {
+        let _ = adi_events::Events::with_config(self.config.clone()).emit_event(event);
     }
 
     /// Renames an agent and its completed history, keeping the manifest and session ids intact.
@@ -1373,10 +1361,7 @@ impl Agents {
         store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
         let launch = launch_of(&agent, runner.as_ref(), &session);
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(name, message, &launch),
-        );
+        self.emit_event(&AgentRunStarted::of(name, message, &launch));
         Ok(launch)
     }
 
@@ -1769,10 +1754,7 @@ impl Agents {
         };
 
         let launch = self.start_turn(&agent, &store, runner.as_ref(), &record, &next)?;
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(name, &next.text, &launch),
-        );
+        self.emit_event(&AgentRunStarted::of(name, &next.text, &launch));
         Ok(Sent::Started(launch))
     }
 
@@ -2036,10 +2018,7 @@ impl Agents {
         let Ok(launch) = self.start_turn(agent, &store, runner.as_ref(), &record, &message) else {
             return false;
         };
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(&agent.name, &message.text, &launch),
-        );
+        self.emit_event(&AgentRunStarted::of(&agent.name, &message.text, &launch));
         true
     }
 
@@ -2155,19 +2134,16 @@ impl Agents {
             .record_outcome(agent, run_id, &outcome)
             .unwrap_or(false)
         {
-            self.emit(
-                "adi.agents.run.finished",
-                &AgentRunFinished {
-                    agent: agent.to_string(),
-                    run_id: run_id.to_string(),
-                    terminal_reason: outcome.terminal_reason.clone(),
-                    is_error: true,
-                    duration_ms: outcome.duration_ms,
-                    active_ms: None,
-                    cost_micro_usd: None,
-                    result_head: outcome.result_head.clone(),
-                },
-            );
+            self.emit_event(&AgentRunFinished {
+                agent: agent.to_string(),
+                run_id: run_id.to_string(),
+                terminal_reason: outcome.terminal_reason.clone(),
+                is_error: true,
+                duration_ms: outcome.duration_ms,
+                active_ms: None,
+                cost_micro_usd: None,
+                result_head: outcome.result_head.clone(),
+            });
         }
         Err(error)
     }
@@ -2501,19 +2477,16 @@ impl Agents {
                 // ending is the one that acts on it, so sixteen watchers of a spent backend produce
                 // one hold, one switch and one notice rather than sixteen.
                 self.fail_over(agent, &store, &run.run_id, &content, &outcome);
-                self.emit(
-                    "adi.agents.run.finished",
-                    &AgentRunFinished {
-                        agent: agent.name.clone(),
-                        run_id: run.run_id.clone(),
-                        terminal_reason: outcome.terminal_reason.clone(),
-                        is_error: outcome.is_error,
-                        duration_ms: outcome.duration_ms,
-                        active_ms: outcome.active_ms,
-                        cost_micro_usd: outcome.cost_micro_usd,
-                        result_head: outcome.result_head.clone(),
-                    },
-                );
+                self.emit_event(&AgentRunFinished {
+                    agent: agent.name.clone(),
+                    run_id: run.run_id.clone(),
+                    terminal_reason: outcome.terminal_reason.clone(),
+                    is_error: outcome.is_error,
+                    duration_ms: outcome.duration_ms,
+                    active_ms: outcome.active_ms,
+                    cost_micro_usd: outcome.cost_micro_usd,
+                    result_head: outcome.result_head.clone(),
+                });
             }
             run.outcome = Some(outcome);
         }
@@ -2551,16 +2524,13 @@ impl Agents {
                 .last_turn(&agent.name, &run.run_id)
                 .map(|turn| store::head(&turn.text))
                 .unwrap_or_default();
-            self.emit(
-                "adi.agents.run.idle",
-                &AgentRunIdle {
-                    agent: agent.name.clone(),
-                    run_id: run.run_id.clone(),
-                    state: "waiting".to_string(),
-                    pending_awaits,
-                    result_head,
-                },
-            );
+            self.emit_event(&AgentRunIdle {
+                agent: agent.name.clone(),
+                run_id: run.run_id.clone(),
+                state: "waiting".to_string(),
+                pending_awaits,
+                result_head,
+            });
         }
     }
 
@@ -2804,13 +2774,10 @@ impl Agents {
         // rather than marching on into a conversation somebody has just interrupted.
         store.clear_queue(name, run_id)?;
         if stopped {
-            self.emit(
-                "adi.agents.run.stopped",
-                &AgentRunStopped {
-                    agent: name.to_string(),
-                    run_id: Some(run_id.to_string()),
-                },
-            );
+            self.emit_event(&AgentRunStopped {
+                agent: name.to_string(),
+                run_id: Some(run_id.to_string()),
+            });
         }
         Ok(stopped)
     }
@@ -2845,13 +2812,10 @@ impl Agents {
         if deleted {
             let _ =
                 awaits::Awaits::with_config(self.config.clone()).forget_conversation(name, run_id);
-            self.emit(
-                "adi.agents.run.deleted",
-                &AgentRunDeleted {
-                    agent: name.to_string(),
-                    run_id: run_id.to_string(),
-                },
-            );
+            self.emit_event(&AgentRunDeleted {
+                agent: name.to_string(),
+                run_id: run_id.to_string(),
+            });
         }
         Ok(deleted)
     }
@@ -2937,13 +2901,10 @@ impl Agents {
             }
         }
         if stopped {
-            self.emit(
-                "adi.agents.run.stopped",
-                &AgentRunStopped {
-                    agent: name.to_string(),
-                    run_id: None,
-                },
-            );
+            self.emit_event(&AgentRunStopped {
+                agent: name.to_string(),
+                run_id: None,
+            });
         }
         Ok(stopped)
     }
@@ -2963,12 +2924,9 @@ impl Agents {
             // conversation something, and there is nothing left to ask. Closed ones stay as
             // history, beside the transcript that shows how they were met.
             let _ = self.sessions().forget_goals(name);
-            self.emit(
-                "adi.agents.deleted",
-                &AgentDeleted {
-                    agent: name.to_string(),
-                },
-            );
+            self.emit_event(&AgentDeleted {
+                agent: name.to_string(),
+            });
         }
         Ok(removed)
     }
@@ -3015,10 +2973,7 @@ impl Agents {
         store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
         let launch = launch_of(&agent, &runner, &session);
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(name, message, &launch),
-        );
+        self.emit_event(&AgentRunStarted::of(name, message, &launch));
         Ok(launch)
     }
 
@@ -3645,6 +3600,7 @@ fn attached_secret_env(config: &Config, attachments: &[SecretAttachment]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adi_events::Event;
 
     #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
     struct CloudManifest {
@@ -6187,7 +6143,7 @@ mod tests {
             .expect("drain");
         let refusal = events
             .iter()
-            .find(|e| e.record.name == "adi.agents.spawn.refused")
+            .find(|e| e.record.name == AgentSpawnRefused::NAME)
             .expect("the refusal was published even though nothing was actually stopped");
         let payload: serde_json::Value =
             serde_json::from_str(&refusal.record.payload).expect("json payload");
@@ -7331,7 +7287,7 @@ mod tests {
                 .drain()
                 .expect("drain")
                 .iter()
-                .all(|e| e.record.name != "adi.agents.run.finished"),
+                .all(|e| e.record.name != AgentRunFinished::NAME),
             "nothing here is really finished yet",
         );
 
@@ -7347,7 +7303,7 @@ mod tests {
                 .drain()
                 .expect("drain")
                 .iter()
-                .any(|e| e.record.name == "adi.agents.run.finished"),
+                .any(|e| e.record.name == AgentRunFinished::NAME),
             "now it really is",
         );
     }
@@ -7387,7 +7343,7 @@ mod tests {
         let events = bus.drain().expect("drain");
         let idle = events
             .iter()
-            .find(|e| e.record.name == "adi.agents.run.idle")
+            .find(|e| e.record.name == AgentRunIdle::NAME)
             .expect("published the first time this was noticed");
         let payload: serde_json::Value =
             serde_json::from_str(&idle.record.payload).expect("json payload");
@@ -7407,7 +7363,7 @@ mod tests {
             bus.drain()
                 .expect("drain")
                 .iter()
-                .all(|e| e.record.name != "adi.agents.run.idle"),
+                .all(|e| e.record.name != AgentRunIdle::NAME),
             "the same idle turn is not announced twice"
         );
     }

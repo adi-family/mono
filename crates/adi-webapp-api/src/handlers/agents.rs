@@ -3312,7 +3312,9 @@ fn clean_arguments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adi_agents::AgentRunFinished;
     use adi_config::Config;
+    use adi_events::Event;
 
     fn scratch(tag: &str) -> Agents {
         let root = std::env::temp_dir().join(format!(
@@ -3974,7 +3976,7 @@ mod tests {
             &run,
             &adi_agents::awaits::Request {
                 note: "the parser build I launched".to_string(),
-                events: vec!["adi.agents.run.finished".to_string()],
+                events: vec![AgentRunFinished::NAME.to_string()],
                 when: [("run_id".to_string(), "1750000000000-0002".to_string())]
                     .into_iter()
                     .collect(),

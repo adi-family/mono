@@ -4,11 +4,12 @@
 
 > The adi task tree: a persistent tree of work items (one JSON document under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library.
 
-6 structs · 4 enums · 1 type alias across 3 files.
+11 structs · 4 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
+- [`src/events.rs`](#srceventsrs) — `TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskArchived`, `TaskReopened`
 - [`src/lib.rs`](#srclibrs) — `Tasks`
 - [`src/task.rs`](#srctaskrs) — `TaskStatus`, `EffectiveStatus`, `Task`, `TaskView`, `TaskDeleted`, `TasksDoc`, `TaskPatch`, `ParentChange`
 
@@ -37,6 +38,60 @@ pub enum Error {
     ReopenFirst,
     Store(anyhow::Error),
 }
+```
+
+---
+
+## `src/events.rs`
+
+### struct `TaskCreated`
+
+`adi.tasks.created` — a task was created, carrying its resulting view.
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskCreated<'a>(pub &'a TaskView);
+```
+
+### struct `TaskUpdated`
+
+`adi.tasks.updated` — a task's fields were edited, carrying its resulting view.
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskUpdated<'a>(pub &'a TaskView);
+```
+
+### struct `TaskCompleted`
+
+`adi.tasks.completed` — a task was marked done, carrying its resulting view.
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskCompleted<'a>(pub &'a TaskView);
+```
+
+### struct `TaskArchived`
+
+`adi.tasks.archived` — a task was archived, carrying its resulting view.
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskArchived<'a>(pub &'a TaskView);
+```
+
+### struct `TaskReopened`
+
+`adi.tasks.reopened` — a task was reopened, carrying its resulting view.
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskReopened<'a>(pub &'a TaskView);
 ```
 
 ---

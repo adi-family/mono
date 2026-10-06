@@ -229,9 +229,29 @@ impl EventDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adi_events::Event;
+    use serde::Serialize;
 
     use crate::TriggerManifest;
     use crate::trigger::{KIND_EVENT, RUNTIME_SH};
+
+    #[derive(Serialize)]
+    struct ItemCreated {
+        id: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project: Option<&'static str>,
+    }
+
+    impl Event for ItemCreated {
+        const NAME: &'static str = "test.items.created";
+    }
+
+    #[derive(Serialize)]
+    struct OtherEvent {}
+
+    impl Event for OtherEvent {
+        const NAME: &'static str = "test.other.created";
+    }
 
     fn scratch(tag: &str) -> Triggers {
         let root = std::env::temp_dir().join(format!(
@@ -275,20 +295,23 @@ mod tests {
         let store = scratch("match");
         save_event_trigger(
             &store,
-            "on-task",
+            "on-item",
             "printf '%s|%s' \"$ADI_EVENT\" \"$ADI_PAYLOAD\"",
-            &["adi.tasks.*"],
+            &["test.items.*"],
         );
         let bus = Events::with_config(store.config().clone());
 
         let dispatcher = EventDispatcher::start(store.clone());
-        bus.emit("adi.tasks.created", r#"{"id":"t1"}"#)
-            .expect("emit");
+        let event = ItemCreated {
+            id: "t1",
+            project: None,
+        };
+        let record = event.to_record().expect("item-created record");
+        let expected = format!("{}|{}", record.name, record.payload);
+        bus.emit_event(&event).expect("emit");
 
         assert!(
-            wait_until(|| store.read_log("on-task").as_deref()
-                == Some("adi.tasks.created|{\"id\":\"t1\"}"))
-            .await,
+            wait_until(|| store.read_log("on-item").as_deref() == Some(expected.as_str())).await,
             "the subscriber should have fired with event name and payload"
         );
         // The event was consumed from the spool.
@@ -301,18 +324,18 @@ mod tests {
     #[tokio::test]
     async fn an_unsubscribed_event_is_dropped() {
         let store = scratch("nosub");
-        save_event_trigger(&store, "on-task", "true", &["adi.tasks.*"]);
+        save_event_trigger(&store, "on-item", "true", &["test.items.*"]);
         let bus = Events::with_config(store.config().clone());
 
         let dispatcher = EventDispatcher::start(store.clone());
-        bus.emit("adi.agents.run.started", "{}").expect("emit");
+        bus.emit_event(&OtherEvent {}).expect("emit");
 
         assert!(
             wait_until(|| bus.drain().expect("drain").is_empty()).await,
             "the unmatched event should be consumed and dropped"
         );
         assert!(
-            store.read_log("on-task").is_none(),
+            store.read_log("on-item").is_none(),
             "the non-matching subscriber must not have fired"
         );
 
@@ -332,7 +355,7 @@ mod tests {
                     kind: KIND_EVENT.into(),
                     runtime: RUNTIME_SH.into(),
                     code: "printf '%s' \"$ADI_PAYLOAD\"".into(),
-                    events: vec!["adi.tasks.*".into()],
+                    events: vec!["test.items.*".into()],
                     trigger_on: vec!["alpha".into()],
                     ..TriggerManifest::default()
                 },
@@ -341,11 +364,17 @@ mod tests {
         let bus = Events::with_config(store.config().clone());
         let dispatcher = EventDispatcher::start(store.clone());
 
-        // A task in a different project must not fire it, and neither must one naming no project.
-        bus.emit("adi.tasks.created", r#"{"id":"t1","project":"beta"}"#)
-            .expect("emit beta");
-        bus.emit("adi.tasks.created", r#"{"id":"t2"}"#)
-            .expect("emit none");
+        // An item in a different project must not fire it, and neither must one naming no project.
+        bus.emit_event(&ItemCreated {
+            id: "t1",
+            project: Some("beta"),
+        })
+        .expect("emit beta");
+        bus.emit_event(&ItemCreated {
+            id: "t2",
+            project: None,
+        })
+        .expect("emit none");
         assert!(
             wait_until(|| bus.drain().expect("drain").is_empty()).await,
             "both non-matching events should be consumed"
@@ -355,14 +384,17 @@ mod tests {
             "a project-restricted trigger must not fire for another project or an unattributed event"
         );
 
-        // A task in the allowed project fires it, with its payload intact.
-        bus.emit("adi.tasks.created", r#"{"id":"t3","project":"alpha"}"#)
-            .expect("emit alpha");
+        // An item in the allowed project fires it, with its payload intact.
+        let event = ItemCreated {
+            id: "t3",
+            project: Some("alpha"),
+        };
+        let record = event.to_record().expect("item-created record");
+        bus.emit_event(&event).expect("emit alpha");
         assert!(
-            wait_until(|| store.read_log("on-alpha").as_deref()
-                == Some(r#"{"id":"t3","project":"alpha"}"#))
-            .await,
-            "the trigger should fire for a task in its allowed project"
+            wait_until(|| store.read_log("on-alpha").as_deref() == Some(record.payload.as_str()))
+                .await,
+            "the trigger should fire for an item in its allowed project"
         );
 
         dispatcher.stop(Duration::from_secs(2)).await;
@@ -372,21 +404,25 @@ mod tests {
     #[tokio::test]
     async fn only_matching_patterns_fire() {
         let store = scratch("selective");
-        save_event_trigger(&store, "tasks-only", "printf hit", &["adi.tasks.*"]);
-        save_event_trigger(&store, "agents-only", "printf hit", &["adi.agents.**"]);
+        save_event_trigger(&store, "items-only", "printf hit", &["test.items.*"]);
+        save_event_trigger(&store, "other-only", "printf hit", &["test.other.**"]);
         let bus = Events::with_config(store.config().clone());
 
         let dispatcher = EventDispatcher::start(store.clone());
-        bus.emit("adi.tasks.created", "{}").expect("emit");
+        bus.emit_event(&ItemCreated {
+            id: "t1",
+            project: None,
+        })
+        .expect("emit");
 
         assert!(
-            wait_until(|| store.read_log("tasks-only").as_deref() == Some("hit")).await,
-            "the tasks subscriber should fire"
+            wait_until(|| store.read_log("items-only").as_deref() == Some("hit")).await,
+            "the items subscriber should fire"
         );
-        // Give the agents subscriber every chance to (wrongly) fire before asserting it didn't.
+        // Give the other subscriber every chance to (wrongly) fire before asserting it didn't.
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(
-            store.read_log("agents-only").is_none(),
+            store.read_log("other-only").is_none(),
             "a non-matching pattern must not fire"
         );
 

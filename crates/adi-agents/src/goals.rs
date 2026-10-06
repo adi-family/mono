@@ -45,7 +45,7 @@ use std::fmt::Write as _;
 use crate::awaits::Awaits;
 use crate::error::Result;
 use crate::events::{
-    AgentGoalClosed, AgentGoalNudged, AgentGoalSet, GOAL_GIVEN_UP, GOAL_MET, GOAL_NUDGED, GOAL_SET,
+    AgentGoalClosed, AgentGoalGivenUp, AgentGoalMet, AgentGoalNudged, AgentGoalSet,
 };
 use crate::marker::Marker;
 use crate::runner::runner_of;
@@ -113,16 +113,13 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
             )
             .err()
             .map(|e| e.to_string());
-        agents.emit(
-            GOAL_NUDGED,
-            &AgentGoalNudged {
-                agent: agent.clone(),
-                conv: conv.clone(),
-                goals: goals.iter().map(|g| g.id.clone()).collect(),
-                // +1 for the stamp just written: these copies were read before it.
-                nudges: goals.first().map_or(0, |g| g.nudges + 1),
-            },
-        );
+        agents.emit_event(&AgentGoalNudged {
+            agent: agent.clone(),
+            conv: conv.clone(),
+            goals: goals.iter().map(|g| g.id.clone()).collect(),
+            // +1 for the stamp just written: these copies were read before it.
+            nudges: goals.first().map_or(0, |g| g.nudges + 1),
+        });
         nudged.push(Nudged {
             agent,
             conv,
@@ -243,16 +240,13 @@ fn nudge_message(goals: &[Goal]) -> String {
 /// [`store::goals`](crate::store).
 pub fn create(agents: &Agents, agent: &str, conv: &str, text: &str, set_by: SetBy) -> Result<Goal> {
     let goal = agents.sessions().create_goal(agent, conv, text, set_by)?;
-    agents.emit(
-        GOAL_SET,
-        &AgentGoalSet {
-            agent: goal.agent.clone(),
-            conv: goal.conv.clone(),
-            goal: goal.id.clone(),
-            text: goal.text.clone(),
-            set_by: goal.set_by.as_str().to_string(),
-        },
-    );
+    agents.emit_event(&AgentGoalSet {
+        agent: goal.agent.clone(),
+        conv: goal.conv.clone(),
+        goal: goal.id.clone(),
+        text: goal.text.clone(),
+        set_by: goal.set_by.as_str().to_string(),
+    });
     Ok(goal)
 }
 
@@ -307,20 +301,18 @@ pub fn all_open(agents: &Agents) -> Vec<Goal> {
 fn close(agents: &Agents, goal_id: &str, state: GoalState, note: &str) -> Result<GoalClosed> {
     let closed = agents.sessions().close_goal(goal_id, state, note)?;
     if let GoalClosed::Now(goal) = &closed {
-        agents.emit(
-            match state {
-                GoalState::Met => GOAL_MET,
-                _ => GOAL_GIVEN_UP,
-            },
-            &AgentGoalClosed {
-                agent: goal.agent.clone(),
-                conv: goal.conv.clone(),
-                goal: goal.id.clone(),
-                text: goal.text.clone(),
-                note: goal.note.clone(),
-                nudges: goal.nudges,
-            },
-        );
+        let payload = AgentGoalClosed {
+            agent: goal.agent.clone(),
+            conv: goal.conv.clone(),
+            goal: goal.id.clone(),
+            text: goal.text.clone(),
+            note: goal.note.clone(),
+            nudges: goal.nudges,
+        };
+        match state {
+            GoalState::Met => agents.emit_event(&AgentGoalMet(payload)),
+            _ => agents.emit_event(&AgentGoalGivenUp(payload)),
+        }
     }
     Ok(closed)
 }

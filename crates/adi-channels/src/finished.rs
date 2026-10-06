@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use adi_agents::Agents;
-use adi_events::EventRecord;
+use adi_agents::{AgentQuestionAsked, Agents};
+use adi_events::{Event, EventRecord};
 use adi_secrets::Secrets;
 use tracing::warn;
 
@@ -26,18 +26,11 @@ use crate::token;
 /// no other reason to take `adi-triggers` as a dependency.
 pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
 
-/// `adi_agents::events::QUESTION_ASKED`'s exact spelling, copied rather than imported: that
-/// module is private to `adi-agents` and nothing re-exports the constant at its crate root (only
-/// the [`AgentQuestionAsked`] payload type is public). If `adi-agents` ever renames the event,
-/// this silently stops matching rather than failing to compile — worth asking `adi-agents` to
-/// export the constant if that risk ever bites.
-const QUESTION_ASKED: &str = "adi.agents.question.asked";
-
 /// Build the observer `adi-app` composes into its event dispatcher. `router_url` is the one this
 /// node's client already subscribes through — see `RouterApi`'s own note on its assumed shape.
 ///
-/// Matches only [`QUESTION_ASKED`]; everything else is ignored immediately, which is what "return
-/// promptly" (the dispatcher's own contract on an observer) means in practice. The actual
+/// Matches only [`AgentQuestionAsked`]; everything else is ignored immediately, which is what
+/// "return promptly" (the dispatcher's own contract on an observer) means in practice. The actual
 /// lookup-and-post happens on a detached thread, never on the dispatcher's own tick — a slow or
 /// unreachable router must not stall the trigger/await delivery that shares this one drain.
 #[must_use]
@@ -48,7 +41,7 @@ pub fn observer(
     router_url: String,
 ) -> EventObserver {
     Arc::new(move |record: &EventRecord| {
-        if record.name != QUESTION_ASKED {
+        if record.name != AgentQuestionAsked::NAME {
             return;
         }
         let connections = connections.clone();
@@ -66,7 +59,7 @@ pub fn observer(
     })
 }
 
-/// The run id a [`QUESTION_ASKED`] payload belongs to.
+/// The run id an [`AgentQuestionAsked`] payload belongs to.
 fn run_id_of(value: &serde_json::Value) -> String {
     value
         .get("run_id")
@@ -88,7 +81,7 @@ fn post_back(
     name: &str,
     payload: &str,
 ) -> Result<()> {
-    if name != QUESTION_ASKED {
+    if name != AgentQuestionAsked::NAME {
         return Ok(());
     }
     let value: serde_json::Value = serde_json::from_str(payload)
@@ -124,8 +117,8 @@ fn post_back(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adi_agents::AgentQuestionAsked;
     use crate::connection::Target;
+    use adi_agents::AgentSaved;
     use std::time::Duration;
 
     fn scratch(tag: &str) -> adi_config::Config {
@@ -195,18 +188,15 @@ mod tests {
         let agents = Agents::with_config(cfg.clone());
         let secrets = Secrets::with_config(cfg);
 
-        let record = EventRecord {
-            name: QUESTION_ASKED.to_string(),
-            payload: serde_json::to_string(&AgentQuestionAsked {
-                agent: "solver".into(),
-                conv: "no-such-run".into(),
-                run_id: "no-such-run".into(),
-                ask: "q1".into(),
-                question: "which backend?".into(),
-            })
-            .unwrap(),
-            emitted_at: 1,
-        };
+        let record = AgentQuestionAsked {
+            agent: "solver".into(),
+            conv: "no-such-run".into(),
+            run_id: "no-such-run".into(),
+            ask: "q1".into(),
+            question: "which backend?".into(),
+        }
+        .to_record()
+        .expect("question-asked record");
         // Must not panic and must not spin up a post — there's nothing to look up a token for.
         post_back(
             &connections,
@@ -239,25 +229,27 @@ mod tests {
         connections.set_paused(&created.id, true).unwrap();
         token::save(&secrets, "telegram", "tok").unwrap();
 
+        let record = AgentQuestionAsked {
+            agent: "solver".into(),
+            conv: "run-1".into(),
+            run_id: "run-1".into(),
+            ask: "q1".into(),
+            question: "which backend?".into(),
+        }
+        .to_record()
+        .expect("question-asked record");
         post_back(
             &connections,
             &agents,
             &secrets,
             "http://127.0.0.1:1",
-            QUESTION_ASKED,
-            &serde_json::to_string(&AgentQuestionAsked {
-                agent: "solver".into(),
-                conv: "run-1".into(),
-                run_id: "run-1".into(),
-                ask: "q1".into(),
-                question: "which backend?".into(),
-            })
-            .unwrap(),
+            &record.name,
+            &record.payload,
         )
         .expect("paused connections are skipped, not errored");
     }
 
-    /// `QUESTION_ASKED` never touches the "thinking…" indicator — the run isn't finished, just
+    /// `AgentQuestionAsked` never touches the "thinking…" indicator — the run isn't finished, just
     /// paused on a question, so there's nothing yet to clear.
     #[test]
     fn question_asked_never_calls_set_thinking() {
@@ -277,20 +269,22 @@ mod tests {
         token::save(&secrets, "slack", "tok").unwrap();
 
         let (router_url, rx) = spawn_capturing_router();
+        let record = AgentQuestionAsked {
+            agent: "solver".into(),
+            conv: "run-1".into(),
+            run_id: "run-1".into(),
+            ask: "q1".into(),
+            question: "which backend?".into(),
+        }
+        .to_record()
+        .expect("question-asked record");
         post_back(
             &connections,
             &agents,
             &secrets,
             &router_url,
-            QUESTION_ASKED,
-            &serde_json::to_string(&AgentQuestionAsked {
-                agent: "solver".into(),
-                conv: "run-1".into(),
-                run_id: "run-1".into(),
-                ask: "q1".into(),
-                question: "which backend?".into(),
-            })
-            .unwrap(),
+            &record.name,
+            &record.payload,
         )
         .expect("posts the question back");
 
@@ -310,11 +304,11 @@ mod tests {
         );
         // No thread is spun up for an unrelated event — nothing to assert on directly, but this
         // must return instantly and never panic.
-        obs(&EventRecord {
-            name: "adi.tasks.created".into(),
-            payload: "{}".into(),
-            emitted_at: 1,
-        });
+        obs(&AgentSaved {
+            agent: "solver".into(),
+        }
+        .to_record()
+        .expect("agent-saved record"));
         assert!(wait_until(|| true), "returned promptly");
     }
 }

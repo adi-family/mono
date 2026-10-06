@@ -9,14 +9,18 @@
 //! and the webapp API read; `adi_agents::event_catalog` still exists and is still correct, it is
 //! simply no longer the *whole* catalog.
 
-use adi_events::EventType;
+use adi_events::{Event, EventType};
 use schemars::JsonSchema;
 use serde_json::Value;
 
 use crate::message::{Attachment, AttachmentKind, ChannelMessage, Sender, VERSION};
 
 /// The event name — also [`crate::message::ChannelMessage`]'s home on the bus.
-pub const CHANNEL_MESSAGE: &str = "adi.channels.message";
+pub const CHANNEL_MESSAGE: &str = ChannelMessage::NAME;
+
+impl Event for ChannelMessage {
+    const NAME: &'static str = "adi.channels.message";
+}
 
 fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).unwrap_or(Value::Null)
@@ -48,8 +52,7 @@ fn example() -> ChannelMessage {
 /// This crate's slice of the catalog: just [`CHANNEL_MESSAGE`].
 #[must_use]
 pub fn event_types() -> Vec<EventType> {
-    vec![EventType::of(
-        CHANNEL_MESSAGE,
+    vec![EventType::of_event(
         "An inbound Telegram/Slack message was normalized and forwarded by the channel-router.",
         schema::<ChannelMessage>(),
         &example(),
@@ -87,6 +90,13 @@ mod tests {
     fn channel_message_entry_has_a_valid_name_schema_and_example() {
         let entry = event_types().into_iter().next().unwrap();
         assert_eq!(entry.name, CHANNEL_MESSAGE);
+        assert_eq!(entry.name, "adi.channels.message");
+        let record = example().to_record().expect("channel-message record");
+        assert_eq!(entry.name, record.name);
+        assert_eq!(
+            entry.example,
+            serde_json::from_str::<Value>(&record.payload).unwrap(),
+        );
         assert!(adi_events::validate_name(entry.name).is_ok());
         assert!(entry.schema.is_object());
         assert!(entry.example.is_object());

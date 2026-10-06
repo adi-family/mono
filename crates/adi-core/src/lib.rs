@@ -52,10 +52,11 @@ pub use adi_embeddings as embeddings;
 pub use adi_agents::migrations;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
-    Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLifecycle, RunLimits,
-    RunOverrides, SecretAttachment, Sent, SpawnPolicy, StoredAgent, StoredAgentManifest,
-    UNVERSIONED, contains_json_null,
+    Agent, AgentManifest, AgentQuestionAsked, AgentRunFinished, AgentRunIdle, AgentRunReported,
+    Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError, Launch, LaunchOptions,
+    MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLifecycle, RunLimits, RunOverrides,
+    SecretAttachment, Sent, SpawnPolicy, StoredAgent, StoredAgentManifest, UNVERSIONED,
+    contains_json_null,
 };
 
 /// The whole platform event catalog — task + agent + channel events. Re-exported from
@@ -95,8 +96,8 @@ pub use adi_tools::{
 pub use tools::{ToolRenamed, rename_tool};
 
 pub use adi_events::{
-    ENVELOPE as EVENT_ENVELOPE, Error as EventsError, EventRecord, EventType, Events, SpooledEvent,
-    matches as event_matches,
+    ENVELOPE as EVENT_ENVELOPE, Error as EventsError, Event, EventRecord, EventType, Events,
+    SpooledEvent, matches as event_matches,
 };
 
 pub use adi_triggers::{

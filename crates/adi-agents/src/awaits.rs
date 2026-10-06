@@ -1122,6 +1122,8 @@ fn new_id(now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AgentRunFinished, AgentRunStarted};
+    use adi_events::Event;
 
     fn scratch(tag: &str) -> Awaits {
         let root = std::env::temp_dir().join(format!(
@@ -1261,21 +1263,21 @@ mod tests {
     fn a_wake_scoped_to_one_run_ignores_every_other_runs_ending() {
         let store = scratch("scoped");
         let mut req = request("the run you started ended");
-        req.events = vec!["adi.agents.run.finished".into()];
+        req.events = vec![AgentRunFinished::NAME.into()];
         req.when = [("run_id".to_string(), "r-42".to_string())]
             .into_iter()
             .collect();
         let saved = register(&store, "watcher", "conv-1", &req).expect("register");
 
-        let name = "adi.agents.run.finished";
-        assert!(saved.wants(
-            name,
-            r#"{"agent":"solver","run_id":"r-42","is_error":false}"#
-        ));
-        assert!(!saved.wants(
-            name,
-            r#"{"agent":"solver","run_id":"r-43","is_error":false}"#
-        ));
+        let name = AgentRunFinished::NAME;
+        let matching = AgentRunFinished::new("r-42", "solver", false)
+            .to_record()
+            .expect("matching record");
+        let other = AgentRunFinished::new("r-43", "solver", false)
+            .to_record()
+            .expect("other record");
+        assert!(saved.wants(&matching.name, &matching.payload));
+        assert!(!saved.wants(&other.name, &other.payload));
         assert!(
             !saved.wants(name, r#"{"agent":"solver"}"#),
             "a missing field is not a match"
@@ -1303,7 +1305,7 @@ mod tests {
             agent: "watcher".into(),
             conv: "conv-1".into(),
             note: String::new(),
-            events: vec!["adi.agents.run.finished".into()],
+            events: vec![AgentRunFinished::NAME.into()],
             when: [("run_id".to_string(), "r-42".to_string())]
                 .into_iter()
                 .collect(),
@@ -1316,9 +1318,9 @@ mod tests {
             created_at: 0,
             fails: 0,
         };
-        assert!(!a.wants("adi.agents.run.finished", "not json at all"));
-        assert!(!a.wants("adi.agents.run.finished", "[]"));
-        assert!(!a.wants("adi.agents.run.finished", ""));
+        assert!(!a.wants(AgentRunFinished::NAME, "not json at all"));
+        assert!(!a.wants(AgentRunFinished::NAME, "[]"));
+        assert!(!a.wants(AgentRunFinished::NAME, ""));
     }
 
     /// A filter with no events to filter is a mistake worth naming: the run believes it is waiting
@@ -1351,7 +1353,7 @@ mod tests {
             conv: "conv-1".into(),
         };
         let mut req = request("the agent you started ended");
-        req.events = vec!["adi.agents.run.finished".into()];
+        req.events = vec![AgentRunFinished::NAME.into()];
         let note = follow_up(&store, &who, &req);
 
         let pending = store.for_conversation("watcher", "conv-1");
@@ -1435,7 +1437,7 @@ mod tests {
     fn a_wake_is_changed_in_place_and_keeps_its_id() {
         let store = scratch("update");
         let mut req = request("the old note");
-        req.events = vec!["adi.agents.run.finished".into()];
+        req.events = vec![AgentRunFinished::NAME.into()];
         let saved = register(&store, "watcher", "conv-1", &req).expect("register");
         assert!(saved.at.is_none(), "no deadline yet");
 
@@ -1594,7 +1596,7 @@ mod tests {
         let saved = register(&store, "watcher", "conv-1", &req).expect("register");
 
         assert!(saved.wants_event("adi.tasks.created"));
-        assert!(saved.wants_event("adi.agents.run.started"));
+        assert!(saved.wants_event(AgentRunStarted::NAME));
         assert!(!saved.wants_event("adi.tasks.sub.created"));
         assert!(!saved.wants_event("adi.projects.saved"));
 

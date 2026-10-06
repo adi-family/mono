@@ -1,8 +1,9 @@
 //! adi-events — a tiny, decoupled event bus for the adi platform.
 //!
-//! A **publisher** calls [`Events::emit`] with a dotted event name (`adi.tasks.created`) and a
-//! JSON payload; the event is written as one small record file into a spool directory
-//! (`~/.adi/mono/events`). A **consumer** — the app's event dispatcher — calls [`Events::drain`]
+//! A **publisher** calls [`Events::emit_event`] with a typed [`Event`], or [`Events::emit`] with a
+//! dotted event name (`adi.tasks.created`) and a JSON payload. The event is written as one small
+//! record file into a spool directory (`~/.adi/mono/events`). A **consumer** — the app's event
+//! dispatcher — calls [`Events::drain`]
 //! to read every spooled event, delivers each to whoever subscribed, and [`Events::remove`]s it.
 //!
 //! The point is decoupling *across processes*: a publisher (the task store, an agent run, the
@@ -25,15 +26,21 @@
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-events-doctest-{}", std::process::id()));
 //! # let _ = std::fs::remove_dir_all(&tmp);
-//! use adi_events::Events;
+//! use adi_events::{Event, Events};
+//!
+//! #[derive(serde::Serialize)]
+//! struct ItemCreated { id: String }
+//! impl Event for ItemCreated {
+//!     const NAME: &'static str = "my.items.created";
+//! }
 //!
 //! # let bus = Events::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let bus = Events::open();
-//! bus.emit("adi.tasks.created", r#"{"id":"t1"}"#)?;
+//! bus.emit_event(&ItemCreated { id: "item-1".into() })?;
 //!
 //! let spooled = bus.drain()?;
 //! assert_eq!(spooled.len(), 1);
-//! assert_eq!(spooled[0].record.name, "adi.tasks.created");
+//! assert_eq!(spooled[0].record.name, ItemCreated::NAME);
 //! bus.remove(&spooled[0].path)?;
 //! assert!(bus.drain()?.is_empty());
 //! # std::fs::remove_dir_all(&tmp).ok();
@@ -62,7 +69,7 @@ pub enum Error {
     Config(adi_config::Error),
     /// A directory operation (listing the spool) failed.
     Io(std::io::Error),
-    /// A record couldn't be encoded to JSON.
+    /// An event payload or record couldn't be encoded to JSON.
     Encode(serde_json::Error),
 }
 
@@ -130,6 +137,26 @@ pub struct EventRecord {
     pub emitted_at: u64,
 }
 
+/// A typed event payload that owns its topic and can construct the complete bus record.
+pub trait Event: Serialize {
+    /// The dotted event topic, e.g. `adi.agents.run.finished`.
+    const NAME: &'static str;
+
+    /// Build the record with this event's topic, JSON payload, and the current timestamp.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] if the topic is unsafe, or [`Error::Encode`] if the payload
+    /// cannot be serialized.
+    fn to_record(&self) -> Result<EventRecord> {
+        validate_name(Self::NAME)?;
+        Ok(EventRecord {
+            name: Self::NAME.to_string(),
+            payload: serde_json::to_string(self).map_err(Error::Encode)?,
+            emitted_at: now_unix(),
+        })
+    }
+}
+
 /// A record as it sits in the spool: the file backing it (pass to [`Events::remove`] once
 /// delivered) and the parsed [`EventRecord`].
 #[derive(Debug, Clone)]
@@ -195,6 +222,15 @@ impl Events {
         }
     }
 
+    /// Publish a typed event, deriving its topic and JSON payload from the event itself.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe topic, [`Error::Encode`] if the payload or record
+    /// cannot be serialized, or [`Error::Config`] on a write failure.
+    pub fn emit_event(&self, event: &impl Event) -> Result<()> {
+        self.write_record(&event.to_record()?)
+    }
+
     /// Publish an event: write one record file into the spool, then prune the spool back under
     /// [`MAX_SPOOL`]. The write is atomic (temp-then-rename), so a draining consumer never reads
     /// a half-written record.
@@ -209,7 +245,12 @@ impl Events {
             payload: payload.into(),
             emitted_at: now_unix(),
         };
-        let bytes = serde_json::to_vec(&record).map_err(Error::Encode)?;
+        self.write_record(&record)
+    }
+
+    /// Write an already constructed record, keeping the spool bounded after a successful write.
+    fn write_record(&self, record: &EventRecord) -> Result<()> {
+        let bytes = serde_json::to_vec(record).map_err(Error::Encode)?;
         let file = format!("{}.{RECORD_EXT}", record_stem(record.emitted_at));
         self.config.module(MODULE).write_raw(&file, &bytes)?;
         self.prune();
@@ -335,6 +376,15 @@ fn seg_match(p: &[&str], s: &[&str]) -> bool {
 mod tests {
     use super::*;
 
+    #[derive(Serialize, Deserialize)]
+    struct Tick {
+        n: usize,
+    }
+
+    impl Event for Tick {
+        const NAME: &'static str = "test.tick";
+    }
+
     fn scratch(tag: &str) -> Events {
         let root = std::env::temp_dir().join(format!(
             "adi-events-{tag}-{}-{:?}",
@@ -343,6 +393,89 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         Events::with_config(Config::with_root(root))
+    }
+
+    #[test]
+    fn typed_event_builds_and_spools_a_complete_record() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct ExampleEvent {
+            message: String,
+        }
+
+        impl Event for ExampleEvent {
+            const NAME: &'static str = "adi.example.finished";
+        }
+
+        let bus = scratch("typed-roundtrip");
+        let event = ExampleEvent {
+            message: "a \"quoted\" value, a backslash \\, and a newline\n".into(),
+        };
+        let before = now_unix();
+        let record = event.to_record().expect("build typed record");
+        bus.emit_event(&event).expect("emit typed event");
+        let after = now_unix();
+        let spooled = bus.drain().expect("drain");
+        assert_eq!(spooled.len(), 1);
+
+        for record in [&record, &spooled[0].record] {
+            assert_eq!(record.name, ExampleEvent::NAME);
+            assert!(record.emitted_at > 0);
+            assert!((before..=after).contains(&record.emitted_at));
+            assert_eq!(
+                serde_json::from_str::<ExampleEvent>(&record.payload).expect("decode payload"),
+                event,
+            );
+        }
+    }
+
+    #[test]
+    fn typed_event_encoding_failure_never_spools() {
+        struct UnencodableEvent;
+
+        impl Serialize for UnencodableEvent {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("intentional encoding failure"))
+            }
+        }
+
+        impl Event for UnencodableEvent {
+            const NAME: &'static str = "adi.example.unencodable";
+        }
+
+        let bus = scratch("typed-encode-error");
+        assert!(matches!(
+            UnencodableEvent.to_record(),
+            Err(Error::Encode(_))
+        ));
+        assert!(matches!(
+            bus.emit_event(&UnencodableEvent),
+            Err(Error::Encode(_))
+        ));
+        assert!(bus.drain().expect("still empty").is_empty());
+    }
+
+    #[test]
+    fn typed_event_invalid_name_never_spools() {
+        #[derive(Serialize)]
+        struct InvalidEvent;
+
+        impl Event for InvalidEvent {
+            const NAME: &'static str = "bad name";
+        }
+
+        let bus = scratch("typed-invalid-name");
+        assert!(matches!(
+            InvalidEvent.to_record(),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            bus.emit_event(&InvalidEvent),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(bus.drain().expect("still empty").is_empty());
     }
 
     #[test]
@@ -368,25 +501,19 @@ mod tests {
     fn drain_returns_events_in_emission_order() {
         let bus = scratch("order");
         for i in 0..5 {
-            bus.emit("adi.tasks.created", format!("{{\"n\":{i}}}"))
-                .expect("emit");
+            bus.emit_event(&Tick { n: i }).expect("emit");
         }
-        let names: Vec<String> = bus
+        let sequence: Vec<usize> = bus
             .drain()
             .expect("drain")
             .into_iter()
-            .map(|s| s.record.payload)
+            .map(|s| {
+                serde_json::from_str::<Tick>(&s.record.payload)
+                    .expect("tick")
+                    .n
+            })
             .collect();
-        assert_eq!(
-            names,
-            vec![
-                "{\"n\":0}",
-                "{\"n\":1}",
-                "{\"n\":2}",
-                "{\"n\":3}",
-                "{\"n\":4}"
-            ]
-        );
+        assert_eq!(sequence, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
@@ -435,7 +562,7 @@ mod tests {
     fn prune_keeps_the_spool_bounded() {
         let bus = scratch("prune");
         for i in 0..(MAX_SPOOL + 25) {
-            bus.emit("adi.load.tick", format!("{i}")).expect("emit");
+            bus.emit_event(&Tick { n: i }).expect("emit");
         }
         assert_eq!(
             bus.drain().expect("drain").len(),

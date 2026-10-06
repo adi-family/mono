@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Backend, Launch, LaunchOptions,
+    Adi, AgentManifest, AgentQuestionAsked, AgentRunFinished, AgentRunIdle, AgentRunReported,
+    AgentSummaryArguments, Agents, AgentsError, Backend, Event, Launch, LaunchOptions,
     MANIFEST_VERSION, RunInfo, RunLifecycle, RunOverrides, SecretAttachment, StoredAgent,
     UNVERSIONED, awaits, launcher, llm::LlmBackends, migrations,
 };
@@ -1428,10 +1429,10 @@ fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> O
                  leave it be. `adi-mono agents runs --agent {agent}` has the full picture either way."
             ),
             events: vec![
-                "adi.agents.run.finished".to_string(),
-                "adi.agents.run.reported".to_string(),
-                "adi.agents.question.asked".to_string(),
-                "adi.agents.run.idle".to_string(),
+                AgentRunFinished::NAME.to_string(),
+                AgentRunReported::NAME.to_string(),
+                AgentQuestionAsked::NAME.to_string(),
+                AgentRunIdle::NAME.to_string(),
             ],
             when: [
                 ("agent".to_string(), agent.to_string()),

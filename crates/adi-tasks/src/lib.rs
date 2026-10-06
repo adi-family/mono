@@ -36,7 +36,9 @@ use std::path::PathBuf;
 use adi_config::{Config, Module, now_unix};
 
 pub use error::{Error, Result};
-pub use events::event_types;
+pub use events::{
+    TaskArchived, TaskCompleted, TaskCreated, TaskReopened, TaskUpdated, event_types,
+};
 pub use task::{EffectiveStatus, Task, TaskDeleted, TaskPatch, TaskStatus, TaskView};
 
 use task::{ParentChange, TasksDoc, clean, descendants, max_num_for_key, project_key, would_cycle};
@@ -120,12 +122,12 @@ impl Tasks {
         Ok(())
     }
 
-    /// Publish an `adi.tasks.*` event with `payload` (a task view, or `{id}` for a delete) onto
+    /// Publish a typed `adi.tasks.*` event (a task view, or a task id for a delete) onto
     /// the shared event bus. Best-effort and fire-and-forget: this store neither knows nor cares
     /// whether anything subscribes, and a spool failure must never fail the mutation that caused
     /// it. Emitted against **this store's** [`Config`], so a scratch store stays isolated.
-    fn emit(&self, event: &str, payload: &impl serde::Serialize) {
-        adi_events::Events::with_config(self.config.clone()).emit_json(event, payload);
+    fn emit(&self, event: &impl adi_events::Event) {
+        let _ = adi_events::Events::with_config(self.config.clone()).emit_event(event);
     }
 
     /// Create a new `open` task. If `parent` is given (and non-blank) it must already exist.
@@ -200,7 +202,7 @@ impl Tasks {
         doc.tasks.push(task);
         self.save(&doc)?;
         let view = view_of(&doc, &id)?;
-        self.emit("adi.tasks.created", &view);
+        self.emit(&TaskCreated::new(&view));
         Ok(view)
     }
 
@@ -293,7 +295,7 @@ impl Tasks {
         task.updated_at = now_unix();
         self.save(&doc)?;
         let view = view_of(&doc, id)?;
-        self.emit("adi.tasks.updated", &view);
+        self.emit(&TaskUpdated::new(&view));
         Ok(view)
     }
 
@@ -315,7 +317,7 @@ impl Tasks {
         task.updated_at = now_unix();
         self.save(&doc)?;
         let view = view_of(&doc, id)?;
-        self.emit("adi.tasks.completed", &view);
+        self.emit(&TaskCompleted::new(&view));
         Ok(view)
     }
 
@@ -348,7 +350,7 @@ impl Tasks {
         }
         self.save(&doc)?;
         let view = view_of(&doc, id)?;
-        self.emit("adi.tasks.archived", &view);
+        self.emit(&TaskArchived::new(&view));
         Ok(view)
     }
 
@@ -367,7 +369,7 @@ impl Tasks {
         }
         self.save(&doc)?;
         let view = view_of(&doc, id)?;
-        self.emit("adi.tasks.reopened", &view);
+        self.emit(&TaskReopened::new(&view));
         Ok(view)
     }
 
@@ -389,7 +391,7 @@ impl Tasks {
         }
         doc.tasks.remove(idx);
         self.save(&doc)?;
-        self.emit("adi.tasks.deleted", &TaskDeleted { id: id.to_string() });
+        self.emit(&TaskDeleted::new(id));
         Ok(())
     }
 }
@@ -427,23 +429,78 @@ mod tests {
         let store = scratch("events");
         let bus = adi_events::Events::with_config(store.config().clone());
 
-        mk(&store, "ship it", None);
-        store.complete("t1").expect("complete");
+        let created = mk(&store, "ship \"it\"\nnext", None);
+        let updated = store
+            .update(
+                "t1",
+                TaskPatch {
+                    details: Some("ready to ship".into()),
+                    ..TaskPatch::default()
+                },
+            )
+            .expect("update");
+        let completed = store.complete("t1").expect("complete");
+        let archived = store.archive("t1", false).expect("archive");
+        let reopened = store.reopen("t1").expect("reopen");
+        store.delete("t1").expect("delete");
 
-        let events: Vec<(String, String)> = bus
-            .drain()
-            .expect("drain")
-            .into_iter()
-            .map(|s| (s.record.name, s.record.payload))
-            .collect();
-        assert_eq!(events.len(), 2, "create + complete each emit one event");
-        assert_eq!(events[0].0, "adi.tasks.created");
-        assert_eq!(events[1].0, "adi.tasks.completed");
-        // The payload is the task view — parseable JSON carrying the id (the Task fields are
-        // flattened to the top level).
-        let payload: serde_json::Value =
-            serde_json::from_str(&events[0].1).expect("payload is JSON");
-        assert_eq!(payload["id"], "t1");
+        let expected = [
+            (
+                "adi.tasks.created",
+                serde_json::to_value(created).expect("created"),
+            ),
+            (
+                "adi.tasks.updated",
+                serde_json::to_value(updated).expect("updated"),
+            ),
+            (
+                "adi.tasks.completed",
+                serde_json::to_value(completed).expect("completed"),
+            ),
+            (
+                "adi.tasks.archived",
+                serde_json::to_value(archived).expect("archived"),
+            ),
+            (
+                "adi.tasks.reopened",
+                serde_json::to_value(reopened).expect("reopened"),
+            ),
+            (
+                "adi.tasks.deleted",
+                serde_json::to_value(TaskDeleted::new("t1")).expect("deleted"),
+            ),
+        ];
+        let events = bus.drain().expect("drain");
+        assert_eq!(
+            events.len(),
+            expected.len(),
+            "each mutation emits one event"
+        );
+        for (event, (name, payload)) in events.into_iter().zip(expected) {
+            assert_eq!(event.record.name, name);
+            assert!(event.record.emitted_at > 0);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&event.record.payload).expect("payload"),
+                payload,
+                "{name} must retain its original flat payload"
+            );
+        }
+    }
+
+    #[test]
+    fn task_mutations_succeed_when_the_event_spool_cannot_be_written() {
+        let store = scratch("events-unwritable");
+        let bus = adi_events::Events::with_config(store.config().clone());
+        std::fs::create_dir_all(store.config().root()).expect("create root");
+        // A regular file in the spool directory's place makes event writes fail on every OS.
+        std::fs::write(bus.dir(), "not a directory").expect("block spool");
+
+        mk(&store, "ship it", None);
+        store.complete("t1").expect("complete without event spool");
+        assert_eq!(
+            store.get("t1").expect("persisted task").task.status,
+            TaskStatus::Done
+        );
     }
 
     #[test]

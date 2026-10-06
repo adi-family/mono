@@ -12,6 +12,8 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::Event;
+
 /// One kind of event the platform publishes, for display in the editor, the CLI, and the agent's
 /// system prompt. A producer builds it from its payload's own Rust type via [`EventType::new`], so
 /// the schema and example are generated, never hand-maintained.
@@ -63,6 +65,12 @@ impl EventType {
             schema,
             serde_json::to_value(value).unwrap_or(Value::Null),
         )
+    }
+
+    /// Describe a typed event using its own topic and serialized example.
+    #[must_use]
+    pub fn of_event<T: Event>(summary: &'static str, schema: Value, value: &T) -> Self {
+        Self::of(T::NAME, summary, schema, value)
     }
 }
 

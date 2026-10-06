@@ -3,7 +3,9 @@
 //!
 //! Typing the payloads — instead of building an ad-hoc `serde_json::json!` at each emit site — is
 //! what lets [`event_types`] publish a JSON Schema guaranteed to match what is emitted: the same
-//! struct is both serialized onto the bus and reflected into the schema.
+//! struct is both serialized onto the bus and reflected into the schema. Each event also implements
+//! [`Event`], so its type owns the topic and builds the complete record without exposing JSON at
+//! the publishing site.
 //!
 //! [`event_catalog`] is the task+agent catalog — the task events (from `adi-tasks`) followed by the
 //! agent events defined here. It is assembled in this crate because this is the lowest one that can
@@ -15,7 +17,7 @@
 //! `adi_channels::event_catalog` extends this one with `adi.channels.message`. `adi-core` and the
 //! webapp API read that extended catalog; this function stays exactly what it always was.
 
-use adi_events::EventType;
+use adi_events::{Event, EventType};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -29,11 +31,19 @@ pub struct AgentSaved {
     pub agent: String,
 }
 
+impl Event for AgentSaved {
+    const NAME: &'static str = "adi.agents.saved";
+}
+
 /// `adi.agents.deleted` — an agent definition was deleted.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct AgentDeleted {
     /// The agent's name.
     pub agent: String,
+}
+
+impl Event for AgentDeleted {
+    const NAME: &'static str = "adi.agents.deleted";
 }
 
 /// `adi.agents.run.started` — a run was launched, identified by its backend-specific handle (a pty
@@ -65,6 +75,10 @@ pub enum AgentRunStarted {
     },
 }
 
+impl Event for AgentRunStarted {
+    const NAME: &'static str = "adi.agents.run.started";
+}
+
 impl AgentRunStarted {
     /// Build the payload for a launched run from its backend handle.
     pub(crate) fn of(name: &str, message: &str, launch: &Launch) -> Self {
@@ -93,6 +107,10 @@ pub struct AgentRunStopped {
     /// The stopped run's id, when a specific run (not the whole agent) was targeted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+}
+
+impl Event for AgentRunStopped {
+    const NAME: &'static str = "adi.agents.run.stopped";
 }
 
 /// `adi.agents.run.finished` — a run ended on its own, and here is what became of it.
@@ -137,6 +155,28 @@ pub struct AgentRunFinished {
     pub result_head: String,
 }
 
+impl AgentRunFinished {
+    /// A run's verdict, with no optional outcome details. Set the public metadata fields when
+    /// available, then use [`Event::to_record`] or [`adi_events::Events::emit_event`].
+    #[must_use]
+    pub fn new(run_id: impl Into<String>, agent: impl Into<String>, is_error: bool) -> Self {
+        Self {
+            agent: agent.into(),
+            run_id: run_id.into(),
+            terminal_reason: None,
+            is_error,
+            duration_ms: None,
+            active_ms: None,
+            cost_micro_usd: None,
+            result_head: String::new(),
+        }
+    }
+}
+
+impl Event for AgentRunFinished {
+    const NAME: &'static str = "adi.agents.run.finished";
+}
+
 /// `adi.agents.run.idle` — a turn ended and left the run waiting rather than finished (ADI-MONO-129):
 /// a pending await, a queued message still behind it, or an unanswered question are all going to
 /// move this conversation again on their own, and this says so on the bus the moment a listing
@@ -167,6 +207,10 @@ pub struct AgentRunIdle {
     pub result_head: String,
 }
 
+impl Event for AgentRunIdle {
+    const NAME: &'static str = "adi.agents.run.idle";
+}
+
 /// `adi.agents.spawn.refused` — an `agent:<caller>` launch named a target outside the caller's own
 /// `can_spawn` (ADI-MONO-113). Published either way, `enforce` or `observe`: the field says which
 /// happened, so a subscriber (or an operator watching before flipping the switch) can tell a
@@ -187,6 +231,10 @@ pub struct AgentSpawnRefused {
     pub enforced: bool,
 }
 
+impl Event for AgentSpawnRefused {
+    const NAME: &'static str = "adi.agents.spawn.refused";
+}
+
 /// `adi.agents.run.deleted` — one run of an agent was deleted outright: it was stopped if still
 /// live, and its log, metadata and any transcript are gone. Distinct from `stopped`, which ends a
 /// run but leaves it in the history to read.
@@ -198,13 +246,17 @@ pub struct AgentRunDeleted {
     pub run_id: String,
 }
 
+impl Event for AgentRunDeleted {
+    const NAME: &'static str = "adi.agents.run.deleted";
+}
+
 /// `adi.agents.run.reported` — a run handed over an interim report *on purpose*, via the `Report`
 /// tool, without waiting for the run to actually end.
 ///
 /// Named by a constant for the same reason [`QUESTION_ASKED`] is: it is published from inside a
 /// turn — the harness loop, or the MCP server serving a Claude/codex engine — and the launcher's
 /// own wake (`adi-cli`'s `agents run`) subscribes to the exact spelling.
-pub const RUN_REPORTED: &str = "adi.agents.run.reported";
+pub const RUN_REPORTED: &str = AgentRunReported::NAME;
 
 /// The payload of [`RUN_REPORTED`].
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -215,6 +267,10 @@ pub struct AgentRunReported {
     pub run_id: String,
     /// The report itself, verbatim.
     pub report: String,
+}
+
+impl Event for AgentRunReported {
+    const NAME: &'static str = "adi.agents.run.reported";
 }
 
 /// `adi.agents.question.asked` — a run stopped to ask a person something and ended its turn.
@@ -249,6 +305,10 @@ pub struct AgentQuestionAsked {
     pub question: String,
 }
 
+impl Event for AgentQuestionAsked {
+    const NAME: &'static str = QUESTION_ASKED;
+}
+
 /// The payload of [`QUESTION_ANSWERED`].
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct AgentQuestionAnswered {
@@ -259,6 +319,10 @@ pub struct AgentQuestionAnswered {
     /// assumption was taken. Worth publishing: a fleet where most asks time out is a fleet asking
     /// the wrong questions, or asking nobody.
     pub by: String,
+}
+
+impl Event for AgentQuestionAnswered {
+    const NAME: &'static str = QUESTION_ANSWERED;
 }
 
 /// `adi.agents.goal.set` — a goal was written onto a conversation, by a person or by the run
@@ -294,6 +358,10 @@ pub struct AgentGoalSet {
     pub set_by: String,
 }
 
+impl Event for AgentGoalSet {
+    const NAME: &'static str = GOAL_SET;
+}
+
 /// The payload of [`GOAL_NUDGED`].
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct AgentGoalNudged {
@@ -305,6 +373,10 @@ pub struct AgentGoalNudged {
     /// number that keeps climbing is the signal that a run is circling rather than converging, and
     /// nothing in the platform will stop it: only `met` and `knowingly-give-up` close a goal.
     pub nudges: u64,
+}
+
+impl Event for AgentGoalNudged {
+    const NAME: &'static str = GOAL_NUDGED;
 }
 
 /// The payload of [`GOAL_MET`] and [`GOAL_GIVEN_UP`] alike — the same facts either way, and the
@@ -321,6 +393,24 @@ pub struct AgentGoalClosed {
     pub nudges: u64,
 }
 
+/// A goal was judged done. The wrapper owns the topic; its payload stays the shared closure facts.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct AgentGoalMet(pub AgentGoalClosed);
+
+impl Event for AgentGoalMet {
+    const NAME: &'static str = GOAL_MET;
+}
+
+/// A goal was given up on, with the reason it could not be met.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct AgentGoalGivenUp(pub AgentGoalClosed);
+
+impl Event for AgentGoalGivenUp {
+    const NAME: &'static str = GOAL_GIVEN_UP;
+}
+
 fn schema<T: JsonSchema>() -> Value {
     serde_json::to_value(schemars::schema_for!(T)).unwrap_or(Value::Null)
 }
@@ -330,24 +420,21 @@ fn schema<T: JsonSchema>() -> Value {
 #[must_use]
 pub fn event_types() -> Vec<EventType> {
     vec![
-        EventType::of(
-            "adi.agents.saved",
+        EventType::of_event(
             "An agent definition was created or updated.",
             schema::<AgentSaved>(),
             &AgentSaved {
                 agent: "my-agent".into(),
             },
         ),
-        EventType::of(
-            "adi.agents.deleted",
+        EventType::of_event(
             "An agent definition was deleted.",
             schema::<AgentDeleted>(),
             &AgentDeleted {
                 agent: "my-agent".into(),
             },
         ),
-        EventType::of(
-            "adi.agents.run.started",
+        EventType::of_event(
             "An agent run was launched.",
             schema::<AgentRunStarted>(),
             &AgentRunStarted::Process {
@@ -357,8 +444,7 @@ pub fn event_types() -> Vec<EventType> {
                 run_id: "r-1a2b3c".into(),
             },
         ),
-        EventType::of(
-            "adi.agents.run.stopped",
+        EventType::of_event(
             "A running agent (or one of its runs) was stopped.",
             schema::<AgentRunStopped>(),
             &AgentRunStopped {
@@ -366,8 +452,7 @@ pub fn event_types() -> Vec<EventType> {
                 run_id: Some("r-1a2b3c".into()),
             },
         ),
-        EventType::of(
-            "adi.agents.run.finished",
+        EventType::of_event(
             "An agent run ended on its own, with the engine's verdict on how it went.",
             schema::<AgentRunFinished>(),
             &AgentRunFinished {
@@ -381,8 +466,7 @@ pub fn event_types() -> Vec<EventType> {
                 result_head: "Filed three tasks and left a note on the scope.".into(),
             },
         ),
-        EventType::of(
-            "adi.agents.run.idle",
+        EventType::of_event(
             "A turn ended and left the run waiting — on a pending await, a queued message, or an \
              unanswered question — rather than really finished.",
             schema::<AgentRunIdle>(),
@@ -394,8 +478,7 @@ pub fn event_types() -> Vec<EventType> {
                 result_head: "Started the migration in the background.".into(),
             },
         ),
-        EventType::of(
-            "adi.agents.spawn.refused",
+        EventType::of_event(
             "An agent-to-agent launch named a target outside the caller's own can_spawn.",
             schema::<AgentSpawnRefused>(),
             &AgentSpawnRefused {
@@ -405,8 +488,7 @@ pub fn event_types() -> Vec<EventType> {
                 enforced: false,
             },
         ),
-        EventType::of(
-            "adi.agents.run.deleted",
+        EventType::of_event(
             "One run of an agent was deleted, along with everything it kept.",
             schema::<AgentRunDeleted>(),
             &AgentRunDeleted {
@@ -414,8 +496,7 @@ pub fn event_types() -> Vec<EventType> {
                 run_id: "r-1a2b3c".into(),
             },
         ),
-        EventType::of(
-            RUN_REPORTED,
+        EventType::of_event(
             "A run handed over an interim report on purpose, via the Report tool, without waiting \
              for the run to end.",
             schema::<AgentRunReported>(),
@@ -427,8 +508,7 @@ pub fn event_types() -> Vec<EventType> {
                     .into(),
             },
         ),
-        EventType::of(
-            QUESTION_ASKED,
+        EventType::of_event(
             "A run stopped to ask a person a question, and is waiting on the answer.",
             schema::<AgentQuestionAsked>(),
             &AgentQuestionAsked {
@@ -439,8 +519,7 @@ pub fn event_types() -> Vec<EventType> {
                 question: "Auth method: session cookies or bearer tokens?".into(),
             },
         ),
-        EventType::of(
-            QUESTION_ANSWERED,
+        EventType::of_event(
             "A run's question was answered and the conversation is moving again.",
             schema::<AgentQuestionAnswered>(),
             &AgentQuestionAnswered {
@@ -450,8 +529,7 @@ pub fn event_types() -> Vec<EventType> {
                 by: "human".into(),
             },
         ),
-        EventType::of(
-            GOAL_SET,
+        EventType::of_event(
             "A goal was written onto a conversation — what would make it done.",
             schema::<AgentGoalSet>(),
             &AgentGoalSet {
@@ -462,8 +540,7 @@ pub fn event_types() -> Vec<EventType> {
                 set_by: "human".into(),
             },
         ),
-        EventType::of(
-            GOAL_NUDGED,
+        EventType::of_event(
             "A conversation fell quiet with a goal still open, and was asked whether it is met.",
             schema::<AgentGoalNudged>(),
             &AgentGoalNudged {
@@ -473,24 +550,22 @@ pub fn event_types() -> Vec<EventType> {
                 nudges: 3,
             },
         ),
-        EventType::of(
-            GOAL_MET,
+        EventType::of_event(
             "A goal was judged done, with whatever evidence was offered for it.",
             schema::<AgentGoalClosed>(),
-            &AgentGoalClosed {
+            &AgentGoalMet(AgentGoalClosed {
                 agent: "my-agent".into(),
                 conv: "1750000000000-0001".into(),
                 goal: "g-1750000000000-0001".into(),
                 text: "every flaky test in the suite is either fixed or quarantined".into(),
                 note: "12 fixed, 2 quarantined; three green runs in a row".into(),
                 nudges: 4,
-            },
+            }),
         ),
-        EventType::of(
-            GOAL_GIVEN_UP,
+        EventType::of_event(
             "A goal was given up on, with the reason it could not be met.",
             schema::<AgentGoalClosed>(),
-            &AgentGoalClosed {
+            &AgentGoalGivenUp(AgentGoalClosed {
                 agent: "my-agent".into(),
                 conv: "1750000000000-0001".into(),
                 goal: "g-1750000000000-0001".into(),
@@ -498,7 +573,7 @@ pub fn event_types() -> Vec<EventType> {
                 note: "two of them need the staging database, which I cannot reach from here"
                     .into(),
                 nudges: 9,
-            },
+            }),
         ),
     ]
 }
@@ -517,6 +592,81 @@ pub fn event_catalog() -> Vec<EventType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_finished_builds_a_complete_record() {
+        let run_id = "run-\"quoted\"\\path\nnext";
+        let agent = "worker-\"quoted\"\\path\nnext";
+        for is_error in [false, true] {
+            let before = adi_config::now_unix();
+            let record = AgentRunFinished::new(run_id, agent, is_error)
+                .to_record()
+                .expect("run-finished record");
+            assert_eq!(record.name, "adi.agents.run.finished");
+            assert!((before..=adi_config::now_unix()).contains(&record.emitted_at));
+            assert_eq!(
+                serde_json::from_str::<Value>(&record.payload).expect("JSON payload"),
+                serde_json::json!({
+                    "agent": agent,
+                    "run_id": run_id,
+                    "is_error": is_error,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn goal_outcomes_preserve_the_payload_and_select_distinct_topics() {
+        let payload = AgentGoalClosed {
+            agent: "worker".into(),
+            conv: "r-42".into(),
+            goal: "g-1".into(),
+            text: "ship the fix".into(),
+            note: "quoted \"evidence\"\nnext line".into(),
+            nudges: 3,
+        };
+        let expected = serde_json::to_value(&payload).expect("original closure payload");
+        let met = AgentGoalMet(payload.clone())
+            .to_record()
+            .expect("met record");
+        let given_up = AgentGoalGivenUp(payload)
+            .to_record()
+            .expect("give-up record");
+        assert_eq!(met.name, "adi.agents.goal.met");
+        assert_eq!(given_up.name, "adi.agents.goal.given_up");
+        for record in [met, given_up] {
+            assert_eq!(
+                serde_json::from_str::<Value>(&record.payload).expect("JSON payload"),
+                expected,
+                "the topic wrapper must not add a field or nesting to the payload"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_catalog_preserves_the_published_topics() {
+        let catalog = event_types();
+        assert_eq!(
+            catalog.iter().map(|event| event.name).collect::<Vec<_>>(),
+            vec![
+                "adi.agents.saved",
+                "adi.agents.deleted",
+                "adi.agents.run.started",
+                "adi.agents.run.stopped",
+                "adi.agents.run.finished",
+                "adi.agents.run.idle",
+                "adi.agents.spawn.refused",
+                "adi.agents.run.deleted",
+                "adi.agents.run.reported",
+                "adi.agents.question.asked",
+                "adi.agents.question.answered",
+                "adi.agents.goal.set",
+                "adi.agents.goal.nudged",
+                "adi.agents.goal.met",
+                "adi.agents.goal.given_up",
+            ]
+        );
+    }
 
     #[test]
     fn catalog_is_coherent() {

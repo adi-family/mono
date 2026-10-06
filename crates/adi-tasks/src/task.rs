@@ -183,6 +183,14 @@ pub struct TaskDeleted {
     pub id: String,
 }
 
+impl TaskDeleted {
+    /// Build the event for the removed task's id.
+    #[must_use]
+    pub fn new(id: impl Into<String>) -> Self {
+        Self { id: id.into() }
+    }
+}
+
 /// The on-disk document: the id counters plus the task list. `next_id` numbers project-less tasks
 /// (the legacy `t<n>` scheme); `seq` holds a per-project-key high-water mark so project-scoped
 /// tasks get stable, never-reused Jira-style `<KEY>-<n>` ids (a deleted top task's number is not

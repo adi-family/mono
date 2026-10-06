@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-147 structs · 41 enums · 5 type aliases across 57 files.
+149 structs · 41 enums · 5 type aliases across 57 files.
 
 ## Index
 
@@ -26,7 +26,7 @@
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
@@ -1368,6 +1368,26 @@ pub struct AgentGoalClosed {
     pub note: String,
     pub nudges: u64,
 }
+```
+
+### struct `AgentGoalMet`
+
+A goal was judged done. The wrapper owns the topic; its payload stays the shared closure facts.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct AgentGoalMet(pub AgentGoalClosed);
+```
+
+### struct `AgentGoalGivenUp`
+
+A goal was given up on, with the reason it could not be met.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct AgentGoalGivenUp(pub AgentGoalClosed);
 ```
 
 ---

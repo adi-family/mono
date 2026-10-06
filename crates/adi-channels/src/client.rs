@@ -242,10 +242,7 @@ impl RouterClient {
                     return;
                 }
 
-                if let Err(e) = self.events.emit(
-                    crate::events::CHANNEL_MESSAGE,
-                    serde_json::to_string(&message).unwrap_or_default(),
-                ) {
+                if let Err(e) = self.events.emit_event(message.as_ref()) {
                     warn!(provider = %self.provider, error = %e, "couldn't publish adi.channels.message");
                 }
 
@@ -284,6 +281,7 @@ mod tests {
     use super::*;
     use crate::connection::{Connections, Target};
     use crate::message::{ChannelMessage, Sender, VERSION};
+    use adi_events::Event;
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
     use tokio::net::TcpListener;
 
@@ -446,7 +444,9 @@ mod tests {
             )
             .unwrap();
 
-        let (router_url, server) = spawn_fake_router(message_for(&created.id)).await;
+        let message = message_for(&created.id);
+        let (router_url, server) = spawn_fake_router(message.clone()).await;
+        let events = Events::with_config(cfg.clone());
 
         let connected = Arc::new(AtomicBool::new(false));
         let client = RouterClient {
@@ -454,8 +454,8 @@ mod tests {
             provider: "telegram".into(),
             node_token: "tok_1".into(),
             connections,
-            agents: Agents::with_config(cfg.clone()),
-            events: Events::with_config(cfg),
+            agents: Agents::with_config(cfg),
+            events: events.clone(),
             connected: connected.clone(),
         };
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -474,6 +474,14 @@ mod tests {
         assert!(
             !connected.load(Ordering::Relaxed),
             "and false again once the client has shut down"
+        );
+
+        let spooled = events.drain().expect("published channel message");
+        assert_eq!(spooled.len(), 1);
+        assert_eq!(spooled[0].record.name, ChannelMessage::NAME);
+        assert_eq!(
+            serde_json::from_str::<ChannelMessage>(&spooled[0].record.payload).unwrap(),
+            message,
         );
 
         // The client's frames are masked (§5.1); `ws::Reader` unmasks either way (see its own
