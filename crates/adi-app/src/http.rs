@@ -1,5 +1,5 @@
-//! A tiny hand-rolled HTTP/1.1 request reader and response writer for the JSON API and
-//! SPA. Every response sets `Connection: close`, so each request is its own connection.
+//! HTTP/1.1 request parsing and responses for the API and SPA.
+//! Responses use `Connection: close`; each connection serves one request.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -7,50 +7,32 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 
-/// Cap the request head so a client that never sends the blank line can't grow memory.
 const MAX_HEAD: usize = 32 * 1024;
 
-/// Cap the request body we'll buffer.
-///
-/// Nearly every API payload is a few hundred bytes. Two are not: a dashboard arriving from another
-/// machine (`POST /api/dashboards/import`), which carries the directory's files as base64 and is
-/// packed no larger than 4 MiB before that third is added; and a file somebody attached to a message
-/// (`POST /api/agents/attachment`), which is the raw bytes of whatever they dragged in. The
-/// attachment store caps those at 25 MiB, so this sits above it — an oversized upload should be
-/// refused by the handler, which knows what the file was called, rather than by this reader, which
-/// does not.
+/// Above the attachment store's 25 MiB limit so its handler can report oversized uploads.
 const MAX_BODY: usize = 32 << 20; // 32 MiB
 
-/// So a silent client can't tie up a connection forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A parsed request: method, full path (query included), the headers (names lowercased), the
-/// buffered body, and whatever arrived after it.
+/// Parsed HTTP request with lowercase header names and the query included in `path`.
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
     pub path: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    /// Bytes read past the body — nothing for an ordinary request, which is one request per
-    /// connection, but a client that pipelines straight into a protocol switch (the WebSocket
-    /// upgrade at `/api/ws`) may have sent its first frames already. Dropping them would lose
-    /// that client's opening message.
+    /// Bytes past the body, preserved for clients that pipeline WebSocket frames after upgrade.
     pub rest: Vec<u8>,
 }
 
 impl Request {
-    /// The path with any `?query` stripped — what routing matches on.
     #[must_use]
     pub fn route_path(&self) -> &str {
         self.path.split('?').next().unwrap_or(&self.path)
     }
 
-    /// One query parameter's raw value, by exact name.
-    ///
-    /// Raw: nothing is percent-decoded, so this suits the short identifiers routing asks about
-    /// (`?engine=openai`) and not free text. A parameter repeated in the query yields its first
-    /// occurrence, and one given without `=` reads as empty rather than absent.
+    /// First raw value for an exact query name; no percent-decoding.
+    /// A parameter without `=` has an empty value.
     #[must_use]
     pub fn query_param(&self, name: &str) -> Option<&str> {
         let query = self.path.split_once('?').map(|(_, q)| q)?;
@@ -60,14 +42,13 @@ impl Request {
         })
     }
 
-    /// One header's value, by lowercase name.
+    /// Look up a header by lowercase name.
     #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
         self.headers.get(name).map(String::as_str)
     }
 
-    /// Whether this request asks to leave HTTP behind for a WebSocket (RFC 6455 §4.2.1: an
-    /// `Upgrade: websocket` token and `websocket` in `Connection`, both case-insensitive).
+    /// Check case-insensitive WebSocket upgrade tokens (RFC 6455 §4.2.1).
     #[must_use]
     pub fn is_websocket_upgrade(&self) -> bool {
         let upgrade = self
@@ -81,10 +62,10 @@ impl Request {
     }
 }
 
-/// Read one request from `stream`; `Ok(None)` if the peer closed while idle.
+/// Read one request; `Ok(None)` means the peer closed while idle.
 ///
 /// # Errors
-/// Fails on a read/timeout error, an oversized head, or a connection closed mid-head.
+/// Fails on I/O, timeout, oversized input, or a connection closed mid-head.
 pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Request>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
@@ -109,8 +90,6 @@ pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Reque
         .get("content-length")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
-    // Refused, not truncated. Clamping used to leave the excess unread in the socket, so an
-    // oversized body surfaced as a JSON parse error about a document that was simply cut in half.
     anyhow::ensure!(
         content_length <= MAX_BODY,
         "request body of {content_length} bytes is over the {MAX_BODY}-byte limit"
@@ -124,7 +103,6 @@ pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Reque
         }
         body.extend_from_slice(&chunk[..n]);
     }
-    // Keep, rather than discard, anything past the declared body — see [`Request::rest`].
     let rest = if body.len() > content_length {
         body.split_off(content_length)
     } else {
@@ -144,7 +122,6 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-/// Parse the request line and headers out of the raw head; header names are lowercased.
 fn parse_head(head: &[u8]) -> (String, String, HashMap<String, String>) {
     let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
@@ -161,7 +138,7 @@ fn parse_head(head: &[u8]) -> (String, String, HashMap<String, String>) {
     (method, path, headers)
 }
 
-/// Write a full response and close the connection.
+/// Write a response with `no-store` caching and close the connection.
 ///
 /// # Errors
 /// Fails if the socket write fails.
@@ -175,14 +152,8 @@ pub async fn write_response(
     write_with_cache(stream, status, reason, content_type, "no-store", body).await
 }
 
-/// Write a build file whose name carries the hash of its own bytes — cached for a year.
-///
-/// The panel's wasm bundle is 14 MB, and over plain `http://app.adi` the browser withholds the
-/// service worker that would otherwise keep it (not a secure context — see the webapp's
-/// `index.html`), so the HTTP cache is the only one there is. Served `no-store` like everything
-/// else, every open of the panel downloaded it again and compiled it from scratch, which on a
-/// machine busy with disk was seconds before the first frame. Nothing is lost by keeping it: a new
-/// build is a new name, and the `index.html` that names it is still never cached.
+/// Cache a build asset for a year. Its filename must contain a content hash.
+/// Keep the referencing `index.html` uncached so new builds use new asset URLs.
 ///
 /// # Errors
 /// Fails if the socket write fails.
@@ -219,17 +190,11 @@ async fn write_with_cache(
     Ok(())
 }
 
-/// Write a body that may be cached for a year — for content whose address *is* its version.
-///
-/// Every other answer this server writes carries `no-store`, which is right for state that is polled
-/// and can change under the reader. An attachment cannot: its id is minted from random bytes when
-/// the bytes are stored, and nothing ever writes different bytes under the same id. Without this the
-/// page redraws a chat every second and re-fetches every screenshot in it every time.
+/// Cache content privately for a year; its address must never serve different bytes.
+/// `disposition` selects inline rendering or download.
 ///
 /// # Errors
 /// Fails if the socket write fails.
-/// `disposition` is `inline` for what the browser may render in a tab and `attachment` for what it
-/// must download instead — see [`serve_attachment`](crate::serve_attachment), which decides which.
 pub async fn write_cached(
     stream: &mut TcpStream,
     content_type: &str,
@@ -254,10 +219,7 @@ pub async fn write_cached(
     Ok(())
 }
 
-/// Write a body the browser should save rather than render — `no-store`, since (unlike an
-/// attachment's immutable id) the address a report was fetched from does not name its content:
-/// asking again after a fresh `POST /api/system/diagnose` would otherwise risk a cached, stale
-/// archive under a name that happens to collide.
+/// Download without caching: report URLs can be reused for newly generated content.
 ///
 /// # Errors
 /// Fails if the socket write fails.
@@ -285,7 +247,7 @@ pub async fn write_download(
     Ok(())
 }
 
-/// Write a JSON response with the given status.
+/// Write a JSON response.
 ///
 /// # Errors
 /// Fails if the socket write fails.
@@ -301,7 +263,7 @@ pub async fn write_json(stream: &mut TcpStream, status: u16, json: &str) -> anyh
     .await
 }
 
-/// Write an HTML response with the given status.
+/// Write an HTML response.
 ///
 /// # Errors
 /// Fails if the socket write fails.
@@ -345,7 +307,6 @@ mod tests {
         assert_eq!(headers.get("content-length").map(String::as_str), Some("3"));
     }
 
-    /// A request with no headers and no body — the shape the path/upgrade tests need.
     fn bare(method: &str, path: &str) -> Request {
         Request {
             method: method.into(),
@@ -366,12 +327,9 @@ mod tests {
         let req = bare("POST", "/api/voice/transcribe?engine=openai&x=1");
         assert_eq!(req.query_param("engine"), Some("openai"));
         assert_eq!(req.query_param("x"), Some("1"));
-        // Absent, versus present-but-empty: the caller distinguishes them, so the type must.
         assert_eq!(req.query_param("nope"), None);
         assert_eq!(bare("GET", "/a?flag").query_param("flag"), Some(""));
-        // A path carrying no query at all is not a parse failure, just no parameters.
         assert_eq!(bare("GET", "/a").query_param("engine"), None);
-        // A name that is only a prefix of a real one must not match it.
         assert_eq!(bare("GET", "/a?engineer=1").query_param("engine"), None);
     }
 
@@ -380,7 +338,7 @@ mod tests {
         let mut req = bare("GET", "/api/ws");
         assert!(!req.is_websocket_upgrade());
         req.headers.insert("upgrade".into(), "WebSocket".into());
-        // Firefox sends `keep-alive, Upgrade`, so the token has to be found in a list.
+        // Firefox sends the upgrade token in a list.
         req.headers
             .insert("connection".into(), "keep-alive, Upgrade".into());
         assert!(req.is_websocket_upgrade());

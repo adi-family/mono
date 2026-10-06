@@ -1,23 +1,8 @@
-//! The live channel behind `GET /api/ws`: the control panel says what it is looking at, and the
-//! server sends it back whenever the answer changes.
+//! Shared subscriptions over `GET /api/ws`, keyed by `(method, path, body)`.
 //!
-//! What it replaces: every open tab re-asked the same questions on a timer — a chat's transcript
-//! and run list once a second, the agent/session/dashboard rails every four — so the request rate
-//! grew with the number of tabs, and nearly every answer was byte-identical to the one before it.
-//!
-//! A **topic** here is not a new concept to maintain alongside the API: it *is* a request, the same
-//! `(method, path, body)` the browser used to poll, and it is answered by the very same routing.
-//! The difference is who repeats it and how often the answer travels:
-//!
-//! * a topic is computed **once for everyone** watching it, on its own interval, not once per
-//!   watcher per tick;
-//! * the result is sent only when it **differs from the last one sent** — a settled page costs
-//!   nothing on the wire;
-//! * a topic with no watchers is not computed at all, so closing a page really does stop its work;
-//! * but its last answer is kept for a while ([`LINGER`]), so going back to a page — or reloading
-//!   it — paints at once from what was last known while the fresh read runs.
-//!
-//! Only reads are watchable ([`watchable`]) — a subscription can never reach a mutation.
+//! Each watched topic is computed once per interval; only changed answers are broadcast.
+//! Unwatched topics stop computing but retain a snapshot until [`LINGER`] expires.
+//! [`watchable`] restricts subscriptions to reads; they must never dispatch mutations.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -31,74 +16,38 @@ use tracing::debug;
 
 use crate::{App, http, ws};
 
-/// How often the hub looks for topics that have come due. The floor on how promptly a change is
-/// noticed, and deliberately shorter than the fastest topic interval.
 const TICK: Duration = Duration::from_millis(250);
 
-/// Live views — a transcript being written, a terminal pane, a log still being appended to.
+/// Transcripts, terminal panes, and active logs.
 const FAST: Duration = Duration::from_secs(1);
 
-/// Everything else: lists that change when a person changes them.
+/// Lists that change when a person changes them.
 const SLOW: Duration = Duration::from_secs(3);
 
-/// `/api/health` alone. Its uptime counts seconds, so unlike every other topic it is *never* the
-/// same answer twice — polled at [`SLOW`] it would be the one thing still talking to a page
-/// nobody is touching. Nothing is lost by asking rarely: the socket being open is what says the
-/// backend is up, and the uptime it reports is displayed in minutes and hours.
+/// Health uptime changes every second, so poll it less often to avoid constant broadcasts.
 const IDLE: Duration = Duration::from_secs(15);
 
-/// How often the server pings an idle socket, so a connection dropped by something in the middle
-/// (a proxy, a sleeping laptop) is noticed rather than silently kept.
 const PING_EVERY: Duration = Duration::from_secs(30);
 
-/// Cap what one connection may watch. The busiest page subscribes to a dozen or so topics.
 const MAX_WATCHES: usize = 64;
 
-/// How many undelivered messages a connection may bank up before it is dropped. A client not
-/// reading its socket is not a client to keep buffering for; the browser reconnects.
+/// Drop clients that exceed this backlog; the browser reconnects.
 const QUEUE: usize = 256;
 
-/// How long a topic nobody watches any more keeps its last answer.
-///
-/// Leaving a page and coming back is the common case — and so is reloading it, or opening the
-/// panel again — and each one used to be a cold read of everything the page shows, because the
-/// last watcher leaving threw the topic away. Most reads are quick, but some walk the whole store
-/// (`/api/agents/runs/all` is every run of every agent), and on a machine busy with disk the same
-/// read measured anywhere from 85 ms to over 20 s. The Analytics page drew nothing until it came
-/// back. Kept, the page gets the last answer immediately and the fresh one the moment it is ready.
-/// A kept topic is not recomputed while nobody watches it, so this costs memory, never work.
+/// Retain unwatched snapshots for quick navigation back, without recomputing them.
 const LINGER: Duration = Duration::from_secs(10 * 60);
 
-/// The most unwatched topics kept at once; past it the longest-unwatched go first. A topic is one
-/// answer, and the largest are a few megabytes, so this bounds what a long session of opening and
-/// closing chats can leave behind.
+/// Bound retained snapshots, evicting the longest-unwatched first.
 const MAX_LINGERING: usize = 32;
 
-/// How long a read may be outstanding before the topic is offered again.
-///
-/// A topic is claimed while it is being computed, so a slow read is never started twice over. If
-/// the task doing it ever went away without publishing, that claim would be permanent and the
-/// topic would go quiet for the life of the process — a page that silently stops updating being
-/// far worse than an occasional duplicated read.
+/// Retry abandoned reads after this timeout so a lost task cannot permanently mute a topic.
 const STALE: Duration = Duration::from_secs(60);
 
-/// Which reads the live channel may watch, and how often each is recomputed.
-///
-/// The allowlist is the security boundary of this whole module: a subscription is dispatched with
-/// the same routing an HTTP request uses, so anything reachable here would be callable over the
-/// socket. Every entry is a read, and reads are all that belongs on a channel whose whole purpose
-/// is to repeat itself.
-///
-/// Matched on the route alone, as the HTTP side matches it: a read that takes a query parameter
-/// (`/api/agents/runs/all?limit=100`) is the same read either way. The *topic* is still keyed by
-/// the full path, so two pages watching different pages of it get an answer each.
+/// Read-only allowlist: subscriptions dispatch through the same routing as HTTP requests.
+/// Match the route without its query; topic keys still include the full path.
 fn watchable(method: &str, path: &str) -> Option<Duration> {
     let path = path.split('?').next().unwrap_or(path);
-    // The same read, on a paired node (`docs/fleet.md` §13). Watchable exactly when the read it
-    // names is — it *is* that read, forwarded — but never faster than [`SLOW`], because every tick
-    // is an authenticated mesh round trip and a third of a second of it is relay latency before any
-    // payload. A transcript on another machine updating every three seconds instead of every one is
-    // the cost of it being on another machine.
+    // Forwarded reads use the same allowlist, with a slower interval for mesh round trips.
     if let Some((_, inner)) = crate::viewer::split_node_path(path) {
         return watchable(method, inner).map(|every| every.max(SLOW));
     }
@@ -112,20 +61,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/fleet"
             | "/api/fleet/nodes"
             | "/api/hive"
-            // The LLM backend registry, watched by the backends page and by the agent editor's
-            // model list. It changes without anybody touching the panel — the prober lifts a hold,
-            // another machine's run records one — which is the whole reason that page watches it
-            // rather than reading it once.
             | "/api/llm/backends"
-            // `/api/embeddings/backends` is deliberately NOT here. It differs from the LLM
-            // registry just above in the one way that matters: nothing outside the panel moves
-            // it. There is no prober, no hold, and no other machine's run to record one — an
-            // embedding backend either builds or it does not, per call, with no background sweep
-            // watching it. So this page fetches once on open, the way `/api/knowledge` does, and
-            // every mutation already answers with the fresh registry in the same round trip.
-            //
-            // The apps listing, watched by the marketplace door so an install made in another
-            // tab — or by an agent — appears without a reload.
             | "/api/marketplace"
             | "/api/mesh"
             | "/api/meta"
@@ -133,20 +69,14 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/ports/used"
             | "/api/projects"
             | "/api/secrets"
-            // The shared-assets mode. A settings page is watched like any other read because the
-            // panel's fallback fetch runs only while the socket is *down*: a read missing from
-            // this list leaves its page on "Loading…" for the life of the tab, which is how both
-            // this one and `/api/llm/backends` above shipped mute.
             | "/api/settings/shared-assets"
             | "/api/tasks"
             | "/api/tools"
             | "/api/triggers" => Some(SLOW),
-            // One project's detail page. The exact paths above are matched first, so this is only
-            // ever an id.
             p if p.starts_with("/api/projects/") => Some(SLOW),
             _ => None,
         },
-        // Reads that are POSTs because they carry a subject — an agent name, a run id — in a body.
+        // POST reads carry their subject in the body.
         "POST" => match path {
             "/api/agents/peek"
             | "/api/agents/goals"
@@ -162,7 +92,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
     }
 }
 
-/// One read a connection is watching: exactly the request it would otherwise have polled.
+/// One subscribed HTTP read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Watch {
     method: String,
@@ -171,30 +101,26 @@ pub struct Watch {
 }
 
 impl Watch {
-    /// The identity of this read — and, being `method path\nbody`, the same string the HTTP side
-    /// collapses concurrent identical reads under.
+    /// Keep this key identical to the HTTP request deduplication key.
     fn key(&self) -> String {
         format!("{} {}\n{}", self.method, self.path, self.body)
     }
 }
 
-/// A read being watched: who wants it, when it is next due, and what was last sent for it.
 #[derive(Debug)]
 struct Topic {
     watch: Watch,
     every: Duration,
     watchers: HashSet<u64>,
-    /// The last message published, which is both the change baseline and the snapshot a newly
-    /// subscribing connection gets straight away.
+    /// Both the change baseline and the snapshot for new subscribers.
     last: Option<Arc<String>>,
     due: Instant,
-    /// When the outstanding read was started, if there is one — see [`STALE`].
+    /// Start of the outstanding read; expired claims can be retried after [`STALE`].
     computing: Option<Instant>,
-    /// When the last watcher left, while nobody watches it — see [`LINGER`].
+    /// Start of the retention window while no watchers remain.
     unwatched_since: Option<Instant>,
 }
 
-/// Every connection and every topic, behind one lock.
 #[derive(Debug, Default)]
 struct Inner {
     topics: HashMap<String, Topic>,
@@ -202,8 +128,6 @@ struct Inner {
 }
 
 impl Inner {
-    /// Stop `id` watching every topic `keep` does not name. A topic left with nobody watching is
-    /// set aside rather than dropped, answer and all — see [`LINGER`].
     fn release(&mut self, id: u64, keep: impl Fn(&str) -> bool, now: Instant) {
         for (key, topic) in &mut self.topics {
             if !keep(key) && topic.watchers.remove(&id) && topic.watchers.is_empty() {
@@ -213,8 +137,6 @@ impl Inner {
         self.prune(now);
     }
 
-    /// Forget what has gone unwatched for longer than [`LINGER`], and the longest-unwatched of
-    /// whatever is still kept beyond [`MAX_LINGERING`].
     fn prune(&mut self, now: Instant) {
         self.topics.retain(|_, topic| {
             topic
@@ -237,7 +159,6 @@ impl Inner {
     }
 }
 
-/// The live channel's shared state.
 #[derive(Debug, Default)]
 pub struct Hub {
     inner: std::sync::Mutex<Inner>,
@@ -245,15 +166,13 @@ pub struct Hub {
 }
 
 impl Hub {
-    /// A previous panic while holding this lock says nothing about the maps, so a poisoned lock
-    /// is taken anyway rather than failing every later connection.
+    /// Recover poisoned locks so one panic does not fail all later connections.
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Register a connection, returning its id and the receiver its messages arrive on.
     fn attach(&self) -> (u64, mpsc::Receiver<Arc<String>>) {
         let id = self.next_conn.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(QUEUE);
@@ -261,20 +180,13 @@ impl Hub {
         (id, rx)
     }
 
-    /// Drop a connection. A topic it was the last watcher of stops being computed — which is what
-    /// makes a closed tab stop costing anything — and keeps its last answer for the next tab to
-    /// open it (see [`LINGER`]).
     fn detach(&self, id: u64) {
         let mut inner = self.lock();
         inner.conns.remove(&id);
         inner.release(id, |_| false, Instant::now());
     }
 
-    /// Replace what one connection watches.
-    ///
-    /// Returns `(snapshots, fresh)`: messages to send immediately because the topic already has an
-    /// answer, and topics nobody has computed yet — which the caller starts at once, so a page
-    /// paints on subscribe rather than on the next tick.
+    /// Replace a connection's watch list, returning cached snapshots and reads to start now.
     fn subscribe(&self, id: u64, wanted: Vec<Watch>) -> (Vec<Arc<String>>, Vec<(String, Watch)>) {
         let now = Instant::now();
         let mut inner = self.lock();
@@ -285,12 +197,7 @@ impl Hub {
         for watch in wanted.into_iter().take(MAX_WATCHES) {
             let Some(every) = watchable(&watch.method, &watch.path) else {
                 debug!(method = %watch.method, path = %watch.path, "refusing to watch");
-                // Refused *out loud*, not passed over. From the page's side a topic that is never
-                // spoken to is indistinguishable from one whose first answer has not arrived yet,
-                // so a read missing from [`watchable`] leaves the table that wanted it on
-                // "Loading…" for the life of the tab with nothing anywhere saying why — which is
-                // exactly how `/api/llm/backends` shipped mute. One message per subscribe, in the
-                // shape every other failed read arrives in.
+                // Silence would leave the client waiting indefinitely for its first answer.
                 snapshots.push(Arc::new(message(
                     &watch.key(),
                     400,
@@ -309,7 +216,6 @@ impl Hub {
                 computing: None,
                 unwatched_since: None,
             });
-            // Already watching it: nothing to send, the topic's own schedule carries on.
             if !topic.watchers.insert(id) {
                 continue;
             }
@@ -317,8 +223,7 @@ impl Hub {
             match &topic.last {
                 Some(message) => {
                     snapshots.push(Arc::clone(message));
-                    // Kept from a page somebody left, so it may be minutes old: shown at once, and
-                    // asked again at once rather than a whole interval later.
+                    // Retained snapshots may be stale; show them immediately and refresh now.
                     if was_unwatched && topic.computing.is_none() {
                         topic.computing = Some(now);
                         fresh.push((key, watch));
@@ -328,19 +233,16 @@ impl Hub {
                     topic.computing = Some(now);
                     fresh.push((key, watch));
                 }
-                // Someone else's subscribe is already computing it; its result reaches us too.
+                // An in-flight read will publish to this subscriber too.
                 None => {}
             }
         }
 
-        // Whatever this connection no longer names, it no longer watches.
         inner.release(id, |key| keys.contains(key), now);
         (snapshots, fresh)
     }
 
-    /// The topics that have come due, marked as computing so the next tick passes them by. Nobody
-    /// watching means nobody is waiting for it, so a kept topic is never due — and this, run on
-    /// every tick, is also where the ones kept too long are let go.
+    /// Claim due topics before releasing the lock, preventing duplicate reads on the next tick.
     fn take_due(&self, now: Instant) -> Vec<(String, Watch)> {
         let mut inner = self.lock();
         inner.prune(now);
@@ -351,7 +253,6 @@ impl Hub {
             .filter(|(_, topic)| {
                 let free = match topic.computing {
                     None => true,
-                    // A read that never came back — take the topic over rather than leave it mute.
                     Some(started) => now.saturating_duration_since(started) > STALE,
                 };
                 free && topic.due <= now
@@ -363,8 +264,7 @@ impl Hub {
             .collect()
     }
 
-    /// Hand a computed answer to everyone watching — but only if it differs from the last one
-    /// they were sent. Re-arms the topic either way.
+    /// Publish changed answers and re-arm the topic even when unchanged.
     fn publish(&self, key: &str, message: String) {
         let mut inner = self.lock();
         let Some(topic) = inner.topics.get_mut(key) else {
@@ -379,8 +279,7 @@ impl Hub {
         topic.last = Some(Arc::clone(&message));
         let watchers: Vec<u64> = topic.watchers.iter().copied().collect();
 
-        // A connection that can't keep up is dropped rather than buffered for; closing its
-        // channel ends its task, and the browser reconnects.
+        // Closing a stalled client's channel ends its task and lets the browser reconnect.
         let mut stalled = Vec::new();
         for id in watchers {
             if let Some(tx) = inner.conns.get(&id)
@@ -400,7 +299,6 @@ impl Hub {
     }
 }
 
-/// Compute one topic and publish it.
 async fn compute(app: &Arc<App>, key: String, watch: Watch) {
     let req = http::Request {
         method: watch.method,
@@ -414,9 +312,6 @@ async fn compute(app: &Arc<App>, key: String, watch: Watch) {
         .publish(&key, message(&key, response.status, &response.body));
 }
 
-/// The body a refused subscription is answered with. Built through the API's own error helper so
-/// it is byte-for-byte the `{ "error": … }` shape a failed HTTP read returns, and the client needs
-/// no second way to read a failure off this channel.
 fn refused(method: &str, path: &str) -> String {
     crate::handlers::error(
         400,
@@ -425,15 +320,13 @@ fn refused(method: &str, path: &str) -> String {
     .body
 }
 
-/// Render what goes over the wire: the topic it answers, its status, and the response body
-/// spliced in as-is — the very bytes the same request would have returned over HTTP.
+/// Insert the HTTP response body verbatim as JSON data.
 fn message(key: &str, status: u16, body: &str) -> String {
     let key = Value::String(key.to_string());
     format!("{{\"key\":{key},\"status\":{status},\"data\":{body}}}")
 }
 
-/// Run the hub's clock for as long as the app: recompute what has come due, off the connections'
-/// tasks so one slow read never holds up a socket.
+/// Recompute due topics outside connection tasks so slow reads cannot block sockets.
 pub fn start(app: Arc<App>) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(TICK);
@@ -448,11 +341,10 @@ pub fn start(app: Arc<App>) {
     });
 }
 
-/// Serve one `/api/ws` connection: finish the handshake, then pump subscriptions in and messages
-/// out until either side hangs up.
+/// Serve subscriptions and updates on one `/api/ws` connection.
 ///
 /// # Errors
-/// Fails on a socket error or a client that breaks framing; either way the connection is over.
+/// Fails on a socket error or invalid client framing.
 pub async fn serve(
     mut stream: TcpStream,
     req: &http::Request,
@@ -475,9 +367,7 @@ pub async fn serve(
     ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     ping.tick().await; // the first tick is immediate; we want the first ping a period out
 
-    // Every exit from here goes through the detach below — a connection left registered would
-    // keep every topic it watches alive, and being computed, for the life of the process. So the
-    // loop breaks with its outcome rather than using `?`.
+    // Break instead of using `?` so every exit detaches the connection and its watches.
     let outcome = loop {
         let step = tokio::select! {
             frame = reader.next(&mut rd) => match frame {
@@ -500,7 +390,6 @@ pub async fn serve(
             },
             message = rx.recv() => match message {
                 Some(message) => ws::write_text(&mut wr, &message).await,
-                // The hub dropped us (a client that stopped reading).
                 None => break Ok(()),
             },
             _ = ping.tick() => ws::write_ping(&mut wr).await,
@@ -515,11 +404,8 @@ pub async fn serve(
     outcome
 }
 
-/// Apply one client message — `{"sub":[{"method":…,"path":…,"body":…}, …]}`, the connection's
-/// whole watch list — sending back whatever is already known. Returns the topics still to compute.
-///
-/// A message that isn't a subscription is ignored: this is the only thing a client may say, and a
-/// socket is not worth closing over a stray frame.
+/// Replace the watch list with `{"sub":[{"method":…,"path":…,"body":…}, …]}`.
+/// Send cached snapshots and return reads to start; ignore other messages.
 async fn take_subscription<W: tokio::io::AsyncWrite + Unpin>(
     app: &Arc<App>,
     id: u64,
@@ -566,31 +452,13 @@ mod tests {
         }
     }
 
-    /// The panel's source tree, which [`subscribed_by_the_panel`] reads its subscriptions out of.
-    /// A sibling crate in this workspace; absent only if `adi-app` is built on its own, which is
-    /// why the test below skips rather than fails when it isn't there.
     const PANEL_SRC: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../adi-webapp/src");
 
-    /// How few subscriptions mean the scan below found nothing rather than nothing being there.
-    /// Without a floor, a rename of `Sub::get` would turn the one test guarding this boundary into
-    /// a test of an empty list, passing for ever.
+    /// Prevent scanner drift from silently turning this into a test of an empty list.
     const FEWEST_PLAUSIBLE_SUBS: usize = 15;
 
-    /// Every read the control panel subscribes to, read out of `adi-webapp`'s own source — the
-    /// `live::Sub::{get,post,get_on,post_on}` calls, which are the only thing that ever sends a
-    /// `sub` message down this channel.
-    ///
-    /// Scanned rather than listed, because the two halves live in different crates and nothing
-    /// makes the compiler care that they agree. This *was* a hand-kept list, and it drifted twice:
-    /// the LLM backends page subscribed to `/api/llm/backends` and the shared-assets settings page
-    /// to `/api/settings/shared-assets`, [`watchable`] named neither, and each sat on "Loading…"
-    /// for ever — the panel's one-shot fetch is a *fallback* that runs only while the socket is
-    /// down, so a healthy live channel was the thing that broke them. A list that has to be
-    /// updated by whoever adds a page is a list that says nothing when they don't.
-    ///
-    /// Only string literals are read; the one subscription built with `format!`
-    /// (`/api/projects/{id}`) has its placeholders filled with a sample segment, since
-    /// [`watchable`] matches those by prefix anyway.
+    /// Scan the panel's subscriptions so additions cannot silently bypass the allowlist test.
+    /// Replace formatted path segments with samples for prefix-matched routes.
     fn subscribed_by_the_panel() -> Vec<(String, String)> {
         fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
@@ -608,9 +476,7 @@ mod tests {
             }
         }
 
-        // `Sub::get(` and friends, then the first `"/api/…"` literal after it. The call may wrap,
-        // so the search runs over the rest of the file and stops at the first literal — every
-        // subscription in the panel names its path as its first argument.
+        // Each subscription's path is its first `/api/…` string literal.
         fn scan(source: &str, out: &mut Vec<(String, String)>) {
             for (call, method) in [
                 ("Sub::get(", "GET"),
@@ -627,7 +493,6 @@ mod tests {
                     let Some(end) = literal.find('"') else {
                         continue;
                     };
-                    // `{id}` and the like: any segment stands in, so the prefix arm matches.
                     let path = literal[..end]
                         .split('/')
                         .map(|seg| if seg.starts_with('{') { "sample" } else { seg })
@@ -666,8 +531,6 @@ mod tests {
         }
     }
 
-    /// A read this channel will not watch is told so. Silence is the one answer a page cannot act
-    /// on: it looks exactly like an answer that has not arrived yet.
     #[test]
     fn a_refused_subscription_is_answered_rather_than_ignored() {
         let hub = Hub::default();
@@ -691,24 +554,17 @@ mod tests {
         assert_eq!(watchable("POST", "/api/agents/peek"), Some(FAST));
         assert_eq!(watchable("GET", "/api/projects/acme"), Some(SLOW));
         assert_eq!(watchable("GET", "/api/fleet"), Some(SLOW));
-        // A query parameter is part of the read, not a different one: the rail's page of the
-        // session index is watchable exactly as the whole index is.
         assert_eq!(
             watchable("GET", "/api/agents/runs/all?limit=100"),
             Some(SLOW)
         );
-        // Mutations are not on the list, whatever they look like.
         assert_eq!(watchable("POST", "/api/fleet/unpair"), None);
         assert_eq!(watchable("POST", "/api/projects/remove"), None);
         assert_eq!(watchable("POST", "/api/agents/run"), None);
         assert_eq!(watchable("DELETE", "/api/health"), None);
-        // …and a query cannot smuggle one on: the route is what is matched, still.
         assert_eq!(watchable("POST", "/api/agents/run?limit=1"), None);
     }
 
-    /// A node's read is watchable exactly when the same read here is — and no faster than [`SLOW`],
-    /// because each tick crosses the mesh. The allowlist is the boundary of this module, so a
-    /// forwarded path must not be a way past it.
     #[test]
     fn a_nodes_read_is_watchable_but_never_at_the_local_rate() {
         assert_eq!(
@@ -719,24 +575,19 @@ mod tests {
             watchable("GET", "/api/node/laptop-b/api/agents/runs/all?limit=100"),
             Some(SLOW)
         );
-        // FAST locally; a transcript on another machine is asked for at SLOW.
         assert_eq!(
             watchable("POST", "/api/node/laptop-b/api/agents/run/peek"),
             Some(SLOW)
         );
-        // …and everything the local table refuses, this refuses through a node too.
         assert_eq!(watchable("POST", "/api/node/laptop-b/api/agents/run"), None);
         assert_eq!(watchable("GET", "/api/node/laptop-b/api/ws"), None);
         assert_eq!(watchable("GET", "/api/node/laptop-b/index.html"), None);
-        // No chain of them: a node's node is one hop more than the gateway routes.
         assert_eq!(
             watchable("GET", "/api/node/laptop-b/api/node/studio/api/agents"),
             None
         );
     }
 
-    /// Two pages of the same read are two topics: the path they are keyed by carries the query, so
-    /// a rail showing a hundred sessions and one showing two hundred each get their own answer.
     #[test]
     fn a_page_of_a_read_is_its_own_topic() {
         assert_ne!(
@@ -751,7 +602,6 @@ mod tests {
             watch("POST", "/api/agents/peek", "{\"name\":\"adi-agent\"}").key(),
             "POST /api/agents/peek\n{\"name\":\"adi-agent\"}"
         );
-        // Same read, different subject: two topics.
         assert_ne!(
             watch("POST", "/api/agents/peek", "{\"name\":\"a\"}").key(),
             watch("POST", "/api/agents/peek", "{\"name\":\"b\"}").key()
@@ -774,8 +624,6 @@ mod tests {
         assert!(snapshots.is_empty());
         assert_eq!(fresh.len(), 1, "nothing cached yet, so it must be computed");
 
-        // A second connection joins the same topic while the first read is still out: it does not
-        // start a second read of the same thing.
         let (b, _rx_b) = hub.attach();
         let (snapshots, fresh) = hub.subscribe(b, vec![watch("GET", "/api/health", "")]);
         assert!(snapshots.is_empty() && fresh.is_empty());
@@ -795,10 +643,8 @@ mod tests {
         assert!(rx_a.recv().await.is_some());
         assert!(rx_b.recv().await.is_some());
 
-        // The same answer again is not a change, so nothing is sent…
         hub.publish(&key, message(&key, 200, "{\"up\":1}"));
         assert!(rx_a.try_recv().is_err());
-        // …and a different one is.
         hub.publish(&key, message(&key, 200, "{\"up\":2}"));
         assert!(rx_a.try_recv().is_ok());
     }
@@ -835,8 +681,6 @@ mod tests {
         hub.publish(&health, message(&health, 200, "{}"));
         hub.publish(&tasks, message(&tasks, 200, "{}"));
 
-        // Navigating away: the new list replaces the old one wholesale, and what it no longer
-        // names is no longer computed.
         hub.subscribe(a, vec![watch("GET", "/api/tasks", "")]);
         let due: Vec<String> = hub
             .take_due(Instant::now() + SLOW)
@@ -845,11 +689,9 @@ mod tests {
             .collect();
         assert_eq!(due, vec![tasks]);
 
-        // And closing the tab stops the rest of it.
         hub.detach(a);
         assert!(hub.lock().conns.is_empty());
         assert!(hub.take_due(Instant::now() + STALE + SLOW).is_empty());
-        // What it last showed is kept for the next tab, but not for ever.
         assert_eq!(hub.lock().topics.len(), 2);
         hub.take_due(Instant::now() + LINGER + SLOW);
         assert!(hub.lock().topics.is_empty());
@@ -865,7 +707,6 @@ mod tests {
         hub.publish(&key, message(&key, 200, "{\"runs\":1}"));
         hub.detach(a);
 
-        // The page opened again — another tab, a reload, or the same tab navigating back.
         let (b, _rx_b) = hub.attach();
         let (snapshots, fresh) = hub.subscribe(b, vec![read]);
         assert_eq!(snapshots.len(), 1, "the last answer, straight away");
@@ -911,14 +752,11 @@ mod tests {
         let (a, _rx_a) = hub.attach();
         let key = watch("GET", "/api/tasks", "").key();
         hub.subscribe(a, vec![watch("GET", "/api/tasks", "")]);
-        // Subscribe already claimed it for its first read.
         assert!(hub.take_due(Instant::now()).is_empty());
 
         hub.publish(&key, message(&key, 200, "{}"));
-        // Just published: due one interval out, not now.
         assert!(hub.take_due(Instant::now()).is_empty());
         assert_eq!(hub.take_due(Instant::now() + SLOW).len(), 1);
-        // Claimed by that call, so a second look finds nothing outstanding.
         assert!(hub.take_due(Instant::now() + SLOW).is_empty());
     }
 
@@ -926,10 +764,8 @@ mod tests {
     fn a_read_that_never_came_back_does_not_mute_its_topic_forever() {
         let hub = Hub::default();
         let (a, _rx_a) = hub.attach();
-        // Subscribe claims the topic for a first read that, here, never publishes.
         hub.subscribe(a, vec![watch("GET", "/api/tasks", "")]);
         assert!(hub.take_due(Instant::now() + SLOW).is_empty());
-        // Past the stale window the topic is offered again rather than staying silent.
         assert_eq!(hub.take_due(Instant::now() + STALE + SLOW).len(), 1);
     }
 }

@@ -1,12 +1,7 @@
-//! adi-app — the adi application server behind `app.adi`: one process serving the
-//! control-panel webapp at `GET /` and a JSON `/api/*` backend over [`adi_ports_manager`].
-//! Listens on `$PORT` or an explicit `addr` argument, on loopback.
+//! Control-panel webapp and JSON API behind `app.adi`.
 //!
-//! The UI is the Leptos app [`adi-webapp`](../adi-webapp), compiled to wasm by Trunk. Its
-//! `dist/` output is embedded here at build time; set `ADI_WEBAPP_DIST=/path/to/dist` to
-//! serve those files from disk instead (a dev mode — rebuild the UI with `trunk build` and
-//! refresh, no re-embed). The API handlers live in [`adi_webapp_api::handlers`] and share
-//! their DTO types with that frontend.
+//! The Trunk build in `adi-webapp/dist` is embedded at compile time. Set `ADI_WEBAPP_DIST`
+//! to serve a build from disk. API handlers and shared DTOs live in `adi_webapp_api`.
 
 mod awaits;
 mod channels;
@@ -48,11 +43,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, info, warn};
 
-/// Everything a request may need, held once and shared by every connection.
-///
-/// One `Arc<App>` rather than a dozen: a synchronous handler runs on the blocking pool, which
-/// needs an owned `'static` handle to what it touches (see [`App::answer`]). Grouping the stores
-/// is what makes that a clone of one pointer instead of twelve.
+/// Shared stores and runtime state for all connections.
 struct App {
     ports: Ports,
     projects: Projects,
@@ -61,71 +52,50 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
-    /// The knowledge store, held for the life of the process **on purpose**: the embedding model
-    /// loads lazily into it and stays there, so the second search is instant. A handler that
-    /// opened its own store per request would reload the weights every time.
+    /// Keep the lazily loaded embedding model alive across requests.
     knowledge: KnowledgeStore,
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
-    /// The node side of Channels (`docs/channels.md`): connections this node holds, each bound to
-    /// an agent/trigger/app-route target.
     channels: Connections,
-    /// This node's live channel-router sockets, one per provider with a connection on it.
+    /// One live channel-router socket per connected provider.
     channels_live: channels::Live,
     mesh: MeshCtl,
-    /// A `dist/` to serve the webapp from instead of the embedded copy ([`DIST_ENV`]).
+    /// Overrides the embedded webapp when [`DIST_ENV`] is set.
     dist: Option<PathBuf>,
-    /// When the process started, for `/api/health`'s uptime.
     start: Instant,
     reads: Reads,
-    /// The `/api/ws` live channel: what each connected control panel is watching, and the answers
-    /// it has already been sent. See [`live`].
     live: live::Hub,
 }
 
-/// Owns the mesh [`Daemon`] the control panel starts/stops in-process, so it lives only as
-/// long as this app. `None` when stopped. The async mutex serializes start/stop.
+/// Owns the in-process mesh daemon; the mutex serializes start, stop, and join.
 #[derive(Debug, Default)]
 struct MeshCtl {
     daemon: Mutex<Option<Daemon>>,
 }
 
 impl MeshCtl {
-    /// Whether the mesh daemon is currently running.
     async fn running(&self) -> bool {
         self.daemon.lock().await.is_some()
     }
 
-    /// Start the daemon if it isn't already up.
     async fn start(&self) -> anyhow::Result<()> {
         let mut slot = self.daemon.lock().await;
         if slot.is_none() {
-            // With this machine's stored node passwords, so a `*.n.adi` link opened here does not
-            // ask for one the panel already holds — see [`crate::viewer::HeldCredentials`].
+            // Reuse stored node passwords for links opened through the mesh gateway.
             *slot = Some(Daemon::start_with(Some(Arc::new(viewer::HeldCredentials))).await?);
         }
         Ok(())
     }
 
-    /// Stop the daemon if it's running (a clean teardown: tasks joined, ticket cleared).
     async fn stop(&self) {
         if let Some(daemon) = self.daemon.lock().await.take() {
             daemon.stop().await;
         }
     }
 
-    /// Spend an invite: over the running daemon's endpoint when the mesh is up here, and over a
-    /// short-lived one of its own when it is not.
-    ///
-    /// The distinction is the whole reason this is a method and not a call to [`join::join`]. A
-    /// second endpoint bound on this machine's identity while the daemon holds one would race it
-    /// for the same relay session, and the loser's peers quietly stop reaching it — see
-    /// [`Daemon::join`]. With the mesh stopped there is no such endpoint, so binding one for the
-    /// length of the handshake is exactly what `adi-mono mesh join` does.
-    ///
-    /// The lock is held across the handshake on purpose: a `start` arriving mid-dial would bind
-    /// that second endpoint behind this call's back.
+    /// Reuse the running endpoint: a second endpoint with the same identity races for its relay.
+    /// Hold the lock across the handshake so a concurrent start cannot bind another endpoint.
     async fn join(&self, token: &str) -> anyhow::Result<join::Joined> {
         match self.daemon.lock().await.as_ref() {
             Some(daemon) => daemon.join(token).await,
@@ -134,30 +104,19 @@ impl MeshCtl {
     }
 }
 
-/// Reads that are already in flight, so several askers share one answer.
-///
-/// The control panel polls: an open chat asks for its run list and its transcript once a second,
-/// and the rails refetch the agent list, every agent's sessions and the dashboards every four —
-/// per tab. When one of those reads takes longer than the interval, the next tick fires anyway and
-/// the requests stack up, each redoing byte-for-byte the same work. This collapses that: the first
-/// asker computes, everyone who asks the same thing while it runs waits on *its* result, and they
-/// all get the same response.
-///
-/// Only routes named by [`shared_read_key`] take part — reads, where "the answer a moment ago" and
-/// "the answer now" are the same answer. Nothing that mutates is ever shared.
+/// Coalesce identical in-flight reads. Only [`shared_read_key`] routes participate;
+/// mutations must never share a response.
 #[derive(Debug, Default)]
 struct Reads {
     inflight: std::sync::Mutex<HashMap<String, broadcast::Sender<Arc<Response>>>>,
 }
 
 impl Reads {
-    /// The answer to `key`, computing it only if nobody else already is.
     async fn shared<F>(&self, key: String, compute: F) -> Arc<Response>
     where
         F: FnOnce() -> Response + Send + 'static,
     {
-        // Claim the slot or join it, holding the lock for exactly that decision — never across
-        // the read itself, which is the slow part everyone is waiting on.
+        // Release the map lock before computing or waiting for the response.
         let joined = {
             let mut inflight = self.inflight();
             match inflight.entry(key.clone()) {
@@ -171,24 +130,20 @@ impl Reads {
 
         if let Some(mut answer) = joined {
             return answer.recv().await.unwrap_or_else(|_| {
-                // Only reachable if the leader's connection task vanished between claiming the
-                // slot and answering; it cannot happen through a handler panic, which [`blocking`]
-                // turns into a 500 the followers receive like any other answer.
+                // Handler panics become 500s in `blocking`; this covers a dropped leader.
                 Arc::new(handlers::error(500, "the shared read was dropped"))
             });
         }
 
         let response = Arc::new(blocking(compute).await);
-        // Free the slot before publishing, so the next poll starts a fresh read rather than
-        // joining one that has already finished.
+        // Remove before publishing so new callers start a fresh read.
         if let Some(waiting) = self.inflight().remove(&key) {
             let _ = waiting.send(Arc::clone(&response));
         }
         response
     }
 
-    /// A previous panic while holding this lock says nothing about the map, so a poisoned lock is
-    /// taken anyway rather than failing every later request.
+    /// Recover a poisoned lock so later requests can still use the map.
     fn inflight(
         &self,
     ) -> std::sync::MutexGuard<'_, HashMap<String, broadcast::Sender<Arc<Response>>>> {
@@ -198,13 +153,7 @@ impl Reads {
     }
 }
 
-/// Run a synchronous handler on tokio's blocking pool.
-///
-/// Every `/api` handler below reads files, stats pids and sometimes spawns a subprocess. Run
-/// directly in the connection's async task — as they used to be — a handful of them occupy every
-/// runtime worker at once, and the server stops answering *anything*: `/api/health`, which touches
-/// nothing, was observed taking 22 seconds behind them. On the blocking pool they can take as long
-/// as they take without a single async worker being held.
+/// Keep file I/O and subprocess work off the async runtime workers.
 async fn blocking<F>(work: F) -> Response
 where
     F: FnOnce() -> Response + Send + 'static,
@@ -214,38 +163,25 @@ where
         .unwrap_or_else(|e| handlers::error(500, &format!("the request handler failed: {e}")))
 }
 
-/// The webapp's Trunk build output, embedded so the binary is self-contained. Empty until
-/// `trunk build` runs in `crates/adi-webapp`; [`serve_asset`] serves a placeholder when
-/// `index.html` is absent.
+/// Embedded Trunk output; [`serve_asset`] uses a placeholder if `index.html` is absent.
 static WEBAPP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../adi-webapp/dist");
 
-/// Service identity reported at `/api/health`.
 const SERVICE: &str = "adi-app";
-/// The release tag this was built from when there is one (see `build.rs`), so `/api/health`
-/// reports the same number as the bundle it shipped in rather than the workspace floor.
+/// Prefer the release tag from `build.rs` to the workspace version.
 const VERSION: &str = match option_env!("ADI_VERSION") {
     Some(v) if !v.is_empty() => v,
     _ => env!("CARGO_PKG_VERSION"),
 };
 
-/// Fallback listen port when `$PORT` is unset and no `addr` argument is given.
 const DEFAULT_PORT: u16 = 8090;
 
-/// Env var pointing at a webapp `dist/` to serve from disk instead of the embedded copy.
 const DIST_ENV: &str = "ADI_WEBAPP_DIST";
 
-/// How long to wait for background triggers to exit at shutdown before giving up on them — a
-/// code block that ignores SIGTERM must not hold the whole app open.
+/// Bound shutdown time for triggers that ignore SIGTERM.
 const TRIGGER_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// Install `ring` as the process-wide rustls provider, once.
-///
-/// reqwest is built with `rustls-no-provider` (see the workspace manifest), which means it picks
-/// no crypto provider of its own and *panics* when a client is built without one. So this is
-/// called at each client construction rather than once in `main`: the tests reach the request
-/// paths directly, never through `main`, and a start-up-only install left them panicking inside
-/// `Client::builder().build()`. `install_default` errors only if a provider is already set, which
-/// is exactly the outcome wanted on the second and every later call.
+/// `rustls-no-provider` requires an explicit provider. Call at client construction so tests
+/// that bypass `main` also work; an already-installed provider is harmless.
 pub(crate) fn ensure_tls_provider() {
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -269,38 +205,28 @@ async fn main() -> anyhow::Result<()> {
     let secrets = Secrets::open();
     let tasks = Tasks::open();
     let tools = Tools::open();
-    // Ensure the built-in system tools (the adi-ecosystem CLIs) exist, then rebuild the global
-    // `.bin`. Best-effort — a store that can't be seeded shouldn't stop the app from starting.
+    // Tool seeding is best-effort so a store error cannot prevent startup.
     if let Err(e) = tools
         .seed_system()
         .and_then(|_| tools.sync_bin().map(|_| ()))
     {
         warn!(error = %e, "seeding system tools failed");
     }
-    // The `channel-reply` tool (docs/channels.md §5) — same best-effort seeding as the system
-    // tools above, re-seeded (not just created once) so an edit to its script ships on restart.
+    // Re-seed on restart so changes to the channel-reply script reach existing installs.
     if let Err(e) = adi_channels::tool::ensure(&tools) {
         warn!(error = %e, "seeding the channel-reply tool failed");
     }
-    // This node's own address, for the channel-reply tool script to find without guessing a port
-    // (`adi_channels::node_port`). Written after the listener is bound, so it is always this
-    // process's *real* address even when `$PORT` was 0.
+    // Record the bound port, including the actual port selected when `$PORT` is 0.
     if let Err(e) = adi_channels::node_port::write(tools.config(), local.port()) {
         warn!(error = %e, "recording this node's own port failed");
     }
-    // Create the global database (so it exists in WAL mode before anything races to make it) and
-    // seed the `@adi/db` Bun client into the store's node_modules, so `import … from "@adi/db"`
-    // resolves from every `.ts` the platform runs. Best-effort, like the tools above.
+    // Initialize WAL before other users open the database; seed the shared Bun client.
     let db = Db::open();
     if let Err(e) = db.bootstrap() {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
     let agents = Agents::open();
-    // Bring every definition up to the shape this binary reads, *before* anything reads one. The
-    // panel, the launcher and the triggers below all assume the current shape, and a migration
-    // somebody has to remember to run is a migration that does not happen — so the thing that opens
-    // the store is the thing that brings it forward. A failure is logged and stepped over: a store
-    // that reads oddly is worse than one that reads oddly and cannot be opened to fix it.
+    // Migrate before consumers read definitions; log failures so the panel remains usable.
     match adi_agents::migrations::on_boot(&agents) {
         Ok(applied) => {
             if applied.agents > 0 {
@@ -316,10 +242,6 @@ async fn main() -> anyhow::Result<()> {
             for (agent, why) in &applied.held {
                 warn!(%agent, %why, "migration held an agent back");
             }
-            // The skew that runs the other way, and the only one this binary cannot fix: a store a
-            // newer adi has already migrated. Nothing was written — but this process is about to
-            // serve definitions in a shape it does not know, so the operator hears it once, loudly,
-            // rather than working it out from an agent that will not start.
             if !applied.ahead.is_empty() {
                 warn!(
                     agents = applied.ahead.len(),
@@ -331,25 +253,13 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(e) => warn!(error = %e, "migrating agent definitions failed"),
     }
-    // Opening the store loads nothing — the embedding model is built on the first call that
-    // genuinely needs one (a search, an add), and then stays for the life of the process.
     let knowledge = KnowledgeStore::open();
     let triggers = Triggers::open();
     let events = Events::open();
     let channels_store = Connections::open();
-    // Background triggers are long-lived processes owned by this app: the supervisor keeps
-    // every enabled one running for as long as the app is up, and stops them on the way out.
     let trigger_supervisor = Supervisor::start(triggers.clone());
-    // Event triggers, in turn, are fired on demand: the dispatcher drains the shared event spool
-    // (which task/agent mutations and the emit endpoint publish onto) and launches every enabled
-    // event trigger whose patterns match a drained event.
-    //
-    // Triggers are not the only subscriber: a harness run can register an *await* — "wake me when
-    // this is published" — and the await worker is what honors it. A channel-opened run's answer
-    // (docs/channels.md §5) is the second: `adi_channels::finished::observer` posts it back to the
-    // router the moment `adi.agents.run.finished`/`question.asked` fires. Both watch from the
-    // dispatcher's side rather than draining the spool themselves, because two drainers would race
-    // for records — see `adi_triggers::dispatch`'s own module doc.
+    // A single dispatcher drains the event spool. Awaits and channel replies observe it
+    // rather than racing independent drainers for records.
     let awaits_observer = awaits::start(agents.clone());
     let channels_observer = adi_channels::finished::observer(
         channels_store.clone(),
@@ -364,9 +274,6 @@ async fn main() -> anyhow::Result<()> {
             channels_observer(record);
         }),
     );
-    // And the third worker on this clock: the sweep that finds out an LLM backend whose usage limit
-    // has expired is actually back. It belongs to the app rather than to the hive because it binds
-    // no port, and the hive watches a service by its port — see `crate::prober`.
     prober::start(agents.clone());
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
@@ -395,14 +302,9 @@ async fn main() -> anyhow::Result<()> {
         live: live::Hub::default(),
     });
 
-    // The live channel's clock: it recomputes only what some open page is watching, so until a
-    // control panel connects this costs a wakeup every quarter second and nothing else.
     live::start(Arc::clone(&app));
 
-    // Resume a socket for every provider that already has a linked connection and a node token
-    // on file — a restart must not leave a previously connected chat silent until somebody hits
-    // Connect again. Best-effort: a provider this node has never registered (no token yet, or
-    // one dropped since) is skipped rather than failing the whole start-up.
+    // Restore provider sockets after a restart when a saved node token is available.
     {
         let app = Arc::clone(&app);
         tokio::spawn(async move {
@@ -430,13 +332,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    // The mesh daemon runs in-process, so it lives only as long as this app, and it is opt-in:
-    // autostart it (non-blocking, best-effort) only when `mesh.toml`'s `enabled` resolves to on
-    // — an explicit choice, or evidence this install already looks used
-    // (`adi_mesh::config::MeshConfig::resolved_enabled`). A genuinely fresh install comes up with
-    // the mesh down, and stays that way until the operator turns it on from the Mesh page,
-    // `adi-mono mesh enable`, or by joining a fleet. The control panel's Start/Stop buttons act on
-    // the daemon and persist the choice for next time either way.
+    // Respect the persisted mesh choice; a fresh install starts with the mesh disabled.
     {
         let app = Arc::clone(&app);
         tokio::spawn(async move {
@@ -473,19 +369,15 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // Background triggers run in their own process groups so the supervisor can signal their
-    // whole tree — which also means they outlive this process unless they are stopped first.
-    // Waiting here is what keeps a restart from leaking a copy of every background trigger.
+    // Trigger process groups outlive this process unless explicitly stopped.
     app.trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
-    // The dispatcher owns no child processes (fired event triggers are detached one-offs), so
-    // this just ends its poll loop cleanly.
     event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
     app.mesh.stop().await;
     app.channels_live.stop_all().await;
     Ok(())
 }
 
-/// Resolve where to listen: an explicit `addr` argument wins, else `$PORT`, else `DEFAULT_PORT`.
+/// An explicit address/port argument takes precedence over `$PORT`, then [`DEFAULT_PORT`].
 fn listen_addr() -> SocketAddr {
     if let Some(arg) = std::env::args().nth(1) {
         if let Ok(addr) = arg.parse::<SocketAddr>() {
@@ -503,16 +395,14 @@ fn listen_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
 }
 
-/// Read one request, route it, and write the response.
 async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     let Some(req) = http::read_request(&mut stream).await? else {
         return Ok(());
     };
     debug!(method = %req.method, path = %req.path, "request");
 
-    // Before anything is routed: this panel has no login, so a page on another site must not be
-    // able to drive it (see [`origin`]). Ahead of the websocket branch on purpose — the handshake
-    // is the one route where this check is the only guard that can ever exist.
+    // This panel has no login. Reject cross-site API requests before routing, including
+    // websocket upgrades, whose handshake must pass the same origin check.
     if req.route_path().starts_with("/api")
         && let Err(refusal) = origin::check(&req)
     {
@@ -526,31 +416,24 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
         return http::write_json(&mut stream, response.status, &response.body).await;
     }
 
-    // The live channel leaves HTTP behind entirely: past the handshake this connection is a
-    // websocket for as long as the page is open, not a request and a response.
     if req.method == "GET" && req.route_path() == "/api/ws" && req.is_websocket_upgrade() {
         return live::serve(stream, &req, app).await;
     }
 
-    // An image somebody attached to a message, served back to the page drawing the transcript. It
-    // is handled here rather than in the JSON router because it is the one `/api` route whose answer
-    // is bytes: the router's `Response` is a status and a JSON string by construction.
+    // Binary responses bypass the JSON router.
     if req.method == "GET"
         && let Some(id) = req.route_path().strip_prefix("/api/agents/attachment/")
     {
         return serve_attachment(&mut stream, &app.agents, id).await;
     }
 
-    // A diagnostic archive `POST /api/system/diagnose` wrote, offered back as a download — the
-    // one `/api/system` route whose answer is bytes rather than JSON, same reason as above.
     if req.method == "GET"
         && let Some(name) = req.route_path().strip_prefix("/api/system/diagnose/download/")
     {
         return serve_diagnose_download(&mut stream, name).await;
     }
 
-    // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
-    // Inside `/api` an unknown path is a 404 from the router, not the app shell.
+    // Unknown API paths must return a 404, not the SPA shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
         return serve_asset(
             &mut stream,
@@ -565,11 +448,7 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     http::write_json(&mut stream, response.status, &response.body).await
 }
 
-/// Answer one read or mutation: the few genuinely asynchronous routes first, then the synchronous
-/// dispatch — shared with anyone else asking the same thing, and off the async workers either way.
-///
-/// Shared with the live channel, which answers a subscription with the very same routing rather
-/// than a parallel set of handlers that could drift from it.
+/// Common routing for HTTP requests and live subscriptions.
 async fn answer(app: &Arc<App>, req: http::Request) -> Arc<Response> {
     match async_route(app, &req).await {
         Some(response) => Arc::new(response),
@@ -577,14 +456,9 @@ async fn answer(app: &Arc<App>, req: http::Request) -> Arc<Response> {
     }
 }
 
-/// The few routes that are genuinely asynchronous: an outbound HTTP call, and the in-process mesh
-/// daemon behind its async mutex. `None` means "not one of these" — a synchronous route, which
-/// [`App::answer`] takes off the runtime entirely.
+/// Handle async routes, or return `None` for dispatch on the blocking pool.
 async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
-    // Addressed to one of the paired nodes: forwarded to that node's own control panel and handed
-    // back verbatim, so this panel's pages can be pointed at another machine without a second copy
-    // of any of them (`docs/fleet.md` §13, [`viewer::proxy`]). Matched on `req.path` and not
-    // `route_path`, because the query belongs to the node's router, not to ours.
+    // Preserve the query string for the remote router.
     if let Some((node, path)) = viewer::split_node_path(&req.path) {
         return Some(
             viewer::proxy(
@@ -600,25 +474,15 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         );
     }
     let response = match (req.method.as_str(), req.route_path()) {
-        // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
-        // because it makes an outbound call, so it can't be a plain sync handler.
         ("POST", "/api/secrets/refresh") => refresh_secret(&app.secrets, &req.body).await,
-        // Send a dashboard to a paired node. Async for the same reason: it is an outbound call —
-        // through this machine's mesh gateway, at the node's own control panel (see [`transfer`]).
         ("POST", "/api/dashboards/transfer") => {
             transfer::transfer_dashboard(&app.projects, &app.ports, &req.body).await
         }
-        // What the *fleet* is running: one authenticated call to each paired node's own control
-        // panel, over the same gateway (see [`viewer`]). Async for the same reason as a transfer —
-        // every one of these leaves the machine.
         ("GET", "/api/fleet/dashboards") => viewer::fleet_dashboards(&app.secrets).await,
-        // Whether each paired node answers a dial right now — one short mesh call per node.
         ("GET", "/api/fleet/reach") => viewer::reach(&app.secrets).await,
         ("POST", "/api/fleet/dashboards/unlock") => viewer::unlock(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/forget") => viewer::forget(&app.secrets, &req.body).await,
         ("POST", "/api/fleet/dashboards/allow") => viewer::allow(&app.secrets, &req.body).await,
-        // Spend an invite minted somewhere else. Async because it *dials* — the one fleet route
-        // that leaves the machine, and the half of `docs/fleet.md` §8 the panel could not do.
         ("POST", "/api/fleet/join") => fleet_join(app, &req.body).await,
         ("GET", "/api/mesh") => handlers::mesh(app.mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(&app.mesh).await,
@@ -637,9 +501,6 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         ("POST", "/api/mesh/forwards/remove") => {
             handlers::mesh_remove_forward(app.mesh.running().await, &req.body)
         }
-        // Both talk to the router (`POST /register`, a blocking HTTP call run off the runtime —
-        // see `blocking`) and, on success, start or stop this node's live socket for the
-        // provider — the one piece of channel state that lives on the tokio runtime itself.
         ("POST", "/api/channels/connect") => channels_connect(app, &req.body).await,
         ("POST", "/api/channels/disconnect") => channels_disconnect(app, &req.body).await,
         _ => return None,
@@ -648,8 +509,7 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
 }
 
 impl App {
-    /// Answer a synchronous request without occupying an async worker: shared with whoever else is
-    /// asking the same thing right now, and run on the blocking pool either way.
+    /// Coalesce eligible reads and dispatch synchronous work on the blocking pool.
     async fn answer(self: &Arc<Self>, req: http::Request) -> Arc<Response> {
         let key = shared_read_key(&req);
         let app = Arc::clone(self);
@@ -661,7 +521,7 @@ impl App {
     }
 }
 
-/// GET routes that only look at state, and so may be shared between concurrent askers.
+/// Read-only GET routes eligible for coalescing.
 const SHARED_GETS: &[&str] = &[
     "/api/agents",
     "/api/agents/runs/all",
@@ -688,8 +548,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/voice",
 ];
 
-/// POST routes that are reads despite the method — the polled ones carry their subject (an agent
-/// name, a run id) in the body, which is why they are POSTs at all.
+/// Read-only POST routes; their bodies identify the subject.
 const SHARED_POSTS: &[&str] = &[
     "/api/agents/peek",
     "/api/agents/run/peek",
@@ -701,16 +560,12 @@ const SHARED_POSTS: &[&str] = &[
     "/api/triggers/log",
 ];
 
-/// The largest body a shared read may be keyed on. Every route above sends a handful of fields;
-/// anything larger is answered on its own rather than growing the in-flight map.
+/// Larger bodies bypass coalescing to bound the in-flight map.
 const MAX_SHARED_KEY_BODY: usize = 1024;
 
-/// How to identify a request that may be answered together with identical ones in flight, or
-/// `None` for everything else — which is every mutation, and so every route not named above.
 fn shared_read_key(req: &http::Request) -> Option<String> {
     let path = req.route_path();
     let shared = match req.method.as_str() {
-        // `/api/projects/<id>` is one project's detail page, a read like the bare list above.
         "GET" => SHARED_GETS.contains(&path) || path.starts_with("/api/projects/"),
         "POST" => SHARED_POSTS.contains(&path),
         _ => false,
@@ -718,9 +573,7 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
     if !shared || req.body.len() > MAX_SHARED_KEY_BODY {
         return None;
     }
-    // Keyed on the *full* path, query and all: the allowlist is matched without one, but
-    // `?limit=100` and `?limit=200` are different answers to the same route, and sharing would
-    // hand one asker the other's page.
+    // Queries distinguish responses even though the allowlist matches only the route.
     Some(format!(
         "{} {}\n{}",
         req.method,
@@ -729,10 +582,7 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
     ))
 }
 
-/// The fleet node behind `req`, off the headers the mesh gateway attaches when it forwards a
-/// peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/
-/// `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `None` for a request that never left this machine,
-/// which is every request the control panel's own pages send.
+/// Identity attached by the mesh gateway; absent on local panel requests.
 fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
     let nickname = req.header("x-adi-fleet-node")?;
     Some(handlers::FleetSender {
@@ -741,10 +591,8 @@ fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
     })
 }
 
-/// Route a synchronous request. Runs on the blocking pool ([`blocking`]), never on an async
-/// worker: nearly every arm reads files, and several spawn a subprocess.
-// One flat table of routes, deliberately: splitting it by prefix would hide the ordering the
-// guarded arms depend on, and every arm is a single line of dispatch.
+/// Runs on the blocking pool because handlers perform file I/O and spawn subprocesses.
+// Keep exact routes ahead of guarded prefix matches.
 #[allow(clippy::too_many_lines)]
 fn dispatch(app: &App, req: &http::Request) -> Response {
     let App {
@@ -768,25 +616,14 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
     let path = req.route_path();
     match (req.method.as_str(), path) {
         ("GET", "/api/health") => handlers::health(SERVICE, VERSION, start),
-        // Auto-update (`docs/adi-update.md`). The `GET` reads two files and is what the top
-        // bar's version pill polls; `check` fetches the release manifest; `run` hands the
-        // install to the bundled CLI, which restarts this very process on its way through.
         ("GET", "/api/update") => handlers::update_state(),
         ("POST", "/api/update/check") => handlers::check_update(),
         ("POST", "/api/update/run") => handlers::run_update(),
-        // The System page (`docs/fleet.md` §14's L3 exemptions — always local, never the
-        // panel-wide picker): live service status, one action off a service's own row, the
-        // platform power switch, a bounce for what's running, and a diagnostic report. Power and
-        // restart hand off to a detached `adi-mono` for the same reason `/api/update/run` does —
-        // see `adi_webapp_api::handlers::system`'s module header.
         ("GET", "/api/system") => handlers::system_status(agents),
         ("POST", "/api/system/action") => handlers::run_system_action(agents, &req.body),
         ("POST", "/api/system/power") => handlers::run_system_power(&req.body),
         ("POST", "/api/system/restart") => handlers::restart_system(),
         ("POST", "/api/system/diagnose") => handlers::diagnose_system(),
-        // Shared assets (`crate::shared_assets`): whether the webapp bundle is fetched from the
-        // R2 CDN instead of served from this instance. The setting only; the rewrite it drives
-        // happens in `serve_embedded`, not here.
         ("GET", "/api/settings/shared-assets") => handlers::shared_assets_state(),
         ("POST", "/api/settings/shared-assets") => handlers::set_shared_assets(&req.body),
         ("GET", "/api/ports") => handlers::ports(ports),
@@ -798,19 +635,15 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/projects/archive") => handlers::archive_project(projects, &req.body),
         ("POST", "/api/projects/unarchive") => handlers::unarchive_project(projects, &req.body),
         ("POST", "/api/projects/remove") => handlers::remove_project(projects, &req.body),
-        // Not a `handlers::` arm: a rename spans stores that crate does not reach (see [`projects`]).
+        // Renaming spans stores outside `adi_webapp_api`; see [`projects`].
         ("POST", "/api/projects/rename") => projects::rename_project(projects, &req.body),
         ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
         ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
         ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),
-        // The store browser: the whole ~/.adi/mono tree, jailed to it (see handlers::fs).
         ("POST", "/api/fs/list") => handlers::fs_list(projects, &req.body),
         ("POST", "/api/fs/read") => handlers::fs_read(projects, &req.body),
         ("POST", "/api/fs/write") => handlers::fs_write(projects, &req.body),
         ("POST", "/api/fs/create") => handlers::fs_create(projects, &req.body),
-        // Workspaces & project hooks: working copies created by the script files under a
-        // project's .adi/hooks, registered in its .adi/workspaces.toml. All POST under
-        // /api/projects/… — NOT /api/hooks/*, which is the triggers webhook URL space.
         ("POST", "/api/projects/workspaces") => handlers::workspaces_state(projects, &req.body),
         ("POST", "/api/projects/workspaces/create") => {
             handlers::create_workspace(projects, &req.body)
@@ -833,15 +666,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/projects/hook/run") => handlers::run_project_hook(projects, &req.body),
         ("POST", "/api/projects/hook/log") => handlers::project_hook_log(projects, &req.body),
         ("POST", "/api/projects/hook/create") => handlers::create_project_hook(projects, &req.body),
-        // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
-        // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {
             let live = scan::listening_ports();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &live)
         }
-        // The knowledge base (`docs/knowledge.md`): scoped collections of text notes, searched by
-        // meaning. These run here, on the blocking pool, and not as `async_route` arms — a search
-        // may load the embedding model, which is seconds of CPU the async workers must not spend.
+        // Embedding-model loading must stay on the blocking pool.
         ("GET", "/api/knowledge") => handlers::knowledge(knowledge_store),
         ("POST", "/api/knowledge/search") => handlers::search_knowledge(knowledge_store, &req.body),
         ("POST", "/api/knowledge/notes") => handlers::knowledge_notes(knowledge_store, &req.body),
@@ -864,22 +693,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/knowledge/reembed") => {
             handlers::reembed_knowledge(knowledge_store, &req.body)
         }
-        // The fleet: the remote adi nodes this machine is paired with (`docs/fleet.md`). The
-        // registry is a file in the shared store, so these take the store the projects registry
-        // already holds open rather than reaching for `~/.adi/mono` a second time — which is also
-        // what lets the handlers be tested against a temp root.
         ("GET", "/api/fleet") => handlers::fleet(projects.config()),
-        // Which of those nodes this machine can *ask* things of — the registry joined to the
-        // credentials kept here, and nothing over the wire, so it is cheap enough for a menu to
-        // watch (`docs/fleet.md` §13). `/api/fleet/dashboards` is the expensive one beside it.
         ("GET", "/api/fleet/nodes") => viewer::nodes(secrets),
-        // Minting is a POST with no body: it takes nothing and it is not a read — every call
-        // writes a fresh nonce into the invite book.
+        // Minting creates a new nonce, so it must not be treated as a shareable read.
         ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config()),
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
-        // Drop one direction of a pairing — this machine reading the node, or the node reading
-        // this machine — and unpair only when neither is left (the new UI's Disconnect).
+        // Unpair only after both directions have been dropped.
         ("POST", "/api/fleet/sources/drop") => {
             viewer::drop_source(projects, secrets, &req.body)
         }
@@ -904,8 +724,6 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
         ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
         ("POST", "/api/tasks/delete") => handlers::delete_task(tasks, &req.body),
-        // Tools: user CLIs (sh/ts) created in-store or linked by path, exposed as tools/.bin/<name>
-        // shims agents run. Every mutation returns the fresh list for one-round-trip updates.
         ("GET", "/api/tools") => handlers::tools(tools),
         ("POST", "/api/tools/create") => handlers::create_tool(tools, &req.body),
         ("POST", "/api/tools/link") => handlers::link_tool(tools, &req.body),
@@ -914,41 +732,28 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/tools/remove") => handlers::remove_tool(tools, &req.body),
         ("POST", "/api/tools/script/read") => handlers::read_tool_script(tools, &req.body),
         ("POST", "/api/tools/script/write") => handlers::write_tool_script(tools, &req.body),
-        // A run resolves a project-scoped tool's cwd from the project registry.
         ("POST", "/api/tools/run") => handlers::run_tool(tools, projects, &req.body),
 
-        // The shared SQLite store. `query` runs on a read-only connection and `exec` on a
-        // read-write one, so browsing can never write — see handlers::db.
+        // `query` uses a read-only connection; writes go through `exec`.
         ("GET", "/api/db") => handlers::db_state(db),
         ("POST", "/api/db/tables") => handlers::db_tables(db, &req.body),
         ("POST", "/api/db/schema") => handlers::db_schema(db, &req.body),
         ("POST", "/api/db/query") => handlers::db_query(db, &req.body),
         ("POST", "/api/db/exec") => handlers::db_exec(db, &req.body),
 
-        // The LLM gateway's journal. Reads only, on a read-only connection: the record of what
-        // was sent to a model is written by the gateway and by nothing else.
         ("POST", "/api/llm/summary") => handlers::llm_summary(db, &req.body),
         ("POST", "/api/llm/calls") => handlers::llm_calls(db, &req.body),
         ("POST", "/api/llm/call") => handlers::llm_call(db, &req.body),
 
-        // The backend registry: which models an agent may answer on, and which are spent right
-        // now. Keyed off the agent store because a backend's whole audience is the agents that
-        // list it — the registry is read and written beside them, in the same mono store.
         ("GET", "/api/llm/backends") => handlers::llm_backends(agents),
         ("POST", "/api/llm/backends/save") => handlers::save_llm_backend(agents, &req.body),
         ("POST", "/api/llm/backends/delete") => handlers::delete_llm_backend(agents, &req.body),
-        // A real, billed request — right now, whichever runtime the backend names. Distinct from
-        // the background prober, and it writes nothing: no hold touched, no hold created.
+        // Sends a billed request without changing holds.
         ("POST", "/api/llm/backends/test") => handlers::test_llm_backend(agents, &req.body),
         ("POST", "/api/llm/holds/release") => handlers::release_llm_hold(agents, &req.body),
         ("POST", "/api/llm/settings") => handlers::save_llm_settings(agents, &req.body),
 
-        // The embedding backend registry: which runtime the indexer/knowledge/facts stores turn
-        // text into a vector with. Keyed off the agent store's config for the same reason the LLM
-        // registry above is — there is no store of its own to open, only a shared config root.
-        // Listed in `SHARED_GETS` (concurrent pollers share one read), but deliberately absent from
-        // `live.rs`'s `watchable`: unlike the LLM registry, nothing outside the panel moves this —
-        // no prober, no hold. See that file's own note on this route.
+        // Not watchable: embedding settings change only through the panel; see `live::watchable`.
         ("GET", "/api/embeddings/backends") => handlers::embedding_backends(agents),
         ("POST", "/api/embeddings/backends/save") => {
             handlers::save_embedding_backend(agents, &req.body)
@@ -956,8 +761,6 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/embeddings/backends/delete") => {
             handlers::delete_embedding_backend(agents, &req.body)
         }
-        // Embed one short string through this backend, right now — the same distinction from a
-        // save that the LLM test above draws: writes nothing, and a draft never touches the store.
         ("POST", "/api/embeddings/backends/test") => {
             handlers::test_embedding_backend(agents, &req.body)
         }
@@ -970,21 +773,14 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/secrets/set-oauth") => handlers::set_oauth_secret(secrets, &req.body),
         ("POST", "/api/secrets/remove") => handlers::remove_secret(secrets, &req.body),
         ("POST", "/api/secrets/reveal") => handlers::reveal_secret(secrets, &req.body),
-        // Dictation. The clip arrives as a raw body — it is already bytes with a content type
-        // from `MediaRecorder`, and wrapping it in JSON would cost a base64 third for nothing.
         ("GET", "/api/voice") => handlers::voice(secrets),
         ("POST", "/api/voice/transcribe") => handlers::transcribe(
             secrets,
             req.query_param("engine")
                 .unwrap_or(handlers::BROWSER_ENGINE),
-            // Chrome records WebM/Opus and Safari MP4; the fallback only matters for a caller
-            // that sent no type at all, and webm is the likelier guess.
             req.header("content-type").unwrap_or("audio/webm"),
             &req.body,
         ),
-        // The Meta page's state: the well-known `adi-agent` (if set up), the defaults to seed a
-        // new one with (system prompt + every active tool), and the agent form schema. Reads the
-        // same agents store; the tools store supplies the default tool set.
         ("GET", "/api/meta") => handlers::meta(agents, tools),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
@@ -995,13 +791,6 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/spawn-rule") => handlers::set_spawn_rule(agents, &req.body),
         ("POST", "/api/agents/auto-title") => handlers::set_auto_title(agents, &req.body),
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
-        // `?limit=N` is the chat rail's page — the newest N sessions across every agent. Absent
-        // (or unparseable) means the whole index, which is what the pages that read all of it ask
-        // for. `?hidden=false|true` is the rail's own narrowing, moved server-side — see
-        // `handlers::all_agent_runs`; absent means every run, hidden or not, exactly as before that
-        // parameter existed. `?filter=starred|mine` is the rail's "All / Only starred / Only started
-        // by me" box, moved down the same way so the `?limit=` page is a page of the rows it draws;
-        // absent (or `all`) narrows nothing — see `handlers::RunFilter`.
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(
             agents,
             req.query_param("limit").and_then(|n| n.parse().ok()),
@@ -1010,47 +799,27 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
                 .and_then(handlers::RunFilter::from_query),
         ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
-        // The calls behind one folded run of a transcript — what a reader asks for when they open
-        // one. Deliberately *not* watchable (`live::watchable`): it answers a click, not a poll,
-        // and a settled run's calls never change once fetched.
+        // Fetch on demand; completed steps do not need a live subscription.
         ("POST", "/api/agents/run/steps") => handlers::run_steps(agents, &req.body),
         ("POST", "/api/agents/run/reply") => {
             handlers::reply_run(agents, &req.body, fleet_sender(req))
         }
-        // An image on its way into a message. Raw bytes with their type in the header, like the
-        // dictation clip above — the page already holds both, and JSON would cost a base64 third.
-        // The bytes are read back out at `GET /api/agents/attachment/<id>`, which is not routed
-        // here: it answers with bytes rather than JSON, so it is handled before this dispatch.
         ("POST", "/api/agents/attachment") => handlers::store_attachment(
             agents,
             req.header("content-type").unwrap_or_default(),
             req.header("x-adi-filename").unwrap_or_default(),
             &req.body,
         ),
-        // Settle the question a conversation stopped to ask. Distinct from a reply because it
-        // names the ask it answers, so a card left open in another tab cannot answer the question
-        // that replaced it.
+        // The question ID prevents an old tab from answering a replacement question.
         ("POST", "/api/agents/run/answer") => handlers::answer_run(agents, &req.body),
-        // Every conversation waiting on a person, across every agent — the "needs you" inbox.
         ("GET", "/api/agents/questions") => handlers::pending_questions(agents),
-        // What a conversation is for. `goals` reads (a conversation's, or every open one when the
-        // body names nothing); the two writes are set-or-reword and the two ways of closing.
         ("POST", "/api/agents/goals") => handlers::agent_goals(agents, &req.body),
         ("POST", "/api/agents/goal/set") => handlers::set_agent_goal(agents, &req.body),
         ("POST", "/api/agents/goal/close") => handlers::close_agent_goal(agents, &req.body),
-        // What a conversation is waiting on the *world* for. The list rides the run listing and the
-        // conversation snapshot, so there is nothing to read here — only the one write, which drops
-        // a wake that is never coming and would otherwise hold the chat open for a week.
         ("POST", "/api/agents/await/ignore") => handlers::ignore_await(agents, &req.body),
-        // What a conversation spent its context on. Its own endpoint, not part of the peek: it
-        // re-tokenizes the whole transcript, and the peek is polled once a second.
+        // Retokenizing the transcript is too expensive for the polled peek response.
         ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),
-        // Hand the same conversation to an agent and ask how it should have gone. Writes the
-        // dossier, then launches the reviewer on it — the answer arrives as its own conversation.
         ("POST", "/api/agents/run/review") => handlers::review_run(agents, &req.body),
-        // A run of the agent with a person in the model's seat: the agent's own environment, its
-        // own composed prompt, and tools that really execute. All four answer the same state
-        // object, so a page never renders a prompt one turn behind what it just did.
         ("POST", "/api/agents/simulate") => handlers::simulate_agent(agents, &req.body),
         ("POST", "/api/agents/simulate/prompt") => handlers::simulate_prompt(agents, &req.body),
         ("POST", "/api/agents/simulate/turn") => handlers::simulate_turn(agents, &req.body),
@@ -1072,15 +841,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             handlers::delete_trigger(triggers, trigger_supervisor, &req.body)
         }
         ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),
-        // Replace a supervised background trigger's process without changing its definition.
         ("POST", "/api/triggers/restart") => {
             handlers::restart_trigger(triggers, trigger_supervisor, &req.body)
         }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
-        // Publish a platform event by hand — the app's dispatcher fires matching event triggers.
         ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
-        // Channels (docs/channels.md §7). `connect`/`disconnect` are async routes (they talk to
-        // the router) — see `async_route` below.
         ("GET", "/api/channels") => handlers::channels(channels),
         ("GET", "/api/channels/status") => handlers::channel_status(channels_provider_status(
             channels,
@@ -1089,17 +854,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/channels/route") => handlers::route_channel(channels, &req.body),
         ("POST", "/api/channels/pause") => handlers::pause_channel(channels, &req.body),
         ("POST", "/api/channels/allow") => handlers::allow_channel(channels, &req.body),
-        // The `channel-reply` tool's own local endpoint — a mid-run post, routed by run id alone.
         ("POST", "/api/channels/reply") => {
             handlers::reply_channel(channels, secrets, &channels::router_url(), &req.body)
         }
-        // One connection, for the connect flow's own poll on `linked`.
         (m, p) if m == "GET" && p.starts_with("/api/channels/") => {
             handlers::channel(channels, &p["/api/channels/".len()..])
         }
-        // The public webhook endpoint: fire an enabled `webhook` trigger with the request body
-        // as its payload. GET is accepted too — some webhook providers ping with it. The secret
-        // (when the trigger requires one) rides in the query, which route_path() strips.
+        // Preserve the query for webhook secrets; GET also supports provider pings.
         (m, p) if p.starts_with("/api/hooks/") && matches!(m, "POST" | "GET") => {
             let name = &p["/api/hooks/".len()..];
             let query = req.path.split_once('?').map_or("", |(_, q)| q);
@@ -1132,16 +893,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             let live = scan::listening_ports();
             handlers::delete_dashboard(projects.config(), ports, &live, &req.body)
         }
-        // The receiving half of a transfer: another machine handing us a dashboard it packed.
-        // Reached over the mesh, so it is gated by this node's own password before it ever gets
-        // here (`docs/fleet.md` §5) — the same gate every other route on this panel sits behind.
+        // Mesh imports have already passed the node password gate (`docs/fleet.md` §5).
         ("POST", "/api/dashboards/import") => {
             let live = scan::listening_ports();
             handlers::import_dashboard(projects, ports, &live, &req.body)
         }
-        // The apps marketplace: the listing reads the store (offline), sync is the only one that
-        // fetches a manifest, and install/start/update are the three deliberate acts — install
-        // clones a repository at the commit its manifest pins. See docs/marketplace.md.
         ("GET", "/api/marketplace") => handlers::marketplace(projects.config()),
         ("POST", "/api/marketplace/sync") => handlers::sync_marketplace(projects.config()),
         ("POST", "/api/marketplace/install") => {
@@ -1162,8 +918,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/marketplace/bundle/update") => {
             handlers::update_marketplace_bundle(projects.config(), &req.body)
         }
-        // Starting or stopping a service changes what is listening, and the page asks that next —
-        // so drop the port-scan memo rather than answering it from a scan taken before the change.
+        // Service changes invalidate the cached port scan.
         ("POST", "/api/hive/start") => {
             let response = handlers::start_service(projects, &req.body);
             scan::invalidate();
@@ -1183,13 +938,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
     }
 }
 
-/// `POST /api/mesh/start` — persist `enabled=true`, bring the in-process mesh daemon up, then
-/// report fresh state.
-///
-/// The write happens first and is not undone if the start itself fails: the operator's choice is
-/// "on", and a machine that could not bind this time should still try on its next restart rather
-/// than silently staying off. Persisted, not just acted on for the session, so this machine stays
-/// on after a restart the same way `mesh enable` does from a shell.
+/// Persist the enabled choice even if startup fails, so the next restart retries.
 async fn mesh_start(mesh: &MeshCtl) -> Response {
     if let Err(e) = persist_mesh_enabled(true) {
         return handlers::error(500, &format!("saving mesh config: {e}"));
@@ -1200,8 +949,7 @@ async fn mesh_start(mesh: &MeshCtl) -> Response {
     }
 }
 
-/// `POST /api/mesh/stop` — persist `enabled=false`, stop the in-process mesh daemon, then report
-/// fresh state. See [`mesh_start`] for why the write is unconditional.
+/// Persist the disabled choice before stopping the daemon.
 async fn mesh_stop(mesh: &MeshCtl) -> Response {
     if let Err(e) = persist_mesh_enabled(false) {
         return handlers::error(500, &format!("saving mesh config: {e}"));
@@ -1210,9 +958,7 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
     handlers::mesh(false)
 }
 
-/// `GET /api/channels/status`'s own data: one entry per provider this node holds a connection
-/// on, true only once that provider's live socket has actually completed its handshake with the
-/// router.
+/// A provider is connected only after its live socket completes the router handshake.
 fn channels_provider_status(
     channels: &Connections,
     channels_live: &channels::Live,
@@ -1231,10 +977,7 @@ fn channels_provider_status(
         .collect()
 }
 
-/// `POST /api/channels/connect` (`docs/channels.md` §7): register this node for the provider
-/// (minting/refreshing its node token — a blocking HTTP call, run off the runtime through
-/// [`blocking`]) and create a fresh connection. On success, starts this node's live socket for
-/// the provider if one isn't already running.
+/// Register on the blocking pool, then start the provider socket on success.
 async fn channels_connect(app: &App, body: &[u8]) -> Response {
     let connections = app.channels.clone();
     let secrets = app.secrets.clone();
@@ -1272,11 +1015,8 @@ async fn channels_connect(app: &App, body: &[u8]) -> Response {
     response
 }
 
-/// `POST /api/channels/disconnect` — drop the connection, and stop this node's live socket for
-/// its provider too if nothing else on this node still has a connection there.
 async fn channels_disconnect(app: &App, body: &[u8]) -> Response {
-    // The provider has to be read *before* the store mutation below removes the only record of
-    // it — there is nothing left to ask once the connection is gone.
+    // Read the provider before disconnect removes its record.
     let provider = serde_json::from_slice::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v["id"].as_str().map(str::to_string))
@@ -1305,34 +1045,15 @@ async fn channels_disconnect(app: &App, body: &[u8]) -> Response {
     response
 }
 
-/// Persist an explicit on/off choice to `mesh.toml`. Never called from the shutdown path
-/// ([`MeshCtl::stop`] itself touches no config) — stopping the daemon because the process is
-/// exiting is not an operator decision, and must not be confused with one.
+/// Persist an operator choice only; process shutdown must not change this setting.
 fn persist_mesh_enabled(enabled: bool) -> anyhow::Result<()> {
     let mut cfg = adi_mesh::config::MeshConfig::load()?;
     cfg.set_enabled(enabled);
     cfg.save()
 }
 
-/// `POST /api/fleet/join` — spend an invite minted on another machine, enrolling this one in its
-/// fleet (`docs/fleet.md` §8).
-///
-/// The mirror of `POST /api/fleet/invite`, and the reason both directions of pairing are now
-/// reachable without a terminal: minting only ever helps the side that can be *dialled*, so a
-/// machine whose operator has no shell could be paired only by somebody who did have one. The
-/// token is checked before anything leaves the machine ([`handlers::fleet_join_token`]), dialled
-/// over the endpoint the mesh already holds ([`MeshCtl::join`]), and answered with the credential
-/// the handshake minted — once, because neither machine keeps it.
-///
-/// **This grants nothing that could not be granted from here already.** The pairing files the far
-/// side with `http:app`, which is what the panel's own Grant form hands out, and §5's argument
-/// covers the rest: whatever can reach this panel can already create a dashboard here and run a
-/// task on this machine.
-///
-/// **Joining also turns the mesh on.** `join::join_on` persists `enabled=true` — asking to join a
-/// fleet is consent to run the mesh — and this handler brings the daemon up here too, rather than
-/// leaving it for the app's next restart to notice: a join that appeared to do nothing would be a
-/// support question.
+/// Join a fleet and return the minted credential once. Joining persists `enabled=true`
+/// and starts the mesh immediately (`docs/fleet.md` §8).
 async fn fleet_join(app: &App, body: &[u8]) -> Response {
     let token = match handlers::fleet_join_token(body, now_secs()) {
         Ok(token) => token,
@@ -1341,28 +1062,18 @@ async fn fleet_join(app: &App, body: &[u8]) -> Response {
     match app.mesh.join(&token).await {
         Ok(joined) => {
             record_front_door(&joined.viewer);
-            // A no-op if the handshake already ran over this daemon's own endpoint
-            // (`MeshCtl::join`'s `Daemon::join` branch); otherwise this is what leaves it up.
+            // Idempotent when the join reused the running daemon.
             if let Err(e) = app.mesh.start().await {
                 warn!(error = %e, "mesh daemon did not come up after a join");
             }
             handlers::fleet_joined(app.projects.config(), &joined)
         }
-        // 502 and not 500: what failed is the far side of a handshake — an unreachable viewer, a
-        // nonce already spent, a refusal — and the message is the one thing that tells them apart.
         Err(e) => handlers::error(502, &format!("{e:#}")),
     }
 }
 
-/// Record a freshly paired peer in the front door's certificate list, so this machine's next leaf
-/// covers `*.<petname>.n.adi`.
-///
-/// Deliberately **advisory**, exactly as the CLI's copy is (`adi-cli`'s `record_front_door`): the
-/// list feeds only the SAN set, while routing `*.n.adi` is one gateway rule that never consults
-/// it. A peer that could not be recorded is reachable over `http://` immediately and only warns on
-/// `https://` until the next front-door start — turning that into a failed pairing would be far
-/// worse than a browser warning. It must never run ahead of the registry save; by here, the
-/// handshake has already written it.
+/// Update certificate names after the pairing is saved. Failure is advisory: HTTP routing
+/// still works, but HTTPS may warn until the front-door certificate is refreshed.
 fn record_front_door(petname: &str) {
     if adi_core::dns::Dns.add_mesh_node(petname) == adi_core::dns::MeshNodeChange::Failed {
         warn!(
@@ -1373,24 +1084,18 @@ fn record_front_door(petname: &str) {
     }
 }
 
-/// The OAuth router base URL used for server-side secret refresh (override with
-/// `ADI_OAUTH_ROUTER_URL`, e.g. for a self-hosted or local router).
 fn oauth_router_url() -> String {
     std::env::var("ADI_OAUTH_ROUTER_URL")
         .unwrap_or_else(|_| "https://oauth-router.withadi.dev".to_string())
 }
 
-/// Seconds since the Unix epoch (for stamping a refreshed token's absolute expiry).
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
 }
 
-/// `POST /api/secrets/refresh` — renew an OAuth secret's access token using its stored refresh
-/// token, entirely server-side: the refresh token is decrypted here, exchanged at the router
-/// (which holds the provider client secret), and the fresh token is re-stored. The refresh token
-/// never crosses to the browser. Returns the fresh secrets list on success.
+/// Refresh and re-store an OAuth token without exposing the refresh token to the browser.
 async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<adi_webapp_api::types::SecretRef>(body) else {
         return handlers::error(
@@ -1408,7 +1113,6 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         .map(str::trim)
         .filter(|p| !p.is_empty());
 
-    // Find the secret and confirm it's an OAuth secret with a refresh token.
     let secret = match secrets.get(project, name) {
         Ok(Some(s)) => s,
         Ok(None) => return handlers::error(404, &format!("no such secret: {name}")),
@@ -1429,7 +1133,6 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         Err(e) => return Response::from(&e),
     };
 
-    // Exchange it at the router (holds the client secret); the refresh token stays server-side.
     let url = format!(
         "{}/refresh/{}",
         oauth_router_url().trim_end_matches('/'),
@@ -1464,8 +1167,6 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         return handlers::error(502, "the OAuth router returned no access_token");
     };
 
-    // Re-store: new access token; the provider's rotated refresh token if it issued one, else
-    // keep the current one; the new expiry and scope.
     let rotated = payload
         .get("refresh_token")
         .and_then(serde_json::Value::as_str)
@@ -1492,11 +1193,7 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
     }
 }
 
-/// Serve one attached image's bytes, or a 404 when the id names nothing.
-///
-/// Cached hard: an attachment is immutable and its id is minted from random bytes, so the page that
-/// draws a chat every second must not re-fetch every screenshot in it. The id changing *is* the
-/// invalidation.
+/// Attachments are immutable; their random IDs also serve as cache keys.
 async fn serve_attachment(stream: &mut TcpStream, agents: &Agents, id: &str) -> anyhow::Result<()> {
     let Some((media_type, bytes)) = handlers::attachment_bytes(agents, id) else {
         return http::write_json(stream, 404, r#"{"ok":false,"error":"no such attachment"}"#).await;
@@ -1509,9 +1206,7 @@ async fn serve_attachment(stream: &mut TcpStream, agents: &Agents, id: &str) -> 
     http::write_cached(stream, &media_type, disposition, &bytes).await
 }
 
-/// Serve a diagnostic archive `adi-mono diagnose` wrote, as a download. `name` is resolved
-/// against the reports directory by [`handlers::diagnose_download_path`] — never a raw path off
-/// the request — so this can only ever read a file that collector itself wrote.
+/// Resolve downloads within the reports directory, never from a raw request path.
 async fn serve_diagnose_download(stream: &mut TcpStream, name: &str) -> anyhow::Result<()> {
     let Some(path) = handlers::diagnose_download_path(name) else {
         return http::write_json(stream, 404, r#"{"ok":false,"error":"no such report"}"#).await;
@@ -1522,15 +1217,8 @@ async fn serve_diagnose_download(stream: &mut TcpStream, name: &str) -> anyhow::
     http::write_download(stream, "application/octet-stream", name, &bytes).await
 }
 
-/// The types an attachment may be served back **as itself**, for a browser to draw in a tab.
-///
-/// A message can carry any file now, and this route answers on `app.adi` — the panel's own origin,
-/// which holds the whole API. So anything a browser would run as a *document* (`text/html`, an SVG,
-/// an XHTML page) is served as `application/octet-stream` with `Content-Disposition: attachment`
-/// instead: it downloads, and never executes with the panel's origin behind it. The four image
-/// types plus a PDF cover what anybody actually opens from a transcript, and each is drawn by a
-/// viewer rather than as a page. `nosniff` rides along on both branches, so a downloaded file cannot
-/// talk the browser into promoting it back.
+/// Types safe to serve inline on the panel origin. Other types, including HTML and SVG,
+/// download as `application/octet-stream`; `nosniff` prevents content-type promotion.
 const RENDERABLE: [&str; 6] = [
     "image/png",
     "image/jpeg",
@@ -1540,14 +1228,8 @@ const RENDERABLE: [&str; 6] = [
     "text/plain",
 ];
 
-/// Serve a webapp asset. With a disk override ([`DIST_ENV`]) set, files come from that
-/// directory; otherwise from the embedded copy. Either way, an unknown path falls back to
-/// the app shell (`index.html`) for client-side routing, and the placeholder if the webapp
-/// isn't built yet.
-///
-/// `host` is this request's own `Host` header, threaded through to [`serve_embedded`] for the
-/// shared-assets `cdn-when-remote` mode's decision — unused on the [`DIST_ENV`] path, which never
-/// asks the CDN at all.
+/// Unknown asset paths fall back to the SPA shell, or a placeholder if it is not built.
+/// Disk overrides bypass the CDN; embedded assets use `host` for `cdn-when-remote`.
 async fn serve_asset(
     stream: &mut TcpStream,
     path: &str,
@@ -1564,13 +1246,7 @@ async fn serve_asset(
     }
 }
 
-/// Serve `rel` from the embedded `dist/`, falling back to the shell / placeholder.
-///
-/// The shell (`index.html`) is the one file this rewrites: when the shared-assets setting asks
-/// for the CDN on this request (see [`shared_assets`], which `host` is for), every hashed bundle
-/// file it points at moves there. Everything else — including a direct request for one of those
-/// hashed files by an older, cached shell — keeps being served byte-identical to what it always
-/// was.
+/// Rewrite only the embedded shell for CDN mode; direct asset requests keep working locally.
 async fn serve_embedded(
     stream: &mut TcpStream,
     rel: &str,
@@ -1595,8 +1271,6 @@ async fn serve_embedded(
     http::write_html(stream, 200, &placeholder_html()).await
 }
 
-/// Serve `rel` from a `dist/` directory on disk (the [`DIST_ENV`] dev mode), falling back
-/// to the shell / placeholder.
 async fn serve_from_disk(stream: &mut TcpStream, dir: &Path, rel: &str) -> anyhow::Result<()> {
     if is_safe_rel(rel)
         && let Ok(bytes) = tokio::fs::read(dir.join(rel)).await
@@ -1610,7 +1284,6 @@ async fn serve_from_disk(stream: &mut TcpStream, dir: &Path, rel: &str) -> anyho
     http::write_html(stream, 200, &placeholder_html()).await
 }
 
-/// Serve one file of the webapp's build — for a year if its name says which bytes it holds.
 async fn write_build_file(stream: &mut TcpStream, rel: &str, body: &[u8]) -> anyhow::Result<()> {
     if is_content_addressed(rel) {
         http::write_immutable(stream, content_type(rel), body).await
@@ -1619,13 +1292,8 @@ async fn write_build_file(stream: &mut TcpStream, rel: &str, body: &[u8]) -> any
     }
 }
 
-/// Whether a build file's own name carries the hash of its bytes: Trunk's `<name>-<hash>.<ext>`,
-/// as in `adi-webapp-7fde788d5e37b14c_bg.wasm` or `main-42001df2ba433658.css`.
-///
-/// Judged on the file name alone. wasm-bindgen's `snippets/<crate>-<hash>/inline0.js` carries a
-/// hash in its *directory*, which names the crate rather than the bytes, so it stays `no-store`;
-/// so do `sw.js`, the elements and every other unhashed file, which a new build rewrites in place.
-/// The hash is at least 12 hex digits because Trunk prints it without leading zeros.
+/// Trunk hashes the file name (`<name>-<hash>[_bg].<ext>`), with at least 12 hex digits.
+/// A hash in a snippets directory names the crate, not the file contents, and is not cacheable.
 fn is_content_addressed(rel: &str) -> bool {
     let name = rel.rsplit('/').next().unwrap_or(rel);
     let stem = name.split('.').next().unwrap_or(name);
@@ -1634,13 +1302,11 @@ fn is_content_addressed(rel: &str) -> bool {
         .is_some_and(|(_, hash)| hash.len() >= 12 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
-/// Reject path traversal: `rel` has its leading `/` stripped already, so joining it to the
-/// dist dir stays inside as long as no component is `..`.
+/// `rel` has already had its leading slash stripped; reject parent-directory components.
 fn is_safe_rel(rel: &str) -> bool {
     !rel.split('/').any(|c| c == "..")
 }
 
-/// The `ADI_WEBAPP_DIST` override, if it points at an existing directory.
 fn webapp_dist_override() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os(DIST_ENV)?);
     if dir.is_dir() {
@@ -1651,9 +1317,6 @@ fn webapp_dist_override() -> Option<PathBuf> {
     }
 }
 
-/// The page shown when the webapp isn't built into `dist/` yet, drawn with the shared
-/// [`adi_css`] system — the tokens travel inside its stylesheet. No mark: the geometry lives in
-/// crates that pin it with a test, and a dev-only page is not worth a fourth untested copy.
 fn placeholder_html() -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -1673,7 +1336,6 @@ fn placeholder_html() -> String {
     )
 }
 
-/// Map a file name to a `Content-Type` by its extension; unknown types are served as bytes.
 fn content_type(path: &str) -> &'static str {
     match path.rsplit('.').next() {
         Some("html") => "text/html; charset=utf-8",
@@ -1681,7 +1343,6 @@ fn content_type(path: &str) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("css") => "text/css; charset=utf-8",
         Some("json" | "map") => "application/json; charset=utf-8",
-        // The PWA manifest: browsers accept `application/json` but only this type is spec'd.
         Some("webmanifest") => "application/manifest+json; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("ico") => "image/x-icon",
@@ -1706,9 +1367,6 @@ mod tests {
         }
     }
 
-    /// The identity headers the mesh gateway attaches when it forwards a peer's request here
-    /// (`docs/fleet.md` §13) name the sending node, or say nothing for a request that never left
-    /// this machine.
     #[test]
     fn fleet_sender_reads_the_mesh_gateways_identity_headers() {
         let mut forwarded = request("POST", "/api/agents/run", "{}");
@@ -1728,26 +1386,20 @@ mod tests {
         );
     }
 
-    /// What may be shared and what may not. The distinction is the whole safety argument for
-    /// coalescing: a read repeated is the same read, a mutation repeated is a second mutation.
     #[test]
     fn only_a_build_file_named_by_its_hash_is_cached() {
-        // Trunk's own names, including a hash printed without its leading zero.
         assert!(is_content_addressed("adi-webapp-7fde788d5e37b14c_bg.wasm"));
         assert!(is_content_addressed("adi-webapp-7fde788d5e37b14c.js"));
         assert!(is_content_addressed("adi-webapp-81b3a4fdd05fb69_bg.wasm"));
         assert!(is_content_addressed("main-42001df2ba433658.css"));
-        // The shell, and every file a new build rewrites under the same name.
         assert!(!is_content_addressed("index.html"));
         assert!(!is_content_addressed("sw.js"));
         assert!(!is_content_addressed("rerenders.js"));
         assert!(!is_content_addressed("elements/adi-elements.js"));
         assert!(!is_content_addressed("manifest.webmanifest"));
-        // A hash in the directory names the crate, not these bytes.
         assert!(!is_content_addressed(
             "snippets/adi-webapp-723bd312eb4d940f/inline0.js"
         ));
-        // Too short, or not hex, to be a content hash.
         assert!(!is_content_addressed("icon-192.png"));
         assert!(!is_content_addressed("mark-maskable.svg"));
     }
@@ -1772,8 +1424,6 @@ mod tests {
         );
     }
 
-    /// Two pollers watching *different* chats must not be handed each other's answer, so the body
-    /// that names the subject is part of the key — and a body too large to key on opts out.
     #[test]
     fn the_key_separates_subjects_and_bounds_itself() {
         let one = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"a"}"#));
@@ -1783,9 +1433,6 @@ mod tests {
             "different agents, different keys"
         );
 
-        // A query is part of the subject, not decoration on the route: `?limit=100` and
-        // `?limit=200` are two different pages of the session index, and sharing them would hand
-        // one page's asker the other's answer.
         let page = shared_read_key(&request("GET", "/api/agents/runs/all?limit=100", ""));
         assert!(
             page.is_some(),
@@ -1808,8 +1455,6 @@ mod tests {
         );
     }
 
-    /// The point of the coalescer: concurrent askers cost one read between them, and every one of
-    /// them gets that read's answer.
     #[tokio::test]
     async fn concurrent_readers_share_one_answer() {
         let reads = Reads::default();
@@ -1818,7 +1463,7 @@ mod tests {
         let compute = |runs: Arc<AtomicUsize>| {
             move || {
                 let nth = runs.fetch_add(1, Ordering::SeqCst);
-                // Long enough that the followers below are certain to join while it is in flight.
+                // Give the other readers time to join the in-flight read.
                 std::thread::sleep(std::time::Duration::from_millis(120));
                 handlers::error(200, &format!("read #{nth}"))
             }
@@ -1840,7 +1485,6 @@ mod tests {
         );
     }
 
-    /// Sharing is per-question: two different reads in flight at once must not collapse into one.
     #[tokio::test]
     async fn different_reads_are_not_shared() {
         let reads = Reads::default();
@@ -1860,8 +1504,6 @@ mod tests {
         assert_eq!(runs.load(Ordering::SeqCst), 2);
     }
 
-    /// A panicking handler must not take the followers with it: everyone waiting on that read gets
-    /// the same 500, and the slot is released so the next poll tries again.
     #[tokio::test]
     async fn a_panicking_read_answers_its_followers() {
         let reads = Reads::default();

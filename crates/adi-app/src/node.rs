@@ -1,24 +1,8 @@
-//! One HTTP request to a paired node's control panel, over this machine's mesh gateway.
+//! HTTP calls to paired nodes through the local mesh gateway.
 //!
-//! Two features call *out* to another machine — sending a dashboard to a node ([`crate::transfer`])
-//! and reading what a node already runs ([`crate::viewer`]) — and both do it the same way, so the
-//! way is written once, here.
-//!
-//! **It goes through the local mesh gateway, not through DNS.** The request is addressed to
-//! `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi` — byte for byte what the front door
-//! would forward if the same URL were typed into a browser here (`adi-mesh`'s
-//! `gateway::handle_client`). Resolving the name instead would add the system resolver and the root
-//! front door to the path for no gain, and both can be down while the mesh is fine.
-//!
-//! **The credential is a parameter, never a global.** The node's Basic-auth password is the
-//! human-scoped half of `docs/fleet.md` §5 and is enforced *on the node*; this module only carries
-//! whatever the caller hands it. Where a caller gets one from is that caller's problem — a transfer
-//! asks per transfer, the viewer keeps one per node.
-//!
-//! **A refusal comes back as a sentence.** [`CallError`] carries a status to answer with and a
-//! message already phrased for an operator, because the three failures that actually happen — a
-//! wrong password, a node too old for the endpoint, and the *local* gateway's own error page — send
-//! a person in three different directions.
+//! Connect to the gateway directly; `Host: app.<node>.n.adi` selects the peer without DNS.
+//! Credentials are supplied by the caller and enforced by the node's Basic-auth gate.
+//! Errors distinguish node refusals from the local gateway's error pages.
 
 use adi_mesh::fleet::FleetRegistry;
 use adi_webapp_api::handlers::{self, Response};
@@ -26,32 +10,22 @@ use adi_webapp_api::types::{ApiError, Reach};
 use base64::Engine as _;
 use tracing::debug;
 
-/// The zone every `<service>.<node>` name lives under (`docs/fleet.md` §1).
 pub(crate) const MESH_ZONE: &str = "n.adi";
 
-/// The service label of a node's own control panel — the one thing pairing grants by default.
+/// Pairing grants access to this service by default.
 pub(crate) const APP_SERVICE: &str = "app";
 
-/// The zone a node's own services answer in locally, which is what [`service_name`] strips to get
-/// the name the mesh addresses them by (`docs/fleet.md` §1, and `adi-mesh`'s `gateway::LOCAL_ZONE`
-/// on the other side of the same mapping).
 pub(crate) const LOCAL_ZONE: &str = "adi";
 
-/// How long a small control-plane call may take. A relayed mesh round trip is a third of a second
-/// before any payload (`docs/fleet.md` §9), so this is generous for a listing and short enough that
-/// an unreachable node does not hold a page open.
 pub(crate) const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// A failed call to a node, already phrased for the operator and carrying the status to answer
-/// with.
 #[derive(Debug)]
 pub(crate) struct CallError {
     pub(crate) status: u16,
     pub(crate) message: String,
 }
 
-/// Refuse a node this machine has never paired with, before any connection is attempted — the
-/// gateway would answer its own *not paired* page, as HTML, which is not an error a page can read.
+/// Reject invalid or unpaired names before dialing, so callers receive JSON errors.
 pub(crate) fn require_paired(node: &str) -> Result<(), Response> {
     if !adi_mesh::fleet::valid_name(node) {
         return Err(handlers::error(
@@ -72,8 +46,6 @@ pub(crate) fn require_paired(node: &str) -> Result<(), Response> {
     }
 }
 
-/// This machine's own mesh key, in the string form the registry stores. `None` when the identity
-/// cannot be read, which is only ever a broken store.
 pub(crate) fn local_key() -> Option<String> {
     adi_mesh::identity::endpoint_id()
         .map(|id| id.to_string())
@@ -81,29 +53,19 @@ pub(crate) fn local_key() -> Option<String> {
         .ok()
 }
 
-/// A local hostname with its zone taken off — `nosh.adi` → `nosh`, `app.nosh.adi` → `app.nosh`.
-/// That name is both a grant's scope and what a dashboard answers to on its own machine.
-///
-/// Everything left of `.adi` is kept, because a node's own hosts are not all one label: a project
-/// at `app.nosh.adi` sits beside the `nosh.adi` it belongs to, and truncating to the first label
-/// would name a *different* service (or none). A host outside the local zone — a dashboard
-/// published under a real domain — yields nothing rather than a guess: it answers where it is
-/// published, not on the node's front door, so no mesh name reaches it.
+/// Strip the local zone, preserving service labels (`app.nosh.adi` → `app.nosh`).
+/// Hosts outside `.adi` have no mesh service name.
 pub(crate) fn service_name(host: Option<&str>) -> Option<String> {
     let host = host?.trim().trim_end_matches('.').to_ascii_lowercase();
     let name = host.strip_suffix(&format!(".{LOCAL_ZONE}"))?;
     adi_mesh::protocol::is_service_name(name).then(|| name.to_string())
 }
 
-/// Where to open one of a node's services from *this* machine: its name under the node's mesh
-/// zone. `None` when there is no routable name over there, in which case there is nothing on this
-/// side to link to either.
 pub(crate) fn mesh_url(node: &str, host: Option<&str>) -> Option<String> {
     service_name(host).map(|name| format!("http://{name}.{node}.{MESH_ZONE}/"))
 }
 
-/// The `Authorization` header value for a node's Basic-auth gate, defaulting the user to the one
-/// pairing mints.
+/// Build Basic auth, defaulting an absent or blank username to the pairing user.
 pub(crate) fn basic_auth(username: Option<&str>, password: &str) -> String {
     let user = username
         .map(str::trim)
@@ -114,7 +76,6 @@ pub(crate) fn basic_auth(username: Option<&str>, password: &str) -> String {
     format!("Basic {encoded}")
 }
 
-/// `GET <path>` on a node's control panel.
 pub(crate) async fn get(
     node: &str,
     path: &str,
@@ -124,7 +85,6 @@ pub(crate) async fn get(
     call(node, reqwest::Method::GET, path, auth, None, timeout).await
 }
 
-/// `POST <path>` on a node's control panel, with a JSON body.
 pub(crate) async fn post(
     node: &str,
     path: &str,
@@ -147,11 +107,7 @@ pub(crate) async fn post(
     .await
 }
 
-/// `POST <path>` on a node's control panel, with a body that is not JSON — an attachment's own
-/// bytes and type, and its filename in `X-Adi-Filename` alongside them
-/// (`docs/fleet.md` §13, J7). The one shape besides JSON this module carries: everything else a
-/// node's `/api` takes is JSON, and forcing an attachment through that forwarder would hand the
-/// node a body it cannot parse.
+/// POST raw attachment bytes with their content type and optional `X-Adi-Filename`.
 pub(crate) async fn post_bytes(
     node: &str,
     path: &str,
@@ -176,15 +132,12 @@ pub(crate) async fn post_bytes(
     .await
 }
 
-/// One `POST`'s body, carried through [`call`]/[`call_at`] — JSON for every route but an
-/// attachment's own bytes and type for that one ([`post_bytes`]).
 struct Payload<'a> {
     bytes: Vec<u8>,
     content_type: &'a str,
     filename: Option<&'a str>,
 }
 
-/// One request to `app.<node>.n.adi`, at whatever address the local gateway is listening on.
 async fn call(
     node: &str,
     method: reqwest::Method,
@@ -205,13 +158,6 @@ async fn call(
     .await
 }
 
-/// The gateway address is a parameter and not read here, so the one assumption this whole path
-/// rests on — that *our* `Host` reaches the wire, rather than the URL's authority — is pinned by a
-/// test against a real socket instead of by reading someone else's client.
-///
-/// Made the way the front door would make it: straight at the local mesh gateway, with the fleet
-/// hostname in the `Host` header. The gateway is what turns that name into a peer key and a
-/// bi-stream; nothing here knows about iroh.
 async fn call_at(
     gateway: std::net::SocketAddr,
     node: &str,
@@ -233,8 +179,7 @@ async fn call_at(
 
     let mut request = client
         .request(method, format!("http://{gateway}{path}"))
-        // The gateway routes on this and nothing else — the URL's authority is only how the
-        // connection finds the loopback listener.
+        // The URL selects the loopback socket; only Host selects the peer and service.
         .header(reqwest::header::HOST, &host)
         .header(reqwest::header::AUTHORIZATION, auth);
     if let Some(payload) = payload {
@@ -267,9 +212,6 @@ async fn call_at(
     })
 }
 
-/// Why a request never got an answer. Almost always one thing — the mesh daemon is not running on
-/// this machine, so nothing is listening on the gateway port — and that is worth saying outright
-/// rather than surfacing a connection-refused.
 fn unreachable(node: &str, gateway: std::net::SocketAddr, e: &reqwest::Error) -> CallError {
     if e.is_connect() {
         return CallError {
@@ -292,12 +234,7 @@ fn unreachable(node: &str, gateway: std::net::SocketAddr, e: &reqwest::Error) ->
     }
 }
 
-/// Turn a node's refusal into one sentence an operator can act on.
-///
-/// The three cases are genuinely different problems: a wrong password is typed again, a 404 means
-/// the node is running an adi that predates this endpoint, and a `text/html` body is the local
-/// gateway's own error page — which means the request never left this machine, so the node's
-/// password had nothing to do with it.
+/// HTML errors come from the local gateway; JSON errors come from the node.
 fn refusal(node: &str, path: &str, status: u16, html: bool, body: &str) -> String {
     if status == 401 {
         return format!("{node} refused the password");
@@ -322,21 +259,18 @@ fn refusal(node: &str, path: &str, status: u16, html: bool, body: &str) -> Strin
     }
 }
 
-/// Dial a node's control panel and say what came back — the outbound "is it there" a fleet list
-/// shows beside each node. `auth` is whatever credential this machine holds for it, or empty: a
-/// `401` still proves the node answered.
+/// Probe the node; even a `401` proves it answered.
 pub(crate) async fn reach(node: &str, auth: &str, timeout: std::time::Duration) -> Reach {
     reach_at(adi_mesh::gateway::configured_addr(), node, auth, timeout).await
 }
 
-/// [`reach`], at an explicit gateway address — see [`call_at`] for why it is a parameter.
 async fn reach_at(
     gateway: std::net::SocketAddr,
     node: &str,
     auth: &str,
     timeout: std::time::Duration,
 ) -> Reach {
-    // Before the builder, which panics rather than erring without a provider.
+    // The client builder panics if no TLS provider is installed.
     crate::ensure_tls_provider();
     let Ok(client) = reqwest::Client::builder().timeout(timeout).build() else {
         return Reach::Unreachable;
@@ -369,12 +303,8 @@ async fn reach_at(
     classify(status, html, &body)
 }
 
-/// What one answer through the gateway says about the node behind it.
-///
-/// Every failure the gateway itself serves is a `502` `text/html` page, and the only thing that
-/// tells them apart on this side of the socket is the heading it draws — `reason_heading` in
-/// `adi-mesh`'s `gateway.rs`, whose "refused the request" is the one case in which the node was
-/// dialled and did answer. Anything else — any status, any type — came from the node's own panel.
+/// Gateway failures are `502 text/html`; its "refused the request" heading means the
+/// peer answered. Keep this in sync with `adi-mesh`'s `gateway::reason_heading`.
 fn classify(status: u16, html: bool, body: &str) -> Reach {
     if !(html && status == 502) {
         return Reach::Reachable;
@@ -410,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn nothing_listening_on_the_gateway_is_the_mesh_being_off() {
-        // Bound and dropped, so the port is known to be closed.
+        // Drop the listener after obtaining its address to probe a closed port.
         let addr = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|l| l.local_addr())
             .expect("bind");
@@ -424,18 +354,15 @@ mod tests {
     fn a_dashboard_host_becomes_a_service_name_and_a_mesh_url() {
         assert_eq!(service_name(Some("nosh.adi")).as_deref(), Some("nosh"));
         assert_eq!(service_name(Some("NOSH.adi.")).as_deref(), Some("nosh"));
-        // Kept whole: `app.nosh.adi` is its own service, not `app`'s and not `nosh`'s.
         assert_eq!(
             service_name(Some("app.nosh.adi")).as_deref(),
             Some("app.nosh")
         );
         assert_eq!(service_name(None), None);
         assert_eq!(service_name(Some("  ")), None);
-        // Outside the node's own zone there is no name the mesh could route.
         assert_eq!(service_name(Some("nosh.guide")), None);
         assert_eq!(service_name(Some("adi")), None);
 
-        // The node cannot know what we call it, so the viewer builds the name it will type.
         assert_eq!(
             mesh_url("laptop-b", Some("nosh.adi")).as_deref(),
             Some("http://nosh.laptop-b.n.adi/")
@@ -444,13 +371,11 @@ mod tests {
             mesh_url("laptop-b", Some("app.nosh.adi")).as_deref(),
             Some("http://app.nosh.laptop-b.n.adi/")
         );
-        // No routable name over there means no link over here — never `http://.laptop-b.n.adi/`.
         assert_eq!(mesh_url("laptop-b", None), None);
     }
 
     #[test]
     fn the_credential_defaults_to_the_user_pairing_mints() {
-        // `adi:hunter2`
         assert_eq!(basic_auth(None, "hunter2"), "Basic YWRpOmh1bnRlcjI=");
         assert_eq!(
             basic_auth(Some("  "), "hunter2"),
@@ -467,8 +392,6 @@ mod tests {
         let wrong = refusal("laptop-b", "/api/dashboards/import", 401, false, "");
         assert!(wrong.contains("password"), "{wrong}");
 
-        // An HTML body is the *local* gateway's error page: the request never left this machine,
-        // so telling the operator to check their password would send them the wrong way.
         let page = refusal("laptop-b", "/api/dashboards/import", 502, true, "<html>…");
         assert!(page.contains("paired"), "{page}");
         assert!(!page.contains("password"), "{page}");
@@ -476,7 +399,6 @@ mod tests {
         let old = refusal("laptop-b", "/api/dashboards/import", 404, false, "");
         assert!(old.contains("update it"), "{old}");
 
-        // A JSON error from the node itself is quoted, not swallowed.
         let json = refusal(
             "laptop-b",
             "/api/dashboards/import",
@@ -487,8 +409,7 @@ mod tests {
         assert!(json.contains("the bundle is too large"), "{json}");
     }
 
-    /// Answer one request with `status` and `body`, and hand back the request head as it arrived
-    /// on the wire. A real socket, because what is under test is what reqwest actually writes.
+    /// Capture the request head from a real socket to check what reqwest sends.
     async fn one_request(
         listener: tokio::net::TcpListener,
         status: &'static str,
@@ -500,8 +421,7 @@ mod tests {
         let (mut sock, _) = listener.accept().await.expect("accept");
         let mut buf = Vec::new();
         let mut chunk = [0u8; 1024];
-        // Until the blank line: the head may not arrive in one segment, and asserting on half of
-        // it would make this test pass for the wrong reason.
+        // The request head may arrive across multiple reads.
         while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
             let n = sock.read(&mut chunk).await.expect("read");
             if n == 0 {
@@ -522,11 +442,6 @@ mod tests {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    /// The single load-bearing assumption of this module: the gateway routes on `Host`, and the
-    /// URL only says which loopback socket to open. If a client library ever decided its own
-    /// authority wins, every call would be addressed to the gateway itself — which parses that as
-    /// "not a `*.n.adi` name" and answers 400. Pinned against a real socket rather than by reading
-    /// someone else's source.
     #[tokio::test]
     async fn a_request_is_addressed_to_the_node_and_carries_the_credential() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -571,7 +486,6 @@ mod tests {
             !head.contains(&gateway.to_string()),
             "the loopback address must not reach the wire as a name: {head}"
         );
-        // `adi:hunter2`, and a content length so the node reads the whole bundle.
         assert!(
             head.contains("authorization: basic ywrpomh1bnrlcji="),
             "{head}"
@@ -580,9 +494,6 @@ mod tests {
         assert_eq!(body, "{\"ok\":1}");
     }
 
-    /// [`post_bytes`] is the one call this module forwards that is not JSON: an attachment's own
-    /// type and filename must reach the node, not the `application/json` every other write sends
-    /// (`docs/fleet.md` §13, J7).
     #[tokio::test]
     async fn an_attachments_bytes_carry_their_own_type_and_filename() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -627,8 +538,6 @@ mod tests {
         assert_eq!(body, "{\"id\":\"att-1\"}");
     }
 
-    /// A refusal is turned into a message here, not left as a status for the page to guess at —
-    /// and the *local* gateway's HTML error page must never be reported as the node's answer.
     #[tokio::test]
     async fn the_local_gateways_own_error_page_is_not_read_as_the_node_refusing() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -666,7 +575,6 @@ mod tests {
 
     #[test]
     fn an_unpaired_node_is_refused_before_anything_is_dialled() {
-        // Not a DNS label: caught by name, without touching the registry at all.
         for bad in ["Laptop-B", "laptop b", "", "a.b"] {
             let refused = require_paired(bad).expect_err("must be refused");
             assert_eq!(refused.status, 400, "{bad}: {}", refused.body);

@@ -1,42 +1,19 @@
-//! Point the served shell at the shared-assets CDN: an immutable-per-version prefix on Cloudflare
-//! R2 holding every browser asset Trunk built (`apps/shared-assets` publishes it — see that
-//! crate's directory for the URL scheme and the publisher). The setting itself
-//! (`GET`/`POST /api/settings/shared-assets`) lives in [`adi_webapp_api::handlers::shared_assets`];
-//! this module does the actual rewriting, because that operates on the built `index.html`, which
-//! this crate already owns serving (see [`crate::serve_embedded`]).
+//! Rewrite embedded-shell asset URLs to the versioned CDN published by `apps/shared-assets`.
 //!
-//! Same URL for every instance on the same version is the whole point — a browser that already
-//! loaded the bundle for one instance has it cached for the next — so the prefix carries the
-//! version and nothing else: no hostname, no node id, no per-install token.
-//!
-//! `index.html` itself is never served from anywhere but this instance; only what it points at
-//! moves. And it only moves when there is no [`crate::DIST_ENV`] override — a developer serving
-//! their own edits out of a local `dist/` gets exactly those edits, never the CDN's cached build.
-//!
-//! The setting has three modes ([`adi_webapp_api::types::SharedAssetsMode`]): always local,
-//! always the CDN, or the CDN only for a request that doesn't look like it's on this same machine
-//! — [`crate::origin::looks_local`] decides that from the request's own `Host`, since the CDN's
-//! whole benefit (see the module docs above) is the uplink to a browser somewhere else, and there
-//! is nothing to save when there isn't one.
+//! The prefix contains only the build version so instances share browser cache entries.
+//! The shell stays local, and a [`crate::DIST_ENV`] override bypasses CDN rewriting.
 
 use adi_webapp_api::handlers;
 use adi_webapp_api::types::SharedAssetsMode;
 
-/// The CDN base URL and version a shell is pointed at, once [`SharedAssets::active`] has decided
-/// this request should ask for it.
 pub struct SharedAssets<'a> {
     base_url: String,
     version: &'a str,
 }
 
 impl<'a> SharedAssets<'a> {
-    /// The active configuration for this request, or `None` when it should get the local copy —
-    /// either because the mode is off outright, or because `cdn-when-remote` and `host` looks
-    /// local.
-    ///
-    /// `version` is this build's own [`crate::VERSION`] — every instance on the same release
-    /// resolves to the same prefix, and one on an older build never asks for a newer bundle.
-    /// `host` is the request's own `Host` header, exactly as `crate::origin::check` reads it.
+    /// Select CDN settings for this request. `version` must be this build's [`crate::VERSION`]
+    /// and `host` the request's Host header.
     #[must_use]
     pub fn active(version: &'a str, host: Option<&str>) -> Option<Self> {
         let ask_cdn = match handlers::mode() {
@@ -50,8 +27,6 @@ impl<'a> SharedAssets<'a> {
         })
     }
 
-    /// `rel`'s URL under this version's prefix — `<base>/monoapp/<version>/<rel>`, `rel` taken
-    /// either root-absolute (as it appears in `index.html`) or bare.
     fn cdn(&self, rel: &str) -> String {
         format!(
             "{}/monoapp/{}/{}",
@@ -62,24 +37,17 @@ impl<'a> SharedAssets<'a> {
     }
 }
 
-/// The service worker registration path, which must never be rewritten: a cross-origin service
-/// worker registration is refused by the browser outright, and this is the one `.js` reference in
-/// the shell that isn't a Trunk-hashed bundle file.
+/// Service workers must remain same-origin.
 const SW: &str = "/sw.js";
 
-/// Point `html` (the built shell, byte-identical to what this instance would otherwise serve) at
-/// `shared`'s CDN for every hashed bundle file it loads — the wasm, its JS glue, both
-/// stylesheets, and the `modulepreload`/`preload` hints that name them — each with a same-origin
-/// fallback, so a CDN that is offline, down, or simply hasn't been sent this version yet degrades
-/// to exactly what an instance with the setting off already serves, rather than a blank page.
+/// Rewrite bundle URLs and preload hints, retaining same-origin fallbacks.
 #[must_use]
 pub fn rewrite(html: &str, shared: &SharedAssets<'_>) -> String {
     let (Some(js), Some(wasm)) = (
         between(html, "from '", "'"),
         between(html, "module_or_path: '", "'"),
     ) else {
-        // Trunk's output no longer matches what this expects — serve it unmodified rather than
-        // guess; the setting then behaves as if it were off for this one shell.
+        // Unknown Trunk output must remain usable without CDN rewriting.
         return html.to_string();
     };
 
@@ -94,16 +62,11 @@ pub fn rewrite(html: &str, shared: &SharedAssets<'_>) -> String {
         None => html.to_string(),
     };
 
-    // Every `modulepreload`/`preload`/`stylesheet` hint naming a hashed bundle file: point it at
-    // the same CDN URL the boot script above now asks for, so the preload actually warms it.
-    // Scanned off the original `html`, not `out` — the new boot script never contains `href="`.
     for path in href_paths(html) {
         let cdn = shared.cdn(&path);
         let from = format!("href=\"{path}\"");
         let to = if has_ext(&path, "css") {
-            // Cross-origin now, so `crossorigin` is what makes the browser run the `integrity`
-            // check at all — and unlike the module script, a `<link>` has no surrounding code to
-            // wrap in `try`, so the same-origin fallback is its own `onerror` handler instead.
+            // Cross-origin SRI needs CORS; stylesheets recover through their own onerror handler.
             format!(
                 "href=\"{cdn}\" crossorigin=\"anonymous\" \
                  onerror=\"this.onerror=null;this.href='{path}'\""
@@ -117,11 +80,8 @@ pub fn rewrite(html: &str, shared: &SharedAssets<'_>) -> String {
     out
 }
 
-/// The boot script: a static `import … from` can't be wrapped in `try`, so the CDN attempt
-/// becomes a dynamic `import()` that falls back to this instance's own copy of `js`/`wasm` on any
-/// failure. `{js:?}`/`{wasm:?}` (and the CDN URLs) rely on `Debug` for `str` producing a
-/// JS-safe double-quoted literal — true for the plain, hash-named ASCII paths and URLs these
-/// always are.
+/// Dynamic import allows CDN failures to fall back to local JS and wasm.
+/// Debug quoting assumes these asset paths and URLs are plain ASCII.
 fn boot_script(shared: &SharedAssets<'_>, js: &str, wasm: &str) -> String {
     let cdn_js = shared.cdn(js);
     let cdn_wasm = shared.cdn(wasm);
@@ -143,9 +103,7 @@ await adiBoot({js:?}, {wasm:?});\n\
     )
 }
 
-/// Every `href="/…"` in `html` naming a hashed bundle file (`.js`, `.mjs`, `.wasm`, `.css`) —
-/// the `modulepreload`/`preload` hints plus the two stylesheet links. Excludes [`SW`], the one
-/// same-origin-only `.js` reference among them.
+/// Collect root-relative bundle references, excluding the same-origin service worker.
 fn href_paths(html: &str) -> Vec<String> {
     const MARKER: &str = "href=\"";
     let mut paths = Vec::new();
@@ -167,15 +125,12 @@ fn href_paths(html: &str) -> Vec<String> {
     paths
 }
 
-/// Whether `path`'s extension is `ext`, case-insensitively — Trunk's own output is always
-/// lowercase, but a hand-fed shell shouldn't silently mismatch on case alone.
 fn has_ext(path: &str, ext: &str) -> bool {
     std::path::Path::new(path)
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case(ext))
 }
 
-/// The text strictly between the first `before` and the following `after`.
 fn between<'a>(html: &'a str, before: &str, after: &str) -> Option<&'a str> {
     let start = html.find(before)? + before.len();
     let rest = &html[start..];
@@ -183,8 +138,7 @@ fn between<'a>(html: &'a str, before: &str, after: &str) -> Option<&'a str> {
     Some(&rest[..end])
 }
 
-/// The byte range `[start, end)` of the first `open` through the `close` that follows it,
-/// `close` included.
+/// Return the byte range including both delimiters.
 fn span(html: &str, open: &str, close: &str) -> Option<(usize, usize)> {
     let start = html.find(open)?;
     let close_at = html[start..].find(close)? + start;
@@ -195,11 +149,7 @@ fn span(html: &str, open: &str, close: &str) -> Option<(usize, usize)> {
 mod tests {
     use super::*;
 
-    // A trimmed but structurally faithful copy of Trunk's real output (`crates/adi-webapp/dist`
-    // is a gitignored build artifact — `trunk build` may never have run here — so this is a fixed
-    // fixture rather than an `include_str!` of it). Every anchor `rewrite` parses is present:
-    // the boot script's static import and `module_or_path`, both stylesheet links with SRI, the
-    // `modulepreload`/`preload` hints, the manifest/icon links, and the `sw.js` registration.
+    // Fixed Trunk fixture: the generated dist directory may not exist in a fresh checkout.
     const SHELL: &str = r#"<!doctype html>
 <html lang="en">
 <head>
@@ -240,9 +190,6 @@ if ("serviceWorker" in navigator) {
         }
     }
 
-    /// Whether the real dist output this repo ships matches every anchor this module leans on —
-    /// if Trunk's template ever changes shape, this fails loudly instead of `rewrite` silently
-    /// falling back to serving the shell unmodified.
     #[test]
     fn the_checked_in_shell_still_has_every_anchor_this_module_parses() {
         assert!(SHELL.contains("from '"), "the boot script's static import");
@@ -259,8 +206,6 @@ if ("serviceWorker" in navigator) {
             "the boot script's import must no longer be root-relative"
         );
         assert!(out.contains("https://cdn.withadi.dev/monoapp/1.2.3/"));
-        // The two stylesheet links, by content: both css files referenced in the checked-in
-        // shell must have moved.
         for css in href_paths(SHELL)
             .into_iter()
             .filter(|p| p.ends_with(".css"))
@@ -319,8 +264,6 @@ if ("serviceWorker" in navigator) {
         }
     }
 
-    /// A shell that doesn't match the anchors this parses (a future Trunk output, or a hand-fed
-    /// fixture in a test) is served unmodified rather than partially rewritten.
     #[test]
     fn an_unrecognized_shell_is_returned_unchanged() {
         let html = "<html><body>not a trunk shell</body></html>";

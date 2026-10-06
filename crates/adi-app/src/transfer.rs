@@ -1,24 +1,8 @@
-//! `POST /api/dashboards/transfer` — take a dashboard that runs here and make it run on a node.
+//! Transfer a dashboard bundle through the paired node's control panel.
 //!
-//! A dashboard is a directory (`docs/fleet.md` §4), and every machine in the fleet already knows
-//! how to turn one into a running pair of bun servers. So "run this in the cloud" needs no new
-//! deployment machinery at all: pack the directory, hand it to the node's own control panel, and
-//! let the node's supervisor do there exactly what ours does here.
-//!
-//! The call out to the node is [`crate::node`]'s — through this machine's mesh gateway, addressed
-//! by `Host`, with the credential in an `Authorization` header. Two things about this particular
-//! caller are worth stating.
-//!
-//! **The password is asked for and never kept.** This machine holds a *verifier* for each node's
-//! credential, not the credential (`docs/fleet.md` §8), and a deploy button is not a reason to
-//! start keeping one. It rides in the request body, becomes an `Authorization` header, and is
-//! dropped with the request. (The rail that *lists* a node's dashboards does keep one, deliberately
-//! and per node — see [`crate::viewer`] — but that is a viewer holding its own credential, not a
-//! transfer inventing a reason to.)
-//!
-//! **The local copy is stood down last, and only on a `200`.** [`handlers::complete_move`] runs
-//! after the node has confirmed it holds the files — never in parallel, never optimistically. A
-//! move whose upload failed leaves this machine exactly as it was.
+//! The supplied password is used for this request only and is never stored.
+//! For moves, stop the local copy only after a successful remote import (`200`);
+//! upload failure must leave it running.
 
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
@@ -31,12 +15,8 @@ use crate::node;
 use crate::scan;
 use crate::viewer;
 
-/// How long the upload may take. Generous next to the control-plane calls: it carries the whole
-/// dashboard, and a relayed mesh round trip is a third of a second before any payload
-/// (`docs/fleet.md` §9).
 const UPLOAD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
-/// Send a dashboard to a paired node, and in [`TransferMode::Move`] stand the local copy down.
 pub(crate) async fn transfer_dashboard(
     projects: &Projects,
     ports: &Ports,
@@ -63,8 +43,6 @@ pub(crate) async fn transfer_dashboard(
         return response;
     }
 
-    // Pack before dialling: an unknown id or an oversized directory is a local answer, and there
-    // is no reason to have opened a connection to learn it.
     let bundle = match handlers::export_bundle(projects.config(), &id) {
         Ok(bundle) => bundle,
         Err(response) => return response,
@@ -98,9 +76,8 @@ pub(crate) async fn transfer_dashboard(
         Err(e) => return handlers::error(e.status, &e.message),
     };
 
-    // Reaching it from here needs a grant on the node, and pairing hands out only `http:app`
-    // (`docs/fleet.md` §8). Best-effort by design: the dashboard is already running over there,
-    // so a grant we could not add is a link that 502s, not a transfer that failed.
+    // Pairing grants only `http:app`. Adding the dashboard grant is best-effort:
+    // the remote import already succeeded, even if its link cannot be opened yet.
     let granted = match node::service_name(remote.host.as_deref()) {
         Some(name) => viewer::grant_self(&node, &auth, &name).await.is_ok(),
         None => false,
@@ -120,8 +97,7 @@ pub(crate) async fn transfer_dashboard(
         ),
     };
     if local.status != 200 {
-        // The node has it; only the local half went wrong. Say so with the node's status intact,
-        // rather than reporting a failure for a transfer that did happen.
+        // The remote import succeeded; report the local cleanup failure.
         return local;
     }
     let Ok(dashboards) = serde_json::from_str::<DashboardsState>(&local.body) else {

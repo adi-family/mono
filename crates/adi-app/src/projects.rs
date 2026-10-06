@@ -1,18 +1,9 @@
-//! `POST /api/projects/rename` — give a project a new id (its slug), and take the rest of the
-//! store with it.
-//!
-//! Every other project mutation is a handler in [`adi_webapp_api::handlers`], over the projects
-//! registry alone. This one is here because it is not one store's operation: a project id is also
-//! written into tools, agent definitions, triggers, its encrypted secrets, its database, and its
-//! knowledge bases, and following it into all of them lives in [`adi_core::rename_project`] —
-//! shared with `adi-mono projects rename`, so the panel and the CLI cannot drift on what a rename
-//! carries.
+//! Project renames span multiple stores and share [`adi_core::rename_project`] with the CLI.
 
 use adi_projects::Projects;
 use adi_webapp_api::handlers::{self, Response};
 use adi_webapp_api::types::{ProjectRenamed, RenameProject};
 
-/// Rename a project, answering with what followed it plus the fresh project list.
 pub(crate) fn rename_project(projects: &Projects, body: &[u8]) -> Response {
     let req: RenameProject = match serde_json::from_slice(body) {
         Ok(req) => req,
@@ -31,13 +22,11 @@ pub(crate) fn rename_project(projects: &Projects, body: &[u8]) -> Response {
         return handlers::error(400, "a rename needs both the project and its new id");
     }
 
-    // The store this app opened, not a freshly discovered one: every follower must land in the
-    // same root the registry it moved lives in.
+    // All affected stores must use the registry's configured root.
     let report = match adi_core::rename_project(projects.config(), id, new_id) {
         Ok(report) => report,
         Err(e) => return Response::from(&e),
     };
-    // The list is read *after* the move, so the client's refresh already knows the new id.
     let projects = match handlers::projects_state(projects) {
         Ok(state) => state,
         Err(e) => return Response::from(&e),
@@ -88,8 +77,6 @@ mod tests {
         assert_eq!(got.from, "old");
         assert_eq!(got.secrets, 1);
         assert!(got.warnings.is_empty(), "{:?}", got.warnings);
-        // The list is read after the move, so a client that trusts it sees the new id and not the
-        // old one — the page navigates on this.
         let ids: Vec<&str> = got
             .projects
             .projects

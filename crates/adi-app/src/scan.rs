@@ -1,13 +1,6 @@
-//! Enumerate the TCP ports currently in the `LISTEN` state on this machine, via `lsof`, and
-//! charge each one what its owning process tree costs, via `ps`. This is read-only observation
-//! — it never binds a socket — so it's safe to run against a live system. Best-effort: if
-//! `lsof`/`ps` is missing or errors, the scan yields an empty list (or portless usage) rather
-//! than failing the request. macOS/Linux only (this app targets macOS).
-//!
-//! A scan is **memoized for [`SCAN_TTL`]**. It is by far the most expensive thing a request can
-//! ask for — two whole-machine subprocesses, ~170ms of it spent blocked — and eight routes call
-//! it, several of which the open control panel refetches every four seconds. Without the memo a
-//! single page render pays for the same `lsof` three or four times over.
+//! Observe listening TCP ports with `lsof` and process-tree usage with `ps`.
+//! Missing tools yield empty results or usage; scans never bind sockets.
+//! Cache for [`SCAN_TTL`] to share expensive whole-machine subprocesses across requests.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
@@ -16,20 +9,12 @@ use std::time::{Duration, Instant};
 
 use adi_webapp_api::types::{ProcessUsage, UsedPort};
 
-/// How long a scan is served from memory before the machine is looked at again. Short enough that
-/// "is this service up?" still reads as live, long enough that one page render scans once.
 const SCAN_TTL: Duration = Duration::from_millis(1_500);
 
-/// The last scan and the moment it was taken, or `None` before the first one.
 static MEMO: Mutex<Option<(Instant, Vec<UsedPort>)>> = Mutex::new(None);
 
-/// Every distinct listening TCP port, with the owning process where `lsof` reports one and
-/// what that process tree currently costs. Sorted by port; deduplicated (a port listening on
-/// both IPv4 and IPv6 appears once).
-///
-/// Served from the [`SCAN_TTL`] memo when one is fresh. The lock is deliberately held across the
-/// scan itself, so concurrent callers that all miss produce **one** `lsof` between them: the
-/// others wait, then find the answer already there.
+/// Return distinct listening ports in port order, with process-tree usage.
+/// Hold the cache lock through the scan so concurrent misses start only one `lsof`.
 #[must_use]
 pub fn listening_ports() -> Vec<UsedPort> {
     let mut memo = MEMO.lock().unwrap_or_else(PoisonError::into_inner);
@@ -43,22 +28,18 @@ pub fn listening_ports() -> Vec<UsedPort> {
     ports
 }
 
-/// Drop the memo, so the next [`listening_ports`] looks at the machine again. For the moments
-/// where a stale answer would be a visibly wrong one — right after we ourselves started or
-/// stopped a service, when the caller is about to ask whether it is up.
+/// Invalidate after starting or stopping a service so the next status read is fresh.
 pub fn invalidate() {
     *MEMO.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
-/// Whether a scan taken at `taken` is still worth serving at `now`.
 fn is_fresh(taken: Instant, now: Instant) -> bool {
     now.duration_since(taken) < SCAN_TTL
 }
 
-/// Look at the machine: the listening sockets, then what each listener's tree costs.
 fn scan() -> Vec<UsedPort> {
-    // `-nP` skips host/port name lookups (fast, numeric); `+c0` keeps full (untruncated)
-    // command names; `-Fpcn` emits machine-readable fields: p<pid>, c<command>, n<addr:port>.
+    // `-nP` disables name lookups; `+c0` keeps full command names.
+    // `-Fpcn` emits tagged pid, command, and socket-name fields.
     let Ok(output) = Command::new("lsof")
         .args(["+c0", "-nP", "-iTCP", "-sTCP:LISTEN", "-Fpcn"])
         .output()
@@ -66,8 +47,6 @@ fn scan() -> Vec<UsedPort> {
         return Vec::new();
     };
     let mut ports = parse_lsof(&String::from_utf8_lossy(&output.stdout));
-    // One `ps` for the whole machine, then roll it up per port — cheaper and far more
-    // consistent than sampling each listener separately.
     let table = process_table();
     for used in &mut ports {
         used.usage = used.pid.and_then(|pid| table.usage_of(pid));
@@ -75,8 +54,7 @@ fn scan() -> Vec<UsedPort> {
     ports
 }
 
-/// Parse `lsof -Fpcn` field output into one entry per listening port. Each line is a single
-/// field tagged by its first character; `p`/`c` are process-scoped, `n` is per-socket.
+/// In `lsof -Fpcn`, `p`/`c` fields are process-scoped and `n` is per-socket.
 fn parse_lsof(out: &str) -> Vec<UsedPort> {
     let mut by_port: BTreeMap<u16, UsedPort> = BTreeMap::new();
     let mut pid: Option<u32> = None;
@@ -108,38 +86,27 @@ fn parse_lsof(out: &str) -> Vec<UsedPort> {
     by_port.into_values().collect()
 }
 
-/// The port from an lsof name field like `127.0.0.1:8080`, `*:443`, or `[::1]:631`.
-/// A wildcard port (`*`) or otherwise unparseable tail yields `None`.
+/// Parse the tail of an lsof address (`127.0.0.1:8080`, `*:443`, or `[::1]:631`).
 fn port_of(name: &str) -> Option<u16> {
     name.rsplit(':').next()?.parse().ok()
 }
 
-// MARK: process usage — what the tree behind a port costs
-
-/// One process in the [`ProcessTable`] snapshot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Proc {
     ppid: u32,
-    /// CPU as a percentage of one core, as `ps` reports it (a decaying recent average).
+    /// Percentage of one core, reported by `ps` as a decaying recent average.
     cpu_percent: f32,
-    /// Resident set size in bytes.
     memory_bytes: u64,
-    /// Seconds since the process started, from `ps` `etime`.
     uptime_secs: u64,
 }
 
-/// A single snapshot of the machine's processes, with a parent→children index so a listener's
-/// whole tree can be rolled up. A service's port is usually held by a child of the command the
-/// hive supervises (`sh -c "bun run …"`), and servers fork workers, so per-process numbers on
-/// their own describe almost nothing.
+/// Index parent-child relationships so usage includes a listener's worker processes.
 #[derive(Debug, Default)]
 struct ProcessTable {
     procs: BTreeMap<u32, Proc>,
     children: BTreeMap<u32, Vec<u32>>,
 }
 
-/// Sample every process on the machine once. An unavailable or unparseable `ps` yields an empty
-/// table, which reports no usage rather than failing the scan.
 fn process_table() -> ProcessTable {
     let Ok(output) = Command::new("ps")
         .args(["-Ao", "pid=,ppid=,rss=,pcpu=,etime="])
@@ -151,8 +118,7 @@ fn process_table() -> ProcessTable {
 }
 
 impl ProcessTable {
-    /// Parse `ps -Ao pid=,ppid=,rss=,pcpu=,etime=` output — five whitespace-separated columns,
-    /// no header. Rows that don't parse are skipped, not fatal.
+    /// Parse headerless `ps` columns: pid, ppid, rss, pcpu, etime.
     fn parse(out: &str) -> Self {
         let mut procs = BTreeMap::new();
         let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -185,8 +151,7 @@ impl ProcessTable {
         Self { procs, children }
     }
 
-    /// Roll `pid` and every descendant into one sample, or `None` if the pid is not in the
-    /// snapshot (it exited between the port scan and this one).
+    /// Include descendants; return `None` if the listener exited before this snapshot.
     fn usage_of(&self, pid: u32) -> Option<ProcessUsage> {
         let root = self.procs.get(&pid)?;
         let mut usage = ProcessUsage {
@@ -196,8 +161,7 @@ impl ProcessTable {
             processes: 0,
             uptime_secs: root.uptime_secs,
         };
-        // Iterative walk with a visited set: `ps` snapshots can disagree with themselves about
-        // parentage (a reparented process sampled mid-flight), and a cycle here would hang.
+        // Reparenting during a ps snapshot can create cycles; count each process once.
         let mut seen = BTreeSet::new();
         let mut stack = vec![pid];
         while let Some(next) = stack.pop() {
@@ -224,7 +188,6 @@ fn parse_etime(raw: &str) -> Option<u64> {
         Some((days, rest)) => (days.parse::<u64>().ok()?, rest),
         None => (0, raw),
     };
-    // Read the clock right-to-left, so `mm:ss` and `hh:mm:ss` share one path.
     let mut secs = 0;
     for (i, part) in clock.rsplit(':').enumerate() {
         let value = part.parse::<u64>().ok()?;
@@ -263,7 +226,6 @@ mod tests {
         assert!(parse_lsof("").is_empty());
     }
 
-    /// The memo's whole contract: a scan just taken is reusable, one older than the TTL is not.
     #[test]
     fn a_scan_is_fresh_only_inside_the_ttl() {
         let now = Instant::now();
@@ -287,7 +249,6 @@ mod tests {
         assert_eq!(parse_etime("junk"), None);
     }
 
-    /// The core of the feature: a listener's numbers include its children, not just itself.
     #[test]
     fn usage_rolls_up_the_whole_process_tree() {
         let out = concat!(
@@ -309,7 +270,6 @@ mod tests {
             "uptime is the listener's own, not the tree's"
         );
 
-        // A leaf is charged only for itself; an unrelated tree never leaks in.
         let leaf = table.usage_of(300).expect("a leaf is still a tree of one");
         assert_eq!(leaf.processes, 1);
         assert_eq!(leaf.memory_bytes, 1024 * 1024);
@@ -322,7 +282,6 @@ mod tests {
         assert!(ProcessTable::default().usage_of(100).is_none(), "no `ps`");
     }
 
-    /// A snapshot that claims a process is its own ancestor must not spin forever.
     #[test]
     fn a_parentage_cycle_terminates() {
         let out = "100 200 1024 1.0 01:00\n200 100 1024 1.0 01:00\n";

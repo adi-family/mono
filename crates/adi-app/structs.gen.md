@@ -26,7 +26,7 @@
 
 ### type `Posted`
 
-One published event, owned — the observer runs on the dispatcher's tick and must not keep it waiting, so it copies the two fields the worker needs and returns.
+Owned event name and payload.
 
 ```rust
 type Posted = (String, String);
@@ -37,8 +37,6 @@ type Posted = (String, String);
 ## `src/channels.rs`
 
 ### struct `Live`
-
-The running sockets, by provider. Cheap to hold in `App`; everything here is behind the async mutex, the same shape `crate::MeshCtl` already uses for its own single long-lived task.
 
 ```rust
 #[derive(Debug, Default)]
@@ -54,7 +52,7 @@ pub struct Live {
 
 ### struct `Request`
 
-A parsed request: method, full path (query included), the headers (names lowercased), the buffered body, and whatever arrived after it.
+Parsed HTTP request with lowercase header names and the query included in `path`.
 
 ```rust
 #[derive(Debug)]
@@ -73,7 +71,7 @@ pub struct Request {
 
 ### struct `Watch`
 
-One read a connection is watching: exactly the request it would otherwise have polled.
+One subscribed HTTP read.
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,8 +83,6 @@ pub struct Watch {
 ```
 
 ### struct `Topic`
-
-A read being watched: who wants it, when it is next due, and what was last sent for it.
 
 ```rust
 #[derive(Debug)]
@@ -103,8 +99,6 @@ struct Topic {
 
 ### struct `Inner`
 
-Every connection and every topic, behind one lock.
-
 ```rust
 #[derive(Debug, Default)]
 struct Inner {
@@ -114,8 +108,6 @@ struct Inner {
 ```
 
 ### struct `Hub`
-
-The live channel's shared state.
 
 ```rust
 #[derive(Debug, Default)]
@@ -131,7 +123,7 @@ pub struct Hub {
 
 ### struct `App`
 
-Everything a request may need, held once and shared by every connection.
+Shared stores and runtime state for all connections.
 
 ```rust
 struct App {
@@ -158,7 +150,7 @@ struct App {
 
 ### struct `MeshCtl`
 
-Owns the mesh `Daemon` the control panel starts/stops in-process, so it lives only as long as this app. `None` when stopped. The async mutex serializes start/stop.
+Owns the in-process mesh daemon; the mutex serializes start, stop, and join.
 
 ```rust
 #[derive(Debug, Default)]
@@ -169,7 +161,7 @@ struct MeshCtl {
 
 ### struct `Reads`
 
-Reads that are already in flight, so several askers share one answer.
+Coalesce identical in-flight reads. Only `shared_read_key` routes participate; mutations must never share a response.
 
 ```rust
 #[derive(Debug, Default)]
@@ -184,8 +176,6 @@ struct Reads {
 
 ### struct `CallError`
 
-A failed call to a node, already phrased for the operator and carrying the status to answer with.
-
 ```rust
 #[derive(Debug)]
 pub(crate) struct CallError {
@@ -195,8 +185,6 @@ pub(crate) struct CallError {
 ```
 
 ### struct `Payload`
-
-One `POST`'s body, carried through `call`/`call_at` — JSON for every route but an attachment's own bytes and type for that one (`post_bytes`).
 
 ```rust
 struct Payload<'a> {
@@ -212,8 +200,6 @@ struct Payload<'a> {
 
 ### struct `Refusal`
 
-A request that will not be routed: the status to answer with, and the sentence to say.
-
 ```rust
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Refusal {
@@ -228,8 +214,6 @@ pub(crate) struct Refusal {
 
 ### struct `Proc`
 
-One process in the `ProcessTable` snapshot.
-
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Proc {
@@ -242,7 +226,7 @@ struct Proc {
 
 ### struct `ProcessTable`
 
-A single snapshot of the machine's processes, with a parent→children index so a listener's whole tree can be rolled up. A service's port is usually held by a child of the command the hive supervises (`sh -c "bun run …"`), and servers fork workers, so per-process numbers on their own describe almost nothing.
+Index parent-child relationships so usage includes a listener's worker processes.
 
 ```rust
 #[derive(Debug, Default)]
@@ -258,8 +242,6 @@ struct ProcessTable {
 
 ### struct `SharedAssets`
 
-The CDN base URL and version a shell is pointed at, once `SharedAssets::active` has decided this request should ask for it.
-
 ```rust
 pub struct SharedAssets<'a> {
     base_url: String,
@@ -273,8 +255,6 @@ pub struct SharedAssets<'a> {
 
 ### struct `Credential`
 
-One node's Basic-auth credential, as this machine keeps it for asking that node questions.
-
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Credential {
@@ -286,15 +266,13 @@ struct Credential {
 
 ### type `Credentials`
 
-Every node credential this machine holds, by petname.
-
 ```rust
 type Credentials = BTreeMap<String, Credential>;
 ```
 
 ### struct `HeldCredentials`
 
-The same store, as the **mesh gateway** asks it: the credential for one node, on its way out.
+Supply held credentials to outgoing mesh-gateway requests. Read the store on every call so locking a node takes effect on the next connection.
 
 ```rust
 #[derive(Debug)]
@@ -307,7 +285,7 @@ pub(crate) struct HeldCredentials;
 
 ### enum `Frame`
 
-One complete message (fragments already reassembled) or control frame from the client.
+A reassembled message or control frame from the client.
 
 ```rust
 #[derive(Debug)]
@@ -321,7 +299,7 @@ pub enum Frame {
 
 ### struct `Reader`
 
-Reads frames off a socket, reassembling fragmented messages.
+Buffer socket reads and reassemble fragmented messages.
 
 ```rust
 #[derive(Debug)]
