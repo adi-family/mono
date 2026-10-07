@@ -232,9 +232,11 @@ pub fn Composer(
                     }
                 }
                 on:paste=move |ev: ev::ClipboardEvent| {
-                    // Cmd-V with a screenshot on the clipboard. Text pastes carry no files and fall
-                    // straight through to the browser's own handling, which is what puts the words
-                    // in the box.
+                    // Cmd-V with a screenshot on the clipboard. `pasted` already filters out the
+                    // case a spreadsheet app pastes — text plus a picture of the same cells — so
+                    // anything it returns here is really a file, and a paste with no files falls
+                    // straight through to the browser's own handling, which is what puts the
+                    // words in the box.
                     let Some(take) = take else { return };
                     if !can_attach.get_untracked() {
                         return;

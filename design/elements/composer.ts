@@ -6,6 +6,12 @@ import "./icon.ts";
 
 const MAX_HEIGHT = 200;
 
+// A paste with both text and files is a spreadsheet app's picture of the cells it also put on
+// the clipboard as text — see the `paste` listener below — not a screenshot, which has no text.
+function wantsFiles(text: string, fileCount: number): boolean {
+  return fileCount > 0 && text.trim() === "";
+}
+
 export interface ComposerAttachment {
   key: string;
   name: string;
@@ -71,7 +77,9 @@ class AdiComposer extends AdiElement {
 
   #setupAttachments(): void {
     this.must<HTMLTextAreaElement>("textarea").addEventListener("paste", (event) => {
-      this.#receiveFiles(event, event.clipboardData?.files);
+      const text = event.clipboardData?.getData("text/plain") ?? "";
+      const files = event.clipboardData?.files;
+      this.#receiveFiles(event, wantsFiles(text, files?.length ?? 0) ? files : undefined);
     });
 
     const box = this.must<HTMLDivElement>(".box");

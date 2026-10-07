@@ -323,10 +323,53 @@ pub(crate) fn dropped(ev: &ev::DragEvent) -> Vec<web_sys::File> {
     files_of(ev.data_transfer())
 }
 
+/// Whether a paste that carries both text and files should be treated as a file paste.
+///
+/// A spreadsheet app — Numbers, Excel, Google Sheets, Keynote, Pages — puts a picture of the
+/// copied cells on the clipboard right alongside the text, for whatever can only show a picture.
+/// `clipboardData.files` is non-empty there too, and a handler that attached on that alone would
+/// swallow the text and staple a PNG of it to the message instead. Non-whitespace text on the
+/// clipboard means a person pasted text; a paste is a file paste only when there is none.
+#[must_use]
+fn wants_files(text: Option<&str>, file_count: usize) -> bool {
+    file_count > 0 && text.is_none_or(|t| t.trim().is_empty())
+}
+
 /// The files on a paste — a screenshot from the system clipboard, or a picture copied from another
 /// page. `clipboardData.files` is the one that carries both; `items` also holds the same picture as
 /// a string of HTML, which is not what anybody meant by pasting it.
+///
+/// Empty whenever the clipboard also carries text, even if `files` is not: see [`wants_files`].
 #[must_use]
 pub(crate) fn pasted(ev: &ev::ClipboardEvent) -> Vec<web_sys::File> {
-    files_of(ev.clipboard_data())
+    let files = files_of(ev.clipboard_data());
+    let text = ev.clipboard_data().and_then(|d| d.get_data("text/plain").ok());
+    if wants_files(text.as_deref(), files.len()) {
+        files
+    } else {
+        Vec::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_files;
+
+    #[test]
+    fn no_files_wants_nothing() {
+        assert!(!wants_files(None, 0));
+        assert!(!wants_files(Some("hello"), 0));
+    }
+
+    #[test]
+    fn files_with_no_text_is_a_screenshot() {
+        assert!(wants_files(None, 1));
+        assert!(wants_files(Some(""), 1));
+        assert!(wants_files(Some("   \n\t"), 1));
+    }
+
+    #[test]
+    fn files_alongside_real_text_is_a_spreadsheet_paste() {
+        assert!(!wants_files(Some("1\t2\t3"), 1));
+    }
 }

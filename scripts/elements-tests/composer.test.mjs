@@ -189,6 +189,21 @@ test('composer accepts pasted and dropped files only when attachment support is 
   assert.equal(await page.locator('#subject .line').textContent(), '');
 });
 
+test('composer lets a spreadsheet paste through as text instead of attaching its picture of the cells', async ({ page, mount }) => {
+  await mount('<adi-composer id="subject" attach></adi-composer>');
+  const result = await page.locator('#subject').evaluate((element) => {
+    const received = [];
+    element.addEventListener('files', (event) => { received.push(event.detail.files.map((file) => file.name)); });
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['x'], 'cells.png', { type: 'image/png' }));
+    transfer.setData('text/plain', '1\t2\t3');
+    const event = new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true });
+    element.shadowRoot.querySelector('textarea').dispatchEvent(event);
+    return { prevented: event.defaultPrevented, received };
+  });
+  assert.deepEqual(result, { prevented: false, received: [] });
+});
+
 test('ask submits a single selected option immediately with its question id and typed context', async ({ page, mount }) => {
   await mount('<adi-ask id="subject"></adi-ask>');
   await recordEvents(page, ['answer']);
