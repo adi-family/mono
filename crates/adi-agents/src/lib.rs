@@ -137,12 +137,37 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 /// transcript, both of which advance the queue — so without this the check and the send could
 /// interleave and start two children into the same slot, each clobbering the other's log. Turn
 /// starts are rare and take milliseconds, so one gate costs nothing; reads never take it.
+/// The channels daemon and app now both advance conversations, so the thread mutex is paired
+/// with an OS file lock covering the same critical section in every process using this store.
 static TURN_GATE: Mutex<()> = Mutex::new(());
+
+struct TurnGuard {
+    // Drop the file first, releasing the OS lock before letting the next local thread enter.
+    _file: std::fs::File,
+    _thread: MutexGuard<'static, ()>,
+}
 
 /// Hold the turn gate. A previous panic while holding it says nothing about what is on disk, so a
 /// poisoned lock is taken anyway rather than propagating that panic into every later turn.
-fn turn_gate() -> MutexGuard<'static, ()> {
-    TURN_GATE.lock().unwrap_or_else(PoisonError::into_inner)
+/// The lock file is permanent: replacing/removing it could give two processes different inodes
+/// to lock. Closing the handle (including process exit) releases ownership without stale files.
+fn turn_gate(config: &Config) -> Result<TurnGuard> {
+    let thread = TURN_GATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let sessions = config.module("sessions");
+    sessions.ensure_dir()?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let file = options.open(sessions.raw_path("turn.lock"))?;
+    file.lock()?;
+    Ok(TurnGuard {
+        _file: file,
+        _thread: thread,
+    })
 }
 
 /// An on-disk agent registry.
@@ -764,7 +789,7 @@ impl Agents {
         if from == to {
             return Ok(());
         }
-        let _gate = turn_gate();
+        let _gate = turn_gate(&self.config)?;
         let agent = self
             .get(from)?
             .ok_or_else(|| Error::NotFound(from.to_string()))?;
@@ -1726,7 +1751,7 @@ impl Agents {
         }
         let may_start = !self.at_capacity_for(&agent);
 
-        let _gate = turn_gate();
+        let _gate = turn_gate(&self.config)?;
         let session = store.session(name, conv_id);
         if !may_start || runner.is_alive(&session) {
             let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
@@ -1978,7 +2003,7 @@ impl Agents {
         }
         // Gated: this is a read-modify-write of the same file a starting turn pops from, and an
         // ungated pair could write back an entry that has just been asked.
-        let _gate = turn_gate();
+        let _gate = turn_gate(&self.config)?;
         self.sessions().unqueue(name, conv_id, index)
     }
 
@@ -2005,7 +2030,13 @@ impl Agents {
             return false;
         }
 
-        let _gate = turn_gate();
+        let _gate = match turn_gate(&self.config) {
+            Ok(gate) => gate,
+            Err(error) => {
+                tracing::warn!(%error, "couldn't lock the agent turn queue; leaving messages queued");
+                return false;
+            }
+        };
         // Re-decided here, where only one poller can be holding the gate.
         if runner.is_alive(&store.session(&agent.name, conv_id)) {
             return false;
@@ -3652,6 +3683,86 @@ mod tests {
             backend: Some(backend.into()),
             ..AgentManifest::default()
         }
+    }
+
+    /// A separate test process is essential: two threads would pass with the old static mutex.
+    /// Exercise the actual reply path while another process owns its idle-check/start boundary.
+    #[test]
+    fn turn_gate_serializes_replies_from_another_process() {
+        let store = scratch("process-turn-gate");
+        store.save("talker", spec("harness:adi")).unwrap();
+        let Launch::Process { run_id, .. } = store.simulate("talker", "first").unwrap() else {
+            panic!("expected a simulated conversation");
+        };
+        store
+            .simulate_turn("talker", &run_id, &[SimBlock::Text("done".into())])
+            .unwrap();
+        let gate = turn_gate(&store.config).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "tests::turn_gate_reply_child", "--nocapture"])
+            .env("ADI_TEST_TURN_GATE_ROOT", store.config.root())
+            .env("ADI_TEST_TURN_GATE_RUN", &run_id)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let ready = store.config.root().join("reply-ready");
+        let completed = store.config.root().join("reply-completed");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "reply child exited before entering"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "reply child must reach the gated call");
+        std::thread::sleep(Duration::from_millis(250));
+        let was_blocked = !completed.exists();
+        drop(gate);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("reply child did not finish after the lock was released");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            was_blocked,
+            "a second process must not start a turn while this one owns the gate"
+        );
+        assert!(status.success(), "reply child failed: {status}");
+        assert!(
+            completed.exists(),
+            "releasing the gate must allow the reply"
+        );
+        assert!(matches!(
+            store.reply("talker", &run_id, "third").unwrap(),
+            Sent::Queued { .. }
+        ));
+        assert_eq!(texts(store.sessions().queued("talker", &run_id)), ["third"]);
+        std::fs::remove_dir_all(store.config.root()).unwrap();
+    }
+
+    #[test]
+    fn turn_gate_reply_child() {
+        let Some(root) = std::env::var_os("ADI_TEST_TURN_GATE_ROOT") else {
+            return;
+        };
+        let store = Agents::with_config(Config::with_root(root));
+        let run = std::env::var("ADI_TEST_TURN_GATE_RUN").unwrap();
+        std::fs::write(store.config.root().join("reply-ready"), b"").unwrap();
+        assert!(matches!(
+            store.reply("talker", &run, "second").unwrap(),
+            Sent::Started(_)
+        ));
+        std::fs::write(store.config.root().join("reply-completed"), b"").unwrap();
     }
 
     #[test]

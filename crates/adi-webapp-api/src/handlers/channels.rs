@@ -30,9 +30,8 @@ pub fn channels(store: &Connections) -> Response {
 }
 
 /// `GET /api/channels/status` — the router-connection pill's own data: whether each provider's
-/// socket is actually open right now. `connected` is computed by the caller (`adi-app`'s
-/// `channels::Live::is_connected`, a fact this crate has no way to reach on its own) and handed
-/// in already built.
+/// socket is actually open right now. `connected` is computed by `adi-channelsd` from its
+/// live clients and handed in already built.
 #[must_use]
 pub fn channel_status(connected: std::collections::BTreeMap<String, bool>) -> Response {
     ok_json(&ChannelProviderStatus { connected })
@@ -127,7 +126,9 @@ pub fn disconnect_channel(
 ) -> Response {
     mutate(
         body,
-        |req: ChannelRef| adi_channels::connect::disconnect(connections, secrets, router_url, &req.id),
+        |req: ChannelRef| {
+            adi_channels::connect::disconnect(connections, secrets, router_url, &req.id)
+        },
         || channels(connections),
     )
 }
@@ -142,7 +143,14 @@ pub fn reply_channel(
     body: &[u8],
 ) -> Response {
     let req = require!(body, ChannelReplyRequest);
-    match adi_channels::reply::handle(connections, secrets, router_url, &req.agent, &req.run_id, &req.text) {
+    match adi_channels::reply::handle(
+        connections,
+        secrets,
+        router_url,
+        &req.agent,
+        &req.run_id,
+        &req.text,
+    ) {
         Ok(()) => ok_json(&serde_json::json!({ "ok": true })),
         Err(e) => Response::from(&e),
     }

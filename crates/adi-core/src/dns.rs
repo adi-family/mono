@@ -533,7 +533,7 @@ fn render_frontdoor_hive(hosts: &[String], app_port: u16, mesh_nodes: &[String])
             "  {name}:\n    proxy:\n      host: {host}\n    rollout:\n      recreate:\n        ports:\n          http: {app_port}\n"
         );
     }
-    format!(
+    let rendered = format!(
         "# Written by adi-core — adi-hive front door for the .{domain} zone.
 # Always-on plumbing: proxies the hosts below to the adi control panel (adi-app), which runs
 # as its own per-user service on this reserved port so it can be toggled without a
@@ -586,7 +586,9 @@ services:
 {routes}",
         gateway = mesh_gateway_addr(),
         mesh_nodes = mesh_nodes_line(mesh_nodes),
-    )
+    );
+    crate::channels::with_import(&rendered, &crate::channels::routes_path().to_string_lossy())
+        .expect("generated front-door YAML has an imports sequence")
 }
 
 fn write_config() {

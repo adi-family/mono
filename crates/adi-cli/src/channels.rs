@@ -5,9 +5,8 @@
 //! (`adi_channels::node_api::NodeApi`) — never the router directly, and never this node's local
 //! store files either. The panel calls the exact same endpoints from the browser; this group is
 //! the shell's way in, and the two are kept honest by sharing one contract rather than each
-//! reimplementing it. That also means every verb here needs `adi-app` already running: `connect`'s
-//! blocking wait on `linked` is waiting on *that* process's own WebSocket, which only exists while
-//! it does.
+//! reimplementing it. Hive runs the `adi-channelsd` service and publishes its internal domain;
+//! `connect` waits on that service's WebSocket link state, independently of the control panel.
 
 use adi_channels::connection::{Allowlist, Target};
 use adi_channels::node_api::{ConnectionView, NodeApi};
@@ -83,8 +82,8 @@ pub(crate) enum ChannelsCommand {
 /// Dispatch a `channels` subcommand against this node's own `/api/channels/*`.
 ///
 /// # Errors
-/// Whatever [`NodeApi::local`] or the specific verb's own call returns — most commonly "no node
-/// is running on this machine" when `adi-app` isn't up.
+/// Whatever the API call returns, including a connection error when the Hive-managed channels
+/// service is unavailable.
 pub(crate) fn run_channels(command: ChannelsCommand) -> Result<(), String> {
     let config = adi_config::Config::open();
     let api = NodeApi::local(&config)?;

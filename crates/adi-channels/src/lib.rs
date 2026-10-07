@@ -10,6 +10,7 @@
 //! agent it names.
 
 pub mod client;
+pub mod config;
 pub mod connect;
 pub mod connection;
 pub mod dispatch;
@@ -19,10 +20,10 @@ pub mod finished;
 pub mod message;
 pub mod node_api;
 pub mod node_id;
-pub mod node_port;
 pub mod protocol;
 pub mod reply;
 pub mod router_api;
+pub mod service;
 pub mod token;
 pub mod tool;
 pub mod turn;

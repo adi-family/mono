@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-149 structs · 41 enums · 5 type aliases across 57 files.
+150 structs · 41 enums · 5 type aliases across 57 files.
 
 ## Index
 
@@ -29,7 +29,7 @@
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
-- [`src/lib.rs`](#srclibrs) — `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
+- [`src/lib.rs`](#srclibrs) — `TurnGuard`, `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
 - [`src/llm/chain.rs`](#srcllmchainrs) — `AgentBackendEntry`, `StartAt`, `ResolvedBackend`, `ResolvedChain`, `PinnedChain`
@@ -1427,6 +1427,15 @@ pub(crate) struct RunKnowledge {
 ---
 
 ## `src/lib.rs`
+
+### struct `TurnGuard`
+
+```rust
+struct TurnGuard {
+    _file: std::fs::File,
+    _thread: MutexGuard<'static, ()>,
+}
+```
 
 ### struct `Agents`
 

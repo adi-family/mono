@@ -45,11 +45,12 @@ What is actually installed
       bin\adi-dns.exe      the .test / .adi split-DNS resolver
       bin\adi-hive.exe     the front-door reverse proxy that serves *.adi hosts
       bin\adi-app.exe      the web control panel
+      bin\adi-channelsd.exe the local messaging client, supervised by Hive
       README.txt, LICENSE.txt, VERSION, Uninstall ADI.exe
 
-The platform is four separate programs because it is four separate services, each supervised on
-its own — the same four that live inside `ADI.app` on macOS. They are in `bin\` because there is
-never a reason to pick one: `ADI.exe` is the app, `adi` is the command.
+Service binaries sit alongside the launcher and CLI, as they do inside `ADI.app` on macOS.
+Hive supervises the channels client and allocates its local API port. `ADI.exe` is the app,
+and `adi` is the command.
 
 Your data is somewhere else entirely: `%USERPROFILE%\.adi` — projects, secrets, the database,
 every agent transcript. Uninstalling never touches it.

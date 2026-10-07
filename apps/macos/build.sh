@@ -81,13 +81,13 @@ for probe in SME SME2 SME2P1 SMEF64 SMEHALF SMEBF16 SMEBI32 SMELUT2 SMEFA64; do
     export "NK_TARGET_$probe=0"
 done
 
-echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release, universal: ${RUST_TARGETS[*]}, v$VERSION)"
+echo "==> building adi-dns + adi-hive + adi-app + adi-channelsd + adi-mono (release, universal: ${RUST_TARGETS[*]}, v$VERSION)"
 ( cd "$ROOT" && MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" cargo build \
-    -p adi-dns -p adi-hive -p adi-app -p adi-cli --release \
+    -p adi-dns -p adi-hive -p adi-app -p adi-channelsd -p adi-cli --release \
     "${RUST_TARGETS[@]/#/--target=}" )
 # Each --target=<triple> lands its output in target/<triple>/release/, so verify
 # every binary exists for every arch before we lipo them together.
-for name in adi-dns adi-hive adi-app adi-mono; do
+for name in adi-dns adi-hive adi-app adi-channelsd adi-mono; do
     for t in "${RUST_TARGETS[@]}"; do
         [ -x "$ROOT/target/$t/release/$name" ] || { echo "error: $ROOT/target/$t/release/$name missing"; exit 1; }
     done
@@ -153,10 +153,10 @@ plutil -replace NSAppTransportSecurity -json "{
 # the app registers them at launch; missing, the views fall back to the system face.
 cp -R "$SCRIPT_DIR/Resources/Fonts" "$APP/Contents/Resources/Fonts"
 plutil -replace CFBundleIconFile -string "$APP_NAME" "$APP/Contents/Info.plist"
-# adi-mono resolves adi-dns/adi-hive/adi-app as siblings, so they all live side by side
-# in Resources (adi-hive runs adi-app as the app.adi front-door service). Fuse the
+# adi-mono resolves the service binaries as siblings, so they all live side by side
+# in Resources (the user Hive supervises adi-channelsd). Fuse the
 # per-arch builds into one universal Mach-O each.
-for name in adi-dns adi-hive adi-app adi-mono; do
+for name in adi-dns adi-hive adi-app adi-channelsd adi-mono; do
     srcs=(); for t in "${RUST_TARGETS[@]}"; do srcs+=("$ROOT/target/$t/release/$name"); done
     lipo -create "${srcs[@]}" -output "$APP/Contents/Resources/$name"
 done
@@ -164,7 +164,7 @@ done
 # The guard for the paragraph above: a probe that leaks back in is invisible in every other
 # check, so look at the one thing that actually broke — an undefined symbol no older macOS
 # exports. Cheap, and it fails the build rather than the friend's Mac.
-for name in adi-dns adi-hive adi-app adi-mono; do
+for name in adi-dns adi-hive adi-app adi-channelsd adi-mono; do
     if nm -arch arm64 -u "$APP/Contents/Resources/$name" 2>/dev/null | grep -q '_sme_'; then
         echo "error: $name references an SME libSystem symbol, which only very recent macOS has" >&2
         echo "       it would abort at launch on macOS $DEPLOY_TARGET (dyld: Symbol not found)" >&2
@@ -194,6 +194,7 @@ if [ -n "${SIGN_ID:-}" ]; then
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-dns"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-hive"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-app"
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-channelsd"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-mono"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
     codesign --verify --strict --verbose=2 "$APP"
@@ -202,6 +203,7 @@ else
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-dns"
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-hive"
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-app"
+    codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-channelsd"
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-mono"
     codesign --force --sign - --timestamp=none "$APP"
 fi

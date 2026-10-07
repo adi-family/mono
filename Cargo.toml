@@ -14,6 +14,7 @@ default-members = [
     "crates/adi-agents",
     "crates/adi-app",
     "crates/adi-channels",
+    "crates/adi-channelsd",
     "crates/adi-cli",
     "crates/adi-config",
     "crates/adi-core",

@@ -1,314 +1,358 @@
-//! The auto-post-back of a question: a channel-opened run that stops to ask something gets the
-//! question posted to the router without anybody asking (`docs/channels.md` §5). This is an
-//! [`EventObserver`] the same shape `adi-triggers::dispatch::EventObserver` already is — composed
-//! alongside `adi-agents`' own `awaits::start` observer in `adi-app`'s one event dispatcher, rather
-//! than draining the shared event spool a second time (`adi-triggers`' own dispatcher is explicit
-//! that a second drainer would race it for records; see its module doc).
+//! Forward pending agent questions from the Hive-managed channels daemon.
 //!
-//! A turn's *answer* is not posted from here any more: `adi.agents.run.finished` fires once per run
-//! and only when somebody lists it, which left every follow-up message unanswered — see
-//! [`crate::turn`], which owns the answer and the "thinking…" clear now.
+//! Questions already live in the session store. Polling the conversations bound to channel
+//! threads keeps delivery independent of the control panel and leaves the platform's single
+//! event-spool consumer alone. Successful sends are checkpointed so normal daemon restarts do
+//! not repeat a pending question. A crash after the remote send but before its checkpoint can
+//! still repeat it: the router has no idempotency key with which to make that boundary atomic.
+//!
+//! Final answers and the "thinking…" indicator remain owned by [`crate::turn`].
 
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
-use adi_agents::{AgentQuestionAsked, Agents};
-use adi_events::{Event, EventRecord};
+use adi_agents::Agents;
+use adi_config::ConfigFile;
 use adi_secrets::Secrets;
 use tracing::warn;
 
-use crate::connection::Connections;
+use crate::connection::{Connection, Connections, Target};
 use crate::error::Result;
 use crate::router_api::RouterApi;
 use crate::token;
 
-/// Told about every event the platform's one dispatcher drains — same shape
-/// `adi_triggers::dispatch::EventObserver` is, duplicated rather than depended on: this crate has
-/// no other reason to take `adi-triggers` as a dependency.
-pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
+type Deliveries = BTreeMap<String, String>;
 
-/// Build the observer `adi-app` composes into its event dispatcher. `router_url` is the one this
-/// node's client already subscribes through — see `RouterApi`'s own note on its assumed shape.
-///
-/// Matches only [`AgentQuestionAsked`]; everything else is ignored immediately, which is what
-/// "return promptly" (the dispatcher's own contract on an observer) means in practice. The actual
-/// lookup-and-post happens on a detached thread, never on the dispatcher's own tick — a slow or
-/// unreachable router must not stall the trigger/await delivery that shares this one drain.
-#[must_use]
-pub fn observer(
+/// One sequential question-delivery worker. Call [`Self::tick`] on a blocking thread about once
+/// a second; a slow router must not block the daemon's HTTP or WebSocket runtime.
+#[derive(Debug)]
+pub struct QuestionForwarder {
     connections: Connections,
     agents: Agents,
     secrets: Secrets,
     router_url: String,
-) -> EventObserver {
-    Arc::new(move |record: &EventRecord| {
-        if record.name != AgentQuestionAsked::NAME {
-            return;
+    delivered: Option<Deliveries>,
+    dirty: bool,
+}
+
+impl QuestionForwarder {
+    #[must_use]
+    pub fn new(
+        connections: Connections,
+        agents: Agents,
+        secrets: Secrets,
+        router_url: String,
+    ) -> Self {
+        Self {
+            connections,
+            agents,
+            secrets,
+            router_url,
+            delivered: None,
+            dirty: false,
         }
-        let connections = connections.clone();
-        let agents = agents.clone();
-        let secrets = secrets.clone();
-        let router_url = router_url.clone();
-        let name = record.name.clone();
-        let payload = record.payload.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = post_back(&connections, &agents, &secrets, &router_url, &name, &payload)
-            {
-                warn!(event = %name, error = %e, "couldn't post a channel's run answer back");
+    }
+
+    fn checkpoint(&self) -> ConfigFile<Deliveries> {
+        // Nested below the manifests: Connections::list only reads top-level TOML files.
+        self.connections
+            .config()
+            .module("channels")
+            .file("state/question-deliveries.toml")
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        if self.dirty {
+            if let Some(delivered) = &self.delivered {
+                self.checkpoint().save(delivered)?;
+                self.dirty = false;
             }
-        });
-    })
-}
+        }
+        Ok(())
+    }
 
-/// The run id an [`AgentQuestionAsked`] payload belongs to.
-fn run_id_of(value: &serde_json::Value) -> String {
-    value
-        .get("run_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
+    /// Send each newly pending question from a linked, unpaused channel conversation.
+    /// A missing token or a failed router request leaves it pending for the next tick.
+    /// Returns the number of successful sends, without changing the question's answer state.
+    ///
+    /// # Errors
+    /// Connection-store or checkpoint errors. An unreadable checkpoint is never discarded: that
+    /// would resend questions after a restart. Router/token errors are logged per connection so
+    /// one unavailable provider does not prevent another from receiving its questions.
+    pub fn tick(&mut self) -> Result<usize> {
+        if self.delivered.is_none() {
+            self.delivered = Some(self.checkpoint().load_or_default()?);
+        }
+        // If a previous send succeeded but saving failed, persist its in-memory record before
+        // trying another send. This also avoids repeats on every tick while the disk is full.
+        self.flush()?;
+        let mut sent = 0;
+        for connection in self.connections.list()? {
+            if !connection.manifest.linked || connection.manifest.paused {
+                continue;
+            }
+            let Target::Agent { agent } = &connection.manifest.target else {
+                continue;
+            };
+            for (thread, run_id) in &connection.manifest.threads {
+                let Some(ask) = self.agents.pending_question(agent, run_id) else {
+                    continue;
+                };
+                let key = serde_json::json!([connection.id, thread, agent, run_id]).to_string();
+                if self.delivered.as_ref().and_then(|d| d.get(&key)) == Some(&ask.id) {
+                    continue;
+                }
+                match self.send(&connection, thread, &ask.headline()) {
+                    Ok(true) => {
+                        self.delivered
+                            .get_or_insert_with(Deliveries::new)
+                            .insert(key, ask.id);
+                        self.dirty = true;
+                        self.flush()?;
+                        sent += 1;
+                    }
+                    Ok(false) => {}
+                    Err(error) => warn!(
+                        connection = %connection.id,
+                        run = %run_id,
+                        error = %error,
+                        "couldn't forward a channel question; will retry"
+                    ),
+                }
+            }
+        }
+        Ok(sent)
+    }
 
-/// Reads the payload as a bare [`serde_json::Value`] rather than `adi_agents::AgentQuestionAsked`:
-/// that type derives `Serialize` only (nothing inside `adi-agents` itself ever needs to parse its
-/// own events back), and adding `Deserialize` there for this one caller is more than this crate's
-/// boundary asks for. `agents` is unused now that answers are [`crate::turn`]'s, and kept so
-/// `adi-app`'s composition doesn't change shape.
-fn post_back(
-    connections: &Connections,
-    _agents: &Agents,
-    secrets: &Secrets,
-    router_url: &str,
-    name: &str,
-    payload: &str,
-) -> Result<()> {
-    if name != AgentQuestionAsked::NAME {
-        return Ok(());
+    fn send(&self, connection: &Connection, thread: &str, question: &str) -> Result<bool> {
+        let Some(token) = token::load(&self.secrets, &connection.manifest.provider)? else {
+            return Ok(false);
+        };
+        RouterApi::new(&self.router_url).send(&token, &connection.id, Some(thread), question)?;
+        Ok(true)
     }
-    let value: serde_json::Value = serde_json::from_str(payload)
-        .map_err(|e| crate::error::Error::Router(format!("unreadable payload: {e}")))?;
-    let run_id = run_id_of(&value);
-    if run_id.is_empty() {
-        return Ok(());
-    }
-    // A run with no connection pointed at it is an ordinary (non-channel) conversation that just
-    // happens to share the event bus — the overwhelming majority of runs, so this is the expected
-    // path, not an error.
-    let Some((connection, thread)) = connections.find_by_run(&run_id)? else {
-        return Ok(());
-    };
-    if connection.manifest.paused {
-        return Ok(());
-    }
-    let question = value.get("question").and_then(|v| v.as_str()).unwrap_or_default();
-    if question.trim().is_empty() {
-        return Ok(());
-    }
-    let Some(token) = token::load(secrets, &connection.manifest.provider)? else {
-        warn!(
-            connection = %connection.id,
-            provider = %connection.manifest.provider,
-            "no node token on file for this provider; can't post the question back"
-        );
-        return Ok(());
-    };
-    RouterApi::new(router_url).send(&token, &connection.id, Some(&thread), question)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connection::Target;
-    use adi_agents::AgentSaved;
+    use adi_agents::store::{Answer, AnsweredBy, AskRequest, Question, SessionStore};
+    use std::io::{BufRead, BufReader, Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::sync::mpsc::{Receiver, channel};
     use std::time::Duration;
 
-    fn scratch(tag: &str) -> adi_config::Config {
-        let root = std::env::temp_dir().join(format!(
-            "adi-channels-finished-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        adi_config::Config::with_root(root)
+    struct Fixture {
+        config: adi_config::Config,
+        connections: Connections,
+        sessions: SessionStore,
+        connection: String,
+        run_id: String,
     }
 
-    fn wait_until(mut pred: impl FnMut() -> bool) -> bool {
-        for _ in 0..200 {
-            if pred() {
-                return true;
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "adi-channels-questions-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id(),
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let config = adi_config::Config::with_root(root);
+            let connections = Connections::with_config(config.clone());
+            let sessions = SessionStore::new(config.module("sessions").dir());
+            let run_id = sessions
+                .create("solver", adi_agents::Backend::HarnessAdi, "/tmp", "go")
+                .unwrap()
+                .id;
+            let connection = connections
+                .create(
+                    "slack",
+                    Target::Agent {
+                        agent: "solver".into(),
+                    },
+                )
+                .unwrap()
+                .id;
+            connections
+                .mark_linked(&connection, "workspace", "owner")
+                .unwrap();
+            connections.bind_thread(&connection, "C1", &run_id).unwrap();
+            token::save(&Secrets::with_config(config.clone()), "slack", "test-token").unwrap();
+            Self {
+                config,
+                connections,
+                sessions,
+                connection,
+                run_id,
             }
-            std::thread::sleep(Duration::from_millis(10));
         }
-        false
+
+        fn ask(&self, text: &str) {
+            self.sessions
+                .ask(
+                    "solver",
+                    &self.run_id,
+                    &AskRequest {
+                        questions: vec![Question {
+                            header: String::new(),
+                            question: text.into(),
+                            options: Vec::new(),
+                            multi_select: false,
+                        }],
+                        ..AskRequest::default()
+                    },
+                )
+                .unwrap();
+        }
+
+        fn worker(&self, router_url: &str) -> QuestionForwarder {
+            QuestionForwarder::new(
+                self.connections.clone(),
+                Agents::with_config(self.config.clone()),
+                Secrets::with_config(self.config.clone()),
+                router_url.to_string(),
+            )
+        }
     }
 
-    /// A fake router that accepts any number of requests in sequence, 200s every one, and hands
-    /// each request's raw body back over a channel — enough to tell which of `/send`'s two shapes
-    /// (`{..., status}` vs `{..., text}`) `post_back` actually sent, and in what order. Per this
-    /// task's own instructions, never the real `apps/channel-router`.
-    fn spawn_capturing_router() -> (String, std::sync::mpsc::Receiver<String>) {
-        use std::io::{BufRead, BufReader, Write as _};
-        use std::net::TcpListener;
+    /// Serve a fixed sequence, then exit. Tests never use real router credentials or services.
+    fn router(statuses: Vec<u16>) -> (String, Receiver<serde_json::Value>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = channel();
         std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { break };
+            for status in statuses {
+                let (mut stream, _) = listener.accept().unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
-                let mut request_line = String::new();
-                if reader.read_line(&mut request_line).unwrap_or(0) == 0 {
-                    break;
-                }
-                let mut content_length = 0usize;
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                assert!(line.starts_with("POST /send "));
+                let mut length = 0;
                 loop {
-                    let mut line = String::new();
+                    line.clear();
                     reader.read_line(&mut line).unwrap();
-                    if line == "\r\n" || line.is_empty() {
+                    if line == "\r\n" {
                         break;
                     }
                     if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                        content_length = value.trim().parse().unwrap_or(0);
+                        length = value.trim().parse().unwrap();
                     }
                 }
-                let mut body = vec![0u8; content_length];
-                std::io::Read::read_exact(&mut reader, &mut body).unwrap();
-                let _ = tx.send(String::from_utf8_lossy(&body).to_string());
-                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                tx.send(serde_json::from_slice(&body).unwrap()).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+                )
+                .unwrap();
             }
         });
-        (format!("http://{addr}"), rx)
-    }
-
-    /// A run with no connection pointed at it (the ordinary case: almost every run on the
-    /// machine) is silently skipped, never treated as an error.
-    #[test]
-    fn a_run_nobody_bound_a_thread_to_is_ignored() {
-        let cfg = scratch("unbound");
-        let connections = Connections::with_config(cfg.clone());
-        let agents = Agents::with_config(cfg.clone());
-        let secrets = Secrets::with_config(cfg);
-
-        let record = AgentQuestionAsked {
-            agent: "solver".into(),
-            conv: "no-such-run".into(),
-            run_id: "no-such-run".into(),
-            ask: "q1".into(),
-            question: "which backend?".into(),
-        }
-        .to_record()
-        .expect("question-asked record");
-        // Must not panic and must not spin up a post — there's nothing to look up a token for.
-        post_back(
-            &connections,
-            &agents,
-            &secrets,
-            "http://127.0.0.1:1",
-            &record.name,
-            &record.payload,
-        )
-        .expect("silently skipped");
-    }
-
-    /// A paused connection's run still finished, but nothing is posted — same rule the dispatch
-    /// side applies to an inbound message.
-    #[test]
-    fn a_paused_connections_run_is_not_posted() {
-        let cfg = scratch("paused");
-        let connections = Connections::with_config(cfg.clone());
-        let agents = Agents::with_config(cfg.clone());
-        let secrets = Secrets::with_config(cfg);
-        let created = connections
-            .create(
-                "telegram",
-                Target::Agent {
-                    agent: "solver".into(),
-                },
-            )
-            .unwrap();
-        connections.bind_thread(&created.id, "chat-1", "run-1").unwrap();
-        connections.set_paused(&created.id, true).unwrap();
-        token::save(&secrets, "telegram", "tok").unwrap();
-
-        let record = AgentQuestionAsked {
-            agent: "solver".into(),
-            conv: "run-1".into(),
-            run_id: "run-1".into(),
-            ask: "q1".into(),
-            question: "which backend?".into(),
-        }
-        .to_record()
-        .expect("question-asked record");
-        post_back(
-            &connections,
-            &agents,
-            &secrets,
-            "http://127.0.0.1:1",
-            &record.name,
-            &record.payload,
-        )
-        .expect("paused connections are skipped, not errored");
-    }
-
-    /// `AgentQuestionAsked` never touches the "thinking…" indicator — the run isn't finished, just
-    /// paused on a question, so there's nothing yet to clear.
-    #[test]
-    fn question_asked_never_calls_set_thinking() {
-        let cfg = scratch("question-no-clear");
-        let connections = Connections::with_config(cfg.clone());
-        let agents = Agents::with_config(cfg.clone());
-        let secrets = Secrets::with_config(cfg);
-        let created = connections
-            .create(
-                "slack",
-                Target::Agent {
-                    agent: "solver".into(),
-                },
-            )
-            .unwrap();
-        connections.bind_thread(&created.id, "C1", "run-1").unwrap();
-        token::save(&secrets, "slack", "tok").unwrap();
-
-        let (router_url, rx) = spawn_capturing_router();
-        let record = AgentQuestionAsked {
-            agent: "solver".into(),
-            conv: "run-1".into(),
-            run_id: "run-1".into(),
-            ask: "q1".into(),
-            question: "which backend?".into(),
-        }
-        .to_record()
-        .expect("question-asked record");
-        post_back(
-            &connections,
-            &agents,
-            &secrets,
-            &router_url,
-            &record.name,
-            &record.payload,
-        )
-        .expect("posts the question back");
-
-        let body = rx.recv_timeout(Duration::from_secs(5)).expect("one request");
-        assert!(body.contains("\"text\":\"which backend?\""), "got: {body}");
-        assert!(!body.contains("\"status\""), "got: {body}");
+        (format!("http://{address}"), rx)
     }
 
     #[test]
-    fn observer_ignores_events_it_does_not_care_about() {
-        let cfg = scratch("ignore");
-        let obs = observer(
-            Connections::with_config(cfg.clone()),
-            Agents::with_config(cfg.clone()),
-            Secrets::with_config(cfg),
-            "http://127.0.0.1:1".into(),
+    fn forwards_once_across_ticks_and_restart_then_forwards_the_next_question() {
+        let fixture = Fixture::new("restart");
+        fixture.ask("which backend?");
+        let (url, received) = router(vec![200, 200]);
+        let mut first = fixture.worker(&url);
+        assert_eq!(first.tick().unwrap(), 1);
+        assert_eq!(first.tick().unwrap(), 0);
+        let mut restarted = fixture.worker(&url);
+        assert_eq!(restarted.tick().unwrap(), 0);
+        let body = received.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(body["text"], "which backend?");
+        assert_eq!(body["thread"], "C1");
+        assert!(
+            body.get("status").is_none(),
+            "a question does not clear thinking"
         );
-        // No thread is spun up for an unrelated event — nothing to assert on directly, but this
-        // must return instantly and never panic.
-        obs(&AgentSaved {
-            agent: "solver".into(),
-        }
-        .to_record()
-        .expect("agent-saved record"));
-        assert!(wait_until(|| true), "returned promptly");
+        fixture
+            .sessions
+            .resolve_question(
+                "solver",
+                &fixture.run_id,
+                None,
+                &Answer {
+                    at: 1,
+                    by: AnsweredBy::Human,
+                    replies: vec!["Rust".into()],
+                },
+            )
+            .unwrap();
+        fixture.ask("which database?");
+        assert_eq!(restarted.tick().unwrap(), 1);
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap()["text"],
+            "which database?"
+        );
+        assert_eq!(
+            fixture.connections.list().unwrap().len(),
+            1,
+            "checkpoint is not a manifest"
+        );
+    }
+
+    #[test]
+    fn failed_send_is_retried_without_marking_the_question_delivered() {
+        let fixture = Fixture::new("retry");
+        fixture.ask("ship it?");
+        let (url, received) = router(vec![503, 200]);
+        let mut worker = fixture.worker(&url);
+        assert_eq!(worker.tick().unwrap(), 0);
+        assert_eq!(worker.tick().unwrap(), 1);
+        assert_eq!(worker.tick().unwrap(), 0);
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap()["text"],
+            "ship it?"
+        );
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap()["text"],
+            "ship it?"
+        );
+    }
+
+    #[test]
+    fn paused_questions_wait_for_resume_and_unbound_questions_are_ignored() {
+        let fixture = Fixture::new("paused");
+        fixture.ask("ship it?");
+        fixture
+            .connections
+            .set_paused(&fixture.connection, true)
+            .unwrap();
+        let unbound = fixture
+            .sessions
+            .create("solver", adi_agents::Backend::HarnessAdi, "/tmp", "go")
+            .unwrap();
+        fixture
+            .sessions
+            .ask(
+                "solver",
+                &unbound.id,
+                &AskRequest {
+                    questions: vec![Question {
+                        header: String::new(),
+                        question: "not for this channel".into(),
+                        options: Vec::new(),
+                        multi_select: false,
+                    }],
+                    ..AskRequest::default()
+                },
+            )
+            .unwrap();
+        let (url, received) = router(vec![200]);
+        let mut worker = fixture.worker(&url);
+        assert_eq!(worker.tick().unwrap(), 0);
+        fixture
+            .connections
+            .set_paused(&fixture.connection, false)
+            .unwrap();
+        assert_eq!(worker.tick().unwrap(), 1);
+        assert_eq!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap()["text"],
+            "ship it?"
+        );
+        assert_eq!(worker.tick().unwrap(), 0);
     }
 }

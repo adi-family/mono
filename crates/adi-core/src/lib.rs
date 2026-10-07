@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod bun;
+pub mod channels;
 mod commands;
 pub mod dashboards;
 pub mod diagnose;

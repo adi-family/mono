@@ -138,7 +138,7 @@ fi
 # ── 1. binaries ─────────────────────────────────────────────────────────────────────────────
 say "installing binaries into $PREFIX/bin"
 mkdir -p "$PREFIX/bin"
-for b in adi-mono adi-dns adi-hive adi-app adi-mesh; do
+for b in adi-mono adi-dns adi-hive adi-app adi-channelsd adi-mesh; do
     [ -f "$HERE/bin/$b" ] || die "missing $HERE/bin/$b — incomplete package"
     # Remove first: copying over a *running* executable fails with ETXTBSY, which is exactly
     # what an upgrade-in-place is. Unlinking leaves the running process on the old inode.

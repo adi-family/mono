@@ -75,8 +75,9 @@ rm -rf "$repo_root/crates/adi-webapp/dist"
 cp -R "$private_dist" "$repo_root/crates/adi-webapp/dist"
 check_dist "after trunk build"
 
-echo "==> cargo build ${cargo_flags[*]} -p adi-app  (embeds dist/)"
-cargo build "${cargo_flags[@]}" -p adi-app
+echo "==> cargo build ${cargo_flags[*]} -p adi-app -p adi-channelsd  (embeds dist/)"
+cargo build "${cargo_flags[@]}" -p adi-app -p adi-channelsd
 check_dist "after cargo build — this is what got embedded"
 
 echo "==> built: $repo_root/target/$profile/adi-app"
+echo "==> built: $repo_root/target/$profile/adi-channelsd"

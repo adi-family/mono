@@ -125,7 +125,7 @@ impl Dashboards {
     ///
     /// Never overwrites: the file is meant to be edited (an operator may add imports or move the
     /// bind), and `up` is run repeatedly. Writing it unconditionally would silently discard that.
-    fn ensure_config(self) {
+    pub(crate) fn ensure_config(self) {
         let path = config_path();
         if path.exists() {
             return;

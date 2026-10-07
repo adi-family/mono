@@ -48,7 +48,7 @@ jobs:
       # icon is not: the resource compiler is mingw's `windres`, and the crate's build script
       # skips the resources under MSVC rather than failing. Nothing that ships is built this way.
       - name: Build release binaries
-        run: cargo build --release -p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-launcher
+        run: cargo build --release -p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-channelsd -p adi-launcher
 
       # Read-only smoke test: proves the binary runs on real Windows, resolves its store under
       # %USERPROFILE%, and that the status pipeline actually shells out to `schtasks /Query`
@@ -167,7 +167,7 @@ jobs:
           # has to be present, or makensis fails outright.
           $stage = "$env:RUNNER_TEMP\pkg"
           New-Item -ItemType Directory -Force -Path "$stage\bin" | Out-Null
-          foreach ($b in 'adi-mono', 'adi-dns', 'adi-hive', 'adi-app') {
+          foreach ($b in 'adi-mono', 'adi-dns', 'adi-hive', 'adi-app', 'adi-channelsd') {
             Copy-Item "target\release\$b.exe" "$stage\bin\$b.exe"
           }
           Copy-Item "target\release\adi-launcher.exe" "$stage\bin\ADI.exe"
@@ -191,7 +191,7 @@ jobs:
           Start-Process -Wait -FilePath $setup -ArgumentList '/S'
 
           foreach ($f in 'bin\ADI.exe', 'bin\adi-mono.exe', 'bin\adi-dns.exe', 'bin\adi-hive.exe',
-                         'bin\adi-app.exe', 'bin\adi.cmd', 'bin\VERSION', 'README.txt', 'VERSION',
+                         'bin\adi-app.exe', 'bin\adi-channelsd.exe', 'bin\adi.cmd', 'bin\VERSION', 'README.txt', 'VERSION',
                          'Uninstall ADI.exe') {
             if (-not (Test-Path "$install\$f")) { throw "the install is missing $f" }
           }

@@ -4,10 +4,8 @@
 //! for it.
 //!
 //! **Not included here: opening the `/subscribe` socket.** That's
-//! [`crate::client::RouterClient::run`], an async task that has to live on `adi-app`'s own tokio
-//! runtime — this module only does the parts that don't need one, so it stays plain, synchronous,
-//! and callable straight from a webapp handler (`adi-webapp-api` handlers run on tokio's blocking
-//! pool, never inside the runtime itself).
+//! [`crate::client::RouterClient::run`], an async task owned by the Hive-managed `adi-channelsd`
+//! runtime. This module handles registration synchronously from its API's blocking pool.
 //!
 //! [`disconnect`] tells the router first (`POST /disconnect`, added by ADI-MONO-122 once
 //! ADI-MONO-120/121 both flagged the gap — see `docs/channels.md` §1 step 4) and only then drops

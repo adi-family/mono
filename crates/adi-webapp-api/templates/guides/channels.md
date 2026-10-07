@@ -9,12 +9,16 @@ a channel. The one thing you do call is `channel-reply`, for a message mid-turn.
 ## Where it lives
 - `~/.adi/mono/channels/<id>.toml` — one connection: provider, routing key, target agent,
   allowlist, paused flag, and the provider-thread → run-id map.
-- The router (`hooks.withadi.dev`, or a local `wrangler dev` while this is unreleased) holds the
-  bot credentials and the live WebSocket. This store never has a bot token in it.
+- The public router (`hooks.withadi.dev`) holds the bot credentials. This store never has a bot
+  token in it.
+- Hive runs the local client as `adi-channelsd`, continuously, at `channels.adi` (respecting
+  the installation's domain). Hive assigns its port automatically. The client owns the live
+  WebSocket and continues working when the control panel restarts.
 
 ## Do it
-Every verb below needs `adi-app` running on this machine — it's the process holding the live
-socket to the router, and `connect`'s wait on `linked` is waiting on that socket, not on a file.
+Every verb below uses the local channel service managed by Hive. The CLI reaches its internal
+domain directly; the panel forwards the same API calls. `connect` waits for that service's
+live router socket to report the completed link.
 
 - Connect a service: `{{cli}} channels connect <telegram|slack> --agent <agent>` — registers the
   connection, prints the install/link URL (for Telegram, `t.me/<bot>?start=<code>`; Telegram also

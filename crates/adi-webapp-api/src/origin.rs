@@ -1,9 +1,9 @@
 //! Browser-origin checks for the unauthenticated loopback API, including WebSocket upgrades.
 //!
-//! Validate `Host` against `.adi` and loopback names before comparing it with `Origin`;
-//! matching attacker-controlled headers alone cannot prevent DNS rebinding. Local aliases and
-//! fleet petnames vary, so `.adi` names are validated by zone and label shape.
-//! This relies on `.adi` being a private split-DNS zone rather than a public DNS suffix.
+//! Validate `Host` against this install's private domain and loopback names before comparing
+//! it with `Origin`; matching attacker-controlled headers alone cannot prevent DNS rebinding.
+//! Local aliases and fleet petnames vary, so names are validated by zone and label shape.
+//! This relies on the configured domain being a private split-DNS zone, such as `.adi`.
 //!
 //! Missing `Host` or `Origin` is allowed for mesh peers and command-line clients. Compare
 //! authorities, not schemes: the front door terminates TLS before forwarding plain HTTP.
@@ -13,10 +13,12 @@
 //!
 //! This blocks browser-driven requests; it does not authenticate local processes.
 
+use adi_config::Flavor;
+
 use crate::http::Request;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Refusal {
+pub struct Refusal {
     pub status: u16,
     pub message: String,
 }
@@ -28,26 +30,34 @@ const CORS_SIMPLE_TYPES: [&str; 3] = [
     "multipart/form-data",
 ];
 
-const LOCAL_ZONE_SUFFIX: &str = ".adi";
-
 const LOOPBACK_HOSTS: [&str; 3] = ["localhost", "127.0.0.1", "[::1]"];
 
-const FLEET_ZONE_SUFFIX: &str = ".n.adi";
-
-/// Heuristic for `cdn-when-remote`: loopback and non-fleet `.adi` names look local.
+/// Heuristic for `cdn-when-remote`: loopback and non-fleet names in this install look local.
 /// Missing hosts default to local. This selects an asset source, not a security boundary.
 #[must_use]
-pub(crate) fn looks_local(host: Option<&str>) -> bool {
+pub fn looks_local(host: Option<&str>) -> bool {
+    looks_local_in_zone(host, &Flavor::current().domain)
+}
+
+fn looks_local_in_zone(host: Option<&str>, domain: &str) -> bool {
     let Some(host) = host.filter(|h| !h.trim().is_empty()) else {
         return true;
     };
     let authority = normalize_authority(host);
     let name = without_port(&authority);
     LOOPBACK_HOSTS.contains(&name)
-        || (is_in_the_adi_zone(name) && !name.ends_with(FLEET_ZONE_SUFFIX))
+        || (is_in_zone(name, domain) && !name.ends_with(&format!(".n.{domain}")))
 }
 
-pub(crate) fn check(req: &Request) -> Result<(), Refusal> {
+/// Validate a request against this install's names and browser-origin protections.
+///
+/// # Errors
+/// Returns the HTTP status and explanation for an unsafe host, origin, or POST body type.
+pub fn check(req: &Request) -> Result<(), Refusal> {
+    check_in_zone(req, &Flavor::current().domain)
+}
+
+fn check_in_zone(req: &Request, domain: &str) -> Result<(), Refusal> {
     // Cross-site navigations may omit Origin but still carry Fetch Metadata.
     if req
         .header("sec-fetch-site")
@@ -58,9 +68,9 @@ pub(crate) fn check(req: &Request) -> Result<(), Refusal> {
 
     // Check Host first: matching an attacker-controlled Origin and Host proves nothing.
     if let Some(host) = present(req.header("host"))
-        && !is_a_name_we_answer_to(host)
+        && !is_a_name_we_answer_to(host, domain)
     {
-        return Err(not_our_name(host.trim()));
+        return Err(not_our_name(host.trim(), domain));
     }
 
     if let Some(origin) = req.header("origin") {
@@ -111,21 +121,21 @@ fn cross_origin(origin: &str) -> Refusal {
     }
 }
 
-fn not_our_name(host: &str) -> Refusal {
+fn not_our_name(host: &str, domain: &str) -> Refusal {
     Refusal {
         status: 403,
         message: format!(
-            "this control panel is not served at {host} — it answers to its .adi names and to \
+            "this control panel is not served at {host} — it answers to its .{domain} names and to \
              loopback, so a request addressed to any other name is a page that pointed its own \
              hostname here, and it has no login to stop that with"
         ),
     }
 }
 
-fn is_a_name_we_answer_to(host: &str) -> bool {
+fn is_a_name_we_answer_to(host: &str, domain: &str) -> bool {
     let authority = normalize_authority(host);
     let name = without_port(&authority);
-    LOOPBACK_HOSTS.contains(&name) || is_in_the_adi_zone(name)
+    LOOPBACK_HOSTS.contains(&name) || is_in_zone(name, domain)
 }
 
 /// Strip the port while preserving bracketed IPv6 literals.
@@ -139,8 +149,9 @@ fn without_port(authority: &str) -> &str {
     authority.split(':').next().unwrap_or(authority)
 }
 
-fn is_in_the_adi_zone(name: &str) -> bool {
-    let Some(rest) = name.strip_suffix(LOCAL_ZONE_SUFFIX) else {
+fn is_in_zone(name: &str, domain: &str) -> bool {
+    let suffix = format!(".{}", domain.trim_end_matches('.').to_ascii_lowercase());
+    let Some(rest) = name.strip_suffix(&suffix) else {
         return false;
     };
     !rest.is_empty() && rest.split('.').all(is_dns_label)
@@ -202,6 +213,54 @@ fn is_cors_simple(content_type: &str) -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    fn check(req: &Request) -> Result<(), Refusal> {
+        super::check_in_zone(req, "adi")
+    }
+
+    fn looks_local(host: Option<&str>) -> bool {
+        super::looks_local_in_zone(host, "adi")
+    }
+
+    #[test]
+    fn a_service_accepts_its_flavor_domain_and_rejects_other_zones() {
+        assert_eq!(
+            super::check_in_zone(
+                &req(
+                    "GET",
+                    "/api/channels",
+                    &[
+                        ("host", "channels.adi-dev"),
+                        ("origin", "http://channels.adi-dev")
+                    ]
+                ),
+                "adi-dev",
+            ),
+            Ok(()),
+        );
+        for host in [
+            "channels.adi",
+            "channels.adi-dev.evil.example",
+            "channels..adi-dev",
+            "adi-dev",
+        ] {
+            assert_eq!(
+                super::check_in_zone(&req("GET", "/api/channels", &[("host", host)]), "adi-dev")
+                    .unwrap_err()
+                    .status,
+                403,
+                "{host}",
+            );
+        }
+        assert!(super::looks_local_in_zone(
+            Some("channels.adi-dev"),
+            "adi-dev"
+        ));
+        assert!(!super::looks_local_in_zone(
+            Some("app.other.n.adi-dev"),
+            "adi-dev"
+        ));
+    }
 
     fn req(method: &str, path: &str, headers: &[(&str, &str)]) -> Request {
         with_body(method, path, headers, b"")

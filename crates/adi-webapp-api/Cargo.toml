@@ -15,6 +15,8 @@ default = []
 # the DTO types (never adi-ports-manager or adi-mesh, which do filesystem I/O / link iroh
 # and can't target wasm).
 server = [
+    "dep:anyhow",
+    "dep:tokio",
     "dep:adi-config",
     "dep:adi-core",
     "dep:adi-osext",
@@ -69,6 +71,8 @@ server = [
 ]
 
 [dependencies]
+anyhow = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["net", "io-util", "time"], optional = true }
 serde = { workspace = true }
 
 # The on-disk dashboard contract: manifest, hive file, and the bundle a dashboard travels as.

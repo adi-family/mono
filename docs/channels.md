@@ -5,7 +5,20 @@ touching `apps/channel-router`, the node-side `adi-channels` crate, the `/settin
 panel, or `adi-mono channels`. Tracked as ADI-MONO-118; this document is ADI-MONO-119, and
 ADI-MONO-120..124 build against it in the order given at the end.
 
-Status: **design.** Nothing below is built yet.
+Status: **implemented.** The sections below include the original design and implementation
+history. The local process boundary is now the following:
+
+- `apps/channel-router` is the independently deployed public Cloudflare router.
+- `crates/adi-channels` contains the reusable local client and conversation logic.
+- `crates/adi-channelsd` runs the local client and `/api/channels/*` API under Hive, with
+  `start: always`, an automatically allocated port, and the internal `channels.adi` domain
+  (respecting the installation flavor). The daemon requires Hive's injected `PORT`.
+- `adi-app` forwards channel API requests to that domain; it owns no channel sockets.
+  The CLI and `channel-reply` tool also use the service domain directly.
+- Questions are polled from bound conversations and checkpointed by the daemon, so channel
+  delivery does not depend on the panel process or a second consumer of the event spool.
+
+See [`adi-channelsd`](../crates/adi-channelsd/README.md) for current lifecycle and configuration.
 
 ## The shape, in one picture
 

@@ -92,6 +92,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-channelsd"
+version = "0.1.0"
+dependencies = [
+ "adi-agents",
+ "adi-channels",
+ "adi-config",
+ "adi-db",
+ "adi-events",
+ "adi-osext",
+ "adi-secrets",
+ "adi-tools",
+ "adi-webapp-api",
+ "anyhow",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "adi-cli"
 version = "0.1.0"
 dependencies = [
@@ -607,6 +627,7 @@ dependencies = [
  "adi-tools",
  "adi-triggers",
  "adi-update",
+ "anyhow",
  "base64 0.22.1",
  "qrcode",
  "quircs",
@@ -615,6 +636,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "tokio",
  "toml",
  "uuid",
 ]

@@ -14,8 +14,7 @@ pub enum Error {
     Config(adi_config::Error),
     /// A call into the agent store failed — launching, replying, or reading a session.
     Agents(adi_agents::Error),
-    /// A call into the event bus failed — publishing `adi.channels.message`, or draining the
-    /// spool for the run-finished watcher.
+    /// Publishing an event such as `adi.channels.message` failed.
     Events(adi_events::Error),
     /// A call into the secrets store failed — reading or writing a node token (`src/token.rs`).
     Secrets(adi_secrets::Error),

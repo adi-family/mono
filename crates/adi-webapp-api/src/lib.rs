@@ -13,3 +13,11 @@ pub mod types;
 
 #[cfg(feature = "server")]
 pub mod handlers;
+
+/// Shared native HTTP request parsing and response writing for API hosts.
+#[cfg(feature = "server")]
+pub mod http;
+
+/// Browser-origin protection shared by the control panel and local API services.
+#[cfg(feature = "server")]
+pub mod origin;

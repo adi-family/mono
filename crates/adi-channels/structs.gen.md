@@ -4,7 +4,7 @@
 
 > The node side of Channels (docs/channels.md): the outbound WebSocket client to the channel-router, the adi.channels.message event, the connection store (provider + routing key -> agent/trigger/app-route target), dispatch to an agent with thread->conversation mapping, and the automatic post-back of a run's answer.
 
-27 structs · 8 enums · 2 type aliases across 11 files.
+28 structs · 8 enums · 2 type aliases across 11 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/connect.rs`](#srcconnectrs) — `Connected`, `Router`
 - [`src/connection.rs`](#srcconnectionrs) — `Target`, `Allowlist`, `ConnectionManifest`, `Connection`, `Connections`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/finished.rs`](#srcfinishedrs) — `EventObserver`
+- [`src/finished.rs`](#srcfinishedrs) — `Deliveries`, `QuestionForwarder`
 - [`src/message.rs`](#srcmessagers) — `Sender`, `AttachmentKind`, `Attachment`, `ChannelMessage`
 - [`src/node_api.rs`](#srcnode_apirs) — `ConnectionView`, `ConnectionsView`, `ConnectResponse`, `ConnectBody`, `RefBody`, `RouteBody`, `PauseBody`, `AllowBody`, `NodeApi`
 - [`src/protocol.rs`](#srcprotocolrs) — `RouterFrame`, `NodeFrame`
@@ -38,7 +38,7 @@ struct DedupCache {
 
 ### struct `RouterClient`
 
-Everything one `RouterClient` needs, gathered so `adi-app` builds one per `(node, provider)` it has a live token for.
+Everything one `RouterClient` needs, gathered so `adi-channelsd` builds one per `(node, provider)` it has a live token for.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -211,12 +211,26 @@ pub enum Error {
 
 ## `src/finished.rs`
 
-### type `EventObserver`
-
-Told about every event the platform's one dispatcher drains — same shape `adi_triggers::dispatch::EventObserver` is, duplicated rather than depended on: this crate has no other reason to take `adi-triggers` as a dependency.
+### type `Deliveries`
 
 ```rust
-pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
+type Deliveries = BTreeMap<String, String>;
+```
+
+### struct `QuestionForwarder`
+
+One sequential question-delivery worker. Call `Self::tick` on a blocking thread about once a second; a slow router must not block the daemon's HTTP or WebSocket runtime.
+
+```rust
+#[derive(Debug)]
+pub struct QuestionForwarder {
+    connections: Connections,
+    agents: Agents,
+    secrets: Secrets,
+    router_url: String,
+    delivered: Option<Deliveries>,
+    dirty: bool,
+}
 ```
 
 ---
@@ -385,7 +399,7 @@ struct AllowBody<'a> {
 
 ### struct `NodeApi`
 
-This node's own small HTTP API, over whatever port `crate::node_port` names.
+This node's channels API, through its Hive-managed internal domain.
 
 ```rust
 #[derive(Debug, Clone)]

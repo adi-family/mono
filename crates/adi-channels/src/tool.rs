@@ -5,7 +5,7 @@
 //!
 //! It reads `ADI_AGENT`/`ADI_RUN_ID` — the same pair `adi_agents::launcher::by_caller` reads — and
 //! posts to this node's own small local endpoint (`POST /api/channels/reply`, built in
-//! `adi-webapp-api`/`adi-app`), which is [`crate::reply::handle`] underneath: look up the
+//! `adi-channelsd`), which is [`crate::reply::handle`] underneath: look up the
 //! connection the run id maps to, then `POST /send` on the router. A mid-run post never blocks the
 //! turn the way a question does, so none of the harness's suspend/resume machinery is needed —
 //! which is also why this can be a plain script instead of an engine-native tool.
@@ -22,8 +22,9 @@ use crate::error::Result;
 /// a fresh store (see `adi-tools`' own doc on why a tool's id is minted from its name once).
 pub const TOOL_NAME: &str = "channel-reply";
 
-/// The script reads this node's own port from the same file [`crate::node_port::write`] writes —
-/// under the `channels` module, honoring `$ADI_DIR` the way every other store path does.
+/// The script sends Hive's internal domain as the Host header through its existing supervisor
+/// listener. Seeded values capture the resolved flavor; its exported environment takes
+/// precedence. No DNS installation or knowledge of the daemon's allocated port is required.
 const SCRIPT: &str = r#"#!/usr/bin/env bun
 // channel-reply — post a message back through this run's channel connection, mid-turn.
 // Managed by the platform; edits are overwritten the next time this tool is (re-)seeded.
@@ -35,12 +36,14 @@ if (!text.trim()) {
   process.exit(1);
 }
 
-const root = process.env.ADI_DIR ?? `${process.env.HOME}/.adi/mono`;
-const port = (await Bun.file(`${root}/channels/node_port`).text()).trim();
+const host = process.env.ADI_DOMAIN
+  ? `channels.${process.env.ADI_DOMAIN}`
+  : __CHANNELS_SERVICE_HOST__;
+const hivePort = process.env.ADI_SUPERVISOR_PORT ?? __CHANNELS_HIVE_PORT__;
 
-const res = await fetch(`http://127.0.0.1:${port}/api/channels/reply`, {
+const res = await fetch(`http://127.0.0.1:${hivePort}/api/channels/reply`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: { "content-type": "application/json", host },
   body: JSON.stringify({
     agent: process.env.ADI_AGENT ?? "",
     run_id: process.env.ADI_RUN_ID ?? "",
@@ -53,9 +56,20 @@ if (!res.ok) {
 }
 "#;
 
+fn script() -> String {
+    SCRIPT
+        .replace(
+            "__CHANNELS_SERVICE_HOST__",
+            &serde_json::Value::String(crate::service::host()).to_string(),
+        )
+        .replace(
+            "__CHANNELS_HIVE_PORT__",
+            &adi_config::Flavor::current().supervisor_port.to_string(),
+        )
+}
+
 /// The one line an agent sees before ever running it — `description`, in the tools listing.
-const DESCRIPTION: &str =
-    "Post a message back through this run's channel connection (Telegram/Slack) without waiting for the turn to end. Usage: channel-reply \"<text>\"";
+const DESCRIPTION: &str = "Post a message back through this run's channel connection (Telegram/Slack) without waiting for the turn to end. Usage: channel-reply \"<text>\"";
 
 /// Create the tool if this store has never seen it, or refresh its script if it has — the same
 /// "managed, re-seeded" idempotency `adi_tools::Tools::seed_system` gives the built-in CLIs,
@@ -67,8 +81,9 @@ const DESCRIPTION: &str =
 /// # Errors
 /// Whatever `adi_tools::Tools::create_file`/`write_script` returns — a write failure.
 pub fn ensure(tools: &Tools) -> Result<String> {
+    let script = script();
     if let Some(existing) = tools.get(TOOL_NAME)? {
-        tools.write_script(&existing.id, SCRIPT)?;
+        tools.write_script(&existing.id, &script)?;
         return Ok(existing.id);
     }
     let tool = tools.create_file(
@@ -76,7 +91,7 @@ pub fn ensure(tools: &Tools) -> Result<String> {
         Some(DESCRIPTION.to_string()),
         adi_tools::RUNTIME_TS,
         None,
-        Some(SCRIPT.to_string()),
+        Some(script),
     )?;
     Ok(tool.id)
 }
@@ -99,7 +114,7 @@ mod tests {
     fn ensure_creates_once_and_refreshes_on_every_later_call() {
         let tools = scratch("idempotent");
         let id = ensure(&tools).expect("first ensure creates it");
-        assert_eq!(tools.read_script(&id).unwrap(), SCRIPT);
+        assert_eq!(tools.read_script(&id).unwrap(), script());
         assert_eq!(tools.list().unwrap().len(), 1, "exactly one tool exists");
 
         // A second call must not create a duplicate, and must leave the script exactly as
@@ -107,7 +122,7 @@ mod tests {
         let again = ensure(&tools).expect("second ensure refreshes it");
         assert_eq!(again, id);
         assert_eq!(tools.list().unwrap().len(), 1);
-        assert_eq!(tools.read_script(&id).unwrap(), SCRIPT);
+        assert_eq!(tools.read_script(&id).unwrap(), script());
     }
 
     #[test]

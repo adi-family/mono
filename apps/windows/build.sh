@@ -119,10 +119,10 @@ SETUP_NAME="ADI-Setup-x64.exe"
 BUILD="$SCRIPT_DIR/build"
 PKG="$BUILD/$PKG_NAME"
 
-# The four platform binaries — a CLI and three supervised daemons — plus the launcher, which is
-# the only one of the five a person ever names.
-BINS=(adi-mono adi-dns adi-hive adi-app adi-launcher)
-CRATES=(-p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-launcher)
+# The platform binaries — a CLI and four supervised daemons — plus the launcher, which is
+# the one a person opens.
+BINS=(adi-mono adi-dns adi-hive adi-app adi-channelsd adi-launcher)
+CRATES=(-p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-channelsd -p adi-launcher)
 
 # The git tag is the source of truth (scripts/version.sh), same as the macOS and Linux builds.
 # Exported so the binaries compile it in as `BUILT_VERSION`, matching the VERSION file below.
@@ -186,7 +186,7 @@ done
 echo "==> assembling $PKG  (version $VERSION)"
 rm -rf "$PKG"
 mkdir -p "$PKG/bin"
-for b in adi-mono adi-dns adi-hive adi-app; do
+for b in adi-mono adi-dns adi-hive adi-app adi-channelsd; do
     cp "$OUT/$b.exe" "$PKG/bin/$b.exe"
 done
 # `adi-launcher` is the crate; `ADI` is the app. The name in the Start menu is the product's,

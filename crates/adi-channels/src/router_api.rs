@@ -2,8 +2,8 @@
 //! `POST /register` to mint a node token and a fresh connection, and `POST /send` to post a reply
 //! through one (`docs/channels.md` §1/§2). Blocking, like every other HTTP call this workspace
 //! makes from a synchronous context (see `adi-agents`' harness loop) — both calls happen off the
-//! tokio runtime (a webapp handler on the blocking pool, or the run-finished observer's own
-//! `spawn_blocking`), never inside it.
+//! tokio runtime (an API handler on the blocking pool, or the question forwarder's own
+//! blocking worker), never inside it.
 //!
 //! The request/response shapes here are read off `apps/channel-router`'s own
 //! `src/router.ts`/`do.ts` (ADI-MONO-120), not guessed — this crate's tests still run only

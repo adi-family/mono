@@ -4,12 +4,13 @@
 
 > Core shared library for the adi-family workspace.
 
-23 structs · 6 enums across 13 files.
+24 structs · 6 enums across 14 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `App`
 - [`src/bun.rs`](#srcbunrs) — `Artifact`, `Outcome`, `Staging`
+- [`src/channels.rs`](#srcchannelsrs) — `ImportDocument`
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/diagnose.rs`](#srcdiagnosers) — `Error`, `Bundle`, `Diagnose`, `Part`, `Stamp`
@@ -80,6 +81,20 @@ A scratch directory that removes itself, so a failed or panicking install leaves
 ```rust
 struct Staging {
     dir: PathBuf,
+}
+```
+
+---
+
+## `src/channels.rs`
+
+### struct `ImportDocument`
+
+```rust
+#[derive(serde::Deserialize)]
+struct ImportDocument {
+    #[serde(default, deserialize_with = "read_imports")]
+    imports: Option<Vec<String>>,
 }
 ```
 

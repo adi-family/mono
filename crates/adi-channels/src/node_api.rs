@@ -3,9 +3,9 @@
 //! `adi-mono channels` is the only consumer: the panel calls the same endpoints straight from the
 //! browser, so it has no need of a Rust client at all.
 //!
-//! The node's address is read from [`crate::node_port`] — the port `adi-app` wrote at its own
-//! start-up — so this never guesses one, and every verb here fails the same understandable way
-//! when nothing is running: there is no socket to subscribe or wait on without it.
+//! Hive supervises the channels daemon and routes its internal domain. Requests connect to
+//! [`crate::service::transport_url`] with [`crate::service::host`] in the Host header, so the
+//! same domain routing works on mesh-only Linux nodes without a local DNS installation.
 //!
 //! Errors here are plain `String`s, not [`crate::error::Error`] — that enum's `Router`/`Http`
 //! variants are phrased for a call *to the router* ("couldn't reach the router"), and a failure
@@ -26,6 +26,7 @@ fn ensure_provider() {
 fn client() -> Result<reqwest::blocking::Client, String> {
     ensure_provider();
     reqwest::blocking::Client::builder()
+        .no_proxy()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())
@@ -98,28 +99,21 @@ struct AllowBody<'a> {
     allowlist: &'a Allowlist,
 }
 
-/// This node's own small HTTP API, over whatever port [`crate::node_port`] names.
+/// This node's channels API, through its Hive-managed internal domain.
 #[derive(Debug, Clone)]
 pub struct NodeApi {
     base_url: String,
 }
 
 impl NodeApi {
-    /// Find the running node and build a client for it.
+    /// Build a client for the local channels daemon. Kept fallible for CLI compatibility;
+    /// connectivity is checked when a request is made, rather than through a stale port file.
     ///
     /// # Errors
-    /// A message naming the reason, if [`crate::node_port::read`] fails or finds nothing — the
-    /// one error every verb in this module can hit before it ever sends a request.
-    pub fn local(config: &adi_config::Config) -> Result<Self, String> {
-        let port = crate::node_port::read(config)
-            .map_err(|e| format!("reading this node's own port: {e}"))?
-            .ok_or_else(|| {
-                "no node is running on this machine (nothing has written a port under \
-                 ~/.adi/mono/channels/) — start adi-app first"
-                    .to_string()
-            })?;
+    /// Currently always succeeds; individual requests report service availability failures.
+    pub fn local(_config: &adi_config::Config) -> Result<Self, String> {
         Ok(Self {
-            base_url: format!("http://127.0.0.1:{port}"),
+            base_url: crate::service::transport_url(),
         })
     }
 
@@ -211,7 +205,11 @@ fn get<T: serde::de::DeserializeOwned>(
     client: &reqwest::blocking::Client,
     url: &str,
 ) -> Result<T, String> {
-    let response = client.get(url).send().map_err(|e| e.to_string())?;
+    let response = client
+        .get(url)
+        .header(reqwest::header::HOST, crate::service::host())
+        .send()
+        .map_err(|e| e.to_string())?;
     finish(response)
 }
 
@@ -220,13 +218,20 @@ fn post<B: Serialize, T: serde::de::DeserializeOwned>(
     url: &str,
     body: &B,
 ) -> Result<T, String> {
-    let response = client.post(url).json(body).send().map_err(|e| e.to_string())?;
+    let response = client
+        .post(url)
+        .header(reqwest::header::HOST, crate::service::host())
+        .json(body)
+        .send()
+        .map_err(|e| e.to_string())?;
     finish(response)
 }
 
 /// Turn a response into `T`, or the node's own `{ "error": "…" }` message, or the status line
 /// when the body isn't that shape.
-fn finish<T: serde::de::DeserializeOwned>(response: reqwest::blocking::Response) -> Result<T, String> {
+fn finish<T: serde::de::DeserializeOwned>(
+    response: reqwest::blocking::Response,
+) -> Result<T, String> {
     let status = response.status();
     let text = response.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
@@ -265,13 +270,20 @@ mod tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
+            let mut host = None;
             loop {
                 let mut h = String::new();
                 reader.read_line(&mut h).unwrap();
                 if h == "\r\n" {
                     break;
                 }
+                if let Some((name, value)) = h.split_once(':')
+                    && name.eq_ignore_ascii_case("host")
+                {
+                    host = Some(value.trim().to_string());
+                }
             }
+            assert_eq!(host.as_deref(), Some(crate::service::host().as_str()));
             stream
                 .try_clone()
                 .unwrap()
@@ -282,18 +294,11 @@ mod tests {
     }
 
     #[test]
-    fn local_reports_no_node_when_nothing_wrote_a_port() {
+    fn local_uses_hive_domain_without_a_port_file() {
         let cfg = scratch("no-node");
-        let err = NodeApi::local(&cfg).expect_err("nothing is running");
-        assert!(err.contains("no node is running"), "{err}");
-    }
-
-    #[test]
-    fn local_finds_the_port_a_running_node_wrote() {
-        let cfg = scratch("found");
-        crate::node_port::write(&cfg, 12345).unwrap();
-        let api = NodeApi::local(&cfg).expect("a port was written");
-        assert_eq!(api.base_url, "http://127.0.0.1:12345");
+        let api = NodeApi::local(&cfg).expect("Hive discovers the service");
+        assert_eq!(api.base_url, crate::service::transport_url());
+        assert!(!cfg.module("channels").dir().exists());
     }
 
     #[test]

@@ -206,6 +206,9 @@ impl Adi {
         // Before the services, because one of them is the dashboards supervisor and `bun` is what
         // it exists to run. Never fatal and never checked: see [`crate::bun`].
         let _ = bun::ensure();
+        if let Err(error) = crate::channels::ensure() {
+            eprintln!("adi: could not provision channels: {error}");
+        }
         for svc in self.services() {
             svc.enable();
         }
@@ -224,6 +227,9 @@ impl Adi {
         // Costs one `stat` on a machine that has bun, which is what makes it safe on a path the
         // app runs at every launch; only a machine without it reaches the network at all.
         let _ = bun::ensure();
+        if let Err(error) = crate::channels::ensure() {
+            eprintln!("adi: could not provision channels: {error}");
+        }
         for svc in self.services() {
             svc.ensure_enabled();
         }

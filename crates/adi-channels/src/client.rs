@@ -95,7 +95,7 @@ pub(crate) fn parse_ws_url(url: &str) -> Result<(String, u16)> {
     Ok((host.to_string(), port))
 }
 
-/// Everything one [`RouterClient`] needs, gathered so `adi-app` builds one per `(node, provider)`
+/// Everything one [`RouterClient`] needs, gathered so `adi-channelsd` builds one per `(node, provider)`
 /// it has a live token for.
 #[derive(Debug, Clone)]
 pub struct RouterClient {
@@ -108,8 +108,8 @@ pub struct RouterClient {
     pub agents: Agents,
     pub events: Events,
     /// Set `true` for as long as the socket is actually open, `false` the instant it drops or
-    /// before the first connect — what `adi-app`'s `channels::Live::is_connected` (and so the
-    /// panel's router-connection pill) reads.
+    /// before the first connect — the channels daemon exposes this through its status API for
+    /// the panel's router-connection pill.
     pub connected: Arc<AtomicBool>,
 }
 

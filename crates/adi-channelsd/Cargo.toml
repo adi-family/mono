@@ -1,0 +1,28 @@
+[package]
+name = "adi-channelsd"
+description = "Hive-managed local channel client and control API"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-agents = { workspace = true }
+adi-channels = { workspace = true }
+adi-config = { workspace = true }
+adi-db = { workspace = true }
+adi-events = { workspace = true }
+adi-osext = { workspace = true, features = ["signals"] }
+adi-secrets = { workspace = true }
+adi-tools = { workspace = true }
+adi-webapp-api = { workspace = true, features = ["server"] }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

@@ -4,17 +4,14 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-18 structs · 1 enum · 2 type aliases across 11 files.
+15 structs · 1 enum · 2 type aliases across 8 files.
 
 ## Index
 
 - [`src/awaits.rs`](#srcawaitsrs) — `Posted`
-- [`src/channels.rs`](#srcchannelsrs) — `Live`
-- [`src/http.rs`](#srchttprs) — `Request`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
-- [`src/origin.rs`](#srcoriginrs) — `Refusal`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
@@ -30,39 +27,6 @@ Owned event name and payload.
 
 ```rust
 type Posted = (String, String);
-```
-
----
-
-## `src/channels.rs`
-
-### struct `Live`
-
-```rust
-#[derive(Debug, Default)]
-pub struct Live {
-    shutdowns: Mutex<HashMap<String, watch::Sender<bool>>>,
-    connected: std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
-}
-```
-
----
-
-## `src/http.rs`
-
-### struct `Request`
-
-Parsed HTTP request with lowercase header names and the query included in `path`.
-
-```rust
-#[derive(Debug)]
-pub struct Request {
-    pub method: String,
-    pub path: String,
-    pub headers: HashMap<String, String>,
-    pub body: Vec<u8>,
-    pub rest: Vec<u8>,
-}
 ```
 
 ---
@@ -138,8 +102,6 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
-    channels: Connections,
-    channels_live: channels::Live,
     mesh: MeshCtl,
     dist: Option<PathBuf>,
     start: Instant,
@@ -191,20 +153,6 @@ struct Payload<'a> {
     bytes: Vec<u8>,
     content_type: &'a str,
     filename: Option<&'a str>,
-}
-```
-
----
-
-## `src/origin.rs`
-
-### struct `Refusal`
-
-```rust
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Refusal {
-    pub status: u16,
-    pub message: String,
 }
 ```
 

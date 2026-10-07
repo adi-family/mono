@@ -36,8 +36,7 @@ adi-tools = { workspace = true }
 
 adi-agents = { workspace = true }
 
-# The node side of Channels (docs/channels.md): the connection store, the router client, and the
-# run-finished auto-post-back observer composed into the event dispatcher below.
+# Address of the Hive-managed channels service; its process owns sockets and reply delivery.
 adi-channels = { workspace = true }
 
 # The knowledge base, with its default features — which is what turns the embedder on for this

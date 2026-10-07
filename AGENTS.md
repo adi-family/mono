@@ -2,6 +2,11 @@
 
 please prefer working on the main unless asked to checkout. we value speed over stability now.
 
+**Managed services belong in Hive.** Use Hive whenever a component needs process
+supervision. Declare an internal domain for its local API and let Hive allocate the
+first available managed port; pass the injected `$PORT` to the service. Callers use
+the internal domain instead of hard-coded ports or separate port-discovery files.
+
 **⚠️ You (probably) cannot write into `/Applications/ADI.app`.** It's a signed,
 notarized bundle, so macOS **App Management** protection blocks modifying
 `…/Contents/Resources/adi-app` — you get `Operation not permitted` **even under

@@ -59,8 +59,8 @@ PKG="$BUILD/$PKG_NAME"
 # mesh. The mesh *daemon* runs in-process inside adi-app (that is what its "Start mesh" button
 # starts), so `adi-mesh` ships for the standalone and debugging cases — `adi-mesh id`, `ticket`,
 # `forward` — rather than because a node cannot come up without it.
-BINS=(adi-mono adi-dns adi-hive adi-app adi-mesh)
-CRATES=(-p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-mesh)
+BINS=(adi-mono adi-dns adi-hive adi-app adi-channelsd adi-mesh)
+CRATES=(-p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-channelsd -p adi-mesh)
 
 # The git tag is the source of truth (scripts/version.sh), same as the macOS and Windows builds.
 # Exported so the binaries compile it in as `BUILT_VERSION` — the node's updater compares that

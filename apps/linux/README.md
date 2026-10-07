@@ -26,6 +26,7 @@ What's in this folder
     bin/adi-dns    The .adi / .test split-DNS resolver.
     bin/adi-hive   The front-door reverse proxy that serves *.adi hosts.
     bin/adi-app    The web control panel, and the host of the in-process mesh daemon.
+    bin/adi-channelsd  The local channels client, supervised by the user Hive.
     bin/adi-mesh   The standalone mesh CLI — `id`, `ticket`, `forward` (the daemon itself runs
                    inside adi-app, so this is for inspection and port forwards).
 

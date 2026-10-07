@@ -5,10 +5,8 @@
 
 mod awaits;
 mod channels;
-mod http;
 mod live;
 mod node;
-mod origin;
 mod prober;
 mod projects;
 mod scan;
@@ -25,7 +23,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
-use adi_channels::Connections;
 use adi_db::Db;
 use adi_events::Events;
 use adi_knowledge::KnowledgeStore;
@@ -36,8 +33,8 @@ use adi_secrets::Secrets;
 use adi_tasks::Tasks;
 use adi_tools::Tools;
 use adi_triggers::{EventDispatcher, Supervisor, Triggers};
-use adi_webapp_api::handlers;
 use adi_webapp_api::handlers::Response;
+use adi_webapp_api::{handlers, http, origin};
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, broadcast};
@@ -57,9 +54,6 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
-    channels: Connections,
-    /// One live channel-router socket per connected provider.
-    channels_live: channels::Live,
     mesh: MeshCtl,
     /// Overrides the embedded webapp when [`DIST_ENV`] is set.
     dist: Option<PathBuf>,
@@ -212,13 +206,10 @@ async fn main() -> anyhow::Result<()> {
     {
         warn!(error = %e, "seeding system tools failed");
     }
-    // Re-seed on restart so changes to the channel-reply script reach existing installs.
-    if let Err(e) = adi_channels::tool::ensure(&tools) {
-        warn!(error = %e, "seeding the channel-reply tool failed");
-    }
-    // Record the bound port, including the actual port selected when `$PORT` is 0.
-    if let Err(e) = adi_channels::node_port::write(tools.config(), local.port()) {
-        warn!(error = %e, "recording this node's own port failed");
+    // Upgrade existing installs to the Hive-managed channel service. Provisioning failure
+    // leaves the control panel usable; Hive owns the service's process and assigned port.
+    if let Err(e) = adi_core::channels::ensure() {
+        warn!(error = %e, "provisioning the Hive channel service failed");
     }
     // Initialize WAL before other users open the database; seed the shared Bun client.
     let db = Db::open();
@@ -256,24 +247,11 @@ async fn main() -> anyhow::Result<()> {
     let knowledge = KnowledgeStore::open();
     let triggers = Triggers::open();
     let events = Events::open();
-    let channels_store = Connections::open();
     let trigger_supervisor = Supervisor::start(triggers.clone());
-    // A single dispatcher drains the event spool. Awaits and channel replies observe it
-    // rather than racing independent drainers for records.
-    let awaits_observer = awaits::start(agents.clone());
-    let channels_observer = adi_channels::finished::observer(
-        channels_store.clone(),
-        agents.clone(),
-        secrets.clone(),
-        channels::router_url(),
-    );
-    let event_dispatcher = EventDispatcher::start_watched(
-        triggers.clone(),
-        std::sync::Arc::new(move |record: &adi_events::EventRecord| {
-            awaits_observer(record);
-            channels_observer(record);
-        }),
-    );
+    // Only this dispatcher drains the event spool. The Hive channel service observes
+    // conversation state independently, so it never competes for these records.
+    let event_dispatcher =
+        EventDispatcher::start_watched(triggers.clone(), awaits::start(agents.clone()));
     prober::start(agents.clone());
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
@@ -293,8 +271,6 @@ async fn main() -> anyhow::Result<()> {
         triggers,
         trigger_supervisor,
         events,
-        channels: channels_store,
-        channels_live: channels::Live::default(),
         mesh: MeshCtl::default(),
         dist,
         start: Instant::now(),
@@ -303,34 +279,6 @@ async fn main() -> anyhow::Result<()> {
     });
 
     live::start(Arc::clone(&app));
-
-    // Restore provider sockets after a restart when a saved node token is available.
-    {
-        let app = Arc::clone(&app);
-        tokio::spawn(async move {
-            let Ok(connections) = app.channels.list() else {
-                return;
-            };
-            let mut providers: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-            for connection in connections {
-                providers.insert(connection.manifest.provider);
-            }
-            for provider in providers {
-                let Ok(Some(token)) = adi_channels::token::load(&app.secrets, &provider) else {
-                    continue;
-                };
-                app.channels_live
-                    .ensure(
-                        &provider,
-                        token,
-                        app.channels.clone(),
-                        app.agents.clone(),
-                        app.events.clone(),
-                    )
-                    .await;
-            }
-        });
-    }
 
     // Respect the persisted mesh choice; a fresh install starts with the mesh disabled.
     {
@@ -373,7 +321,6 @@ async fn main() -> anyhow::Result<()> {
     app.trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
     event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
     app.mesh.stop().await;
-    app.channels_live.stop_all().await;
     Ok(())
 }
 
@@ -428,7 +375,9 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     }
 
     if req.method == "GET"
-        && let Some(name) = req.route_path().strip_prefix("/api/system/diagnose/download/")
+        && let Some(name) = req
+            .route_path()
+            .strip_prefix("/api/system/diagnose/download/")
     {
         return serve_diagnose_download(&mut stream, name).await;
     }
@@ -473,6 +422,9 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
             .await,
         );
     }
+    if channels::matches(req.route_path()) {
+        return Some(channels::forward(req).await);
+    }
     let response = match (req.method.as_str(), req.route_path()) {
         ("POST", "/api/secrets/refresh") => refresh_secret(&app.secrets, &req.body).await,
         ("POST", "/api/dashboards/transfer") => {
@@ -501,8 +453,6 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         ("POST", "/api/mesh/forwards/remove") => {
             handlers::mesh_remove_forward(app.mesh.running().await, &req.body)
         }
-        ("POST", "/api/channels/connect") => channels_connect(app, &req.body).await,
-        ("POST", "/api/channels/disconnect") => channels_disconnect(app, &req.body).await,
         _ => return None,
     };
     Some(response)
@@ -607,8 +557,6 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         triggers,
         trigger_supervisor,
         events,
-        channels,
-        channels_live,
         start,
         ..
     } = app;
@@ -700,12 +648,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
         // Unpair only after both directions have been dropped.
-        ("POST", "/api/fleet/sources/drop") => {
-            viewer::drop_source(projects, secrets, &req.body)
-        }
-        ("POST", "/api/fleet/viewers/drop") => {
-            viewer::drop_viewer(projects, secrets, &req.body)
-        }
+        ("POST", "/api/fleet/sources/drop") => viewer::drop_source(projects, secrets, &req.body),
+        ("POST", "/api/fleet/viewers/drop") => viewer::drop_viewer(projects, secrets, &req.body),
         ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),
         ("POST", "/api/fleet/grants/remove") => {
             handlers::fleet_revoke(projects.config(), &req.body)
@@ -846,20 +790,6 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
         ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
-        ("GET", "/api/channels") => handlers::channels(channels),
-        ("GET", "/api/channels/status") => handlers::channel_status(channels_provider_status(
-            channels,
-            channels_live,
-        )),
-        ("POST", "/api/channels/route") => handlers::route_channel(channels, &req.body),
-        ("POST", "/api/channels/pause") => handlers::pause_channel(channels, &req.body),
-        ("POST", "/api/channels/allow") => handlers::allow_channel(channels, &req.body),
-        ("POST", "/api/channels/reply") => {
-            handlers::reply_channel(channels, secrets, &channels::router_url(), &req.body)
-        }
-        (m, p) if m == "GET" && p.starts_with("/api/channels/") => {
-            handlers::channel(channels, &p["/api/channels/".len()..])
-        }
         // Preserve the query for webhook secrets; GET also supports provider pings.
         (m, p) if p.starts_with("/api/hooks/") && matches!(m, "POST" | "GET") => {
             let name = &p["/api/hooks/".len()..];
@@ -956,93 +886,6 @@ async fn mesh_stop(mesh: &MeshCtl) -> Response {
     }
     mesh.stop().await;
     handlers::mesh(false)
-}
-
-/// A provider is connected only after its live socket completes the router handshake.
-fn channels_provider_status(
-    channels: &Connections,
-    channels_live: &channels::Live,
-) -> std::collections::BTreeMap<String, bool> {
-    channels
-        .list()
-        .unwrap_or_default()
-        .iter()
-        .map(|c| c.manifest.provider.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .map(|provider| {
-            let connected = channels_live.is_connected(&provider);
-            (provider, connected)
-        })
-        .collect()
-}
-
-/// Register on the blocking pool, then start the provider socket on success.
-async fn channels_connect(app: &App, body: &[u8]) -> Response {
-    let connections = app.channels.clone();
-    let secrets = app.secrets.clone();
-    let config = connections.config().clone();
-    let body = body.to_vec();
-    let admin_secret = channels::router_admin_secret();
-    let response = blocking(move || {
-        handlers::connect_channel(
-            &connections,
-            &secrets,
-            &config,
-            &channels::router_url(),
-            admin_secret.as_deref(),
-            &body,
-        )
-    })
-    .await;
-    if response.status == 200
-        && let Ok(v) = serde_json::from_str::<serde_json::Value>(&response.body)
-        && let Some(provider) = v["connection"]["provider"].as_str()
-    {
-        let provider = provider.to_string();
-        if let Ok(Some(token)) = adi_channels::token::load(&app.secrets, &provider) {
-            app.channels_live
-                .ensure(
-                    &provider,
-                    token,
-                    app.channels.clone(),
-                    app.agents.clone(),
-                    app.events.clone(),
-                )
-                .await;
-        }
-    }
-    response
-}
-
-async fn channels_disconnect(app: &App, body: &[u8]) -> Response {
-    // Read the provider before disconnect removes its record.
-    let provider = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| v["id"].as_str().map(str::to_string))
-        .and_then(|id| app.channels.get(&id).ok().flatten())
-        .map(|c| c.manifest.provider);
-
-    let connections = app.channels.clone();
-    let secrets = app.secrets.clone();
-    let router_url = channels::router_url();
-    let body = body.to_vec();
-    let response = blocking(move || {
-        handlers::disconnect_channel(&connections, &secrets, &router_url, &body)
-    })
-    .await;
-
-    if response.status == 200
-        && let Some(provider) = provider
-        && !app
-            .channels
-            .list()
-            .map(|l| l.iter().any(|c| c.manifest.provider == provider))
-            .unwrap_or(true)
-    {
-        app.channels_live.stop(&provider).await;
-    }
-    response
 }
 
 /// Persist an operator choice only; process shutdown must not change this setting.
