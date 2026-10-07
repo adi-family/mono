@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.27.2 — 2026-10-07
+
 ### Fixed
 
 - **The control panel opens much faster, and a page you return to paints at once.** Over plain
