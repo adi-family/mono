@@ -2032,6 +2032,34 @@ pub struct AgentGoal {
     pub note: String,
 }
 
+/// `POST /api/agents/prompts` request — what a person already said to one agent.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct PromptsOf {
+    #[serde(default)]
+    pub name: String,
+    /// How many distinct prompts to answer with; `0` takes the server's default.
+    #[serde(default)]
+    pub limit: usize,
+}
+
+/// One prompt a person sent an agent, start prompt or reply — what the composer offers to send
+/// again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPrompt {
+    pub text: String,
+    /// Unix milliseconds it was last sent.
+    pub at: u64,
+    /// How many times the same words were sent among the recent ones read.
+    #[serde(default)]
+    pub times: usize,
+}
+
+/// The answer to `POST /api/agents/prompts`: distinct prompts, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentPrompts {
+    pub prompts: Vec<AgentPrompt>,
+}
+
 /// `POST /api/agents/goals` request — one conversation's goals, or (with neither field) every open
 /// goal on the machine.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]

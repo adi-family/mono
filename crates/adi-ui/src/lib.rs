@@ -60,6 +60,7 @@ mod pair;
 mod panel;
 mod path;
 mod rail;
+mod recall;
 mod session;
 mod simulator;
 mod staging;
@@ -96,6 +97,7 @@ pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};
 pub use markdown::Markdown;
+pub use recall::{PastPrompt, Recall};
 pub use menu::{Menu, MenuAt, MenuHead, MenuItem, MenuLink, MenuNote, MenuTick};
 pub use modal::Modal;
 pub use pair::{

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef,
+    Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentPrompts, AgentRef,
     AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
     AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel, AnswerRun,
     ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
@@ -21,7 +21,7 @@ use adi_webapp_api::types::{
     MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
     NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
     NewWorkspace, NodeServiceRef, PauseChannel, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, QueueMode,
+    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode,
     ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
     RouteChannel, ReviewRun, RunAgent,
     RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
@@ -1019,6 +1019,12 @@ pub async fn agent_goals(
     run_id: String,
 ) -> Result<AgentGoals, String> {
     post_on(node, "/api/agents/goals", &GoalsOf { name, run_id }).await
+}
+
+/// The distinct prompts a person already sent one agent — start prompts and replies, newest first.
+/// What its composers offer to send again.
+pub async fn agent_prompts(node: Option<&str>, name: String) -> Result<AgentPrompts, String> {
+    post_on(node, "/api/agents/prompts", &PromptsOf { name, limit: 0 }).await
 }
 
 /// Write a goal onto a conversation, or reword one that is open (`goal` names which).

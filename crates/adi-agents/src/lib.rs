@@ -973,6 +973,14 @@ impl Agents {
         SessionStore::new(self.config.module(SESSIONS_MODULE).dir())
     }
 
+    /// The newest `limit` distinct prompts a person sent `agent` — start prompts and replies
+    /// alike, newest first — what a composer offers to send again. See
+    /// [`SessionStore::recent_prompts`].
+    #[must_use]
+    pub fn recent_prompts(&self, agent: &str, limit: usize) -> Vec<store::RecentPrompt> {
+        self.sessions().recent_prompts(agent, limit)
+    }
+
     /// The runner for this agent's backend, or the honest refusal.
     ///
     /// By *backend*, so this is the question to ask when there is no session yet — a launch about

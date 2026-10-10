@@ -41,6 +41,8 @@ web-sys = { version = "0.3", features = [
     "File",
     "FileList",
     "HtmlInputElement",
+    # Walking the composer's recent-prompts list with the arrow keys (see `recall`).
+    "HtmlElement",
 ] }
 
 # Playground-only: routes a wasm panic to the browser console instead of an opaque

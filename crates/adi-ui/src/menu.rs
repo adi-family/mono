@@ -15,6 +15,9 @@ pub enum MenuAt {
     /// Top-**right**, measured in from the viewport's right edge, for a control that sits on one:
     /// a row's `⋯` is at the right of its table, so a left-anchored menu would open off screen.
     RightOf(i32, i32),
+    /// Bottom-**right**, both measured in from the viewport's right and bottom edges: for a control
+    /// near the foot of the screen, where a menu dropped under it would open off the bottom.
+    RightAbove(i32, i32),
 }
 
 impl MenuAt {
@@ -23,6 +26,7 @@ impl MenuAt {
         match self {
             Self::Point(x, y) => format!("left:{x}px; top:{y}px"),
             Self::RightOf(right, top) => format!("right:{right}px; top:{top}px"),
+            Self::RightAbove(right, bottom) => format!("right:{right}px; bottom:{bottom}px"),
         }
     }
 }

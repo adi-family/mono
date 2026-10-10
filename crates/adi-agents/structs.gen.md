@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-150 structs · 41 enums · 5 type aliases across 57 files.
+151 structs · 41 enums · 5 type aliases across 58 files.
 
 ## Index
 
@@ -60,6 +60,7 @@
 - [`src/store/attachments.rs`](#srcstoreattachmentsrs) — `Attachment`
 - [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
+- [`src/store/prompts.rs`](#srcstorepromptsrs) — `RecentPrompt`
 - [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
 - [`src/store/queue.rs`](#srcstorequeuers) — `QueueMode`, `QueuedMessage`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
@@ -2999,6 +3000,23 @@ The sessions under one root.
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     dir: PathBuf,
+}
+```
+
+---
+
+## `src/store/prompts.rs`
+
+### struct `RecentPrompt`
+
+One prompt, and how often it was sent.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentPrompt {
+    pub text: String,
+    pub at: u64,
+    pub times: usize,
 }
 ```
 

@@ -758,6 +758,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/run/answer") => handlers::answer_run(agents, &req.body),
         ("GET", "/api/agents/questions") => handlers::pending_questions(agents),
         ("POST", "/api/agents/goals") => handlers::agent_goals(agents, &req.body),
+        ("POST", "/api/agents/prompts") => handlers::agent_prompts(agents, &req.body),
         ("POST", "/api/agents/goal/set") => handlers::set_agent_goal(agents, &req.body),
         ("POST", "/api/agents/goal/close") => handlers::close_agent_goal(agents, &req.body),
         ("POST", "/api/agents/await/ignore") => handlers::ignore_await(agents, &req.body),

@@ -13,13 +13,13 @@ use crate::types::{
     AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentBackendRowDto,
     AgentCapabilities, AgentChatStats, AgentChoice, AgentDto, AgentFieldOwner, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentGoal, AgentGoals, AgentKeys,
-    AgentNearDup, AgentPeek, AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape,
+    AgentNearDup, AgentPeek, AgentPrompt, AgentPrompts, AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape,
     AgentReviewStarted, AgentRunInfo, AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset,
     AgentSetupSecret, AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult,
     AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn, AgentStep, AgentSteps, AgentToken,
     AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
     AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CanSpawnRuleDto, CloseGoal, GoalsOf,
-    HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, QueueMode, RenameRun,
+    HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, PromptsOf, QueueMode, RenameRun,
     ReplyToRun, ReviewRun, RunAgent, RunRef, RunState, RunSteps, SaveAgent, SecretRef,
     SetAutoTitle, SetGoal, SetRunLimit, SetSpawnPolicy, SimulateAgent, SimulateTurn,
     SpawnRefusalDto, SpawnRuleEdit, SpawnedByDto, StarRun, TranscriptView, TurnMarker,
@@ -1082,6 +1082,30 @@ pub fn agent_goals(store: &Agents, body: &[u8]) -> Response {
         adi_agents::goals::of_conversation(store, name, run_id)
     };
     ok_json(&goals_response(&goals))
+}
+
+/// `POST /api/agents/prompts` — the distinct prompts a person sent one agent, newest first: what
+/// its composer offers to send again. See `adi_agents::store::prompts` for what counts.
+#[must_use]
+pub fn agent_prompts(store: &Agents, body: &[u8]) -> Response {
+    /// A screenful; past it a prompt is easier typed again than found.
+    const DEFAULT: usize = 30;
+    let req = require!(body, PromptsOf);
+    let limit = if req.limit == 0 {
+        DEFAULT
+    } else {
+        req.limit.min(200)
+    };
+    let prompts = store
+        .recent_prompts(req.name.trim(), limit)
+        .into_iter()
+        .map(|p| AgentPrompt {
+            text: p.text,
+            at: p.at,
+            times: p.times,
+        })
+        .collect();
+    ok_json(&AgentPrompts { prompts })
 }
 
 /// `POST /api/agents/goal/set` — write a goal onto a conversation, or reword one that is open.
@@ -3252,6 +3276,14 @@ impl FromBody for UnqueueFromRun {
 
 impl FromBody for AnswerRun {
     const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }";
+}
+
+impl FromBody for PromptsOf {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"limit\"?: n }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
 impl FromBody for SetGoal {

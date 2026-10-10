@@ -1997,6 +1997,54 @@ const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
 const IMAGES_REFUSED: &str = "this one can't be sent a file — a terminal session takes typing, and \
                               a simulated run has no model to give one to";
 
+/// What both composers offer to send again: the prompts a person already said to the agent the box
+/// is pointed at — every conversation's start prompt and replies, not only this one's, because the
+/// prompt somebody re-sends is usually the one that opened a *previous* run.
+///
+/// Fetched each time the list is opened, from whichever source the agent was picked from, and held
+/// under the agent it answers for: pointed at another agent, the box shows nothing until that one's
+/// list arrives rather than offering the last agent's words.
+fn recall(watch: AgentsWatch) -> adi_ui::Recall {
+    let held = RwSignal::new(None::<(Option<String>, String, Vec<adi_webapp_api::types::AgentPrompt>)>);
+    let loading = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    let prompts = Signal::derive(move || {
+        let (node, name) = (watch.node.get(), watch.name.get());
+        held.get()
+            .filter(|(of_node, of_name, _)| *of_node == node && Some(of_name) == name.as_ref())
+            .map(|(_, _, list)| {
+                list.into_iter()
+                    .map(|p| adi_ui::PastPrompt {
+                        text: p.text,
+                        when: run_age(p.at),
+                        times: p.times,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    let on_open = Callback::new(move |()| {
+        let Some(name) = watch.name.get_untracked() else { return };
+        let node = watch.node.get_untracked();
+        loading.set(true);
+        error.set(None);
+        spawn_local(async move {
+            let got = fetch::agent_prompts(node.as_deref(), name.clone()).await;
+            loading.set(false);
+            match got {
+                Ok(got) => held.set(Some((node, name, got.prompts))),
+                Err(e) => error.set(Some(e)),
+            }
+        });
+    });
+    adi_ui::Recall {
+        prompts,
+        loading: loading.into(),
+        error: error.into(),
+        on_open,
+    }
+}
+
 /// The reply box: says the next thing into the selected conversation. It never locks you out while
 /// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* (the
 /// button says so), and is picked up either by the turn in flight, at its next round, or by the one
@@ -2036,6 +2084,7 @@ fn reply_bar(state: State, watch: AgentsWatch, sourced: bool) -> impl IntoView {
                 attr:title=COMPOSER_HINT
                 mic=move || crate::voice::mic(watch.reply)
                 attach=attach
+                recall=recall(watch)
                 on_send=Callback::new(move |message: String| {
                     let images = crate::attach::ready_ids(watch.reply_files);
                     watch.reply.set(String::new());
@@ -2828,6 +2877,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 settings=move || run_settings_button(watch)
                 mic=move || crate::voice::mic(watch.input)
                 attach=attach
+                recall=recall(watch)
                 on_send=Callback::new(start)
             />
             <div class="adi-chat__note">

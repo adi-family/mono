@@ -4,7 +4,9 @@ use leptos::{ev, html, prelude::*};
 
 use crate::attach::{AttachButton, AttachRefusal, AttachTray, Attaching};
 use crate::icon::{Icon, IconSize, Lucide};
+use crate::menu::MenuAt;
 use crate::merge;
+use crate::recall::{Recall, RecallButton, focus_first, place};
 
 /// The composer.
 ///
@@ -105,6 +107,11 @@ pub fn Composer(
     /// slot: where a file is stored is a question about the app.
     #[prop(optional)]
     attach: Option<Attaching>,
+    /// What has already been sent, offered to send again — a clock in the button row, and
+    /// Arrow-up in an empty box. Picking one puts it in the box rather than sending it: a prompt
+    /// from yesterday is usually *nearly* the one wanted now, and Enter is one key away.
+    #[prop(optional)]
+    recall: Option<Recall>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let area = NodeRef::<html::Textarea>::new();
@@ -125,6 +132,61 @@ pub fn Composer(
             let wanted = el.scroll_height().max(0).unsigned_abs().min(max_height);
             el.style(("height", format!("{wanted}px")));
         }
+    };
+
+    // Text set from outside — a recalled prompt, a dictation landing — never fires `input`, so
+    // the box is re-measured on every change of the value, after the framework has written it.
+    Effect::new(move |_| {
+        value.track();
+        set_timeout(fit, std::time::Duration::ZERO);
+    });
+
+    let recall_at = RwSignal::new(None::<MenuAt>);
+    let recall_button = NodeRef::<html::Button>::new();
+    let recall_list = NodeRef::<html::Div>::new();
+    let focus_area = move || {
+        if let Some(el) = area.get_untracked() {
+            let _ = el.focus();
+        }
+    };
+    let close_recall = Callback::new(move |()| {
+        recall_at.set(None);
+        focus_area();
+    });
+    let pick = Callback::new(move |text: String| {
+        recall_at.set(None);
+        value.set(text.clone());
+        if let Some(el) = area.get_untracked() {
+            el.set_value(&text);
+            fit();
+            let _ = el.focus();
+            // In UTF-16 units, which is what a textarea counts in.
+            let end = u32::try_from(text.encode_utf16().count()).unwrap_or(u32::MAX);
+            let _ = el.set_selection_range(end, end);
+        }
+    });
+    // Arrow-up in an empty box, the way a shell recalls the last command: open the list, or step
+    // into it when it is already open. A box with words in it keeps the key for moving the caret.
+    let recall_key = move || {
+        let Some(recall) = recall else { return false };
+        if !value.get_untracked().is_empty() {
+            return false;
+        }
+        if recall_at.get_untracked().is_some() {
+            return focus_first(recall_list);
+        }
+        let Some(el) = recall_button.get_untracked() else { return false };
+        recall.on_open.run(());
+        recall_at.set(Some(place(&el)));
+        // The rows are drawn on the next tick; the cached list is already there to focus. A
+        // timeout rather than a frame: a frame never comes in a tab that is not on screen.
+        set_timeout(
+            move || {
+                focus_first(recall_list);
+            },
+            std::time::Duration::ZERO,
+        );
+        true
     };
 
     // Whether a send would carry anything. Words are the usual answer; an attached picture is the
@@ -229,6 +291,10 @@ pub fn Composer(
                     {
                         ev.prevent_default();
                         send();
+                    } else if ev.key() == "ArrowUp" && !ev.shift_key() && !ev.alt_key()
+                        && !ev.ctrl_key() && !ev.meta_key() && recall_key()
+                    {
+                        ev.prevent_default();
                     }
                 }
                 on:paste=move |ev: ev::ClipboardEvent| {
@@ -260,6 +326,17 @@ pub fn Composer(
                     .filter(|a| a.can_attach.get())
                     .map(|attach| view! { <AttachButton attach=attach/> })
             }}
+            {recall.map(|recall| view! {
+                <RecallButton
+                    recall=recall
+                    at=recall_at
+                    button=recall_button
+                    list=recall_list
+                    on_leave=Callback::new(move |()| focus_area())
+                    on_pick=pick
+                    on_dismiss=close_recall
+                />
+            })}
             {settings.map(|settings| settings.run())}
             {mic.map(|mic| mic.run())}
             // Stop sits to the left of send, so send keeps the corner the hand already goes to

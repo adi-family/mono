@@ -33,6 +33,7 @@
 mod attachments;
 mod db;
 mod goals;
+mod prompts;
 mod questions;
 mod queue;
 mod record;
@@ -52,6 +53,7 @@ pub use attachments::{
 };
 pub use db::now_ms;
 pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
+pub use prompts::RecentPrompt;
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
@@ -1086,6 +1088,13 @@ impl SessionStore {
     #[must_use]
     pub fn last_turn(&self, agent: &str, id: &str) -> Option<Turn> {
         self.read(|conn| transcript::last(conn, agent, id))
+    }
+
+    /// The newest `limit` distinct prompts a person sent `agent` — start prompts and replies alike,
+    /// newest first. See [`prompts`] for what counts as a person's.
+    #[must_use]
+    pub fn recent_prompts(&self, agent: &str, limit: usize) -> Vec<RecentPrompt> {
+        self.read(|conn| prompts::recent(conn, agent, limit))
     }
 
     /// One recorded turn by its place in the conversation, or `None` if there is no such row.

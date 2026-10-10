@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-35 structs · 35 enums across 29 files.
+37 structs · 35 enums across 30 files.
 
 ## Index
 
@@ -28,6 +28,7 @@
 - [`src/menu.rs`](#srcmenurs) — `MenuAt`
 - [`src/pair.rs`](#srcpairrs) — `Relation`, `Verdict`, `PairSide`, `Decided`, `Pair`, `Ruling`, `Truncated`, `Mode`, `Order`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
+- [`src/recall.rs`](#srcrecallrs) — `PastPrompt`, `Recall`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
 - [`src/simulator.rs`](#srcsimulatorrs) — `ToolDecl`, `Tab`
 - [`src/staging.rs`](#srcstagingrs) — `Block`, `Stop`
@@ -712,6 +713,7 @@ Where a `Menu`'s top corner goes, in viewport coordinates.
 pub enum MenuAt {
     Point(i32, i32),
     RightOf(i32, i32),
+    RightAbove(i32, i32),
 }
 ```
 
@@ -866,6 +868,37 @@ A named place worth one click — home, the repo, the last project.
 pub struct PathRoot {
     pub label: String,
     pub path: String,
+}
+```
+
+---
+
+## `src/recall.rs`
+
+### struct `PastPrompt`
+
+One prompt the person already sent.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PastPrompt {
+    pub text: String,
+    pub when: String,
+    pub times: usize,
+}
+```
+
+### struct `Recall`
+
+What a composer needs to offer its history.
+
+```rust
+#[derive(Clone, Copy)]
+pub struct Recall {
+    pub prompts: Signal<Vec<PastPrompt>>,
+    pub loading: Signal<bool>,
+    pub error: Signal<Option<String>>,
+    pub on_open: Callback<()>,
 }
 ```
 
