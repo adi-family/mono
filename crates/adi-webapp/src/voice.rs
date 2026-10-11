@@ -1045,27 +1045,62 @@ async fn open_agent_call(
 /// `application/sdp` in and out — not JSON: this is the WebRTC handshake, and the bytes are the
 /// session description verbatim. The ephemeral key is the bearer here, never the account key.
 async fn open_call(url: &str, client_secret: &str, offer_sdp: String) -> Result<String, String> {
-    let resp = Request::post(url)
-        .header("authorization", &format!("Bearer {client_secret}"))
-        .header("content-type", "application/sdp")
-        .body(offer_sdp)
-        .map_err(|e| format!("the SDP request would not build: {e}"))?
-        .send()
-        .await
-        .map_err(|e| format!("OpenAI could not be reached: {e}"))?;
-    let ok = resp.ok();
-    let status = resp.status();
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("reading OpenAI's answer failed: {e}"))?;
-    if !ok {
-        return Err(format!(
-            "OpenAI returned {status}: {}",
-            body.chars().take(200).collect::<String>()
-        ));
+    // Realtime rate limits are low and brief; one short backoff clears the common transient 429 (a
+    // burst, or a previous call's session not yet released) without turning a hard limit into a
+    // long wait. Beyond that, a 429 is reported as what it is — a limit, not a broken call.
+    let mut backed_off = false;
+    loop {
+        let resp = Request::post(url)
+            .header("authorization", &format!("Bearer {client_secret}"))
+            .header("content-type", "application/sdp")
+            .body(offer_sdp.clone())
+            .map_err(|e| format!("the SDP request would not build: {e}"))?
+            .send()
+            .await
+            .map_err(|e| format!("OpenAI could not be reached: {e}"))?;
+        let ok = resp.ok();
+        let status = resp.status();
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| format!("reading OpenAI's answer failed: {e}"))?;
+        if ok {
+            return Ok(body);
+        }
+        let (code, message) = provider_error(&body);
+        // No credits is final — retrying only delays the same answer. A plain rate limit is brief,
+        // so one short backoff clears the common transient case before the message is shown.
+        let out_of_credits = matches!(
+            code.as_deref(),
+            Some("insufficient_quota" | "credit_balance_exhausted")
+        );
+        if status == 429 && !out_of_credits && !backed_off {
+            backed_off = true;
+            gloo_timers::future::TimeoutFuture::new(1500).await;
+            continue;
+        }
+        // Reported in OpenAI's own words — "no credits remaining", a rate limit that outlasted the
+        // retry, a rejected model — which is what the operator can actually act on.
+        return Err(format!("OpenAI ({status}): {message}"));
     }
-    Ok(body)
+}
+
+/// The provider's own error message (and `code`, when it names one) dug out of an error body.
+fn provider_error(body: &str) -> (Option<String>, String) {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(body) {
+        let error = value.get("error");
+        let code = error
+            .and_then(|e| e.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        if let Some(message) = error
+            .and_then(|e| e.get("message"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return (code, message.to_string());
+        }
+    }
+    (None, body.chars().take(200).collect())
 }
 
 /// Pull the finished message out of a data-channel event, if this event is the agent calling

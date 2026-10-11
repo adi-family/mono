@@ -205,22 +205,16 @@ fn resolve_agent_key(store: &Secrets) -> Option<String> {
 /// The voice agent's standing instructions, with whatever context the panel sent folded in.
 fn agent_instructions(req: &RealtimeSessionRequest) -> String {
     let mut s = String::from(
-        "You are a voice assistant helping the operator write their next message in a chat. \
-         Talk with them naturally and keep it short. Ask a clarifying question only when you \
-         genuinely need one to write the message; otherwise get to the point. Reply in the \
-         operator's own language. ",
+        "You are a voice assistant the operator is talking to while they look at a chat. Help them with THIS conversation, out loud: answer their questions about it, tell them what the latest messages say, summarize what happened, explain or translate — from the transcript below. Keep your answers short and spoken, the way you would say them, not written out. ",
     );
     if let Some(name) = req.agent.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
         s.push_str(&format!("The chat is with an assistant called \"{name}\". "));
     }
     s.push_str(
-        "When the two of you have settled what the message should say, call the `commit_reply` \
-         function with the final message text exactly as it should be sent. Do not read the \
-         whole message back word for word first, and do not ask for a second confirmation — once \
-         it is clearly settled, send it.",
+        "Send a message only when the operator clearly asks you to (for example 'reply …', 'tell them …', 'send …', 'answer that'). When they do, compose the exact message and call the `commit_reply` function with it to send it — no need to ask again or read it all back first. If they are only asking you about the chat, just answer them and do not send anything. Speak the operator's own language.",
     );
     if let Some(ctx) = req.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        s.push_str("\n\nThe recent conversation, for context:\n");
+        s.push_str("\n\nThe conversation so far, oldest first and the latest message last:\n");
         s.push_str(ctx);
     }
     s

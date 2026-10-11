@@ -574,8 +574,8 @@ fn with_context(watch: AgentsWatch, message: String) -> String {
 /// A light touch on purpose: the newest handful, each capped, so the agent can answer in the
 /// thread of the conversation without a whole transcript being shipped up with every call.
 fn render_recent_turns(turns: &[AgentTurn]) -> String {
-    const MAX_TURNS: usize = 8;
-    const MAX_CHARS: usize = 600;
+    const MAX_TURNS: usize = 16;
+    const MAX_CHARS: usize = 1500;
     let start = turns.len().saturating_sub(MAX_TURNS);
     turns[start..]
         .iter()
@@ -2927,7 +2927,16 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
                 settings=move || run_settings_button(watch)
-                mic=move || crate::voice::mic(watch.input, None)
+                mic=move || crate::voice::mic(
+                    watch.input,
+                    Some(crate::voice::AgentChat {
+                        agent: watch.name.into(),
+                        // Starting a conversation has no transcript yet: the agent just composes
+                        // the opening message with you and launches the run once it is settled.
+                        context: Signal::derive(String::new),
+                        commit: Callback::new(start),
+                    }),
+                )
                 attach=attach
                 recall=recall(watch)
                 on_send=Callback::new(start)
