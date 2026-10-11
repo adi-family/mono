@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-103 structs · 34 enums · 5 type aliases across 44 files.
+106 structs · 34 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -51,7 +51,7 @@
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
-- [`src/voice.rs`](#srcvoicers) — `Session`
+- [`src/voice.rs`](#srcvoicers) — `AgentChat`, `PickerArgs`, `Session`, `RealtimeLive`
 
 ---
 
@@ -2559,6 +2559,37 @@ pub(crate) struct UpdateWatch {
 
 ## `src/voice.rs`
 
+### struct `AgentChat`
+
+What the voice agent needs from the chat it is helping answer.
+
+```rust
+#[derive(Clone, Copy)]
+pub struct AgentChat {
+    pub agent: Signal<Option<String>>,
+    pub context: Signal<String>,
+    pub commit: Callback<String>,
+}
+```
+
+### struct `PickerArgs`
+
+The engine chooser: a caret under the microphone, and the list it opens.
+
+```rust
+struct PickerArgs {
+    engines: RwSignal<Vec<VoiceEngineDto>>,
+    engine: RwSignal<String>,
+    picking: RwSignal<bool>,
+    state: RwSignal<MicState>,
+    anchor: NodeRef<html::Div>,
+    menu_style: RwSignal<String>,
+    chat_present: bool,
+    agent_ready: RwSignal<bool>,
+    agent_detail: RwSignal<String>,
+}
+```
+
 ### enum `Session`
 
 A dictation in progress, and how to end it.
@@ -2569,6 +2600,22 @@ enum Session {
         recognition: JsValue,
     },
     Recording(Rc<RefCell<Option<MediaRecorder>>>),
+    Realtime {
+        live: Rc<RefCell<Option<RealtimeLive>>>,
+        done: Rc<Cell<bool>>,
+    },
+}
+```
+
+### struct `RealtimeLive`
+
+A live voice-agent call's handles, held so a press — or the agent finishing — can end it cleanly: stop the microphone (or the browser keeps its recording dot lit), close the peer connection, and take the playback element back out of the page.
+
+```rust
+struct RealtimeLive {
+    pc: RtcPeerConnection,
+    audio: HtmlMediaElement,
+    mic: MediaStream,
 }
 ```
 

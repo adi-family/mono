@@ -569,6 +569,35 @@ fn with_context(watch: AgentsWatch, message: String) -> String {
     }
 }
 
+/// Render the last few turns of a conversation to plain text — the voice agent's "small context".
+///
+/// A light touch on purpose: the newest handful, each capped, so the agent can answer in the
+/// thread of the conversation without a whole transcript being shipped up with every call.
+fn render_recent_turns(turns: &[AgentTurn]) -> String {
+    const MAX_TURNS: usize = 8;
+    const MAX_CHARS: usize = 600;
+    let start = turns.len().saturating_sub(MAX_TURNS);
+    turns[start..]
+        .iter()
+        .filter(|t| !t.queued && !t.text.trim().is_empty())
+        .map(|t| {
+            let who = match t.role.as_str() {
+                "user" => "User",
+                "assistant" => "Assistant",
+                other => other,
+            };
+            let text = t.text.trim();
+            let text = if text.chars().count() > MAX_CHARS {
+                format!("{}…", text.chars().take(MAX_CHARS).collect::<String>())
+            } else {
+                text.to_string()
+            };
+            format!("{who}: {text}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// Point the shared live view at one specific conversation — its agent *and* that run — so the
 /// transcript is what shows. Interactive agents keep no run history, so `run_id` is only selected
 /// when present. Used wherever a conversation is picked from a list that spans several agents.
@@ -2082,7 +2111,30 @@ fn reply_bar(state: State, watch: AgentsWatch, sourced: bool) -> impl IntoView {
                 busy=false
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
-                mic=move || crate::voice::mic(watch.reply)
+                mic=move || crate::voice::mic(
+                    watch.reply,
+                    Some(crate::voice::AgentChat {
+                        agent: watch.name.into(),
+                        context: Signal::derive(move || {
+                            watch.peek.with(|peek| {
+                                peek.as_ref()
+                                    .map(|p| render_recent_turns(&p.turns))
+                                    .unwrap_or_default()
+                            })
+                        }),
+                        // Auto-send: the voice agent's finished message goes straight to the
+                        // conversation, down the very path Send takes (see `on_send` below).
+                        commit: Callback::new(move |text: String| {
+                            send_reply(
+                                state,
+                                watch,
+                                with_context(watch, text),
+                                Vec::new(),
+                                QueueMode::Regular,
+                            );
+                        }),
+                    }),
+                )
                 attach=attach
                 recall=recall(watch)
                 on_send=Callback::new(move |message: String| {
@@ -2875,7 +2927,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
                 settings=move || run_settings_button(watch)
-                mic=move || crate::voice::mic(watch.input)
+                mic=move || crate::voice::mic(watch.input, None)
                 attach=attach
                 recall=recall(watch)
                 on_send=Callback::new(start)

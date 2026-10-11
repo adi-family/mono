@@ -74,6 +74,17 @@ web-sys = { version = "0.3", features = [
     "BlobEvent",              # …its chunks…
     "Blob",
     "BlobPropertyBag",        # …joined into one clip carrying the recorder's own MIME type.
+    # The voice agent (see `voice::start_agent`): a WebRTC peer connection straight to OpenAI's
+    # Realtime API over a short-lived key the server mints. The mic track goes up through
+    # `add_track`, OpenAI's voice comes back on an `ontrack` into a hidden <audio>, and the JSON
+    # events (including the `commit_reply` the finished message rides home on) cross a data channel.
+    "RtcPeerConnection",
+    "RtcSessionDescriptionInit",
+    "RtcSdpType",
+    "RtcDataChannel",
+    "RtcRtpSender",           # add_track returns one; the two-arg form needs the type in scope
+    "RtcTrackEvent",          # …OpenAI's audio track arrives on this…
+    "HtmlMediaElement",       # …and plays through a hidden media element's srcObject.
     # The live channel (see `live`): one socket per tab, in place of a poll per open view.
     "WebSocket",
     "MessageEvent",      # …its inbound messages…

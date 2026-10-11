@@ -5764,6 +5764,28 @@ pub struct VoiceState {
     /// Which engine to start on when the user has expressed no preference: the first configured
     /// remote one, else the browser. Only a default — the panel remembers its own choice.
     pub default_engine: String,
+    /// The real-time **voice agent** — a different thing from the transcription engines above,
+    /// reported in the same call because it is reached through the same button.
+    #[serde(default)]
+    pub agent: VoiceAgentDto,
+}
+
+/// The real-time voice agent, in [`VoiceState`].
+///
+/// Dictation turns speech into text you then edit and send; the voice agent *holds a conversation*
+/// — it talks back, asks what it needs, and once the two of you have settled the message it sends
+/// it to the chat itself. One capability, not a list, because there is one of it: OpenAI's Realtime
+/// API, reached over WebRTC with a short-lived key this server mints (see
+/// `POST /api/voice/realtime/session`). The account key never leaves the machine.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VoiceAgentDto {
+    /// Whether a key was found — the agent cannot run without one, and the picker shows it out
+    /// with the reason when it is missing, exactly as an unconfigured engine is.
+    pub ready: bool,
+    /// The Realtime model it talks through, shown under the label when it is ready.
+    pub model: String,
+    /// Said in the picker under the label: the model when ready, or which secret to set.
+    pub detail: String,
 }
 
 /// `POST /api/voice/transcribe` — what the audio turned out to say.
@@ -5773,6 +5795,42 @@ pub struct Transcript {
     /// The engine that produced it, echoed back so the panel can say where the words came from
     /// even if the choice changed while the clip was in flight.
     pub engine: String,
+}
+
+/// `POST /api/voice/realtime/session` — ask for a short-lived key to open a voice-agent call.
+///
+/// The body carries the *context* the agent should have before it speaks: which agent the chat is
+/// with, and a plain-text rendering of the last few turns. Both optional — a fresh box has
+/// neither, and the agent simply asks what the operator wants.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RealtimeSessionRequest {
+    /// The agent this conversation is with, named to the voice agent so it talks about the right
+    /// thing.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// The recent transcript, already rendered to text by the panel — the voice agent reads it as
+    /// the standing context of the chat it is helping answer.
+    #[serde(default)]
+    pub context: Option<String>,
+}
+
+/// `POST /api/voice/realtime/session` — everything the browser needs to open the WebRTC call,
+/// and nothing it must never hold: the key here is the *ephemeral* one, minted for this one call
+/// and dead within the minute, never the account key.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RealtimeSessionDto {
+    /// The short-lived client secret the browser sends to OpenAI as its bearer token.
+    pub client_secret: String,
+    /// The Realtime model the call runs on — echoed so the browser names it in the SDP exchange
+    /// and never hard-codes a model the server chose.
+    pub model: String,
+    /// Where the browser POSTs its SDP offer. Supplied by the server so the one place that knows
+    /// OpenAI's URL is the one that holds the key.
+    pub webrtc_url: String,
+    /// Unix seconds the ephemeral key dies at, when the provider says so — the panel can refuse a
+    /// call that would outlive its key.
+    #[serde(default)]
+    pub expires_at: Option<i64>,
 }
 
 // ---- channels (docs/channels.md — Telegram/Slack connections to an agent) -----------

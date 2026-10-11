@@ -725,6 +725,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             req.header("content-type").unwrap_or("audio/webm"),
             &req.body,
         ),
+        // Mints a fresh ephemeral key every call, so it is deliberately absent from SHARED_POSTS:
+        // coalescing two of these would hand two browsers the same one-call key.
+        ("POST", "/api/voice/realtime/session") => {
+            handlers::realtime_session(secrets, &req.body)
+        }
         ("GET", "/api/meta") => handlers::meta(agents, tools),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),

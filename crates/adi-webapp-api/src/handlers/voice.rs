@@ -1,4 +1,11 @@
-//! `/api/voice` — dictation: audio recorded in the panel, words back.
+//! `/api/voice` — dictation (audio in, words back) and the real-time voice **agent**.
+//!
+//! Two different things reached through one button. Dictation records a clip and this module
+//! transcribes it. The voice agent (`realtime_session`) is a conversation: the panel opens a
+//! WebRTC call straight to OpenAI's Realtime API, and this module's part is only to mint the
+//! short-lived key that call rides on — configured with the chat's context and a `commit_reply`
+//! tool, so the finished message comes back to the panel to be sent. The account key stays here
+//! either way; what the browser is handed is ephemeral.
 //!
 //! **Why the server is in this at all.** The browser can recognise speech by itself, and for the
 //! `browser` engine it does — nothing here runs. The rest are HTTP services behind an API key,
@@ -23,9 +30,12 @@ use std::time::Duration;
 use adi_secrets::Secrets;
 use serde_json::Value;
 
-use crate::types::{Transcript, VoiceEngineDto, VoiceState};
+use crate::types::{
+    RealtimeSessionDto, RealtimeSessionRequest, Transcript, VoiceAgentDto, VoiceEngineDto,
+    VoiceState,
+};
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// Long enough for a minute of speech over a slow uplink, short enough that a wedged provider
 /// frees the blocking-pool thread it is sitting on. Dictation is interactive: a caller who has
@@ -152,6 +162,177 @@ fn resolve_key(store: &Secrets, engine: &Engine) -> Option<String> {
     None
 }
 
+/// The voice agent's key. Deliberately its own secret, distinct from the transcription engines'
+/// `OPENAI_API_KEY`: the agent *sends messages on the operator's behalf*, and a key scoped to that
+/// is one the operator can rotate or revoke without taking dictation down with it.
+const AGENT_KEY_NAMES: &[&str] = &["VOICE_AGENT_OPENAI_API_KEY"];
+
+/// The Realtime model the voice agent talks through.
+const AGENT_MODEL: &str = "gpt-realtime";
+
+/// The voice OpenAI speaks in — one of the Realtime voices.
+const AGENT_VOICE: &str = "marin";
+
+/// Where the server mints the ephemeral key…
+const CLIENT_SECRETS_URL: &str = "https://api.openai.com/v1/realtime/client_secrets";
+
+/// …and where the browser then POSTs its SDP offer to open the call. Handed to the browser so the
+/// one place that knows OpenAI's URL is the one place that holds the key.
+const WEBRTC_URL: &str = "https://api.openai.com/v1/realtime/calls";
+
+/// Long enough for OpenAI to mint a key over a slow link, short enough that a wedged provider frees
+/// the blocking-pool thread. The browser is holding a pressed button on the other end of this.
+const MINT_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A voice-agent key, from the secret store first and the process environment second — the same
+/// resolution order dictation uses, for the same reason (the agent loop exports provider keys).
+fn resolve_agent_key(store: &Secrets) -> Option<String> {
+    for name in AGENT_KEY_NAMES {
+        if let Ok(Some(value)) = store.reveal(None, name)
+            && !value.trim().is_empty()
+        {
+            return Some(value);
+        }
+        if let Ok(value) = std::env::var(name)
+            && !value.trim().is_empty()
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// The voice agent's standing instructions, with whatever context the panel sent folded in.
+fn agent_instructions(req: &RealtimeSessionRequest) -> String {
+    let mut s = String::from(
+        "You are a voice assistant helping the operator write their next message in a chat. \
+         Talk with them naturally and keep it short. Ask a clarifying question only when you \
+         genuinely need one to write the message; otherwise get to the point. Reply in the \
+         operator's own language. ",
+    );
+    if let Some(name) = req.agent.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        s.push_str(&format!("The chat is with an assistant called \"{name}\". "));
+    }
+    s.push_str(
+        "When the two of you have settled what the message should say, call the `commit_reply` \
+         function with the final message text exactly as it should be sent. Do not read the \
+         whole message back word for word first, and do not ask for a second confirmation — once \
+         it is clearly settled, send it.",
+    );
+    if let Some(ctx) = req.context.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        s.push_str("\n\nThe recent conversation, for context:\n");
+        s.push_str(ctx);
+    }
+    s
+}
+
+/// Mint one ephemeral Realtime key, configured for this chat.
+fn mint_session(key: &str, req: &RealtimeSessionRequest) -> Result<RealtimeSessionDto, String> {
+    // Same one-time install the transcribe path does — see `call`.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(MINT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("couldn't build the HTTP client: {e}"))?;
+
+    // The one tool the agent has: the bridge back to the panel. The model calls it with the
+    // finished text, the browser reads that off the data channel and sends it to the chat.
+    let body = serde_json::json!({
+        "session": {
+            "type": "realtime",
+            "model": AGENT_MODEL,
+            "instructions": agent_instructions(req),
+            "audio": { "output": { "voice": AGENT_VOICE } },
+            "tools": [{
+                "type": "function",
+                "name": "commit_reply",
+                "description": "Send the finished message to the chat. Call this once the \
+                                message is settled; its text is sent verbatim.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "The exact message text to send."
+                        }
+                    },
+                    "required": ["text"],
+                    "additionalProperties": false
+                }
+            }],
+            "tool_choice": "auto"
+        }
+    });
+
+    let resp = client
+        .post(CLIENT_SECRETS_URL)
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .body(serde_json::to_string(&body).unwrap_or_default())
+        .send()
+        .map_err(|e| format!("OpenAI could not be reached: {e}"))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
+        .map_err(|e| format!("reading OpenAI's answer failed: {e}"))?;
+    if !status.is_success() {
+        return Err(format!(
+            "OpenAI returned {status}: {}",
+            provider_message(&text)
+        ));
+    }
+
+    let json: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("OpenAI answered something that isn't JSON: {e}"))?;
+
+    // GA puts the ephemeral key at the top level as `value`; the older sessions endpoint nests it
+    // under `client_secret`. Read either, so the one line here is all that moves if OpenAI does.
+    let client_secret = dig(&json, &["value"])
+        .or_else(|| dig(&json, &["client_secret", "value"]))
+        .ok_or_else(|| {
+            format!(
+                "OpenAI minted no client secret: {}",
+                text.chars().take(200).collect::<String>()
+            )
+        })?;
+    let expires_at = json
+        .get("expires_at")
+        .and_then(Value::as_i64)
+        .or_else(|| json.pointer("/client_secret/expires_at").and_then(Value::as_i64));
+
+    Ok(RealtimeSessionDto {
+        client_secret,
+        model: AGENT_MODEL.to_string(),
+        webrtc_url: WEBRTC_URL.to_string(),
+        expires_at,
+    })
+}
+
+/// `POST /api/voice/realtime/session` — a short-lived key and where to use it, for one call.
+///
+/// The body ([`RealtimeSessionRequest`]) is optional context; an empty body is a fresh call with
+/// none. The account key never travels past this function: what the browser gets back is the
+/// ephemeral key OpenAI minted for this one session.
+#[must_use]
+pub fn realtime_session(store: &Secrets, body: &[u8]) -> Response {
+    let req: RealtimeSessionRequest = parse_body(body).unwrap_or_default();
+    let Some(key) = resolve_agent_key(store) else {
+        return error(
+            400,
+            "no voice-agent key: set VOICE_AGENT_OPENAI_API_KEY as a secret (or export it) to \
+             talk to the voice agent",
+        );
+    };
+    match mint_session(&key, &req) {
+        Ok(dto) => ok_json(&dto),
+        Err(e) => error(502, &e),
+    }
+}
+
 /// `GET /api/voice` — the engines, and which of them are usable right now.
 #[must_use]
 pub fn voice(store: &Secrets) -> Response {
@@ -185,9 +366,19 @@ pub fn voice(store: &Secrets) -> Response {
         });
     }
 
+    let agent_ready = resolve_agent_key(store).is_some();
     ok_json(&VoiceState {
         engines,
         default_engine,
+        agent: VoiceAgentDto {
+            ready: agent_ready,
+            model: AGENT_MODEL.to_string(),
+            detail: if agent_ready {
+                format!("{AGENT_MODEL} — talks with you, then sends")
+            } else {
+                format!("set {} to talk with a voice agent", AGENT_KEY_NAMES[0])
+            },
+        },
     })
 }
 

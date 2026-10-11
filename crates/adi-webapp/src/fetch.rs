@@ -22,6 +22,7 @@ use adi_webapp_api::types::{
     NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
     NewWorkspace, NodeServiceRef, PauseChannel, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode,
+    RealtimeSessionDto, RealtimeSessionRequest,
     ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
     RouteChannel, ReviewRun, RunAgent,
     RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
@@ -1642,6 +1643,21 @@ pub async fn transcribe(engine: &str, mime: &str, audio: &[u8]) -> Result<Transc
         .await
         .map_err(stringify)?;
     finish(resp).await
+}
+
+/// Mint a short-lived key and the address to use it at, for one voice-agent call.
+///
+/// JSON, not raw bytes like [`transcribe`]: the body is a little context, not a clip. The reply
+/// carries the *ephemeral* key — the account key never leaves the server (`handlers::voice`).
+pub async fn realtime_session(
+    agent: Option<&str>,
+    context: &str,
+) -> Result<RealtimeSessionDto, String> {
+    let body = RealtimeSessionRequest {
+        agent: agent.map(str::to_string).filter(|a| !a.trim().is_empty()),
+        context: (!context.trim().is_empty()).then(|| context.to_string()),
+    };
+    post("/api/voice/realtime/session", &body).await
 }
 
 /// Store one image for a message to carry, and get back the reference it is carried by.

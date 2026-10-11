@@ -1,4 +1,11 @@
-//! Dictation: speaking a message instead of typing it.
+//! Dictation, and the real-time voice **agent**: speaking to the composer instead of typing.
+//!
+//! Two modes behind one button, chosen in the picker beside it. Dictation (below) writes a
+//! draft and sends nothing. The voice **agent** (`start_agent`) is the other: in a chat it is
+//! the default, and pressing the button opens a WebRTC call to OpenAI's Realtime API — the
+//! operator talks, the agent talks back, and when the two have settled the message the agent
+//! calls `commit_reply`, which `AgentChat::commit` sends straight to the conversation. It writes
+//! nothing into the box: it is a conversation that ends in a sent message, not a draft.
 //!
 //! [`mic`] returns a microphone button bound to one composer's text signal. Pressing it opens the
 //! microphone; pressing it again closes it and the words land in the box — as text, editable,
@@ -22,10 +29,11 @@
 //! the constructor is `webkitSpeechRecognition` on Chrome and Safari and `SpeechRecognition` in
 //! the specification, so it has to be looked up by name at run time regardless.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adi_webapp_api::types::VoiceEngineDto;
+use gloo_net::http::Request;
 use leptos::html;
 use leptos::prelude::LocalStorage;
 use leptos::prelude::*;
@@ -33,8 +41,9 @@ use leptos::task::spawn_local;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    Blob, BlobEvent, BlobPropertyBag, MediaRecorder, MediaRecorderOptions, MediaStream,
-    MediaStreamConstraints,
+    Blob, BlobEvent, BlobPropertyBag, HtmlMediaElement, MediaRecorder, MediaRecorderOptions,
+    MediaStream, MediaStreamConstraints, MediaStreamTrack, MessageEvent, RtcPeerConnection,
+    RtcSdpType, RtcSessionDescriptionInit, RtcTrackEvent,
 };
 
 use adi_ui::MicState;
@@ -47,6 +56,32 @@ const ENGINE_KEY: &str = "adi.voice.engine.v1";
 
 /// The engine id the server uses for "the browser recognises it itself".
 const BROWSER: &str = "browser";
+
+/// The engine id that means **the real-time voice agent**, not a transcription engine. Kept out of
+/// the server's engine list on purpose: the agent is a different capability (`VoiceState::agent`),
+/// reported alongside the engines rather than as one of them.
+const AGENT: &str = "agent";
+
+/// Sent down the data channel the instant it opens, so the agent speaks first rather than waiting
+/// for the operator to. Its instructions — set when the key was minted — already say what it is for.
+const RESPONSE_CREATE: &str = r#"{"type":"response.create"}"#;
+
+/// What the voice agent needs from the chat it is helping answer.
+///
+/// Given to [`mic`] only where there is a conversation to answer; without it the button dictates
+/// and nothing else. `Copy`, so it threads into the press handler and the data-channel callbacks.
+#[derive(Clone, Copy)]
+pub struct AgentChat {
+    /// The agent this chat is with, read at press time and sent as context so the voice agent
+    /// talks about the right thing.
+    pub agent: Signal<Option<String>>,
+    /// The recent transcript, rendered to text by the caller — the voice agent's "small context".
+    /// Read at press time, so it is the freshest turns and not whatever showed when the box drew.
+    pub context: Signal<String>,
+    /// Send a finished message to the chat, now. The agent calls into this once it has settled the
+    /// reply; this is the auto-send bridge, and the one thing the agent does to the world.
+    pub commit: Callback<String>,
+}
 
 /// Containers to record in, best first. Chrome and Firefox take the first; Safari records MP4 and
 /// nothing else, and would silently produce an empty clip if handed a type it does not support.
@@ -62,10 +97,16 @@ const CONTAINERS: &[&str] = &[
 /// `value` is the composer's own text signal, so a dictated sentence lands where a typed one would
 /// and is edited the same way. Text already in the box is kept and spoken words are appended after
 /// a space — dictating is adding to the message, not replacing it.
-pub fn mic(value: RwSignal<String>) -> impl IntoView {
+pub fn mic(value: RwSignal<String>, chat: Option<AgentChat>) -> impl IntoView {
     let state = RwSignal::new(MicState::Idle);
     let engines = RwSignal::new(Vec::<VoiceEngineDto>::new());
-    let engine = RwSignal::new(stored_engine().unwrap_or_else(|| BROWSER.to_string()));
+    // In a chat the button is the voice agent by default (confirmed once the capability lands
+    // below); everywhere else it dictates, as it always has. A remembered choice still wins.
+    let engine = RwSignal::new(stored_engine().unwrap_or_else(|| {
+        if chat.is_some() { AGENT.to_string() } else { BROWSER.to_string() }
+    }));
+    let agent_ready = RwSignal::new(false);
+    let agent_detail = RwSignal::new(String::new());
     let picking = RwSignal::new(false);
     // The live session, so a second press can stop what the first started. Stored *locally*: a
     // recogniser and its closures are JS handles, which are neither `Send` nor `Sync`, and the
@@ -82,11 +123,19 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
     // so a failed fetch leaves the button alone rather than blocking it.
     spawn_local(async move {
         if let Ok(voice) = fetch::voice().await {
+            agent_ready.set(voice.agent.ready);
+            agent_detail.set(voice.agent.detail.clone());
             let chosen = engine.get_untracked();
-            // A remembered engine whose key has since been removed would fail on every press with
-            // a message from the server. Falling back to the server's default keeps the button
-            // working; the picker still shows what happened to the old choice.
-            if !voice.engines.iter().any(|e| e.id == chosen && e.ready) {
+            // A remembered choice whose backing has since gone would fail on every press. Falling
+            // back to the server's default keeps the button working; the picker still shows what
+            // became of the old one.
+            if chosen == AGENT {
+                // The agent is a valid choice only in a chat whose key is set.
+                if chat.is_none() || !voice.agent.ready {
+                    engine.set(voice.default_engine.clone());
+                    remember_engine(&voice.default_engine);
+                }
+            } else if !voice.engines.iter().any(|e| e.id == chosen && e.ready) {
                 engine.set(voice.default_engine.clone());
                 remember_engine(&voice.default_engine);
             }
@@ -109,6 +158,19 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
             return;
         }
         let engine_id = engine.get_untracked();
+        // The voice agent is a conversation, not a dictation: it drives its own state from here
+        // (see `start_agent`) and never writes into the box. Only in a chat — there is nothing to
+        // answer otherwise, which is why a chat-less button never offers it.
+        if engine_id == AGENT {
+            if let Some(chat) = chat {
+                state.set(MicState::Listening);
+                session.set_value(Some(start_agent(state, chat)));
+                return;
+            }
+        }
+        // AGENT with no chat should be unreachable (the picker hides it and the fetch above resets
+        // it), but if it is ever reached, dictate rather than send "agent" to the transcriber.
+        let engine_id = if engine_id == AGENT { BROWSER.to_string() } else { engine_id };
         let started = if engine_id == BROWSER {
             start_browser(value, state)
         } else {
@@ -125,6 +187,10 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
 
     let hint = Signal::derive(move || {
         let id = engine.get();
+        if id == AGENT {
+            let detail = agent_detail.get();
+            return if detail.is_empty() { "voice agent".to_string() } else { detail };
+        }
         engines
             .get()
             .iter()
@@ -140,8 +206,19 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
     view! {
         <div class="relative flex items-end" node_ref=anchor>
             <adi_ui::MicButton state=state on_press=press hint=hint/>
-            {move || (!engines.get().is_empty())
-                .then(|| picker(engines, engine, picking, state, anchor, menu_style))}
+            {move || (!engines.get().is_empty()).then(|| {
+                picker(PickerArgs {
+                    engines,
+                    engine,
+                    picking,
+                    state,
+                    anchor,
+                    menu_style,
+                    chat_present: chat.is_some(),
+                    agent_ready,
+                    agent_detail,
+                })
+            })}
         </div>
     }
 }
@@ -158,14 +235,33 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
 /// engines cut off at the panel's edge. A fixed element is not clipped by an ancestor's overflow,
 /// but it also cannot be placed by CSS relative to that ancestor, so the button's rectangle is
 /// read when the menu opens and the menu is pinned to the viewport instead.
-fn picker(
+/// Everything [`picker`] needs, as one value — the list had grown past what reads well (and past
+/// the arg-count lint) once the voice agent joined the engines.
+struct PickerArgs {
     engines: RwSignal<Vec<VoiceEngineDto>>,
     engine: RwSignal<String>,
     picking: RwSignal<bool>,
     state: RwSignal<MicState>,
     anchor: NodeRef<html::Div>,
     menu_style: RwSignal<String>,
-) -> impl IntoView {
+    /// Whether this composer answers a chat — only then is the voice-agent row offered.
+    chat_present: bool,
+    agent_ready: RwSignal<bool>,
+    agent_detail: RwSignal<String>,
+}
+
+fn picker(args: PickerArgs) -> impl IntoView {
+    let PickerArgs {
+        engines,
+        engine,
+        picking,
+        state,
+        anchor,
+        menu_style,
+        chat_present,
+        agent_ready,
+        agent_detail,
+    } = args;
     view! {
         <button
             class="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full \
@@ -194,6 +290,43 @@ fn picker(
             <div class="fixed inset-0 z-40" on:click=move |_| picking.set(false)></div>
             <div class="fixed z-50 w-60 rounded-lg border border-line-strong bg-raise p-1"
                  style=move || menu_style.get()>
+                // The voice agent sits at the top — it is the one that talks back and sends, and in
+                // a chat it is the button's default. Shown only where there is a chat to answer, and
+                // shown-but-out when its key is missing, the same as an unconfigured engine.
+                {chat_present.then(|| {
+                    let chosen = Signal::derive(move || engine.get() == AGENT);
+                    view! {
+                        <button
+                            class="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left hover:bg-hover disabled:opacity-40 disabled:hover:bg-transparent"
+                            type="button"
+                            disabled=move || !agent_ready.get()
+                            on:click=move |_| {
+                                engine.set(AGENT.to_string());
+                                remember_engine(AGENT);
+                                picking.set(false);
+                                if matches!(state.get_untracked(), MicState::Blocked(_))
+                                    && unsupported().is_none()
+                                {
+                                    state.set(MicState::Idle);
+                                }
+                            }
+                        >
+                            <span class="flex items-center gap-1.5 text-row text-ink">
+                                <span class=move || if chosen.get() { "font-medium" } else { "" }>
+                                    "Voice agent"
+                                </span>
+                                {move || chosen.get().then(|| view! {
+                                    <adi_ui::Icon
+                                        icon=adi_ui::Lucide::Check
+                                        size=adi_ui::IconSize::Sm
+                                        class="text-ink-2"
+                                    />
+                                })}
+                            </span>
+                            <span class="text-mini text-ink-3">{move || agent_detail.get()}</span>
+                        </button>
+                    }
+                })}
                 <For
                     each=move || engines.get()
                     key=|e| e.id.clone()
@@ -289,6 +422,17 @@ enum Session {
     /// *after* the session exists: the button must show Listening the moment it is pressed, and
     /// the recorder only appears once the user has said yes.
     Recording(Rc<RefCell<Option<MediaRecorder>>>),
+    /// A live voice-agent call: the WebRTC peer connection and the handles its teardown needs.
+    ///
+    /// Behind an `Option` for the same reason the recorder is — the connection is built after two
+    /// awaits (mint a key, open the microphone), and a stop pressed before it is up must still
+    /// cancel it. `done` is that race's referee: whichever ends the call first — this stop or the
+    /// agent's own `commit_reply` — flips it, and the setup, reaching its end, finds it set and
+    /// tears down what it built instead of going live.
+    Realtime {
+        live: Rc<RefCell<Option<RealtimeLive>>>,
+        done: Rc<Cell<bool>>,
+    },
 }
 
 impl Session {
@@ -315,6 +459,13 @@ impl Session {
                 if let Some(recorder) = recorder.borrow().as_ref() {
                     let _ = recorder.stop();
                     return None;
+                }
+                Some(MicState::Idle)
+            }
+            Self::Realtime { live, done } => {
+                done.set(true);
+                if let Some(call) = live.borrow_mut().take() {
+                    call.teardown();
                 }
                 Some(MicState::Idle)
             }
@@ -696,4 +847,288 @@ fn remember_engine(id: &str) {
 
 fn window() -> web_sys::Window {
     leptos::prelude::window()
+}
+
+/// A live voice-agent call's handles, held so a press — or the agent finishing — can end it
+/// cleanly: stop the microphone (or the browser keeps its recording dot lit), close the peer
+/// connection, and take the playback element back out of the page.
+struct RealtimeLive {
+    pc: RtcPeerConnection,
+    audio: HtmlMediaElement,
+    mic: MediaStream,
+}
+
+impl RealtimeLive {
+    fn teardown(self) {
+        stop_tracks(&self.mic);
+        self.pc.close();
+        self.audio.set_src_object(None);
+        self.audio.remove();
+    }
+}
+
+/// Stop every track of a stream — what actually releases the microphone.
+fn stop_tracks(stream: &MediaStream) {
+    for track in stream.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+            track.stop();
+        }
+    }
+}
+
+/// Open a real-time voice conversation with OpenAI and, when it settles on a message, send it.
+///
+/// Unlike dictation this writes nothing into the composer: the agent *talks*, and its finished
+/// message rides home over the data channel in a `commit_reply`, which `chat.commit` sends straight
+/// to the conversation. The handle starts empty and is filled once the call is up; `done` lets a
+/// stop in the meantime cancel it (see [`Session::Realtime`]).
+fn start_agent(state: RwSignal<MicState>, chat: AgentChat) -> Session {
+    // The context is read now, at press time, so it is the freshest transcript.
+    let agent = chat.agent.get_untracked();
+    let context = chat.context.get_untracked();
+    let commit = chat.commit;
+
+    let live: Rc<RefCell<Option<RealtimeLive>>> = Rc::new(RefCell::new(None));
+    let done = Rc::new(Cell::new(false));
+    let live_task = Rc::clone(&live);
+    let done_task = Rc::clone(&done);
+
+    spawn_local(async move {
+        if let Err(why) =
+            open_agent_call(state, &agent, &context, commit, &live_task, &done_task).await
+        {
+            // Only latch the failure if a stop has not already ended the call and moved the button.
+            if !done_task.get() {
+                state.set(MicState::Blocked(why));
+            }
+        }
+    });
+
+    Session::Realtime { live, done }
+}
+
+/// The body of a voice-agent call, from key to connected, with `?` carrying the first failure out.
+///
+/// It checks `done` after each await: a stop between any two steps means the rest is wasted, and
+/// whatever was built by then is torn down rather than left running with nothing holding it.
+async fn open_agent_call(
+    state: RwSignal<MicState>,
+    agent: &Option<String>,
+    context: &str,
+    commit: Callback<String>,
+    live: &Rc<RefCell<Option<RealtimeLive>>>,
+    done: &Rc<Cell<bool>>,
+) -> Result<(), String> {
+    // 1. A short-lived key for this one call, and where to use it.
+    let session = fetch::realtime_session(agent.as_deref(), context).await?;
+    if done.get() {
+        return Ok(());
+    }
+
+    // 2. The microphone.
+    let media_devices = window()
+        .navigator()
+        .media_devices()
+        .map_err(|_| "this browser exposes no microphone".to_string())?;
+    let constraints = MediaStreamConstraints::new();
+    constraints.set_audio(&JsValue::TRUE);
+    let request = media_devices
+        .get_user_media_with_constraints(&constraints)
+        .map_err(|_| "the microphone could not be opened".to_string())?;
+    let mic = JsFuture::from(request)
+        .await
+        .map_err(|_| {
+            "The microphone is blocked — allow it for this site in the browser's settings"
+                .to_string()
+        })?
+        .unchecked_into::<MediaStream>();
+    if done.get() {
+        stop_tracks(&mic);
+        return Ok(());
+    }
+
+    // 3. The peer connection: the mic going up it, OpenAI's voice coming back on an `ontrack`.
+    let pc = RtcPeerConnection::new().map_err(|_| "a WebRTC connection would not open".to_string())?;
+    for track in mic.get_tracks().iter() {
+        if let Ok(track) = track.dyn_into::<MediaStreamTrack>() {
+            pc.add_track_0(&track, &mic);
+        }
+    }
+
+    let audio = playback_element()?;
+    {
+        let audio = audio.clone();
+        let ontrack = Closure::<dyn FnMut(JsValue)>::new(move |ev: JsValue| {
+            let ev: RtcTrackEvent = ev.unchecked_into();
+            if let Ok(stream) = ev.streams().get(0).dyn_into::<MediaStream>() {
+                audio.set_src_object(Some(&stream));
+                let _ = audio.play();
+            }
+        });
+        pc.set_ontrack(Some(ontrack.as_ref().unchecked_ref()));
+        // Leaked on purpose, like dictation's handlers: the track arrives long after this frame.
+        ontrack.forget();
+    }
+
+    // 4. The event channel: it greets on open, and listens for the finished message.
+    let channel = pc.create_data_channel("oai-events");
+    {
+        let greeter = channel.clone();
+        let on_open = Closure::<dyn FnMut(JsValue)>::new(move |_: JsValue| {
+            let _ = greeter.send_with_str(RESPONSE_CREATE);
+        });
+        channel.set_onopen(Some(on_open.as_ref().unchecked_ref()));
+        on_open.forget();
+    }
+    {
+        let live = Rc::clone(live);
+        let done = Rc::clone(done);
+        let on_message = Closure::<dyn FnMut(JsValue)>::new(move |ev: JsValue| {
+            if done.get() {
+                return;
+            }
+            let ev: MessageEvent = ev.unchecked_into();
+            let Some(raw) = ev.data().as_string() else {
+                return;
+            };
+            if let Some(reply) = commit_reply_from_event(&raw) {
+                // The agent settled the message: send it, and end the call. `done` first, so the
+                // sibling event (args-done and response-done both carry the call) does not re-send.
+                done.set(true);
+                commit.run(reply);
+                if let Some(call) = live.borrow_mut().take() {
+                    call.teardown();
+                }
+                state.set(MicState::Idle);
+            }
+        });
+        channel.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+        on_message.forget();
+    }
+
+    // 5. Offer → OpenAI → answer.
+    let offer = JsFuture::from(pc.create_offer())
+        .await
+        .map_err(|_| "the call could not be set up".to_string())?
+        .unchecked_into::<RtcSessionDescriptionInit>();
+    let offer_sdp = offer
+        .get_sdp()
+        .ok_or_else(|| "the call produced no offer".to_string())?;
+    JsFuture::from(pc.set_local_description(&offer))
+        .await
+        .map_err(|_| "the call could not be set up".to_string())?;
+
+    let answer_sdp = open_call(&session.webrtc_url, &session.client_secret, offer_sdp).await?;
+    if done.get() {
+        RealtimeLive { pc, audio, mic }.teardown();
+        return Ok(());
+    }
+
+    let answer = RtcSessionDescriptionInit::new(RtcSdpType::Answer);
+    answer.set_sdp(&answer_sdp);
+    JsFuture::from(pc.set_remote_description(&answer))
+        .await
+        .map_err(|_| "OpenAI's answer was not usable".to_string())?;
+
+    // 6. Live. Hold the handles so a stop — or the agent's own `commit_reply` — can end it. If a
+    //    stop slipped in during the last await, honour it now rather than go live unheld.
+    if done.get() {
+        RealtimeLive { pc, audio, mic }.teardown();
+        return Ok(());
+    }
+    *live.borrow_mut() = Some(RealtimeLive { pc, audio, mic });
+    Ok(())
+}
+
+/// POST the SDP offer to OpenAI with the ephemeral key, and return the answer SDP.
+///
+/// `application/sdp` in and out — not JSON: this is the WebRTC handshake, and the bytes are the
+/// session description verbatim. The ephemeral key is the bearer here, never the account key.
+async fn open_call(url: &str, client_secret: &str, offer_sdp: String) -> Result<String, String> {
+    let resp = Request::post(url)
+        .header("authorization", &format!("Bearer {client_secret}"))
+        .header("content-type", "application/sdp")
+        .body(offer_sdp)
+        .map_err(|e| format!("the SDP request would not build: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI could not be reached: {e}"))?;
+    let ok = resp.ok();
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("reading OpenAI's answer failed: {e}"))?;
+    if !ok {
+        return Err(format!(
+            "OpenAI returned {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    Ok(body)
+}
+
+/// Pull the finished message out of a data-channel event, if this event is the agent calling
+/// `commit_reply`. Both `response.function_call_arguments.done` and the `response.done` that
+/// follows carry it; either is read, and `start_agent`'s `done` flag keeps the message from being
+/// sent twice when both arrive.
+fn commit_reply_from_event(raw: &str) -> Option<String> {
+    let event: serde_json::Value = serde_json::from_str(raw).ok()?;
+    match event.get("type").and_then(serde_json::Value::as_str)? {
+        "response.function_call_arguments.done" => {
+            let named = event
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|name| name == "commit_reply");
+            if !named {
+                return None;
+            }
+            let args = event.get("arguments").and_then(serde_json::Value::as_str)?;
+            text_argument(args)
+        }
+        "response.done" => {
+            let output = event.pointer("/response/output")?.as_array()?;
+            output.iter().find_map(|item| {
+                let is_commit = item.get("type").and_then(serde_json::Value::as_str)
+                    == Some("function_call")
+                    && item.get("name").and_then(serde_json::Value::as_str) == Some("commit_reply");
+                if !is_commit {
+                    return None;
+                }
+                item.get("arguments")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(text_argument)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The non-empty `text` field out of a `commit_reply` arguments blob (itself a JSON string).
+fn text_argument(arguments: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    parsed
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// A hidden `<audio>` appended to the page for OpenAI's voice to play through. Hidden because it is
+/// an output, not a control; in the page rather than merely constructed because an autoplaying
+/// media element off the DOM is treated inconsistently across browsers.
+fn playback_element() -> Result<HtmlMediaElement, String> {
+    let document = window()
+        .document()
+        .ok_or_else(|| "no document to attach playback to".to_string())?;
+    let audio = document
+        .create_element("audio")
+        .map_err(|_| "the audio element would not be created".to_string())?
+        .unchecked_into::<HtmlMediaElement>();
+    audio.set_autoplay(true);
+    let _ = audio.set_attribute("style", "display:none");
+    if let Some(body) = document.body() {
+        let _ = body.append_child(&audio);
+    }
+    Ok(audio)
 }
