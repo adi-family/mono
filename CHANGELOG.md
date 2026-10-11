@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.28.1 — 2026-10-11
+
+### Changed
+
+- **The chat's voice agent now talks _about_ the chat, not just into it.** Press the mic in a
+  conversation and you can ask what the latest messages say, or have it summarize or explain — it
+  answers out loud from the last several messages of that chat. It sends a reply only when you
+  actually ask it to ("reply …", "tell them …") rather than rushing one out, and it is offered
+  in the box that starts a conversation too, not only an open conversation's reply box. A call
+  that fails now says why on the mic button — for example "no credits remaining" — instead of
+  doing nothing.
+
 ## 1.28.0 — 2026-10-11
 
 ### Added
