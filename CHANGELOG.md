@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.28.0 — 2026-10-11
+
+### Added
+
+- **Talk to a voice agent to write your reply.** The microphone in a chat's composer now does
+  more than dictate. Press it and you are in a real-time voice conversation with OpenAI: it asks
+  what it needs to know, works out the message with you, and sends it to the conversation once the
+  two of you have settled it — all by voice, with the recent transcript for context. Plain
+  dictation is still a click away: the caret beside the microphone chooses between the voice agent
+  and the transcription engines, and in a chat the voice agent is the default. Set a
+  `VOICE_AGENT_OPENAI_API_KEY` secret to turn it on (it talks through OpenAI's `gpt-realtime`); the
+  key never leaves your machine — the browser is handed only a short-lived one for each call.
+
 ## 1.27.2 — 2026-10-07
 
 ### Fixed
