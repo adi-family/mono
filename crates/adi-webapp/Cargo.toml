@@ -95,6 +95,20 @@ web-sys = { version = "0.3", features = [
     "FileList",
     "Url",
     "HtmlImageElement",
+    # The chat's "notify me when this chat stops" bell (see `notify`): a desktop notification when a
+    # watched conversation goes idle, and a short chime synthesized with the Web Audio API so no
+    # sound file has to ship. Both are gated behind the one click that arms the bell — the
+    # permission the notification needs, and the user gesture an AudioContext needs to make sound.
+    "Notification",
+    "NotificationOptions",
+    "NotificationPermission",
+    "AudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "GainNode",
 ] }
 
 serde = { workspace = true }

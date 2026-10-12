@@ -51,6 +51,38 @@
   color: var(--ink-3);
 }
 
+// The "notify me when this chat stops" bell, on its own line above the goal and right-aligned so
+// it sits over the composer's controls below. Armed, it wears the quiet "active" treatment the
+// selected list items do \u{2014} never the accent orange, which this screen spends on the send button.
+.adi-chat__bellbar {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 24px;
+  margin-bottom: 6px;
+}
+
+.adi-chat__bell {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--r);
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition);
+
+  &:hover { background: var(--bg-hover); color: var(--ink-2); }
+
+  // Armed: the bell is lit and sits in a filled chip, so "this chat will ping me" reads at a
+  // glance and stays legible with the pointer away.
+  &.is-on {
+    color: var(--ink);
+    background: var(--bg-active);
+  }
+}
+
 // The home screen's composer, centred at the form width (§5).
 .adi-chat__runbar {
   width: min(100%, var(--form-w));

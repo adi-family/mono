@@ -22,6 +22,7 @@ mod live;
 mod menu;
 mod native;
 mod new_ui;
+mod notify;
 mod origin;
 mod pages;
 mod pwa;

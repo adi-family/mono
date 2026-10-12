@@ -675,6 +675,7 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
                 // agent of the same name (`docs/fleet.md` §13).
                 && watch.node.get_untracked() == for_peek
             {
+                crate::notify::on_peek(watch, &peek);
                 watch.peek.set(Some(peek));
             }
         });
@@ -717,6 +718,7 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
                     watch.log.set(peek.output.clone());
                 }
                 if watch.peek.get_untracked().as_ref() != Some(&peek) {
+                    crate::notify::on_peek(watch, &peek);
                     watch.peek.set(Some(peek));
                 }
             }
@@ -1286,6 +1288,7 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool, sourced: bool) 
         // top, next to the box you typed it in.
         {answerable.then(|| view! {
             <div class="adi-chat__top">
+                {notify_bell()}
                 {goal_bar(state, watch)}
                 {awaits_bar(state, watch)}
                 {reply_bar(state, watch, sourced)}
@@ -2079,6 +2082,40 @@ fn recall(watch: AgentsWatch) -> adi_ui::Recall {
 /// button says so), and is picked up either by the turn in flight, at its next round, or by the one
 /// that starts when this answer lands. Beside it, while an answer is streaming, a Stop that cuts the
 /// turn short and drops anything lined up behind it.
+/// The bell above the composer: arm it, and this browser chimes and raises a desktop notification
+/// the next time the open conversation stops — whether it finished or stopped to ask you something.
+///
+/// A per-browser preference, not a fact about the conversation ([`crate::notify`]), so the control
+/// is just a toggle over that one flag; the watching and the firing are the poll's
+/// ([`crate::notify::on_peek`]). Arming it the first time is also where the browser's notification
+/// permission and its audio are unlocked, which is why it has to be a real click and not a setting
+/// restored on load — the local signal is seeded from the stored flag either way.
+fn notify_bell() -> impl IntoView {
+    let armed = RwSignal::new(crate::notify::armed());
+    view! {
+        <div class="adi-chat__bellbar">
+            <button
+                class="adi-chat__bell"
+                type="button"
+                class:is-on=move || armed.get()
+                aria-pressed=move || armed.get().to_string()
+                title=move || if armed.get() {
+                    "Notifying you when this chat stops \u{2014} click to turn off"
+                } else {
+                    "Notify me when this chat stops (sound + desktop notification)"
+                }
+                on:click=move |_| {
+                    let on = !armed.get_untracked();
+                    armed.set(on);
+                    crate::notify::set_armed(on);
+                }
+            >
+                <adi_ui::Icon icon=adi_ui::Lucide::Bell label="Notify when this chat stops"/>
+            </button>
+        </div>
+    }
+}
+
 fn reply_bar(state: State, watch: AgentsWatch, sourced: bool) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
     // What the open conversation's own backend can take — the snapshot's capability profile, not
