@@ -476,11 +476,11 @@ mod tests {
             "and false again once the client has shut down"
         );
 
-        let spooled = events.drain().expect("published channel message");
-        assert_eq!(spooled.len(), 1);
-        assert_eq!(spooled[0].record.name, ChannelMessage::NAME);
+        let caught_up = events.catch_up("test", 10).expect("published channel message");
+        assert_eq!(caught_up.len(), 1);
+        assert_eq!(caught_up[0].record.name, ChannelMessage::NAME);
         assert_eq!(
-            serde_json::from_str::<ChannelMessage>(&spooled[0].record.payload).unwrap(),
+            serde_json::from_str::<ChannelMessage>(&caught_up[0].record.payload).unwrap(),
             message,
         );
 

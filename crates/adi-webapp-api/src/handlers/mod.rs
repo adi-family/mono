@@ -1170,12 +1170,12 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert_eq!(v["event"], "adi.tasks.created");
 
-        let spooled = bus.drain().unwrap();
-        assert_eq!(spooled.len(), 1);
-        assert_eq!(spooled[0].record.name, "adi.tasks.created");
-        assert_eq!(spooled[0].record.payload, r#"{"id":"t1"}"#);
+        let caught_up = bus.catch_up("test", 10).unwrap();
+        assert_eq!(caught_up.len(), 1);
+        assert_eq!(caught_up[0].record.name, "adi.tasks.created");
+        assert_eq!(caught_up[0].record.payload, r#"{"id":"t1"}"#);
 
-        // An empty name is a 400, not a spooled empty event.
+        // An empty name is a 400, not a logged empty event.
         let Response { status, .. } = emit_event(&bus, br#"{ "name":"  " }"#);
         assert_eq!(status, 400);
     }

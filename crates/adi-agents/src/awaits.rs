@@ -833,7 +833,7 @@ fn check_pattern(pattern: &str) -> Result<()> {
 }
 
 /// Consider every await against a published event, waking the ones whose patterns match and whose
-/// check agrees. Called by the app as it drains the event spool.
+/// check agrees. Called by the app as it catches up on the event log.
 #[must_use]
 pub fn on_event(agents: &Agents, name: &str, payload: &str) -> Vec<Woken> {
     let store = Awaits::with_config(agents.config().clone());

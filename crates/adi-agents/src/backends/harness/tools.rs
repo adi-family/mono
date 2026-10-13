@@ -1828,8 +1828,8 @@ mod tests {
         assert!(reply.contains("reported"), "{reply}");
 
         let events = adi_events::Events::with_config(ctx.awaits.config().clone())
-            .drain()
-            .expect("drain");
+            .catch_up("test", 10)
+            .expect("catch up");
         let published = events
             .iter()
             .find(|e| e.record.name == crate::events::RUN_REPORTED)

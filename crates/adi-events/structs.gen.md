@@ -2,14 +2,14 @@
 
 # `adi-events` — types
 
-> A tiny, decoupled event bus for the adi platform: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one JSON record spooled under ~/.adi/mono/events, and a consumer drains the spool and delivers each to whoever subscribed. Publishers depend only on this crate (which depends only on adi-config) — they never know a subscriber exists. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail).
+> The adi platform's reliable event log: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one row in an append-only SQLite log under ~/.adi/mono/events/log.db, under a monotonic seq. A consumer picks a stable subscriber name and `catch_up`/`ack`s its own cursor, so it replays exactly what it missed after downtime, at-least-once. The `outbox` module is the other half: a producer with its own database writes an event in the same transaction as the state change it describes, then relays it into the log. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail).
 
 4 structs · 1 enum · 1 type alias across 2 files.
 
 ## Index
 
 - [`src/catalog.rs`](#srccatalogrs) — `EventType`
-- [`src/lib.rs`](#srclibrs) — `Result`, `Error`, `EventRecord`, `SpooledEvent`, `Events`
+- [`src/lib.rs`](#srclibrs) — `Result`, `Error`, `EventRecord`, `LoggedEvent`, `Events`
 
 ---
 
@@ -43,14 +43,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 ### enum `Error`
 
-Everything that can go wrong emitting or draining events.
+Everything that can go wrong emitting, logging, or consuming events.
 
 ```rust
 #[derive(Debug)]
 pub enum Error {
     InvalidName(String),
     Config(adi_config::Error),
-    Io(std::io::Error),
+    Sqlite(rusqlite::Error),
     Encode(serde_json::Error),
 }
 ```
@@ -70,21 +70,21 @@ pub struct EventRecord {
 }
 ```
 
-### struct `SpooledEvent`
+### struct `LoggedEvent`
 
-A record as it sits in the spool: the file backing it (pass to `Events::remove` once delivered) and the parsed `EventRecord`.
+One row read back off the log: its `seq` (pass to `Events::ack` once handled) and the event itself.
 
 ```rust
 #[derive(Debug, Clone)]
-pub struct SpooledEvent {
-    pub path: PathBuf,
+pub struct LoggedEvent {
+    pub seq: u64,
     pub record: EventRecord,
 }
 ```
 
 ### struct `Events`
 
-The event bus: emits records into, and drains records out of, the `events` spool directory. Cheap to clone; all state is on disk.
+The event log: appends and reads rows of the shared `events`/`log.db` database. Cheap to clone; all state is on disk.
 
 ```rust
 #[derive(Debug, Clone)]

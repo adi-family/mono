@@ -27,8 +27,8 @@ The CLI and `channel-reply` tool keep working with the control panel stopped.
 
 The service restores one router WebSocket per provider from saved connections and tokens.
 Agent answers are posted by the existing turn watchers. Pending questions are polled from
-bound conversations with delivery checkpoints; the daemon does not drain the shared event
-spool or compete with the app's trigger dispatcher.
+bound conversations with delivery checkpoints; the daemon does not read the shared event
+log or compete with the app's trigger dispatcher.
 
 ## Router configuration
 

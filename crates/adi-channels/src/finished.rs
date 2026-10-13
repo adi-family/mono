@@ -1,10 +1,11 @@
 //! Forward pending agent questions from the Hive-managed channels daemon.
 //!
 //! Questions already live in the session store. Polling the conversations bound to channel
-//! threads keeps delivery independent of the control panel and leaves the platform's single
-//! event-spool consumer alone. Successful sends are checkpointed so normal daemon restarts do
-//! not repeat a pending question. A crash after the remote send but before its checkpoint can
-//! still repeat it: the router has no idempotency key with which to make that boundary atomic.
+//! threads keeps delivery independent of the control panel, whether or not it is even running,
+//! rather than subscribing this daemon to the shared event log as one more cursor. Successful
+//! sends are checkpointed so normal daemon restarts do not repeat a pending question. A crash
+//! after the remote send but before its checkpoint can still repeat it: the router has no
+//! idempotency key with which to make that boundary atomic.
 //!
 //! Final answers and the "thinking…" indicator remain owned by [`crate::turn`].
 

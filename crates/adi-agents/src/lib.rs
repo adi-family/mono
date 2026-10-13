@@ -765,10 +765,16 @@ impl Agents {
         });
     }
 
-    /// Publish an `adi.agents.*` event onto the shared bus. Best-effort and fire-and-forget: this
-    /// registry neither knows nor cares whether anything subscribes, and a spool failure must
-    /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
-    /// so a scratch store stays isolated.
+    /// Publish an `adi.agents.*` event onto the shared log. Best-effort and fire-and-forget: this
+    /// registry neither knows nor cares whether anything subscribes, and a failure to reach the
+    /// log must never fail the lifecycle action that caused it. Emitted against **this store's**
+    /// [`Config`], so a scratch store stays isolated.
+    ///
+    /// This is a direct publish, not the transactional-outbox write `adi_tasks::Tasks::with_doc`
+    /// uses — a crash in the narrow window between a sessions-table write committing and this
+    /// call can still drop the event. Worth tightening the same way tasks already are, but this
+    /// registry's mutations are not funneled through one `with_doc`-shaped choke point the way
+    /// tasks' are, so doing it here is its own piece of work, not a one-line change.
     fn emit_event(&self, event: &impl adi_events::Event) {
         let _ = adi_events::Events::with_config(self.config.clone()).emit_event(event);
     }
@@ -6258,8 +6264,8 @@ mod tests {
         };
 
         let events = adi_events::Events::with_config(store.config().clone())
-            .drain()
-            .expect("drain");
+            .catch_up("test", 10)
+            .expect("catch up");
         let refusal = events
             .iter()
             .find(|e| e.record.name == AgentSpawnRefused::NAME)
@@ -7403,8 +7409,8 @@ mod tests {
         assert_eq!(store.peek_run(&agent, &conv).state, RunLifecycle::Waiting);
         assert!(
             adi_events::Events::with_config(store.config().clone())
-                .drain()
-                .expect("drain")
+                .catch_up("test", 100)
+                .expect("catch up")
                 .iter()
                 .all(|e| e.record.name != AgentRunFinished::NAME),
             "nothing here is really finished yet",
@@ -7419,8 +7425,8 @@ mod tests {
         assert_eq!(store.peek_run(&agent, &conv).state, RunLifecycle::Finished);
         assert!(
             adi_events::Events::with_config(store.config().clone())
-                .drain()
-                .expect("drain")
+                .catch_up("test", 100)
+                .expect("catch up")
                 .iter()
                 .any(|e| e.record.name == AgentRunFinished::NAME),
             "now it really is",
@@ -7459,7 +7465,7 @@ mod tests {
         let runs = store.runs(&agent);
         assert_eq!(runs[0].state, RunLifecycle::Waiting);
         let bus = adi_events::Events::with_config(store.config().clone());
-        let events = bus.drain().expect("drain");
+        let events = bus.catch_up("test", 100).expect("catch up");
         let idle = events
             .iter()
             .find(|e| e.record.name == AgentRunIdle::NAME)
@@ -7470,17 +7476,17 @@ mod tests {
         assert_eq!(payload["run_id"], conv);
         assert_eq!(payload["state"], "waiting");
         assert_eq!(payload["pending_awaits"].as_array().expect("array").len(), 1);
-        // `drain` only reads the spool — consuming a record, the same as any other reader of the
-        // bus, is a separate call.
-        bus.remove(&idle.path).expect("remove");
+        // `catch_up` only reads the log — acking it, the same as any other reader of the bus, is
+        // a separate call.
+        bus.ack("test", idle.seq).expect("ack");
 
         // Nothing changed since — still the same turn, still the same await — so nothing new is
         // published for it.
         let runs_again = store.runs(&agent);
         assert_eq!(runs_again[0].state, RunLifecycle::Waiting);
         assert!(
-            bus.drain()
-                .expect("drain")
+            bus.catch_up("test", 100)
+                .expect("catch up")
                 .iter()
                 .all(|e| e.record.name != AgentRunIdle::NAME),
             "the same idle turn is not announced twice"

@@ -71,6 +71,14 @@ use trigger::validate_name;
 const TRIGGERS_MODULE: &str = "triggers";
 const MANIFEST_EXT: &str = "toml";
 
+/// The event log cursor name the `supervisor`-feature event dispatcher owns. Public — and not
+/// itself gated by that feature, since it names no tokio type — so a consumer without the feature
+/// (the CLI's `events list`, peeking at the dispatcher's own backlog) can agree with the app on
+/// which cursor that is without linking the async runtime to do it. Load-bearing: it is this
+/// dispatcher's identity across restarts, so it must never change once a real install has caught
+/// up under it.
+pub const SUBSCRIBER: &str = "triggers.event-dispatcher";
+
 /// The trigger registry: lists, reads, mutates, and fires the per-trigger manifests under the
 /// `triggers` module dir. Cheap to clone; all state is on disk.
 #[derive(Debug, Clone)]

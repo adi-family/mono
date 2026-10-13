@@ -235,6 +235,7 @@ name = "adi-events"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "rusqlite",
  "serde",
  "serde_json",
 ]

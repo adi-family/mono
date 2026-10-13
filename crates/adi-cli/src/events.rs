@@ -1,5 +1,5 @@
-//! The `events` command group: publish platform events onto the shared bus and peek at what is
-//! spooled but not yet delivered. Publishing here reaches every enabled
+//! The `events` command group: publish platform events onto the shared log and peek at what the
+//! trigger dispatcher hasn't caught up on yet. Publishing here reaches every enabled
 //! [event trigger](adi_core::KIND_EVENT) whose patterns match — the same path task and agent
 //! mutations take automatically.
 
@@ -19,8 +19,8 @@ pub(crate) enum EventsCommand {
         #[arg(long)]
         payload: Option<String>,
     },
-    /// List events that are spooled but not yet delivered. Normally empty while the app is up —
-    /// its dispatcher drains the spool within a second.
+    /// List events the trigger dispatcher hasn't caught up on yet. Normally empty while the app
+    /// is up — its dispatcher polls the log within a second.
     List {
         #[arg(long)]
         json: bool,
@@ -50,12 +50,17 @@ pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String>
             println!("Emitted {name}.");
         }
         EventsCommand::List { json } => {
-            let spooled = bus.drain().map_err(|e| e.to_string())?;
+            // Peek at exactly what the real trigger dispatcher still owes itself — not an ack, so
+            // this never affects delivery.
+            let pending = bus
+                .catch_up(adi_core::EVENT_DISPATCH_SUBSCRIBER, 1000)
+                .map_err(|e| e.to_string())?;
             if json {
-                let items: Vec<_> = spooled
+                let items: Vec<_> = pending
                     .iter()
                     .map(|s| {
                         serde_json::json!({
+                            "seq": s.seq,
                             "name": s.record.name,
                             "emitted_at": s.record.emitted_at,
                             "payload": s.record.payload,
@@ -63,10 +68,10 @@ pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String>
                     })
                     .collect();
                 print_json(&items);
-            } else if spooled.is_empty() {
-                println!("No events spooled (delivered ones are gone).");
+            } else if pending.is_empty() {
+                println!("No events pending (the trigger dispatcher is caught up).");
             } else {
-                for s in &spooled {
+                for s in &pending {
                     println!("{} — {} (unix)", s.record.name, s.record.emitted_at);
                     if !s.record.payload.trim().is_empty() {
                         println!("  {}", s.record.payload);

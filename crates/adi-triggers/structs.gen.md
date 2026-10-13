@@ -23,7 +23,7 @@
 
 ### type `EventObserver`
 
-A callback handed every drained event, beside the triggers it fires.
+A callback handed every event this dispatcher catches up on, beside the triggers it fires.
 
 ```rust
 pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
@@ -31,7 +31,7 @@ pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
 
 ### struct `EventDispatcher`
 
-Drains the event spool and fires matching event triggers. Cheap to clone behind an `Arc`; hold one for as long as events should be delivered, and `stop` it on the way out.
+Catches up on the event log and fires matching event triggers. Cheap to clone behind an `Arc`; hold one for as long as events should be delivered, and `stop` it on the way out.
 
 ```rust
 pub struct EventDispatcher {

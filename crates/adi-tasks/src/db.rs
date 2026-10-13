@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS task_seq (
 );
 ";
 
+/// The local outbox table — see [`adi_events::outbox`]. Concatenated onto [`SCHEMA`] rather than
+/// applied separately so there is exactly one `execute_batch` to get the ordering right against.
+const OUTBOX_SCHEMA: &str = adi_events::outbox::SCHEMA;
+
 /// The columns of a task, in the order [`row_to_task`] reads them and [`insert_task`] writes them.
 const TASK_COLUMNS: &str = "id, title, details, status, project, cwd, parent, tag, assignee, \
                              created_at, updated_at, input, output_schema, result, workflow_run, \
@@ -95,6 +99,9 @@ pub(crate) fn conn(path: &Path) -> Result<Rc<Connection>, Error> {
         connection
             .execute_batch(SCHEMA)
             .map_err(|e| sql_err("create the schema in", e))?;
+        connection
+            .execute_batch(OUTBOX_SCHEMA)
+            .map_err(|e| sql_err("create the outbox table in", e))?;
         // Every explicit transaction in the store reads before it writes. Reserve the writer
         // before taking that read snapshot: a deferred transaction cannot upgrade a stale WAL
         // snapshot, and SQLite returns BUSY immediately instead of honoring busy_timeout.

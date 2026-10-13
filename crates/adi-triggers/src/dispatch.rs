@@ -1,15 +1,18 @@
 //! Delivers platform events to the [event triggers](crate::KIND_EVENT) subscribed to them.
 //!
-//! Publishers ([`adi_events`]) drop event records into a shared spool; this dispatcher polls that
-//! spool and, for each event, fires every enabled `event` trigger whose patterns match — handing
-//! the event's payload over as `ADI_PAYLOAD` and its name as `ADI_EVENT`. It is the event-side
-//! twin of [`Supervisor`](crate::Supervisor): the supervisor keeps *background* triggers alive,
-//! the dispatcher launches *event* triggers on demand. Both run inside the app.
+//! Publishers ([`adi_events`]) append event records to a shared, durable log; this dispatcher is
+//! one [`SUBSCRIBER`] of that log, catching up from its own cursor every tick and, for each event,
+//! firing every enabled `event` trigger whose patterns match — handing the event's payload over as
+//! `ADI_PAYLOAD` and its name as `ADI_EVENT`. It is the event-side twin of
+//! [`Supervisor`](crate::Supervisor): the supervisor keeps *background* triggers alive, the
+//! dispatcher launches *event* triggers on demand. Both run inside the app.
 //!
-//! Delivery is at-least-once while the app is up and best-effort otherwise: an event with no
-//! subscriber is dropped, a fire that fails to spawn is logged and the event is still consumed
-//! (a permanently broken code block must not wedge the whole spool), and a burst is spread across
-//! ticks so a backlog can't fork-bomb the machine.
+//! Delivery is at-least-once, including across a restart: this dispatcher's cursor is itself a row
+//! in the log's own database, so an app that was down for an hour catches up from exactly where it
+//! left off rather than from "now". An event with no subscriber is still acked (nothing to retry
+//! it for), a fire that fails to spawn is logged and the event is still acked (a permanently broken
+//! code block must not wedge the whole log), and a burst is spread across ticks so a backlog can't
+//! fork-bomb the machine.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,32 +22,31 @@ use tracing::{info, warn};
 
 use adi_events::{EventRecord, Events};
 
-use crate::Triggers;
+use crate::{SUBSCRIBER, Triggers};
 
-/// A callback handed every drained event, beside the triggers it fires.
+/// A callback handed every event this dispatcher catches up on, beside the triggers it fires.
 ///
-/// The dispatcher is the only thing that drains the spool — a second drainer would race it for
-/// records — so anything else in the app that reacts to platform events has to be told by this one.
 /// It runs on the dispatch tick, so an observer must return promptly: hand the event to a worker,
 /// don't do the work here.
 pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
 
-/// How often the spool is drained. Short, because event latency is user-visible ("I created a
-/// task, did my hook run?"), and draining an empty spool is a single cheap directory read.
+/// How often the log is polled. Short, because event latency is user-visible ("I created a task,
+/// did my hook run?"), and polling with nothing new is a single cheap, indexed query.
 const TICK: Duration = Duration::from_secs(1);
 
-/// The most events one tick will fire. A spool that filled while the app was down (up to
-/// `adi_events`' own cap) is drained a slice at a time rather than spawning thousands of
-/// processes at once; the remainder waits on disk for the next tick.
+/// The most events one tick will catch up on. A log that grew while the app was down is caught up
+/// a slice at a time rather than spawning thousands of processes at once; the remainder waits for
+/// the next tick, exactly as it would if it had just now been appended.
 const MAX_PER_TICK: usize = 200;
 
-/// Drains the event spool and fires matching event triggers. Cheap to clone behind an `Arc`; hold
-/// one for as long as events should be delivered, and [`stop`](Self::stop) it on the way out.
+/// Catches up on the event log and fires matching event triggers. Cheap to clone behind an `Arc`;
+/// hold one for as long as events should be delivered, and [`stop`](Self::stop) it on the way out.
 pub struct EventDispatcher {
     triggers: Triggers,
     events: Events,
-    /// Told about every drained event, so something other than a trigger can react to one without
-    /// draining the spool itself. `None` for a dispatcher nobody is listening in on.
+    /// Told about every event this dispatcher catches up on, so something other than a trigger
+    /// can react to one without reading the log itself. `None` for a dispatcher nobody is
+    /// listening in on.
     observer: Option<EventObserver>,
     /// Stops the dispatch loop.
     shutdown: watch::Sender<bool>,
@@ -132,16 +134,16 @@ impl EventDispatcher {
         let _ = tokio::time::timeout(grace, done.changed()).await;
     }
 
-    /// The dispatch loop: drain and deliver, then wait for the next tick or shutdown.
+    /// The dispatch loop: catch up and deliver, then wait for the next tick or shutdown.
     async fn run_loop(self: Arc<Self>, mut rx: watch::Receiver<bool>) {
         loop {
-            // Draining the spool, reading the triggers and firing what matches is all disk work
-            // (and, for a match, a spawned process). At one tick a second it would otherwise hold
-            // an async worker every second, for as long as the app is up.
+            // Catching up on the log, reading the triggers and firing what matches is all disk
+            // work (and, for a match, a spawned process). At one tick a second it would otherwise
+            // hold an async worker every second, for as long as the app is up.
             let dispatcher = Arc::clone(&self);
             if let Err(e) = tokio::task::spawn_blocking(move || dispatcher.dispatch_pending()).await
             {
-                warn!(error = %e, "dispatching spooled events failed");
+                warn!(error = %e, "dispatching caught-up events failed");
             }
             tokio::select! {
                 () = tokio::time::sleep(TICK) => {}
@@ -154,24 +156,25 @@ impl EventDispatcher {
         let _ = self.done.send(true);
     }
 
-    /// Drain up to [`MAX_PER_TICK`] spooled events and fire the event triggers each one matches.
-    /// Every drained event is removed from the spool whether or not it had a subscriber (an
-    /// unsubscribed event is simply dropped) and whether or not a fire succeeded (a failed spawn
-    /// is logged, never retried).
+    /// Catch up on up to [`MAX_PER_TICK`] events past this dispatcher's own cursor and fire the
+    /// event triggers each one matches. Every caught-up event is acked whether or not it had a
+    /// subscriber (an unsubscribed event is simply dropped) and whether or not a fire succeeded (a
+    /// failed spawn is logged, never retried) — acked one at a time, right after it is handled, so
+    /// a crash partway through a batch replays only what that crash actually missed.
     fn dispatch_pending(&self) {
-        let spooled = match self.events.drain() {
-            Ok(spooled) => spooled,
+        let caught_up = match self.events.catch_up(SUBSCRIBER, MAX_PER_TICK) {
+            Ok(caught_up) => caught_up,
             Err(e) => {
-                warn!(error = %e, "couldn't drain the event spool");
+                warn!(error = %e, "couldn't catch up on the event log");
                 return;
             }
         };
-        if spooled.is_empty() {
+        if caught_up.is_empty() {
             return;
         }
 
-        // The enabled event triggers, loaded once for this batch. A read failure leaves the spool
-        // untouched so the events are retried next tick rather than silently dropped.
+        // The enabled event triggers, loaded once for this batch. A read failure leaves the
+        // cursor where it was so these events are retried next tick rather than silently skipped.
         let subscribers: Vec<crate::Trigger> = match self.triggers.list() {
             Ok(list) => list
                 .into_iter()
@@ -183,12 +186,12 @@ impl EventDispatcher {
                 })
                 .collect(),
             Err(e) => {
-                warn!(error = %e, "couldn't read triggers; leaving events spooled");
+                warn!(error = %e, "couldn't read triggers; leaving the cursor where it was");
                 return;
             }
         };
 
-        for ev in spooled.into_iter().take(MAX_PER_TICK) {
+        for ev in caught_up {
             // Whoever is listening in hears about the event whether or not a trigger wanted it: an
             // awaiting run is subscribed to the *bus*, not to anyone's trigger.
             if let Some(observer) = self.observer.as_ref() {
@@ -219,8 +222,8 @@ impl EventDispatcher {
                     }
                 }
             }
-            if let Err(e) = self.events.remove(&ev.path) {
-                warn!(error = %e, "couldn't remove delivered event from the spool");
+            if let Err(e) = self.events.ack(SUBSCRIBER, ev.seq) {
+                warn!(error = %e, "couldn't advance the event dispatcher's cursor");
             }
         }
     }
@@ -314,13 +317,13 @@ mod tests {
             wait_until(|| store.read_log("on-item").as_deref() == Some(expected.as_str())).await,
             "the subscriber should have fired with event name and payload"
         );
-        // The event was consumed from the spool.
-        assert!(bus.drain().expect("drain").is_empty());
+        // The event was acked — this dispatcher's cursor caught up with it.
+        assert!(bus.catch_up(SUBSCRIBER, 10).expect("catch up").is_empty());
 
         dispatcher.stop(Duration::from_secs(2)).await;
     }
 
-    /// An event nobody subscribes to is drained and dropped, not left to pile up.
+    /// An event nobody subscribes to is caught up on and acked, not left to pile up.
     #[tokio::test]
     async fn an_unsubscribed_event_is_dropped() {
         let store = scratch("nosub");
@@ -331,8 +334,8 @@ mod tests {
         bus.emit_event(&OtherEvent {}).expect("emit");
 
         assert!(
-            wait_until(|| bus.drain().expect("drain").is_empty()).await,
-            "the unmatched event should be consumed and dropped"
+            wait_until(|| bus.catch_up(SUBSCRIBER, 10).expect("catch up").is_empty()).await,
+            "the unmatched event should be caught up on and dropped"
         );
         assert!(
             store.read_log("on-item").is_none(),
@@ -376,8 +379,8 @@ mod tests {
         })
         .expect("emit none");
         assert!(
-            wait_until(|| bus.drain().expect("drain").is_empty()).await,
-            "both non-matching events should be consumed"
+            wait_until(|| bus.catch_up(SUBSCRIBER, 10).expect("catch up").is_empty()).await,
+            "both non-matching events should be caught up on"
         );
         assert!(
             store.read_log("on-alpha").is_none(),
@@ -427,5 +430,65 @@ mod tests {
         );
 
         dispatcher.stop(Duration::from_secs(2)).await;
+    }
+
+    /// "App-down replay": events appended while no dispatcher is running at all (not merely one
+    /// that hasn't gotten to them yet) are still fired once a dispatcher starts — and a dispatcher
+    /// that starts *again* later (a fresh [`EventDispatcher`] instance, exactly what a restarted
+    /// app constructs) resumes from the cursor the log kept, not from whatever is newest.
+    #[tokio::test]
+    async fn events_appended_with_no_dispatcher_running_are_caught_up_on_a_later_start() {
+        let store = scratch("app-down");
+        save_event_trigger(
+            &store,
+            "on-item",
+            "printf '%s' \"$ADI_PAYLOAD\"",
+            &["test.items.*"],
+        );
+        let bus = Events::with_config(store.config().clone());
+
+        // The "app" is down: nothing is draining the log while this is appended.
+        let first_event = ItemCreated {
+            id: "t1",
+            project: None,
+        };
+        let first_payload = first_event.to_record().expect("record").payload;
+        bus.emit_event(&first_event).expect("emit while nothing was running");
+        assert!(store.read_log("on-item").is_none(), "nothing could have fired yet");
+
+        // The app "starts" — a dispatcher that has never run before on this store.
+        let first = EventDispatcher::start(store.clone());
+        assert!(
+            wait_until(|| store.read_log("on-item").as_deref() == Some(first_payload.as_str()))
+                .await,
+            "the backlog from before the dispatcher existed should still fire"
+        );
+        first.stop(Duration::from_secs(2)).await;
+
+        // The app "restarts": a second, independent `EventDispatcher` for the same store. A fresh
+        // event appended now must fire exactly once, through the cursor the log — not this
+        // process — remembers.
+        let second_event = ItemCreated {
+            id: "t2",
+            project: None,
+        };
+        let second_payload = second_event.to_record().expect("record").payload;
+        bus.emit_event(&second_event).expect("emit after the restart");
+        let second = EventDispatcher::start(store.clone());
+        assert!(
+            wait_until(|| store.read_log("on-item").as_deref() == Some(second_payload.as_str()))
+                .await,
+            "a fresh dispatcher instance must pick up where the log's cursor left off, not replay \
+             the first event again"
+        );
+        second.stop(Duration::from_secs(2)).await;
+
+        // And the original event from before either dispatcher existed was not re-delivered —
+        // acking is durable across the restart too, not just catching up.
+        assert_eq!(
+            bus.cursor(SUBSCRIBER).expect("cursor"),
+            2,
+            "both events were acked exactly once each"
+        );
     }
 }

@@ -143,19 +143,35 @@ impl Tasks {
     /// commit — all atomically, so no other writer's transaction can interleave. See the module
     /// docs for why this is one transaction rather than three.
     ///
+    /// `f` also returns the [`EventRecord`](adi_events::EventRecord) describing the mutation, and
+    /// that record is written into this store's local outbox table **inside the same
+    /// transaction**, before it commits — the spec's "producer writes the event in the same
+    /// transaction as the state change". A crash after this method returns can therefore never
+    /// lose the event; at worst it delays [`relay_pending_events`](Self::relay_pending_events)
+    /// reaching the shared log, which the next successful write (here or from another process)
+    /// retries.
+    ///
     /// # Errors
     /// Whatever `f` returns, plus any transaction or store I/O failure.
-    fn with_doc<T>(&self, f: impl FnOnce(&mut TasksDoc) -> Result<T>) -> Result<T> {
+    fn with_doc<T>(
+        &self,
+        f: impl FnOnce(&mut TasksDoc) -> Result<(T, adi_events::EventRecord)>,
+    ) -> Result<T> {
         let conn = self.conn()?;
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| db::sql_err("begin a transaction in", e))?;
         self.migrate(&tx)?;
         let mut doc = db::load(&tx)?;
-        let result = f(&mut doc)?;
+        let (result, record) = f(&mut doc)?;
         db::save(&tx, &doc)?;
+        adi_events::outbox::write(&tx, &record.name, &record.payload)
+            .map_err(|e| Error::Store(e.into()))?;
         tx.commit()
             .map_err(|e| db::sql_err("commit a transaction in", e))?;
+        // Best-effort: the event is already durable in the outbox row just committed above, so a
+        // relay failure here only delays it reaching the shared log, never loses it.
+        let _ = self.relay_pending_events();
         Ok(result)
     }
 
@@ -221,12 +237,31 @@ impl Tasks {
         }
     }
 
-    /// Publish a typed `adi.tasks.*` event (a task view, or a task id for a delete) onto
-    /// the shared event bus. Best-effort and fire-and-forget: this store neither knows nor cares
-    /// whether anything subscribes, and a spool failure must never fail the mutation that caused
-    /// it. Emitted against **this store's** [`Config`], so a scratch store stays isolated.
-    fn emit(&self, event: &impl adi_events::Event) {
-        let _ = adi_events::Events::with_config(self.config.clone()).emit_event(event);
+    /// The name [`with_doc`](Self::with_doc)'s outbox rows are relayed under — part of the
+    /// idempotency key [`adi_events::outbox::relay`] mints, so it must never change once anything
+    /// has shipped.
+    const EVENT_SOURCE: &str = "tasks";
+
+    /// Forward whatever is sitting in this store's local outbox table into the shared event log
+    /// (see [`adi_events::outbox::relay`]). [`with_doc`](Self::with_doc) already calls this itself
+    /// right after every commit; it is also public so the app can run it on a schedule, which is
+    /// what catches up a backlog a crash left unrelayed — nothing here depends on this store ever
+    /// being written to again.
+    ///
+    /// # Errors
+    /// [`Error::Store`] if either database can't be reached.
+    pub fn relay_pending_events(&self) -> Result<usize> {
+        let conn = self.conn()?;
+        let log = adi_events::Events::with_config(self.config.clone());
+        adi_events::outbox::relay(&conn, &log, Self::EVENT_SOURCE, 200)
+            .map_err(|e| Error::Store(e.into()))
+    }
+
+    /// Build the [`EventRecord`](adi_events::EventRecord) [`with_doc`](Self::with_doc) writes into
+    /// the outbox for `event`, translating the (practically never hit, for these static-named,
+    /// always-serializable types) encode failure into this store's own error type.
+    fn record_of(event: &impl adi_events::Event) -> Result<adi_events::EventRecord> {
+        event.to_record().map_err(|e| Error::Store(e.into()))
     }
 
     /// Create a new `open` task. If `parent` is given (and non-blank) it must already exist. A
@@ -351,9 +386,10 @@ impl Tasks {
                 give_up_reason: None,
             };
             doc.tasks.push(task);
-            view_of(doc, &id)
+            let view = view_of(doc, &id)?;
+            let record = Self::record_of(&TaskCreated::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskCreated::new(&view));
         Ok(view)
     }
 
@@ -445,9 +481,10 @@ impl Tasks {
                 ParentChange::Set(pid) => task.parent = Some(pid),
             }
             task.updated_at = now_unix();
-            view_of(doc, id)
+            let view = view_of(doc, id)?;
+            let record = Self::record_of(&TaskUpdated::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskUpdated::new(&view));
         Ok(view)
     }
 
@@ -494,9 +531,10 @@ impl Tasks {
             task.status = TaskStatus::Done;
             task.give_up_reason = None;
             task.updated_at = now_unix();
-            view_of(doc, id)
+            let view = view_of(doc, id)?;
+            let record = Self::record_of(&TaskCompleted::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskCompleted::new(&view));
         Ok(view)
     }
 
@@ -520,9 +558,10 @@ impl Tasks {
             }
             task.give_up_reason = Some(reason);
             task.updated_at = now_unix();
-            view_of(doc, id)
+            let view = view_of(doc, id)?;
+            let record = Self::record_of(&TaskGaveUp::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskGaveUp::new(&view));
         Ok(view)
     }
 
@@ -553,9 +592,10 @@ impl Tasks {
                     t.updated_at = now;
                 }
             }
-            view_of(doc, id)
+            let view = view_of(doc, id)?;
+            let record = Self::record_of(&TaskArchived::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskArchived::new(&view));
         Ok(view)
     }
 
@@ -576,9 +616,10 @@ impl Tasks {
             if changed {
                 task.updated_at = now_unix();
             }
-            view_of(doc, id)
+            let view = view_of(doc, id)?;
+            let record = Self::record_of(&TaskReopened::new(&view))?;
+            Ok((view, record))
         })?;
-        self.emit(&TaskReopened::new(&view));
         Ok(view)
     }
 
@@ -599,10 +640,9 @@ impl Tasks {
                 }
             }
             doc.tasks.remove(idx);
-            Ok(())
-        })?;
-        self.emit(&TaskDeleted::new(id));
-        Ok(())
+            let record = Self::record_of(&TaskDeleted::new(id))?;
+            Ok(((), record))
+        })
     }
 }
 
@@ -688,7 +728,7 @@ mod tests {
                 serde_json::to_value(TaskDeleted::new("t1")).expect("deleted"),
             ),
         ];
-        let events = bus.drain().expect("drain");
+        let events = bus.catch_up("sub", 100).expect("catch up");
         assert_eq!(
             events.len(),
             expected.len(),
@@ -706,18 +746,41 @@ mod tests {
     }
 
     #[test]
-    fn task_mutations_succeed_when_the_event_spool_cannot_be_written() {
+    fn task_mutations_succeed_when_the_shared_log_cannot_be_reached() {
         let store = scratch("events-unwritable");
         let bus = adi_events::Events::with_config(store.config().clone());
         std::fs::create_dir_all(store.config().root()).expect("create root");
-        // A regular file in the spool directory's place makes event writes fail on every OS.
-        std::fs::write(bus.dir(), "not a directory").expect("block spool");
+        // A regular file in the log directory's place makes relaying to it fail on every OS. The
+        // event is still safely in this store's own outbox table (same db, same transaction) —
+        // only forwarding it onward is affected, and that is best-effort.
+        std::fs::write(bus.dir(), "not a directory").expect("block the shared log");
 
         mk(&store, "ship it", None);
-        store.complete("t1", None).expect("complete without event spool");
+        store
+            .complete("t1", None)
+            .expect("complete even though the shared log is unreachable");
         assert_eq!(
             store.get("t1").expect("persisted task").task.status,
             TaskStatus::Done
+        );
+        // Called directly (rather than through `with_doc`'s own best-effort swallow), the failure
+        // to reach the shared log is reported rather than hidden — a periodic sweep wants to know.
+        assert!(store.relay_pending_events().is_err());
+
+        // The events are not lost: they are still rows in this store's own outbox table. Once the
+        // shared log is reachable again (the "app came back up" half of "catch-up after
+        // downtime"), the very same call relays everything that piled up while it wasn't.
+        std::fs::remove_file(bus.dir()).expect("unblock the shared log");
+        assert_eq!(
+            store.relay_pending_events().expect("relay now that the log is back"),
+            2,
+            "both the create and the complete were still pending"
+        );
+        let caught_up = bus.catch_up("sub", 10).expect("catch up");
+        assert_eq!(
+            caught_up.iter().map(|e| e.record.name.as_str()).collect::<Vec<_>>(),
+            vec!["adi.tasks.created", "adi.tasks.completed"],
+            "delivered in the order they actually happened, not the order they were relayed"
         );
     }
 

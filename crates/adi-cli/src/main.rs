@@ -230,7 +230,7 @@ enum Command {
         #[command(subcommand)]
         command: ChannelsCommand,
     },
-    /// Event bus commands: publish platform events and peek at the spool.
+    /// Event bus commands: publish platform events and peek at what hasn't been delivered yet.
     Events {
         #[command(subcommand)]
         command: EventsCommand,

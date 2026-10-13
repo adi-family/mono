@@ -100,13 +100,13 @@ pub use tools::{ToolRenamed, rename_tool};
 
 pub use adi_events::{
     ENVELOPE as EVENT_ENVELOPE, Error as EventsError, Event, EventRecord, EventType, Events,
-    SpooledEvent, matches as event_matches,
+    LoggedEvent, matches as event_matches, outbox as event_outbox,
 };
 
 pub use adi_triggers::{
     Error as TriggersError, Firing, KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH,
-    RUNTIME_TS, RunState, Trigger, TriggerManifest, Triggers, clean_trigger_on,
-    presets as trigger_presets,
+    RUNTIME_TS, RunState, SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest,
+    Triggers, clean_trigger_on, presets as trigger_presets,
 };
 
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.

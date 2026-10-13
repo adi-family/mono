@@ -1,6 +1,6 @@
 [package]
 name = "adi-events"
-description = "A tiny, decoupled event bus for the adi platform: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one JSON record spooled under ~/.adi/mono/events, and a consumer drains the spool and delivers each to whoever subscribed. Publishers depend only on this crate (which depends only on adi-config) — they never know a subscriber exists. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail)."
+description = "The adi platform's reliable event log: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one row in an append-only SQLite log under ~/.adi/mono/events/log.db, under a monotonic seq. A consumer picks a stable subscriber name and `catch_up`/`ack`s its own cursor, so it replays exactly what it missed after downtime, at-least-once. The `outbox` module is the other half: a producer with its own database writes an event in the same transaction as the state change it describes, then relays it into the log. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 adi-config = { workspace = true }
 
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

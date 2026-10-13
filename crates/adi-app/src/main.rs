@@ -5,6 +5,7 @@
 
 mod awaits;
 mod channels;
+mod event_log;
 mod live;
 mod node;
 mod prober;
@@ -248,10 +249,12 @@ async fn main() -> anyhow::Result<()> {
     let triggers = Triggers::open();
     let events = Events::open();
     let trigger_supervisor = Supervisor::start(triggers.clone());
-    // Only this dispatcher drains the event spool. The Hive channel service observes
-    // conversation state independently, so it never competes for these records.
+    // Each consumer of the shared event log owns its own cursor, so this dispatcher and anything
+    // else reading the log (the Hive channel service observes conversation state independently)
+    // never race each other for the same rows.
     let event_dispatcher =
         EventDispatcher::start_watched(triggers.clone(), awaits::start(agents.clone()));
+    event_log::start(tasks.clone(), events.clone());
     prober::start(agents.clone());
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
