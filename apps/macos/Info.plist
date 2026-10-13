@@ -35,14 +35,18 @@
          shelling out to ask. Restamped per flavour by build.sh alongside ADIFlavor. -->
     <key>ADIDomain</key>
     <string>adi</string>
-    <!-- The panel window (Sources/PanelWindow.swift) loads `http://app.adi`, and App Transport
-         Security refuses plain HTTP unless it is told otherwise. There is no HTTPS to move to:
-         the front door serves a zone that resolves only on this Mac, for which no certificate
-         authority issues anything, and the traffic never leaves the loopback interface.
-         NSAllowsLocalNetworking covers the `127.0.0.1:<port>` a dashboard is reached on before it
-         has a host; the exception domain covers the zone itself. Restamped per flavour by
-         build.sh, beside ADIDomain — a dev build browses `.adi-dev`, and an exception naming
-         `adi` would leave its every page blocked. -->
+    <!-- The store directory under $HOME, so the panel window can find the front door's CA
+         (~/<ADIDir>/mono/hive/tls/ca.pem) and trust it for this zone. Restamped per flavour. -->
+    <key>ADIDir</key>
+    <string>.adi</string>
+    <!-- The panel window (Sources/PanelWindow.swift) loads `https://app.adi`, but a page in it
+         still links to plain `http://` hosts in the zone — a dashboard's own URL, a service the
+         hive lists — and App Transport Security refuses those unless told otherwise. The traffic
+         never leaves the loopback interface. NSAllowsLocalNetworking covers the
+         `127.0.0.1:<port>` a dashboard is reached on before it has a host; the exception domain
+         covers the zone itself, and also relaxes ATS's checks on the front door's locally minted
+         certificate. Restamped per flavour by build.sh, beside ADIDomain — a dev build browses
+         `.adi-dev`, and an exception naming `adi` would leave its every page blocked. -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsLocalNetworking</key>

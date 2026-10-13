@@ -28,11 +28,27 @@ enum Core {
             .flatMap { $0.isEmpty ? nil : $0 } ?? "adi"
     }
 
-    /// The control panel's address on this install — `http://app.adi`, or the flavour's own zone.
+    /// The control panel's address on this install — `https://app.adi`, or the flavour's own zone.
     /// One definition, because two things open it now: the window in the app, and the default
     /// browser when somebody asks for it there.
+    ///
+    /// HTTPS because only a secure context gets a service worker, and with it the panel's PWA
+    /// install and its notifications. The front door serves both schemes; its certificate is
+    /// signed by the install's own CA, which `WebPanel` trusts for this zone even before the
+    /// operator has trusted it system-wide.
     static var panelURL: URL {
-        URL(string: "http://app.\(domain)/") ?? URL(string: "http://app.adi/")!
+        URL(string: "https://app.\(domain)/") ?? URL(string: "https://app.adi/")!
+    }
+
+    /// The front door's certificate authority, `~/<ADI_DIR>/mono/hive/tls/ca.pem` — `adi-hive`
+    /// writes it beside the `hive.yaml` it serves from. `ADIDir` is stamped by build.sh with the
+    /// flavour's store directory, so a dev bundle pins the dev install's CA and not the real one.
+    static var frontDoorCA: URL {
+        let dir = (Bundle.main.object(forInfoDictionaryKey: "ADIDir") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 } ?? ".adi"
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(dir)
+            .appendingPathComponent("mono/hive/tls/ca.pem")
     }
 
     private static var binaryPath: String {

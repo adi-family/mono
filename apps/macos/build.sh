@@ -132,8 +132,10 @@ plutil -replace CFBundleIdentifier -string "$ADI_BUNDLE_ID" "$APP/Contents/Info.
 plutil -replace CFBundleExecutable -string "$APP_NAME" "$APP/Contents/Info.plist"
 plutil -replace ADIFlavor -string "$ADI_FLAVOR" "$APP/Contents/Info.plist"
 plutil -replace ADIDomain -string "$ADI_DOMAIN" "$APP/Contents/Info.plist"
-# The panel window is a WKWebView on http://app.$ADI_DOMAIN, and App Transport Security blocks
-# plain HTTP unless the zone is excepted by name. The zone is the flavour's, so this is stamped
+plutil -replace ADIDir -string "$ADI_DIR" "$APP/Contents/Info.plist"
+# The panel window is a WKWebView on https://app.$ADI_DOMAIN, but its pages still link to plain
+# http:// hosts in the zone, and App Transport Security blocks those unless the zone is excepted
+# by name. The zone is the flavour's, so this is stamped
 # here rather than written once in Info.plist: a dev build serving .adi-dev would otherwise ship
 # an exception for .adi and show an empty window with a policy error in Console.
 plutil -replace NSAppTransportSecurity -json "{

@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import SwiftUI
 import WebKit
 
@@ -361,6 +362,48 @@ extension WebPanel: WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         report(error)
+    }
+
+    /// Trust the front door's own CA for this install's zone, and nothing else.
+    ///
+    /// The leaf on `https://app.adi` is signed by a CA `adi-hive` minted on this machine, which the
+    /// system trusts only once somebody has run `security add-trusted-cert` by hand — until then
+    /// WebKit's default answer is a TLS error and an empty window. So a challenge from a local
+    /// host is evaluated with that CA added as an anchor *on top of* the system's: a certificate
+    /// the system already trusts still passes, and one the CA did not sign still fails. Any other
+    /// host gets WebKit's default handling untouched. The CA is name-constrained to `.adi`,
+    /// `localhost` and `127/8` (crates/adi-hive/src/tls.rs), so anchoring it here cannot vouch
+    /// for a name outside them either.
+    func webView(_ webView: WKWebView,
+                 didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust,
+              let host = URL(string: "https://\(space.host)"), Self.isLocal(host),
+              let ca = Self.frontDoorCA() else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        SecTrustSetAnchorCertificates(trust, [ca] as CFArray)
+        SecTrustSetAnchorCertificatesOnly(trust, false)
+        if SecTrustEvaluateWithError(trust, nil) {
+            completionHandler(.useCredential, URLCredential(trust: trust))
+        } else {
+            completionHandler(.performDefaultHandling, nil)
+        }
+    }
+
+    /// Read on every challenge rather than cached: `adi-hive` replaces the CA when its parameters
+    /// change (`CA_PARAMS_VERSION`), and a copy held from launch would refuse the new one.
+    private static func frontDoorCA() -> SecCertificate? {
+        guard let pem = try? String(contentsOf: Core.frontDoorCA, encoding: .utf8) else { return nil }
+        let base64 = pem
+            .components(separatedBy: .newlines)
+            .filter { !$0.hasPrefix("-----") }
+            .joined()
+        guard let der = Data(base64Encoded: base64) else { return nil }
+        return SecCertificateCreateWithData(nil, der as CFData)
     }
 
     func webView(_ webView: WKWebView,
