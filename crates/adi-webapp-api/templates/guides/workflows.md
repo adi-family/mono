@@ -112,11 +112,50 @@ way:
 
 A `ctx.task`/`ctx.ask` assigned to a **person** shows up on the Tasks panel's "Needs your input"
 section, with a form rendered from the task's own `output_schema` — submitting it runs through
-the same validation `tasks complete --result` does. To be *pushed* a notice rather than checking
-the panel, wire an `event` trigger on `adi.tasks.created` (`triggers.md`) that posts to a
-connected Telegram/Slack channel when the payload's `assignee` is the person you want notified —
-the task event already carries `assignee`/`workflow_run`/`step_key`, and firing once per task
-creation is inherently idempotent.
+the same validation `tasks complete --result` does.
+
+### Getting *pushed* a notice, not just checking the panel
+
+By design, this is a `triggers.md` recipe, not a built-in feature of workflows themselves — a
+person task is an ordinary `adi.tasks.created` event (already carrying `assignee`/`workflow_run`/
+`step_key`), so an `event` trigger reacts to it exactly like any other. The settings below are the
+same Telegram pattern the built-in `telegram-notify` preset uses (a bot token + chat id read from
+the trigger's own settings), just reacting to a task event instead of a webhook:
+
+- Kind: `event`. Runtime: `typescript`. Event pattern: `adi.tasks.created`.
+- Settings (`--extra key=value`, or the editor's settings fields): `token_env` (which env var
+  holds the bot token — default `TELEGRAM_BOT_TOKEN`), `chat_id` (where that person's bot DM
+  already is), `person` (the `assignee` to watch for — one trigger per person, or widen the
+  filter below to notify a whole team at once).
+- Code block:
+
+```ts
+// Notify one person over Telegram when a task is created and assigned to them.
+const token = process.env[process.env.ADI_TOKEN_ENV ?? "TELEGRAM_BOT_TOKEN"];
+const chatId = process.env.ADI_CHAT_ID;
+const person = process.env.ADI_PERSON;
+if (!token || !chatId || !person) throw new Error("token_env/chat_id/person are all required");
+
+const task = JSON.parse(process.env.ADI_PAYLOAD ?? "{}");
+if (task.assignee !== person) process.exit(0); // not for this person — nothing to do
+
+const lines = [
+  `New task for you: ${task.title}`,
+  task.workflow_run ? `from workflow run ${task.workflow_run}` : null,
+  `{{cli}} tasks show ${task.id}`,
+].filter(Boolean);
+
+await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ chat_id: chatId, text: lines.join("\n") }),
+});
+```
+
+`TELEGRAM_BOT_TOKEN` is a secret the trigger's own process reads from its environment, same as
+the `telegram-notify`/`telegram-bot` presets. Idempotent for free: one task creation is one
+`adi.tasks.created` event, so the trigger fires — and so the message sends — exactly once per
+task.
 
 ## Opting an agent into dispatch
 
