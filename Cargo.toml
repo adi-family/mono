@@ -38,6 +38,7 @@ default-members = [
     "crates/adi-ports-manager",
     "crates/adi-projects",
     "crates/adi-pty",
+    "crates/adi-schedules",
     "crates/adi-secrets",
     "crates/adi-tasks",
     "crates/adi-tools",
@@ -91,6 +92,7 @@ adi-osext = { path = "crates/adi-osext" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
 adi-pty = { path = "crates/adi-pty" }
+adi-schedules = { path = "crates/adi-schedules" }
 adi-secrets = { path = "crates/adi-secrets" }
 adi-tasks = { path = "crates/adi-tasks" }
 adi-tools = { path = "crates/adi-tools" }
@@ -122,6 +124,14 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # drops the remote `$ref` resolver (`reqwest` + `tls-aws-lc-rs`, which wants cmake) — every schema
 # here is an already-in-hand JSON document, never a URL to fetch.
 jsonschema = { version = "0.58", default-features = false }
+# The schedule sweep (adi-schedules): `cron::Schedule::after`/`upcoming` take any `chrono::TimeZone`
+# directly, so a slot resolved in a workflow's own IANA zone carries its DST transition rather than
+# this tree redoing that math by hand. `chrono-tz` is the compiled IANA database that implements
+# the trait `cron` wants; `chrono` itself is just the `DateTime<Utc>` type everything else here
+# already speaks.
+chrono = "0.4"
+chrono-tz = "0.10"
+cron = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # OpenAI's BPE, ranks compiled in — no model load, no network. Used by adi-agents' transcript

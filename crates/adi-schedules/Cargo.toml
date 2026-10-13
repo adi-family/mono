@@ -1,0 +1,21 @@
+[package]
+name = "adi-schedules"
+description = "The WORKFLOWS schedule sweep (ADI-MONO-141 §D): computes which slots a workflow's cron rule owes since it was last checked, in the workflow's own IANA timezone with DST handled, collapses a downtime backlog to a single fire (or none, under `catchUp: skip`), and claims each `wf@slot` run key exactly once. Pure library — the workflow engine (WF-5) supplies the schedules and what a pour actually does."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+chrono-tz = { workspace = true }
+cron = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true
