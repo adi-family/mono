@@ -1,6 +1,6 @@
 [package]
 name = "adi-workflows"
-description = "The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?)` fires (schedule via adi-schedules' sweep, event via this crate's own log cursor), and pours the run row + root task + `adi.workflows.run.started` event every starter shares. The TS execution runtime that drives a started run's own `ctx` checkpoints (step/task/run/waitFor/sleep/ask, replay, rewind) is further WF-5 work, not yet built here — see the crate docs."
+description = "The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?) | manual()` fires, pours its row + root task + `adi.workflows.run.started` event, and drives it — a fresh `bun` process per attempt, relaying each `ctx` checkpoint (step/task/run/waitFor/sleep/ask) over a line-delimited JSON pipe, journaling every resolution so replay is instant and an unresolved checkpoint just suspends the attempt cleanly — through to `adi.workflows.run.completed/failed`. See the crate docs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

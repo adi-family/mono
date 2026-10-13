@@ -1,45 +1,47 @@
 //! adi-workflows — the WORKFLOWS engine, spec section E of ADI-MONO-141 (ADI-MONO-146, "WF-5").
 //!
-//! # What this crate builds, so far
+//! # What this crate builds
 //!
 //! A workflow is a TypeScript file (`workflows/*.ts`, or `projects/<id>/workflows/*.ts`) that
 //! exports `on` — one or several triggers built from `@adi/workflows`' `schedule(cron, tz)` /
-//! `event(pattern, where?)` / `manual()`. This crate:
+//! `event(pattern, where?)` / `manual()` — and a `default workflow(async (ctx, input) => …)`
+//! body. This crate:
 //!
 //! * **discovers** every such file ([`discover::workflow_files`]);
-//! * **describes** one, by actually running it under `bun` and reading its `on` export back as
-//!   JSON ([`describe::describe`]) — never by parsing the TypeScript text, since `on` is arbitrary
-//!   JS;
+//! * **describes** one, by actually running it under `bun` and reading its `on`/`input`/`output`
+//!   exports back as JSON ([`describe::describe`]) — never by parsing the TypeScript text, since
+//!   `on` is arbitrary JS;
 //! * **starts a run** when a trigger fires: [`WorkflowScheduleSource`] feeds `adi-schedules`'
-//!   sweep (`schedule_tick`) for the cron half, and [`starters::tick`] (`event_tick`) is this
-//!   crate's own cursor-driven consumer of the shared event log for the event half;
+//!   sweep ([`Engine::schedule_tick`]) for the cron half, [`starters::tick`]
+//!   ([`Engine::event_tick`]) is this crate's own cursor-driven consumer of the shared event log
+//!   for the event half, and [`Engine::start_manual`] is the one-call starter for an explicit
+//!   `wf@manual:<requestId>` run (the CLI/panel command that calls it is WF-6's job, not this
+//!   crate's);
 //! * **pours** that run — [`pour::WorkflowRunPourer`] creates the run row, its root task, and
-//!   emits `adi.workflows.run.started`, exactly once per run key, whichever starter asked.
+//!   emits `adi.workflows.run.started`, exactly once per run key, whichever starter asked;
+//! * **drives** it: [`Engine::run_tick`] attempts every unfinished run, spawning a fresh `bun`
+//!   process ([`attempt::Attempt`]) that replays the workflow body from the top, relaying each
+//!   `ctx` checkpoint — `step`/`task`/`run`/`waitFor`/`sleep`/`ask` — to this crate over a line-
+//!   delimited JSON pipe ([`rpc::Request`]; `@adi/workflows`' `createCtx` is the TS side of the
+//!   same contract) and journaling every resolution ([`store::WorkflowStore`]'s `step_journal`),
+//!   so a saved step replays instantly and a checkpoint that hasn't resolved yet just suspends
+//!   the attempt cleanly, tried again next tick;
+//! * **rewinds** a run to an earlier step ([`Engine::rewind`]), discarding its journal past that
+//!   point and deleting whatever task or child run each discarded step had created, so the redo
+//!   is genuine rather than a replay of the stale answer (see [`rewind`]'s own doc for the one
+//!   documented limit on that).
 //!
-//! Igor's decision on the cron dialect: a workflow file writes standard 5-field unix cron (the
-//! spec's own examples, e.g. `"0 5 * * MON"`), normalized here into `adi-schedules`' 6-field
-//! dialect ([`normalize_five_field`]) — anything that isn't exactly 5 fields is refused with a
-//! clear error, naming the field count, rather than silently reinterpreted.
+//! Igor's decisions, both load-bearing on how this reads:
 //!
-//! # What this crate does NOT build yet
-//!
-//! The actual execution engine — the part that takes a started run's root task and drives the
-//! workflow file's own `workflow(async (ctx, input) => …)` body through its `ctx` checkpoints
-//! (`step`/`task`/`run`/`waitFor`/`sleep`/`ask`), replaying saved steps instantly on resume,
-//! rewinding a run to an earlier step, refusing a reused key, validating `input`/`output` against
-//! the file's `zod` shapes, and completing or failing the run's root task (`adi.workflows.run.
-//! completed`/`failed`) — **is not built here**. A run this crate starts sits with an open root
-//! task forever until that engine exists; `@adi/workflows`' `workflow()` export is a placeholder
-//! for exactly this reason (see its own doc comment).
-//!
-//! That is a genuinely separate, large piece of work (a durable-execution runtime, in both
-//! directions of the host/Bun boundary) — ADI-MONO-146 stays open for it. This run landed the
-//! *starting* half: discovery, description, the two triggers' starters, and the pour every run
-//! begins with, each tested end to end including through a real `bun` process. See the task's own
-//! "done / remaining" notes for the precise list.
-//!
-//! Also deferred: `manual()` triggers (`wf@manual:<requestId>` run keys) have no starter at all
-//! yet — there is no caller for one until the CLI/panel (WF-6) exist to ask for a manual run.
+//! * the cron dialect — a workflow file writes standard 5-field unix cron (the spec's own
+//!   examples, e.g. `"0 5 * * MON"`), normalized here into `adi-schedules`' 6-field dialect
+//!   ([`normalize_five_field`]) — anything that isn't exactly 5 fields is refused with a clear
+//!   error, naming the field count, rather than silently reinterpreted;
+//! * the self-retrigger fix — every `adi.workflows.run.*` event carries `caused_by_run`, and every
+//!   task event already carries the same fact as `workflow_run`; [`causation::would_cycle`] walks
+//!   that chain, up to 8 hops, so an event starter refuses to start workflow `W` from an event
+//!   whose own causation already includes a run of `W`, directly or through a few other
+//!   workflows in between.
 
 mod attempt;
 mod causation;
