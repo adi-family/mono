@@ -303,8 +303,14 @@ impl Attempt {
             // creation moment at millisecond precision in the same pending-marker table
             // `ctx.waitFor` already uses for its own "when did I start" memory;
             // `resolve_task_step` prefers this over `created_at` whenever it's there.
+            // `timeout_ms` rides along too (even when `None`) — `crate::readiness` reads it back
+            // to know this step's own deadline without re-spawning `bun` to re-ask for it.
             self.store
-                .put_pending(&run.run_key, key, &json!({"started_at_ms": now_ms()}))
+                .put_pending(
+                    &run.run_key,
+                    key,
+                    &json!({"started_at_ms": crate::now_ms(), "timeout_ms": timeout_ms}),
+                )
                 .map_err(|e| store_err(&e))?;
             created
         };
@@ -386,7 +392,7 @@ impl Attempt {
                 .map_err(|e| store_err(&e))?
                 .and_then(|state| state.get("started_at_ms").and_then(Value::as_u64))
                 .unwrap_or_else(|| task.task.created_at.saturating_mul(1000));
-            let age_ms = now_ms().saturating_sub(started_at_ms);
+            let age_ms = crate::now_ms().saturating_sub(started_at_ms);
             if age_ms >= timeout_ms {
                 let record =
                     StepRecord::new(key, kind, StepOutcome::TimedOut).with_task(task.task.id.clone());
@@ -408,7 +414,7 @@ impl Attempt {
         if let Some(record) = self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))? {
             return Ok(outcome_to_reply(&record.outcome));
         }
-        let now = now_ms();
+        let now = crate::now_ms();
         let (since_seq, started_at_ms) = if let Some(state) =
             self.store.get_pending(&run.run_key, key).map_err(|e| store_err(&e))?
         {
@@ -418,8 +424,14 @@ impl Attempt {
             )
         } else {
             let head = self.events.head().map_err(|e| format!("couldn't read the event log: {e}"))?;
+            // `timeout_ms` rides along here too, same reason as `on_task_like`'s own pending
+            // write — `crate::readiness` reads it back without spawning `bun`.
             self.store
-                .put_pending(&run.run_key, key, &json!({"since_seq": head, "started_at_ms": now}))
+                .put_pending(
+                    &run.run_key,
+                    key,
+                    &json!({"since_seq": head, "started_at_ms": now, "timeout_ms": timeout_ms}),
+                )
                 .map_err(|e| store_err(&e))?;
             (head, now)
         };
@@ -454,12 +466,17 @@ impl Attempt {
         if self.store.get_step(&run.run_key, key).map_err(|e| store_err(&e))?.is_some() {
             return Ok(json!({"state": "ok"}));
         }
-        let now = i64::try_from(now_ms()).unwrap_or(i64::MAX);
+        let now = i64::try_from(crate::now_ms()).unwrap_or(i64::MAX);
         if now >= until_ms {
             let record = StepRecord::new(key, StepKind::Sleep, StepOutcome::Ok(Value::Null));
             self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
             return Ok(json!({"state": "ok"}));
         }
+        // Persisted host-side so `crate::readiness` can tell when this deadline passes without
+        // spawning `bun` again just to re-ask the workflow body what `until` was.
+        self.store
+            .put_pending(&run.run_key, key, &json!({"until_ms": until_ms}))
+            .map_err(|e| store_err(&e))?;
         Ok(json!({"state": "pending"}))
     }
 
@@ -543,15 +560,6 @@ fn store_err(e: &crate::error::Error) -> String {
     format!("couldn't read or write the step journal: {e}")
 }
 
-/// Now, as epoch milliseconds — [`adi_config::now_unix`]'s own second-granularity is too coarse
-/// for a `timeout` under a couple of seconds (see [`Attempt::on_task_like`]'s own doc on why).
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +613,12 @@ mod tests {
         max_ticks: usize,
     ) {
         for _ in 0..max_ticks {
+            // A real pause between simulated ticks: with the run-readiness cache (ADI-MONO-150),
+            // a tick that finds nothing changed and no deadline due costs a few cheap reads, not
+            // a `bun` spawn — so, unlike before this fix, nothing here reliably burns the real
+            // wall-clock time this workflow's `ctx.sleep` needs to pass on its own. 40 * 20ms
+            // comfortably clears the 300ms `sleepUntil` the "tour" workflow below sleeps until.
+            std::thread::sleep(Duration::from_millis(20));
             let _ = engine.run_tick();
             complete_person_steps(tasks, run_key, &["review", "ask1"]);
             let _ = events.emit(event_name, "{}");
@@ -967,6 +981,149 @@ mod tests {
             Outcome::Completed(json!({"r": {"answer": "second"}})),
             "the redo answers with the NEW completion, not the stale first one"
         );
+    }
+
+    /// ADI-MONO-150: a run waiting on a person task must not spawn `bun` on every tick — only the
+    /// first (nothing cached yet) and the one the person's completion actually wakes.
+    #[test]
+    fn a_waiting_run_spawns_bun_only_on_a_real_change() {
+        let config = scratch("readiness-person-task");
+        let engine = Engine::with_config(config.clone());
+        engine.bootstrap().expect("bootstrap");
+        write_workflow(
+            &config,
+            "gate.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx, input) => {\n\
+             \x20 const r = await ctx.task({ key: \"gate\", title: \"review\", person: \"igor\" });\n\
+             \x20 return { r };\n\
+             });\n",
+        );
+        let started = engine.start_manual("gate", &json!({}), "req-1").expect("start");
+        let tasks = Tasks::with_config(config.clone());
+
+        let first = engine.run_tick();
+        assert_eq!(first.len(), 1, "never attempted before — the first tick always tries");
+        assert_eq!(first[0].outcome, Outcome::Suspended);
+
+        let mut extra_spawns = 0;
+        for _ in 0..30 {
+            extra_spawns += engine.run_tick().len();
+        }
+        assert_eq!(
+            extra_spawns, 0,
+            "nothing changed across 30 simulated ticks — no bun spawn should have happened"
+        );
+
+        let review = tasks
+            .list(None, None, Some(TaskStatus::Open), None)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.task.title == "review")
+            .expect("review task");
+        tasks
+            .complete(&review.task.id, Some(json!({"ok": true})))
+            .expect("complete");
+
+        let woke = engine.run_tick();
+        assert_eq!(woke.len(), 1, "the task's own completion must wake the run within one tick");
+        assert_eq!(woke[0].outcome, Outcome::Completed(json!({"r": {"ok": true}})));
+        let _ = started;
+    }
+
+    /// ADI-MONO-150: even with nothing changed, a run is re-attempted once the safety interval
+    /// has passed — the fallback for a signal the readiness cache doesn't model.
+    #[test]
+    fn the_safety_interval_forces_a_reattempt_even_with_nothing_changed() {
+        let config = scratch("readiness-safety");
+        let safety_interval = Duration::from_millis(120);
+        let engine = Engine::with_config_and_safety_interval(config.clone(), safety_interval);
+        engine.bootstrap().expect("bootstrap");
+        write_workflow(
+            &config,
+            "stuck.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx, input) => {\n\
+             \x20 const r = await ctx.task({ key: \"gate\", title: \"review\", person: \"igor\" });\n\
+             \x20 return { r };\n\
+             });\n",
+        );
+        let started = engine.start_manual("stuck", &json!({}), "req-1").expect("start");
+
+        let first = engine.run_tick();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].outcome, Outcome::Suspended);
+
+        assert!(
+            engine.run_tick().is_empty(),
+            "immediately again, nothing changed, well inside the safety interval"
+        );
+
+        std::thread::sleep(safety_interval + Duration::from_millis(80));
+        let safety_tick = engine.run_tick();
+        assert_eq!(
+            safety_tick.len(), 1,
+            "the safety interval must force a re-attempt even though nothing visible changed"
+        );
+        assert_eq!(
+            safety_tick[0].outcome,
+            Outcome::Suspended,
+            "still nothing real to resolve — just re-tried"
+        );
+        let _ = started;
+    }
+
+    /// ADI-MONO-150: a `ctx.sleep` deadline wakes its run on its own, without any earlier spawn,
+    /// and on time.
+    #[test]
+    fn a_sleep_deadline_wakes_the_run_without_an_earlier_spawn() {
+        let config = scratch("readiness-sleep");
+        let engine = Engine::with_config(config.clone());
+        engine.bootstrap().expect("bootstrap");
+        write_workflow(
+            &config,
+            "napper.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx, input) => {\n\
+             \x20 await ctx.sleep({ key: \"nap\", until: input.sleepUntil });\n\
+             \x20 return { done: true };\n\
+             });\n",
+        );
+        // Generous relative to the first attempt's own real `bun` spawn overhead (which the
+        // "too soon" checks below must survive without crossing the deadline early) — the point
+        // under test is the timing *logic*, not how fast this machine's first spawn happens to be.
+        let sleep_for = Duration::from_millis(800);
+        let start_instant = std::time::Instant::now();
+        let sleep_until = (std::time::SystemTime::now() + sleep_for)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis();
+        let started = engine
+            .start_manual("napper", &json!({"sleepUntil": sleep_until}), "req-1")
+            .expect("start");
+
+        let first = engine.run_tick();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].outcome, Outcome::Suspended);
+
+        // Keep checking — no spawn should happen — until comfortably before the deadline itself.
+        while start_instant.elapsed() + Duration::from_millis(150) < sleep_for {
+            assert!(
+                engine.run_tick().is_empty(),
+                "too soon for the sleep's own deadline — no spawn yet"
+            );
+        }
+
+        while start_instant.elapsed() < sleep_for {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let woke = engine.run_tick();
+        assert_eq!(woke.len(), 1, "the deadline passing must wake the run on its own");
+        assert_eq!(woke[0].outcome, Outcome::Completed(json!({"done": true})));
+        let _ = started;
     }
 
     /// `attempt_once`'s own `ensure_run_dir` is private; the test needs the exact same path to

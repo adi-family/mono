@@ -4,7 +4,7 @@
 
 > The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?) | manual()` fires, pours its row + root task + `adi.workflows.run.started` event, and drives it — a fresh `bun` process per attempt, relaying each `ctx` checkpoint (step/task/run/waitFor/sleep/ask) over a line-delimited JSON pipe, journaling every resolution so replay is instant and an unresolved checkpoint just suspends the attempt cleanly — through to `adi.workflows.run.completed/failed`. See the crate docs.
 
-17 structs · 6 enums · 1 type alias across 11 files.
+20 structs · 6 enums · 1 type alias across 12 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`, `WorkflowRunCompleted`, `WorkflowRunFailed`
 - [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`, `RanAttempt`
 - [`src/pour.rs`](#srcpourrs) — `WorkflowRunPourer`
+- [`src/readiness.rs`](#srcreadinessrs) — `Entry`, `Readiness`, `Signal`
 - [`src/rpc.rs`](#srcrpcrs) — `Request`
 - [`src/source.rs`](#srcsourcers) — `WorkflowScheduleSource`
 - [`src/starters.rs`](#srcstartersrs) — `Started`, `EventPattern`
@@ -232,6 +233,7 @@ pub struct Engine {
     schedules: ScheduleStore,
     tasks: Tasks,
     events: Events,
+    readiness: Arc<readiness::Readiness>,
 }
 ```
 
@@ -263,6 +265,45 @@ pub struct WorkflowRunPourer {
     store: crate::store::WorkflowStore,
     tasks: Tasks,
     events: Events,
+}
+```
+
+---
+
+## `src/readiness.rs`
+
+### struct `Entry`
+
+What's remembered about one run's last attempt — see the module doc for why this is purely a performance cache.
+
+```rust
+#[derive(Debug)]
+struct Entry {
+    fingerprint: u64,
+    last_attempt: Instant,
+}
+```
+
+### struct `Readiness`
+
+The per-run attempt-worthiness cache — one per `crate::Engine`, shared (behind an `Arc`, on `Engine` itself) across every clone, so the dedicated attempt worker and anything else calling the same engine agree on what's already been tried.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct Readiness {
+    safety_interval: Duration,
+    entries: Mutex<HashMap<String, Entry>>,
+}
+```
+
+### struct `Signal`
+
+What a run looks like right now: a hash of everything `Readiness::due` treats as "changed" (never read back out except to compare against an earlier `Signal`'s own hash, so what's actually hashed only has to be *consistent*, never meaningful on its own), plus the earliest deadline a pending checkpoint has told the host about so far, if any.
+
+```rust
+struct Signal {
+    fingerprint: u64,
+    deadline_ms: Option<u64>,
 }
 ```
 

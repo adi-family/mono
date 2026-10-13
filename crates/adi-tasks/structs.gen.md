@@ -4,13 +4,13 @@
 
 > The adi task tree: a persistent tree of work items (SQLite under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library.
 
-13 structs · 4 enums · 1 type alias across 4 files.
+13 structs · 4 enums · 2 type aliases across 4 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskArchived`, `TaskReopened`, `TaskGaveUp`
-- [`src/lib.rs`](#srclibrs) — `Tasks`
+- [`src/lib.rs`](#srclibrs) — `TaskSignatureRow`, `Tasks`
 - [`src/task.rs`](#srctaskrs) — `TaskStatus`, `EffectiveStatus`, `Task`, `TaskView`, `TaskDeleted`, `TasksDoc`, `NewTask`, `TaskPatch`, `ParentChange`
 
 ---
@@ -115,6 +115,14 @@ pub struct TaskGaveUp<'a>(pub &'a TaskView);
 ---
 
 ## `src/lib.rs`
+
+### type `TaskSignatureRow`
+
+One row of `Tasks::workflow_run_signature`: a task's `id`, `status`, `result`, and `give_up_reason`.
+
+```rust
+pub type TaskSignatureRow = (String, TaskStatus, Option<serde_json::Value>, Option<String>);
+```
 
 ### struct `Tasks`
 

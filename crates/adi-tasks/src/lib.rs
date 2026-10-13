@@ -75,6 +75,10 @@ const BACKUP_FILE: &str = "tasks.json.bak";
 /// The store's SQLite database.
 const DB_FILE: &str = "tasks.db";
 
+/// One row of [`Tasks::workflow_run_signature`]: a task's `id`, `status`, `result`, and
+/// `give_up_reason`.
+pub type TaskSignatureRow = (String, TaskStatus, Option<serde_json::Value>, Option<String>);
+
 /// The task tree store: reads and writes `tasks.db` under the `tasks` module dir. Cheap to clone;
 /// all state is on disk.
 #[derive(Debug, Clone)]
@@ -451,6 +455,46 @@ impl Tasks {
                 })
                 .map(|t| TaskView::of(t.clone(), &doc.tasks)))
         })
+    }
+
+    /// A cheap read of just enough about `workflow_run`'s tasks to tell whether anything has
+    /// changed — each one's `id`/`status`/`result`/`give_up_reason`, in a stable order — without
+    /// loading the whole task table the way [`list`](Self::list)/[`find_step`](Self::find_step)
+    /// do, since it's scoped to one run's own tasks (typically a handful) rather than every task
+    /// in the store. Built for `adi-workflows`' own run-readiness cache
+    /// (`crates/adi-workflows/src/readiness.rs`), which polls this once per unfinished run every
+    /// sweep; nothing here returns enough to answer anything but "did this change since I last
+    /// looked".
+    ///
+    /// Deliberately **not** `updated_at` alone: it's second-granularity
+    /// ([`now_unix`]), so a task created and completed inside the same wall-clock second — not a
+    /// contrived case, just a fast workflow attempt — would otherwise look unchanged despite a
+    /// real status flip. Comparing the stored fields themselves has no such blind spot.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn workflow_run_signature(&self, workflow_run: &str) -> Result<Vec<TaskSignatureRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, status, result, give_up_reason FROM tasks \
+                 WHERE workflow_run = ?1 ORDER BY id",
+            )
+            .map_err(|e| db::sql_err("read a workflow run's task signature in", e))?;
+        let rows = stmt
+            .query_map([workflow_run], |row| {
+                let status: String = row.get(1)?;
+                let result: Option<String> = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    TaskStatus::parse(&status),
+                    result.and_then(|r| serde_json::from_str(&r).ok()),
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            })
+            .map_err(|e| db::sql_err("read a workflow run's task signature in", e))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| db::sql_err("read a workflow run's task signature in", e))
     }
 
     /// Edit a task's fields (never its status). Reparenting is validated against the tree.

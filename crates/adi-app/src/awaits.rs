@@ -2,6 +2,12 @@
 //!
 //! Await checks run commands, so the dispatcher queues events to one worker to avoid blocking
 //! trigger dispatch or spawning unbounded threads during bursts.
+//!
+//! Workflow *execution* (spawning `bun` attempts for runs already poured) runs on its own thread,
+//! [`run_workflow_attempts`], separate from [`run`]'s shared one-second loop — see that function's
+//! own doc for why (ADI-MONO-150). Workflow *starting* (`schedule_tick`/`event_tick`, pouring a
+//! newly-due run's row and root task) stays on the shared loop: cheap, and bounded by how often a
+//! schedule or event actually fires, never by how many runs are already waiting.
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
@@ -15,20 +21,50 @@ use tracing::{info, warn};
 
 const TICK: Duration = Duration::from_secs(1);
 
+/// How many workflow runs [`run_workflow_attempts`] will attempt at once — spec ADI-MONO-150's
+/// own "e.g. 2 bun processes at a time". A run waiting on a 48-hour review and a run waiting on a
+/// 5-minute sleep must never queue behind each other indefinitely; two in flight is enough
+/// headroom without this process running an unbounded number of `bun` children at once.
+const WORKFLOW_CONCURRENCY: usize = 2;
+
 /// Owned event name and payload.
 type Posted = (String, String);
 
-/// Start the worker; dropping every clone of the returned observer stops it.
+/// Start the worker; dropping every clone of the returned observer stops it (both threads this
+/// spawns — the shared loop and the dedicated workflow-attempt loop).
 pub fn start(agents: Agents, workflows: WorkflowEngine) -> EventObserver {
     let (tx, rx) = channel::<Posted>();
+    let (keepalive_tx, keepalive_rx) = channel::<()>();
+    let workflow_attempts = workflows.clone();
     std::thread::spawn(move || run(&agents, &workflows, &rx));
-    observer(tx)
+    std::thread::spawn(move || run_workflow_attempts(&workflow_attempts, &keepalive_rx));
+    observer(tx, keepalive_tx)
 }
 
-fn observer(tx: Sender<Posted>) -> EventObserver {
+fn observer(tx: Sender<Posted>, keepalive: Sender<()>) -> EventObserver {
     Arc::new(move |record: &EventRecord| {
         let _ = tx.send((record.name.clone(), record.payload.clone()));
+        // Held only so its matching receiver disconnects — and `run_workflow_attempts` stops —
+        // the moment every clone of this very closure (the `EventObserver` this crate hands out)
+        // is dropped, exactly like `tx` already does for `run`'s own loop.
+        let _ = &keepalive;
     })
+}
+
+/// Drives workflow execution on its own thread and cadence, independent of [`run`]'s shared
+/// one-second loop: a run waiting on a slow person task or a many-hour sleep must never delay
+/// `dispatch`/`goals`/`awaits`, which share that loop (ADI-MONO-150). `run_tick_bounded`'s own
+/// readiness cache already means a sweep that finds nothing due costs a handful of indexed SQLite
+/// reads, never a `bun` spawn; the concurrency cap here is about the sweeps that *do* find
+/// something, so one slow attempt can never queue up every other due run behind it.
+fn run_workflow_attempts(workflows: &WorkflowEngine, keepalive: &Receiver<()>) {
+    loop {
+        report_workflows_ran(&workflows.run_tick_bounded(WORKFLOW_CONCURRENCY));
+        match keepalive.recv_timeout(TICK) {
+            Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
 }
 
 /// Track deadlines explicitly so a steady event stream cannot starve sweeps.
@@ -51,12 +87,11 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
             // state rather than next second's.
             report_dispatched(&dispatch::tick(agents));
             // The workflow engine's two starters — schedule and event — pour a new run's row and
-            // root task; `run_tick` is what actually drives one (spawning a fresh `bun` attempt
-            // for every run not yet finished). Starting before driving means a run poured this
-            // very second gets its first attempt this same tick, not next one.
+            // root task; `run_workflow_attempts`' own dedicated thread is what actually drives one
+            // (spawning a fresh `bun` attempt for every due run), off this shared loop entirely so
+            // a waiting run can never delay the ticks above (ADI-MONO-150).
             report_workflows_started(&workflows.schedule_tick(chrono::Utc::now()));
             report_workflows_started(&workflows.event_tick());
-            report_workflows_ran(&workflows.run_tick());
             next_tick = Instant::now() + TICK;
         }
     }
@@ -253,6 +288,70 @@ mod tests {
             store.list()
         );
         assert!(!store.claim(&scoped.id));
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-MONO-150: the shared loop's own cadence (a plain timer await firing close to its own
+    /// deadline) must hold however many workflow runs are sitting there waiting on a never-
+    /// completed person task — before this fix, `run_tick` attempted every one of them, serially,
+    /// inside this very loop.
+    #[test]
+    fn n_waiting_workflow_runs_never_delay_the_shared_ticks() {
+        let config = scratch("workflow-pressure");
+        let agents = Agents::with_config(config.clone());
+        let store = Awaits::with_config(config.clone());
+
+        let workflows = WorkflowEngine::with_config(config.clone());
+        workflows.bootstrap().expect("bootstrap");
+        let dir = config.module("workflows").dir().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(
+                dir.join(format!("n{i}.ts")),
+                "import { manual, workflow } from \"@adi/workflows\";\n\
+                 export const on = manual();\n\
+                 export default workflow(async (ctx, input) => {\n\
+                 \x20 await ctx.task({ key: \"gate\", title: \"review\", person: \"igor\" });\n\
+                 \x20 return {};\n\
+                 });\n",
+            )
+            .unwrap();
+            workflows
+                .start_manual(&format!("n{i}"), &serde_json::json!({}), &format!("req-{i}"))
+                .expect("start");
+        }
+
+        let on_timer = awaits::register(
+            &store,
+            "watcher",
+            "conv-timer",
+            &Request {
+                note: "the timer one".into(),
+                after_seconds: Some(1),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let started_at = Instant::now();
+        let _observer = start(agents, workflows);
+        let deadline = started_at + Duration::from_secs(5);
+        while Instant::now() < deadline && !store.list().is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let elapsed = started_at.elapsed();
+        assert!(
+            store.list().is_empty(),
+            "the timer await must still fire with 5 workflow runs waiting; still pending: {:?}",
+            store.list()
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "an await scheduled for 1s took {elapsed:?} to fire with 5 workflow runs waiting \
+             on an unfinished person task — the shared loop must never wait on a workflow attempt"
+        );
+        assert!(!store.claim(&on_timer.id));
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

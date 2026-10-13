@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_workflow ON runs (workflow);
 CREATE INDEX IF NOT EXISTS runs_unfinished ON runs (finished_at);
+-- What crate::readiness's \"a child run finished\" signal filters on — a run key's children are
+-- exactly the rows naming it as their caused_by_run (see pour::WorkflowRunPourer::pour_for_workflow
+-- 's own caller in attempt.rs's on_run).
+CREATE INDEX IF NOT EXISTS runs_caused_by ON runs (caused_by_run);
 
 CREATE TABLE IF NOT EXISTS step_journal (
     id         INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -460,7 +464,51 @@ impl WorkflowStore {
         Ok(discarded)
     }
 
+    /// A cheap signature of the runs `run_key` has caused ([`RunRow::caused_by_run`]) that have
+    /// finished — a count and the latest `finished_at` — the "a child run finished" signal
+    /// [`crate::readiness`] polls for every sweep, without loading any child run's full row.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn children_signature(&self, run_key: &str) -> Result<(i64, i64)> {
+        let conn = self.connect()?;
+        conn.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(finished_at), 0) FROM runs \
+             WHERE caused_by_run = ?1 AND finished_at IS NOT NULL",
+            [run_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run's children signature: {e}")))
+    }
+
     // ---- pending state (checkpoints not yet resolved) --------------------------------------
+
+    /// Every not-yet-resolved checkpoint's pending marker for `run_key` — in practice at most one,
+    /// since a run only ever blocks on the first checkpoint its replay hasn't resolved yet, but
+    /// [`crate::readiness`] reads whatever is actually there rather than assuming that invariant.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn list_pending(&self, run_key: &str) -> Result<Vec<(String, serde_json::Value)>> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare("SELECT step_key, state FROM step_pending WHERE run_key = ?1")
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read pending state: {e}")))?;
+        let rows = stmt
+            .query_map([run_key], |row| {
+                let step_key: String = row.get(0)?;
+                let state: String = row.get(1)?;
+                Ok((step_key, state))
+            })
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read pending state: {e}")))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a pending row: {e}")))
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(k, s)| (k, serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)))
+                    .collect()
+            })
+    }
 
     /// The pending marker `ctx.waitFor` saved the first time it reached this step, if any.
     ///

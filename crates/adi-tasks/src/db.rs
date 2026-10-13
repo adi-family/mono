@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks (parent);
 CREATE INDEX IF NOT EXISTS tasks_project ON tasks (project);
+-- `workflow_run_signature`'s own index: `tasks_step_id` below covers the same leading column but
+-- is partial (`WHERE workflow_run IS NOT NULL AND step_key IS NOT NULL`), so a plain
+-- `WHERE workflow_run = ?` can't rely on it in general. A real index, not a workaround.
+CREATE INDEX IF NOT EXISTS tasks_workflow_run ON tasks (workflow_run);
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_step_id
     ON tasks (workflow_run, step_key)
     WHERE workflow_run IS NOT NULL AND step_key IS NOT NULL;

@@ -19,13 +19,15 @@
 //!   crate's);
 //! * **pours** that run — [`pour::WorkflowRunPourer`] creates the run row, its root task, and
 //!   emits `adi.workflows.run.started`, exactly once per run key, whichever starter asked;
-//! * **drives** it: [`Engine::run_tick`] attempts every unfinished run, spawning a fresh `bun`
-//!   process ([`attempt::Attempt`]) that replays the workflow body from the top, relaying each
-//!   `ctx` checkpoint — `step`/`task`/`run`/`waitFor`/`sleep`/`ask` — to this crate over a line-
-//!   delimited JSON pipe ([`rpc::Request`]; `@adi/workflows`' `createCtx` is the TS side of the
-//!   same contract) and journaling every resolution ([`store::WorkflowStore`]'s `step_journal`),
-//!   so a saved step replays instantly and a checkpoint that hasn't resolved yet just suspends
-//!   the attempt cleanly, tried again next tick;
+//! * **drives** it: [`Engine::run_tick`] attempts every unfinished run that's actually *due*
+//!   ([`readiness::Readiness`] — a run with nothing new to look at since its last attempt costs a
+//!   few cheap reads, never a `bun` spawn), spawning a fresh `bun` process ([`attempt::Attempt`])
+//!   that replays the workflow body from the top, relaying each `ctx` checkpoint —
+//!   `step`/`task`/`run`/`waitFor`/`sleep`/`ask` — to this crate over a line-delimited JSON pipe
+//!   ([`rpc::Request`]; `@adi/workflows`' `createCtx` is the TS side of the same contract) and
+//!   journaling every resolution ([`store::WorkflowStore`]'s `step_journal`), so a saved step
+//!   replays instantly and a checkpoint that hasn't resolved yet just suspends the attempt
+//!   cleanly, tried again once it's due;
 //! * **rewinds** a run to an earlier step ([`Engine::rewind`]), discarding its journal past that
 //!   point and deleting whatever task or child run each discarded step had created, so the redo
 //!   is genuine rather than a replay of the stale answer (see [`rewind`]'s own doc for the one
@@ -52,6 +54,7 @@ mod error;
 mod event;
 mod pin;
 mod pour;
+mod readiness;
 mod rewind;
 mod rpc;
 mod source;
@@ -69,10 +72,23 @@ pub use source::WorkflowScheduleSource;
 pub use starters::{SUBSCRIBER as EVENT_STARTER_SUBSCRIBER, Started};
 pub use store::{RunRow, StepKind, StepOutcome, StepRecord, WorkflowStore};
 
+use std::sync::Arc;
+
 use adi_config::Config;
 use adi_events::Events;
 use adi_schedules::{Due, ScheduleStore};
 use adi_tasks::Tasks;
+
+/// Now, as epoch milliseconds — shared by [`attempt`] (a `ctx.task`/`ctx.waitFor`'s own pending
+/// marker needs sub-second precision; [`adi_config::now_unix`] is too coarse) and [`readiness`]
+/// (comparing a cached deadline against the wall clock needs the same clock both were stamped
+/// with).
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
 
 /// One run a tick started, whichever starter poured it — [`Engine::schedule_tick`] and
 /// [`Engine::event_tick`] both answer in this shape, so a caller logging "what fired" doesn't need
@@ -128,6 +144,11 @@ pub struct Engine {
     schedules: ScheduleStore,
     tasks: Tasks,
     events: Events,
+    /// Shared (not per-clone) so every clone of this engine — in particular the dedicated
+    /// workflow-attempt worker a host process runs [`run_tick_bounded`](Self::run_tick_bounded)
+    /// on, off its own thread — agrees on what's already been tried. See [`readiness`] for why
+    /// this is a cache, never load-bearing for correctness.
+    readiness: Arc<readiness::Readiness>,
 }
 
 impl Default for Engine {
@@ -151,6 +172,23 @@ impl Engine {
             schedules: ScheduleStore::with_config(config.clone()),
             tasks: Tasks::with_config(config.clone()),
             events: Events::with_config(config.clone()),
+            readiness: Arc::new(readiness::Readiness::new()),
+            config,
+        }
+    }
+
+    /// Same as [`with_config`](Self::with_config), but with the run-readiness cache's safety
+    /// interval overridden — for a test that wants to prove the safety interval actually fires
+    /// without sitting through a real 5 minutes.
+    #[must_use]
+    #[cfg(test)]
+    pub(crate) fn with_config_and_safety_interval(config: Config, safety_interval: std::time::Duration) -> Self {
+        Self {
+            runs: WorkflowStore::with_config(config.clone()),
+            schedules: ScheduleStore::with_config(config.clone()),
+            tasks: Tasks::with_config(config.clone()),
+            events: Events::with_config(config.clone()),
+            readiness: Arc::new(readiness::Readiness::with_safety_interval(safety_interval)),
             config,
         }
     }
@@ -212,32 +250,74 @@ impl Engine {
         )
     }
 
-    /// Attempt every unfinished run, once each — the level-triggered sweep that actually drives
-    /// execution: "re-attempt every unfinished run every tick", exactly like
-    /// [`schedule_tick`](Self::schedule_tick)/[`event_tick`](Self::event_tick) re-sweep rather
-    /// than waiting to be told something changed. A run that suspends is simply tried again next
-    /// call; what changed in between (a task finished, an event arrived, a sleep came due, a
-    /// child run resolved) is read fresh from the stores each time, never cached between ticks.
+    /// Attempt every unfinished run that is actually *due* — a `bun` attempt only for a run
+    /// [`readiness::Readiness::due`] says has something new to look at since its last one (or has
+    /// never been attempted, or has hit its own deadline, or is overdue for the safety interval).
+    /// One at a time, in [`list_unfinished`](store::WorkflowStore::list_unfinished)'s own oldest-
+    /// first order; [`run_tick_bounded`](Self::run_tick_bounded) is the same sweep with several
+    /// attempts in flight at once, for a caller (a dedicated worker thread, never the shared
+    /// 1-second tick loop dispatch/goals/awaits also run on) that wants that.
     #[must_use]
     pub fn run_tick(&self) -> Vec<RanAttempt> {
-        let attempt = self.attempt();
-        let runs = match self.runs.list_unfinished() {
+        self.run_tick_bounded(1)
+    }
+
+    /// The same sweep as [`run_tick`](Self::run_tick), attempting up to `max_concurrency` due runs
+    /// at once — what lets one run waiting on a slow person task or a many-hour sleep never cost
+    /// every *other* waiting run its own chance at an attempt this sweep. `max_concurrency` of `1`
+    /// (what [`run_tick`](Self::run_tick) uses) never spawns a worker thread at all, so the common
+    /// case — a handful of runs, most of them not due — pays no threading cost over the old
+    /// always-attempt sweep for whichever runs genuinely are due.
+    #[must_use]
+    pub fn run_tick_bounded(&self, max_concurrency: usize) -> Vec<RanAttempt> {
+        let unfinished = match self.runs.list_unfinished() {
             Ok(runs) => runs,
             Err(e) => {
                 tracing::warn!(error = %e, "couldn't list unfinished workflow runs");
                 return Vec::new();
             }
         };
-        runs.into_iter()
-            .map(|run| {
-                let outcome = attempt.run(&run);
-                RanAttempt {
-                    run_key: run.run_key,
-                    workflow: run.workflow,
-                    outcome,
-                }
-            })
-            .collect()
+        let due = self.readiness.due(&self.tasks, &self.runs, &self.events, &unfinished);
+        if due.is_empty() {
+            return Vec::new();
+        }
+        let max_concurrency = max_concurrency.clamp(1, due.len());
+        if max_concurrency == 1 {
+            return due.iter().map(|run| self.attempt_and_record(run)).collect();
+        }
+
+        let queue = std::sync::Mutex::new(due.into_iter());
+        let results = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..max_concurrency {
+                scope.spawn(|| {
+                    loop {
+                        let next = queue.lock().unwrap_or_else(std::sync::PoisonError::into_inner).next();
+                        let Some(run) = next else { break };
+                        let ran = self.attempt_and_record(&run);
+                        results
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(ran);
+                    }
+                });
+            }
+        });
+        results.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// One attempt, with its readiness cache entry refreshed (or cleared, once the run is
+    /// terminal) immediately after — see [`readiness::Readiness::record_attempt`].
+    fn attempt_and_record(&self, run: &RunRow) -> RanAttempt {
+        let outcome = self.attempt().run(run);
+        let finished = !matches!(outcome, AttemptOutcome::Suspended);
+        self.readiness
+            .record_attempt(&self.tasks, &self.runs, &self.events, run, finished);
+        RanAttempt {
+            run_key: run.run_key.clone(),
+            workflow: run.workflow.clone(),
+            outcome,
+        }
     }
 
     /// Start workflow `workflow` manually, keyed `wf@manual:<requestId>` — spec section E's run-
