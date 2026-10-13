@@ -169,6 +169,14 @@ pub(crate) enum AgentsCommand {
         /// Take the agent's own memory away (see `--memory`).
         #[arg(long, conflicts_with = "memory")]
         no_memory: bool,
+        /// Opt this agent into the dispatch tick: a ready task whose `assignee` names it will be
+        /// launched automatically. Off by default — a task sits `ready` and untouched until its
+        /// agent opts in. Omit both this and `--no-dispatch` to leave the setting as it was.
+        #[arg(long)]
+        dispatch: bool,
+        /// Opt the agent back out of the dispatch tick (see `--dispatch`).
+        #[arg(long, conflicts_with = "dispatch")]
+        no_dispatch: bool,
         /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`),
         /// `project:<id>` (every agent filed directly under that project), or `*` (everything).
         /// Repeatable; comma-separated values are also accepted. Omit every `--can-spawn` to
@@ -519,6 +527,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_knowledge,
             memory,
             no_memory,
+            dispatch,
+            no_dispatch,
             can_spawn,
             no_can_spawn,
             arguments: arguments_flags,
@@ -684,6 +694,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     old.map(|m| m.knowledge.clone()),
                 ),
                 memory: flag(memory, no_memory, old.is_some_and(|m| m.memory)),
+                dispatch: flag(dispatch, no_dispatch, old.is_some_and(|m| m.dispatch)),
                 // Stated wins, omitted keeps — same rule as everything above. The store has the
                 // last word regardless: a save made from inside a run drops this outright, no
                 // matter what is typed here (see `Agents::save`, and the field's own doc).
@@ -1383,6 +1394,9 @@ fn print_agent(agent: &StoredAgent) {
     }
     if agent.manifest.memory {
         println!("  memory: agent:{}/memory", agent.name);
+    }
+    if agent.manifest.dispatch {
+        println!("  dispatch: opted in");
     }
     if !agent.manifest.can_spawn.is_empty() {
         println!("  can spawn: {}", agent.manifest.can_spawn.join(", "));

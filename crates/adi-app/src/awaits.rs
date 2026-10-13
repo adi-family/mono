@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
-use adi_agents::{Agents, awaits, goals, questions};
+use adi_agents::{Agents, awaits, dispatch, goals, questions};
 use adi_events::EventRecord;
 use adi_triggers::EventObserver;
 use tracing::{info, warn};
@@ -45,6 +45,10 @@ fn run(agents: &Agents, rx: &Receiver<Posted>) {
             report_settled(&questions::tick(agents));
             // Awaits and question defaults may wake a conversation before its goal check.
             report_nudged(&goals::tick(agents));
+            // Last: a task just finished by a goal check above is exactly the kind of "not
+            // working any more" the dispatch tick looks for, so it should see today's freshest
+            // state rather than next second's.
+            report_dispatched(&dispatch::tick(agents));
             next_tick = Instant::now() + TICK;
         }
     }
@@ -79,6 +83,15 @@ fn report_settled(settled: &[questions::Settled]) {
                 "a question's deadline passed but its default could not be delivered"
             ),
         }
+    }
+}
+
+fn report_dispatched(dispatched: &[dispatch::Dispatched]) {
+    for d in dispatched {
+        info!(
+            task = %d.task_id, agent = %d.agent, run_id = %d.run_id,
+            "dispatch tick launched a ready task"
+        );
     }
 }
 

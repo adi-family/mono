@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-151 structs · 41 enums · 5 type aliases across 58 files.
+153 structs · 41 enums · 5 type aliases across 60 files.
 
 ## Index
 
@@ -25,6 +25,7 @@
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/process/codex.rs`](#srcbackendsprocesscodexrs) — `Continuation`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
+- [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
@@ -58,6 +59,7 @@
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
 - [`src/spawn.rs`](#srcspawnrs) — `SpawnedByEntry`, `Launch`, `Refusal`
 - [`src/store/attachments.rs`](#srcstoreattachmentsrs) — `Attachment`
+- [`src/store/dispatch.rs`](#srcstoredispatchrs) — `DispatchRow`
 - [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/prompts.rs`](#srcstorepromptsrs) — `RecentPrompt`
@@ -126,6 +128,8 @@ pub struct AgentManifest<Args> {
     pub knowledge: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dispatch: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub can_spawn: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1110,6 +1114,23 @@ One conversation's shell state, as the two files holding it.
 pub(crate) struct Shell {
     cwd: PathBuf,
     env: PathBuf,
+}
+```
+
+---
+
+## `src/dispatch.rs`
+
+### struct `Dispatched`
+
+One task a tick actually launched — what the app logs, mirroring `goals::Nudged` and `awaits::Woken`. Everything a tick decided *not* to do (waiting on backoff, waiting on the cap, already working) is not an event; only a launch is.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Dispatched {
+    pub task_id: String,
+    pub agent: String,
+    pub run_id: String,
 }
 ```
 
@@ -2926,6 +2947,29 @@ pub struct Attachment {
 
 ---
 
+## `src/store/dispatch.rs`
+
+### struct `DispatchRow`
+
+One task's dispatch bookkeeping. `task_id` is foreign to this database — `adi-tasks` owns the task itself — so there is no foreign key, only a plain primary key on a string nothing else here resolves.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DispatchRow {
+    pub task_id: String,
+    pub agent: String,
+    pub run_id: String,
+    pub counted_run_id: String,
+    pub attempts: u32,
+    pub launch_failures: u32,
+    pub last_attempt_at: u64,
+    pub stuck_ask_id: String,
+    pub silence_ask_id: String,
+}
+```
+
+---
+
 ## `src/store/goals.rs`
 
 ### enum `GoalState`
@@ -2952,6 +2996,7 @@ Who set the goal. Not bookkeeping: a goal a run wrote for itself is a run that h
 pub enum SetBy {
     Human,
     Agent,
+    Automation,
 }
 ```
 

@@ -315,6 +315,9 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // empty — the other forms send `None`, which leaves them as they are.
                     knowledge: Some(form.knowledge.get().into_iter().collect()),
                     memory: Some(form.memory.get()),
+                    // No checkbox for this yet (ADI-MONO-144) — `None` leaves whatever is already
+                    // stored exactly as it was, same as every field below this form does not own.
+                    dispatch: None,
                     // Which agents this one may launch — this is the form that owns it, so it
                     // states the list even when empty. The store still refuses this outright when
                     // the save itself comes from inside a run, whatever is sent here.

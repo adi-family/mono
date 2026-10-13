@@ -140,6 +140,17 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS goals_by_id ON goals (id);
 CREATE INDEX IF NOT EXISTS goals_open ON goals (created_at, id) WHERE state = 'open';
+CREATE TABLE IF NOT EXISTS task_dispatch (
+    task_id         TEXT    NOT NULL PRIMARY KEY,
+    agent           TEXT    NOT NULL DEFAULT '',
+    run_id          TEXT    NOT NULL DEFAULT '',
+    counted_run_id  TEXT    NOT NULL DEFAULT '',
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    launch_failures INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at INTEGER NOT NULL DEFAULT 0,
+    stuck_ask_id    TEXT    NOT NULL DEFAULT '',
+    silence_ask_id  TEXT    NOT NULL DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS attachments (
     id         TEXT    NOT NULL PRIMARY KEY,
     agent      TEXT    NOT NULL DEFAULT '',

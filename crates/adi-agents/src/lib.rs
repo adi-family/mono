@@ -34,6 +34,7 @@ mod auto_title;
 pub mod awaits;
 mod backend;
 mod backends;
+pub mod dispatch;
 mod error;
 mod events;
 pub mod goals;
@@ -3546,7 +3547,7 @@ fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
 /// The log is the engine's own output, recreated for each turn and appended to until it stops, so
 /// its mtime is the last moment this turn produced anything. `None` when there is no log or the
 /// platform reports no mtime, which reads as "no better answer than now".
-fn finished_at(log: &std::path::Path) -> Option<u64> {
+pub(crate) fn finished_at(log: &std::path::Path) -> Option<u64> {
     let modified = std::fs::metadata(log)
         .and_then(|meta| meta.modified())
         .ok()?;

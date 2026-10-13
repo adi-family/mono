@@ -242,6 +242,7 @@ fn submit_setup(state: State, form: MetaForm) {
         // checkboxes.
         knowledge: None,
         memory: None,
+        dispatch: None,
         // Same as `knowledge`/`memory` above: no form here offers it, so `None` leaves whatever
         // the agent already has.
         can_spawn: None,

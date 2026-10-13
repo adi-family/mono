@@ -32,6 +32,7 @@
 
 mod attachments;
 mod db;
+pub(crate) mod dispatch;
 mod goals;
 mod prompts;
 mod questions;
@@ -52,6 +53,7 @@ pub use attachments::{
     MEDIA_TYPES, is_image, max_bytes as max_attachment_bytes,
 };
 pub use db::now_ms;
+pub(crate) use dispatch::DispatchRow;
 pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
 pub use prompts::RecentPrompt;
 pub use questions::{
@@ -1027,6 +1029,24 @@ impl SessionStore {
     /// transcript that explains them.
     pub fn forget_goals(&self, agent: &str) -> usize {
         self.read(|conn| goals::forget_agent(conn, agent))
+    }
+
+    /// The dispatch tick's own bookkeeping for one task — see [`DispatchRow`].
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub(crate) fn dispatch_row(&self, task_id: &str) -> Result<Option<DispatchRow>> {
+        let conn = self.conn()?;
+        dispatch::get(&conn, task_id)
+    }
+
+    /// Write a task's dispatch row back whole.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub(crate) fn save_dispatch_row(&self, row: &DispatchRow) -> Result<()> {
+        let conn = self.conn()?;
+        dispatch::save(&conn, row)
     }
 
     /// Record a turn, where it stays.

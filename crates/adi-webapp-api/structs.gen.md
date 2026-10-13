@@ -1592,6 +1592,8 @@ pub struct AgentDto {
     #[serde(default)]
     pub memory: bool,
     #[serde(default)]
+    pub dispatch: bool,
+    #[serde(default)]
     pub can_spawn: Vec<CanSpawnRuleDto>,
     #[serde(default)]
     pub spawned_by: Vec<SpawnedByDto>,
@@ -1778,6 +1780,8 @@ pub struct SaveAgent {
     pub knowledge: Option<Vec<String>>,
     #[serde(default)]
     pub memory: Option<bool>,
+    #[serde(default)]
+    pub dispatch: Option<bool>,
     #[serde(default)]
     pub can_spawn: Option<Vec<String>>,
     #[serde(default)]

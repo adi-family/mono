@@ -120,6 +120,10 @@ pub(crate) enum AgentsCommand {
         memory: bool,
         #[arg(long, conflicts_with = "memory")]
         no_memory: bool,
+        #[arg(long)]
+        dispatch: bool,
+        #[arg(long, conflicts_with = "dispatch")]
+        no_dispatch: bool,
         #[arg(long = "can-spawn")]
         can_spawn: Vec<String>,
         #[arg(long, conflicts_with = "can_spawn")]

@@ -1346,6 +1346,10 @@ pub struct AgentDto {
     /// alone writes and every other agent may read.
     #[serde(default)]
     pub memory: bool,
+    /// Whether the dispatch tick may hand this agent ready tasks `assignee` names it as. Off by
+    /// default: a task sits `ready` and untouched until its agent opts in.
+    #[serde(default)]
+    pub dispatch: bool,
     /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`), `project:<id>`
     /// (every agent filed directly under that project), or `*` (everything). Empty means this
     /// agent's runs may launch no agents. **Only a human may set or change this** — a save made
@@ -1596,6 +1600,10 @@ pub struct SaveAgent {
     /// memory away.
     #[serde(default)]
     pub memory: Option<bool>,
+    /// Whether this agent opts into the dispatch tick (see [`AgentDto::dispatch`]). Omitted means
+    /// unchanged, for the same reason as `memory`.
+    #[serde(default)]
+    pub dispatch: Option<bool>,
     /// Which agents this one's runs may launch (see [`AgentDto::can_spawn`]). **Omit to keep
     /// whatever the agent already has**, for the same reason as `bin_tools`; send an empty list
     /// to clear. The store drops this outright when the save itself was made from inside a run —

@@ -138,6 +138,15 @@ pub struct AgentManifest<Args> {
     /// default made for them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub memory: bool,
+    /// Whether this agent is one the [dispatch tick](crate::dispatch) may hand ready tasks to.
+    ///
+    /// Off by default, deliberately, the same spirit as [`memory`](Self::memory): a task whose
+    /// `assignee` names this agent sits `ready` and untouched until somebody opts it in. Without
+    /// this, every agent on a fleet that had `assignee` set for any reason (a workflow step
+    /// created before this shipped, a stray edit) would start being launched automatically the
+    /// moment the dispatcher existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dispatch: bool,
     /// Which agents this one's runs may launch, as rules matched against a candidate's name or
     /// project: an exact name, a glob (`dr-*`), `project:<id>` (every agent filed directly under
     /// that project), or `*` (everything). Empty means this agent's runs may launch **no** agents
@@ -270,6 +279,7 @@ impl<Args> AgentManifest<Args> {
             prelude: self.prelude.clone(),
             knowledge: self.knowledge.clone(),
             memory: self.memory,
+            dispatch: self.dispatch,
             can_spawn: self.can_spawn.clone(),
             backends: self.backends.clone(),
             secrets: self.secrets.clone(),
@@ -516,6 +526,20 @@ mod tests {
         let back: StoredAgentManifest = toml::from_str(&text).expect("parse back");
         assert_eq!(back.can_spawn, manifest.can_spawn);
         assert_eq!(back.secrets, manifest.secrets);
+    }
+
+    /// `dispatch` is off by default and round-trips, the same as `memory`.
+    #[test]
+    fn dispatch_defaults_off_and_round_trips_through_toml() {
+        let manifest = StoredAgentManifest {
+            backend: Some("harness:adi".into()),
+            dispatch: true,
+            ..Default::default()
+        };
+        assert!(!StoredAgentManifest::default().dispatch);
+        let text = toml::to_string_pretty(&manifest).expect("toml");
+        let back: StoredAgentManifest = toml::from_str(&text).expect("parse back");
+        assert!(back.dispatch);
     }
 
     #[test]

@@ -83,6 +83,11 @@ impl GoalState {
 pub enum SetBy {
     Human,
     Agent,
+    /// The platform decided the goal before the run even started — the [dispatch
+    /// tick](crate::dispatch) setting `task <id> is done` on the conversation it just launched.
+    /// Neither a person's own words nor the run talking itself into something: distinguishing it
+    /// from [`Agent`] keeps that distinction readable afterward.
+    Automation,
 }
 
 impl SetBy {
@@ -91,12 +96,14 @@ impl SetBy {
         match self {
             Self::Human => "human",
             Self::Agent => "agent",
+            Self::Automation => "automation",
         }
     }
 
     fn from_str(text: &str) -> Self {
         match text {
             "agent" => Self::Agent,
+            "automation" => Self::Automation,
             _ => Self::Human,
         }
     }

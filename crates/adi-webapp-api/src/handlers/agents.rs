@@ -1939,6 +1939,11 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         memory: req
             .memory
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.memory)),
+        // Whether this agent opts into the dispatch tick. Omit-to-keep, same reason as `memory`:
+        // only the full agent editor offers the checkbox.
+        dispatch: req
+            .dispatch
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.dispatch)),
         // Which agents this one's runs may launch. Omit-to-keep, as above; send an empty list to
         // clear. The store (`Agents::save`) has the last word regardless: a save made from inside
         // a run drops this outright, whatever this request sends.
@@ -2213,6 +2218,7 @@ fn agent_dto(
         prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,
+        dispatch: m.dispatch,
         can_spawn,
         spawned_by,
         backends: m
