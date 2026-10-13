@@ -52,7 +52,7 @@ mod starters;
 mod store;
 
 pub use cron5::normalize_five_field;
-pub use describe::{TriggerDef, describe};
+pub use describe::{TriggerDef, WorkflowShape, describe};
 pub use discover::{WorkflowFile, workflow_files};
 pub use error::{Error, Result};
 pub use event::WorkflowRunStarted;

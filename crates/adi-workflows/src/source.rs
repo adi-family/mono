@@ -30,8 +30,8 @@ impl adi_schedules::ScheduleSource for WorkflowScheduleSource {
     fn schedules(&self) -> Vec<ScheduleRule> {
         let mut rules = Vec::new();
         for file in discover::workflow_files(&self.config) {
-            let triggers = match describe::describe(&self.config, &file.path) {
-                Ok(triggers) => triggers,
+            let shape = match describe::describe(&self.config, &file.path) {
+                Ok(shape) => shape,
                 Err(e) => {
                     tracing::warn!(
                         workflow = %file.id, path = %file.path.display(), error = %e,
@@ -40,7 +40,7 @@ impl adi_schedules::ScheduleSource for WorkflowScheduleSource {
                     continue;
                 }
             };
-            for trigger in triggers {
+            for trigger in shape.on {
                 let TriggerDef::Schedule { cron, tz, catch_up } = trigger else {
                     continue;
                 };

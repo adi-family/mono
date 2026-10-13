@@ -8,7 +8,7 @@
 
 ## Index
 
-- [`src/describe.rs`](#srcdescribers) — `TriggerDef`, `DescribeOutput`, `CacheEntry`
+- [`src/describe.rs`](#srcdescribers) — `TriggerDef`, `WorkflowShape`, `CacheEntry`
 - [`src/discover.rs`](#srcdiscoverrs) — `WorkflowFile`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`
@@ -48,13 +48,19 @@ pub enum TriggerDef {
 }
 ```
 
-### struct `DescribeOutput`
+### struct `WorkflowShape`
+
+A workflow file's whole declared shape, as `describe` reads it: its triggers, and the JSON Schema of its `input`/`output` zod exports (`null` when a file declares neither — a workflow is not obliged to type its input or output). Converted from zod by the describe harness itself (`z.toJSONSchema`), never re-derived on the Rust side, which has no zod of its own.
 
 ```rust
-#[derive(Debug, Deserialize)]
-struct DescribeOutput {
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WorkflowShape {
     #[serde(default)]
-    on: Vec<TriggerDef>,
+    pub on: Vec<TriggerDef>,
+    #[serde(default, rename = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, rename = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
 }
 ```
 
@@ -64,7 +70,7 @@ struct DescribeOutput {
 struct CacheEntry {
     mtime: SystemTime,
     len: u64,
-    triggers: Vec<TriggerDef>,
+    shape: WorkflowShape,
 }
 ```
 

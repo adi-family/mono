@@ -92,7 +92,8 @@ pub fn tick(events: &Events, config: &adi_config::Config, pourer: &WorkflowRunPo
 /// logged and reads as "none", so one broken file never stops the rest of the batch matching.
 fn event_triggers(config: &adi_config::Config, file: &WorkflowFile) -> Vec<EventPattern> {
     match crate::describe::describe(config, &file.path) {
-        Ok(triggers) => triggers
+        Ok(shape) => shape
+            .on
             .into_iter()
             .filter_map(|t| match t {
                 TriggerDef::Event {

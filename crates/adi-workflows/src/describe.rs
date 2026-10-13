@@ -46,20 +46,65 @@ const DESCRIBE_SCRIPT: &str = include_str!("../templates/engine/describe.ts");
 /// workflow file can never stall a tick forever.
 const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The exact `zod` version this build pins — every workflow file, and this crate's own
+/// `describe`/`run` harnesses, `import { z } from "zod"` and get this one. Pinning it (rather
+/// than a range) is what makes `bun add --offline` a cache hit rather than a version-resolution
+/// network call.
+const ZOD_VERSION: &str = "4.5.4";
+
 /// Seed the `@adi/workflows` client and the describe harness, rewriting a file only when its
 /// content differs (so an unchanged build touches no disk — see `adi-db::ensure_client`, the same
-/// pattern).
+/// pattern); and resolve `zod` into the store root's own `node_modules`, so every `.ts` under the
+/// root — a workflow file several directories deep (`projects/<id>/workflows/*.ts`) just as much
+/// as this crate's own `describe.ts`/`run.ts` harnesses — finds it by the same upward resolution
+/// that already finds `@adi/workflows` and `@adi/db` (see `adi-db`'s own doc on this). `bun add
+/// --offline` resolves from Bun's global package cache, never the network: every build this runs
+/// on already has `zod` cached (another part of the platform already depends on it), and pinning
+/// the exact version ([`ZOD_VERSION`]) is what makes that cache hit reproducible rather than
+/// lucky.
 ///
 /// # Errors
-/// [`Error::Store`] if either directory or file can't be written.
+/// [`Error::Store`] if either directory or file can't be written, or if `bun add` fails.
 pub fn bootstrap(config: &Config) -> Result<()> {
     let client_dir = CLIENT_DIR
         .iter()
         .fold(config.root().to_path_buf(), |path, seg| path.join(seg));
     write_if_changed_dir(&client_dir, CLIENT_FILES)?;
 
+    let zod_dir = config.root().join("node_modules").join("zod");
+    if !zod_dir.is_dir() {
+        install_zod(config.root())?;
+    }
+
     let engine_dir = config.module(ENGINE_MODULE).dir().to_path_buf();
-    write_if_changed_dir(&engine_dir, &[(DESCRIBE_FILE, DESCRIBE_SCRIPT)])
+    write_if_changed_dir(&engine_dir, &[(DESCRIBE_FILE, DESCRIBE_SCRIPT)])?;
+    Ok(())
+}
+
+/// Resolve `zod` into `root/node_modules` from Bun's global cache, offline — run once, the first
+/// time this store ever bootstraps.
+fn install_zod(root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't create {}: {e}", root.display())))?;
+    let status = Command::new("bun")
+        .arg("add")
+        .arg(format!("zod@{ZOD_VERSION}"))
+        .arg("--offline")
+        .current_dir(root)
+        .env("PATH", adi_config::augmented_path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| Error::Describe(format!("couldn't spawn bun add: {e}")))?;
+    if !status.status.success() {
+        return Err(Error::Describe(format!(
+            "bun add zod@{ZOD_VERSION} --offline failed in {}: {}",
+            root.display(),
+            String::from_utf8_lossy(&status.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 fn write_if_changed_dir(dir: &Path, files: &[(&str, &str)]) -> Result<()> {
@@ -102,16 +147,24 @@ pub enum TriggerDef {
     Manual,
 }
 
-#[derive(Debug, Deserialize)]
-struct DescribeOutput {
+/// A workflow file's whole declared shape, as [`describe`] reads it: its triggers, and the JSON
+/// Schema of its `input`/`output` zod exports (`null` when a file declares neither — a workflow
+/// is not obliged to type its input or output). Converted from zod by the describe harness itself
+/// (`z.toJSONSchema`), never re-derived on the Rust side, which has no zod of its own.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WorkflowShape {
     #[serde(default)]
-    on: Vec<TriggerDef>,
+    pub on: Vec<TriggerDef>,
+    #[serde(default, rename = "inputSchema")]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default, rename = "outputSchema")]
+    pub output_schema: Option<serde_json::Value>,
 }
 
 struct CacheEntry {
     mtime: SystemTime,
     len: u64,
-    triggers: Vec<TriggerDef>,
+    shape: WorkflowShape,
 }
 
 /// Per-process memo of the last successful describe, keyed by path — see the module docs.
@@ -120,14 +173,14 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, CacheEntry>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Every trigger `path`'s `on` export declares, running it fresh under `bun` unless a cached
-/// result for the exact same `(mtime, len)` is already in hand.
+/// `path`'s whole declared [`WorkflowShape`], running it fresh under `bun` unless a cached result
+/// for the exact same `(mtime, len)` is already in hand.
 ///
 /// # Errors
 /// [`Error::Describe`] if `bun` can't be spawned, times out, exits non-zero (the file threw on
 /// import — a syntax error, a bad `@adi/workflows` import, …), or doesn't print the JSON this
 /// crate's own harness is seeded to.
-pub fn describe(config: &Config, path: &Path) -> Result<Vec<TriggerDef>> {
+pub fn describe(config: &Config, path: &Path) -> Result<WorkflowShape> {
     let meta = std::fs::metadata(path)
         .map_err(|e| Error::Describe(format!("couldn't stat {}: {e}", path.display())))?;
     let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
@@ -139,26 +192,26 @@ pub fn describe(config: &Config, path: &Path) -> Result<Vec<TriggerDef>> {
             && entry.mtime == mtime
             && entry.len == len
         {
-            return Ok(entry.triggers.clone());
+            return Ok(entry.shape.clone());
         }
     }
 
-    let triggers = run_describe(config, path)?;
+    let shape = run_describe(config, path)?;
     let mut guard = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     guard.insert(
         path.to_path_buf(),
         CacheEntry {
             mtime,
             len,
-            triggers: triggers.clone(),
+            shape: shape.clone(),
         },
     );
-    Ok(triggers)
+    Ok(shape)
 }
 
 /// Spawn `bun run describe.ts <path>`, wait for it with [`DESCRIBE_TIMEOUT`], and parse its
 /// stdout — the uncached body of [`describe`].
-fn run_describe(config: &Config, path: &Path) -> Result<Vec<TriggerDef>> {
+fn run_describe(config: &Config, path: &Path) -> Result<WorkflowShape> {
     let script = describe_script_path(config);
     let mut child = Command::new("bun")
         .arg("run")
@@ -205,13 +258,12 @@ fn run_describe(config: &Config, path: &Path) -> Result<Vec<TriggerDef>> {
             stderr.trim()
         )));
     }
-    let parsed: DescribeOutput = serde_json::from_str(stdout.trim()).map_err(|e| {
+    serde_json::from_str(stdout.trim()).map_err(|e| {
         Error::Describe(format!(
             "couldn't parse describe output for {}: {e} (got {stdout:?})",
             path.display()
         ))
-    })?;
-    Ok(parsed.on)
+    })
 }
 
 #[cfg(test)]
@@ -247,15 +299,17 @@ mod tests {
              export const on = schedule(\"0 5 * * MON\", \"America/New_York\");\n",
         );
 
-        let triggers = describe(&config, &path).expect("describe");
+        let shape = describe(&config, &path).expect("describe");
         assert_eq!(
-            triggers,
+            shape.on,
             vec![TriggerDef::Schedule {
                 cron: "0 5 * * MON".into(),
                 tz: "America/New_York".into(),
                 catch_up: Some("fire".into()),
             }]
         );
+        assert_eq!(shape.input_schema, None);
+        assert_eq!(shape.output_schema, None);
     }
 
     #[test]
@@ -269,14 +323,14 @@ mod tests {
              export const on = event(\"adi.tasks.created\", { project: \"demo\" });\n",
         );
 
-        let triggers = describe(&config, &path).expect("describe");
+        let shape = describe(&config, &path).expect("describe");
         let serde_json::Value::Object(expected) =
             serde_json::json!({ "project": "demo" })
         else {
             unreachable!()
         };
         assert_eq!(
-            triggers,
+            shape.on,
             vec![TriggerDef::Event {
                 pattern: "adi.tasks.created".into(),
                 where_clause: Some(expected),
@@ -295,9 +349,9 @@ mod tests {
              export const on = [schedule(\"0 0 * * *\", \"UTC\"), manual()];\n",
         );
 
-        let triggers = describe(&config, &path).expect("describe");
-        assert_eq!(triggers.len(), 2);
-        assert!(matches!(triggers[1], TriggerDef::Manual));
+        let shape = describe(&config, &path).expect("describe");
+        assert_eq!(shape.on.len(), 2);
+        assert!(matches!(shape.on[1], TriggerDef::Manual));
     }
 
     #[test]
@@ -305,7 +359,39 @@ mod tests {
         let config = scratch("none");
         bootstrap(&config).expect("bootstrap");
         let path = workflow_file(&config, "bare.ts", "export default 1;\n");
-        assert_eq!(describe(&config, &path).expect("describe"), vec![]);
+        let shape = describe(&config, &path).expect("describe");
+        assert_eq!(shape.on, vec![]);
+        assert_eq!(shape.input_schema, None);
+        assert_eq!(shape.output_schema, None);
+    }
+
+    /// The whole reason `describe` went looking for more than `on`: a workflow's `input`/`output`
+    /// zod shapes come back as plain JSON Schema, converted by the harness itself — exactly what
+    /// `pour_run` stores on a run's root task via `create_full`.
+    #[test]
+    fn input_and_output_zod_shapes_come_back_as_json_schema() {
+        let config = scratch("shapes");
+        bootstrap(&config).expect("bootstrap");
+        let path = workflow_file(
+            &config,
+            "typed.ts",
+            "import { z } from \"zod\";\n\
+             import { manual } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export const input = z.object({ topic: z.string() });\n\
+             export const output = z.object({ ok: z.boolean() });\n",
+        );
+
+        let shape = describe(&config, &path).expect("describe");
+        let input = shape.input_schema.expect("input schema");
+        assert_eq!(input["type"], "object");
+        assert_eq!(input["properties"]["topic"]["type"], "string");
+        assert_eq!(
+            input["required"],
+            serde_json::json!(["topic"]),
+        );
+        let output = shape.output_schema.expect("output schema");
+        assert_eq!(output["properties"]["ok"]["type"], "boolean");
     }
 
     #[test]
@@ -329,8 +415,8 @@ mod tests {
             "cached.ts",
             "import { manual } from \"@adi/workflows\";\nexport const on = manual();\n",
         );
-        assert_eq!(describe(&config, &path).unwrap(), vec![TriggerDef::Manual]);
-        assert_eq!(describe(&config, &path).unwrap(), vec![TriggerDef::Manual]);
+        assert_eq!(describe(&config, &path).unwrap().on, vec![TriggerDef::Manual]);
+        assert_eq!(describe(&config, &path).unwrap().on, vec![TriggerDef::Manual]);
 
         std::thread::sleep(Duration::from_millis(1100));
         std::fs::write(
@@ -340,7 +426,7 @@ mod tests {
         .unwrap();
         let updated = describe(&config, &path).unwrap();
         assert_eq!(
-            updated,
+            updated.on,
             vec![TriggerDef::Schedule {
                 cron: "0 0 * * *".into(),
                 tz: "UTC".into(),
