@@ -1,5 +1,7 @@
 # Workflows
 
+Not on the release install yet — dev flavour (feat/workflows) only, until released.
+
 A workflow is one TypeScript file, run with checkpoints so it resumes exactly where it left off
 after a crash or a restart, never from the top. Panel: `/workflows`.
 
