@@ -40,6 +40,12 @@
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentsCommand {
     List {
+        #[arg(value_name = "FILTER")]
+        filter: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        tag: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -127,8 +133,10 @@ pub(crate) enum AgentsCommand {
     },
     Run {
         name: String,
-        #[arg(short, long, default_value = "run")]
-        message: String,
+        #[arg(value_name = "TASK", conflicts_with = "message")]
+        task: Option<String>,
+        #[arg(short, long, value_name = "TASK")]
+        message: Option<String>,
         #[arg(long = "pre-run", value_name = "COMMAND")]
         pre_run: Vec<String>,
         #[arg(long, value_name = "PATH")]
@@ -801,7 +809,8 @@ pub(crate) enum KnowledgeCommand {
     },
     Get {
         base: String,
-        id: String,
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -848,6 +857,8 @@ pub(crate) enum KnowledgeCommand {
         limit: usize,
         #[arg(long)]
         text: bool,
+        #[arg(long)]
+        full: bool,
         #[arg(long)]
         json: bool,
     },

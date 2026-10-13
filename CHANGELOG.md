@@ -20,6 +20,19 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- `adi-mono agents run <name> "<task>"` now takes the task positionally, same as `-m`/`--message`
+  (giving both is refused). Omitting it entirely still sends the placeholder task `"run"` to a
+  process/harness backend, now with a one-line stderr notice, since forgetting `-m` used to send
+  that word silently.
+- `adi-mono knowledge search --full` prints each hit's full note body under its result line.
+  `adi-mono knowledge get <base> <id>...` now takes several ids in one call, printing each note in
+  turn (an array with `--json` and more than one id; a single id's output is unchanged).
+- `adi-mono agents list` takes an optional `[FILTER]` (substring match on the name) plus
+  `--project <id>` and `--tag <tag>`; the summary line now reads "4 of 85 agents" when a filter
+  narrowed the list.
+
 ## 1.28.1 — 2026-10-11
 
 ### Changed

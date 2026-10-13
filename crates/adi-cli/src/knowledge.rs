@@ -77,10 +77,12 @@ pub(crate) enum KnowledgeCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Print one note in full.
+    /// Print one or more notes in full, in the order given. With `--json` and more than one id,
+    /// answers an array rather than repeating the single-note shape once per id.
     Get {
         base: String,
-        id: String,
+        #[arg(required = true, value_name = "ID")]
+        ids: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -140,6 +142,11 @@ pub(crate) enum KnowledgeCommand {
         /// Search by word instead of by meaning — no model, no network.
         #[arg(long)]
         text: bool,
+        /// Print each hit's full note body under its result line — a search already has the
+        /// whole note in hand, so this is what skips the `knowledge get` most searches end up
+        /// doing next. Leaves the result line itself unchanged.
+        #[arg(long)]
+        full: bool,
         #[arg(long)]
         json: bool,
     },
@@ -281,16 +288,31 @@ pub(crate) fn run_knowledge(
                 }
             }
         }
-        KnowledgeCommand::Get { base, id, json } => {
+        KnowledgeCommand::Get { base, ids, json } => {
             let base_id = parse_base(&base)?;
-            let note = store
-                .get(&base_id, &id)
-                .map_err(err)?
-                .ok_or_else(|| format!("no such knowledge: {id}"))?;
+            let mut notes = Vec::with_capacity(ids.len());
+            for id in &ids {
+                let note = store
+                    .get(&base_id, id)
+                    .map_err(err)?
+                    .ok_or_else(|| format!("no such knowledge: {id}"))?;
+                notes.push(note);
+            }
             if json {
-                print_json(&note);
+                // Single-id output is unchanged on purpose — a caller that already parses one
+                // note's own shape should not have to start unwrapping a one-element array.
+                if notes.len() == 1 {
+                    print_json(&notes[0]);
+                } else {
+                    print_json(&notes);
+                }
             } else {
-                print_note(&note);
+                for (index, note) in notes.iter().enumerate() {
+                    if index > 0 {
+                        println!();
+                    }
+                    print_note(note);
+                }
             }
         }
         KnowledgeCommand::Edit {
@@ -381,6 +403,7 @@ pub(crate) fn run_knowledge(
             bases,
             limit,
             text,
+            full,
             json,
         } => {
             let ids = if bases.is_empty() {
@@ -404,6 +427,11 @@ pub(crate) fn run_knowledge(
             } else {
                 for hit in &hits {
                     print_hit(hit);
+                    if full {
+                        println!();
+                        println!("{}", hit.knowledge.body);
+                        println!();
+                    }
                 }
             }
         }
@@ -732,6 +760,49 @@ mod tests {
             panic!("expected search");
         };
         assert_eq!(limit, 5);
+    }
+
+    /// ADI-MONO-140: `--full` is a flag on the result, not a different search — the hits
+    /// themselves are untouched, which is what the default-output-unchanged requirement means in
+    /// parse terms.
+    #[test]
+    fn full_is_a_plain_flag_alongside_the_rest() {
+        let KnowledgeCommand::Search { full, limit, .. } =
+            parse(&["search", "how do I deploy", "--full", "--top", "5"])
+        else {
+            panic!("expected search");
+        };
+        assert!(full);
+        assert_eq!(limit, 5);
+
+        let KnowledgeCommand::Search { full, .. } = parse(&["search", "how do I deploy"]) else {
+            panic!("expected search");
+        };
+        assert!(!full, "the default stays unchanged without --full");
+    }
+
+    /// ADI-MONO-140: `get` takes one id as it always did, or several in one call so a caller
+    /// doesn't pay a round trip per note.
+    #[test]
+    fn get_accepts_one_id_or_several() {
+        let KnowledgeCommand::Get { base, ids, .. } = parse(&["get", "global/runbooks", "one"])
+        else {
+            panic!("expected get");
+        };
+        assert_eq!(base, "global/runbooks");
+        assert_eq!(ids, vec!["one"]);
+
+        let KnowledgeCommand::Get { ids, .. } =
+            parse(&["get", "global/runbooks", "one", "two", "three"])
+        else {
+            panic!("expected get");
+        };
+        assert_eq!(ids, vec!["one", "two", "three"]);
+
+        assert!(
+            Harness::try_parse_from(["knowledge", "get", "global/runbooks"]).is_err(),
+            "at least one id is required"
+        );
     }
 
     #[test]

@@ -20,6 +20,15 @@ use crate::format::{clean, clean_tags, parse_arguments, print_json};
 pub(crate) enum AgentsCommand {
     /// List agent definitions.
     List {
+        /// Only agents whose name contains this (case-insensitive).
+        #[arg(value_name = "FILTER")]
+        filter: Option<String>,
+        /// Only agents filed under this project id.
+        #[arg(long)]
+        project: Option<String>,
+        /// Only agents carrying this tag.
+        #[arg(long)]
+        tag: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -187,9 +196,16 @@ pub(crate) enum AgentsCommand {
     /// process executors run a headless CLI in the background.
     Run {
         name: String,
-        /// The task sent to a process backend (ignored by pty backends).
-        #[arg(short, long, default_value = "run")]
-        message: String,
+        /// The task sent to a process backend, e.g. `adi-mono agents run my-agent "do the
+        /// thing"`. Ignored by pty backends — an interactive session takes no task, it's typed
+        /// into once the session opens. Same as `-m`/`--message`; giving both is refused. Leave
+        /// it off entirely and a process backend is sent the placeholder task "run" (with a
+        /// one-line notice on stderr), since forgetting it is far more likely than meaning it.
+        #[arg(value_name = "TASK", conflicts_with = "message")]
+        task: Option<String>,
+        /// Same as the positional TASK, for a caller that already writes `-m`.
+        #[arg(short, long, value_name = "TASK")]
+        message: Option<String>,
         /// A command to really run before this run's first message reaches the model, after the
         /// agent's own `--prelude`. Repeatable, run in order; its real output is carried into the
         /// opening message, labelled as the tool call it was.
@@ -421,14 +437,33 @@ pub(crate) enum AwaitsCommand {
 pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
     let store = adi.agents();
     match command {
-        AgentsCommand::List { json } => {
-            let agents = store.list().map_err(|e| e.to_string())?;
+        AgentsCommand::List {
+            filter,
+            project,
+            tag,
+            json,
+        } => {
+            let mut agents = store.list().map_err(|e| e.to_string())?;
+            let total = agents.len();
+            if let Some(needle) = clean(filter).map(|f| f.to_ascii_lowercase()) {
+                agents.retain(|a| a.name.to_ascii_lowercase().contains(&needle));
+            }
+            if let Some(project) = clean(project) {
+                agents.retain(|a| a.manifest.project.as_deref() == Some(project.as_str()));
+            }
+            if let Some(tag) = clean(tag) {
+                agents.retain(|a| a.manifest.tags.contains(&tag));
+            }
             if json {
                 print_json(&agents);
             } else if agents.is_empty() {
-                println!("No agents registered.");
+                if total == 0 {
+                    println!("No agents registered.");
+                } else {
+                    println!("No agents match.");
+                }
             } else {
-                print_agent_rows(&agents);
+                print_agent_rows(&agents, total);
             }
         }
         AgentsCommand::Show { name, json } => {
@@ -674,6 +709,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         }
         AgentsCommand::Run {
             name,
+            task,
             message,
             pre_run,
             dir,
@@ -682,6 +718,13 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_await,
             wait,
         } => {
+            // `conflicts_with` already refuses both at parse time; `task.or(message)` is just
+            // which of the two the caller actually used. Neither is the default "run" that was
+            // sent the day the agent forgot `-m` — that only shows up below, and only for a
+            // backend that would otherwise act on it.
+            let given = task.or(message);
+            let no_task_given = given.is_none();
+            let message = given.unwrap_or_else(|| "run".to_string());
             let by = launched_by();
             let overrides = RunOverrides::parse_pairs(&set)?;
             let launch = store
@@ -722,6 +765,12 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     log,
                     run_id,
                 } => {
+                    if no_task_given {
+                        eprintln!(
+                            "no task given — sent the placeholder task \"run\"; pass one as \
+                             `adi-mono agents run {name} \"<task>\"` or `-m`"
+                        );
+                    }
                     if wait {
                         return await_run(&store, &name, &run_id);
                     }
@@ -1236,7 +1285,10 @@ fn now_ms() -> u64 {
 /// Everything else a definition carries (chain, tools, secrets, memory, env, …) is `agents show`'s
 /// to print. Repeating it for every agent turned sixty agents into several hundred lines, and the
 /// list is for finding an agent, not reading one.
-fn print_agent_rows(agents: &[StoredAgent]) {
+///
+/// `total` is the unfiltered count — the summary line says "N of M agents" when a filter narrowed
+/// it, and just "N agents" when it didn't, rather than leaving a filtered list looking complete.
+fn print_agent_rows(agents: &[StoredAgent], total: usize) {
     let runtimes: Vec<String> = agents
         .iter()
         .map(|agent| agent.manifest.runtime().to_string())
@@ -1261,10 +1313,12 @@ fn print_agent_rows(agents: &[StoredAgent]) {
         println!("{}", row.trim_end());
     }
     println!();
-    println!(
-        "{} agents — `adi-mono agents show <name>` for one agent's details.",
-        agents.len()
-    );
+    let count = if agents.len() == total {
+        format!("{total} agents")
+    } else {
+        format!("{} of {total} agents", agents.len())
+    };
+    println!("{count} — `adi-mono agents show <name>` for one agent's details.");
 }
 
 /// Print an agent definition in the compact human CLI format.
@@ -1633,6 +1687,37 @@ mod tests {
             .command
     }
 
+    /// ADI-MONO-140: `agents list` takes an optional substring filter positionally, plus
+    /// `--project` and `--tag`, all three independent of one another.
+    #[test]
+    fn list_accepts_a_name_filter_project_and_tag() {
+        let AgentsCommand::List {
+            filter,
+            project,
+            tag,
+            ..
+        } = parse(&["list", "research"])
+        else {
+            panic!("expected list");
+        };
+        assert_eq!(filter.as_deref(), Some("research"));
+        assert_eq!(project, None);
+        assert_eq!(tag, None);
+
+        let AgentsCommand::List {
+            filter,
+            project,
+            tag,
+            ..
+        } = parse(&["list", "--project", "acme", "--tag", "ops"])
+        else {
+            panic!("expected list");
+        };
+        assert_eq!(filter, None);
+        assert_eq!(project.as_deref(), Some("acme"));
+        assert_eq!(tag.as_deref(), Some("ops"));
+    }
+
     /// ADI-MONO-132: `adi-mono agents runs frontend-2` reads naturally and now parses — the
     /// positional and `--agent` both land on the same filter, and asking for both at once is
     /// refused rather than silently picking one.
@@ -1655,6 +1740,40 @@ mod tests {
         assert!(
             Harness::try_parse_from(["agents", "runs", "one", "--agent", "two"]).is_err(),
             "naming it twice is a mistake worth refusing, not guessing between"
+        );
+    }
+
+    /// ADI-MONO-140: `adi-mono agents run <name> "<task>"` is accepted, `-m`/`--message` keeps
+    /// working for whatever already writes it that way, and giving both is a mistake worth
+    /// refusing rather than silently picking one — the opposite of today's parse-and-ignore,
+    /// which lets `-m` default to the literal word "run" with nothing said about it.
+    #[test]
+    fn run_accepts_the_task_positionally_or_as_a_flag() {
+        let AgentsCommand::Run { task, message, .. } = parse(&["run", "frontend-2", "do it"])
+        else {
+            panic!("expected run");
+        };
+        assert_eq!(task.as_deref(), Some("do it"));
+        assert_eq!(message, None);
+
+        let AgentsCommand::Run { task, message, .. } =
+            parse(&["run", "frontend-2", "-m", "do it"])
+        else {
+            panic!("expected run");
+        };
+        assert_eq!(task, None);
+        assert_eq!(message.as_deref(), Some("do it"));
+
+        let AgentsCommand::Run { task, message, .. } = parse(&["run", "frontend-2"]) else {
+            panic!("expected run");
+        };
+        assert_eq!(task, None);
+        assert_eq!(message, None);
+
+        assert!(
+            Harness::try_parse_from(["agents", "run", "frontend-2", "one", "-m", "two"]).is_err(),
+            "giving both the positional task and -m is a mistake worth refusing, not guessing \
+             between"
         );
     }
 
