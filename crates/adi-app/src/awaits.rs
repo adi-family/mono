@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use adi_agents::{Agents, awaits, dispatch, goals, questions};
 use adi_events::EventRecord;
 use adi_triggers::EventObserver;
-use adi_workflows::{Engine as WorkflowEngine, StartedRun};
+use adi_workflows::{AttemptOutcome, Engine as WorkflowEngine, StartedRun};
 use tracing::{info, warn};
 
 const TICK: Duration = Duration::from_secs(1);
@@ -51,10 +51,12 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
             // state rather than next second's.
             report_dispatched(&dispatch::tick(agents));
             // The workflow engine's two starters — schedule and event — pour a new run's row and
-            // root task; nothing here yet drives that run's own `ctx` checkpoints (see
-            // `adi_workflows`' crate docs for what's still WF-5 work).
+            // root task; `run_tick` is what actually drives one (spawning a fresh `bun` attempt
+            // for every run not yet finished). Starting before driving means a run poured this
+            // very second gets its first attempt this same tick, not next one.
             report_workflows_started(&workflows.schedule_tick(chrono::Utc::now()));
             report_workflows_started(&workflows.event_tick());
+            report_workflows_ran(&workflows.run_tick());
             next_tick = Instant::now() + TICK;
         }
     }
@@ -104,6 +106,21 @@ fn report_dispatched(dispatched: &[dispatch::Dispatched]) {
 fn report_workflows_started(started: &[StartedRun]) {
     for s in started {
         info!(run_key = %s.run_key, workflow = %s.workflow, "a workflow starter poured a new run");
+    }
+}
+
+fn report_workflows_ran(ran: &[adi_workflows::RanAttempt]) {
+    for r in ran {
+        match &r.outcome {
+            AttemptOutcome::Completed(_) => {
+                info!(run_key = %r.run_key, workflow = %r.workflow, "a workflow run completed");
+            }
+            AttemptOutcome::Failed(reason) | AttemptOutcome::GaveUp(reason) => warn!(
+                run_key = %r.run_key, workflow = %r.workflow, %reason,
+                "a workflow run failed"
+            ),
+            AttemptOutcome::Suspended => {}
+        }
     }
 }
 

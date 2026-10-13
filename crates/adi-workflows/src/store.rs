@@ -173,6 +173,10 @@ impl WorkflowStore {
     /// # Errors
     /// [`Error::DuplicateRunKey`] if `run_key` is already in use, or [`Error::Store`] on a write
     /// failure.
+    // One more positional field (`caused_by_run`) than WF-5's own run-starting half left this
+    // at; a `NewRun` struct (mirroring `adi_tasks::NewTask`) would be the fix if another grows
+    // onto it, but isn't worth the call-site churn for one field today.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_run(
         &self,
         run_key: &str,
@@ -246,6 +250,22 @@ impl WorkflowStore {
             params![seq_i64(adi_config::now_unix()), run_key],
         )
         .map_err(|e| Error::Store(anyhow::anyhow!("couldn't mark a run finished: {e}")))?;
+        Ok(())
+    }
+
+    /// Clear a run's terminal mark — [`crate::rewind`]'s own use: a rewound run needs
+    /// [`Engine::run_tick`](crate::Engine::run_tick) to pick it back up and genuinely redo the
+    /// discarded work, which a still-set `finished_at` would otherwise hide it from forever.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn unfinish(&self, run_key: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE runs SET finished_at = NULL WHERE run_key = ?1",
+            [run_key],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't unfinish a run: {e}")))?;
         Ok(())
     }
 
@@ -457,6 +477,23 @@ impl WorkflowStore {
             .optional()
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read pending state: {e}")))?;
         Ok(found.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)))
+    }
+
+    /// Overwrite an already-journaled record's `task_id`/`ref_key` in place — the one case that
+    /// legitimately rewrites a journal row rather than inserting a fresh one: a `ctx.run` step
+    /// adding its child run key just after resolving, without `put_step` needing to carry that
+    /// field through every other caller.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn restamp_step(&self, run_key: &str, record: &StepRecord) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE step_journal SET task_id = ?1, ref_key = ?2 WHERE run_key = ?3 AND step_key = ?4",
+            params![record.task_id, record.ref_key, run_key, record.step_key],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't restamp a step: {e}")))?;
+        Ok(())
     }
 
     /// Save (or replace) the pending marker for a not-yet-resolved checkpoint.

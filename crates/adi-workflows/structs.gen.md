@@ -4,19 +4,52 @@
 
 > The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?)` fires (schedule via adi-schedules' sweep, event via this crate's own log cursor), and pours the run row + root task + `adi.workflows.run.started` event every starter shares. The TS execution runtime that drives a started run's own `ctx` checkpoints (step/task/run/waitFor/sleep/ask, replay, rewind) is further WF-5 work, not yet built here — see the crate docs.
 
-15 structs · 4 enums · 1 type alias across 9 files.
+17 structs · 6 enums · 1 type alias across 11 files.
 
 ## Index
 
+- [`src/attempt.rs`](#srcattemptrs) — `Outcome`, `Attempt`
 - [`src/describe.rs`](#srcdescribers) — `TriggerDef`, `WorkflowShape`, `CacheEntry`
 - [`src/discover.rs`](#srcdiscoverrs) — `WorkflowFile`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`, `WorkflowRunCompleted`, `WorkflowRunFailed`
-- [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`
+- [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`, `RanAttempt`
 - [`src/pour.rs`](#srcpourrs) — `WorkflowRunPourer`
+- [`src/rpc.rs`](#srcrpcrs) — `Request`
 - [`src/source.rs`](#srcsourcers) — `WorkflowScheduleSource`
 - [`src/starters.rs`](#srcstartersrs) — `Started`, `EventPattern`
 - [`src/store.rs`](#srcstorers) — `RunRow`, `WorkflowStore`, `StepKind`, `StepOutcome`, `StepRecord`
+
+---
+
+## `src/attempt.rs`
+
+### enum `Outcome`
+
+How this attempt ended.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    Completed(Value),
+    Failed(String),
+    GaveUp(String),
+    Suspended,
+}
+```
+
+### struct `Attempt`
+
+Drives one run's attempts: spawns the harness, answers its checkpoints, finalizes the root task. Cheap to build fresh per call — see `crate::Engine`'s own `pourer()` for the same pattern this mirrors.
+
+```rust
+pub struct Attempt {
+    config: Config,
+    store: WorkflowStore,
+    tasks: Tasks,
+    events: Events,
+}
+```
 
 ---
 
@@ -202,6 +235,19 @@ pub struct Engine {
 }
 ```
 
+### struct `RanAttempt`
+
+One run `Engine::run_tick` attempted, and what became of it.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct RanAttempt {
+    pub run_key: String,
+    pub workflow: String,
+    pub outcome: AttemptOutcome,
+}
+```
+
 ---
 
 ## `src/pour.rs`
@@ -217,6 +263,93 @@ pub struct WorkflowRunPourer {
     store: crate::store::WorkflowStore,
     tasks: Tasks,
     events: Events,
+}
+```
+
+---
+
+## `src/rpc.rs`
+
+### enum `Request`
+
+One line read off an attempt's stdout — either a checkpoint asking for a reply, or one of the three terminal facts that end the attempt with no reply expected.
+
+```rust
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+pub enum Request {
+    #[serde(rename = "step")]
+    Step {
+        key: String,
+    },
+    #[serde(rename = "step_save")]
+    StepSave {
+        key: String,
+        value: Value,
+    },
+    #[serde(rename = "task")]
+    Task {
+        key: String,
+        title: String,
+        #[serde(default)]
+        agent: Option<String>,
+        #[serde(default)]
+        person: Option<String>,
+        #[serde(default)]
+        instructions: Option<String>,
+        #[serde(default)]
+        input: Option<Value>,
+        #[serde(default, rename = "outputSchema")]
+        output_schema: Option<Value>,
+        #[serde(default, rename = "timeoutMs")]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        project: Option<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
+    #[serde(rename = "run")]
+    Run {
+        key: String,
+        workflow: String,
+        #[serde(default)]
+        input: Option<Value>,
+    },
+    #[serde(rename = "waitFor")]
+    WaitFor {
+        key: String,
+        event: String,
+        #[serde(default, rename = "where")]
+        where_clause: Option<serde_json::Map<String, Value>>,
+        #[serde(default, rename = "timeoutMs")]
+        timeout_ms: Option<u64>,
+    },
+    #[serde(rename = "sleep")]
+    Sleep {
+        key: String,
+        until: i64,
+    },
+    #[serde(rename = "ask")]
+    Ask {
+        key: String,
+        person: String,
+        text: String,
+    },
+    #[serde(rename = "result")]
+    Result {
+        value: Value,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
+    #[serde(rename = "gave_up")]
+    GaveUp {
+        reason: String,
+    },
+    #[serde(rename = "suspend")]
+    Suspend {
+    },
 }
 ```
 

@@ -60,10 +60,18 @@ pub use adi_agents::{
     contains_json_null,
 };
 
-/// The whole platform event catalog — task + agent + channel events. Re-exported from
-/// `adi-channels` rather than `adi-agents` now: it is the lowest crate that can see every
-/// producer (see `adi_channels::events`' own module doc).
-pub use adi_channels::event_catalog;
+/// The whole platform event catalog — task + agent + channel + workflow events. `adi-channels`
+/// is "the lowest crate that can see every producer" for task/agent/channel (see its own
+/// `events` module doc for why); `adi-workflows` sits at the same level (depends on `adi-tasks`/
+/// `adi-events`, not on `adi-channels`, and isn't depended on by it either), so neither can see
+/// both — this facade is the first crate that depends on both and is where the two halves join.
+#[must_use]
+pub fn event_catalog() -> Vec<adi_events::EventType> {
+    adi_channels::event_catalog()
+        .into_iter()
+        .chain(adi_workflows::event_types())
+        .collect()
+}
 
 pub use adi_db::{ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo};
 

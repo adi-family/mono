@@ -41,6 +41,7 @@
 //! Also deferred: `manual()` triggers (`wf@manual:<requestId>` run keys) have no starter at all
 //! yet — there is no caller for one until the CLI/panel (WF-6) exist to ask for a manual run.
 
+mod attempt;
 mod causation;
 mod cron5;
 mod describe;
@@ -49,12 +50,15 @@ mod error;
 mod event;
 mod pin;
 mod pour;
+mod rewind;
+mod rpc;
 mod source;
 mod starters;
 mod store;
 
+pub use attempt::Outcome as AttemptOutcome;
 pub use cron5::normalize_five_field;
-pub use describe::{TriggerDef, WorkflowShape, describe};
+pub use describe::{TriggerDef, WorkflowShape, describe, run_script_path};
 pub use discover::{WorkflowFile, workflow_files};
 pub use error::{Error, Result};
 pub use event::{WorkflowRunCompleted, WorkflowRunFailed, WorkflowRunStarted, event_types};
@@ -94,6 +98,22 @@ impl From<Started> for StartedRun {
             workflow: started.workflow,
         }
     }
+}
+
+/// Whether every key in `where_clause` equals the same field in `payload` — `None` (no `where`
+/// given) always matches. Shared by the event starter ([`starters::tick`], matching a workflow's
+/// `on: event(pattern, where?)`) and a running attempt ([`attempt::Attempt`]'s `ctx.waitFor`),
+/// since both are the same question against the same shape of clause.
+pub(crate) fn where_matches(
+    where_clause: Option<&serde_json::Map<String, serde_json::Value>>,
+    payload: &serde_json::Value,
+) -> bool {
+    let Some(clause) = where_clause else {
+        return true;
+    };
+    clause
+        .iter()
+        .all(|(key, want)| payload.get(key) == Some(want))
 }
 
 /// Bundles every store this crate's starters need, and the two ticks that drive them — the one
@@ -180,6 +200,104 @@ impl Engine {
     pub fn runs(&self) -> &WorkflowStore {
         &self.runs
     }
+
+    fn attempt(&self) -> attempt::Attempt {
+        attempt::Attempt::new(
+            self.config.clone(),
+            self.runs.clone(),
+            self.tasks.clone(),
+            self.events.clone(),
+        )
+    }
+
+    /// Attempt every unfinished run, once each — the level-triggered sweep that actually drives
+    /// execution: "re-attempt every unfinished run every tick", exactly like
+    /// [`schedule_tick`](Self::schedule_tick)/[`event_tick`](Self::event_tick) re-sweep rather
+    /// than waiting to be told something changed. A run that suspends is simply tried again next
+    /// call; what changed in between (a task finished, an event arrived, a sleep came due, a
+    /// child run resolved) is read fresh from the stores each time, never cached between ticks.
+    #[must_use]
+    pub fn run_tick(&self) -> Vec<RanAttempt> {
+        let attempt = self.attempt();
+        let runs = match self.runs.list_unfinished() {
+            Ok(runs) => runs,
+            Err(e) => {
+                tracing::warn!(error = %e, "couldn't list unfinished workflow runs");
+                return Vec::new();
+            }
+        };
+        runs.into_iter()
+            .map(|run| {
+                let outcome = attempt.run(&run);
+                RanAttempt {
+                    run_key: run.run_key,
+                    workflow: run.workflow,
+                    outcome,
+                }
+            })
+            .collect()
+    }
+
+    /// Start workflow `workflow` manually, keyed `wf@manual:<requestId>` — spec section E's run-
+    /// key union, and the engine API `adi-mono workflows run` (WF-6) is the one caller of. The
+    /// same request id always answers with the same run (claiming it is this call's only job;
+    /// [`run_tick`](Self::run_tick) does the actual driving next tick), so retrying an uncertain
+    /// `run` command is always safe.
+    ///
+    /// # Errors
+    /// [`Error::Store`] if `workflow` names no file this engine currently discovers.
+    pub fn start_manual(
+        &self,
+        workflow: &str,
+        input: &serde_json::Value,
+        request_id: &str,
+    ) -> Result<StartedRun> {
+        let run_key = format!("{workflow}@manual:{request_id}");
+        if let Some(existing) = self.runs.get_run(&run_key)? {
+            return Ok(StartedRun {
+                run_key: existing.run_key,
+                workflow: existing.workflow,
+            });
+        }
+        let files = discover::workflow_files(&self.config);
+        if !files.iter().any(|f| f.id == workflow) {
+            return Err(Error::Store(anyhow::anyhow!("no such workflow: {workflow:?}")));
+        }
+        self.pourer().pour_for_workflow(
+            &run_key,
+            workflow,
+            input,
+            &serde_json::json!({"kind": "manual", "request_id": request_id}),
+            None,
+        );
+        let row = self
+            .runs
+            .get_run(&run_key)?
+            .ok_or_else(|| Error::Store(anyhow::anyhow!("manual pour of {workflow:?} didn't land")))?;
+        Ok(StartedRun {
+            run_key: row.run_key,
+            workflow: row.workflow,
+        })
+    }
+
+    /// Discard `run_key`'s journal entries after the first `keep`, deleting whatever task or
+    /// child run each discarded step created — a redo on the next [`run_tick`](Self::run_tick)
+    /// genuinely redoes the work, rather than silently replaying a task that already finished
+    /// under the same stepId. See [`rewind`] for exactly what is (and isn't) cleaned up.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read or write failure.
+    pub fn rewind(&self, run_key: &str, keep: usize) -> Result<()> {
+        rewind::rewind(&self.runs, &self.tasks, run_key, keep)
+    }
+}
+
+/// One run [`Engine::run_tick`] attempted, and what became of it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RanAttempt {
+    pub run_key: String,
+    pub workflow: String,
+    pub outcome: AttemptOutcome,
 }
 
 #[cfg(test)]

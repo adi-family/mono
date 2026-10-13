@@ -162,6 +162,7 @@ dependencies = [
  "adi-tools",
  "adi-triggers",
  "adi-update",
+ "adi-workflows",
  "serde",
  "serde_json",
  "serde_yaml_ng",

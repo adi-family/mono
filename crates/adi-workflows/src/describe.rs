@@ -34,12 +34,14 @@ const CLIENT_FILES: &[(&str, &str)] = &[
     ("index.ts", include_str!("../templates/client/index.ts")),
 ];
 
-/// The module dir the describe harness is seeded under — deliberately not `workflows/`, which
-/// [`crate::discover`] walks for user files; a describe script sitting there would be discovered
-/// as one.
+/// The module dir the describe and run harnesses are seeded under — deliberately not
+/// `workflows/`, which [`crate::discover`] walks for user files; either script sitting there
+/// would be discovered as one.
 const ENGINE_MODULE: &str = "workflows-engine";
 const DESCRIBE_FILE: &str = "describe.ts";
 const DESCRIBE_SCRIPT: &str = include_str!("../templates/engine/describe.ts");
+const RUN_FILE: &str = "run.ts";
+const RUN_SCRIPT: &str = include_str!("../templates/engine/run.ts");
 
 /// How long a single `bun run describe.ts` may take before this crate gives up on it. Generous —
 /// a cold `bun` start plus a trivial import — but bounded, so one hung or infinite-looping
@@ -77,8 +79,18 @@ pub fn bootstrap(config: &Config) -> Result<()> {
     }
 
     let engine_dir = config.module(ENGINE_MODULE).dir().to_path_buf();
-    write_if_changed_dir(&engine_dir, &[(DESCRIBE_FILE, DESCRIBE_SCRIPT)])?;
+    write_if_changed_dir(
+        &engine_dir,
+        &[(DESCRIBE_FILE, DESCRIBE_SCRIPT), (RUN_FILE, RUN_SCRIPT)],
+    )?;
     Ok(())
+}
+
+/// Where the run harness lives, once [`bootstrap`] has seeded it — what [`crate::attempt`] spawns
+/// `bun run` against.
+#[must_use]
+pub fn run_script_path(config: &Config) -> PathBuf {
+    config.module(ENGINE_MODULE).dir().join(RUN_FILE)
 }
 
 /// Resolve `zod` into `root/node_modules` from Bun's global cache, offline — run once, the first

@@ -72,7 +72,7 @@ pub fn tick(
                 if !adi_events::matches(&trigger.pattern, &logged.record.name) {
                     continue;
                 }
-                if !where_matches(trigger.where_clause.as_ref(), &payload) {
+                if !crate::where_matches(trigger.where_clause.as_ref(), &payload) {
                     continue;
                 }
                 if let Some(causer_run) = &causer
@@ -141,20 +141,6 @@ fn event_triggers(config: &adi_config::Config, file: &WorkflowFile) -> Vec<Event
 struct EventPattern {
     pattern: String,
     where_clause: Option<serde_json::Map<String, serde_json::Value>>,
-}
-
-/// Whether every key in `where_clause` equals the same field in `payload` — `None` (no `where`
-/// given) always matches, since the pattern alone was the whole ask.
-fn where_matches(
-    where_clause: Option<&serde_json::Map<String, serde_json::Value>>,
-    payload: &serde_json::Value,
-) -> bool {
-    let Some(clause) = where_clause else {
-        return true;
-    };
-    clause
-        .iter()
-        .all(|(key, want)| payload.get(key) == Some(want))
 }
 
 #[cfg(test)]

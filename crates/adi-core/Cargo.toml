@@ -33,6 +33,10 @@ adi-events = { workspace = true }
 adi-tasks = { workspace = true }
 adi-tools = { workspace = true }
 adi-triggers = { workspace = true }
+# For `event_catalog`: `adi.workflows.*` joins the whole-platform catalog here, alongside
+# `adi-channels` — see this crate's own `event_catalog` for why *here* (neither depends on the
+# other, so neither can see both producers; this facade is the first that does).
+adi-workflows = { workspace = true }
 
 # The control-panel (adi-app) runs as a user LaunchAgent on a stable port taken from the
 # ports manager; the front door proxies app.adi to that same reserved port.
