@@ -432,6 +432,27 @@ impl Tasks {
         self.with_doc_readonly(|doc| view_of(doc, id))
     }
 
+    /// The task whose `workflow_run`/`step_key` together form this stepId, if one has been
+    /// created yet — what a workflow engine's `ctx.task`/`ctx.run`/`ctx.ask` checkpoint asks
+    /// before deciding whether to create one: a cache miss in its own journal does not by itself
+    /// mean "never attempted", since an earlier attempt of the same run may have created the task
+    /// and then crashed before journaling its resolution.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on an I/O failure.
+    pub fn find_step(&self, workflow_run: &str, step_key: &str) -> Result<Option<TaskView>> {
+        self.with_doc_readonly(|doc| {
+            Ok(doc
+                .tasks
+                .iter()
+                .find(|t| {
+                    t.workflow_run.as_deref() == Some(workflow_run)
+                        && t.step_key.as_deref() == Some(step_key)
+                })
+                .map(|t| TaskView::of(t.clone(), &doc.tasks)))
+        })
+    }
+
     /// Edit a task's fields (never its status). Reparenting is validated against the tree.
     ///
     /// # Errors
@@ -1127,6 +1148,24 @@ mod tests {
                 })
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn find_step_locates_a_task_by_its_run_and_key_or_reports_none() {
+        let store = scratch("find-step");
+        store
+            .create_full(NewTask {
+                title: "research".into(),
+                workflow_run: Some("run1".into()),
+                step_key: Some("research".into()),
+                ..NewTask::default()
+            })
+            .expect("create step");
+
+        let found = store.find_step("run1", "research").expect("find");
+        assert_eq!(found.map(|v| v.task.title), Some("research".to_string()));
+        assert!(store.find_step("run1", "other").expect("find").is_none());
+        assert!(store.find_step("run2", "research").expect("find").is_none());
     }
 
     #[test]

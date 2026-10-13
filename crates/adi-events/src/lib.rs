@@ -384,6 +384,49 @@ impl Events {
         cursor_on(&conn, subscriber)
     }
 
+    /// Everything past `seq`, oldest first, capped at `limit` — the same read [`catch_up`]
+    /// does, but against an explicit position instead of a named subscriber's cursor, and with
+    /// no side effect on any cursor. For a consumer that polls its own saved position rather than
+    /// sharing one of the bus's own subscriber slots — `adi-workflows`' `ctx.waitFor`, concretely,
+    /// which needs to re-check "anything new since I started waiting" on every attempt of a run
+    /// without ever acking, since two different runs waiting on the same pattern must each see
+    /// every match, not divide them up the way `catch_up`'s at-least-once delivery is built to.
+    ///
+    /// # Errors
+    /// [`Error::Sqlite`] on a read failure.
+    pub fn after(&self, seq: u64, limit: usize) -> Result<Vec<LoggedEvent>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "SELECT seq, name, payload, emitted_at FROM events \
+             WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![seq_param(seq), seq_param(limit as u64)], |row| {
+                Ok(LoggedEvent {
+                    seq: seq_of(row.get(0)?),
+                    record: EventRecord {
+                        name: row.get(1)?,
+                        payload: row.get(2)?,
+                        emitted_at: seq_of(row.get(3)?),
+                    },
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// The log's current tip — the highest `seq` appended so far, or `0` if it's empty. What
+    /// `ctx.waitFor` saves the first time it reaches a step, so only events appended *after* that
+    /// point ever resolve it (spec section E: "saves the log position when it starts").
+    ///
+    /// # Errors
+    /// [`Error::Sqlite`] on a read failure.
+    pub fn head(&self) -> Result<u64> {
+        let conn = self.connect()?;
+        let seq: Option<i64> = conn.query_row("SELECT MAX(seq) FROM events", [], |row| row.get(0))?;
+        Ok(seq.map_or(0, seq_of))
+    }
+
     /// Drop every event older than `max_age` that **every** registered subscriber has already
     /// passed — a subscriber with no cursor row at all (never once caught up) blocks retention
     /// entirely, by design: "never before every cursor has passed" is only honored by refusing to
@@ -706,6 +749,35 @@ mod tests {
             })
             .collect();
         assert_eq!(sequence, vec![0, 1, 2]);
+    }
+
+    /// `after` is `catch_up` without any subscriber cursor: two independent callers polling the
+    /// same explicit position each see every matching row, and neither advances anything.
+    #[test]
+    fn after_reads_past_an_explicit_position_with_no_cursor_side_effect() {
+        let bus = scratch("after");
+        bus.emit_event(&Tick { n: 1 }).expect("emit 1");
+        let first_seq = bus.after(0, 10).expect("after 0")[0].seq;
+        bus.emit_event(&Tick { n: 2 }).expect("emit 2");
+
+        let since_zero = bus.after(0, 10).expect("after 0 again");
+        assert_eq!(since_zero.len(), 2);
+        let since_first = bus.after(first_seq, 10).expect("after first");
+        assert_eq!(since_first.len(), 1);
+
+        // Nothing here touched a cursor at all.
+        assert_eq!(bus.cursor("nobody").expect("cursor"), 0);
+        assert_eq!(bus.catch_up("nobody", 10).expect("catch up").len(), 2);
+    }
+
+    #[test]
+    fn head_is_zero_when_empty_and_the_tip_otherwise() {
+        let bus = scratch("head");
+        assert_eq!(bus.head().expect("head"), 0);
+        bus.emit("a", "{}").expect("emit");
+        bus.emit("b", "{}").expect("emit");
+        let caught = bus.catch_up("sub", 10).expect("catch up");
+        assert_eq!(bus.head().expect("head"), caught[1].seq);
     }
 
     #[test]
