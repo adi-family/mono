@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use adi_agents::{Agents, awaits, dispatch, goals, questions};
 use adi_events::EventRecord;
 use adi_triggers::EventObserver;
+use adi_workflows::{Engine as WorkflowEngine, StartedRun};
 use tracing::{info, warn};
 
 const TICK: Duration = Duration::from_secs(1);
@@ -18,9 +19,9 @@ const TICK: Duration = Duration::from_secs(1);
 type Posted = (String, String);
 
 /// Start the worker; dropping every clone of the returned observer stops it.
-pub fn start(agents: Agents) -> EventObserver {
+pub fn start(agents: Agents, workflows: WorkflowEngine) -> EventObserver {
     let (tx, rx) = channel::<Posted>();
-    std::thread::spawn(move || run(&agents, &rx));
+    std::thread::spawn(move || run(&agents, &workflows, &rx));
     observer(tx)
 }
 
@@ -31,7 +32,7 @@ fn observer(tx: Sender<Posted>) -> EventObserver {
 }
 
 /// Track deadlines explicitly so a steady event stream cannot starve sweeps.
-fn run(agents: &Agents, rx: &Receiver<Posted>) {
+fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
     let mut next_tick = Instant::now() + TICK;
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
@@ -49,6 +50,11 @@ fn run(agents: &Agents, rx: &Receiver<Posted>) {
             // working any more" the dispatch tick looks for, so it should see today's freshest
             // state rather than next second's.
             report_dispatched(&dispatch::tick(agents));
+            // The workflow engine's two starters — schedule and event — pour a new run's row and
+            // root task; nothing here yet drives that run's own `ctx` checkpoints (see
+            // `adi_workflows`' crate docs for what's still WF-5 work).
+            report_workflows_started(&workflows.schedule_tick(chrono::Utc::now()));
+            report_workflows_started(&workflows.event_tick());
             next_tick = Instant::now() + TICK;
         }
     }
@@ -95,6 +101,12 @@ fn report_dispatched(dispatched: &[dispatch::Dispatched]) {
     }
 }
 
+fn report_workflows_started(started: &[StartedRun]) {
+    for s in started {
+        info!(run_key = %s.run_key, workflow = %s.workflow, "a workflow starter poured a new run");
+    }
+}
+
 fn report_nudged(nudged: &[goals::Nudged]) {
     for n in nudged {
         match n.error.as_deref() {
@@ -134,7 +146,7 @@ mod tests {
     fn a_posted_event_and_a_passing_deadline_both_reach_the_store() {
         let config = scratch("worker");
         let agents = Agents::with_config(config.clone());
-        let store = Awaits::with_config(config);
+        let store = Awaits::with_config(config.clone());
 
         let on_event = awaits::register(
             &store,
@@ -159,7 +171,7 @@ mod tests {
         )
         .expect("register");
 
-        let observer = start(agents);
+        let observer = start(agents, WorkflowEngine::with_config(config));
         observer(&TaskDeleted::new("t1").to_record().expect("task event"));
 
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -181,7 +193,7 @@ mod tests {
     fn a_wake_scoped_to_one_run_survives_another_runs_ending() {
         let config = scratch("scoped");
         let agents = Agents::with_config(config.clone());
-        let store = Awaits::with_config(config);
+        let store = Awaits::with_config(config.clone());
 
         let scoped = awaits::register(
             &store,
@@ -203,7 +215,7 @@ mod tests {
                 .to_record()
                 .expect("run-finished record")
         };
-        let observer = start(agents);
+        let observer = start(agents, WorkflowEngine::with_config(config));
 
         observer(&finished("r-43"));
         std::thread::sleep(Duration::from_millis(500));

@@ -1,0 +1,29 @@
+[package]
+name = "adi-workflows"
+description = "The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?)` fires (schedule via adi-schedules' sweep, event via this crate's own log cursor), and pours the run row + root task + `adi.workflows.run.started` event every starter shares. The TS execution runtime that drives a started run's own `ctx` checkpoints (step/task/run/waitFor/sleep/ask, replay, rewind) is further WF-5 work, not yet built here — see the crate docs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+adi-events = { workspace = true }
+adi-schedules = { workspace = true }
+adi-tasks = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

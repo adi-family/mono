@@ -55,8 +55,10 @@ dependencies = [
  "adi-tools",
  "adi-triggers",
  "adi-webapp-api",
+ "adi-workflows",
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "include_dir",
  "reqwest",
  "rustls",
@@ -655,6 +657,25 @@ dependencies = [
  "tokio",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "adi-workflows"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-events",
+ "adi-schedules",
+ "adi-tasks",
+ "anyhow",
+ "chrono",
+ "hex",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
