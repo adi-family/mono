@@ -18,6 +18,21 @@ pub enum Error {
     /// Running `bun` to read a workflow file's `on` export failed, or it did not answer with the
     /// JSON this crate's describe harness is seeded to print.
     Describe(String),
+    /// A step key was journaled twice within the same run — either a real bug in this crate (the
+    /// TS `ctx` library's own in-process check is supposed to catch a workflow author's repeated
+    /// key first, before it ever reaches here), or two attempts of the same run racing, which
+    /// [`crate::Engine::run_tick`] is built not to do.
+    DuplicateStepKey(String),
+    /// A checkpoint's resolved value is larger than
+    /// [`crate::store::MAX_STEP_VALUE_BYTES`] — spec section E: "bigger data goes as a path in
+    /// `ctx.dir`", not the journal.
+    JournalEntryTooLarge(String),
+    /// A workflow attempt ended with an error the harness reported — a thrown exception, a zod
+    /// validation failure on `input`/`output`, or a reused step key the TS side caught itself.
+    AttemptFailed(String),
+    /// A ctx.task/ctx.ask/ctx.run step's underlying task was given up on, and the workflow never
+    /// caught the resulting `TaskGaveUp` itself — the run as a whole is what gives up.
+    AttemptGaveUp(String),
     /// Underlying store I/O, SQLite, or filesystem failure.
     Store(anyhow::Error),
 }
@@ -36,6 +51,12 @@ impl fmt::Display for Error {
             }
             Error::DuplicateRunKey(key) => write!(f, "run key {key:?} already exists"),
             Error::Describe(why) => write!(f, "couldn't read the workflow file's `on` export: {why}"),
+            Error::DuplicateStepKey(key) => write!(f, "step key {key:?} is already journaled for this run"),
+            Error::JournalEntryTooLarge(key) => {
+                write!(f, "step {key:?}'s resolved value is too large for the journal")
+            }
+            Error::AttemptFailed(why) => write!(f, "workflow attempt failed: {why}"),
+            Error::AttemptGaveUp(why) => write!(f, "workflow run given up: {why}"),
             Error::Store(e) => write!(f, "workflow store error: {e}"),
         }
     }

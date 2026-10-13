@@ -11,9 +11,11 @@
 
 use adi_events::Events;
 
+use crate::causation;
 use crate::describe::TriggerDef;
 use crate::discover::{self, WorkflowFile};
 use crate::pour::WorkflowRunPourer;
+use crate::store::WorkflowStore;
 
 /// This starter's cursor name on the shared event log. Load-bearing across restarts — never
 /// rename once a real install has caught up under it (same rule as
@@ -36,7 +38,18 @@ pub struct Started {
 /// file that fails to describe (bad syntax, a broken import) is logged and treated as having no
 /// event triggers for this tick, exactly like `adi_schedules::tick` skipping one bad rule: it
 /// must never stop the rest of the batch from being matched against every other workflow.
-pub fn tick(events: &Events, config: &adi_config::Config, pourer: &WorkflowRunPourer) -> Vec<Started> {
+///
+/// Before pouring, reads the matched event's own causer (`caused_by_run`/`workflow_run` on its
+/// payload — see [`causation::causer_of_payload`]) and refuses the match — logging why, starting
+/// nothing — when [`causation::would_cycle`] finds that causer's own chain already includes a run
+/// of the very workflow this match would start: Igor's fix for a workflow retriggering itself,
+/// directly or through a few hops of other workflows.
+pub fn tick(
+    events: &Events,
+    config: &adi_config::Config,
+    store: &WorkflowStore,
+    pourer: &WorkflowRunPourer,
+) -> Vec<Started> {
     let batch = match events.catch_up(SUBSCRIBER, MAX_PER_TICK) {
         Ok(batch) => batch,
         Err(e) => {
@@ -53,12 +66,23 @@ pub fn tick(events: &Events, config: &adi_config::Config, pourer: &WorkflowRunPo
     for logged in &batch {
         let payload: serde_json::Value =
             serde_json::from_str(&logged.record.payload).unwrap_or(serde_json::Value::Null);
+        let causer = causation::causer_of_payload(&payload);
         for file in &files {
             for trigger in event_triggers(config, file) {
                 if !adi_events::matches(&trigger.pattern, &logged.record.name) {
                     continue;
                 }
                 if !where_matches(trigger.where_clause.as_ref(), &payload) {
+                    continue;
+                }
+                if let Some(causer_run) = &causer
+                    && causation::would_cycle(store, causer_run, &file.id)
+                {
+                    tracing::warn!(
+                        workflow = %file.id, event = %logged.record.name, causer = %causer_run,
+                        "refusing to start a run: this event's own causation chain already \
+                         includes a run of this workflow"
+                    );
                     continue;
                 }
                 let run_key = format!("{}@evt:{}", file.id, logged.seq);
@@ -71,6 +95,7 @@ pub fn tick(events: &Events, config: &adi_config::Config, pourer: &WorkflowRunPo
                         "seq": logged.seq,
                         "name": logged.record.name,
                     }),
+                    causer.as_deref(),
                 );
                 started.push(Started {
                     run_key,
@@ -154,10 +179,14 @@ mod tests {
         std::fs::write(dir.join(name), body).unwrap();
     }
 
+    fn store(config: &Config) -> WorkflowStore {
+        WorkflowStore::with_config(config.clone())
+    }
+
     fn pourer(config: &Config) -> WorkflowRunPourer {
         WorkflowRunPourer::new(
             config.clone(),
-            crate::store::WorkflowStore::with_config(config.clone()),
+            store(config),
             Tasks::with_config(config.clone()),
             Events::with_config(config.clone()),
         )
@@ -176,7 +205,7 @@ mod tests {
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", r#"{"id":"t1"}"#).expect("emit");
 
-        let started = tick(&events, &config, &pourer(&config));
+        let started = tick(&events, &config, &store(&config), &pourer(&config));
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].workflow, "on-task");
         assert!(started[0].run_key.starts_with("on-task@evt:"));
@@ -204,7 +233,7 @@ mod tests {
             .emit("adi.tasks.created", r#"{"project":"demo"}"#)
             .expect("emit matching");
 
-        let started = tick(&events, &config, &pourer(&config));
+        let started = tick(&events, &config, &store(&config), &pourer(&config));
         assert_eq!(started.len(), 1, "only the matching payload starts a run");
     }
 
@@ -221,7 +250,7 @@ mod tests {
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", "{}").expect("emit");
 
-        assert!(tick(&events, &config, &pourer(&config)).is_empty());
+        assert!(tick(&events, &config, &store(&config), &pourer(&config)).is_empty());
         assert!(
             events.catch_up(SUBSCRIBER, 10).unwrap().is_empty(),
             "the batch was still acked even though nothing matched"
@@ -244,12 +273,13 @@ mod tests {
         );
         let events = Events::with_config(config.clone());
         events.emit("test.custom.happened", "{}").expect("emit");
+        let store = store(&config);
         let pourer = pourer(&config);
 
-        let first = tick(&events, &config, &pourer);
+        let first = tick(&events, &config, &store, &pourer);
         assert_eq!(first.len(), 1);
         // A second tick with nothing new on the log starts nothing more.
-        let second = tick(&events, &config, &pourer);
+        let second = tick(&events, &config, &store, &pourer);
         assert!(second.is_empty());
     }
 
@@ -267,8 +297,82 @@ mod tests {
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", "{}").expect("emit");
 
-        let started = tick(&events, &config, &pourer(&config));
+        let started = tick(&events, &config, &store(&config), &pourer(&config));
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].workflow, "fine");
+    }
+
+    /// The direct self-retrigger case Igor flagged: a workflow listening on `adi.tasks.created`
+    /// would otherwise retrigger itself forever once its own pour creates a root task. The task
+    /// event's `workflow_run` field (already on every task event, from WF-1) names the run that
+    /// caused it — this starter must see that it's a run of the very workflow matching the event,
+    /// and refuse.
+    #[test]
+    fn a_workflow_is_refused_from_an_event_its_own_run_caused() {
+        let config = scratch("self-retrigger-direct");
+        crate::describe::bootstrap(&config).expect("bootstrap");
+        write_workflow(
+            &config,
+            "on-task.ts",
+            "import { event } from \"@adi/workflows\";\n\
+             export const on = event(\"adi.tasks.created\");\n",
+        );
+        let events = Events::with_config(config.clone());
+        let store = store(&config);
+        let pourer = pourer(&config);
+
+        // Simulate a task-created event whose payload already carries `workflow_run` naming a
+        // real run of "on-task" — exactly what pouring "on-task" itself would emit.
+        store
+            .create_run("on-task@evt:0", "on-task", "/f.ts", "h", &serde_json::json!({}), &serde_json::json!({}), None)
+            .expect("seed the causing run");
+        events
+            .emit(
+                "adi.tasks.created",
+                r#"{"workflow_run":"on-task@evt:0","step_key":"_root"}"#,
+            )
+            .expect("emit");
+
+        let started = tick(&events, &config, &store, &pourer);
+        assert!(
+            started.is_empty(),
+            "a self-caused event must never start another run of the same workflow"
+        );
+        // The batch is still acked (same "never block the rest of the log" rule as a non-match).
+        assert!(events.catch_up(SUBSCRIBER, 10).unwrap().is_empty());
+    }
+
+    /// The refusal is scoped to the *matching* workflow, not every event with a causer: a
+    /// different workflow reacting to the very same task-created event must still be started.
+    #[test]
+    fn a_different_workflow_is_not_refused_by_another_workflows_self_cause() {
+        let config = scratch("self-retrigger-other");
+        crate::describe::bootstrap(&config).expect("bootstrap");
+        write_workflow(
+            &config,
+            "on-task.ts",
+            "import { event } from \"@adi/workflows\";\n\
+             export const on = event(\"adi.tasks.created\");\n",
+        );
+        write_workflow(
+            &config,
+            "watcher.ts",
+            "import { event } from \"@adi/workflows\";\n\
+             export const on = event(\"adi.tasks.created\");\n",
+        );
+        let events = Events::with_config(config.clone());
+        let store = store(&config);
+        let pourer = pourer(&config);
+
+        store
+            .create_run("on-task@evt:0", "on-task", "/f.ts", "h", &serde_json::json!({}), &serde_json::json!({}), None)
+            .expect("seed");
+        events
+            .emit("adi.tasks.created", r#"{"workflow_run":"on-task@evt:0"}"#)
+            .expect("emit");
+
+        let started = tick(&events, &config, &store, &pourer);
+        let workflows: Vec<&str> = started.iter().map(|s| s.workflow.as_str()).collect();
+        assert_eq!(workflows, vec!["watcher"], "only the self-caused one is refused");
     }
 }

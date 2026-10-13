@@ -4,19 +4,19 @@
 
 > The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?)` fires (schedule via adi-schedules' sweep, event via this crate's own log cursor), and pours the run row + root task + `adi.workflows.run.started` event every starter shares. The TS execution runtime that drives a started run's own `ctx` checkpoints (step/task/run/waitFor/sleep/ask, replay, rewind) is further WF-5 work, not yet built here — see the crate docs.
 
-12 structs · 2 enums · 1 type alias across 9 files.
+15 structs · 4 enums · 1 type alias across 9 files.
 
 ## Index
 
 - [`src/describe.rs`](#srcdescribers) — `TriggerDef`, `WorkflowShape`, `CacheEntry`
 - [`src/discover.rs`](#srcdiscoverrs) — `WorkflowFile`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`
+- [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`, `WorkflowRunCompleted`, `WorkflowRunFailed`
 - [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`
 - [`src/pour.rs`](#srcpourrs) — `WorkflowRunPourer`
 - [`src/source.rs`](#srcsourcers) — `WorkflowScheduleSource`
 - [`src/starters.rs`](#srcstartersrs) — `Started`, `EventPattern`
-- [`src/store.rs`](#srcstorers) — `RunRow`, `WorkflowStore`
+- [`src/store.rs`](#srcstorers) — `RunRow`, `WorkflowStore`, `StepKind`, `StepOutcome`, `StepRecord`
 
 ---
 
@@ -113,6 +113,10 @@ pub enum Error {
     InvalidCron(String, String),
     DuplicateRunKey(String),
     Describe(String),
+    DuplicateStepKey(String),
+    JournalEntryTooLarge(String),
+    AttemptFailed(String),
+    AttemptGaveUp(String),
     Store(anyhow::Error),
 }
 ```
@@ -126,12 +130,44 @@ pub enum Error {
 `adi.workflows.run.started` — a workflow run was poured: its row and root task both exist.
 
 ```rust
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct WorkflowRunStarted {
     pub run_key: String,
     pub workflow: String,
     pub root_task: String,
-    pub cause: serde_json::Value,
+    pub cause: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caused_by_run: Option<String>,
+}
+```
+
+### struct `WorkflowRunCompleted`
+
+`adi.workflows.run.completed` — a run's workflow body returned, its output validated against its own `output` zod shape, and its root task completed with that value as the result.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WorkflowRunCompleted {
+    pub run_key: String,
+    pub workflow: String,
+    pub root_task: String,
+    pub result: Value,
+    pub caused_by_run: String,
+}
+```
+
+### struct `WorkflowRunFailed`
+
+`adi.workflows.run.failed` — a run ended in an error the workflow body never caught: a thrown exception, a reused step key, an `input`/`output` zod mismatch, or an uncaught `TaskGaveUp`. Its root task is given up on (not completed — there is no result that would satisfy its own `output_schema`), with this same message as the reason.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct WorkflowRunFailed {
+    pub run_key: String,
+    pub workflow: String,
+    pub root_task: String,
+    pub reason: String,
+    pub caused_by_run: String,
 }
 ```
 
@@ -241,7 +277,9 @@ pub struct RunRow {
     pub file_hash: String,
     pub input: serde_json::Value,
     pub cause: serde_json::Value,
+    pub caused_by_run: Option<String>,
     pub root_task: Option<String>,
+    pub finished_at: Option<u64>,
     pub created_at: u64,
 }
 ```
@@ -254,6 +292,50 @@ The workflow-run store: `workflows.db` under its own module dir.
 #[derive(Debug, Clone)]
 pub struct WorkflowStore {
     config: Config,
+}
+```
+
+### enum `StepKind`
+
+Which `ctx` building block produced a `StepRecord` — kept mostly for `crate::rewind` to know whether a discarded entry has a task (`Task`/`Ask`) or a child run (`Run`) to clean up.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepKind {
+    Step,
+    Task,
+    Run,
+    Wait,
+    Sleep,
+    Ask,
+}
+```
+
+### enum `StepOutcome`
+
+How a checkpoint resolved.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum StepOutcome {
+    Ok(serde_json::Value),
+    GaveUp(String),
+    TimedOut,
+}
+```
+
+### struct `StepRecord`
+
+One resolved checkpoint, as the journal stores it.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct StepRecord {
+    pub step_key: String,
+    pub kind: StepKind,
+    pub outcome: StepOutcome,
+    pub task_id: Option<String>,
+    pub ref_key: Option<String>,
 }
 ```
 

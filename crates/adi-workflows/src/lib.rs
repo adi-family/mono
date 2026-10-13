@@ -41,11 +41,13 @@
 //! Also deferred: `manual()` triggers (`wf@manual:<requestId>` run keys) have no starter at all
 //! yet — there is no caller for one until the CLI/panel (WF-6) exist to ask for a manual run.
 
+mod causation;
 mod cron5;
 mod describe;
 mod discover;
 mod error;
 mod event;
+mod pin;
 mod pour;
 mod source;
 mod starters;
@@ -55,11 +57,11 @@ pub use cron5::normalize_five_field;
 pub use describe::{TriggerDef, WorkflowShape, describe};
 pub use discover::{WorkflowFile, workflow_files};
 pub use error::{Error, Result};
-pub use event::WorkflowRunStarted;
+pub use event::{WorkflowRunCompleted, WorkflowRunFailed, WorkflowRunStarted, event_types};
 pub use pour::{ROOT_STEP_KEY, WorkflowRunPourer};
 pub use source::WorkflowScheduleSource;
 pub use starters::{SUBSCRIBER as EVENT_STARTER_SUBSCRIBER, Started};
-pub use store::{RunRow, WorkflowStore};
+pub use store::{RunRow, StepKind, StepOutcome, StepRecord, WorkflowStore};
 
 use adi_config::Config;
 use adi_events::Events;
@@ -166,7 +168,7 @@ impl Engine {
     #[must_use]
     pub fn event_tick(&self) -> Vec<StartedRun> {
         let pourer = self.pourer();
-        starters::tick(&self.events, &self.config, &pourer)
+        starters::tick(&self.events, &self.config, &self.runs, &pourer)
             .into_iter()
             .map(StartedRun::from)
             .collect()

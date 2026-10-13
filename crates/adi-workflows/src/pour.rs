@@ -53,6 +53,7 @@ impl WorkflowRunPourer {
         workflow: &str,
         input: &serde_json::Value,
         cause: &serde_json::Value,
+        caused_by_run: Option<&str>,
     ) {
         let files = discover::workflow_files(&self.config);
         let Some(file) = files.into_iter().find(|f| f.id == workflow) else {
@@ -62,26 +63,48 @@ impl WorkflowRunPourer {
             );
             return;
         };
-        self.pour_run(run_key, &file, input, cause);
+        self.pour_run(run_key, &file, input, cause, caused_by_run);
     }
 
     /// The actual pour, once the workflow file is in hand: claim the run key, hash the file
-    /// (pinning this run to its current content), create the root task, record it on the run row,
-    /// and emit `adi.workflows.run.started`. Every failure is logged and returns — never panics,
-    /// and never retried by this call (the next tick will simply see the run as never-started and
-    /// try again, same as any other best-effort pour).
+    /// (pinning this run to its current content, into a content-addressed copy so a later edit of
+    /// the live file can never change what an attempt reads — see [`crate::pin`]), create the root
+    /// task (its `output_schema` is the workflow's own `output` zod shape, converted to JSON
+    /// Schema by [`describe::describe`] — `None` for a workflow that declares no `output`), record
+    /// it on the run row, and emit `adi.workflows.run.started`. Every failure is logged and
+    /// returns — never panics, and never retried by this call (the next tick will simply see the
+    /// run as never-started and try again, same as any other best-effort pour).
     pub(crate) fn pour_run(
         &self,
         run_key: &str,
         file: &WorkflowFile,
         input: &serde_json::Value,
         cause: &serde_json::Value,
+        caused_by_run: Option<&str>,
     ) {
         let hash = match hash_file(&file.path) {
             Ok(h) => h,
             Err(e) => {
                 tracing::warn!(%run_key, path = %file.path.display(), error = %e, "couldn't hash a workflow file to pour its run");
                 return;
+            }
+        };
+        let content = match std::fs::read(&file.path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!(%run_key, path = %file.path.display(), error = %e, "couldn't read a workflow file to pin its version");
+                return;
+            }
+        };
+        if let Err(e) = crate::pin::ensure_pinned(&self.config, &hash, &content) {
+            tracing::warn!(%run_key, error = %e, "couldn't pin a workflow file's version");
+            return;
+        }
+        let output_schema = match crate::describe::describe(&self.config, &file.path) {
+            Ok(shape) => shape.output_schema,
+            Err(e) => {
+                tracing::warn!(%run_key, error = %e, "couldn't describe a workflow's output shape; pouring without one");
+                None
             }
         };
         if let Err(e) = self.store.create_run(
@@ -91,6 +114,7 @@ impl WorkflowRunPourer {
             &hash,
             input,
             cause,
+            caused_by_run,
         ) {
             tracing::warn!(%run_key, error = %e, "couldn't claim the run row");
             return;
@@ -102,6 +126,7 @@ impl WorkflowRunPourer {
             workflow_run: Some(run_key.to_string()),
             step_key: Some(ROOT_STEP_KEY.to_string()),
             input: Some(input.clone()),
+            output_schema,
             ..NewTask::default()
         };
         let task = match self.tasks.create_full(new_task) {
@@ -120,6 +145,7 @@ impl WorkflowRunPourer {
             workflow: file.id.clone(),
             root_task: task.task.id.clone(),
             cause: cause.clone(),
+            caused_by_run: caused_by_run.map(String::from),
         });
     }
 }
@@ -134,6 +160,8 @@ impl adi_schedules::RunPourer for WorkflowRunPourer {
                 "kind": "schedule",
                 "slot": due.slot.to_rfc3339(),
             }),
+            // A schedule has no causer of its own — see the crate's causation module doc.
+            None,
         );
     }
 }
@@ -243,5 +271,88 @@ mod tests {
         write_workflow(&config, "weekly.ts", "export const on = []; // edited\n");
         let run_after = store.get_run(&due.run_key).unwrap().unwrap();
         assert_eq!(run_before.file_hash, run_after.file_hash);
+    }
+
+    /// The pinned copy — not just its hash — survives a later edit to the live file, since
+    /// that's what an attempt actually reads.
+    #[test]
+    fn the_pinned_copy_survives_a_later_edit_to_the_live_file() {
+        let config = scratch("pin");
+        write_workflow(&config, "weekly.ts", "export const on = [];");
+        let pourer = pourer(&config);
+        let due = Due {
+            workflow: "weekly".into(),
+            slot: Utc::now(),
+            run_key: "weekly@2026-01-01T00:00:00Z".into(),
+        };
+        adi_schedules::RunPourer::pour(&pourer, &due);
+
+        let store = crate::store::WorkflowStore::with_config(config.clone());
+        let run = store.get_run(&due.run_key).unwrap().unwrap();
+        let pinned = crate::pin::require_pinned(&config, &run.file_hash).expect("pinned copy");
+        assert_eq!(
+            std::fs::read_to_string(pinned).unwrap(),
+            "export const on = [];"
+        );
+    }
+
+    /// A `ctx.run` child pour names its causer — the parent run — on both the row and the
+    /// `adi.workflows.run.started` event, which is what [`crate::causation`] walks.
+    #[test]
+    fn a_pour_with_a_causer_records_it_on_the_run_and_the_started_event() {
+        let config = scratch("caused-by");
+        write_workflow(&config, "child.ts", "export const on = [];");
+        let pourer = pourer(&config);
+
+        pourer.pour_for_workflow(
+            "child@parent@1/step",
+            "child",
+            &serde_json::json!({}),
+            &serde_json::json!({"kind": "child", "parent": "parent@1", "key": "step"}),
+            Some("parent@1"),
+        );
+
+        let store = crate::store::WorkflowStore::with_config(config.clone());
+        let run = store.get_run("child@parent@1/step").unwrap().unwrap();
+        assert_eq!(run.caused_by_run.as_deref(), Some("parent@1"));
+
+        let events = Events::with_config(config);
+        let caught = events.catch_up("test", 10).expect("catch up");
+        let started = caught
+            .iter()
+            .find(|e| e.record.name == "adi.workflows.run.started")
+            .expect("run.started");
+        let payload: serde_json::Value = serde_json::from_str(&started.record.payload).unwrap();
+        assert_eq!(payload["caused_by_run"], "parent@1");
+    }
+
+    /// `output_schema` on the root task comes from the workflow's own declared `output` zod
+    /// shape, converted to JSON Schema — spec section E: "Store the JSON Schema on tasks via
+    /// `create_full`."
+    #[test]
+    fn the_roots_task_output_schema_comes_from_the_workflows_declared_output() {
+        let config = scratch("output-schema");
+        crate::describe::bootstrap(&config).expect("bootstrap");
+        write_workflow(
+            &config,
+            "typed.ts",
+            "import { z } from \"zod\";\n\
+             export const on = [];\n\
+             export const output = z.object({ ok: z.boolean() });\n",
+        );
+        let pourer = pourer(&config);
+        let due = Due {
+            workflow: "typed".into(),
+            slot: Utc::now(),
+            run_key: "typed@2026-01-01T00:00:00Z".into(),
+        };
+        adi_schedules::RunPourer::pour(&pourer, &due);
+
+        let store = crate::store::WorkflowStore::with_config(config.clone());
+        let run = store.get_run(&due.run_key).unwrap().unwrap();
+        let tasks = Tasks::with_config(config);
+        let task = tasks.get(run.root_task.as_deref().unwrap()).expect("task");
+        let schema = task.task.output_schema.expect("output schema stored");
+        assert_eq!(schema["properties"]["ok"]["type"], "boolean");
     }
 }
