@@ -315,9 +315,9 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                     // empty — the other forms send `None`, which leaves them as they are.
                     knowledge: Some(form.knowledge.get().into_iter().collect()),
                     memory: Some(form.memory.get()),
-                    // No checkbox for this yet (ADI-MONO-144) — `None` leaves whatever is already
-                    // stored exactly as it was, same as every field below this form does not own.
-                    dispatch: None,
+                    // This is the form that owns the toggle now (ADI-MONO-147), so it states it
+                    // even when off — the same reasoning `memory` beside it already follows.
+                    dispatch: Some(form.dispatch.get()),
                     // Which agents this one may launch — this is the form that owns it, so it
                     // states the list even when empty. The store still refuses this outright when
                     // the save itself comes from inside a run, whatever is sent here.
@@ -359,6 +359,11 @@ pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<
                 <section class="adi-agents__section">
                     <h2 class="adi-agents__h2">"Knowledge"</h2>
                     {move || agent_knowledge_checkboxes(form)}
+                </section>
+
+                <section class="adi-agents__section">
+                    <h2 class="adi-agents__h2">"Dispatch"</h2>
+                    {move || agent_dispatch_checkbox(form)}
                 </section>
 
                 <section class="adi-agents__section">
@@ -630,6 +635,34 @@ fn agent_knowledge_checkboxes(form: AgentsForm) -> AnyView {
         <div class="adi-field">
             <span class="adi-field__label">"Bases it searches"</span>
             {move || base_checkboxes(form)}
+        </div>
+    }
+    .into_any()
+}
+
+/// The dispatch opt-in toggle (ADI-MONO-144/147): whether the dispatch tick may hand this agent
+/// a ready task its `assignee` names it as. Off by default — the same reasoning `memory`'s own
+/// toggle follows, on the section just above this one: an agent that gets launched by the
+/// platform's own sweep is a different thing from one that only ever runs when asked for by name.
+fn agent_dispatch_checkbox(form: AgentsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <div class="adi-agents__checks">
+                {check_box(
+                    "Opt this agent into dispatch",
+                    String::new(),
+                    move || form.dispatch.get(),
+                    false,
+                    move |on| form.dispatch.set(on),
+                    None,
+                )}
+            </div>
+            <p class="adi-field__note">
+                "A ready task assigned to this agent (by name, in "<code>"assignee"</code>") is
+                 launched automatically once this is on — see "<code>"guides/workflows.md"</code>
+                 " for the retry/backoff/stuck rules dispatch follows. A task assigned to a
+                 person is never affected by this, whatever it says."
+            </p>
         </div>
     }
     .into_any()

@@ -15,6 +15,10 @@ pub enum Error {
     /// in use — a starter pouring the same run twice, which must never happen (each starter claims
     /// its own run keys exactly once; see the schedule and event starters).
     DuplicateRunKey(String),
+    /// A workflow id named by [`crate::Engine::describe_workflow`], [`crate::Engine::start_manual`]
+    /// or the `enable`/`disable` facts names no file this engine currently discovers — a 404 for
+    /// anything built over this crate (`adi-mono workflows show`, the panel's `/api/workflows/*`).
+    UnknownWorkflow(String),
     /// Running `bun` to read a workflow file's `on` export failed, or it did not answer with the
     /// JSON this crate's describe harness is seeded to print.
     Describe(String),
@@ -50,6 +54,7 @@ impl fmt::Display for Error {
                 write!(f, "{expr:?} is not a valid 5-field cron expression: {detail}")
             }
             Error::DuplicateRunKey(key) => write!(f, "run key {key:?} already exists"),
+            Error::UnknownWorkflow(id) => write!(f, "no such workflow: {id:?}"),
             Error::Describe(why) => write!(f, "couldn't read the workflow file's `on` export: {why}"),
             Error::DuplicateStepKey(key) => write!(f, "step key {key:?} is already journaled for this run"),
             Error::JournalEntryTooLarge(key) => {

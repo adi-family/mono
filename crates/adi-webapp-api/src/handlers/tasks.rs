@@ -2,7 +2,7 @@ use adi_tasks::Error as TaskStoreError;
 use adi_tasks::TaskView;
 use adi_tasks::Tasks;
 
-use crate::types::{NewTask, TaskRef, TaskRow, TasksState};
+use crate::types::{CompleteTask, GiveUpTask, NewTask, TaskRef, TaskRow, TasksState};
 
 use super::response::{FromBody, Response, error, mutate, ok_json};
 
@@ -76,6 +76,29 @@ pub fn delete_task(store: &Tasks, body: &[u8]) -> Response {
     )
 }
 
+/// `POST /api/tasks/complete` — spec section F: the panel's own form, rendered from a task's
+/// `output_schema`, finishes a task exactly like `adi-mono tasks complete --result` does: the same
+/// store call, the same validation, the same refusal naming the exact path that didn't fit.
+#[must_use]
+pub fn complete_task(store: &Tasks, body: &[u8]) -> Response {
+    mutate(
+        body,
+        |req: CompleteTask| store.complete(req.id.trim(), req.result),
+        || tasks(store),
+    )
+}
+
+/// `POST /api/tasks/give-up` — the panel's form of `adi-mono tasks give-up --reason`. Stores a
+/// fact (`give_up_reason`); the task's stored `status` is left exactly as it was.
+#[must_use]
+pub fn give_up_task(store: &Tasks, body: &[u8]) -> Response {
+    mutate(
+        body,
+        |req: GiveUpTask| store.give_up(req.id.trim(), req.reason.trim()),
+        || tasks(store),
+    )
+}
+
 /// Flatten a store [`TaskView`] into its wire [`TaskRow`] DTO, stringifying the status enums.
 fn task_row(view: &TaskView) -> TaskRow {
     let task = &view.task;
@@ -94,12 +117,16 @@ fn task_row(view: &TaskView) -> TaskRow {
         children_open: view.children_open,
         created_at: task.created_at,
         updated_at: task.updated_at,
+        input: task.input.clone(),
+        output_schema: task.output_schema.clone(),
+        result: task.result.clone(),
+        give_up_reason: task.give_up_reason.clone(),
+        workflow_run: task.workflow_run.clone(),
     }
 }
 
 // Map a task-store error to an HTTP status: missing → 404, bad edit → 400, conflict → 409, else
-// 500. The panel does not yet expose `--result`/give-up (see ADI-MONO-141 §F), but the match has
-// to be exhaustive regardless of what this crate's own endpoints can currently trigger.
+// 500.
 impl From<&TaskStoreError> for Response {
     fn from(e: &TaskStoreError) -> Self {
         let status = match e {
@@ -131,6 +158,24 @@ impl FromBody for TaskRef {
 
     fn is_complete(&self) -> bool {
         !self.id.trim().is_empty()
+    }
+}
+
+impl FromBody for CompleteTask {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"result\"?: <json> } with a non-empty task id";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
+}
+
+impl FromBody for GiveUpTask {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"reason\": \"…\" } with both non-empty";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.reason.trim().is_empty()
     }
 }
 

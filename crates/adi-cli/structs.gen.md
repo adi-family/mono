@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 26 enums across 21 files.
+5 structs · 28 enums across 22 files.
 
 ## Index
 
@@ -29,6 +29,7 @@
 - [`src/tools.rs`](#srctoolsrs) — `ToolsCommand`
 - [`src/triggers.rs`](#srctriggersrs) — `TriggersCommand`
 - [`src/update.rs`](#srcupdaters) — `UpdateCommand`
+- [`src/workflows.rs`](#srcworkflowsrs) — `WorkflowsCommand`, `LlmCommand`
 
 ---
 
@@ -1078,6 +1079,10 @@ enum Command {
         #[command(subcommand)]
         command: TriggersCommand,
     },
+    Workflows {
+        #[command(subcommand)]
+        command: WorkflowsCommand,
+    },
     Knowledge {
         #[arg(long, value_name = "AGENT")]
         as_agent: Option<String>,
@@ -1782,6 +1787,69 @@ pub(crate) enum UpdateCommand {
     },
     Enable,
     Disable,
+}
+```
+
+---
+
+## `src/workflows.rs`
+
+### enum `WorkflowsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkflowsCommand {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Run {
+        id: String,
+        #[arg(long)]
+        input: Option<String>,
+        #[arg(long = "request-id")]
+        request_id: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Runs {
+        #[arg(long)]
+        workflow: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    Rewind {
+        run: String,
+        #[arg(long = "to")]
+        to: usize,
+    },
+    Enable {
+        id: String,
+    },
+    Disable {
+        id: String,
+    },
+    #[command(disable_help_subcommand = true)]
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
+}
+```
+
+### enum `LlmCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum LlmCommand {
+    Help,
 }
 ```
 

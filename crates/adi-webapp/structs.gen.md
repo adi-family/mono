@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-106 structs · 34 enums · 5 type aliases across 44 files.
+107 structs · 34 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -48,7 +48,7 @@
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `AgentChat`, `PickerArgs`, `Session`, `RealtimeLive`
@@ -71,6 +71,7 @@ pub(crate) enum Icon {
     Tasks,
     Agent,
     Trigger,
+    Workflow,
     Dashboard,
     Server,
     Plug,
@@ -1658,6 +1659,7 @@ pub(crate) enum Route {
     LlmBackends,
     EmbeddingBackends,
     Triggers,
+    Workflows,
     Dashboards,
     Marketplace,
     LiveGraph,
@@ -1981,6 +1983,7 @@ pub(crate) struct TasksForm {
     pub(crate) details: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_done: RwSignal<bool>,
+    pub(crate) completion_drafts: RwSignal<BTreeMap<String, String>>,
 }
 ```
 
@@ -2170,6 +2173,7 @@ pub(crate) struct AgentsForm {
     pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
     pub(crate) knowledge: RwSignal<BTreeSet<String>>,
     pub(crate) memory: RwSignal<bool>,
+    pub(crate) dispatch: RwSignal<bool>,
     pub(crate) can_spawn: RwSignal<Vec<String>>,
     pub(crate) can_spawn_draft: RwSignal<String>,
     pub(crate) spawn_grant_draft: RwSignal<String>,
@@ -2401,6 +2405,24 @@ pub(crate) struct LlmBackendsForm {
     pub(crate) busy: RwSignal<bool>,
     pub(crate) testing: RwSignal<bool>,
     pub(crate) test_result: RwSignal<Option<TestResultDto>>,
+}
+```
+
+### struct `WorkflowsConsole`
+
+Everything the Workflows page holds that isn't on the server — page-local, like `EmbeddingsConsole` beside it: no live-channel subscription for `/api/workflows*`, so it is fetched once when the page opens rather than polled into the shell state.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct WorkflowsConsole {
+    pub(crate) workflows: RwSignal<Option<WorkflowsState>>,
+    pub(crate) error: RwSignal<Option<String>>,
+    pub(crate) selected: RwSignal<String>,
+    pub(crate) run_input: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    pub(crate) runs: RwSignal<Option<RunsState>>,
+    pub(crate) selected_run: RwSignal<String>,
+    pub(crate) run_detail: RwSignal<Option<RunDetailDto>>,
 }
 ```
 

@@ -171,6 +171,13 @@ impl Adi {
         adi_events::Events::open()
     }
 
+    /// The workflow engine backed by the standard store — `Adi::new().workflows().list_workflows()`
+    /// (WF-6: `adi-mono workflows list/show/run/runs/rewind/enable/disable`).
+    #[must_use]
+    pub fn workflows(self) -> adi_workflows::Engine {
+        adi_workflows::Engine::open()
+    }
+
     /// Every managed service, in display + apply order. DNS is first so, when enabling, its
     /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide

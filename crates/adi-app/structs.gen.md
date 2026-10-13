@@ -102,6 +102,7 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
+    workflows: adi_workflows::Engine,
     mesh: MeshCtl,
     dist: Option<PathBuf>,
     start: Instant,

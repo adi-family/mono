@@ -980,6 +980,22 @@ impl Agents {
         SessionStore::new(self.config.module(SESSIONS_MODULE).dir())
     }
 
+    /// Whether `task_id` is stuck per the dispatch tick's own definition (`crate::dispatch`): an
+    /// unresolved stuck ask is currently out for it. `false` for a task the dispatcher has never
+    /// touched — never dispatched at all, assigned to a person rather than an agent, or dispatched
+    /// and still going normally. WF-6's one window into dispatch state from outside this crate: the
+    /// workflow engine has no dependency on `adi-agents` (see its own module doc), so a run waiting
+    /// on a dispatched task reads this, in `adi-core`, to tell "waiting" from "stuck" without this
+    /// crate's own `task_dispatch` table leaking any further than a plain bool.
+    #[must_use]
+    pub fn task_is_stuck(&self, task_id: &str) -> bool {
+        self.sessions()
+            .dispatch_row(task_id)
+            .ok()
+            .flatten()
+            .is_some_and(|row| !row.stuck_ask_id.is_empty())
+    }
+
     /// The newest `limit` distinct prompts a person sent `agent` — start prompts and replies
     /// alike, newest first — what a composer offers to send again. See
     /// [`SessionStore::recent_prompts`].
@@ -7692,6 +7708,32 @@ mod tests {
             err.to_string().contains("no question waiting"),
             "and it says so plainly: {err}"
         );
+    }
+
+    #[test]
+    fn task_is_stuck_reads_the_dispatch_rows_own_stuck_ask() {
+        let store = scratch("task-stuck");
+        assert!(!store.task_is_stuck("t1"), "never touched by the dispatcher");
+
+        store
+            .sessions()
+            .save_dispatch_row(&store::DispatchRow {
+                task_id: "t1".into(),
+                stuck_ask_id: "ask1".into(),
+                ..store::DispatchRow::default()
+            })
+            .expect("save");
+        assert!(store.task_is_stuck("t1"), "an unresolved stuck ask is out");
+
+        store
+            .sessions()
+            .save_dispatch_row(&store::DispatchRow {
+                task_id: "t1".into(),
+                stuck_ask_id: String::new(),
+                ..store::DispatchRow::default()
+            })
+            .expect("save");
+        assert!(!store.task_is_stuck("t1"), "cleared once the stuck ask is answered");
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-24 structs · 6 enums across 14 files.
+24 structs · 7 enums across 15 files.
 
 ## Index
 
@@ -22,6 +22,7 @@
 - [`src/status.rs`](#srcstatusrs) — `DaemonStatus`
 - [`src/tools.rs`](#srctoolsrs) — `ToolRenamed`
 - [`src/update.rs`](#srcupdaters) — `RunOutcome`, `Update`, `Updater`
+- [`src/workflows.rs`](#srcworkflowsrs) — `RunStatus`
 
 ---
 
@@ -463,5 +464,31 @@ The background auto-updater as a service row. A periodic one-shot job, not a dae
 ```rust
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Updater;
+```
+
+---
+
+## `src/workflows.rs`
+
+### enum `RunStatus`
+
+A run's status, derived fresh from the runs/tasks/step-journal tables every call — spec section F: "runs lists runs with DERIVED status: running / waiting on <task|event|sleep| child> / done / failed / stuck." Deleting every cache this (and everything it calls) reads costs nothing but a slower next call — never a wrong answer.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunStatus {
+    Running,
+    WaitingOnTask {
+        task_id: Option<String>,
+    },
+    WaitingOnEvent,
+    WaitingOnSleep,
+    WaitingOnChild,
+    Done,
+    Failed,
+    Stuck {
+        task_id: String,
+    },
+}
 ```
 

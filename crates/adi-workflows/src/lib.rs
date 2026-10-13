@@ -59,6 +59,7 @@ mod rewind;
 mod rpc;
 mod source;
 mod starters;
+mod status;
 mod store;
 
 pub use attempt::Outcome as AttemptOutcome;
@@ -70,6 +71,7 @@ pub use event::{WorkflowRunCompleted, WorkflowRunFailed, WorkflowRunStarted, eve
 pub use pour::{ROOT_STEP_KEY, WorkflowRunPourer};
 pub use source::WorkflowScheduleSource;
 pub use starters::{SUBSCRIBER as EVENT_STARTER_SUBSCRIBER, Started};
+pub use status::WaitingOn;
 pub use store::{RunRow, StepKind, StepOutcome, StepRecord, WorkflowStore};
 
 use std::sync::Arc;
@@ -94,7 +96,7 @@ pub(crate) fn now_ms() -> u64 {
 /// [`Engine::event_tick`] both answer in this shape, so a caller logging "what fired" doesn't need
 /// to know or care which starter it came from (the same reporting shape `adi-agents`' own
 /// dispatch/goals ticks use for their own "what happened").
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StartedRun {
     pub run_key: String,
     pub workflow: String,
@@ -241,6 +243,81 @@ impl Engine {
         &self.runs
     }
 
+    /// Every workflow file this engine currently discovers, each with its declared shape and
+    /// whether it is enabled — `adi-mono workflows list` and the panel's workflows list (WF-6).
+    /// A file that fails to describe (bad syntax, a broken import) is still listed, with its error
+    /// in [`WorkflowListing::describe_error`] rather than silently dropped — a broken file is
+    /// exactly the thing a list needs to surface.
+    #[must_use]
+    pub fn list_workflows(&self) -> Vec<WorkflowListing> {
+        discover::workflow_files(&self.config)
+            .into_iter()
+            .map(|file| self.listing_of(file))
+            .collect()
+    }
+
+    /// One workflow's file and declared shape, by id — `adi-mono workflows show` (WF-6).
+    ///
+    /// # Errors
+    /// [`Error::Store`] if no discovered file has this id.
+    pub fn describe_workflow(&self, id: &str) -> Result<WorkflowListing> {
+        let files = discover::workflow_files(&self.config);
+        let file = files
+            .into_iter()
+            .find(|f| f.id == id)
+            .ok_or_else(|| Error::UnknownWorkflow(id.to_string()))?;
+        Ok(self.listing_of(file))
+    }
+
+    fn listing_of(&self, file: WorkflowFile) -> WorkflowListing {
+        let enabled = self.runs.is_enabled(&file.id).unwrap_or(false);
+        match describe::describe(&self.config, &file.path) {
+            Ok(shape) => WorkflowListing {
+                id: file.id,
+                project: file.project,
+                path: file.path,
+                enabled,
+                shape: Some(shape),
+                describe_error: None,
+            },
+            Err(e) => WorkflowListing {
+                id: file.id,
+                project: file.project,
+                path: file.path,
+                enabled,
+                shape: None,
+                describe_error: Some(e.to_string()),
+            },
+        }
+    }
+
+    /// Whether `workflow`'s `schedule`/`event` triggers may fire it — see
+    /// [`WorkflowStore::is_enabled`].
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn is_enabled(&self, workflow: &str) -> Result<bool> {
+        self.runs.is_enabled(workflow)
+    }
+
+    /// Set whether `workflow`'s `schedule`/`event` triggers may fire it — `adi-mono workflows
+    /// enable`/`disable` (WF-6). Never gates [`start_manual`](Self::start_manual).
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn set_enabled(&self, workflow: &str, enabled: bool) -> Result<()> {
+        self.runs.set_enabled(workflow, enabled)
+    }
+
+    /// What `run_key` is blocked on right now, or `None` between attempts — see
+    /// [`status::waiting_on`] for exactly how each is told apart.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn waiting_on(&self, run_key: &str) -> Result<Option<WaitingOn>> {
+        status::waiting_on(&self.runs, &self.tasks, run_key)
+    }
+
     fn attempt(&self) -> attempt::Attempt {
         attempt::Attempt::new(
             self.config.clone(),
@@ -343,7 +420,7 @@ impl Engine {
         }
         let files = discover::workflow_files(&self.config);
         if !files.iter().any(|f| f.id == workflow) {
-            return Err(Error::Store(anyhow::anyhow!("no such workflow: {workflow:?}")));
+            return Err(Error::UnknownWorkflow(workflow.to_string()));
         }
         self.pourer().pour_for_workflow(
             &run_key,
@@ -382,6 +459,21 @@ pub struct RanAttempt {
     pub outcome: AttemptOutcome,
 }
 
+/// One discovered workflow file, with its declared shape and whether it is enabled —
+/// [`Engine::list_workflows`]/[`Engine::describe_workflow`].
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WorkflowListing {
+    pub id: String,
+    pub project: Option<String>,
+    pub path: std::path::PathBuf,
+    pub enabled: bool,
+    /// `None` when [`describe_error`](Self::describe_error) is set instead.
+    pub shape: Option<WorkflowShape>,
+    /// Set instead of [`shape`](Self::shape) when the file failed to describe (bad syntax, a
+    /// broken import) — surfaced rather than silently dropped from a listing.
+    pub describe_error: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,6 +508,7 @@ mod tests {
             "import { schedule } from \"@adi/workflows\";\n\
              export const on = schedule(\"* * * * *\", \"UTC\");\n",
         );
+        engine.runs().set_enabled("weekly", true).expect("enable");
 
         let first = chrono::DateTime::parse_from_rfc3339("2026-01-01T12:00:00Z")
             .unwrap()
@@ -447,6 +540,7 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.tasks.created\");\n",
         );
+        engine.runs().set_enabled("on-task", true).expect("enable");
 
         Events::with_config(config)
             .emit("adi.tasks.created", "{}")

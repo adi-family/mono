@@ -921,7 +921,9 @@ impl ProjectDetail {
 /// (`open`/`done`/`archived`); `effective` is the computed status
 /// (`ready`/`blocked`/`done`/`archived`, derived from the stored state plus direct children).
 /// `parent` is the id of the parent task, if any — the client rebuilds the tree from these links.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: `input`/`output_schema`/`result` carry `serde_json::Value`, which is `PartialEq` but
+// not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskRow {
     pub id: String,
     pub title: String,
@@ -945,11 +947,31 @@ pub struct TaskRow {
     pub children_open: usize,
     pub created_at: u64,
     pub updated_at: u64,
+    /// The input a run picking this up was given — a workflow's `ctx.task` most often. `None` for
+    /// an ordinary task, whose instructions are [`details`](Self::details) alone.
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    /// The JSON Schema a `--result`/the panel's own completion form must satisfy — spec section
+    /// F: a person task's `output_schema` is what the panel renders a form from. `None` means
+    /// `complete` accepts anything (or nothing).
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
+    /// The value this task was completed with, once validated — `None` until completion.
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+    /// Why an agent gave up on this task, if one has — a fact, not a status (`status` stays
+    /// `open`); see `adi_tasks::Task::give_up_reason`'s own doc for why.
+    #[serde(default)]
+    pub give_up_reason: Option<String>,
+    /// The workflow run this task is a step of, or `None` for a task nobody's workflow owns.
+    #[serde(default)]
+    pub workflow_run: Option<String>,
 }
 
 /// `GET /api/tasks` — every task in the tree as a flat list, ordered by task number. The client
 /// nests them into a tree by `parent`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: `TaskRow` carries `serde_json::Value` fields, which are `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TasksState {
     pub tasks: Vec<TaskRow>,
 }
@@ -981,6 +1003,27 @@ pub struct TaskRef {
     pub id: String,
     #[serde(default)]
     pub cascade: bool,
+}
+
+/// Request body for `POST /api/tasks/complete` — spec section F: a person's own form, rendered
+/// from [`TaskRow::output_schema`], submits here exactly like `adi-mono tasks complete --result`.
+/// Validated server-side against the same `output_schema`; a mismatch refuses with the JSON
+/// pointer path the server-side validator names, same as the CLI. Returns a fresh [`TasksState`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompleteTask {
+    pub id: String,
+    /// Omit for a task with no `output_schema` (nothing to validate); required otherwise.
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+}
+
+/// Request body for `POST /api/tasks/give-up` — the panel's form of `adi-mono tasks give-up
+/// --reason`. Stores a fact (`give_up_reason`); `status` is left exactly as it was. Returns a
+/// fresh [`TasksState`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GiveUpTask {
+    pub id: String,
+    pub reason: String,
 }
 
 // ---- tools (user CLIs under ~/.adi/mono/tools, run by agents) ------------------------
@@ -3683,6 +3726,137 @@ pub struct TriggerLog {
 pub struct HookAck {
     pub ok: bool,
     pub trigger: String,
+}
+
+// ---- workflows (ADI-MONO-141 §F) ------------------------------------------------------
+
+/// `GET /api/workflows` — every discovered workflow file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowsState {
+    pub workflows: Vec<WorkflowDto>,
+}
+
+/// One discovered workflow file: its starters (pre-rendered to one line each, the same text the
+/// CLI's `show` prints), its declared input/output JSON Schema, and whether it is enabled — a
+/// workflow this store has never been told about reads as disabled (spec section E: "a workflow
+/// drafted by an agent in chat is saved DISABLED until Igor confirms"); `run` still works on one
+/// regardless, which is how a draft is tried before it is trusted with its own triggers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowDto {
+    pub id: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub enabled: bool,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    #[serde(default)]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
+    /// Set instead of being describable at all — a syntax error or a bad import in the file.
+    #[serde(default)]
+    pub describe_error: Option<String>,
+}
+
+/// Request body naming a workflow — `POST /api/workflows/enable`, `/disable`, `/run`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRef {
+    pub id: String,
+}
+
+/// `POST /api/workflows/run` — start a workflow by hand.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunWorkflow {
+    pub id: String,
+    /// The workflow's own input. Defaults to `{}`.
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    /// Reuse this request id for an idempotent retry — the same id always answers with the same
+    /// run. Omit to mint a fresh one.
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+
+/// Reply to `POST /api/workflows/run`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowStarted {
+    pub run_key: String,
+    pub workflow: String,
+}
+
+/// `POST /api/workflows/runs` — runs, newest first, optionally narrowed to one workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RunsQuery {
+    /// Only this workflow's runs (oldest first, the audit-trail order). Omit to list across
+    /// every workflow (newest first).
+    #[serde(default)]
+    pub workflow: Option<String>,
+    /// How many to show — only applies with no `workflow`. Defaults to 50.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunsState {
+    pub runs: Vec<RunDto>,
+}
+
+/// One run, with its status derived fresh server-side every call (never cached) — spec section
+/// F: "running / waiting on task|event|sleep|child / done / failed / stuck".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDto {
+    pub run_key: String,
+    pub workflow: String,
+    pub status: String,
+    pub created_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+}
+
+/// Request body naming a run — `POST /api/workflows/run/detail` and `/run/rewind`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRunRef {
+    pub run_key: String,
+}
+
+/// `POST /api/workflows/run/detail` — one run's full timeline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunDetailDto {
+    pub run_key: String,
+    pub workflow: String,
+    pub status: String,
+    pub input: serde_json::Value,
+    pub cause: serde_json::Value,
+    pub created_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+    pub steps: Vec<StepDto>,
+}
+
+/// One journaled checkpoint, in resolution order — "step N" in "rewind to step N" is the Nth
+/// entry here (0-indexed from the caller's own list, so `--to 2` keeps the first two shown).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepDto {
+    pub step_key: String,
+    /// `step` / `task` / `run` / `wait` / `sleep` / `ask`.
+    pub kind: String,
+    /// `ok` / `gave_up` / `timed_out`.
+    pub outcome: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub ref_key: Option<String>,
+}
+
+/// `POST /api/workflows/run/rewind` — discard a run's journal after step `to` (0 discards
+/// everything), so the next attempt genuinely redoes the discarded work rather than replaying a
+/// stale answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewindRun {
+    pub run_key: String,
+    pub to: usize,
 }
 
 // ---- files (a project's own directory, browsed through an isolated jail) --------------

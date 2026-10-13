@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use adi_config::Config;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
@@ -138,7 +138,7 @@ fn describe_script_path(config: &Config) -> PathBuf {
 }
 
 /// One entry of a workflow file's `on` export, as the describe harness prints it.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TriggerDef {
     #[serde(rename = "schedule")]
@@ -163,7 +163,7 @@ pub enum TriggerDef {
 /// Schema of its `input`/`output` zod exports (`null` when a file declares neither — a workflow
 /// is not obliged to type its input or output). Converted from zod by the describe harness itself
 /// (`z.toJSONSchema`), never re-derived on the Rust side, which has no zod of its own.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowShape {
     #[serde(default)]
     pub on: Vec<TriggerDef>,

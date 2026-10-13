@@ -53,6 +53,7 @@ mod tools;
 mod triggers;
 mod update;
 mod voice;
+mod workflows;
 mod workspaces;
 
 pub use agents::*;
@@ -82,6 +83,7 @@ pub use tools::*;
 pub use triggers::*;
 pub use update::*;
 pub use voice::*;
+pub use workflows::*;
 pub use workspaces::*;
 
 #[cfg(test)]
@@ -466,6 +468,66 @@ mod tests {
 
         assert_eq!(delete_task(&store, br#"{"id":"ghost"}"#).status, 404);
         assert_eq!(delete_task(&store, br#"{"id":""}"#).status, 400);
+    }
+
+    /// Spec section F: the panel's own completion form validates against `output_schema` exactly
+    /// like `adi-mono tasks complete --result` does, and names the same offending path on a
+    /// mismatch.
+    #[test]
+    fn complete_task_validates_against_output_schema_like_the_cli_does() {
+        let store = temp_tasks();
+        let created = store
+            .create_full(adi_tasks::NewTask {
+                title: "review".into(),
+                output_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"]
+                })),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("create");
+        let id = created.task.id.clone();
+
+        let bad = format!(r#"{{"id":"{id}","result":{{"ok":"not a bool"}}}}"#);
+        let Response { status, body } = complete_task(&store, bad.as_bytes());
+        assert_eq!(status, 400, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("/ok"), "{body}");
+
+        let good = format!(r#"{{"id":"{id}","result":{{"ok":true}}}}"#);
+        let Response { status, body } = complete_task(&store, good.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let row = v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap();
+        assert_eq!(row["status"], "done");
+        assert_eq!(row["result"]["ok"], true);
+
+        assert_eq!(complete_task(&store, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(complete_task(&store, br#"{"id":""}"#).status, 400);
+    }
+
+    #[test]
+    fn give_up_task_stores_a_fact_without_changing_status() {
+        let store = temp_tasks();
+        let created = store
+            .create("ship it".into(), None, None, None, None, None)
+            .expect("create");
+        let id = created.task.id.clone();
+
+        let body = format!(r#"{{"id":"{id}","reason":"no API key"}}"#);
+        let Response { status, body } = give_up_task(&store, body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let row = v["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap();
+        assert_eq!(row["status"], "open", "give-up is a fact, not a status change");
+        assert_eq!(row["give_up_reason"], "no API key");
+
+        assert_eq!(
+            give_up_task(&store, br#"{"id":"ghost","reason":"x"}"#).status,
+            404
+        );
+        assert_eq!(give_up_task(&store, br#"{"id":"t1","reason":""}"#).status, 400);
     }
 
     #[test]
@@ -1691,6 +1753,141 @@ mod tests {
         assert_eq!(
             store_attachment(&store, "application/pdf", "huge.pdf", &too_big).status,
             413,
+        );
+    }
+
+    // ---- workflows (ADI-MONO-141 §F) ---------------------------------------------------
+
+    fn temp_workflows_config() -> adi_config::Config {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-workflows-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        adi_config::Config::with_root(root)
+    }
+
+    fn temp_engine() -> (adi_workflows::Engine, adi_config::Config) {
+        let config = temp_workflows_config();
+        let engine = adi_workflows::Engine::with_config(config.clone());
+        engine.bootstrap().expect("bootstrap");
+        (engine, config)
+    }
+
+    fn write_workflow(config: &adi_config::Config, name: &str, body: &str) {
+        let dir = config.module("workflows").dir().to_path_buf();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    #[test]
+    fn workflows_lists_every_discovered_file_disabled_by_default() {
+        let (engine, config) = temp_engine();
+        write_workflow(
+            &config,
+            "weekly.ts",
+            "import { schedule } from \"@adi/workflows\";\n\
+             export const on = schedule(\"0 5 * * MON\", \"UTC\");\n",
+        );
+        let Response { status, body } = workflows(&engine);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let w = &v["workflows"][0];
+        assert_eq!(w["id"], "weekly");
+        assert_eq!(w["enabled"], false);
+        assert_eq!(w["triggers"][0], "schedule: 0 5 * * MON UTC");
+    }
+
+    #[test]
+    fn enable_and_disable_round_trip_and_404_an_unknown_id() {
+        let (engine, config) = temp_engine();
+        write_workflow(&config, "weekly.ts", "export const on = [];");
+
+        let Response { status, body } = enable_workflow(&engine, br#"{"id":"weekly"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["workflows"][0]["enabled"], true);
+
+        let Response { status, body } = disable_workflow(&engine, br#"{"id":"weekly"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["workflows"][0]["enabled"], false);
+
+        assert_eq!(enable_workflow(&engine, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(enable_workflow(&engine, br#"{"id":""}"#).status, 400);
+    }
+
+    #[test]
+    fn run_starts_a_manual_run_and_runs_lists_it_with_a_derived_status() {
+        let (engine, config) = temp_engine();
+        write_workflow(
+            &config,
+            "plain.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async () => ({}));\n",
+        );
+        let Response { status, body } = run_workflow(&engine, br#"{"id":"plain"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let run_key = v["run_key"].as_str().unwrap().to_string();
+        assert!(run_key.starts_with("plain@manual:"));
+
+        let tasks = Tasks::with_config(config.clone());
+        let agents = adi_agents::Agents::with_config(config);
+        let Response { status, body } = list_runs(&engine, &tasks, &agents, b"{}");
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let row = &v["runs"][0];
+        assert_eq!(row["run_key"], run_key);
+        assert_eq!(row["status"], "running", "nothing has attempted it yet");
+
+        assert_eq!(run_workflow(&engine, br#"{"id":"ghost"}"#).status, 404);
+    }
+
+    #[test]
+    fn run_detail_reports_the_journal_and_rewind_discards_it() {
+        let (engine, config) = temp_engine();
+        write_workflow(
+            &config,
+            "two-steps.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx) => {\n\
+             \x20 await ctx.step({ key: \"a\", fn: () => 1 });\n\
+             \x20 await ctx.step({ key: \"b\", fn: () => 2 });\n\
+             \x20 return {};\n\
+             });\n",
+        );
+        let Response { body, .. } = run_workflow(&engine, br#"{"id":"two-steps"}"#);
+        let run_key = serde_json::from_str::<Value>(&body).unwrap()["run_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(engine.run_tick().len(), 1, "completes in one tick");
+
+        let tasks = Tasks::with_config(config.clone());
+        let agents = adi_agents::Agents::with_config(config);
+        let detail_body = format!(r#"{{"run_key":"{run_key}"}}"#);
+        let Response { status, body } =
+            run_detail(&engine, &tasks, &agents, detail_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["status"], "done");
+        assert_eq!(v["steps"].as_array().unwrap().len(), 2);
+
+        let rewind_body = format!(r#"{{"run_key":"{run_key}","to":1}}"#);
+        let Response { status, body } =
+            rewind_run(&engine, &tasks, &agents, rewind_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["steps"].as_array().unwrap().len(), 1, "kept only step a");
+        assert_eq!(v["status"], "running", "un-finished by the rewind");
+
+        assert_eq!(
+            run_detail(&engine, &tasks, &agents, br#"{"run_key":"ghost"}"#).status,
+            404
         );
     }
 }

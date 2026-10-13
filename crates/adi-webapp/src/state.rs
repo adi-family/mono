@@ -14,9 +14,10 @@ use adi_webapp_api::types::{
     Health, HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes,
     KnowledgeResults, KnowledgeState, LimitRuleDto, LlmBackendDto, LlmBackendsDto,
     MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectsState, RunRef, SecretsState, SharedAssetsState, TasksState,
+    ProjectHookRef, ProjectsState, RunDetailDto, RunRef, RunsState, SecretsState,
+    SharedAssetsState, TasksState,
     TestResultDto, ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState, UsedPorts,
-    WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+    WorkflowsState, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -858,6 +859,9 @@ pub(crate) struct TasksForm {
     /// Whether the collapsed block of finished tasks at the foot of the page is open. Done and
     /// archived tasks are hidden by default so the tree shows only what is still open.
     pub(crate) show_done: RwSignal<bool>,
+    /// The completion-form draft text (raw JSON, as typed) for each open task carrying an
+    /// `output_schema`, keyed by task id — spec section F's form, rendered from that schema.
+    pub(crate) completion_drafts: RwSignal<BTreeMap<String, String>>,
 }
 
 /// The Dashboards page's create form, plus whether the collapsed archive below the main table is
@@ -1291,6 +1295,9 @@ pub(crate) struct AgentsForm {
     /// Whether the agent keeps a memory of its own — the `agent:<name>/memory` base, which it
     /// alone writes and every other agent may read.
     pub(crate) memory: RwSignal<bool>,
+    /// Whether the dispatch tick may hand this agent a ready task its `assignee` names it as
+    /// (ADI-MONO-144) — off by default, the same reasoning `memory` follows.
+    pub(crate) dispatch: RwSignal<bool>,
     /// Which agents this one's runs may launch: an exact name, a glob (`dr-*`), `project:<id>`,
     /// or `*`. Chips rather than a checkbox picker like `knowledge` — the rules name a pattern,
     /// not one of a fixed set of existing bases. Server-guarded: a save made from inside a run
@@ -1358,6 +1365,7 @@ impl AgentsForm {
             bin_tools: RwSignal::new(BTreeSet::new()),
             knowledge: RwSignal::new(BTreeSet::new()),
             memory: RwSignal::new(false),
+            dispatch: RwSignal::new(false),
             can_spawn: RwSignal::new(Vec::new()),
             can_spawn_draft: RwSignal::new(String::new()),
             spawn_grant_draft: RwSignal::new(String::new()),
@@ -2041,6 +2049,73 @@ impl LlmBackendsForm {
                 .map(|p| p.prompt.clone())
                 .unwrap_or_default(),
         );
+    }
+}
+
+/// Everything the Workflows page holds that isn't on the server — page-local, like
+/// [`EmbeddingsConsole`] beside it: no live-channel subscription for `/api/workflows*`, so it is
+/// fetched once when the page opens rather than polled into the shell state.
+///
+/// `Copy`, for the same reason every other console here is: it threads into the page view and
+/// its handlers as cheaply as a few `RwSignal`s.
+#[derive(Clone, Copy)]
+pub(crate) struct WorkflowsConsole {
+    /// The discovered workflows, or `None` before the first load.
+    pub(crate) workflows: RwSignal<Option<WorkflowsState>>,
+    pub(crate) error: RwSignal<Option<String>>,
+    /// The workflow id currently expanded (its starters, shapes, enable toggle, run-now box, and
+    /// its own runs list) — empty for none expanded.
+    pub(crate) selected: RwSignal<String>,
+    /// The "run now" box's raw JSON input text, kept across a re-render of the expanded row.
+    pub(crate) run_input: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    /// The selected workflow's runs, or `None` before the first load for it.
+    pub(crate) runs: RwSignal<Option<RunsState>>,
+    /// The run key currently expanded into its own timeline — empty for none expanded.
+    pub(crate) selected_run: RwSignal<String>,
+    pub(crate) run_detail: RwSignal<Option<RunDetailDto>>,
+}
+
+impl WorkflowsConsole {
+    pub(crate) fn new() -> Self {
+        Self {
+            workflows: RwSignal::new(None),
+            error: RwSignal::new(None),
+            selected: RwSignal::new(String::new()),
+            run_input: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            runs: RwSignal::new(None),
+            selected_run: RwSignal::new(String::new()),
+            run_detail: RwSignal::new(None),
+        }
+    }
+
+    /// Expand `id` (or collapse it back if it is already the one open) — closes whichever run
+    /// timeline was open, since it belonged to the previously expanded workflow's own runs list.
+    pub(crate) fn toggle_selected(self, id: &str) {
+        if self.selected.get_untracked() == id {
+            self.selected.set(String::new());
+        } else {
+            self.selected.set(id.to_string());
+            self.run_input.set(String::new());
+        }
+        self.runs.set(None);
+        self.close_run();
+    }
+
+    /// Expand `run_key`'s own timeline (or collapse it back if it is already the one open).
+    pub(crate) fn toggle_run(self, run_key: &str) {
+        if self.selected_run.get_untracked() == run_key {
+            self.close_run();
+        } else {
+            self.selected_run.set(run_key.to_string());
+            self.run_detail.set(None);
+        }
+    }
+
+    pub(crate) fn close_run(self) {
+        self.selected_run.set(String::new());
+        self.run_detail.set(None);
     }
 }
 

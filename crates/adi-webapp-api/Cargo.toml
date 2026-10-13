@@ -41,6 +41,8 @@ server = [
     # model stack.
     "dep:adi-embeddings",
     "dep:adi-triggers",
+    # The workflow engine (ADI-MONO-141 §F): list/enable/disable/run, runs, a run's own timeline.
+    "dep:adi-workflows",
     # The auto-update engine, for the version pill's `/api/update` surface: what is installed,
     # what is published, and the marker that says an install is in flight. Native-only (it swaps
     # binaries and shells out to the platform's own tools), so it lives behind this feature.
@@ -100,6 +102,7 @@ adi-embeddings = { workspace = true, optional = true }
 adi-events = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
+adi-workflows = { workspace = true, optional = true }
 adi-update = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
 adi-marketplace = { workspace = true, optional = true }

@@ -85,6 +85,9 @@ pub(crate) enum Route {
     EmbeddingBackends,
     /// Trigger definitions (`/triggers`).
     Triggers,
+    /// Workflow definitions — a TypeScript file per workflow, run with checkpoints
+    /// (ADI-MONO-141 §F) (`/workflows`).
+    Workflows,
     /// Agent-authored dashboards (`/dashboards`).
     Dashboards,
     /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
@@ -127,7 +130,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 26] = [
+    pub(crate) const NAV: [Route; 27] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -140,6 +143,7 @@ impl Route {
         Route::Database,
         Route::Llm,
         Route::Triggers,
+        Route::Workflows,
         Route::Dashboards,
         Route::Marketplace,
         Route::LiveGraph,
@@ -197,6 +201,7 @@ impl Route {
             "/database" => Route::Database,
             "/llm" => Route::Llm,
             "/triggers" => Route::Triggers,
+            "/workflows" => Route::Workflows,
             "/dashboards" => Route::Dashboards,
             "/marketplace" => Route::Marketplace,
             "/live-graph" => Route::LiveGraph,
@@ -234,6 +239,7 @@ impl Route {
             Route::Database => "/extended/database",
             Route::Llm => "/extended/llm",
             Route::Triggers => "/extended/triggers",
+            Route::Workflows => "/extended/workflows",
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
             Route::LiveGraph => "/extended/live-graph",
@@ -270,6 +276,7 @@ impl Route {
             Route::Database => "Database",
             Route::Llm => "LLM traffic",
             Route::Triggers => "Triggers",
+            Route::Workflows => "Workflows",
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
             Route::LiveGraph => "Live graph",
@@ -308,6 +315,7 @@ impl Route {
             Route::Database => "Browse the store's tables, run SQL",
             Route::Llm => "Every prompt and answer through the gateway — tokens, models, cost",
             Route::Triggers => "What runs when something happens",
+            Route::Workflows => "TypeScript workflows: schedules, events, runs, rewind",
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",

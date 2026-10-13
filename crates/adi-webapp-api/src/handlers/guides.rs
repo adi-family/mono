@@ -108,6 +108,11 @@ pub const GUIDES: &[Guide] = &[
         summary: "connecting Telegram/Slack to an agent, and posting back mid-run",
         body: include_str!("../../templates/guides/channels.md"),
     },
+    Guide {
+        file: "workflows.md",
+        summary: "TypeScript workflows: checkpoints, schedules, events, rewind",
+        body: include_str!("../../templates/guides/workflows.md"),
+    },
 ];
 
 /// The directory guides live in: `~/.adi/mono/guides`.

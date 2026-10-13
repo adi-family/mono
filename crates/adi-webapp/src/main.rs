@@ -63,6 +63,7 @@ use pages::{
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
     start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view, triggers_view,
+    workflows_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -73,8 +74,8 @@ use state::{
     FilesState, Flash, FleetForm, Form, HookLogView, KnowledgeConsole, LlmBackendsForm,
     MarketplaceForm, MeshForm,
     MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status,
-    TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
-    refresh_fleet_dashboards,
+    TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView,
+    WorkflowsConsole, load, refresh_fleet_dashboards,
 };
 use ui::fmt_uptime;
 
@@ -1021,6 +1022,7 @@ fn App() -> impl IntoView {
         details: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_done: RwSignal::new(false),
+        completion_drafts: RwSignal::new(BTreeMap::new()),
     };
 
     let agents_form = AgentsForm::new();
@@ -1112,6 +1114,10 @@ fn App() -> impl IntoView {
     // The Channels page's own console — page-local for the same reason (`docs/channels.md` §7):
     // no live-channel subscription for `/api/channels*`.
     let channels_console = ChannelsConsole::new();
+
+    // The Workflows page's own console — page-local for the same reason: no live-channel
+    // subscription for `/api/workflows*`.
+    let workflows_console = WorkflowsConsole::new();
 
     let managed_only = RwSignal::new(true);
 
@@ -1494,6 +1500,7 @@ fn App() -> impl IntoView {
                         Route::Database => database_view(state, db_console),
                         Route::Llm => llm_view(state, llm),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
+                        Route::Workflows => workflows_view(state, workflows_console),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),

@@ -55,6 +55,7 @@ struct App {
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
+    workflows: adi_workflows::Engine,
     mesh: MeshCtl,
     /// Overrides the embedded webapp when [`DIST_ENV`] is set.
     dist: Option<PathBuf>,
@@ -258,7 +259,7 @@ async fn main() -> anyhow::Result<()> {
     // never race each other for the same rows.
     let event_dispatcher = EventDispatcher::start_watched(
         triggers.clone(),
-        awaits::start(agents.clone(), workflows),
+        awaits::start(agents.clone(), workflows.clone()),
     );
     event_log::start(tasks.clone(), events.clone());
     prober::start(agents.clone());
@@ -280,6 +281,7 @@ async fn main() -> anyhow::Result<()> {
         triggers,
         trigger_supervisor,
         events,
+        workflows,
         mesh: MeshCtl::default(),
         dist,
         start: Instant::now(),
@@ -505,6 +507,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/triggers",
     "/api/update",
     "/api/voice",
+    "/api/workflows",
 ];
 
 /// Read-only POST routes; their bodies identify the subject.
@@ -517,6 +520,8 @@ const SHARED_POSTS: &[&str] = &[
     "/api/projects/hook/log",
     "/api/projects/workspaces",
     "/api/triggers/log",
+    "/api/workflows/runs",
+    "/api/workflows/run/detail",
 ];
 
 /// Larger bodies bypass coalescing to bound the in-flight map.
@@ -566,6 +571,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         triggers,
         trigger_supervisor,
         events,
+        workflows,
         start,
         ..
     } = app;
@@ -677,6 +683,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
         ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
         ("POST", "/api/tasks/delete") => handlers::delete_task(tasks, &req.body),
+        ("POST", "/api/tasks/complete") => handlers::complete_task(tasks, &req.body),
+        ("POST", "/api/tasks/give-up") => handlers::give_up_task(tasks, &req.body),
         ("GET", "/api/tools") => handlers::tools(tools),
         ("POST", "/api/tools/create") => handlers::create_tool(tools, &req.body),
         ("POST", "/api/tools/link") => handlers::link_tool(tools, &req.body),
@@ -805,6 +813,19 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
         ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
+        ("GET", "/api/workflows") => handlers::workflows(workflows),
+        ("POST", "/api/workflows/enable") => handlers::enable_workflow(workflows, &req.body),
+        ("POST", "/api/workflows/disable") => handlers::disable_workflow(workflows, &req.body),
+        ("POST", "/api/workflows/run") => handlers::run_workflow(workflows, &req.body),
+        ("POST", "/api/workflows/runs") => {
+            handlers::list_runs(workflows, tasks, agents, &req.body)
+        }
+        ("POST", "/api/workflows/run/detail") => {
+            handlers::run_detail(workflows, tasks, agents, &req.body)
+        }
+        ("POST", "/api/workflows/run/rewind") => {
+            handlers::rewind_run(workflows, tasks, agents, &req.body)
+        }
         // Preserve the query for webhook secrets; GET also supports provider pings.
         (m, p) if p.starts_with("/api/hooks/") && matches!(m, "POST" | "GET") => {
             let name = &p["/api/hooks/".len()..];

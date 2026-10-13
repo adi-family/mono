@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-320 structs · 20 enums across 13 files.
+334 structs · 20 enums across 13 files.
 
 ## Index
 
@@ -20,7 +20,7 @@
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/origin.rs`](#srcoriginrs) — `Refusal`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `CompleteTask`, `GiveUpTask`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `WorkflowsState`, `WorkflowDto`, `WorkflowRef`, `RunWorkflow`, `WorkflowStarted`, `RunsQuery`, `RunsState`, `RunDto`, `WorkflowRunRef`, `RunDetailDto`, `StepDto`, `RewindRun`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
 
 ---
 
@@ -1185,7 +1185,7 @@ pub struct ProjectDetail {
 One task, flattened for the wire. `status` is the stored lifecycle state (`open`/`done`/`archived`); `effective` is the computed status (`ready`/`blocked`/`done`/`archived`, derived from the stored state plus direct children). `parent` is the id of the parent task, if any — the client rebuilds the tree from these links.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskRow {
     pub id: String,
     pub title: String,
@@ -1207,6 +1207,16 @@ pub struct TaskRow {
     pub children_open: usize,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+    #[serde(default)]
+    pub give_up_reason: Option<String>,
+    #[serde(default)]
+    pub workflow_run: Option<String>,
 }
 ```
 
@@ -1215,7 +1225,7 @@ pub struct TaskRow {
 `GET /api/tasks` — every task in the tree as a flat list, ordered by task number. The client nests them into a tree by `parent`.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TasksState {
     pub tasks: Vec<TaskRow>,
 }
@@ -1252,6 +1262,31 @@ pub struct TaskRef {
     pub id: String,
     #[serde(default)]
     pub cascade: bool,
+}
+```
+
+### struct `CompleteTask`
+
+Request body for `POST /api/tasks/complete` — spec section F: a person's own form, rendered from `TaskRow::output_schema`, submits here exactly like `adi-mono tasks complete --result`. Validated server-side against the same `output_schema`; a mismatch refuses with the JSON pointer path the server-side validator names, same as the CLI. Returns a fresh `TasksState`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CompleteTask {
+    pub id: String,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+}
+```
+
+### struct `GiveUpTask`
+
+Request body for `POST /api/tasks/give-up` — the panel's form of `adi-mono tasks give-up --reason`. Stores a fact (`give_up_reason`); `status` is left exactly as it was. Returns a fresh `TasksState`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GiveUpTask {
+    pub id: String,
+    pub reason: String,
 }
 ```
 
@@ -3255,6 +3290,177 @@ The response an external webhook caller gets from `/api/hooks/<name>`: an acknow
 pub struct HookAck {
     pub ok: bool,
     pub trigger: String,
+}
+```
+
+### struct `WorkflowsState`
+
+`GET /api/workflows` — every discovered workflow file.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowsState {
+    pub workflows: Vec<WorkflowDto>,
+}
+```
+
+### struct `WorkflowDto`
+
+One discovered workflow file: its starters (pre-rendered to one line each, the same text the CLI's `show` prints), its declared input/output JSON Schema, and whether it is enabled — a workflow this store has never been told about reads as disabled (spec section E: "a workflow drafted by an agent in chat is saved DISABLED until Igor confirms"); `run` still works on one regardless, which is how a draft is tried before it is trusted with its own triggers.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowDto {
+    pub id: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    pub enabled: bool,
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    #[serde(default)]
+    pub input_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub describe_error: Option<String>,
+}
+```
+
+### struct `WorkflowRef`
+
+Request body naming a workflow — `POST /api/workflows/enable`, `/disable`, `/run`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRef {
+    pub id: String,
+}
+```
+
+### struct `RunWorkflow`
+
+`POST /api/workflows/run` — start a workflow by hand.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunWorkflow {
+    pub id: String,
+    #[serde(default)]
+    pub input: Option<serde_json::Value>,
+    #[serde(default)]
+    pub request_id: Option<String>,
+}
+```
+
+### struct `WorkflowStarted`
+
+Reply to `POST /api/workflows/run`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowStarted {
+    pub run_key: String,
+    pub workflow: String,
+}
+```
+
+### struct `RunsQuery`
+
+`POST /api/workflows/runs` — runs, newest first, optionally narrowed to one workflow.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RunsQuery {
+    #[serde(default)]
+    pub workflow: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+```
+
+### struct `RunsState`
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunsState {
+    pub runs: Vec<RunDto>,
+}
+```
+
+### struct `RunDto`
+
+One run, with its status derived fresh server-side every call (never cached) — spec section F: "running / waiting on task|event|sleep|child / done / failed / stuck".
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunDto {
+    pub run_key: String,
+    pub workflow: String,
+    pub status: String,
+    pub created_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+}
+```
+
+### struct `WorkflowRunRef`
+
+Request body naming a run — `POST /api/workflows/run/detail` and `/run/rewind`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRunRef {
+    pub run_key: String,
+}
+```
+
+### struct `RunDetailDto`
+
+`POST /api/workflows/run/detail` — one run's full timeline.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunDetailDto {
+    pub run_key: String,
+    pub workflow: String,
+    pub status: String,
+    pub input: serde_json::Value,
+    pub cause: serde_json::Value,
+    pub created_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+    pub steps: Vec<StepDto>,
+}
+```
+
+### struct `StepDto`
+
+One journaled checkpoint, in resolution order — "step N" in "rewind to step N" is the Nth entry here (0-indexed from the caller's own list, so `--to 2` keeps the first two shown).
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StepDto {
+    pub step_key: String,
+    pub kind: String,
+    pub outcome: String,
+    #[serde(default)]
+    pub value: Option<serde_json::Value>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub ref_key: Option<String>,
+}
+```
+
+### struct `RewindRun`
+
+`POST /api/workflows/run/rewind` — discard a run's journal after step `to` (0 discards everything), so the next attempt genuinely redoes the discarded work rather than replaying a stale answer.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewindRun {
+    pub run_key: String,
+    pub to: usize,
 }
 ```
 

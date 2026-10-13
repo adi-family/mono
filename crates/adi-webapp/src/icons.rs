@@ -22,6 +22,8 @@ pub(crate) enum Icon {
     Tasks,
     Agent,
     Trigger,
+    /// Workflows — a TypeScript file per workflow, run with checkpoints.
+    Workflow,
     Dashboard,
     /// Services.
     Server,
@@ -96,6 +98,7 @@ impl Icon {
             Icon::Tasks => Lucide::ListTree,
             Icon::Agent => Lucide::Bot,
             Icon::Trigger => Lucide::Zap,
+            Icon::Workflow => Lucide::Workflow,
             Icon::Dashboard => Lucide::LayoutDashboard,
             Icon::Server => Lucide::Server,
             Icon::Plug => Lucide::Plug,
@@ -149,6 +152,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::LlmBackends => Icon::Model,
         Route::EmbeddingBackends => Icon::Vector,
         Route::Triggers => Icon::Trigger,
+        Route::Workflows => Icon::Workflow,
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,
         Route::LiveGraph => Icon::Graph,

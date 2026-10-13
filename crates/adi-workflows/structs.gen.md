@@ -4,7 +4,7 @@
 
 > The WORKFLOWS engine (ADI-MONO-141 §E): discovers the TypeScript workflow files under `workflows/` and `projects/<id>/workflows/`, starts a run when their `on: schedule(cron, tz) | event(pattern, where?) | manual()` fires, pours its row + root task + `adi.workflows.run.started` event, and drives it — a fresh `bun` process per attempt, relaying each `ctx` checkpoint (step/task/run/waitFor/sleep/ask) over a line-delimited JSON pipe, journaling every resolution so replay is instant and an unresolved checkpoint just suspends the attempt cleanly — through to `adi.workflows.run.completed/failed`. See the crate docs.
 
-20 structs · 6 enums · 1 type alias across 12 files.
+21 structs · 7 enums · 1 type alias across 13 files.
 
 ## Index
 
@@ -13,12 +13,13 @@
 - [`src/discover.rs`](#srcdiscoverrs) — `WorkflowFile`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/event.rs`](#srceventrs) — `WorkflowRunStarted`, `WorkflowRunCompleted`, `WorkflowRunFailed`
-- [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`, `RanAttempt`
+- [`src/lib.rs`](#srclibrs) — `StartedRun`, `Engine`, `RanAttempt`, `WorkflowListing`
 - [`src/pour.rs`](#srcpourrs) — `WorkflowRunPourer`
 - [`src/readiness.rs`](#srcreadinessrs) — `Entry`, `Readiness`, `Signal`
 - [`src/rpc.rs`](#srcrpcrs) — `Request`
 - [`src/source.rs`](#srcsourcers) — `WorkflowScheduleSource`
 - [`src/starters.rs`](#srcstartersrs) — `Started`, `EventPattern`
+- [`src/status.rs`](#srcstatusrs) — `WaitingOn`
 - [`src/store.rs`](#srcstorers) — `RunRow`, `WorkflowStore`, `StepKind`, `StepOutcome`, `StepRecord`
 
 ---
@@ -61,7 +62,7 @@ pub struct Attempt {
 One entry of a workflow file's `on` export, as the describe harness prints it.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum TriggerDef {
     #[serde(rename = "schedule")]
@@ -87,7 +88,7 @@ pub enum TriggerDef {
 A workflow file's whole declared shape, as `describe` reads it: its triggers, and the JSON Schema of its `input`/`output` zod exports (`null` when a file declares neither — a workflow is not obliged to type its input or output). Converted from zod by the describe harness itself (`z.toJSONSchema`), never re-derived on the Rust side, which has no zod of its own.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowShape {
     #[serde(default)]
     pub on: Vec<TriggerDef>,
@@ -146,6 +147,7 @@ A failure from discovering, describing, or starting a workflow run.
 pub enum Error {
     InvalidCron(String, String),
     DuplicateRunKey(String),
+    UnknownWorkflow(String),
     Describe(String),
     DuplicateStepKey(String),
     JournalEntryTooLarge(String),
@@ -214,7 +216,7 @@ pub struct WorkflowRunFailed {
 One run a tick started, whichever starter poured it — `Engine::schedule_tick` and `Engine::event_tick` both answer in this shape, so a caller logging "what fired" doesn't need to know or care which starter it came from (the same reporting shape `adi-agents`' own dispatch/goals ticks use for their own "what happened").
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StartedRun {
     pub run_key: String,
     pub workflow: String,
@@ -247,6 +249,22 @@ pub struct RanAttempt {
     pub run_key: String,
     pub workflow: String,
     pub outcome: AttemptOutcome,
+}
+```
+
+### struct `WorkflowListing`
+
+One discovered workflow file, with its declared shape and whether it is enabled — `Engine::list_workflows`/`Engine::describe_workflow`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct WorkflowListing {
+    pub id: String,
+    pub project: Option<String>,
+    pub path: std::path::PathBuf,
+    pub enabled: bool,
+    pub shape: Option<WorkflowShape>,
+    pub describe_error: Option<String>,
 }
 ```
 
@@ -406,6 +424,7 @@ Adapts this crate's workflow-file discovery into what `adi_schedules::tick` swee
 #[derive(Debug, Clone)]
 pub struct WorkflowScheduleSource {
     config: Config,
+    store: WorkflowStore,
 }
 ```
 
@@ -436,6 +455,27 @@ struct EventPattern {
 
 ---
 
+## `src/status.rs`
+
+### enum `WaitingOn`
+
+What a run is blocked on right now, derived fresh — never itself stored. See the module doc for exactly how each is told apart from the others.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WaitingOn {
+    Task {
+        task_id: Option<String>,
+    },
+    Event,
+    Sleep,
+    Child,
+}
+```
+
+---
+
 ## `src/store.rs`
 
 ### struct `RunRow`
@@ -443,7 +483,7 @@ struct EventPattern {
 One started workflow run.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunRow {
     pub run_key: String,
     pub workflow: String,
@@ -474,7 +514,8 @@ pub struct WorkflowStore {
 Which `ctx` building block produced a `StepRecord` — kept mostly for `crate::rewind` to know whether a discarded entry has a task (`Task`/`Ask`) or a child run (`Run`) to clean up.
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StepKind {
     Step,
     Task,
@@ -490,7 +531,8 @@ pub enum StepKind {
 How a checkpoint resolved.
 
 ```rust
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome", content = "value", rename_all = "snake_case")]
 pub enum StepOutcome {
     Ok(serde_json::Value),
     GaveUp(String),
@@ -503,7 +545,7 @@ pub enum StepOutcome {
 One resolved checkpoint, as the journal stores it.
 
 ```rust
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct StepRecord {
     pub step_key: String,
     pub kind: StepKind,

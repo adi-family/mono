@@ -8,28 +8,36 @@ use adi_schedules::ScheduleRule;
 use crate::cron5::normalize_five_field;
 use crate::describe::{self, TriggerDef};
 use crate::discover;
+use crate::store::WorkflowStore;
 
 /// Adapts this crate's workflow-file discovery into what `adi_schedules::tick` sweeps.
 #[derive(Debug, Clone)]
 pub struct WorkflowScheduleSource {
     config: Config,
+    store: WorkflowStore,
 }
 
 impl WorkflowScheduleSource {
     #[must_use]
     pub fn new(config: Config) -> Self {
-        Self { config }
+        let store = WorkflowStore::with_config(config.clone());
+        Self { config, store }
     }
 }
 
 impl adi_schedules::ScheduleSource for WorkflowScheduleSource {
-    /// Every schedule trigger of every workflow file, normalized to `adi_schedules`' own cron
-    /// dialect. A file that fails to describe, or a rule whose cron isn't valid 5-field unix cron,
-    /// is logged and skipped — one broken workflow must never stop every other schedule in the
-    /// same sweep (mirrors `adi_schedules::tick`'s own per-rule resilience).
+    /// Every schedule trigger of every **enabled** workflow file, normalized to `adi_schedules`'
+    /// own cron dialect — a disabled workflow (the default for one this store has never been told
+    /// about; see [`WorkflowStore::is_enabled`]) contributes nothing here, same as one with no
+    /// `schedule` trigger at all. A file that fails to describe, or a rule whose cron isn't valid
+    /// 5-field unix cron, is logged and skipped — one broken workflow must never stop every other
+    /// schedule in the same sweep (mirrors `adi_schedules::tick`'s own per-rule resilience).
     fn schedules(&self) -> Vec<ScheduleRule> {
         let mut rules = Vec::new();
         for file in discover::workflow_files(&self.config) {
+            if !self.store.is_enabled(&file.id).unwrap_or(false) {
+                continue;
+            }
             let shape = match describe::describe(&self.config, &file.path) {
                 Ok(shape) => shape,
                 Err(e) => {
@@ -86,6 +94,33 @@ mod tests {
         std::fs::write(dir.join(name), body).unwrap();
     }
 
+    /// Every test here is about what a trigger *looks like* once a workflow is already trusted
+    /// with its own schedule — `enabled`'s own default (disabled) is covered by
+    /// `a_disabled_workflows_schedule_is_not_swept` below, not re-asserted in every other test.
+    fn enable(config: &Config, workflow: &str) {
+        WorkflowStore::with_config(config.clone())
+            .set_enabled(workflow, true)
+            .expect("enable");
+    }
+
+    #[test]
+    fn a_disabled_workflows_schedule_is_not_swept() {
+        let config = scratch("disabled-default");
+        describe::bootstrap(&config).expect("bootstrap");
+        write_workflow(
+            &config,
+            "weekly.ts",
+            "import { schedule } from \"@adi/workflows\";\n\
+             export const on = schedule(\"0 5 * * MON\", \"UTC\");\n",
+        );
+        assert!(
+            WorkflowScheduleSource::new(config.clone()).schedules().is_empty(),
+            "a never-enabled workflow contributes no schedule rule"
+        );
+        enable(&config, "weekly");
+        assert_eq!(WorkflowScheduleSource::new(config).schedules().len(), 1);
+    }
+
     #[test]
     fn a_schedule_trigger_is_normalized_into_a_six_field_rule() {
         let config = scratch("normalize");
@@ -96,6 +131,7 @@ mod tests {
             "import { schedule } from \"@adi/workflows\";\n\
              export const on = schedule(\"0 5 * * MON\", \"America/New_York\");\n",
         );
+        enable(&config, "weekly");
 
         let rules = WorkflowScheduleSource::new(config).schedules();
         assert_eq!(rules.len(), 1);
@@ -114,6 +150,7 @@ mod tests {
             "import { schedule } from \"@adi/workflows\";\n\
              export const on = schedule(\"0 5 * * MON\", \"UTC\", { catchUp: \"skip\" });\n",
         );
+        enable(&config, "weekly");
 
         let rules = WorkflowScheduleSource::new(config).schedules();
         assert_eq!(rules[0].catch_up, adi_schedules::CatchUp::Skip);
@@ -148,6 +185,8 @@ mod tests {
             "import { schedule } from \"@adi/workflows\";\n\
              export const on = schedule(\"0 5 * * MON\", \"UTC\");\n",
         );
+        enable(&config, "broken");
+        enable(&config, "fine");
         let rules = WorkflowScheduleSource::new(config).schedules();
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].workflow, "fine");

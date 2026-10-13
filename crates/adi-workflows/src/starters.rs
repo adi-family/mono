@@ -68,6 +68,11 @@ pub fn tick(
             serde_json::from_str(&logged.record.payload).unwrap_or(serde_json::Value::Null);
         let causer = causation::causer_of_payload(&payload);
         for file in &files {
+            // Disabled is the default for a workflow this store has never been told about (see
+            // `WorkflowStore::is_enabled`) — same gate the schedule starter applies.
+            if !store.is_enabled(&file.id).unwrap_or(false) {
+                continue;
+            }
             for trigger in event_triggers(config, file) {
                 if !adi_events::matches(&trigger.pattern, &logged.record.name) {
                     continue;
@@ -188,6 +193,7 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.tasks.created\");\n",
         );
+        store(&config).set_enabled("on-task", true).expect("enable");
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", r#"{"id":"t1"}"#).expect("emit");
 
@@ -211,6 +217,7 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.tasks.created\", { project: \"demo\" });\n",
         );
+        store(&config).set_enabled("on-demo", true).expect("enable");
         let events = Events::with_config(config.clone());
         events
             .emit("adi.tasks.created", r#"{"project":"other"}"#)
@@ -233,6 +240,7 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.projects.*\");\n",
         );
+        store(&config).set_enabled("on-other", true).expect("enable");
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", "{}").expect("emit");
 
@@ -257,9 +265,10 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"test.custom.happened\");\n",
         );
+        let store = store(&config);
+        store.set_enabled("on-custom", true).expect("enable");
         let events = Events::with_config(config.clone());
         events.emit("test.custom.happened", "{}").expect("emit");
-        let store = store(&config);
         let pourer = pourer(&config);
 
         let first = tick(&events, &config, &store, &pourer);
@@ -280,6 +289,9 @@ mod tests {
             "import { event } from \"@adi/workflows\";\n\
              export const on = event(\"adi.tasks.created\");\n",
         );
+        let store_ = store(&config);
+        store_.set_enabled("broken", true).expect("enable");
+        store_.set_enabled("fine", true).expect("enable");
         let events = Events::with_config(config.clone());
         events.emit("adi.tasks.created", "{}").expect("emit");
 
@@ -305,6 +317,7 @@ mod tests {
         );
         let events = Events::with_config(config.clone());
         let store = store(&config);
+        store.set_enabled("on-task", true).expect("enable");
         let pourer = pourer(&config);
 
         // Simulate a task-created event whose payload already carries `workflow_run` naming a
@@ -348,6 +361,8 @@ mod tests {
         );
         let events = Events::with_config(config.clone());
         let store = store(&config);
+        store.set_enabled("on-task", true).expect("enable");
+        store.set_enabled("watcher", true).expect("enable");
         let pourer = pourer(&config);
 
         store

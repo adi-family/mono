@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS step_pending (
     state    TEXT NOT NULL,
     PRIMARY KEY (run_key, step_key)
 );
+
+-- A fact, not a status machine (spec section E): whether a workflow's `schedule`/`event`
+-- triggers may fire it. Absent is disabled — see `WorkflowStore::is_enabled`'s own doc for why
+-- that default, rather than present-and-true, is what a brand-new workflow file gets.
+CREATE TABLE IF NOT EXISTS workflow_enabled (
+    workflow   TEXT NOT NULL PRIMARY KEY,
+    enabled    INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 ";
 
 /// `runs.caused_by_run` was added after `runs` first shipped — a dev store created before this
@@ -98,7 +107,7 @@ fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<()> {
 }
 
 /// One started workflow run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RunRow {
     pub run_key: String,
     pub workflow: String,
@@ -346,6 +355,86 @@ impl WorkflowStore {
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read runs: {e}")))?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run row: {e}")))
+    }
+
+    /// Whether `workflow`'s `schedule`/`event` triggers may fire it — spec section E: "A workflow
+    /// drafted by an agent in chat is saved DISABLED until Igor confirms." Nothing distinguishes an
+    /// agent's draft from a human's new file, so every workflow this store has never been told
+    /// about reads as disabled — the one default that satisfies that rule regardless of who wrote
+    /// the file, without this crate (or anything upstream of it) needing to know who did.
+    /// [`Engine::start_manual`](crate::Engine::start_manual) is never gated on this: a disabled
+    /// workflow can still be run by hand, which is how a draft gets tried before it is trusted with
+    /// its own triggers.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn is_enabled(&self, workflow: &str) -> Result<bool> {
+        let conn = self.connect()?;
+        let enabled: Option<i64> = conn
+            .query_row(
+                "SELECT enabled FROM workflow_enabled WHERE workflow = ?1",
+                [workflow],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a workflow's enabled flag: {e}")))?;
+        Ok(enabled == Some(1))
+    }
+
+    /// Set whether `workflow`'s `schedule`/`event` triggers may fire it — `adi-mono workflows
+    /// enable`/`disable` (WF-6), and the one write an agent's own draft never makes for itself
+    /// (see [`is_enabled`](Self::is_enabled)).
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn set_enabled(&self, workflow: &str, enabled: bool) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT INTO workflow_enabled (workflow, enabled, updated_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(workflow) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at",
+            params![workflow, i64::from(enabled), seq_i64(adi_config::now_unix())],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't set a workflow's enabled flag: {e}")))?;
+        Ok(())
+    }
+
+    /// Every run, newest first, capped at `limit` — `adi-mono workflows runs` with no `--workflow`
+    /// filter (WF-6); [`runs_for`](Self::runs_for) is the per-workflow, oldest-first audit trail
+    /// this is not a replacement for.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn list_runs(&self, limit: usize) -> Result<Vec<RunRow>> {
+        let conn = self.connect()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {RUN_COLUMNS} FROM runs ORDER BY id DESC LIMIT ?1"
+            ))
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read runs: {e}")))?;
+        let rows = stmt
+            .query_map([i64::try_from(limit).unwrap_or(i64::MAX)], row_to_run)
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read runs: {e}")))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run row: {e}")))
+    }
+
+    /// Whether `run_key` has at least one `ctx.run` child still in flight — the "waiting on child"
+    /// signal [`crate::status::waiting_on`] reads when a run has nothing pending of its own (a
+    /// `ctx.run` step records no `step_pending` row; the child *run* existing-and-unfinished is the
+    /// only memory of it between attempts).
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read failure.
+    pub fn has_unfinished_child(&self, run_key: &str) -> Result<bool> {
+        let conn = self.connect()?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM runs WHERE caused_by_run = ?1 AND finished_at IS NULL",
+                [run_key],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't check for an unfinished child run: {e}")))?;
+        Ok(count > 0)
     }
 
     // ---- step journal ---------------------------------------------------------------------
@@ -614,7 +703,8 @@ fn seq_i64(value: u64) -> i64 {
 
 /// Which `ctx` building block produced a [`StepRecord`] — kept mostly for [`crate::rewind`] to
 /// know whether a discarded entry has a task (`Task`/`Ask`) or a child run (`Run`) to clean up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StepKind {
     Step,
     Task,
@@ -654,7 +744,8 @@ impl StepKind {
 }
 
 /// How a checkpoint resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome", content = "value", rename_all = "snake_case")]
 pub enum StepOutcome {
     /// A real value the workflow body receives — `ctx.step`'s return, a completed task's
     /// result, a matched event's payload, or `null` for `ctx.sleep`/a plain `ctx.ask` ack.
@@ -704,7 +795,7 @@ impl StepOutcome {
 }
 
 /// One resolved checkpoint, as the journal stores it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct StepRecord {
     pub step_key: String,
     pub kind: StepKind,
@@ -821,6 +912,56 @@ mod tests {
             .map(|r| r.run_key)
             .collect();
         assert_eq!(runs, vec!["a@1".to_string(), "a@2".to_string()]);
+    }
+
+    #[test]
+    fn a_workflow_never_told_about_is_disabled() {
+        let store = scratch("enabled-default");
+        assert!(!store.is_enabled("fresh-draft").unwrap());
+    }
+
+    #[test]
+    fn set_enabled_round_trips_and_is_idempotent() {
+        let store = scratch("enabled-roundtrip");
+        store.set_enabled("wf", true).expect("enable");
+        assert!(store.is_enabled("wf").unwrap());
+        store.set_enabled("wf", true).expect("enable again");
+        assert!(store.is_enabled("wf").unwrap());
+        store.set_enabled("wf", false).expect("disable");
+        assert!(!store.is_enabled("wf").unwrap());
+        // A different, never-touched workflow is unaffected.
+        assert!(!store.is_enabled("other").unwrap());
+    }
+
+    #[test]
+    fn list_runs_is_newest_first_and_respects_the_limit() {
+        let store = scratch("list-runs");
+        store.create_run("a@1", "a", "/a.ts", "h", &json!({}), &json!({}), None).unwrap();
+        store.create_run("b@1", "b", "/b.ts", "h", &json!({}), &json!({}), None).unwrap();
+        store.create_run("a@2", "a", "/a.ts", "h", &json!({}), &json!({}), None).unwrap();
+
+        let all: Vec<String> = store.list_runs(10).unwrap().into_iter().map(|r| r.run_key).collect();
+        assert_eq!(all, vec!["a@2".to_string(), "b@1".to_string(), "a@1".to_string()]);
+
+        let capped: Vec<String> = store.list_runs(2).unwrap().into_iter().map(|r| r.run_key).collect();
+        assert_eq!(capped, vec!["a@2".to_string(), "b@1".to_string()]);
+    }
+
+    #[test]
+    fn has_unfinished_child_tracks_a_child_runs_own_lifecycle() {
+        let store = scratch("unfinished-child");
+        store
+            .create_run("parent@1", "parent", "/p.ts", "h", &json!({}), &json!({}), None)
+            .unwrap();
+        assert!(!store.has_unfinished_child("parent@1").unwrap());
+
+        store
+            .create_run("child@parent@1/step", "child", "/c.ts", "h", &json!({}), &json!({}), Some("parent@1"))
+            .unwrap();
+        assert!(store.has_unfinished_child("parent@1").unwrap());
+
+        store.mark_finished("child@parent@1/step").unwrap();
+        assert!(!store.has_unfinished_child("parent@1").unwrap());
     }
 
     #[test]

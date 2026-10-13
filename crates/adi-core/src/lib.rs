@@ -18,6 +18,7 @@ pub mod service;
 pub mod status;
 pub mod tools;
 pub mod update;
+pub mod workflows;
 
 pub use app::App;
 pub use commands::{Adi, Report, SetupReport};
@@ -116,6 +117,15 @@ pub use adi_triggers::{
     RUNTIME_TS, RunState, SUBSCRIBER as EVENT_DISPATCH_SUBSCRIBER, Trigger, TriggerManifest,
     Triggers, clean_trigger_on, presets as trigger_presets,
 };
+
+pub use adi_workflows::{
+    Engine as WorkflowEngine, Error as WorkflowsError, RanAttempt as WorkflowRanAttempt,
+    RunRow as WorkflowRun, StartedRun as WorkflowStartedRun, StepKind as WorkflowStepKind,
+    StepOutcome as WorkflowStepOutcome, StepRecord as WorkflowStepRecord, TriggerDef,
+    WaitingOn as WorkflowWaitingOn, WorkflowListing, WorkflowShape,
+};
+
+pub use workflows::{RunStatus as WorkflowRunStatus, run_status as workflow_run_status};
 
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.
 pub const BIN_NAME: &str = "adi-mono";

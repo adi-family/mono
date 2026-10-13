@@ -9,7 +9,7 @@ use leptos::prelude::*;
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, effective_label_title, flash_view, menu_item,
+    Key, TextField, apply_mutation, confirm, effective_label_title, flash_view, menu_item, prompt,
     row_actions, sort_rows, task_tree_rows, updated_text,
 };
 
@@ -34,6 +34,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
         details,
         busy,
         show_done,
+        ..
     } = form;
     view! {
         <section class="adi-panel">
@@ -48,6 +49,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
 
             <Table state=state.tables.tasks>{move || task_rows(state, false)}</Table>
         </section>
+
+        {move || needs_input_view(state, form)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -199,6 +202,123 @@ where
     F: std::future::Future<Output = Result<TasksState, String>> + 'static,
 {
     apply_mutation(state, busy, |s, t| s.tasks.set(Some(t)), fut);
+}
+
+/// Spec section F: every open task carrying an `output_schema` — a person task a `ctx.task`/
+/// `ctx.ask` assigned, almost always — gets a form here, rendered from that schema, that finishes
+/// it through the same validation `adi-mono tasks complete --result` applies. Renders nothing at
+/// all while none are open, so an ordinary task tree with no workflow in it looks exactly as it
+/// did before this existed.
+fn needs_input_view(state: State, form: TasksForm) -> AnyView {
+    let Some(st) = state.tasks.get() else {
+        return ().into_any();
+    };
+    let mut waiting: Vec<TaskRow> = st
+        .tasks
+        .into_iter()
+        .filter(|t| t.status == "open" && t.output_schema.is_some())
+        .collect();
+    if waiting.is_empty() {
+        return ().into_any();
+    }
+    waiting.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Needs your input"</h2>
+                <span class="adi-updated adi-tabnums">{waiting.len().to_string()}</span>
+            </div>
+            {waiting.iter().map(|t| completion_card(state, form, t)).collect::<Vec<_>>()}
+        </section>
+    }
+    .into_any()
+}
+
+/// One task's completion form: its instructions/input for context, the `output_schema` it must
+/// satisfy (shown for reference, not re-derived into per-field inputs — see the module doc on
+/// why a raw-JSON box is what this build offers), a Submit that validates server-side exactly as
+/// the CLI does, and a Give-up that stores a reason without touching the task's stored status.
+fn completion_card(state: State, form: TasksForm, t: &TaskRow) -> AnyView {
+    let id = t.id.clone();
+    let submit_id = id.clone();
+    let giveup_id = id.clone();
+    let draft_id = id.clone();
+    let input_id = id.clone();
+    let schema = t.output_schema.clone().unwrap_or_default();
+    view! {
+        <div class="adi-field adi-field--full">
+            <p>
+                <span class="adi-taskrow__title">{t.title.clone()}</span>
+                {t.assignee.clone().map(|a| view! { " — for "<span class="adi-chip">{a}</span> })}
+            </p>
+            {t.details.clone().map(|d| view! { <p class="adi-cell__sub">{d}</p> })}
+            {t.input.clone().map(|v| view! {
+                <details class="adi-field">
+                    <summary class="adi-field__label">"Input"</summary>
+                    <pre class="adi-mono adi-cell__sub">{serde_json::to_string_pretty(&v).unwrap_or_default()}</pre>
+                </details>
+            })}
+            <details class="adi-field">
+                <summary class="adi-field__label">"Required result shape"</summary>
+                <pre class="adi-mono adi-cell__sub">{serde_json::to_string_pretty(&schema).unwrap_or_default()}</pre>
+            </details>
+            <div class="adi-copyrow">
+                <textarea class="adi-textarea adi-mono" rows="3" placeholder="{} (the result, as JSON)"
+                    prop:value=move || form.completion_drafts.get().get(&input_id).cloned().unwrap_or_default()
+                    on:input=move |ev| {
+                        let text = event_target_value(&ev);
+                        form.completion_drafts.update(|m| { m.insert(draft_id.clone(), text); });
+                    }></textarea>
+                <button class="adi-btn adi-btn--primary" type="button"
+                    on:click=move |_| submit_completion(state, form, submit_id.clone())>
+                    "Submit"
+                </button>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    on:click=move |_| give_up(state, giveup_id.clone())>
+                    "Give up"
+                </button>
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// Parse the draft box as JSON and complete the task with it — the same validation
+/// `adi-mono tasks complete --result` runs, server-side, against the task's own `output_schema`.
+fn submit_completion(state: State, form: TasksForm, id: String) {
+    let raw = form.completion_drafts.get_untracked().get(&id).cloned().unwrap_or_default();
+    let result = if raw.trim().is_empty() {
+        None
+    } else {
+        match serde_json::from_str(&raw) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                state.flash.set(Some(Flash::err(format!("the result box isn't valid JSON: {e}"))));
+                return;
+            }
+        }
+    };
+    let cleared = id.clone();
+    apply_mutation(
+        state,
+        None,
+        move |s, t| {
+            s.tasks.set(Some(t));
+            form.completion_drafts.update(|m| { m.remove(&cleared); });
+        },
+        fetch::complete_task(id, result),
+    );
+}
+
+/// Ask for a reason and give up on the task (a stored fact; `status` is left exactly as it was).
+fn give_up(state: State, id: String) {
+    let Some(reason) = prompt("Why are you giving up on this task?", "") else {
+        return;
+    };
+    if reason.trim().is_empty() {
+        return;
+    }
+    apply_tasks(state, None, fetch::give_up_task(id, reason));
 }
 
 /// Render a task table body: a loading/empty placeholder, or the tree flattened into rows (a

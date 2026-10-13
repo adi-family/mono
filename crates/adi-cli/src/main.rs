@@ -24,6 +24,7 @@ mod tasks;
 mod tools;
 mod triggers;
 mod update;
+mod workflows;
 
 use adi_core::{Adi, Service, VERSION};
 use clap::{Parser, Subcommand};
@@ -48,6 +49,7 @@ use crate::tasks::{TasksCommand, run_tasks};
 use crate::tools::{ToolsCommand, run_tools};
 use crate::triggers::{TriggersCommand, run_triggers};
 use crate::update::{UpdateCommand, run_update};
+use crate::workflows::{WorkflowsCommand, run_workflows};
 
 #[derive(Debug, Parser)]
 // `version = VERSION`, not clap's default `version`: the default is CARGO_PKG_VERSION, which
@@ -169,6 +171,12 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    /// Workflow commands: a TypeScript file per workflow, run with checkpoints
+    /// (ADI-MONO-141 §E/F).
+    Workflows {
+        #[command(subcommand)]
+        command: WorkflowsCommand,
     },
     /// Knowledge base commands: scoped collections of text notes, embedded so they can be
     /// searched by meaning. Global, per-project, or per-agent.
@@ -405,6 +413,12 @@ fn main() {
         }
         Command::Triggers { command } => {
             if let Err(e) = run_triggers(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Workflows { command } => {
+            if let Err(e) = run_workflows(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -729,6 +743,20 @@ mod tests {
             } if spec == "adi/crm"
         ));
         assert!(Cli::try_parse_from(["adi-mono", "marketplace"]).is_err());
+    }
+
+    #[test]
+    fn the_workflows_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `workflows.rs`; this pins the wiring — that
+        // `adi-mono workflows …` reaches it at all.
+        let cli = Cli::try_parse_from(["adi-mono", "workflows", "list", "--json"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Workflows {
+                command: WorkflowsCommand::List { json: true }
+            }
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "workflows"]).is_err());
     }
 
     #[test]

@@ -8,12 +8,12 @@ use adi_webapp_api::types::{
     AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
     AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel, AnswerRun,
     ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
-    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, ConnectChannel, Dashboard,
+    ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask, ConnectChannel, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
     DirListing, EmbeddingBackendRef, EmbeddingBackendsDto, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetInstructions, FleetJoinRef, FleetNodes, FleetRef, FleetRename, FleetState,
-    FsContent, FsCreate, FsListing, FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState,
+    FsContent, FsCreate, FsListing, FsRef, FsWrite, GiveUpTask, GoalsOf, Health, HideRun, HiveState,
     IgnoreAwait, InstallMarketplaceApp, KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef,
     KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved, KnowledgeSearch,
     KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, LlmBackendRef, LlmBackendsDto,
@@ -24,8 +24,9 @@ use adi_webapp_api::types::{
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, PromptsOf, QueueMode,
     RealtimeSessionDto, RealtimeSessionRequest,
     ReleaseResponse, RenameProject, RenameRun, ReplyToRun, ReserveResponse, RevealedSecret,
-    RouteChannel, ReviewRun, RunAgent,
-    RunRef, RunSteps, RunSystemAction, RunTool, SaveAgent, SaveEmbeddingBackend,
+    RouteChannel, ReviewRun, RewindRun, RunAgent,
+    RunDetailDto, RunRef, RunSteps, RunSystemAction, RunTool, RunWorkflow, RunsQuery, RunsState,
+    SaveAgent, SaveEmbeddingBackend,
     SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
     SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
     SetSharedAssets, SetSpawnPolicy, SetSystemPower, SharedAssetsMode, SharedAssetsState,
@@ -35,7 +36,8 @@ use adi_webapp_api::types::{
     TestLlmBackend, TestResultDto, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
     TranscriptView, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
     UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
+    UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkflowRef, WorkflowRunRef,
+    WorkflowStarted, WorkflowsState, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile, WriteToolScript,
 };
@@ -1256,6 +1258,44 @@ pub async fn restart_trigger(name: String) -> Result<TriggerFireResult, String> 
 
 pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
     post("/api/triggers/log", &TriggerRef { name }).await
+}
+
+// ---- workflows (ADI-MONO-141 §F) ------------------------------------------------------
+
+pub async fn workflows() -> Result<WorkflowsState, String> {
+    get("/api/workflows").await
+}
+
+pub async fn enable_workflow(id: String) -> Result<WorkflowsState, String> {
+    post("/api/workflows/enable", &WorkflowRef { id }).await
+}
+
+pub async fn disable_workflow(id: String) -> Result<WorkflowsState, String> {
+    post("/api/workflows/disable", &WorkflowRef { id }).await
+}
+
+pub async fn run_workflow(body: RunWorkflow) -> Result<WorkflowStarted, String> {
+    post("/api/workflows/run", &body).await
+}
+
+pub async fn workflow_runs(query: RunsQuery) -> Result<RunsState, String> {
+    post("/api/workflows/runs", &query).await
+}
+
+pub async fn workflow_run_detail(run_key: String) -> Result<RunDetailDto, String> {
+    post("/api/workflows/run/detail", &WorkflowRunRef { run_key }).await
+}
+
+pub async fn rewind_workflow_run(run_key: String, to: usize) -> Result<RunDetailDto, String> {
+    post("/api/workflows/run/rewind", &RewindRun { run_key, to }).await
+}
+
+pub async fn complete_task(id: String, result: Option<serde_json::Value>) -> Result<TasksState, String> {
+    post("/api/tasks/complete", &CompleteTask { id, result }).await
+}
+
+pub async fn give_up_task(id: String, reason: String) -> Result<TasksState, String> {
+    post("/api/tasks/give-up", &GiveUpTask { id, reason }).await
 }
 
 pub async fn dashboards() -> Result<DashboardsState, String> {

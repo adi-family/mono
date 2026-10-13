@@ -132,6 +132,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -646,6 +647,7 @@ dependencies = [
  "adi-tools",
  "adi-triggers",
  "adi-update",
+ "adi-workflows",
  "anyhow",
  "base64 0.22.1",
  "qrcode",

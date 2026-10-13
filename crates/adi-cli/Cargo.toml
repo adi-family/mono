@@ -66,6 +66,9 @@ clap = { workspace = true }
 qrcode = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `workflows run` mints a fresh request id when the caller doesn't give one — the idempotency key
+# `Engine::start_manual` claims the run under (ADI-MONO-141 §E).
+uuid = { workspace = true }
 
 # `mesh join` dials out and awaits one handshake; every other subcommand is synchronous. So the
 # runtime is built inside that one arm rather than wrapping `main`, and only the drivers that
