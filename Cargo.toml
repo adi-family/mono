@@ -118,6 +118,10 @@ vt100 = "0.16"
 # linking a system library, so every target — including the mingw Windows cross-build — ships the
 # same engine, and the store's WAL files are never read by a different, older SQLite.
 rusqlite = { version = "0.37", features = ["bundled"] }
+# Validates a task's `result` against its `output_schema` (adi-tasks). `default-features = false`
+# drops the remote `$ref` resolver (`reqwest` + `tls-aws-lc-rs`, which wants cmake) — every schema
+# here is an already-in-hand JSON document, never a URL to fetch.
+jsonschema = { version = "0.58", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # OpenAI's BPE, ranks compiled in — no model load, no network. Used by adi-agents' transcript

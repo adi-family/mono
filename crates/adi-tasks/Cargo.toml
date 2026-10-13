@@ -1,6 +1,6 @@
 [package]
 name = "adi-tasks"
-description = "The adi task tree: a persistent tree of work items (one JSON document under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library."
+description = "The adi task tree: a persistent tree of work items (SQLite under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,6 +22,12 @@ serde_json = { workspace = true }
 schemars = { workspace = true }
 
 anyhow = { workspace = true }
+
+# The store itself: one `tasks.db` per `tasks` module dir, replacing the old `tasks.json`. See
+# `db` module docs for why, and `docs/comments.md`-style reasoning in `lib.rs`'s migration path.
+rusqlite = { workspace = true }
+# Validates `complete`'s `--result` against a task's `output_schema`.
+jsonschema = { workspace = true }
 
 [lints]
 workspace = true

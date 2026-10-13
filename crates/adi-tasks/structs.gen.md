@@ -2,16 +2,16 @@
 
 # `adi-tasks` — types
 
-> The adi task tree: a persistent tree of work items (one JSON document under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library.
+> The adi task tree: a persistent tree of work items (SQLite under ~/.adi/mono/tasks) with a minimal stored status and a computed effective status. Pure library.
 
-11 structs · 4 enums · 1 type alias across 4 files.
+13 structs · 4 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskArchived`, `TaskReopened`
+- [`src/events.rs`](#srceventsrs) — `TaskCreated`, `TaskUpdated`, `TaskCompleted`, `TaskArchived`, `TaskReopened`, `TaskGaveUp`
 - [`src/lib.rs`](#srclibrs) — `Tasks`
-- [`src/task.rs`](#srctaskrs) — `TaskStatus`, `EffectiveStatus`, `Task`, `TaskView`, `TaskDeleted`, `TasksDoc`, `TaskPatch`, `ParentChange`
+- [`src/task.rs`](#srctaskrs) — `TaskStatus`, `EffectiveStatus`, `Task`, `TaskView`, `TaskDeleted`, `TasksDoc`, `NewTask`, `TaskPatch`, `ParentChange`
 
 ---
 
@@ -37,6 +37,14 @@ pub enum Error {
     Cycle,
     ReopenFirst,
     Store(anyhow::Error),
+    InvalidOutputSchema(String),
+    ResultRequired,
+    ResultInvalid {
+        path: String,
+        message: String,
+    },
+    DuplicateStepId(String),
+    NotOpen(String),
 }
 ```
 
@@ -94,13 +102,23 @@ pub struct TaskArchived<'a>(pub &'a TaskView);
 pub struct TaskReopened<'a>(pub &'a TaskView);
 ```
 
+### struct `TaskGaveUp`
+
+`adi.tasks.gave_up` — an agent gave up on a task, carrying its resulting view (status unchanged; see `Task::give_up_reason`).
+
+```rust
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskGaveUp<'a>(pub &'a TaskView);
+```
+
 ---
 
 ## `src/lib.rs`
 
 ### struct `Tasks`
 
-The task tree store: reads and writes the `tasks.json` document under the `tasks` module dir. Cheap to clone; all state is on disk.
+The task tree store: reads and writes `tasks.db` under the `tasks` module dir. Cheap to clone; all state is on disk.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -168,6 +186,18 @@ pub struct Task {
     pub assignee: Option<String>,
     pub created_at: u64,
     pub updated_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub give_up_reason: Option<String>,
 }
 ```
 
@@ -199,7 +229,7 @@ pub struct TaskDeleted {
 
 ### struct `TasksDoc`
 
-The on-disk document: the id counters plus the task list. `next_id` numbers project-less tasks (the legacy `t<n>` scheme); `seq` holds a per-project-key high-water mark so project-scoped tasks get stable, never-reused Jira-style `<KEY>-<n>` ids (a deleted top task's number is not handed out again).
+The id counters plus the task list — the whole-table working set `crate::db` loads from SQLite and saves back inside one transaction, and (via `Deserialize`) the shape a legacy `tasks.json` is parsed into on a one-time migration. `next_id` numbers project-less tasks (the legacy `t<n>` scheme); `seq` holds a per-project-key high-water mark so project-scoped tasks get stable, never-reused Jira-style `<KEY>-<n>` ids (a deleted top task's number is not handed out again).
 
 ```rust
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -210,6 +240,27 @@ pub(crate) struct TasksDoc {
     pub(crate) seq: BTreeMap<String, u64>,
     #[serde(default)]
     pub(crate) tasks: Vec<Task>,
+}
+```
+
+### struct `NewTask`
+
+Everything a new task can be created with — the superset `Tasks::create` is a six-field front door onto, for callers (a workflow run's `ctx.task`, chiefly) that also need to set the workflow-step and structured-data fields. `..NewTask::default()` for anything not given.
+
+```rust
+#[derive(Debug, Default)]
+pub struct NewTask {
+    pub title: String,
+    pub details: Option<String>,
+    pub project: Option<String>,
+    pub tag: Option<String>,
+    pub parent: Option<String>,
+    pub cwd: Option<String>,
+    pub assignee: Option<String>,
+    pub input: Option<serde_json::Value>,
+    pub output_schema: Option<serde_json::Value>,
+    pub workflow_run: Option<String>,
+    pub step_key: Option<String>,
 }
 ```
 

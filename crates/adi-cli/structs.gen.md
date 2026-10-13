@@ -1556,10 +1556,25 @@ pub(crate) enum TasksCommand {
     Complete {
         id: String,
         #[arg(long)]
+        result: Option<String>,
+        #[arg(long)]
+        result_file: Option<PathBuf>,
+        #[arg(long)]
         json: bool,
     },
     Done {
         id: String,
+        #[arg(long)]
+        result: Option<String>,
+        #[arg(long)]
+        result_file: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    GiveUp {
+        id: String,
+        #[arg(long)]
+        reason: String,
         #[arg(long)]
         json: bool,
     },

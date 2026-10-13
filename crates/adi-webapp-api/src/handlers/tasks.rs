@@ -97,13 +97,21 @@ fn task_row(view: &TaskView) -> TaskRow {
     }
 }
 
-// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
+// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, conflict → 409, else
+// 500. The panel does not yet expose `--result`/give-up (see ADI-MONO-141 §F), but the match has
+// to be exhaustive regardless of what this crate's own endpoints can currently trigger.
 impl From<&TaskStoreError> for Response {
     fn from(e: &TaskStoreError) -> Self {
         let status = match e {
             TaskStoreError::NotFound(_) => 404,
-            TaskStoreError::ParentMissing(_) | TaskStoreError::Cycle => 400,
-            TaskStoreError::ReopenFirst => 409,
+            TaskStoreError::ParentMissing(_)
+            | TaskStoreError::Cycle
+            | TaskStoreError::InvalidOutputSchema(_)
+            | TaskStoreError::ResultRequired
+            | TaskStoreError::ResultInvalid { .. } => 400,
+            TaskStoreError::ReopenFirst
+            | TaskStoreError::DuplicateStepId(_)
+            | TaskStoreError::NotOpen(_) => 409,
             TaskStoreError::Store(_) => 500,
         };
         error(status, &e.to_string())

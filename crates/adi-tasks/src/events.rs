@@ -101,6 +101,24 @@ impl Event for TaskDeleted {
     const NAME: &'static str = "adi.tasks.deleted";
 }
 
+/// `adi.tasks.gave_up` — an agent gave up on a task, carrying its resulting view (status
+/// unchanged; see [`Task::give_up_reason`](crate::Task::give_up_reason)).
+#[derive(Debug, Clone, Copy, Serialize, JsonSchema)]
+#[serde(transparent)]
+pub struct TaskGaveUp<'a>(pub &'a TaskView);
+
+impl<'a> TaskGaveUp<'a> {
+    /// Wrap the resulting task view without copying it.
+    #[must_use]
+    pub fn new(view: &'a TaskView) -> Self {
+        Self(view)
+    }
+}
+
+impl Event for TaskGaveUp<'_> {
+    const NAME: &'static str = "adi.tasks.gave_up";
+}
+
 /// The `adi.tasks.*` catalog entries, in reading order. Every mutation but `deleted` carries the
 /// resulting [`TaskView`]; `deleted` carries only the id via [`TaskDeleted`].
 #[must_use]
@@ -131,8 +149,13 @@ pub fn event_types() -> Vec<EventType> {
         ),
         EventType::of_event(
             "A done or archived task was reopened.",
-            view_schema,
+            view_schema.clone(),
             &TaskReopened::new(&view),
+        ),
+        EventType::of_event(
+            "An agent gave up on a task; its status is unchanged.",
+            view_schema,
+            &TaskGaveUp::new(&view),
         ),
         EventType::of_event(
             "A task was permanently deleted (only its id survives).",
@@ -150,7 +173,7 @@ mod tests {
     fn task_view_event_catalog_preserves_flat_payloads_and_schemas() {
         let schema = serde_json::to_value(schemars::schema_for!(TaskView)).expect("schema");
         let example = serde_json::to_value(TaskView::example()).expect("example");
-        for event in event_types().into_iter().take(5) {
+        for event in event_types().into_iter().take(6) {
             assert_eq!(event.schema, schema, "{} schema changed", event.name);
             assert_eq!(event.example, example, "{} payload changed", event.name);
         }

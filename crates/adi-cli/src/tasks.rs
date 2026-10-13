@@ -1,6 +1,8 @@
 //! The `tasks` command group: the task-tree subcommand surface and its dispatch over
 //! the shared task store.
 
+use std::path::PathBuf;
+
 use adi_core::{Adi, TaskPatch, TaskView};
 use clap::Subcommand;
 
@@ -66,15 +68,38 @@ pub(crate) enum TasksCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Mark a task done.
+    /// Mark a task done. If it has a required output shape, `--result` (or `--result-file`)
+    /// must satisfy it or the call is refused with the exact path of the mismatch.
     Complete {
         id: String,
+        /// The result, as a JSON literal.
+        #[arg(long)]
+        result: Option<String>,
+        /// The result, read from a file of JSON.
+        #[arg(long)]
+        result_file: Option<PathBuf>,
         #[arg(long)]
         json: bool,
     },
-    /// Mark a task done.
+    /// Mark a task done. If it has a required output shape, `--result` (or `--result-file`)
+    /// must satisfy it or the call is refused with the exact path of the mismatch.
     Done {
         id: String,
+        /// The result, as a JSON literal.
+        #[arg(long)]
+        result: Option<String>,
+        /// The result, read from a file of JSON.
+        #[arg(long)]
+        result_file: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Give up on a task without finishing it — a fact recorded for whatever dispatches it,
+    /// leaving the task's status untouched (reopening it clears the reason).
+    GiveUp {
+        id: String,
+        #[arg(long)]
+        reason: String,
         #[arg(long)]
         json: bool,
     },
@@ -149,7 +174,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             if json {
                 print_json(&task);
             } else {
-                print_task(&task);
+                print_task_show(&task);
             }
         }
         TasksCommand::Edit {
@@ -182,12 +207,33 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
                 print_task(&task);
             }
         }
-        TasksCommand::Complete { id, json } | TasksCommand::Done { id, json } => {
-            let task = store.complete(&id).map_err(|e| e.to_string())?;
+        TasksCommand::Complete {
+            id,
+            result,
+            result_file,
+            json,
+        }
+        | TasksCommand::Done {
+            id,
+            result,
+            result_file,
+            json,
+        } => {
+            let result = parse_result(result, result_file)?;
+            let task = store.complete(&id, result).map_err(|e| e.to_string())?;
             if json {
                 print_json(&task);
             } else {
                 println!("Completed task {}.", task.task.id);
+                print_task(&task);
+            }
+        }
+        TasksCommand::GiveUp { id, reason, json } => {
+            let task = store.give_up(&id, &reason).map_err(|e| e.to_string())?;
+            if json {
+                print_json(&task);
+            } else {
+                println!("Gave up on task {}.", task.task.id);
                 print_task(&task);
             }
         }
@@ -217,6 +263,28 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
     Ok(())
 }
 
+/// Parse `--result`/`--result-file` into the JSON value to pass to `complete`, if either was
+/// given. Giving both is refused rather than silently preferring one.
+fn parse_result(
+    result: Option<String>,
+    result_file: Option<PathBuf>,
+) -> Result<Option<serde_json::Value>, String> {
+    match (result, result_file) {
+        (Some(_), Some(_)) => Err("pass either --result or --result-file, not both".to_string()),
+        (Some(s), None) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(|e| format!("--result is not valid JSON: {e}")),
+        (None, Some(path)) => {
+            let bytes = std::fs::read(&path)
+                .map_err(|e| format!("couldn't read {}: {e}", path.display()))?;
+            serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|e| format!("{} is not valid JSON: {e}", path.display()))
+        }
+        (None, None) => Ok(None),
+    }
+}
+
 /// Print a task in the compact human CLI format.
 fn print_task(task: &TaskView) {
     println!(
@@ -225,6 +293,15 @@ fn print_task(task: &TaskView) {
         task.task.title,
         task.effective.as_str()
     );
+    println!("  {}", task_meta_line(task));
+    if let Some(details) = &task.task.details {
+        println!("  {details}");
+    }
+}
+
+/// The one-line `key: value · key: value` summary shared by [`print_task`] and
+/// [`print_task_show`].
+fn task_meta_line(task: &TaskView) -> String {
     let mut meta = vec![format!("status: {}", task.task.status.as_str())];
     if let Some(project) = &task.task.project {
         meta.push(format!("project: {project}"));
@@ -241,14 +318,60 @@ fn print_task(task: &TaskView) {
     if let Some(cwd) = &task.task.cwd {
         meta.push(format!("cwd: {cwd}"));
     }
+    if let Some(step_id) = task.task.step_id() {
+        meta.push(format!("step: {step_id}"));
+    }
     if task.children_total > 0 {
         meta.push(format!(
             "subtasks: {}/{} open",
             task.children_open, task.children_total
         ));
     }
-    println!("  {}", meta.join(" · "));
-    if let Some(details) = &task.task.details {
-        println!("  {details}");
+    if let Some(reason) = &task.task.give_up_reason {
+        meta.push(format!("gave up: {reason}"));
+    }
+    meta.join(" · ")
+}
+
+/// Print a task the way `tasks show` does: the compact summary, then its instructions, its
+/// input, the output shape a result must satisfy, and the exact commands to finish or give up.
+fn print_task_show(task: &TaskView) {
+    print_task(task);
+    println!();
+    println!("Instructions:");
+    match &task.task.details {
+        Some(details) => println!("  {details}"),
+        None => println!("  (none)"),
+    }
+    if let Some(input) = &task.task.input {
+        println!();
+        println!("Input:");
+        print_indented_json(input);
+    }
+    if let Some(schema) = &task.task.output_schema {
+        println!();
+        println!("Required output shape:");
+        print_indented_json(schema);
+    }
+    println!();
+    println!("To finish:");
+    if task.task.output_schema.is_some() {
+        println!(
+            "  adi-mono tasks complete {} --result '<json matching the shape above>'",
+            task.task.id
+        );
+    } else {
+        println!("  adi-mono tasks complete {}", task.task.id);
+    }
+    println!("To give up:");
+    println!("  adi-mono tasks give-up {} --reason \"<why>\"", task.task.id);
+}
+
+/// Pretty-print `value` indented two spaces, for the blocks `print_task_show` shows under
+/// "Input:" and "Required output shape:".
+fn print_indented_json(value: &serde_json::Value) {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    for line in pretty.lines() {
+        println!("  {line}");
     }
 }

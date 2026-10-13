@@ -34,6 +34,19 @@ impl TaskStatus {
             TaskStatus::Archived => "archived",
         }
     }
+
+    /// The inverse of [`as_str`](Self::as_str), for the one column in the store that isn't typed
+    /// SQL — a label this build doesn't recognise (written by a newer one, or hand-edited) reads
+    /// as `open` rather than failing the row, the same leniency the legacy serde aliases give a
+    /// `tasks.json` written by the previous model.
+    #[must_use]
+    pub(crate) fn parse(s: &str) -> Self {
+        match s {
+            "done" => TaskStatus::Done,
+            "archived" | "cancelled" => TaskStatus::Archived,
+            _ => TaskStatus::Open,
+        }
+    }
 }
 
 /// A task's *computed* status, derived from its stored status and direct children. Never stored.
@@ -100,6 +113,47 @@ pub struct Task {
     pub created_at: u64,
     /// Last-update time (Unix epoch seconds).
     pub updated_at: u64,
+    /// The input a run picking up this task was given — set once, at creation, by whatever filed
+    /// it (a workflow's `ctx.task`, most often). `None` for an ordinary task nobody handed
+    /// structured input: its instructions are [`details`](Self::details) alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
+    /// The JSON Schema a `--result` must satisfy to [`complete`](crate::Tasks::complete) this
+    /// task. `None` means any result (or none) is accepted — `complete` requires nothing more
+    /// than the task existing, same as before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
+    /// The value a run completed this task with, once validated against
+    /// [`output_schema`](Self::output_schema). `None` until completion, and for a task completed
+    /// before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<serde_json::Value>,
+    /// The workflow run this task is a step of, or `None` for a task nobody's workflow owns.
+    /// Paired with [`step_key`](Self::step_key) to form [`step_id`](Self::step_id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run: Option<String>,
+    /// This task's key within [`workflow_run`](Self::workflow_run) — unique within that run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_key: Option<String>,
+    /// Why an agent gave up on this task, if one has. A stored *fact*, not a status: giving up
+    /// leaves [`status`](Self::status) exactly as it was (still `open`, almost always) so a
+    /// dispatcher can compute "stuck" from it rather than this field doubling as one more lifecycle
+    /// state. Cleared by [`reopen`](crate::Tasks::reopen) and [`complete`](crate::Tasks::complete)
+    /// — both leave the "waiting on a decision about this give-up" state behind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub give_up_reason: Option<String>,
+}
+
+impl Task {
+    /// The unique id a workflow step is addressed by: `${workflow_run}/${step_key}`, or `None`
+    /// when either half is absent — an ordinary task has no stepId at all, not an empty one.
+    #[must_use]
+    pub fn step_id(&self) -> Option<String> {
+        match (&self.workflow_run, &self.step_key) {
+            (Some(run), Some(key)) => Some(format!("{run}/{key}")),
+            _ => None,
+        }
+    }
 }
 
 /// A task plus its derived fields — the shape every store method returns (never stored). Flattens
@@ -165,6 +219,12 @@ impl TaskView {
                 assignee: None,
                 created_at: 1_700_000_000,
                 updated_at: 1_700_000_000,
+                input: None,
+                output_schema: None,
+                result: None,
+                workflow_run: None,
+                step_key: None,
+                give_up_reason: None,
             },
             effective: EffectiveStatus::Ready,
             children_total: 0,
@@ -191,7 +251,9 @@ impl TaskDeleted {
     }
 }
 
-/// The on-disk document: the id counters plus the task list. `next_id` numbers project-less tasks
+/// The id counters plus the task list — the whole-table working set [`crate::db`] loads from
+/// SQLite and saves back inside one transaction, and (via `Deserialize`) the shape a legacy
+/// `tasks.json` is parsed into on a one-time migration. `next_id` numbers project-less tasks
 /// (the legacy `t<n>` scheme); `seq` holds a per-project-key high-water mark so project-scoped
 /// tasks get stable, never-reused Jira-style `<KEY>-<n>` ids (a deleted top task's number is not
 /// handed out again).
@@ -203,6 +265,37 @@ pub(crate) struct TasksDoc {
     pub(crate) seq: BTreeMap<String, u64>,
     #[serde(default)]
     pub(crate) tasks: Vec<Task>,
+}
+
+/// Everything a new task can be created with — the superset
+/// [`Tasks::create`](crate::Tasks::create) is a six-field front door onto, for callers (a workflow
+/// run's `ctx.task`, chiefly) that also need to set the workflow-step and structured-data fields.
+/// `..NewTask::default()` for anything not given.
+#[derive(Debug, Default)]
+pub struct NewTask {
+    /// Short one-line title.
+    pub title: String,
+    /// Optional longer details / notes — a task's instructions, when it has any.
+    pub details: Option<String>,
+    /// Optional associated adi project id.
+    pub project: Option<String>,
+    /// Optional free-form tag / label.
+    pub tag: Option<String>,
+    /// Optional parent task id.
+    pub parent: Option<String>,
+    /// Where this task's work happens; inherited from the parent when absent.
+    pub cwd: Option<String>,
+    /// Optional assignee, set at creation rather than through a later
+    /// [`update`](crate::Tasks::update) — a workflow step is usually created already assigned.
+    pub assignee: Option<String>,
+    /// The input a run picking this up is given.
+    pub input: Option<serde_json::Value>,
+    /// The JSON Schema a result must satisfy to complete this task.
+    pub output_schema: Option<serde_json::Value>,
+    /// The workflow run this task is a step of. Requires `step_key` to also be set.
+    pub workflow_run: Option<String>,
+    /// This task's key within `workflow_run`. Requires `workflow_run` to also be set.
+    pub step_key: Option<String>,
 }
 
 /// A partial update to a task; `None` fields are left unchanged. Status is deliberately absent —

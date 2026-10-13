@@ -19,6 +19,21 @@ pub enum Error {
     ReopenFirst,
     /// Underlying store I/O or (de)serialization failure.
     Store(anyhow::Error),
+    /// A task's `output_schema` is not valid JSON Schema.
+    InvalidOutputSchema(String),
+    /// The task's `output_schema` makes a result mandatory, and `complete` was called without one.
+    ResultRequired,
+    /// The given result does not satisfy the task's `output_schema`.
+    ResultInvalid {
+        /// The JSON pointer into the result where validation failed (e.g. `/a/b`).
+        path: String,
+        /// The validator's own message for that failure.
+        message: String,
+    },
+    /// The requested `workflow_run`/`step_key` repeats a stepId already in use.
+    DuplicateStepId(String),
+    /// Tried to give up on a task that is not open (already `done` or `archived`).
+    NotOpen(String),
 }
 
 impl From<anyhow::Error> for Error {
@@ -35,6 +50,19 @@ impl fmt::Display for Error {
             Error::Cycle => write!(f, "setting that parent would create a cycle"),
             Error::ReopenFirst => write!(f, "task is archived; reopen it first"),
             Error::Store(e) => write!(f, "task store error: {e}"),
+            Error::InvalidOutputSchema(detail) => {
+                write!(f, "output_schema is not valid JSON Schema: {detail}")
+            }
+            Error::ResultRequired => {
+                write!(f, "this task's output_schema requires a --result")
+            }
+            Error::ResultInvalid { path, message } => {
+                write!(f, "result does not satisfy output_schema at {path}: {message}")
+            }
+            Error::DuplicateStepId(step_id) => {
+                write!(f, "step {step_id:?} already exists for this run")
+            }
+            Error::NotOpen(status) => write!(f, "task is {status}; cannot give up on it"),
         }
     }
 }

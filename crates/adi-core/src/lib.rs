@@ -88,7 +88,9 @@ pub use adi_hooks::{
     hook_template, is_lifecycle, terminal as workspace_terminal,
 };
 
-pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus, TaskView, Tasks};
+pub use adi_tasks::{
+    EffectiveStatus, Error as TasksError, NewTask, TaskPatch, TaskStatus, TaskView, Tasks,
+};
 
 pub use adi_tools::{
     Error as ToolsError, Manifest as ToolManifest, RunOutput as ToolRunOutput, Tool, Tools,
