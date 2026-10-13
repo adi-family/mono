@@ -832,16 +832,19 @@ mod tests {
             "import { manual, workflow } from \"@adi/workflows\";\n\
              export const on = manual();\n\
              export default workflow(async (ctx, input) => {\n\
-             \x20 const r = await ctx.task({ key: \"gate\", title: \"review\", person: \"igor\", timeout: 50 });\n\
+             \x20 const r = await ctx.task({ key: \"gate\", title: \"review\", person: \"igor\", timeout: 3000 });\n\
              \x20 return { r };\n\
              });\n",
         );
 
+        // A generous timeout, well past anything a `bun` spawn plus `describe()`'s own (pour
+        // already ran one to fetch the output shape) could plausibly cost even under load —
+        // the point under test is the *timing logic*, not how fast this machine is right now.
         let started = engine.start_manual("slow", &json!({}), "req-1").expect("start");
         let first = engine.run_tick();
-        assert_eq!(first[0].outcome, Outcome::Suspended, "too soon for the 50ms timeout");
+        assert_eq!(first[0].outcome, Outcome::Suspended, "too soon for the 3s timeout");
 
-        std::thread::sleep(Duration::from_millis(80));
+        std::thread::sleep(Duration::from_millis(3200));
         let second = engine.run_tick();
         assert_eq!(second[0].run_key, started.run_key);
         assert_eq!(second[0].outcome, Outcome::Completed(json!({"r": {"timed_out": true}})));
