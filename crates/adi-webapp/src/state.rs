@@ -2074,6 +2074,16 @@ pub(crate) struct WorkflowsConsole {
     /// The run key currently expanded into its own timeline — empty for none expanded.
     pub(crate) selected_run: RwSignal<String>,
     pub(crate) run_detail: RwSignal<Option<RunDetailDto>>,
+    /// The selected workflow's own TypeScript source, read through the store browser's
+    /// `/api/fs/read` — `None` before the first load for it (or while a fresh one is in flight).
+    pub(crate) source: RwSignal<Option<String>>,
+    /// The same content, mirrored into its own buffer for [`adi_ui::CodeEditor`]'s two-way (but
+    /// `readonly`) binding — [`Self::source`] stays the tri-state signal (`None` while loading, so
+    /// a failed read never gets confused with an empty file).
+    pub(crate) source_buffer: RwSignal<String>,
+    /// Why the source read failed, kept separate from [`Self::error`] so a source read failing
+    /// (a file deleted out from under the list, say) doesn't blank the list or the runs below it.
+    pub(crate) source_error: RwSignal<Option<String>>,
 }
 
 impl WorkflowsConsole {
@@ -2087,6 +2097,9 @@ impl WorkflowsConsole {
             runs: RwSignal::new(None),
             selected_run: RwSignal::new(String::new()),
             run_detail: RwSignal::new(None),
+            source: RwSignal::new(None),
+            source_buffer: RwSignal::new(String::new()),
+            source_error: RwSignal::new(None),
         }
     }
 
@@ -2100,6 +2113,9 @@ impl WorkflowsConsole {
             self.run_input.set(String::new());
         }
         self.runs.set(None);
+        self.source.set(None);
+        self.source_buffer.set(String::new());
+        self.source_error.set(None);
         self.close_run();
     }
 

@@ -168,7 +168,7 @@ pub(crate) fn project_detail_view(
                 }
                 .into_any(),
                 ProjectSection::Workflows => view! {
-                    {workflows_panel(state, workflows_console)}
+                    {workflows_panel(state, route, workflows_console)}
                 }
                 .into_any(),
                 ProjectSection::Tools => view! {

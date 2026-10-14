@@ -26,7 +26,10 @@ extraction script cares about.
   global `/workflows` page was reachable only from ⌘K before; it now lists under Global beside
   Secrets and Triggers, and each row says `Global` or the project it's filed under. A project's
   detail page gets its own Workflows section (same expand/enable/run-now/rewind behaviour),
-  narrowed to that project's own `projects/<id>/workflows/*.ts` files.
+  narrowed to that project's own `projects/<id>/workflows/*.ts` files. Expanding a row now also
+  shows the file's own TypeScript source, read-only and syntax-highlighted, with an **Open in
+  editor** action that jumps to the store-file editor for the real thing — including when the
+  file fails to describe, which is exactly when reading it by eye matters most.
 
 ### Changed
 

@@ -3314,6 +3314,8 @@ pub struct WorkflowDto {
     pub id: String,
     #[serde(default)]
     pub project: Option<String>,
+    #[serde(default)]
+    pub path: String,
     pub enabled: bool,
     #[serde(default)]
     pub triggers: Vec<String>,

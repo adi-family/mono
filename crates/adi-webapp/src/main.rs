@@ -1500,7 +1500,7 @@ fn App() -> impl IntoView {
                         Route::Database => database_view(state, db_console),
                         Route::Llm => llm_view(state, llm),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
-                        Route::Workflows => workflows_view(state, workflows_console),
+                        Route::Workflows => workflows_view(state, route, workflows_console),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),

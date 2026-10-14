@@ -263,6 +263,7 @@ pub struct WorkflowListing {
     pub id: String,
     pub project: Option<String>,
     pub path: std::path::PathBuf,
+    pub rel_path: String,
     pub enabled: bool,
     pub shape: Option<WorkflowShape>,
     pub describe_error: Option<String>,

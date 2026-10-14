@@ -3746,6 +3746,11 @@ pub struct WorkflowDto {
     pub id: String,
     #[serde(default)]
     pub project: Option<String>,
+    /// This file's path, relative to the ADI store root — feed it to the existing `/api/fs/read`
+    /// store-browser endpoint to show its TypeScript source, or to `/files/<path>` to open it in
+    /// the store-file editor. `#[serde(default)]` so an older payload missing it still decodes.
+    #[serde(default)]
+    pub path: String,
     pub enabled: bool,
     #[serde(default)]
     pub triggers: Vec<String>,

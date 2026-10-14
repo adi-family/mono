@@ -6,12 +6,13 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::pages::workflows::{project_rows_view, refresh};
+use crate::routing::Route;
 use crate::state::{State, WorkflowsConsole};
 
 /// The Workflows panel on a project's detail page: this project's own workflow files, each
-/// expandable into its starters/shapes/enable toggle/run-now box and its own runs list, the same
-/// way a row on the global page is.
-pub(crate) fn workflows_panel(state: State, console: WorkflowsConsole) -> AnyView {
+/// expandable into its starters/shapes/enable toggle/run-now box, its own TypeScript source, and
+/// its own runs list, the same way a row on the global page is.
+pub(crate) fn workflows_panel(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
     // Load once per visit to this section — the same shared load the global page's own Effect
     // does, since there is no per-project list endpoint to fetch instead.
     Effect::new(move |loaded: Option<()>| {
@@ -33,7 +34,7 @@ pub(crate) fn workflows_panel(state: State, console: WorkflowsConsole) -> AnyVie
             <div class="adi-panel__body">
                 {move || {
                     let project = state.current_project.get();
-                    project_rows_view(state, console, &project)
+                    project_rows_view(state, route, console, &project)
                 }}
             </div>
         </section>

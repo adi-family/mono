@@ -2424,6 +2424,9 @@ pub(crate) struct WorkflowsConsole {
     pub(crate) runs: RwSignal<Option<RunsState>>,
     pub(crate) selected_run: RwSignal<String>,
     pub(crate) run_detail: RwSignal<Option<RunDetailDto>>,
+    pub(crate) source: RwSignal<Option<String>>,
+    pub(crate) source_buffer: RwSignal<String>,
+    pub(crate) source_error: RwSignal<Option<String>>,
 }
 ```
 

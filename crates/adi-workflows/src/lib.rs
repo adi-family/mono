@@ -120,6 +120,22 @@ impl From<Started> for StartedRun {
     }
 }
 
+/// `path`, relative to `config`'s store root and forward-slash-joined regardless of platform —
+/// the same shape `/api/fs/*` expects. Empty if `path` isn't under the root at all.
+fn store_relative_path(config: &Config, path: &std::path::Path) -> String {
+    path.strip_prefix(config.root())
+        .map(|rel| {
+            rel.components()
+                .filter_map(|c| match c {
+                    std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_default()
+}
+
 /// Whether every key in `where_clause` equals the same field in `payload` — `None` (no `where`
 /// given) always matches. Shared by the event starter ([`starters::tick`], matching a workflow's
 /// `on: event(pattern, where?)`) and a running attempt ([`attempt::Attempt`]'s `ctx.waitFor`),
@@ -271,11 +287,13 @@ impl Engine {
 
     fn listing_of(&self, file: WorkflowFile) -> WorkflowListing {
         let enabled = self.runs.is_enabled(&file.id).unwrap_or(false);
+        let rel_path = store_relative_path(&self.config, &file.path);
         match describe::describe(&self.config, &file.path) {
             Ok(shape) => WorkflowListing {
                 id: file.id,
                 project: file.project,
                 path: file.path,
+                rel_path,
                 enabled,
                 shape: Some(shape),
                 describe_error: None,
@@ -284,6 +302,7 @@ impl Engine {
                 id: file.id,
                 project: file.project,
                 path: file.path,
+                rel_path,
                 enabled,
                 shape: None,
                 describe_error: Some(e.to_string()),
@@ -466,6 +485,12 @@ pub struct WorkflowListing {
     pub id: String,
     pub project: Option<String>,
     pub path: std::path::PathBuf,
+    /// [`path`](Self::path), relative to the ADI store root and forward-slash-joined — what the
+    /// panel feeds the existing `/api/fs/read` store-browser endpoint to show the file's own
+    /// source, and what it opens in the store-file editor. Empty when the file somehow isn't
+    /// under the store root at all (never happens in practice: [`discover::workflow_files`] only
+    /// ever walks directories under [`Config::root`]).
+    pub rel_path: String,
     pub enabled: bool,
     /// `None` when [`describe_error`](Self::describe_error) is set instead.
     pub shape: Option<WorkflowShape>,

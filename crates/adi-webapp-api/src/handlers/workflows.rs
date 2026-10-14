@@ -159,6 +159,7 @@ fn workflow_dto(listing: &WorkflowListing) -> WorkflowDto {
     WorkflowDto {
         id: listing.id.clone(),
         project: listing.project.clone(),
+        path: listing.rel_path.clone(),
         enabled: listing.enabled,
         triggers: listing
             .shape

@@ -11,16 +11,19 @@
 //! [`project_rows_view`] and [`refresh`] are `pub(crate)` so that panel can reuse this page's row,
 //! detail and run views instead of forking them.
 
+use adi_ui::{CodeEditor, CodeFrame, CodeHeight, Lang};
 use adi_webapp_api::types::{RunDto, RunWorkflow, RunsQuery, StepDto, WorkflowDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use crate::pages::store_file::load_store_file;
+use crate::routing::{Route, push_state, scroll_top, store_file_path};
 use crate::state::{Flash, State, WorkflowsConsole};
 use crate::ui::{apply_mutation, confirm, field_hint, flash_view};
 
 /// The Workflows page.
-pub(crate) fn workflows_view(state: State, console: WorkflowsConsole) -> AnyView {
+pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
     // Load once when the page opens.
     Effect::new(move |loaded: Option<()>| {
         if loaded.is_none() {
@@ -55,7 +58,7 @@ pub(crate) fn workflows_view(state: State, console: WorkflowsConsole) -> AnyView
                 </button>
             </div>
             <div class="adi-panel__body">
-                {move || rows_view(state, console)}
+                {move || rows_view(state, route, console)}
             </div>
             {move || error_view(console)}
             {flash_view(state.flash)}
@@ -84,7 +87,7 @@ fn error_view(console: WorkflowsConsole) -> AnyView {
     }
 }
 
-fn rows_view(state: State, console: WorkflowsConsole) -> AnyView {
+fn rows_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
     let Some(st) = console.workflows.get() else {
         return view! { <p class="adi-empty">"Loading…"</p> }.into_any();
     };
@@ -99,7 +102,7 @@ fn rows_view(state: State, console: WorkflowsConsole) -> AnyView {
     }
     st.workflows
         .into_iter()
-        .map(|w| workflow_block(state, console, w))
+        .map(|w| workflow_block(state, route, console, w))
         .collect::<Vec<_>>()
         .into_any()
 }
@@ -108,7 +111,12 @@ fn rows_view(state: State, console: WorkflowsConsole) -> AnyView {
 /// project's Workflows section, reusing this page's row/detail/run views rather than forking
 /// them. There is no per-project list endpoint, so the filter runs client-side over the one
 /// shared load [`refresh`] already did.
-pub(crate) fn project_rows_view(state: State, console: WorkflowsConsole, project: &str) -> AnyView {
+pub(crate) fn project_rows_view(
+    state: State,
+    route: RwSignal<Route>,
+    console: WorkflowsConsole,
+    project: &str,
+) -> AnyView {
     let Some(st) = console.workflows.get() else {
         return view! { <p class="adi-empty">"Loading…"</p> }.into_any();
     };
@@ -127,26 +135,27 @@ pub(crate) fn project_rows_view(state: State, console: WorkflowsConsole, project
         .into_any();
     }
     rows.into_iter()
-        .map(|w| workflow_block(state, console, w))
+        .map(|w| workflow_block(state, route, console, w))
         .collect::<Vec<_>>()
         .into_any()
 }
 
 /// One workflow's header row — its id, project, enabled state, and the enable/disable toggle —
 /// expanding into [`workflow_detail`] when clicked.
-fn workflow_block(state: State, console: WorkflowsConsole, w: WorkflowDto) -> AnyView {
+fn workflow_block(state: State, route: RwSignal<Route>, console: WorkflowsConsole, w: WorkflowDto) -> AnyView {
     let id = w.id.clone();
     let caret_id = id.clone();
     let toggle_id = id.clone();
     let enable_id = id.clone();
     let detail_id = id.clone();
     let enabled = w.enabled;
+    let source_path = w.path.clone();
 
     view! {
         <div class="adi-field adi-field--full">
             <div class="adi-copyrow">
                 <button class="adi-btn adi-btn--quiet" type="button"
-                    on:click=move |_| console.toggle_selected(&toggle_id)>
+                    on:click=move |_| toggle_workflow(console, &toggle_id, source_path.clone())>
                     <span class="adi-mono">
                         {move || if console.selected.get() == caret_id { "\u{25be}" } else { "\u{25b8}" }}
                         " "{w.id.clone()}
@@ -165,15 +174,28 @@ fn workflow_block(state: State, console: WorkflowsConsole, w: WorkflowDto) -> An
                     {if enabled { "Disable" } else { "Enable" }}
                 </button>
             </div>
-            {move || (console.selected.get() == detail_id).then(|| workflow_detail(state, console, &w))}
+            {move || (console.selected.get() == detail_id).then(|| workflow_detail(state, route, console, &w))}
         </div>
     }
     .into_any()
 }
 
+/// Expand/collapse `id` (the header row's click), starting the source read the moment it opens —
+/// not from a page-level `Effect` keyed on [`WorkflowsConsole::selected`], because that console is
+/// shared between the global page and a project's own Workflows section (`workflows_panel.rs`),
+/// and only the former currently sets up effects for anything past the initial list load. Doing
+/// the fetch right here works on both without needing that effect at all.
+fn toggle_workflow(console: WorkflowsConsole, id: &str, path: String) {
+    let opening = console.selected.get_untracked() != id;
+    console.toggle_selected(id);
+    if opening && !path.is_empty() {
+        spawn_local(refresh_source(console, path));
+    }
+}
+
 /// A workflow's expanded detail: its starters, its declared input/output shapes, a describe
-/// error if it has one, the run-now box, and its own runs list.
-fn workflow_detail(state: State, console: WorkflowsConsole, w: &WorkflowDto) -> AnyView {
+/// error if it has one, its own TypeScript source, the run-now box, and its own runs list.
+fn workflow_detail(state: State, route: RwSignal<Route>, console: WorkflowsConsole, w: &WorkflowDto) -> AnyView {
     let run_id = w.id.clone();
     view! {
         <div class="adi-field adi-field--full">
@@ -187,6 +209,8 @@ fn workflow_detail(state: State, console: WorkflowsConsole, w: &WorkflowDto) -> 
             })}
             {schema_view("Input", w.input_schema.clone())}
             {schema_view("Output", w.output_schema.clone())}
+
+            {source_view(state, route, console, w.path.clone())}
 
             <div class="adi-copyrow">
                 <textarea class="adi-textarea adi-mono" rows="2" placeholder="{} (the workflow's own input, as JSON)"
@@ -219,6 +243,55 @@ fn schema_view(label: &'static str, schema: Option<serde_json::Value>) -> AnyVie
         .into_any(),
         None => ().into_any(),
     }
+}
+
+/// The workflow file's own TypeScript source, read-only and syntax-highlighted — shown
+/// unconditionally, even when [`WorkflowDto::describe_error`] is set: that is exactly when
+/// reading the file by eye matters most. The content comes from the store browser's own
+/// `/api/fs/read` (what [`crate::pages::store_file`] itself reads through), fetched once when the
+/// row opens ([`toggle_workflow`]) rather than on every render.
+fn source_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole, path: String) -> AnyView {
+    if path.is_empty() {
+        return ().into_any();
+    }
+    let edit_path = path.clone();
+    let actions = move || {
+        let edit_path = edit_path.clone();
+        view! {
+            <button class="adi-btn adi-btn--sm" type="button"
+                on:click=move |_| open_in_editor(state, route, edit_path.clone())>
+                "Open in editor"
+            </button>
+        }
+        .into_any()
+    };
+    view! {
+        <CodeFrame title=path.clone() actions=actions height=CodeHeight::Form class="island">
+            {move || match (console.source.get(), console.source_error.get()) {
+                (_, Some(e)) => view! {
+                    <p class="adi-error">"Couldn't read this file: "{e}</p>
+                }
+                .into_any(),
+                (None, None) => view! { <p class="adi-empty">"Loading source…"</p> }.into_any(),
+                (Some(_), None) => view! {
+                    <CodeEditor value=console.source_buffer lang=Lang::Ts readonly=true
+                        height=CodeHeight::Form id="workflow-source"/>
+                }
+                .into_any(),
+            }}
+        </CodeFrame>
+    }
+    .into_any()
+}
+
+/// Navigate to the store-file editor (`/files/<path>`, [`Route::StoreFile`]) open on this
+/// workflow file — the "Open in editor" action, the same navigation [`crate::store_browser`]'s own
+/// tree uses to open a file. No second editor: this reuses that one rather than forking it.
+fn open_in_editor(state: State, route: RwSignal<Route>, path: String) {
+    push_state(&store_file_path(&path));
+    route.set(Route::StoreFile);
+    scroll_top();
+    load_store_file(state, path);
 }
 
 /// A workflow's own runs list, under its expanded detail — each row expands into
@@ -326,6 +399,20 @@ pub(crate) async fn refresh(console: WorkflowsConsole) {
             console.error.set(None);
         }
         Err(e) => console.error.set(Some(e)),
+    }
+}
+
+/// Read a workflow file's own source through the store browser's `/api/fs/read` — called once,
+/// when its row opens ([`toggle_workflow`]).
+async fn refresh_source(console: WorkflowsConsole, path: String) {
+    console.source.set(None);
+    console.source_error.set(None);
+    match fetch::fs_read(&path).await {
+        Ok(c) => {
+            console.source_buffer.set(c.content.clone());
+            console.source.set(Some(c.content));
+        }
+        Err(e) => console.source_error.set(Some(e)),
     }
 }
 
