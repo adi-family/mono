@@ -5,6 +5,14 @@
 //! Local aliases and fleet petnames vary, so names are validated by zone and label shape.
 //! This relies on the configured domain being a private split-DNS zone, such as `.adi`.
 //!
+//! The mesh gateway (`adi_mesh::gateway`) forwards a browser's original `Host` to whichever
+//! install answers `<service>.<node>.n.adi`, verbatim and regardless of *that install's own*
+//! flavour — there is one mesh, one reserved zone, and the gateway cannot know it is fronting a
+//! dev panel rather than release. So this zone is accepted in every flavour, not only when the
+//! install's own domain happens to be `adi`: [`adi_mesh::protocol::FLEET_SUFFIX`] and
+//! [`adi_mesh::protocol::parse_fleet_host`] are reused here rather than duplicated, so the two
+//! sides can never disagree about what counts as a fleet name.
+//!
 //! Missing `Host` or `Origin` is allowed for mesh peers and command-line clients. Compare
 //! authorities, not schemes: the front door terminates TLS before forwarding plain HTTP.
 //! Reject cross-site Fetch Metadata and CORS-simple POST bodies (including untyped bodies),
@@ -125,9 +133,10 @@ fn not_our_name(host: &str, domain: &str) -> Refusal {
     Refusal {
         status: 403,
         message: format!(
-            "this control panel is not served at {host} — it answers to its .{domain} names and to \
-             loopback, so a request addressed to any other name is a page that pointed its own \
-             hostname here, and it has no login to stop that with"
+            "this control panel is not served at {host} — it answers to its .{domain} names, to \
+             loopback, and to the fleet's .{} names, so a request addressed to any other name is \
+             a page that pointed its own hostname here, and it has no login to stop that with",
+            adi_mesh::protocol::FLEET_SUFFIX,
         ),
     }
 }
@@ -135,7 +144,9 @@ fn not_our_name(host: &str, domain: &str) -> Refusal {
 fn is_a_name_we_answer_to(host: &str, domain: &str) -> bool {
     let authority = normalize_authority(host);
     let name = without_port(&authority);
-    LOOPBACK_HOSTS.contains(&name) || is_in_zone(name, domain)
+    LOOPBACK_HOSTS.contains(&name)
+        || is_in_zone(name, domain)
+        || adi_mesh::protocol::parse_fleet_host(name).is_some()
 }
 
 /// Strip the port while preserving bracketed IPv6 literals.
@@ -415,6 +426,67 @@ mod tests {
             .unwrap_err();
             assert_eq!(refusal.status, 403, "{origin}");
         }
+    }
+
+    #[test]
+    fn a_fleet_host_is_answered_by_a_non_release_flavour_too() {
+        // The gateway forwards the browser's original Host verbatim whatever flavour answers
+        // it (see the module doc), so the dev panel must accept its own fleet name exactly as
+        // release does — this was the bug: dev's domain is "adi-dev", not "adi", so the old
+        // `*.<domain>` check alone 403'd every mesh request against it.
+        assert_eq!(
+            super::check_in_zone(
+                &req(
+                    "GET",
+                    "/api/fleet/nodes",
+                    &[("host", "dev-app.hetzner-adi.n.adi")]
+                ),
+                "adi-dev",
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_fleet_hosts_origin_must_still_match_its_host_in_every_flavour() {
+        let refusal = super::check_in_zone(
+            &req(
+                "GET",
+                "/api/fleet/nodes",
+                &[
+                    ("host", "dev-app.hetzner-adi.n.adi"),
+                    ("origin", "http://evil.example"),
+                ],
+            ),
+            "adi-dev",
+        )
+        .unwrap_err();
+        assert_eq!(refusal.status, 403);
+    }
+
+    #[test]
+    fn a_name_outside_every_recognized_zone_is_refused_in_every_flavour() {
+        for domain in ["adi", "adi-dev"] {
+            let refusal = super::check_in_zone(
+                &req("GET", "/api/fleet/nodes", &[("host", "evil.com")]),
+                domain,
+            )
+            .unwrap_err();
+            assert_eq!(refusal.status, 403, "{domain}");
+        }
+    }
+
+    #[test]
+    fn release_flavour_zone_and_fleet_acceptance_is_unchanged() {
+        for host in ["app.adi", "app.zomro-de1.n.adi", "app.nosh.zomro-de1.n.adi"] {
+            assert_eq!(
+                check(&req("GET", "/api/fleet/nodes", &[("host", host)])),
+                Ok(()),
+                "{host}"
+            );
+        }
+        let refusal = check(&req("GET", "/api/fleet/nodes", &[("host", "evil.com")])).unwrap_err();
+        assert_eq!(refusal.status, 403);
     }
 
     #[test]
