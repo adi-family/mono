@@ -20,8 +20,52 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **Workflows: a TypeScript file per workflow, with checkpoints that make a crash or a restart
+  resume exactly where it left off, never from the top.** `workflows/*.ts` (global) or
+  `projects/<id>/workflows/*.ts` export a schedule/event/manual starter, optional zod `input`/
+  `output` shapes, and a `workflow(async (ctx, input) => ...)` body. Every `ctx.*` call —
+  `ctx.task`, `ctx.run` (a child workflow), `ctx.step`, `ctx.waitFor`, `ctx.sleep`, `ctx.ask` — is
+  a checkpoint, saved under a required, unique `key`; a crashed `bun` attempt (OOM, a segfault, a
+  watchdog) is retried with backoff rather than failed outright, up to 3 crashes in a row. New
+  `adi-mono workflows list/show/run/runs/rewind/enable/disable`, and a `/workflows` panel page: a
+  list, a run's timeline of saved steps with their in/out data, and a "Rewind to here" button. A
+  workflow a draft agent writes is saved disabled until a human turns it on; `run`/"Run now"
+  always works regardless. `adi-mono workflows llm help` teaches an agent the rules (unique keys,
+  no `Date.now()`/randomness outside `ctx.step`, idempotent effects). See `guides/workflows.md`.
+  The first real workflow, `proof-post`, drafts and posts to adi-launch with a human review step;
+  on dev its publish step is a dry-run stub.
+- **Schedules.** A workflow's `schedule(cron, tz)` starter fires on a computed due slot in the
+  given IANA timezone (DST-aware) — nothing is polled or pre-computed ahead of time. A missed
+  slot after downtime fires once by default (`catchUp: "fire"`), or is dropped entirely
+  (`catchUp: "skip"`); a brand-new schedule never retroactively fires today's already-passed slot.
+- **Tasks are dispatched to agents automatically.** An agent opts in with
+  `adi-mono agents save <name> --dispatch` (or the "Dispatch" toggle on its editor page); once
+  opted in, a ready task assigned to it by name launches a run by itself, retried with backoff on
+  a launch failure, and raised to you as an Ask (retry once / reassign / archive) once it's
+  genuinely stuck. A task assigned to a person is never auto-dispatched — it shows up on the Tasks
+  panel's "Needs your input" section instead, with a form rendered from the task's own
+  `output_schema`.
+- `adi-mono tasks complete <id> --result <json>` (or `--result-file <path>`), validated against
+  the task's `output_schema` — it refuses with the exact path of the mismatch rather than
+  accepting a bad result. `adi-mono tasks give-up <id> --reason <text>` for a task that genuinely
+  can't be done. `adi-mono tasks show` now prints the input, the required output shape, and the
+  exact finish/give-up commands to run.
+
 ### Changed
 
+- **Tasks moved off `tasks.json` onto SQLite** (`tasks.db`, same module dir). The CLI and API
+  contract are unchanged; existing tasks keep their ids. A one-time migration runs automatically
+  on first use and backs up the old file alongside it as `tasks.json.bak`, never deleting it.
+- **Agent-run events, and everything else platform-wide, now live in one durable, append-only
+  event log** (its own SQLite store, a monotonic sequence number, a cursor per subscriber) instead
+  of the old `sessions.db`-only bookkeeping. A producer writes its event in the same transaction
+  as the state change it describes (an outbox), so an event is never emitted for a change that
+  then fails to commit, or lost to a crash between the two. Delivery is at-least-once with
+  idempotency keys, so a subscriber that was down catches up from its own cursor rather than
+  missing anything or double-applying it. Retention is roughly 30 days, and never cut short of
+  whichever subscriber's cursor is furthest behind.
 - `adi-mono agents run <name> "<task>"` now takes the task positionally, same as `-m`/`--message`
   (giving both is refused). Omitting it entirely still sends the placeholder task `"run"` to a
   process/harness backend, now with a one-line stderr notice, since forgetting `-m` used to send
