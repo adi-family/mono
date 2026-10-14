@@ -240,6 +240,26 @@ pub struct Request {
 /// ask is still pending — every one of them phrased for the model that will read it as a failed
 /// tool result. Database errors otherwise.
 pub(super) fn register(conn: &Connection, agent: &str, conv: &str, req: &Request) -> Result<Ask> {
+    register_with(conn, agent, conv, req, |_| Ok(None))
+}
+
+/// [`register`], with `on_write` called with the about-to-be-returned ask just before this call's
+/// own commit — the hook [`SessionStore::ask_with_outbox`](super::SessionStore::ask_with_outbox)
+/// uses to write an event's record into the SAME transaction (ADI-MONO-149). `register` already
+/// opens its own transaction (the read-then-insert below has to be atomic on its own), so the
+/// event is threaded through *this* transaction rather than wrapped in a second, outer one — a
+/// bare `conn.unchecked_transaction()` around an already-transacting call fails outright ("cannot
+/// start a transaction within a transaction").
+///
+/// # Errors
+/// As [`register`], plus whatever `on_write` returns.
+pub(super) fn register_with(
+    conn: &Connection,
+    agent: &str,
+    conv: &str,
+    req: &Request,
+    on_write: impl FnOnce(&Ask) -> Result<Option<adi_events::EventRecord>>,
+) -> Result<Ask> {
     if req.questions.is_empty() {
         return Err(Error::Arguments(
             "an ask needs at least one question — say what you want decided".to_string(),
@@ -324,6 +344,10 @@ pub(super) fn register(conn: &Connection, agent: &str, conv: &str, req: &Request
         rusqlite::params![agent, conv, ask.id, ask.asked_at, ask.deadline, json],
     )
     .map_err(|e| sql_err("record a question in", e))?;
+    if let Some(record) = on_write(&ask)? {
+        adi_events::outbox::write(&tx, &record.name, &record.payload)
+            .map_err(|e| Error::Session(format!("couldn't queue an event in: {e}")))?;
+    }
     tx.commit()
         .map_err(|e| sql_err("record a question in", e))?;
     Ok(ask)
@@ -344,6 +368,23 @@ pub(super) fn resolve(
     conv: &str,
     ask_id: Option<&str>,
     answer: &Answer,
+) -> Result<Option<Ask>> {
+    resolve_with(conn, agent, conv, ask_id, answer, |_| Ok(None))
+}
+
+/// [`resolve`], with `on_write` called with the settled ask (when there was one) just before this
+/// call's own commit — see [`register_with`]'s doc comment for why the event is threaded through
+/// this already-open transaction rather than a second, outer one (ADI-MONO-149).
+///
+/// # Errors
+/// As [`resolve`], plus whatever `on_write` returns.
+pub(super) fn resolve_with(
+    conn: &Connection,
+    agent: &str,
+    conv: &str,
+    ask_id: Option<&str>,
+    answer: &Answer,
+    on_write: impl FnOnce(Option<&Ask>) -> Result<Option<adi_events::EventRecord>>,
 ) -> Result<Option<Ask>> {
     let tx = conn
         .unchecked_transaction()
@@ -385,6 +426,10 @@ pub(super) fn resolve(
         return Ok(None);
     }
     let row = load_one(&tx, agent, conv, &target)?;
+    if let Some(record) = on_write(row.as_ref())? {
+        adi_events::outbox::write(&tx, &record.name, &record.payload)
+            .map_err(|e| Error::Session(format!("couldn't queue an event in: {e}")))?;
+    }
     tx.commit()
         .map_err(|e| sql_err("answer a question in", e))?;
     Ok(row)

@@ -279,6 +279,24 @@ pub enum Closed {
 /// # Errors
 /// Returns database errors only.
 pub(super) fn close(conn: &Connection, id: &str, state: GoalState, note: &str) -> Result<Closed> {
+    close_with(conn, id, state, note, |_| Ok(None))
+}
+
+/// [`close`], with `on_write` called with the closed goal — only when this call is the one that
+/// closed it — just before this call's own commit. See
+/// [`questions::register_with`](super::questions::register_with)'s doc comment for why the event
+/// is threaded through this already-open transaction rather than a second, outer one
+/// (ADI-MONO-149).
+///
+/// # Errors
+/// As [`close`], plus whatever `on_write` returns.
+pub(super) fn close_with(
+    conn: &Connection,
+    id: &str,
+    state: GoalState,
+    note: &str,
+    on_write: impl FnOnce(&Goal) -> Result<Option<adi_events::EventRecord>>,
+) -> Result<Closed> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("close a goal in", e))?;
@@ -298,6 +316,10 @@ pub(super) fn close(conn: &Connection, id: &str, state: GoalState, note: &str) -
         return Ok(Closed::Already(before));
     }
     let after = by_id(&tx, id)?.unwrap_or(before);
+    if let Some(record) = on_write(&after)? {
+        adi_events::outbox::write(&tx, &record.name, &record.payload)
+            .map_err(|e| Error::Session(format!("couldn't queue an event in: {e}")))?;
+    }
     tx.commit().map_err(|e| sql_err("close a goal in", e))?;
     Ok(Closed::Now(after))
 }

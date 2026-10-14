@@ -16,6 +16,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use adi_events::Event as _;
 use serde_json::{Value, json};
 
 use crate::awaits::{self, Awaits, Request};
@@ -839,23 +840,30 @@ fn ask(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
         after_seconds: arg_u64(input, "after_seconds"),
         defaults: string_list(input, "defaults"),
     };
+    // The write and the event it announces are made atomic here (ADI-MONO-149): `ask` already
+    // opens its own transaction (the pending-ask check and the insert have to be atomic on their
+    // own), so this goes through `ask_with_outbox` — which writes the event's record into that
+    // same transaction, right before `ask`'s own commit — rather than `SessionStore::with_outbox`
+    // (which would try to open a second, outer transaction and fail). Relaying afterward is
+    // best-effort: a crash in between can only delay the event reaching the shared log, never
+    // lose it. This runs outside `Agents`'s own `with_event` choke point (there is no `Agents`
+    // handle here, only this store and `ctx.awaits`'s `Config`), but through the same primitives.
     let asked = ctx
         .sessions
-        .ask(ctx.agent, ctx.conv, &req)
+        .ask_with_outbox(ctx.agent, ctx.conv, &req, |asked| {
+            crate::events::AgentQuestionAsked {
+                agent: ctx.agent.to_string(),
+                conv: ctx.conv.to_string(),
+                run_id: ctx.conv.to_string(),
+                ask: asked.id.clone(),
+                question: asked.headline(),
+            }
+            .to_record()
+            .map(Some)
+            .map_err(|e| crate::Error::Session(format!("couldn't build an event record: {e}")))
+        })
         .map_err(|e| e.to_string())?;
-
-    // Announced on the bus rather than delivered anywhere: this crate has no idea who is watching,
-    // and a trigger subscribed to `adi.agents.question.**` is how the question reaches a phone.
-    // Best-effort — a question nobody was told about is still a question that got written down.
-    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit_event(
-        &crate::events::AgentQuestionAsked {
-            agent: ctx.agent.to_string(),
-            conv: ctx.conv.to_string(),
-            run_id: ctx.conv.to_string(),
-            ask: asked.id.clone(),
-            question: asked.headline(),
-        },
-    );
+    let _ = ctx.sessions.relay_pending_events(ctx.awaits.config());
 
     let deadline = match asked.deadline {
         Some(_) => " If nobody answers in time, your defaults are taken and you are told so.",
@@ -923,16 +931,22 @@ fn parse_question(value: &Value) -> std::result::Result<crate::store::Question, 
 /// Announced on the bus for the same reason [`ask`] is: this crate has no idea who is watching,
 /// and [`awaits::follow_up`]'s registered wake is what turns it into somebody's notification.
 /// Nothing here touches an await, the queue, or the transcript — a report changes nothing about
-/// whether the conversation is still going, only who has been told about it.
+/// whether the conversation is still going, only who has been told about it. There is no write to
+/// make this atomic with, but it still goes through the same outbox [`ask`] does (ADI-MONO-149):
+/// the event is a committed local row before this returns, which a direct publish never was.
 fn report(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let text = arg_str(input, "text")?;
-    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit_event(
-        &crate::events::AgentRunReported {
+    let _ = ctx.sessions.with_outbox(|| {
+        let record = crate::events::AgentRunReported {
             agent: ctx.agent.to_string(),
             run_id: ctx.conv.to_string(),
             report: text.trim().to_string(),
-        },
-    );
+        }
+        .to_record()
+        .map_err(|e| crate::Error::Session(format!("couldn't build an event record: {e}")))?;
+        Ok(((), Some(record)))
+    });
+    let _ = ctx.sessions.relay_pending_events(ctx.awaits.config());
     Ok(
         "reported — whoever is watching this run (if anyone registered a wake for it) has been \
          told. Carry on, or end your turn."
@@ -1735,6 +1749,89 @@ mod tests {
         assert_eq!(pending.questions[0].options.len(), 2);
         assert_eq!(pending.questions[0].options[1].label, "no");
         assert!(pending.deadline.is_none(), "no deadline was named");
+    }
+
+    /// ADI-MONO-149: a crash in the gap between `ask`'s own commit and the best-effort relay that
+    /// follows it must not lose the `adi.agents.question.asked` event — only delay it. Simulated
+    /// the same way `adi_tasks` tests the same guarantee: the shared log's own directory is blocked
+    /// with a plain file, so `relay_pending_events` fails exactly as a crash would have stopped it
+    /// from ever running, while the question row — and the event's record, in the SAME transaction
+    /// — are already durable in `sessions.db`.
+    #[test]
+    fn a_crash_between_commit_and_relay_still_delivers_the_question_asked_event() {
+        let chat = Conversation::open("crash-before-relay");
+        let ctx = chat.ctx();
+        let log = adi_events::Events::with_config(ctx.awaits.config().clone());
+        std::fs::create_dir_all(ctx.awaits.config().root()).expect("create root");
+        std::fs::write(log.dir(), "not a directory").expect("block the shared log");
+
+        ask(
+            &json!({
+                "note": "ship now or wait",
+                "questions": [question("ship now, or wait for review?")],
+            }),
+            &ctx,
+        )
+        .expect("the ask still succeeds — the shared log being unreachable never blocks it");
+        let pending = ctx
+            .sessions
+            .pending_question("watcher", &chat.conv)
+            .expect("the question is already durable in sessions.db");
+
+        assert!(
+            ctx.sessions
+                .relay_pending_events(ctx.awaits.config())
+                .is_err(),
+            "relaying while the log is blocked is reported, not swallowed"
+        );
+
+        std::fs::remove_file(log.dir()).expect("unblock the shared log");
+        assert_eq!(
+            ctx.sessions
+                .relay_pending_events(ctx.awaits.config())
+                .expect("relay now that the log is reachable"),
+            1,
+            "the event that crashed before relaying is still exactly one pending row"
+        );
+        let caught_up = log.catch_up("sub", 10).expect("catch up");
+        assert_eq!(caught_up.len(), 1);
+        assert_eq!(caught_up[0].record.name, "adi.agents.question.asked");
+        let payload: serde_json::Value =
+            serde_json::from_str(&caught_up[0].record.payload).expect("payload");
+        assert_eq!(payload["ask"], pending.id);
+        assert!(
+            payload["question"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("ship now, or wait for review?"),
+            "{payload}"
+        );
+    }
+
+    /// ADI-MONO-149: once a relay has forwarded a row it deletes it locally, so a second relay —
+    /// the next write's own best-effort call, or the app's periodic sweep — finds nothing left and
+    /// the event is not appended to the shared log twice.
+    #[test]
+    fn re_relaying_after_a_successful_relay_does_not_double_deliver() {
+        let chat = Conversation::open("no-double-delivery");
+        let ctx = chat.ctx();
+        let log = adi_events::Events::with_config(ctx.awaits.config().clone());
+
+        ask(
+            &json!({ "questions": [question("one more time?")] }),
+            &ctx,
+        )
+        .expect("asked");
+        // `ask` already relays best-effort on success; this call finds nothing left pending.
+        assert_eq!(
+            ctx.sessions
+                .relay_pending_events(ctx.awaits.config())
+                .expect("relay"),
+            0,
+            "the one event was already relayed by `ask` itself"
+        );
+        let caught_up = log.catch_up("sub", 10).expect("catch up");
+        assert_eq!(caught_up.len(), 1, "the fact appears exactly once, not twice");
     }
 
     /// A deadline is a statement about what happens when nobody answers — so it is only a deadline

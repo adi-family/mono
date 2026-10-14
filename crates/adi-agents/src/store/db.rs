@@ -163,6 +163,11 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS attachments_of_session ON attachments (agent, session);
 ";
 
+/// The local outbox table — see [`adi_events::outbox`]. Concatenated onto [`SCHEMA`] rather than
+/// applied separately so there is exactly one `execute_batch` to get the ordering right against.
+/// `adi_tasks`'s `tasks.db` carries the identical table for the identical reason.
+const OUTBOX_SCHEMA: &str = adi_events::outbox::SCHEMA;
+
 /// Columns added to a table that already exists, applied after [`SCHEMA`].
 ///
 /// SQLite has no `ADD COLUMN IF NOT EXISTS`, and `CREATE TABLE IF NOT EXISTS` is a no-op against a
@@ -257,6 +262,9 @@ pub(super) fn conn(path: &Path) -> Result<Rc<Connection>> {
         connection
             .execute_batch(SCHEMA)
             .map_err(|e| sql_err("create the schema in", e))?;
+        connection
+            .execute_batch(OUTBOX_SCHEMA)
+            .map_err(|e| sql_err("create the outbox table in", e))?;
         for statement in MIGRATIONS {
             let _ = connection.execute(statement, []);
         }

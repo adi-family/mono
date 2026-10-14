@@ -100,8 +100,20 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
         }
         // Stamped before the message goes out, for the reason the `error` field exists: a delivery
         // that fails must still push the next attempt out by the floor, or a conversation nothing
-        // can be delivered into is retried at the tick rate for ever.
-        if store.mark_goals_nudged(&agent, &conv, now).is_err() {
+        // can be delivered into is retried at the tick rate for ever. The stamp and the event it
+        // announces are made atomic here (ADI-MONO-149), inside the one `with_event` transaction.
+        let stamped = agents.with_event(|| {
+            let stamped = store.mark_goals_nudged(&agent, &conv, now).is_ok();
+            let event = stamped.then(|| AgentGoalNudged {
+                agent: agent.clone(),
+                conv: conv.clone(),
+                goals: goals.iter().map(|g| g.id.clone()).collect(),
+                // +1 for the stamp just written: these copies were read before it.
+                nudges: goals.first().map_or(0, |g| g.nudges + 1),
+            });
+            Ok((stamped, event))
+        });
+        if !stamped.unwrap_or(false) {
             continue;
         }
         let error = agents
@@ -113,13 +125,6 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
             )
             .err()
             .map(|e| e.to_string());
-        agents.emit_event(&AgentGoalNudged {
-            agent: agent.clone(),
-            conv: conv.clone(),
-            goals: goals.iter().map(|g| g.id.clone()).collect(),
-            // +1 for the stamp just written: these copies were read before it.
-            nudges: goals.first().map_or(0, |g| g.nudges + 1),
-        });
         nudged.push(Nudged {
             agent,
             conv,
@@ -239,15 +244,18 @@ fn nudge_message(goals: &[Goal]) -> String {
 /// errors. Notably *not* an error: a conversation that already has goals — see
 /// [`store::goals`](crate::store).
 pub fn create(agents: &Agents, agent: &str, conv: &str, text: &str, set_by: SetBy) -> Result<Goal> {
-    let goal = agents.sessions().create_goal(agent, conv, text, set_by)?;
-    agents.emit_event(&AgentGoalSet {
-        agent: goal.agent.clone(),
-        conv: goal.conv.clone(),
-        goal: goal.id.clone(),
-        text: goal.text.clone(),
-        set_by: goal.set_by.as_str().to_string(),
-    });
-    Ok(goal)
+    // The write and the event it announces are made atomic here (ADI-MONO-149).
+    agents.with_event(|| {
+        let goal = agents.sessions().create_goal(agent, conv, text, set_by)?;
+        let event = AgentGoalSet {
+            agent: goal.agent.clone(),
+            conv: goal.conv.clone(),
+            goal: goal.id.clone(),
+            text: goal.text.clone(),
+            set_by: goal.set_by.as_str().to_string(),
+        };
+        Ok((goal, Some(event)))
+    })
 }
 
 /// Reword an open goal. `None` when no goal has that id.
@@ -299,21 +307,33 @@ pub fn all_open(agents: &Agents) -> Vec<Goal> {
 /// The shared half of [`met`] and [`give_up`]: close it, and announce it only if this call is what
 /// closed it.
 fn close(agents: &Agents, goal_id: &str, state: GoalState, note: &str) -> Result<GoalClosed> {
-    let closed = agents.sessions().close_goal(goal_id, state, note)?;
-    if let GoalClosed::Now(goal) = &closed {
-        let payload = AgentGoalClosed {
-            agent: goal.agent.clone(),
-            conv: goal.conv.clone(),
-            goal: goal.id.clone(),
-            text: goal.text.clone(),
-            note: goal.note.clone(),
-            nudges: goal.nudges,
-        };
-        match state {
-            GoalState::Met => agents.emit_event(&AgentGoalMet(payload)),
-            _ => agents.emit_event(&AgentGoalGivenUp(payload)),
-        }
-    }
+    use adi_events::Event;
+    // The close and the event it announces are made atomic here (ADI-MONO-149): `close_goal`
+    // already opens its own transaction (the read-then-conditional-update has to be atomic on
+    // its own), so this goes through `close_goal_with_outbox` rather than `with_event_record` —
+    // see `SessionStore::ask_with_outbox`'s doc comment for why. Met and given-up are different
+    // payload types, which is why this was already using the `_record`-shaped primitive rather
+    // than `with_event`'s own `E: Event` one.
+    let closed = agents
+        .sessions()
+        .close_goal_with_outbox(goal_id, state, note, |goal| {
+            let payload = AgentGoalClosed {
+                agent: goal.agent.clone(),
+                conv: goal.conv.clone(),
+                goal: goal.id.clone(),
+                text: goal.text.clone(),
+                note: goal.note.clone(),
+                nudges: goal.nudges,
+            };
+            let record = match state {
+                GoalState::Met => AgentGoalMet(payload).to_record(),
+                _ => AgentGoalGivenUp(payload).to_record(),
+            };
+            record
+                .map(Some)
+                .map_err(|e| crate::Error::Session(format!("couldn't build an event record: {e}")))
+        })?;
+    let _ = agents.sessions().relay_pending_events(agents.config());
     Ok(closed)
 }
 

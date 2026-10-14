@@ -79,6 +79,11 @@ pub const MAX_SESSIONS: usize = 50;
 
 const DB_FILE: &str = "sessions.db";
 
+/// The name under which `sessions.db`'s own outbox rows are relayed — see [`adi_events::outbox`].
+/// Part of the idempotency key [`adi_events::outbox::relay`] mints, so it must never change once
+/// anything has shipped.
+const EVENT_SOURCE: &str = "agents";
+
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
                               hidden, runner_state, outcome, runner, starred, launched_by, \
@@ -147,6 +152,76 @@ impl SessionStore {
     /// showing an empty list — so those keep their `Result`.
     fn read<T: Default>(&self, f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
         self.conn().ok().map(|conn| f(&conn)).unwrap_or_default()
+    }
+
+    /// Run `f`, then write whatever [`EventRecord`](adi_events::EventRecord) it returns into this
+    /// database's own `event_outbox` table in the SAME transaction as whatever write `f` itself
+    /// performed, and commit. Mirrors `adi_tasks::Tasks::with_doc` — see that crate's module docs
+    /// for why a producer's own outbox, not cross-database atomicity, is what "same transaction"
+    /// has to mean once every store here is WAL — and is this crate's answer to the gap flagged on
+    /// the old `Agents::emit_event` (ADI-MONO-149).
+    ///
+    /// `f` makes its write by calling straight back into this store's own mutating methods that
+    /// write with a plain `execute` and no transaction of their own (`record_outcome`,
+    /// `note_idle`, `create_goal`, `delete`, …): they fetch the connection through
+    /// [`conn`](Self::conn), which is cached per path per thread (see [`db::conn`]), so a method
+    /// called from inside `f` reaches the exact connection this call already opened a transaction
+    /// on, and its `execute` lands inside that transaction rather than starting a second one.
+    ///
+    /// **Not every mutating method is safe to call from inside `f`.** [`ask`](Self::ask),
+    /// [`resolve_question`](Self::resolve_question), and [`close_goal`](Self::close_goal) open
+    /// their own transaction internally (a read-then-conditionally-write has to be atomic on its
+    /// own), so calling one of them — or calling this method again — from inside `f` tries to
+    /// `BEGIN` twice and fails outright ("cannot start a transaction within a transaction").
+    /// [`ask_with_outbox`](Self::ask_with_outbox),
+    /// [`resolve_question_with_outbox`](Self::resolve_question_with_outbox), and
+    /// [`close_goal_with_outbox`](Self::close_goal_with_outbox) are those three's own equivalent
+    /// of this method, threading the event through their existing transaction instead of opening
+    /// a second one — use those instead of wrapping them in this.
+    ///
+    /// An event with no sessions.db write behind it at all (an agent definition save is a TOML
+    /// file; a run being told to stop is a fact about a process, not a row) still goes through
+    /// this with `f` doing nothing but building the record: the call becomes one lone `INSERT`
+    /// in its own tiny transaction, which is still strictly more durable than the direct publish
+    /// to the shared log this replaced — the event is a committed local row before this returns,
+    /// so a crash right after can only delay it reaching the shared log, never lose it.
+    ///
+    /// # Errors
+    /// Whatever `f` returns, plus any transaction or store I/O failure.
+    pub(crate) fn with_outbox<T>(
+        &self,
+        f: impl FnOnce() -> Result<(T, Option<adi_events::EventRecord>)>,
+    ) -> Result<T> {
+        let conn = self.conn()?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| db::sql_err("begin a transaction in", e))?;
+        let (result, record) = f()?;
+        if let Some(record) = &record {
+            adi_events::outbox::write(&tx, &record.name, &record.payload).map_err(|e| {
+                Error::Session(format!("couldn't queue an event in the session database: {e}"))
+            })?;
+        }
+        tx.commit()
+            .map_err(|e| db::sql_err("commit a transaction in", e))?;
+        Ok(result)
+    }
+
+    /// Forward whatever is sitting in this store's local outbox table into the shared event log
+    /// (see [`adi_events::outbox::relay`]). [`with_outbox`](Self::with_outbox) does not call this
+    /// itself — unlike `adi_tasks::Tasks`, this store holds no [`Config`](adi_config::Config) of
+    /// its own to find the shared log with, so [`Agents`](crate::Agents) (which has one) calls
+    /// this right after every [`with_outbox`](Self::with_outbox), and the app's periodic sweep
+    /// calls it on a schedule to catch up a backlog a crash left behind.
+    ///
+    /// # Errors
+    /// [`Error::Session`] if either database can't be reached.
+    pub(crate) fn relay_pending_events(&self, config: &adi_config::Config) -> Result<usize> {
+        let conn = self.conn()?;
+        let log = adi_events::Events::with_config(config.clone());
+        adi_events::outbox::relay(&conn, &log, EVENT_SOURCE, 200).map_err(|e| {
+            Error::Session(format!("couldn't relay events from the session database: {e}"))
+        })
     }
 
     /// Where a session's raw output goes.
@@ -911,6 +986,26 @@ impl SessionStore {
         questions::register(&conn, agent, id, req)
     }
 
+    /// [`ask`](Self::ask), with `on_write` called with the stored ask just before the write
+    /// commits, so its [`EventRecord`](adi_events::EventRecord) lands in the local outbox table in
+    /// the SAME transaction (ADI-MONO-149). `register` already opens its own transaction (see
+    /// [`questions::register_with`]'s doc comment), so this does not go through
+    /// [`with_outbox`](Self::with_outbox) — there would be two transactions wanting to open on the
+    /// same connection.
+    ///
+    /// # Errors
+    /// As [`ask`](Self::ask), plus whatever `on_write` returns.
+    pub(crate) fn ask_with_outbox(
+        &self,
+        agent: &str,
+        id: &str,
+        req: &AskRequest,
+        on_write: impl FnOnce(&Ask) -> Result<Option<adi_events::EventRecord>>,
+    ) -> Result<Ask> {
+        let conn = self.conn()?;
+        questions::register_with(&conn, agent, id, req, on_write)
+    }
+
     /// Settle an ask — `ask_id` naming one, or `None` taking whatever this conversation has pending
     /// (what an ordinary typed reply means). `None` back means someone else settled it first.
     ///
@@ -925,6 +1020,25 @@ impl SessionStore {
     ) -> Result<Option<Ask>> {
         let conn = self.conn()?;
         questions::resolve(&conn, agent, id, ask_id, answer)
+    }
+
+    /// [`resolve_question`](Self::resolve_question), with `on_write` called with the settled ask
+    /// (when there was one) just before the write commits — see
+    /// [`ask_with_outbox`](Self::ask_with_outbox)'s doc comment for why this bypasses
+    /// [`with_outbox`](Self::with_outbox) (ADI-MONO-149).
+    ///
+    /// # Errors
+    /// As [`resolve_question`](Self::resolve_question), plus whatever `on_write` returns.
+    pub(crate) fn resolve_question_with_outbox(
+        &self,
+        agent: &str,
+        id: &str,
+        ask_id: Option<&str>,
+        answer: &Answer,
+        on_write: impl FnOnce(Option<&Ask>) -> Result<Option<adi_events::EventRecord>>,
+    ) -> Result<Option<Ask>> {
+        let conn = self.conn()?;
+        questions::resolve_with(&conn, agent, id, ask_id, answer, on_write)
     }
 
     /// What this conversation is waiting on, if it is waiting on anything.
@@ -985,6 +1099,24 @@ impl SessionStore {
     pub fn close_goal(&self, goal_id: &str, state: GoalState, note: &str) -> Result<GoalClosed> {
         let conn = self.conn()?;
         goals::close(&conn, goal_id, state, note)
+    }
+
+    /// [`close_goal`](Self::close_goal), with `on_write` called with the closed goal — only when
+    /// this call is the one that closed it — just before the write commits. See
+    /// [`ask_with_outbox`](Self::ask_with_outbox)'s doc comment for why this bypasses
+    /// [`with_outbox`](Self::with_outbox) (ADI-MONO-149).
+    ///
+    /// # Errors
+    /// As [`close_goal`](Self::close_goal), plus whatever `on_write` returns.
+    pub(crate) fn close_goal_with_outbox(
+        &self,
+        goal_id: &str,
+        state: GoalState,
+        note: &str,
+        on_write: impl FnOnce(&Goal) -> Result<Option<adi_events::EventRecord>>,
+    ) -> Result<GoalClosed> {
+        let conn = self.conn()?;
+        goals::close_with(&conn, goal_id, state, note, on_write)
     }
 
     /// Stamp every open goal of a conversation as just put to it, and count the nudge.

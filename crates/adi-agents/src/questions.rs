@@ -27,6 +27,8 @@
 //! — the ask is already settled, and going back through `reply` would look for a second question to
 //! answer.
 
+use adi_events::Event as _;
+
 use crate::store::{AnsweredBy, now_ms};
 use crate::{Agents, Sent};
 
@@ -57,15 +59,26 @@ pub fn tick(agents: &Agents) -> Vec<Settled> {
     let mut settled = Vec::new();
     for (ask, default) in store.overdue_questions(now) {
         // Claimed before anything is said, so a person answering this instant either wins outright
-        // or is refused — never both.
-        match store.resolve_question(&ask.agent, &ask.conv, Some(&ask.id), &default) {
-            Ok(Some(_)) => {}
-            // Somebody answered between the query and here. Nothing to do, and nothing to report:
-            // the conversation is moving again by the route it should have.
-            Ok(None) => continue,
-            // A store that will not take the claim will not take it on the next tick either;
-            // reporting it as a settlement would be a lie, so it is left overdue and visible.
-            Err(_) => continue,
+        // or is refused — never both. The claim and the event it announces are made atomic here
+        // (ADI-MONO-149): `resolve_question` already opens its own transaction, so this goes
+        // through `resolve_question_with_outbox` rather than `agents.with_event` — see
+        // `SessionStore::ask_with_outbox`'s doc comment for why.
+        let claimed = store
+            .resolve_question_with_outbox(&ask.agent, &ask.conv, Some(&ask.id), &default, |settled| {
+                settled
+                    .map(|_| Agents::answered_event(&ask, AnsweredBy::Default).to_record())
+                    .transpose()
+                    .map_err(|e| crate::Error::Session(format!("couldn't build an event record: {e}")))
+            })
+            .map(|settled| settled.is_some())
+            .unwrap_or(false);
+        let _ = agents.sessions().relay_pending_events(agents.config());
+        if !claimed {
+            // Either somebody answered between the query and here (nothing to do, and nothing to
+            // report: the conversation is moving again by the route it should have), or the store
+            // would not take the claim — which it will not take on the next tick either, so
+            // reporting it as a settlement would be a lie and it is left overdue and visible.
+            continue;
         }
         let sent = agents.deliver(
             &ask.agent,
@@ -73,7 +86,6 @@ pub fn tick(agents: &Agents) -> Vec<Settled> {
             &[ask.marker(&default)],
             &ask.render(&default),
         );
-        agents.emit_answered(&ask, AnsweredBy::Default);
         settled.push(Settled {
             id: ask.id.clone(),
             agent: ask.agent.clone(),

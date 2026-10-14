@@ -65,6 +65,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use adi_config::{Config, ConfigFile, now_unix};
+use adi_events::Event as _;
 
 pub use agent::{
     Agent, AgentManifest, MANIFEST_VERSION, RawAgentArguments, SecretAttachment, StoredAgent,
@@ -688,9 +689,14 @@ impl Agents {
         if needs_runtime(&manifest) {
             hydrate_runtime(&mut manifest, &self.backend_catalog()?);
         }
-        self.emit_event(&AgentSaved {
-            agent: name.to_string(),
-        });
+        self.with_event(|| {
+            Ok((
+                (),
+                Some(AgentSaved {
+                    agent: name.to_string(),
+                }),
+            ))
+        })?;
         Ok(Agent {
             name: name.to_string(),
             manifest,
@@ -728,9 +734,14 @@ impl Agents {
         arguments::validate_builtin(&manifest)?;
         llm::validate_rows(&manifest.backends)?;
         file.save(&manifest)?;
-        self.emit_event(&AgentSaved {
-            agent: name.to_string(),
-        });
+        self.with_event(|| {
+            Ok((
+                (),
+                Some(AgentSaved {
+                    agent: name.to_string(),
+                }),
+            ))
+        })?;
         Ok(())
     }
 
@@ -745,17 +756,24 @@ impl Agents {
             enforced,
             "agent-to-agent launch outside can_spawn"
         );
-        self.emit_event(&AgentSpawnRefused {
-            caller: caller.to_string(),
-            target: target.to_string(),
-            run_id: run_id.to_string(),
-            enforced,
+        let _ = self.with_event(|| {
+            Ok((
+                (),
+                Some(AgentSpawnRefused {
+                    caller: caller.to_string(),
+                    target: target.to_string(),
+                    run_id: run_id.to_string(),
+                    enforced,
+                }),
+            ))
         });
     }
 
-    /// Announce that a question is settled, so whatever told a person about it can say so too.
-    pub(crate) fn emit_answered(&self, ask: &Ask, by: AnsweredBy) {
-        self.emit_event(&AgentQuestionAnswered {
+    /// The payload [`AgentQuestionAnswered`] carries for `ask`, settled `by` whoever claimed it —
+    /// shared by every caller that bundles it with the [`resolve_question`](SessionStore)
+    /// claim that settled the ask, inside the same [`with_event`](Self::with_event) transaction.
+    fn answered_event(ask: &Ask, by: AnsweredBy) -> AgentQuestionAnswered {
+        AgentQuestionAnswered {
             agent: ask.agent.clone(),
             conv: ask.conv.clone(),
             ask: ask.id.clone(),
@@ -763,21 +781,59 @@ impl Agents {
                 AnsweredBy::Human => "human".to_string(),
                 AnsweredBy::Default => "default".to_string(),
             },
-        });
+        }
     }
 
-    /// Publish an `adi.agents.*` event onto the shared log. Best-effort and fire-and-forget: this
-    /// registry neither knows nor cares whether anything subscribes, and a failure to reach the
-    /// log must never fail the lifecycle action that caused it. Emitted against **this store's**
-    /// [`Config`], so a scratch store stays isolated.
+    /// This registry's choke point for `adi.agents.*` events (ADI-MONO-149) — the counterpart of
+    /// `adi_tasks::Tasks::with_doc`. `f` makes whatever sessions.db write the event it builds
+    /// describes (many of these events exist only because some other call already decided to
+    /// make one) and hands back the typed event alongside its own result; that event's record is
+    /// written into `sessions.db`'s own `event_outbox` table in the SAME transaction as `f`'s
+    /// write, via [`SessionStore::with_outbox`](store::SessionStore), before anything commits —
+    /// see that method's doc comment for how `f` reaches the same transaction without taking a
+    /// connection parameter, and for why an event with no accompanying write still gets the same
+    /// durability. `None` from `f` writes no event and still commits whatever it did; a caller
+    /// that wants to emit unconditionally returns `Some` unconditionally.
     ///
-    /// This is a direct publish, not the transactional-outbox write `adi_tasks::Tasks::with_doc`
-    /// uses — a crash in the narrow window between a sessions-table write committing and this
-    /// call can still drop the event. Worth tightening the same way tasks already are, but this
-    /// registry's mutations are not funneled through one `with_doc`-shaped choke point the way
-    /// tasks' are, so doing it here is its own piece of work, not a one-line change.
-    fn emit_event(&self, event: &impl adi_events::Event) {
-        let _ = adi_events::Events::with_config(self.config.clone()).emit_event(event);
+    /// Relay to the shared log is best-effort and happens after commit, exactly as
+    /// `with_doc`'s does: the event is already durable in the outbox row just committed, so a
+    /// relay failure here only delays it reaching the shared log — the next relay (this store's
+    /// own next write, or the app's periodic sweep) catches up whatever a crash left behind.
+    ///
+    /// # Errors
+    /// Whatever `f` returns, plus any transaction, encoding, or store I/O failure.
+    fn with_event<T, E: adi_events::Event>(
+        &self,
+        f: impl FnOnce() -> Result<(T, Option<E>)>,
+    ) -> Result<T> {
+        self.with_event_record(|| {
+            let (value, event) = f()?;
+            let record = event
+                .map(|event| event.to_record())
+                .transpose()
+                .map_err(|e| Error::Session(format!("couldn't build an event record: {e}")))?;
+            Ok((value, record))
+        })
+    }
+
+    /// What [`with_event`](Self::with_event) itself is built on, and the one to reach for
+    /// directly when a caller's possible events are not all the same type (so they cannot flow
+    /// through `with_event`'s own `E: Event` type parameter) and it still has a plain
+    /// [`SessionStore::with_outbox`](store::SessionStore) write to make atomic with them — unlike
+    /// `goals`'s `close`, which needs the `_with_outbox` sibling of a self-transacting method
+    /// instead (see `SessionStore::ask_with_outbox`'s doc comment). `f` builds the already-encoded
+    /// [`EventRecord`](adi_events::EventRecord) itself.
+    ///
+    /// # Errors
+    /// Whatever `f` returns, plus any transaction or store I/O failure.
+    fn with_event_record<T>(
+        &self,
+        f: impl FnOnce() -> Result<(T, Option<adi_events::EventRecord>)>,
+    ) -> Result<T> {
+        let store = self.sessions();
+        let result = store.with_outbox(f)?;
+        let _ = store.relay_pending_events(&self.config);
+        Ok(result)
     }
 
     /// Renames an agent and its completed history, keeping the manifest and session ids intact.
@@ -1412,12 +1468,19 @@ impl Agents {
             &record.id,
             message,
         )?;
-        // Only now, with this run's own files in place: pruning first would count it as one of the
-        // old ones. A run somebody else is still watching is never swept.
-        store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
-
         let launch = launch_of(&agent, runner.as_ref(), &session);
-        self.emit_event(&AgentRunStarted::of(name, message, &launch));
+        let event = AgentRunStarted::of(name, message, &launch);
+        // Pruning rides in the same outbox transaction as the event (ADI-MONO-149) — not because
+        // the two are related, but because this is the last sessions.db write this call makes, and
+        // bundling the event with it is what closes the gap between "the write committed" and "the
+        // event is durable" rather than leaving the event a direct, droppable publish. Pruning
+        // happens only now, with this run's own files in place: doing it any earlier would count
+        // this very run as one of the old ones. A run somebody else is still watching is never
+        // swept.
+        self.with_event(|| {
+            store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
+            Ok(((), Some(event)))
+        })?;
         Ok(launch)
     }
 
@@ -1539,9 +1602,15 @@ impl Agents {
             }
         }
         let images = self.sessions().resolve_attachments(image_ids);
+        // The claim and the event it announces are made atomic here (ADI-MONO-149):
+        // `resolve_question` already opens its own transaction (see
+        // `SessionStore::ask_with_outbox`'s doc comment for why), so this goes through
+        // `resolve_question_with_outbox` rather than `with_event`. `settled` is `None` either
+        // because nothing was pending or because the store couldn't be reached, and neither case
+        // has anything to announce.
         let settled = self
             .sessions()
-            .resolve_question(
+            .resolve_question_with_outbox(
                 name,
                 conv_id,
                 None,
@@ -1550,9 +1619,15 @@ impl Agents {
                     by: AnsweredBy::Human,
                     replies: vec![message.to_string()],
                 },
+                |ask| {
+                    ask.map(|ask| Self::answered_event(ask, AnsweredBy::Human).to_record())
+                        .transpose()
+                        .map_err(|e| Error::Session(format!("couldn't build an event record: {e}")))
+                },
             )
             .ok()
             .flatten();
+        let _ = self.sessions().relay_pending_events(&self.config);
         match settled {
             Some(ask) => {
                 // Both tags: which ask this closes, and — on a machine with more than one voice —
@@ -1564,9 +1639,7 @@ impl Agents {
                     by: AnsweredBy::Human,
                     replies: Vec::new(),
                 }));
-                let sent = self.deliver_with(name, conv_id, &markers, message, &images, mode)?;
-                self.emit_answered(&ask, AnsweredBy::Human);
-                Ok(sent)
+                self.deliver_with(name, conv_id, &markers, message, &images, mode)
             }
             None => self.deliver_with(name, conv_id, markers, message, &images, mode),
         }
@@ -1656,18 +1729,25 @@ impl Agents {
             by: AnsweredBy::Human,
             replies: replies.to_vec(),
         };
+        // The claim and the event it announces are made atomic here (ADI-MONO-149):
+        // `resolve_question` already opens its own transaction, so this goes through
+        // `resolve_question_with_outbox` rather than `with_event` — see
+        // `SessionStore::ask_with_outbox`'s doc comment for why.
         let ask = self
             .sessions()
-            .resolve_question(name, conv_id, ask_id, &answer)?
+            .resolve_question_with_outbox(name, conv_id, ask_id, &answer, |ask| {
+                ask.map(|ask| Self::answered_event(ask, AnsweredBy::Human).to_record())
+                    .transpose()
+                    .map_err(|e| Error::Session(format!("couldn't build an event record: {e}")))
+            })?
             .ok_or_else(|| {
                 Error::NotFound(format!(
                     "{name}: no question waiting in {conv_id} — it was answered already, or the \
                      deadline took its default"
                 ))
             })?;
-        let sent = self.deliver(name, conv_id, &[ask.marker(&answer)], &ask.render(&answer))?;
-        self.emit_answered(&ask, AnsweredBy::Human);
-        Ok(sent)
+        let _ = self.sessions().relay_pending_events(&self.config);
+        self.deliver(name, conv_id, &[ask.marker(&answer)], &ask.render(&answer))
     }
 
     #[must_use]
@@ -1810,7 +1890,10 @@ impl Agents {
         };
 
         let launch = self.start_turn(&agent, &store, runner.as_ref(), &record, &next)?;
-        self.emit_event(&AgentRunStarted::of(name, &next.text, &launch));
+        // No sessions.db write left to bundle this with — `start_turn` already made its own and
+        // returned — so this is `f: || Ok(())`, same durability `with_event` gives every event
+        // (ADI-MONO-149), just with nothing else to make atomic with it.
+        self.with_event(|| Ok(((), Some(AgentRunStarted::of(name, &next.text, &launch)))))?;
         Ok(Sent::Started(launch))
     }
 
@@ -2080,7 +2163,12 @@ impl Agents {
         let Ok(launch) = self.start_turn(agent, &store, runner.as_ref(), &record, &message) else {
             return false;
         };
-        self.emit_event(&AgentRunStarted::of(&agent.name, &message.text, &launch));
+        let _ = self.with_event(|| {
+            Ok((
+                (),
+                Some(AgentRunStarted::of(&agent.name, &message.text, &launch)),
+            ))
+        });
         true
     }
 
@@ -2191,12 +2279,14 @@ impl Agents {
         outcome.terminal_reason = Some(LAUNCH_FAILED.to_string());
         outcome.is_error = true;
         // Only the writer announces, as everywhere else an ending is recorded: the record settles
-        // the race, so this cannot double up with a watcher that notices the same run.
-        if store
-            .record_outcome(agent, run_id, &outcome)
-            .unwrap_or(false)
-        {
-            self.emit_event(&AgentRunFinished {
+        // the race, so this cannot double up with a watcher that notices the same run. The claim
+        // and the event it announces are made atomic here (ADI-MONO-149), inside the one
+        // `with_event` transaction, rather than racing a crash between them.
+        let _ = self.with_event(|| {
+            let recorded = store
+                .record_outcome(agent, run_id, &outcome)
+                .unwrap_or(false);
+            let event = recorded.then(|| AgentRunFinished {
                 agent: agent.to_string(),
                 run_id: run_id.to_string(),
                 terminal_reason: outcome.terminal_reason.clone(),
@@ -2206,7 +2296,8 @@ impl Agents {
                 cost_micro_usd: None,
                 result_head: outcome.result_head.clone(),
             });
-        }
+            Ok(((), event))
+        });
         Err(error)
     }
 
@@ -2530,25 +2621,31 @@ impl Agents {
                 store::now_ms(),
             );
             // Only the writer announces. A database error is not a reason to hold a listing up:
-            // the run stays outcome-less and the next look tries again.
-            if store
-                .record_outcome(&agent.name, &run.run_id, &outcome)
-                .unwrap_or(false)
-            {
+            // the run stays outcome-less and the next look tries again. The claim and the event it
+            // announces are made atomic here (ADI-MONO-149).
+            let recorded = self
+                .with_event(|| {
+                    let recorded = store
+                        .record_outcome(&agent.name, &run.run_id, &outcome)
+                        .unwrap_or(false);
+                    let event = recorded.then(|| AgentRunFinished {
+                        agent: agent.name.clone(),
+                        run_id: run.run_id.clone(),
+                        terminal_reason: outcome.terminal_reason.clone(),
+                        is_error: outcome.is_error,
+                        duration_ms: outcome.duration_ms,
+                        active_ms: outcome.active_ms,
+                        cost_micro_usd: outcome.cost_micro_usd,
+                        result_head: outcome.result_head.clone(),
+                    });
+                    Ok((recorded, event))
+                })
+                .unwrap_or(false);
+            if recorded {
                 // Hung off the same `true`, and that is the point: the one process that recorded the
                 // ending is the one that acts on it, so sixteen watchers of a spent backend produce
                 // one hold, one switch and one notice rather than sixteen.
                 self.fail_over(agent, &store, &run.run_id, &content, &outcome);
-                self.emit_event(&AgentRunFinished {
-                    agent: agent.name.clone(),
-                    run_id: run.run_id.clone(),
-                    terminal_reason: outcome.terminal_reason.clone(),
-                    is_error: outcome.is_error,
-                    duration_ms: outcome.duration_ms,
-                    active_ms: outcome.active_ms,
-                    cost_micro_usd: outcome.cost_micro_usd,
-                    result_head: outcome.result_head.clone(),
-                });
             }
             run.outcome = Some(outcome);
         }
@@ -2571,12 +2668,10 @@ impl Agents {
         let pending = awaits::Awaits::with_config(self.config.clone());
         for run in runs.iter().filter(|r| r.state == RunLifecycle::Waiting) {
             let turn = store.turn_count(&agent.name, &run.run_id);
-            if !store
-                .note_idle(&agent.name, &run.run_id, turn)
-                .unwrap_or(false)
-            {
-                continue;
-            }
+            // Read eagerly, whether or not this call turns out to be the one that wins the gate
+            // below — the same tradeoff `note_finished`'s `outcome` already makes, so the event can
+            // be built *before* the claim and committed in the same transaction as it (ADI-MONO-149)
+            // rather than racing a crash between them.
             let pending_awaits: Vec<String> = pending
                 .for_conversation(&agent.name, &run.run_id)
                 .iter()
@@ -2586,12 +2681,18 @@ impl Agents {
                 .last_turn(&agent.name, &run.run_id)
                 .map(|turn| store::head(&turn.text))
                 .unwrap_or_default();
-            self.emit_event(&AgentRunIdle {
-                agent: agent.name.clone(),
-                run_id: run.run_id.clone(),
-                state: "waiting".to_string(),
-                pending_awaits,
-                result_head,
+            let _ = self.with_event(|| {
+                let noted = store
+                    .note_idle(&agent.name, &run.run_id, turn)
+                    .unwrap_or(false);
+                let event = noted.then(|| AgentRunIdle {
+                    agent: agent.name.clone(),
+                    run_id: run.run_id.clone(),
+                    state: "waiting".to_string(),
+                    pending_awaits,
+                    result_head,
+                });
+                Ok(((), event))
             });
         }
     }
@@ -2836,9 +2937,17 @@ impl Agents {
         // rather than marching on into a conversation somebody has just interrupted.
         store.clear_queue(name, run_id)?;
         if stopped {
-            self.emit_event(&AgentRunStopped {
-                agent: name.to_string(),
-                run_id: Some(run_id.to_string()),
+            // `stopped` is a fact about the process `runner.stop` just signaled, not a sessions.db
+            // row — there is nothing to bundle this with, so `f` only builds the event; it still
+            // gets the same outbox durability every event does (ADI-MONO-149).
+            let _ = self.with_event(|| {
+                Ok((
+                    (),
+                    Some(AgentRunStopped {
+                        agent: name.to_string(),
+                        run_id: Some(run_id.to_string()),
+                    }),
+                ))
             });
         }
         Ok(stopped)
@@ -2870,14 +2979,18 @@ impl Agents {
         if let Some(runner) = store.get(name, run_id).as_ref().and_then(runner_of) {
             runner.stop(&store.session(name, run_id), STOP_GRACE)?;
         }
-        let deleted = store.delete(name, run_id)?;
-        if deleted {
-            let _ =
-                awaits::Awaits::with_config(self.config.clone()).forget_conversation(name, run_id);
-            self.emit_event(&AgentRunDeleted {
+        // The delete and the event it announces are made atomic here (ADI-MONO-149).
+        let deleted = self.with_event(|| {
+            let deleted = store.delete(name, run_id)?;
+            let event = deleted.then(|| AgentRunDeleted {
                 agent: name.to_string(),
                 run_id: run_id.to_string(),
             });
+            Ok((deleted, event))
+        })?;
+        if deleted {
+            let _ =
+                awaits::Awaits::with_config(self.config.clone()).forget_conversation(name, run_id);
         }
         Ok(deleted)
     }
@@ -2963,9 +3076,15 @@ impl Agents {
             }
         }
         if stopped {
-            self.emit_event(&AgentRunStopped {
-                agent: name.to_string(),
-                run_id: None,
+            // As in `stop_run`: a fact about processes, nothing to bundle this with.
+            let _ = self.with_event(|| {
+                Ok((
+                    (),
+                    Some(AgentRunStopped {
+                        agent: name.to_string(),
+                        run_id: None,
+                    }),
+                ))
             });
         }
         Ok(stopped)
@@ -2986,8 +3105,16 @@ impl Agents {
             // conversation something, and there is nothing left to ask. Closed ones stay as
             // history, beside the transcript that shows how they were met.
             let _ = self.sessions().forget_goals(name);
-            self.emit_event(&AgentDeleted {
-                agent: name.to_string(),
+            // The definition this announces is removed above, as a TOML file — there is no
+            // sessions.db row to make this atomic with (`forget_questions`/`forget_goals` are
+            // unconditional best-effort cleanup, not what this event is about).
+            let _ = self.with_event(|| {
+                Ok((
+                    (),
+                    Some(AgentDeleted {
+                        agent: name.to_string(),
+                    }),
+                ))
             });
         }
         Ok(removed)
@@ -3032,10 +3159,15 @@ impl Agents {
         let session = store.session(&agent.name, &record.id);
         store.append_turn(&agent.name, &record.id, user_turn(message))?;
         runner.send(&spec, &session, message)?;
-        store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
         let launch = launch_of(&agent, &runner, &session);
-        self.emit_event(&AgentRunStarted::of(name, message, &launch));
+        let event = AgentRunStarted::of(name, message, &launch);
+        // Pruning rides in the same outbox transaction as the event, exactly as `launch_run` does
+        // — see that call site's comment (ADI-MONO-149).
+        self.with_event(|| {
+            store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
+            Ok(((), Some(event)))
+        })?;
         Ok(launch)
     }
 
