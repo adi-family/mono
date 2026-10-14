@@ -20,7 +20,7 @@ a later run of the agent picks up the changes.
 | `secrets.md` | store a secret, connect Gmail/Google via OAuth, or send a create form |
 | `db.md` | store data that outlives a run, or that another agent or a dashboard reads |
 | `channels.md` | connect Telegram/Slack to an agent, or post back mid-run |
-| `workflows.md` | write or work with a TypeScript workflow (checkpoints, schedules, events, rewind) — not on the release install yet — dev flavour (feat/workflows) only, until released |
+| `workflows.md` | write or work with a TypeScript workflow (checkpoints, schedules, events, rewind) |
 
 Everything is under the mono store at `~/.adi/mono` and browsable in the control panel at
 `http://app.adi`. Prefer the `{{cli}}` CLI and the `/api/*` endpoints over editing store files by
