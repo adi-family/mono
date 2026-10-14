@@ -43,7 +43,9 @@ checkpoint replays instantly from its journal; reusing a key fails the whole run
                                       before-act, or a dedupe key) whenever it has a real effect.
   ctx.task({key,title,agent|person,instructions?,input?,output?,timeout?,project?,cwd?})
                                       a real task; resolves your `output` shape or
-                                      {timed_out:true}; throws if the task is given up on.
+                                      {timed_out:true} (which also closes the task as a fact, so
+                                      it never lingers in "Needs your input"); throws if the task
+                                      is given up on.
   ctx.ask({key, person, text})       a human question, as a task with the same shapes.
   ctx.run({key, workflow, input?})   a child run, keyed to this one; waits for its result.
   ctx.waitFor({key, event, where?, timeout?})   waits for a matching platform event.
@@ -55,6 +57,13 @@ checkpoint replays instantly from its journal; reusing a key fails the whole run
 NEVER CALL Date.now() / Math.random() / crypto.randomUUID() OUTSIDE ctx.step. A replay has to
 compute the identical thing up to wherever it resumes; only a ctx.step's own fn() — and only
 the first time it runs — may touch the clock, randomness, or the outside world.
+
+A CRASHED ATTEMPT IS RETRIED, NOT FAILED. Only your own code failing the workflow (a thrown
+error, an uncaught TaskGaveUp, an output shape rejecting the result) fails the run. The `bun`
+process dying with no message at all (OOM, a segfault, kill -9, this engine's own watchdog) is
+transient: retried with backoff (30s, then 2min), and only the 3rd consecutive crash in a row
+actually fails the run. Real progress on a later attempt resets that count to zero — reason
+enough, again, for every ctx.step with a real effect to be idempotent.
 
 RETRIGGER GUARD: an event-started run carries its own causer. Starting a workflow from an event
 whose causation chain already includes a run of that SAME workflow (up to 8 hops through other
@@ -369,6 +378,7 @@ mod tests {
         for needle in [
             "ctx.step", "ctx.task", "ctx.ask", "ctx.run", "ctx.waitFor", "ctx.sleep",
             "5-FIELD", "Date.now", "8 hops", "30 days", "tasks complete", "--dispatch",
+            "RETRIED, NOT FAILED", "3rd consecutive crash",
         ] {
             assert!(LLM_HELP.contains(needle), "missing {needle:?} in LLM_HELP");
         }

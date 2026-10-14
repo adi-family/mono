@@ -37,6 +37,7 @@ pub enum Outcome {
     Failed(String),
     GaveUp(String),
     Suspended,
+    Crashed(String),
 }
 ```
 
@@ -495,6 +496,8 @@ pub struct RunRow {
     pub root_task: Option<String>,
     pub finished_at: Option<u64>,
     pub created_at: u64,
+    pub crash_streak: u32,
+    pub next_attempt_at: Option<u64>,
 }
 ```
 

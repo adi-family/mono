@@ -34,6 +34,17 @@ use crate::store::{RunRow, StepKind, StepOutcome, StepRecord, WorkflowStore};
 /// steer `adi-triggers`' own supervised-vs-fired split gives.
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Escalating backoff before retrying a transient `bun` crash — Igor's own numbers (ADI-MONO-151).
+/// Indexed by `streak - 1`; only `[0]`/`[1]` are ever read, since a run that reaches
+/// [`MAX_CRASH_STREAK`] fails outright rather than waiting out the third tier for an attempt it
+/// would also deny — kept at the spec's own length anyway, for anyone checking this against it.
+const CRASH_BACKOFF: [Duration; 3] =
+    [Duration::from_secs(30), Duration::from_secs(120), Duration::from_secs(600)];
+
+/// How many consecutive transient `bun` crashes one run tolerates before the run itself fails —
+/// "a bun crash is transient, not permanent," up to a point (ADI-MONO-151).
+const MAX_CRASH_STREAK: u32 = 3;
+
 /// How this attempt ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
@@ -47,6 +58,13 @@ pub enum Outcome {
     GaveUp(String),
     /// A checkpoint has nothing resolved yet — nothing wrong; try again next tick.
     Suspended,
+    /// The `bun` process ended without ever sending a terminal message — an OOM, a segfault, a
+    /// bare `kill -9` of `bun` alone while `adi-app` stays up, or this crate's own
+    /// [`ATTEMPT_TIMEOUT`] watchdog — never something the workflow body itself threw
+    /// (ADI-MONO-151). The payload is whatever was left in the process's `stderr`, if anything.
+    /// [`Attempt::finalize`] retries this with backoff rather than failing the run outright,
+    /// up to [`MAX_CRASH_STREAK`] consecutive times.
+    Crashed(String),
 }
 
 /// Drives one run's attempts: spawns the harness, answers its checkpoints, finalizes the root
@@ -85,7 +103,16 @@ impl Attempt {
     /// everything exactly as it was on [`Outcome::Suspended`] — there is nothing to finalize, and
     /// no event to emit, for "nothing happened this attempt".
     pub fn run(&self, run: &RunRow) -> Outcome {
+        // Count journal rows before and after: real forward progress resets any crash streak
+        // this run was carrying — checked here, ahead of `finalize`, so a crash streak bump for
+        // *this same* attempt (one that made progress and *then* crashed before its terminal
+        // message) still starts counting fresh at 1, not on top of whatever came before.
+        let steps_before = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
         let outcome = self.attempt_once(run);
+        let steps_after = self.store.list_steps(&run.run_key).map(|s| s.len()).unwrap_or(0);
+        if steps_after > steps_before {
+            let _ = self.store.clear_crash_streak(&run.run_key);
+        }
         self.finalize(run, &outcome);
         outcome
     }
@@ -147,17 +174,15 @@ impl Attempt {
         let outcome = loop {
             let mut line = String::new();
             match stdout.read_line(&mut line) {
-                Ok(0) => {
-                    use std::io::Read as _;
-                    let mut err_text = String::new();
-                    let _ = stderr.read_to_string(&mut err_text);
-                    break Outcome::Failed(format!(
-                        "the run harness closed its output before a terminal message (stderr: {})",
-                        err_text.trim()
-                    ));
-                }
+                Ok(0) => break Outcome::Crashed(stderr_tail(&mut stderr)),
                 Ok(_) => {}
-                Err(e) => break Outcome::Failed(format!("couldn't read the run harness: {e}")),
+                Err(e) => {
+                    tracing::debug!(
+                        run_key = %run.run_key, error = %e,
+                        "couldn't read the run harness — treating as a transient crash"
+                    );
+                    break Outcome::Crashed(stderr_tail(&mut stderr));
+                }
             }
             let request: Request = match serde_json::from_str(line.trim()) {
                 Ok(r) => r,
@@ -182,10 +207,14 @@ impl Attempt {
                 Err(reason) => break Outcome::Failed(reason),
             };
             if let Err(e) = writeln!(stdin, "{reply}") {
-                break Outcome::Failed(format!("couldn't write a reply to the run harness: {e}"));
+                tracing::debug!(
+                    run_key = %run.run_key, error = %e,
+                    "couldn't write a reply to the run harness — treating as a transient crash"
+                );
+                break Outcome::Crashed(stderr_tail(&mut stderr));
             }
             if stdin.flush().is_err() {
-                break Outcome::Failed("couldn't flush a reply to the run harness".to_string());
+                break Outcome::Crashed(stderr_tail(&mut stderr));
             }
         };
 
@@ -394,6 +423,23 @@ impl Attempt {
                 .unwrap_or_else(|| task.task.created_at.saturating_mul(1000));
             let age_ms = crate::now_ms().saturating_sub(started_at_ms);
             if age_ms >= timeout_ms {
+                // ADI-MONO-151: a timed-out `ctx.task`/`ctx.ask` must not leave its underlying
+                // task sitting in "Needs your input" forever — close it as a fact, the same way
+                // a person giving up on it by hand would. Any error other than "it's not open
+                // any more" (a race: a person resolved it in the instant between the read above
+                // and this write) is surfaced, since silently losing this would leave the task
+                // behind exactly as before this fix.
+                if let Err(e) = self.tasks.give_up(
+                    &task.task.id,
+                    &format!(
+                        "timed out after {} (workflow run {})",
+                        format_duration_ms(timeout_ms),
+                        run.run_key
+                    ),
+                ) && !matches!(e, adi_tasks::Error::NotOpen(_))
+                {
+                    return Err(format!("couldn't close a timed-out step's task: {e}"));
+                }
                 let record =
                     StepRecord::new(key, kind, StepOutcome::TimedOut).with_task(task.task.id.clone());
                 self.store.put_step(&run.run_key, &record).map_err(|e| store_err(&e))?;
@@ -504,6 +550,8 @@ impl Attempt {
 
     /// Complete or give up the run's root task and emit `adi.workflows.run.completed`/`failed` —
     /// everything [`Outcome::Suspended`] deliberately skips, since nothing happened this attempt.
+    /// [`Outcome::Crashed`] is the one case that may *not* end the run at all — see
+    /// [`handle_crash`](Self::handle_crash).
     fn finalize(&self, run: &RunRow, outcome: &Outcome) {
         let Some(root_task) = run.root_task.clone() else {
             return;
@@ -524,11 +572,13 @@ impl Attempt {
                     result: value.clone(),
                     caused_by_run: run.run_key.clone(),
                 });
+                self.close_leftover_tasks(&run.run_key);
             }
             Outcome::Failed(reason) => self.fail(run, &root_task, reason),
             Outcome::GaveUp(reason) => {
                 self.fail(run, &root_task, &format!("task given up on: {reason}"));
             }
+            Outcome::Crashed(reason) => self.handle_crash(run, &root_task, reason),
         }
     }
 
@@ -542,6 +592,52 @@ impl Attempt {
             reason: reason.to_string(),
             caused_by_run: run.run_key.clone(),
         });
+        self.close_leftover_tasks(&run.run_key);
+    }
+
+    /// A transient `bun` crash: bump the run's own streak and either schedule a backoff retry, or
+    /// — once [`MAX_CRASH_STREAK`] consecutive crashes have happened — fail the run for real, the
+    /// same way an uncaught error would. Idempotent across replays the same way everything else
+    /// here is: there is nothing to replay *from*, since each call only ever increments by one,
+    /// exactly once per real crashed attempt.
+    fn handle_crash(&self, run: &RunRow, root_task: &str, reason: &str) {
+        let streak = self.store.bump_crash_streak(&run.run_key).unwrap_or(1);
+        if streak >= MAX_CRASH_STREAK {
+            let tail = if reason.is_empty() {
+                "no stderr output".to_string()
+            } else {
+                reason.to_string()
+            };
+            self.fail(run, root_task, &format!("bun attempt crashed {streak} times: {tail}"));
+            return;
+        }
+        let backoff = CRASH_BACKOFF[usize::try_from(streak - 1).unwrap_or(0)];
+        let next_attempt_at = crate::now_ms().saturating_add(u64::try_from(backoff.as_millis()).unwrap_or(u64::MAX));
+        if let Err(e) = self.store.set_next_attempt_at(&run.run_key, next_attempt_at) {
+            tracing::warn!(run_key = %run.run_key, error = %e, "couldn't schedule a crashed run's next retry");
+        }
+    }
+
+    /// Close every task of `run_key` that's still genuinely unresolved (open, no give-up reason
+    /// of its own yet) — called once the run itself reaches any terminal state, so a `ctx.task`/
+    /// `ctx.ask` the workflow never got back to resolving never lingers in "Needs your input"
+    /// after the run waiting on it is already gone (ADI-MONO-151). Idempotent: a task this
+    /// already closed — by an earlier call here, or by `resolve_task_step`'s own timeout handling
+    /// — is skipped, never re-stamped over its real reason.
+    fn close_leftover_tasks(&self, run_key: &str) {
+        let open = match self.tasks.list(None, None, Some(TaskStatus::Open), None) {
+            Ok(views) => views,
+            Err(e) => {
+                tracing::warn!(run_key = %run_key, error = %e, "couldn't list open tasks to close at run end");
+                return;
+            }
+        };
+        let reason = format!("run {run_key} finished");
+        for view in open {
+            if view.task.workflow_run.as_deref() == Some(run_key) && view.task.give_up_reason.is_none() {
+                let _ = self.tasks.give_up(&view.task.id, &reason);
+            }
+        }
     }
 }
 
@@ -558,6 +654,34 @@ fn outcome_to_reply(outcome: &StepOutcome) -> Value {
 
 fn store_err(e: &crate::error::Error) -> String {
     format!("couldn't read or write the step journal: {e}")
+}
+
+/// Drain whatever's left in `stderr`, trimmed — the only diagnostic a crashed `bun` process
+/// (killed by the OS, or by [`ATTEMPT_TIMEOUT`]'s own watchdog) leaves behind, since it never got
+/// the chance to write a terminal message of its own.
+fn stderr_tail(stderr: &mut std::process::ChildStderr) -> String {
+    use std::io::Read as _;
+    let mut text = String::new();
+    let _ = stderr.read_to_string(&mut text);
+    text.trim().to_string()
+}
+
+/// A short, human label for a millisecond duration — `"30s"`, `"2m"`, `"48h"` — for the give-up
+/// reason a timed-out `ctx.task`/`ctx.ask` is closed with. Never fractional: picks the coarsest
+/// unit that divides evenly, falling back to milliseconds for anything that doesn't.
+fn format_duration_ms(ms: u64) -> String {
+    if ms == 0 || !ms.is_multiple_of(1000) {
+        return format!("{ms}ms");
+    }
+    let secs = ms / 1000;
+    if !secs.is_multiple_of(60) {
+        return format!("{secs}s");
+    }
+    let mins = secs / 60;
+    if !mins.is_multiple_of(60) {
+        return format!("{mins}m");
+    }
+    format!("{}h", mins / 60)
 }
 
 #[cfg(test)]
@@ -834,9 +958,11 @@ mod tests {
     }
 
     /// `ctx.task`'s `timeout` resolves to `{ timed_out: true }` once it elapses, without ever
-    /// validating that sentinel against the step's own `output` shape.
+    /// validating that sentinel against the step's own `output` shape — and (ADI-MONO-151) the
+    /// task it was waiting on is closed as a fact right then, so it never lingers in "Needs your
+    /// input" after the workflow has already moved on.
     #[test]
-    fn a_task_timeout_resolves_to_timed_out() {
+    fn a_task_timeout_resolves_to_timed_out_and_closes_the_underlying_task() {
         let config = scratch("timeout");
         let engine = Engine::with_config(config.clone());
         engine.bootstrap().expect("bootstrap");
@@ -855,13 +981,89 @@ mod tests {
         // already ran one to fetch the output shape) could plausibly cost even under load —
         // the point under test is the *timing logic*, not how fast this machine is right now.
         let started = engine.start_manual("slow", &json!({}), "req-1").expect("start");
+        let tasks = Tasks::with_config(config.clone());
         let first = engine.run_tick();
         assert_eq!(first[0].outcome, Outcome::Suspended, "too soon for the 3s timeout");
+
+        let gate = tasks
+            .list(None, None, Some(TaskStatus::Open), None)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.task.title == "review")
+            .expect("the review task exists while the run waits on it");
 
         std::thread::sleep(Duration::from_millis(3200));
         let second = engine.run_tick();
         assert_eq!(second[0].run_key, started.run_key);
         assert_eq!(second[0].outcome, Outcome::Completed(json!({"r": {"timed_out": true}})));
+
+        let view = tasks.get(&gate.task.id).expect("task");
+        assert_eq!(view.task.status, TaskStatus::Open, "give-up never changes stored status");
+        let reason = view.task.give_up_reason.expect("closed as a fact once timed out");
+        assert!(reason.contains("timed out after 3s"), "unexpected reason: {reason}");
+        assert!(reason.contains(&started.run_key), "unexpected reason: {reason}");
+
+        // Replaying the same resolution again (another attempt reaching the already-journaled
+        // step) must not re-stamp it or error — the journal's own cache hit short-circuits before
+        // `resolve_task_step` ever runs a second time.
+        let third = engine.run_tick();
+        assert!(third.is_empty(), "the run is already finished — nothing left to attempt");
+        assert_eq!(tasks.get(&gate.task.id).unwrap().task.give_up_reason, Some(reason));
+    }
+
+    /// ADI-MONO-151: when a run ends for any reason, every task of its own that's still
+    /// genuinely open (no give-up reason yet) is closed too — not just the root task `finalize`
+    /// already handles. Exercised directly against `Attempt::finalize`, since the realistic
+    /// trigger (the run failing while a non-root step's task is still open, e.g. after
+    /// [`MAX_CRASH_STREAK`] crashes) is easiest to prove at this level rather than by actually
+    /// crashing a real `bun` process.
+    #[test]
+    fn a_run_ending_closes_its_own_still_open_tasks_without_touching_the_real_root_reason() {
+        let config = scratch("leftover-tasks");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let attempt = Attempt::new(config.clone(), store.clone(), tasks.clone(), events.clone());
+
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create run");
+        let root = tasks
+            .create_full(adi_tasks::NewTask {
+                title: "root".into(),
+                workflow_run: Some("r@1".into()),
+                step_key: Some(crate::ROOT_STEP_KEY.into()),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("root task");
+        store.set_root_task("r@1", &root.task.id).expect("set root");
+        let gate = tasks
+            .create_full(adi_tasks::NewTask {
+                title: "gate".into(),
+                workflow_run: Some("r@1".into()),
+                step_key: Some("gate".into()),
+                assignee: Some("igor".into()),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("gate task");
+        // A task on a *different* run must never be touched.
+        let stranger = tasks.create("stranger".into(), None, None, None, None, None).expect("stranger");
+
+        let run = store.get_run("r@1").unwrap().unwrap();
+        attempt.finalize(&run, &Outcome::Failed("boom".into()));
+
+        let root_view = tasks.get(&root.task.id).expect("root");
+        assert_eq!(root_view.task.give_up_reason.as_deref(), Some("boom"), "the real failure reason is preserved");
+
+        let gate_view = tasks.get(&gate.task.id).expect("gate");
+        assert_eq!(gate_view.task.give_up_reason.as_deref(), Some("run r@1 finished"));
+
+        let stranger_view = tasks.get(&stranger.task.id).expect("stranger");
+        assert_eq!(stranger_view.task.give_up_reason, None, "a different run's task is untouched");
+
+        // Calling finalize again (a replay) must not re-stamp the already-closed task.
+        attempt.finalize(&run, &Outcome::Failed("boom".into()));
+        assert_eq!(tasks.get(&gate.task.id).unwrap().task.give_up_reason.as_deref(), Some("run r@1 finished"));
     }
 
     /// An uncaught `TaskGaveUp` fails the whole run: the root task is given up on (never
@@ -980,6 +1182,168 @@ mod tests {
             engine.run_tick()[0].outcome,
             Outcome::Completed(json!({"r": {"answer": "second"}})),
             "the redo answers with the NEW completion, not the stale first one"
+        );
+    }
+
+    /// ADI-MONO-151: a transient crash is retried with backoff, not failed outright — driven
+    /// directly against `Attempt::finalize` (simulating what a real `bun` kill would produce),
+    /// since actually OOM-killing a subprocess deterministically isn't practical in a unit test.
+    #[test]
+    fn a_transient_crash_is_retried_with_backoff_not_failed_outright() {
+        let config = scratch("crash-retry");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let attempt = Attempt::new(config.clone(), store.clone(), tasks.clone(), events.clone());
+
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create run");
+        let root = tasks
+            .create_full(adi_tasks::NewTask {
+                title: "root".into(),
+                workflow_run: Some("r@1".into()),
+                step_key: Some(crate::ROOT_STEP_KEY.into()),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("root task");
+        store.set_root_task("r@1", &root.task.id).expect("set root");
+        let run = store.get_run("r@1").unwrap().unwrap();
+
+        let before = crate::now_ms();
+        attempt.finalize(&run, &Outcome::Crashed("segfault".into()));
+
+        let after = store.get_run("r@1").unwrap().unwrap();
+        assert!(after.finished_at.is_none(), "one crash must not fail the run");
+        assert_eq!(after.crash_streak, 1);
+        let next = after.next_attempt_at.expect("a backoff deadline must be set");
+        assert!(
+            (before + 29_000..=before + 35_000).contains(&next),
+            "expected roughly the 30s tier, got {next} (now was {before})"
+        );
+        assert_eq!(
+            tasks.get(&root.task.id).unwrap().task.give_up_reason, None,
+            "a retryable crash must not touch the root task at all"
+        );
+    }
+
+    /// ADI-MONO-151: three consecutive transient crashes exhaust the retry budget and fail the
+    /// run for real, with the documented reason — and leave any other still-open task of the run
+    /// closed too, via the same path a thrown error already uses.
+    #[test]
+    fn three_consecutive_crashes_fail_the_run_with_the_documented_reason() {
+        let config = scratch("crash-exhaust");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let attempt = Attempt::new(config.clone(), store.clone(), tasks.clone(), events.clone());
+
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create run");
+        let root = tasks
+            .create_full(adi_tasks::NewTask {
+                title: "root".into(),
+                workflow_run: Some("r@1".into()),
+                step_key: Some(crate::ROOT_STEP_KEY.into()),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("root task");
+        store.set_root_task("r@1", &root.task.id).expect("set root");
+
+        let run = store.get_run("r@1").unwrap().unwrap();
+        attempt.finalize(&run, &Outcome::Crashed("boom1".into()));
+        assert!(store.get_run("r@1").unwrap().unwrap().finished_at.is_none());
+        attempt.finalize(&run, &Outcome::Crashed("boom2".into()));
+        assert!(store.get_run("r@1").unwrap().unwrap().finished_at.is_none());
+        attempt.finalize(&run, &Outcome::Crashed("boom3".into()));
+
+        let after = store.get_run("r@1").unwrap().unwrap();
+        assert!(after.finished_at.is_some(), "the third consecutive crash must fail the run");
+        let view = tasks.get(&root.task.id).expect("root");
+        let reason = view.task.give_up_reason.expect("given up");
+        assert_eq!(reason, "bun attempt crashed 3 times: boom3");
+
+        let caught = events.catch_up("test-crash-exhaust", 50).expect("catch up");
+        assert!(
+            caught.iter().any(|e| e.record.name == "adi.workflows.run.failed"),
+            "{caught:?}"
+        );
+    }
+
+    /// ADI-MONO-151: real forward progress (a new journal entry) resets the crash streak, so a
+    /// run that crashed twice and then genuinely succeeds completes normally, with no scar tissue
+    /// left on the run row.
+    #[test]
+    fn real_progress_resets_the_crash_streak() {
+        let config = scratch("crash-progress");
+        let engine = Engine::with_config(config.clone());
+        engine.bootstrap().expect("bootstrap");
+        write_workflow(
+            &config,
+            "plain.ts",
+            "import { manual, workflow } from \"@adi/workflows\";\n\
+             export const on = manual();\n\
+             export default workflow(async (ctx, input) => {\n\
+             \x20 const a = await ctx.step({ key: \"a\", fn: () => 1 });\n\
+             \x20 return { a };\n\
+             });\n",
+        );
+        let started = engine.start_manual("plain", &json!({}), "req-1").expect("start");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let attempt = Attempt::new(config.clone(), store.clone(), tasks, events);
+        let run = store.get_run(&started.run_key).unwrap().unwrap();
+
+        // Two simulated crashes, same as the dedicated backoff test above.
+        attempt.finalize(&run, &Outcome::Crashed("boom1".into()));
+        attempt.finalize(&run, &Outcome::Crashed("boom2".into()));
+        assert_eq!(store.get_run(&started.run_key).unwrap().unwrap().crash_streak, 2);
+
+        // A real attempt now succeeds outright — `Attempt::run` (not `finalize` alone) is what
+        // detects the journal's own growth and resets the streak ahead of `finalize`.
+        let outcome = attempt.run(&store.get_run(&started.run_key).unwrap().unwrap());
+        assert_eq!(outcome, Outcome::Completed(json!({"a": 1})));
+
+        let after = store.get_run(&started.run_key).unwrap().unwrap();
+        assert_eq!(after.crash_streak, 0, "real progress must reset the streak");
+        assert_eq!(after.next_attempt_at, None);
+        assert!(after.finished_at.is_some());
+    }
+
+    /// ADI-MONO-151: an uncaught error is still a permanent, immediate failure — it never goes
+    /// through the crash-retry machinery, and never touches the crash streak.
+    #[test]
+    fn a_thrown_error_still_fails_the_run_at_once() {
+        let config = scratch("thrown-error-immediate");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        let attempt = Attempt::new(config.clone(), store.clone(), tasks.clone(), events.clone());
+
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create run");
+        let root = tasks
+            .create_full(adi_tasks::NewTask {
+                title: "root".into(),
+                workflow_run: Some("r@1".into()),
+                step_key: Some(crate::ROOT_STEP_KEY.into()),
+                ..adi_tasks::NewTask::default()
+            })
+            .expect("root task");
+        store.set_root_task("r@1", &root.task.id).expect("set root");
+        let run = store.get_run("r@1").unwrap().unwrap();
+
+        attempt.finalize(&run, &Outcome::Failed("bad input".into()));
+
+        let after = store.get_run("r@1").unwrap().unwrap();
+        assert!(after.finished_at.is_some(), "a thrown error fails the run on the spot");
+        assert_eq!(after.crash_streak, 0, "never bumped — this was never a crash");
+        assert_eq!(
+            tasks.get(&root.task.id).unwrap().task.give_up_reason.as_deref(),
+            Some("bad input")
         );
     }
 

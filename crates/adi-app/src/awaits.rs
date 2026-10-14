@@ -154,6 +154,13 @@ fn report_workflows_ran(ran: &[adi_workflows::RanAttempt]) {
                 run_key = %r.run_key, workflow = %r.workflow, %reason,
                 "a workflow run failed"
             ),
+            // A transient `bun` crash — `Attempt::finalize` has already decided whether this
+            // retries with backoff or exhausted its budget and failed the run for real; either
+            // way there's nothing more for this tick's own caller to do but note it happened.
+            AttemptOutcome::Crashed(reason) => info!(
+                run_key = %r.run_key, workflow = %r.workflow, %reason,
+                "a workflow attempt crashed with no terminal message"
+            ),
             AttemptOutcome::Suspended => {}
         }
     }

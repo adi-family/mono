@@ -92,7 +92,12 @@ CREATE TABLE IF NOT EXISTS workflow_enabled (
 /// added) are both fine.
 fn migrate(conn: &Connection) -> Result<()> {
     add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN caused_by_run TEXT")?;
-    add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN finished_at INTEGER")
+    add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN finished_at INTEGER")?;
+    // ADI-MONO-151: a consecutive-transient-bun-crash streak, and the backoff deadline it
+    // implies — a fact on the run row so it survives an `adi-app` restart, same reasoning as
+    // `caused_by_run`/`finished_at` above.
+    add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN crash_streak INTEGER NOT NULL DEFAULT 0")?;
+    add_column_if_missing(conn, "ALTER TABLE runs ADD COLUMN next_attempt_at INTEGER")
 }
 
 /// Run an `ALTER TABLE ... ADD COLUMN` that is safe to repeat on every connect: the one failure
@@ -130,6 +135,17 @@ pub struct RunRow {
     /// unfinished run" never re-scans a run that is done.
     pub finished_at: Option<u64>,
     pub created_at: u64,
+    /// How many consecutive `bun` attempts have ended with no terminal message — a transient
+    /// crash (ADI-MONO-151), never a status: [`crate::attempt::Attempt`] resets it to 0 the
+    /// moment any attempt makes real progress (a new journal entry), and fails the run outright
+    /// once it would reach the crate's own cap rather than letting it grow further.
+    pub crash_streak: u32,
+    /// When this run may next be attempted, set only while backing off from a transient crash —
+    /// [`crate::readiness::Readiness::due`]'s own backoff gate, read straight off this row so the
+    /// deadline survives a restart without the in-memory readiness cache remembering anything.
+    /// `None` the rest of the time (including for an ordinary suspended run — this is not the
+    /// same thing as "waiting on a sleep/task/event").
+    pub next_attempt_at: Option<u64>,
 }
 
 /// The workflow-run store: `workflows.db` under its own module dir.
@@ -228,6 +244,8 @@ impl WorkflowStore {
                 root_task: None,
                 finished_at: None,
                 created_at: now,
+                crash_streak: 0,
+                next_attempt_at: None,
             }),
             Err(e) if is_unique_violation(&e) => Err(Error::DuplicateRunKey(run_key.to_string())),
             Err(e) => Err(Error::Store(anyhow::anyhow!("couldn't claim a run key: {e}"))),
@@ -291,11 +309,10 @@ impl WorkflowStore {
     pub fn list_unfinished(&self) -> Result<Vec<RunRow>> {
         let conn = self.connect()?;
         let mut stmt = conn
-            .prepare(
-                "SELECT run_key, workflow, file_path, file_hash, input, cause, caused_by_run, \
-                        root_task, finished_at, created_at \
-                 FROM runs WHERE finished_at IS NULL AND root_task IS NOT NULL ORDER BY id",
-            )
+            .prepare(&format!(
+                "SELECT {RUN_COLUMNS} FROM runs \
+                 WHERE finished_at IS NULL AND root_task IS NOT NULL ORDER BY id"
+            ))
             .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read unfinished runs: {e}")))?;
         let rows = stmt
             .query_map([], row_to_run)
@@ -652,17 +669,76 @@ impl WorkflowStore {
         .map_err(|e| Error::Store(anyhow::anyhow!("couldn't save pending state: {e}")))?;
         Ok(())
     }
+
+    // ---- transient bun-crash tracking (ADI-MONO-151) ---------------------------------------
+
+    /// Increment `run_key`'s consecutive-transient-crash streak and return the new value —
+    /// called once per `bun` attempt that ended with no terminal message.
+    /// [`crate::attempt::Attempt`] decides what the new count means (retry after a backoff, or
+    /// give up on the run for real); this just persists the count.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a read or write failure.
+    pub fn bump_crash_streak(&self, run_key: &str) -> Result<u32> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE runs SET crash_streak = crash_streak + 1 WHERE run_key = ?1",
+            [run_key],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't bump a run's crash streak: {e}")))?;
+        let streak: i64 = conn
+            .query_row(
+                "SELECT crash_streak FROM runs WHERE run_key = ?1",
+                [run_key],
+                |row| row.get(0),
+            )
+            .map_err(|e| Error::Store(anyhow::anyhow!("couldn't read a run's crash streak: {e}")))?;
+        Ok(u32::try_from(streak).unwrap_or(u32::MAX))
+    }
+
+    /// Clear `run_key`'s crash streak and any pending backoff deadline — real progress (a new
+    /// journal entry) and a terminal outcome both mean whatever run of bad luck was happening is
+    /// over.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn clear_crash_streak(&self, run_key: &str) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE runs SET crash_streak = 0, next_attempt_at = NULL WHERE run_key = ?1",
+            [run_key],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't clear a run's crash streak: {e}")))?;
+        Ok(())
+    }
+
+    /// Set when `run_key` may next be attempted after a transient crash —
+    /// [`crate::readiness::Readiness::due`]'s own backoff gate.
+    ///
+    /// # Errors
+    /// [`Error::Store`] on a write failure.
+    pub fn set_next_attempt_at(&self, run_key: &str, at_ms: u64) -> Result<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE runs SET next_attempt_at = ?1 WHERE run_key = ?2",
+            params![seq_i64(at_ms), run_key],
+        )
+        .map_err(|e| Error::Store(anyhow::anyhow!("couldn't set a run's next attempt time: {e}")))?;
+        Ok(())
+    }
 }
 
 /// The column list every `runs` read shares, in the order [`row_to_run`] expects.
 const RUN_COLUMNS: &str = "run_key, workflow, file_path, file_hash, input, cause, caused_by_run, \
-                            root_task, finished_at, created_at";
+                            root_task, finished_at, created_at, crash_streak, next_attempt_at";
 
 fn row_to_run(row: &Row<'_>) -> rusqlite::Result<RunRow> {
     let input: String = row.get(4)?;
     let cause: String = row.get(5)?;
     let finished_at: Option<i64> = row.get(8)?;
     let created_at: i64 = row.get(9)?;
+    let crash_streak: i64 = row.get(10)?;
+    let next_attempt_at: Option<i64> = row.get(11)?;
     Ok(RunRow {
         run_key: row.get(0)?,
         workflow: row.get(1)?,
@@ -674,6 +750,8 @@ fn row_to_run(row: &Row<'_>) -> rusqlite::Result<RunRow> {
         root_task: row.get(7)?,
         finished_at: finished_at.map(|v| u64::try_from(v).unwrap_or(0)),
         created_at: u64::try_from(created_at).unwrap_or(0),
+        crash_streak: u32::try_from(crash_streak).unwrap_or(0),
+        next_attempt_at: next_attempt_at.map(|v| u64::try_from(v).unwrap_or(0)),
     })
 }
 
@@ -962,6 +1040,28 @@ mod tests {
 
         store.mark_finished("child@parent@1/step").unwrap();
         assert!(!store.has_unfinished_child("parent@1").unwrap());
+    }
+
+    #[test]
+    fn crash_streak_and_backoff_round_trip_and_clear() {
+        let store = scratch("crash-streak");
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create");
+        assert_eq!(store.get_run("r@1").unwrap().unwrap().crash_streak, 0);
+
+        assert_eq!(store.bump_crash_streak("r@1").unwrap(), 1);
+        store.set_next_attempt_at("r@1", 123_456_789).expect("set backoff");
+        let run = store.get_run("r@1").unwrap().unwrap();
+        assert_eq!(run.crash_streak, 1);
+        assert_eq!(run.next_attempt_at, Some(123_456_789));
+
+        assert_eq!(store.bump_crash_streak("r@1").unwrap(), 2);
+
+        store.clear_crash_streak("r@1").expect("clear");
+        let run = store.get_run("r@1").unwrap().unwrap();
+        assert_eq!(run.crash_streak, 0);
+        assert_eq!(run.next_attempt_at, None);
     }
 
     #[test]

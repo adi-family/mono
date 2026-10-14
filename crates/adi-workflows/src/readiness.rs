@@ -30,6 +30,16 @@
 //!
 //! A safety interval ([`SAFETY_INTERVAL`]) re-attempts a run regardless of all of the above, in
 //! case a signal this cache doesn't model (or a bug in it) silently missed a real change.
+//!
+//! # The backoff gate (ADI-MONO-151)
+//!
+//! A run backing off from a transient `bun` crash ([`RunRow::next_attempt_at`] set) is handled
+//! before any of the above, not folded into the fingerprint: while armed, it is due if and only
+//! if that deadline has passed — overriding a fingerprint change, the safety interval, and even
+//! "never attempted before", since the whole point of backing off is pacing retries regardless of
+//! anything else that might also be true. Reading `next_attempt_at` straight off the run row
+//! (rather than anything cached in memory) is also what makes the backoff survive a restart:
+//! there is no "never seen this `run_key`" special case for it to fall through.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -90,13 +100,18 @@ impl Readiness {
         let now_ms = crate::now_ms();
         let entries = self.lock();
         runs.iter()
-            .filter(|run| match entries.get(&run.run_key) {
-                None => true,
-                Some(entry) => {
-                    let signal = Signal::of(tasks, store, events, run);
-                    signal.fingerprint != entry.fingerprint
-                        || signal.deadline_ms.is_some_and(|deadline| now_ms >= deadline)
-                        || now.duration_since(entry.last_attempt) >= self.safety_interval
+            .filter(|run| {
+                if let Some(at) = run.next_attempt_at {
+                    return now_ms >= at;
+                }
+                match entries.get(&run.run_key) {
+                    None => true,
+                    Some(entry) => {
+                        let signal = Signal::of(tasks, store, events, run);
+                        signal.fingerprint != entry.fingerprint
+                            || signal.deadline_ms.is_some_and(|deadline| now_ms >= deadline)
+                            || now.duration_since(entry.last_attempt) >= self.safety_interval
+                    }
                 }
             })
             .cloned()
@@ -202,5 +217,58 @@ fn min_deadline(a: Option<u64>, b: Option<u64>) -> Option<u64> {
         (Some(a), Some(b)) => Some(a.min(b)),
         (Some(v), None) | (None, Some(v)) => Some(v),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adi_config::Config;
+    use serde_json::json;
+
+    fn scratch(tag: &str) -> Config {
+        let root = std::env::temp_dir().join(format!(
+            "adi-workflows-readiness-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Config::with_root(root)
+    }
+
+    /// ADI-MONO-151: a run backing off from a transient crash must not be due before its own
+    /// deadline, even though this `Readiness` has never seen the `run_key` before — the "never
+    /// attempted, always due" default must yield to an armed backoff. Proving this without ever
+    /// populating the in-memory cache is exactly what proves the backoff survives a restart: a
+    /// freshly opened `Readiness` (as a restarted `adi-app` would have) behaves identically.
+    #[test]
+    fn a_backing_off_run_is_not_due_until_its_own_deadline_even_when_never_cached() {
+        let config = scratch("backoff-restart");
+        let store = WorkflowStore::with_config(config.clone());
+        let tasks = Tasks::with_config(config.clone());
+        let events = Events::with_config(config.clone());
+        store
+            .create_run("r@1", "r", "/r.ts", "h", &json!({}), &json!({}), None)
+            .expect("create run");
+        store
+            .set_next_attempt_at("r@1", crate::now_ms() + 30_000)
+            .expect("set backoff");
+        let run = store.get_run("r@1").unwrap().unwrap();
+
+        let readiness = Readiness::new();
+        assert!(
+            readiness.due(&tasks, &store, &events, std::slice::from_ref(&run)).is_empty(),
+            "a never-cached run must still respect an unexpired backoff deadline"
+        );
+
+        store
+            .set_next_attempt_at("r@1", crate::now_ms().saturating_sub(1_000))
+            .expect("set an elapsed backoff");
+        let run = store.get_run("r@1").unwrap().unwrap();
+        assert_eq!(
+            readiness.due(&tasks, &store, &events, &[run]).len(),
+            1,
+            "due the moment the backoff deadline has passed"
+        );
     }
 }

@@ -55,7 +55,11 @@ checkpoint replays instantly from its journal on a later attempt; nothing above 
 | `ctx.dir` / `ctx.runId` / `ctx.slot` | the run's own directory / id / due slot (if any) | — (not a checkpoint) |
 
 `ctx.task`/`ctx.run`/`ctx.ask` resolve to your validated `output` shape, or `{timed_out: true}`
-if a `timeout` elapses first (never validated against `output` — it isn't that shape). An
+if a `timeout` elapses first (never validated against `output` — it isn't that shape). The
+underlying task is closed as a fact right then (`give_up`, reason "timed out after..."), so it
+never lingers in the panel's "Needs your input" after the workflow has already moved on — and the
+same closing happens to *every* still-open task of a run the moment the run itself ends, whatever
+the reason, so nothing a workflow created is ever left dangling once its own run is gone. An
 underlying task given up on throws `TaskGaveUp`; uncaught, it fails the whole run.
 
 ## The two rules that keep a replay honest
@@ -74,6 +78,22 @@ starve a sleep that never fires.
 process dies after its own effect lands but before the save does — check-before-act (read first,
 only act if the thing it would do hasn't happened) or a dedupe key (stamp an id on the side effect
 itself, and refuse to repeat one already stamped) are both fine; assuming "ran once" is not.
+
+## A crashed attempt is retried, not failed
+
+Only something your workflow's own code does — a thrown error, an uncaught `TaskGaveUp`, your
+`output` shape rejecting the result — fails the run. If the `bun` process running your attempt
+dies with no message at all (OOM, a segfault, `kill -9`, or this engine's own 5-minute watchdog),
+that's treated as a transient hiccup: retried with backoff (30s, then 2min), and only after **3**
+consecutive crashes does the run actually fail, with "bun attempt crashed 3 times: ...". Any real
+forward progress (one more journaled `ctx.step`/`ctx.task`/… on a later attempt) resets that count
+to zero. This is all a plain fact on the run, not a status — `workflows runs`/`workflows show`
+report the run as still in-flight (waiting on whatever it was waiting on) while backing off.
+
+The practical upshot for a workflow author: a `ctx.step`'s `fn()` that got partway through a real
+side effect before the process died will run again on the retried attempt — the idempotency rule
+above (check-before-act, or a dedupe key) is what makes that safe, exactly as it already has to be
+for a host restart.
 
 ## The self-retrigger guard
 
