@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **A non-release install's control panel no longer refuses every request that arrives over the
+  ADI mesh.** The mesh gateway always forwards a browser's original `<service>.<node>.n.adi`
+  Host, whatever flavour answers it; the dev panel only recognized its own `.adi-dev` names and
+  loopback, so it 403'd every `/api/*` call and websocket upgrade reached through the mesh. The
+  fleet zone is now accepted in every flavour, not only when the install's domain happens to be
+  `adi`.
+
 ## 1.29.0 — 2026-10-14
 
 ### Added
