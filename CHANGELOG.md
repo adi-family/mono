@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.29.0 — 2026-10-14
+
 ### Added
 
 - **Workflows: a TypeScript file per workflow, with checkpoints that make a crash or a restart
