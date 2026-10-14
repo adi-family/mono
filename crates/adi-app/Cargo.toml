@@ -85,5 +85,11 @@ anyhow = { workspace = true }
 # the one place this crate names the config layer directly.
 adi-config = { workspace = true }
 
+# build.rs precompresses the embedded webapp dist (brotli max quality + gzip) once at build
+# time, so adi-app itself never compresses a response per request.
+[build-dependencies]
+brotli = { workspace = true }
+flate2 = { workspace = true }
+
 [lints]
 workspace = true

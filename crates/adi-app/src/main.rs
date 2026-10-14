@@ -400,6 +400,7 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
             req.route_path(),
             app.dist.as_deref(),
             req.header("host"),
+            req.header("accept-encoding"),
         )
         .await;
     }
@@ -1114,6 +1115,7 @@ async fn serve_asset(
     path: &str,
     dist: Option<&Path>,
     host: Option<&str>,
+    accept_encoding: Option<&str>,
 ) -> anyhow::Result<()> {
     let rel = match path.trim_start_matches('/') {
         "" => "index.html",
@@ -1121,40 +1123,102 @@ async fn serve_asset(
     };
     match dist {
         Some(dir) => serve_from_disk(stream, dir, rel).await,
-        None => serve_embedded(stream, rel, host).await,
+        None => serve_embedded(stream, rel, host, accept_encoding).await,
     }
 }
 
 /// Rewrite only the embedded shell for CDN mode; direct asset requests keep working locally.
+///
+/// Every embedded asset was precompressed at build time (`build.rs`), so negotiating a
+/// coding is a lookup of the matching `.br`/`.gz` sibling, never a per-request compression.
+/// The one exception is a CDN-mode shell rewrite: its bytes depend on `host`, so they can't
+/// have been precompressed in advance, and that one response is sent as identity.
 async fn serve_embedded(
     stream: &mut TcpStream,
     rel: &str,
     host: Option<&str>,
+    accept_encoding: Option<&str>,
 ) -> anyhow::Result<()> {
     if rel != "index.html"
-        && let Some(file) = WEBAPP.get_file(rel)
+        && let Some(hit) = pick_embedded(rel, accept_encoding)
     {
-        return write_build_file(stream, rel, file.contents()).await;
+        return write_build_file(stream, rel, hit.encoding, hit.bytes).await;
     }
     if let Some(index) = WEBAPP.get_file("index.html") {
         let html = "text/html; charset=utf-8";
-        let bytes = index.contents();
         return match shared_assets::SharedAssets::active(VERSION, host) {
             Some(shared) => {
+                let bytes = index.contents();
                 let rewritten = shared_assets::rewrite(&String::from_utf8_lossy(bytes), &shared);
                 http::write_response(stream, 200, "OK", html, rewritten.as_bytes()).await
             }
-            None => http::write_response(stream, 200, "OK", html, bytes).await,
+            None => {
+                let hit = pick_embedded("index.html", accept_encoding)
+                    .expect("index.html is embedded, so at least its identity bytes are");
+                http::write_asset(stream, html, hit.encoding, hit.bytes).await
+            }
         };
     }
     http::write_html(stream, 200, &placeholder_html()).await
+}
+
+/// A resolved embedded asset: `encoding` is `Some("br"|"gzip")` when `bytes` is that
+/// precompressed sibling, `None` for the identity file.
+struct EmbeddedHit {
+    encoding: Option<&'static str>,
+    bytes: &'static [u8],
+}
+
+/// Pick the best precompressed sibling of `rel` the request accepts, falling back to the
+/// identity file. `None` only when `rel` itself isn't embedded at all.
+fn pick_embedded(rel: &str, accept_encoding: Option<&str>) -> Option<EmbeddedHit> {
+    if accepts_coding(accept_encoding, "br")
+        && let Some(file) = WEBAPP.get_file(format!("{rel}.br"))
+    {
+        return Some(EmbeddedHit {
+            encoding: Some("br"),
+            bytes: file.contents(),
+        });
+    }
+    if accepts_coding(accept_encoding, "gzip")
+        && let Some(file) = WEBAPP.get_file(format!("{rel}.gz"))
+    {
+        return Some(EmbeddedHit {
+            encoding: Some("gzip"),
+            bytes: file.contents(),
+        });
+    }
+    WEBAPP.get_file(rel).map(|file| EmbeddedHit {
+        encoding: None,
+        bytes: file.contents(),
+    })
+}
+
+/// Whether `Accept-Encoding` lists `coding` (or `*`) with a nonzero `q`. No header, or a
+/// `q=0`/unparsable `q`, both mean "not accepted" — same as the coding being absent.
+fn accepts_coding(accept_encoding: Option<&str>, coding: &str) -> bool {
+    let Some(header) = accept_encoding else {
+        return false;
+    };
+    header.split(',').any(|part| {
+        let mut tokens = part.split(';');
+        let name = tokens.next().unwrap_or("").trim();
+        if !name.eq_ignore_ascii_case(coding) && name != "*" {
+            return false;
+        }
+        let q = tokens
+            .find_map(|p| p.trim().strip_prefix("q="))
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(1.0);
+        q > 0.0
+    })
 }
 
 async fn serve_from_disk(stream: &mut TcpStream, dir: &Path, rel: &str) -> anyhow::Result<()> {
     if is_safe_rel(rel)
         && let Ok(bytes) = tokio::fs::read(dir.join(rel)).await
     {
-        return write_build_file(stream, rel, &bytes).await;
+        return write_build_file(stream, rel, None, &bytes).await;
     }
     if let Ok(bytes) = tokio::fs::read(dir.join("index.html")).await {
         let html = "text/html; charset=utf-8";
@@ -1163,11 +1227,16 @@ async fn serve_from_disk(stream: &mut TcpStream, dir: &Path, rel: &str) -> anyho
     http::write_html(stream, 200, &placeholder_html()).await
 }
 
-async fn write_build_file(stream: &mut TcpStream, rel: &str, body: &[u8]) -> anyhow::Result<()> {
+async fn write_build_file(
+    stream: &mut TcpStream,
+    rel: &str,
+    encoding: Option<&str>,
+    body: &[u8],
+) -> anyhow::Result<()> {
     if is_content_addressed(rel) {
-        http::write_immutable(stream, content_type(rel), body).await
+        http::write_asset_immutable(stream, content_type(rel), encoding, body).await
     } else {
-        http::write_response(stream, 200, "OK", content_type(rel), body).await
+        http::write_asset(stream, content_type(rel), encoding, body).await
     }
 }
 
@@ -1281,6 +1350,83 @@ mod tests {
         ));
         assert!(!is_content_addressed("icon-192.png"));
         assert!(!is_content_addressed("mark-maskable.svg"));
+    }
+
+    #[test]
+    fn accepts_coding_picks_br_over_gzip_over_identity() {
+        assert!(accepts_coding(Some("br"), "br"));
+        assert!(accepts_coding(Some("gzip, br"), "br"));
+        assert!(accepts_coding(Some("gzip, br"), "gzip"));
+        assert!(!accepts_coding(Some("gzip"), "br"));
+        assert!(!accepts_coding(None, "br"));
+    }
+
+    #[test]
+    fn accepts_coding_is_case_insensitive_and_reads_star() {
+        assert!(accepts_coding(Some("BR"), "br"));
+        assert!(accepts_coding(Some("*"), "br"));
+        assert!(accepts_coding(Some("*"), "gzip"));
+    }
+
+    #[test]
+    fn accepts_coding_honours_a_zero_quality() {
+        // Firefox and curl both send q-values this way; a ruled-out coding must be rejected
+        // exactly like an absent one, not treated as "mentioned, so fine".
+        assert!(!accepts_coding(Some("br;q=0"), "br"));
+        assert!(!accepts_coding(Some("br;q=0.0, gzip"), "br"));
+        assert!(accepts_coding(Some("br;q=0.3"), "br"));
+        // An unparsable q is treated as the default (1.0), not as a reason to reject.
+        assert!(accepts_coding(Some("br;q=nonsense"), "br"));
+    }
+
+    #[tokio::test]
+    async fn write_build_file_sets_content_encoding_and_vary_only_when_compressed() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            write_build_file(&mut stream, "app.js", Some("br"), b"brotli-bytes")
+                .await
+                .unwrap();
+        });
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut raw = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut raw)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        let text = String::from_utf8(raw).unwrap();
+        assert!(text.contains("Content-Encoding: br\r\n"), "{text}");
+        assert!(text.contains("Vary: Accept-Encoding\r\n"), "{text}");
+        assert!(text.contains("Content-Type: text/javascript"), "{text}");
+        assert!(text.ends_with("brotli-bytes"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn write_build_file_sends_no_content_encoding_for_identity() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            write_build_file(&mut stream, "app.js", None, b"plain-bytes")
+                .await
+                .unwrap();
+        });
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        let mut raw = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut client, &mut raw)
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        let text = String::from_utf8(raw).unwrap();
+        assert!(!text.contains("Content-Encoding:"), "{text}");
+        // A cache still needs to know identity was a negotiated outcome, not the only one.
+        assert!(text.contains("Vary: Accept-Encoding\r\n"), "{text}");
+        assert!(text.ends_with("plain-bytes"), "{text}");
     }
 
     #[test]

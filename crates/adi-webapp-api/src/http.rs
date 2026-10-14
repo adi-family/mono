@@ -190,6 +190,74 @@ async fn write_with_cache(
     Ok(())
 }
 
+/// Serve a build asset with `no-store` caching, negotiated against the request's
+/// `Accept-Encoding`. `encoding` is `Some("br"|"gzip")` when `body` is already that
+/// precompressed variant, `None` for identity bytes — the caller picks which by looking up
+/// the matching precompressed file on disk, so no compression happens per request.
+///
+/// `Vary: Accept-Encoding` is always sent, even for the identity response: a cache still has
+/// to know this response would have been different bytes under a different request header.
+///
+/// # Errors
+/// Fails if the socket write fails.
+pub async fn write_asset(
+    stream: &mut TcpStream,
+    content_type: &str,
+    encoding: Option<&str>,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    write_asset_with_cache(stream, content_type, "no-store", encoding, body).await
+}
+
+/// Cache a build asset for a year, negotiated the same way as [`write_asset`]. Its filename
+/// must contain a content hash, same rule as [`write_immutable`].
+///
+/// # Errors
+/// Fails if the socket write fails.
+pub async fn write_asset_immutable(
+    stream: &mut TcpStream,
+    content_type: &str,
+    encoding: Option<&str>,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    write_asset_with_cache(
+        stream,
+        content_type,
+        "public, max-age=31536000, immutable",
+        encoding,
+        body,
+    )
+    .await
+}
+
+async fn write_asset_with_cache(
+    stream: &mut TcpStream,
+    content_type: &str,
+    cache_control: &str,
+    encoding: Option<&str>,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let encoding_header = encoding
+        .map(|coding| format!("Content-Encoding: {coding}\r\n"))
+        .unwrap_or_default();
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {len}\r\n\
+         {encoding_header}\
+         Vary: Accept-Encoding\r\n\
+         Cache-Control: {cache_control}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        len = body.len(),
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.flush().await?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
 /// Cache content privately for a year; its address must never serve different bytes.
 /// `disposition` selects inline rendering or download.
 ///

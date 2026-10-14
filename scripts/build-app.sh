@@ -35,6 +35,21 @@ if ! command -v trunk >/dev/null 2>&1; then
   exit 1
 fi
 
+# A release build with no wasm-opt is a ~43% bigger .wasm shipped to every browser (measured
+# 21.6 MB raw -> 15.0 MB with it) for no reason — trunk only skips it silently if it truly can't find
+# or fetch the pinned version (Trunk.toml's `[tools] wasm-opt`), which on a fresh or
+# network-restricted machine reads as a generic reqwest/download error buried partway through
+# the trunk build, not as "the bundle you're about to ship is bigger than it needs to be".
+# Check for it ourselves, with an actual fix, before that ever happens. Skipped for --debug:
+# trunk never runs wasm-opt there regardless (see Trunk.toml's comment on `data-wasm-opt`).
+if [[ "$profile" == "release" ]] && ! command -v wasm-opt >/dev/null 2>&1; then
+  echo "error: 'wasm-opt' is not on PATH — a release build would silently ship an" >&2
+  echo "       unoptimised, ~43% larger .wasm. Install it (no sudo, user-local):" >&2
+  echo "         scripts/install-binaryen.sh" >&2
+  echo "       then make sure \$HOME/.local/bin is on PATH." >&2
+  exit 1
+fi
+
 # Every local asset dist/index.html asks for has to be *in* dist. A missing one is not a build
 # error anywhere — trunk succeeds, cargo succeeds, the binary runs, the health endpoint answers —
 # and the panel serves the SPA fallback in place of the stylesheet, so the app comes up with its

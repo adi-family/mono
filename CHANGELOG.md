@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **The control panel's first load is ~6x smaller over the wire.** Its webapp bundle (wasm + JS
+  + CSS) is now precompressed at build time (brotli, falling back to gzip, then identity) and
+  served with the matching `Content-Encoding`, rather than always sending raw bytes regardless
+  of what the browser's `Accept-Encoding` offered. On the current bundle: 15.0 MB raw becomes
+  2.6 MB over brotli (4.5 MB over gzip). A release build's wasm is also now reliably optimized
+  with `wasm-opt` — it already ran via Trunk's own default, just silently and from whatever
+  binaryen version it happened to auto-download; it's now a pinned, explicit version, and
+  `scripts/build-app.sh` fails with an install pointer rather than ever shipping an
+  unoptimised build if the tool is missing.
+
 ### Fixed
 
 - **A non-release install's control panel no longer refuses every request that arrives over the

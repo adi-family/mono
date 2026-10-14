@@ -37,6 +37,18 @@ ignore = ["dist"]
 # Pin Tailwind v4 — Trunk's default is 3.3.5, which cannot parse a v4 stylesheet. Same pin
 # as crates/adi-ui/Trunk.toml, for the same reason.
 tailwindcss = "4.2.1"
+# Pin binaryen, matching `scripts/install-binaryen.sh`'s user-local install. A release build
+# (`trunk build --release`) already runs wasm-opt without this — Trunk defaults
+# `data-wasm-opt` to "on" whenever `--release` is given, even with no `data-wasm-opt`
+# attribute on `<link data-trunk rel="rust">` — but unpinned it silently picks whatever
+# `version_123` (Trunk 0.21's hardcoded default) or a future Trunk's default happens to be,
+# and downloads it fresh into `~/.cache/trunk` the first time that exact version is needed
+# on a given machine. Pinning makes the version explicit and reproducible, and matching it to
+# a binary already on PATH (installed by the script above) means a build never depends on
+# reaching github.com for it. `scripts/build-app.sh` checks for that binary itself and fails
+# with an install pointer before calling trunk, rather than letting a missing/offline tool
+# surface as a deep "error downloading archive file" partway through the build.
+wasm-opt = "version_133"
 
 [serve]
 addresses = ["127.0.0.1"]

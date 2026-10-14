@@ -26,7 +26,16 @@
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 
 
-<link data-trunk rel="rust" />
+<!-- `data-wasm-opt="s"` is written out so this isn't invisible: without it, Trunk still runs
+     wasm-opt on a `--release` build (its own default whenever `--release` is passed, with no
+     attribute needed at all), it would just be nowhere on this page for a reader to find. "s"
+     is explicit for what Trunk's own unlabelled default already resolves to — binaryen's `-O`
+     with no number is itself an alias for `-Os`, *not* `-O2` (easy to get backwards; "2" here
+     measured 1 MB bigger, see git history). See Trunk.toml's `[tools] wasm-opt` pin for why a
+     specific binaryen version is named too. Measured on this bundle: "s" and "z" (max
+     size-focused) land within 0.3% of each other post-brotli, so there's nothing to gain
+     chasing a smaller raw .wasm beyond this. -->
+<link data-trunk rel="rust" data-wasm-opt="s" />
 <!-- adi-ui first, adi-css second. Both resolve to design/tokens.css, so the order only decides
      which reset wins where they overlap; see styles/tailwind.css. -->
 <link data-trunk rel="tailwind-css" href="styles/tailwind.css" />

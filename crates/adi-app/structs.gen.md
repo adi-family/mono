@@ -4,13 +4,13 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-15 structs · 1 enum · 2 type aliases across 8 files.
+16 structs · 1 enum · 2 type aliases across 8 files.
 
 ## Index
 
 - [`src/awaits.rs`](#srcawaitsrs) — `Posted`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
-- [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
+- [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/shared_assets.rs`](#srcshared_assetsrs) — `SharedAssets`
@@ -130,6 +130,17 @@ Coalesce identical in-flight reads. Only `shared_read_key` routes participate; m
 #[derive(Debug, Default)]
 struct Reads {
     inflight: std::sync::Mutex<HashMap<String, broadcast::Sender<Arc<Response>>>>,
+}
+```
+
+### struct `EmbeddedHit`
+
+A resolved embedded asset: `encoding` is `Some("br"|"gzip")` when `bytes` is that precompressed sibling, `None` for the identity file.
+
+```rust
+struct EmbeddedHit {
+    encoding: Option<&'static str>,
+    bytes: &'static [u8],
 }
 ```
 
