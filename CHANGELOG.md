@@ -20,6 +20,14 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **Workflows are in the explorer's sidebar, and a project has its own Workflows section.** The
+  global `/workflows` page was reachable only from ⌘K before; it now lists under Global beside
+  Secrets and Triggers, and each row says `Global` or the project it's filed under. A project's
+  detail page gets its own Workflows section (same expand/enable/run-now/rewind behaviour),
+  narrowed to that project's own `projects/<id>/workflows/*.ts` files.
+
 ### Changed
 
 - **The control panel's first load is ~6x smaller over the wire.** Its webapp bundle (wasm + JS

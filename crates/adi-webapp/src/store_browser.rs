@@ -82,9 +82,9 @@ fn toggle_rail(state: State) {
 }
 
 /// Stand the tree up at the open project: expand the chain from the store root down to
-/// `projects/<id>`, one level deeper — into `workspaces/` — on the Workspaces section, and fetch
-/// any listing along it that isn't cached yet. Called on navigation, so the rail shows the
-/// directory behind whatever page you opened.
+/// `projects/<id>`, one level deeper — into `workspaces/` on the Workspaces section, `workflows/`
+/// on the Workflows section — and fetch any listing along it that isn't cached yet. Called on
+/// navigation, so the rail shows the directory behind whatever page you opened.
 ///
 /// A collapsed rail stays collapsed. Revealing follows navigation rather than being asked for,
 /// so popping the rail open would fight whoever closed it; the tree is simply already standing
@@ -98,6 +98,9 @@ pub(crate) fn reveal_project(state: State, id: &str, section: ProjectSection) {
     let mut chain = vec![String::new(), "projects".to_string(), project.clone()];
     if section == ProjectSection::Workspaces {
         chain.push(format!("{project}/workspaces"));
+    }
+    if section == ProjectSection::Workflows {
+        chain.push(format!("{project}/workflows"));
     }
     // The root is rendered unconditionally, so it is loaded but never marked expanded.
     state.store.expanded.update(|set| {

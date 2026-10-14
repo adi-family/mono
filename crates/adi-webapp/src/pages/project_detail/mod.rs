@@ -20,7 +20,7 @@ use crate::routing::{
 };
 use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, KnowledgeConsole, SecretsForm, State,
-    TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
+    TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersLogView, WorkflowsConsole,
 };
 use crate::ui::{flash_view, fmt_date, prompt};
 
@@ -32,6 +32,7 @@ mod subprojects;
 mod tasks;
 mod tools_panel;
 mod triggers;
+mod workflows_panel;
 
 pub(crate) use agents_panel::COLS as PROJECT_AGENT_COLS;
 use agents_panel::{QuickAgentForm, agents_panel};
@@ -46,6 +47,7 @@ pub(crate) use tasks::COLS as PROJECT_TASK_COLS;
 use tasks::{TaskForm, tasks_panel};
 use tools_panel::tools_panel;
 use triggers::{QuickTriggerForm, triggers_panel};
+use workflows_panel::workflows_panel;
 
 /// The project detail page (`/projects/<id>`): the manifest, its actions, and the services
 /// read from the project's `.adi/hive.yaml` — what's "inside" the project.
@@ -60,6 +62,7 @@ pub(crate) fn project_detail_view(
     tool_editor: ToolEditor,
     tool_run: ToolRunView,
     knowledge: KnowledgeConsole,
+    workflows_console: WorkflowsConsole,
 ) -> AnyView {
     let State {
         project_detail,
@@ -162,6 +165,10 @@ pub(crate) fn project_detail_view(
                 ProjectSection::Triggers => view! {
                     {move || log_view(triggers_log)}
                     {triggers_panel(state, trigger_form, triggers_log)}
+                }
+                .into_any(),
+                ProjectSection::Workflows => view! {
+                    {workflows_panel(state, workflows_console)}
                 }
                 .into_any(),
                 ProjectSection::Tools => view! {

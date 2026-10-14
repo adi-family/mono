@@ -1687,6 +1687,7 @@ pub(crate) enum ProjectSection {
     Tasks,
     Agents,
     Triggers,
+    Workflows,
     Tools,
     Secrets,
     Knowledge,

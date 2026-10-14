@@ -177,6 +177,7 @@ pub(crate) fn section_icon(section: ProjectSection) -> Icon {
         ProjectSection::Tasks => Icon::Tasks,
         ProjectSection::Agents => Icon::Agent,
         ProjectSection::Triggers => Icon::Trigger,
+        ProjectSection::Workflows => Icon::Workflow,
         ProjectSection::Tools => Icon::Wrench,
         ProjectSection::Secrets => Icon::Key,
         ProjectSection::Knowledge => Icon::Book,

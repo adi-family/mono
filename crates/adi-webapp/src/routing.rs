@@ -344,6 +344,7 @@ pub(crate) enum ProjectSection {
     Tasks,
     Agents,
     Triggers,
+    Workflows,
     Tools,
     Secrets,
     Knowledge,
@@ -354,11 +355,12 @@ pub(crate) enum ProjectSection {
 
 impl ProjectSection {
     /// Every section, in the order the explorer lists them.
-    pub(crate) const ALL: [ProjectSection; 10] = [
+    pub(crate) const ALL: [ProjectSection; 11] = [
         ProjectSection::Overview,
         ProjectSection::Tasks,
         ProjectSection::Agents,
         ProjectSection::Triggers,
+        ProjectSection::Workflows,
         ProjectSection::Tools,
         ProjectSection::Secrets,
         ProjectSection::Knowledge,
@@ -374,6 +376,7 @@ impl ProjectSection {
             ProjectSection::Tasks => "tasks",
             ProjectSection::Agents => "agents",
             ProjectSection::Triggers => "triggers",
+            ProjectSection::Workflows => "workflows",
             ProjectSection::Tools => "tools",
             ProjectSection::Secrets => "secrets",
             ProjectSection::Knowledge => "knowledge",
@@ -389,6 +392,7 @@ impl ProjectSection {
             ProjectSection::Tasks => "Tasks",
             ProjectSection::Agents => "Agents",
             ProjectSection::Triggers => "Triggers",
+            ProjectSection::Workflows => "Workflows",
             ProjectSection::Tools => "Tools",
             ProjectSection::Secrets => "Secrets",
             ProjectSection::Knowledge => "Knowledge",

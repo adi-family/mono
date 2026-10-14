@@ -5,6 +5,11 @@
 //! Page-local, like [`super::embedding_backends_view`] beside it: nothing here rides the shell's
 //! 4s poll or the live channel, so it is fetched once when the page opens and refreshed after
 //! each mutation from that mutation's own reply.
+//!
+//! This page shows every workflow, global and project; a project's own Workflows section shows
+//! only its own, filtered client-side from the same load — there is no per-project list endpoint.
+//! [`project_rows_view`] and [`refresh`] are `pub(crate)` so that panel can reuse this page's row,
+//! detail and run views instead of forking them.
 
 use adi_webapp_api::types::{RunDto, RunWorkflow, RunsQuery, StepDto, WorkflowDto};
 use leptos::prelude::*;
@@ -99,6 +104,34 @@ fn rows_view(state: State, console: WorkflowsConsole) -> AnyView {
         .into_any()
 }
 
+/// The same rows, narrowed to one project's own workflow files (`project == Some(id)`) — a
+/// project's Workflows section, reusing this page's row/detail/run views rather than forking
+/// them. There is no per-project list endpoint, so the filter runs client-side over the one
+/// shared load [`refresh`] already did.
+pub(crate) fn project_rows_view(state: State, console: WorkflowsConsole, project: &str) -> AnyView {
+    let Some(st) = console.workflows.get() else {
+        return view! { <p class="adi-empty">"Loading…"</p> }.into_any();
+    };
+    let rows: Vec<WorkflowDto> = st
+        .workflows
+        .into_iter()
+        .filter(|w| w.project.as_deref() == Some(project))
+        .collect();
+    if rows.is_empty() {
+        return view! {
+            <p class="adi-empty">
+                "No workflow files found for this project — add one under "
+                <code>"projects/"{project.to_string()}"/workflows/*.ts"</code>"."
+            </p>
+        }
+        .into_any();
+    }
+    rows.into_iter()
+        .map(|w| workflow_block(state, console, w))
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
 /// One workflow's header row — its id, project, enabled state, and the enable/disable toggle —
 /// expanding into [`workflow_detail`] when clicked.
 fn workflow_block(state: State, console: WorkflowsConsole, w: WorkflowDto) -> AnyView {
@@ -119,7 +152,10 @@ fn workflow_block(state: State, console: WorkflowsConsole, w: WorkflowDto) -> An
                         " "{w.id.clone()}
                     </span>
                 </button>
-                {w.project.clone().map(|p| view! { <span class="adi-chip">{p}</span> })}
+                {match w.project.clone() {
+                    Some(p) => view! { <span class="adi-chip">{p}</span> }.into_any(),
+                    None => view! { <span class="adi-muted">"Global"</span> }.into_any(),
+                }}
                 <span class="adi-tstatus" data-status=if enabled { "ready" } else { "archived" }>
                     {if enabled { "Enabled" } else { "Disabled" }}
                 </span>
@@ -283,7 +319,7 @@ fn step_row(state: State, console: WorkflowsConsole, run_key: String, index: usi
     .into_any()
 }
 
-async fn refresh(console: WorkflowsConsole) {
+pub(crate) async fn refresh(console: WorkflowsConsole) {
     match fetch::workflows().await {
         Ok(s) => {
             console.workflows.set(Some(s));
