@@ -32,14 +32,21 @@ A dashboard is **one hostname**. Both services declare the same `proxy.host`: th
 ## Do it
 - List: `GET /api/dashboards`. Panel: `/dashboards`.
 - Create: `POST /api/dashboards/create` (`{ "name", "description" }`). This scaffolds the
-  files; the supervisor then leases ports and starts both bun servers within a few seconds, so
-  the new host appears on its own. **Don't** hand-pick ports.
+  files and leases both ports right away (`GET /api/ports` shows them immediately) — but **not**
+  running processes. Both services come up **on-demand** by default: the supervisor starts them
+  on the dashboard's first request and idle-stops them an hour after the last one. A leased port
+  is not the same as a running process; check `~/.adi/mono/logs/adi-dashboards.log` to see
+  whether the bun servers are actually up. **Don't** hand-pick ports.
 - Edit: change the `.ts` files in place — the dashboard **hot-reloads**. Add a panel by
   dropping a `frontend/modules/<name>.ts`; add an endpoint with a `backend/routes/<name>.ts`.
 - Archive / delete: `POST /api/dashboards/archive`, then `/delete` (delete refuses unless the
   dashboard is archived first).
 
 ## Notes
+- Pin a dashboard always-up: add `start: always` next to `restart: always` on **both** services
+  in the dashboard's own `.adi/hive.yaml`. Needed whenever something other than this install's
+  front door or mesh gateway proxies to the dashboard's ports — those two wake an on-demand
+  service on request; nothing else does.
 - Read the dashboard's own `README.md` before adding modules — it shows the exact shape a
   panel or route module must export.
 - The four entry points (`frontend/index.ts`, `frontend/index.html`, `backend/index.ts`, and

@@ -54,6 +54,13 @@ extraction script cares about.
   installs seeded before those shipped). A guide you've edited is left alone — the new version is
   written beside it as `<file>.new` for you to merge by hand.
 
+- **`guides/dashboards.md` now says dashboards are lazy by default.** A freshly scaffolded
+  dashboard leases both its ports immediately, but the bun services themselves only start on the
+  first request and idle-stop an hour after the last one — a leased port was never proof a
+  process was running. The guide now points at `adi-dashboards.log` to check, and documents
+  `start: always` on the dashboard's own `.adi/hive.yaml` for pinning it up, needed when
+  something other than this install's front door or mesh gateway proxies to its ports.
+
 - **The control panel's first load is ~6x smaller over the wire.** Its webapp bundle (wasm + JS
   + CSS) is now precompressed at build time (brotli, falling back to gzip, then identity) and
   served with the matching `Content-Encoding`, rather than always sending raw bytes regardless
