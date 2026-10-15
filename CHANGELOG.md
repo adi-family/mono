@@ -66,6 +66,10 @@ extraction script cares about.
 
 ### Fixed
 
+- **`adi-mono workflows llm` and `adi-mono facts llm` with no further argument now print the
+  model-facing help and exit 0**, instead of clap's bare usage for the `llm` subcommand and exit
+  2. `llm help` still works the same way it always did.
+
 - **A non-release install's control panel no longer refuses every request that arrives over the
   ADI mesh.** The mesh gateway always forwards a browser's original `<service>.<node>.n.adi`
   Host, whatever flavour answers it; the dev panel only recognized its own `.adi-dev` names and

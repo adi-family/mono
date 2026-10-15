@@ -584,7 +584,7 @@ pub(crate) enum FactsCommand {
     #[command(disable_help_subcommand = true)]
     Llm {
         #[command(subcommand)]
-        command: LlmCommand,
+        command: Option<LlmCommand>,
     },
 }
 ```
@@ -1839,7 +1839,7 @@ pub(crate) enum WorkflowsCommand {
     #[command(disable_help_subcommand = true)]
     Llm {
         #[command(subcommand)]
-        command: LlmCommand,
+        command: Option<LlmCommand>,
     },
 }
 ```

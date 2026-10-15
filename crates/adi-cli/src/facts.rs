@@ -202,7 +202,8 @@ pub(crate) enum FactsCommand {
     },
     /// List fact bases. Only the ones the caller may read are shown.
     Bases,
-    /// Help written for a language model rather than for a person.
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too —
+    /// `Help` is the only variant there is, and a caller shouldn't have to spell it out.
     ///
     // `disable_help_subcommand`: clap generates a `help` subcommand for anything that has
     // subcommands, which collides with the `help` this group exists to provide. `adi-tools`
@@ -210,7 +211,7 @@ pub(crate) enum FactsCommand {
     #[command(disable_help_subcommand = true)]
     Llm {
         #[command(subcommand)]
-        command: LlmCommand,
+        command: Option<LlmCommand>,
     },
 }
 
@@ -282,10 +283,7 @@ pub(crate) fn run_facts(
 
     // Answered before anything opens the store: `adi-tools` captures this on every agent launch
     // with a three-second budget, and a base that cannot be opened must not cost it that.
-    if let FactsCommand::Llm {
-        command: LlmCommand::Help,
-    } = command
-    {
+    if let FactsCommand::Llm { .. } = command {
         print!("{LLM_HELP}");
         return Ok(());
     }
@@ -516,8 +514,17 @@ mod tests {
         assert!(matches!(
             parse(&["llm", "help"]),
             FactsCommand::Llm {
-                command: LlmCommand::Help
+                command: Some(LlmCommand::Help)
             }
+        ));
+    }
+
+    /// Bare `llm` (no `help`) must answer the same help and exit 0, not clap's usage + exit 2.
+    #[test]
+    fn bare_llm_parses_and_answers_the_same_help() {
+        assert!(matches!(
+            parse(&["llm"]),
+            FactsCommand::Llm { command: None }
         ));
     }
 

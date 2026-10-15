@@ -155,11 +155,12 @@ pub(crate) enum WorkflowsCommand {
     Enable { id: String },
     /// Stop a workflow's `schedule`/`event` triggers from firing it. `run` still works on it.
     Disable { id: String },
-    /// Help written for a language model rather than for a person.
+    /// Help written for a language model rather than for a person. Bare `llm` prints it too —
+    /// `Help` is the only variant there is, and a caller shouldn't have to spell it out.
     #[command(disable_help_subcommand = true)]
     Llm {
         #[command(subcommand)]
-        command: LlmCommand,
+        command: Option<LlmCommand>,
     },
 }
 
@@ -171,10 +172,7 @@ pub(crate) enum LlmCommand {
 
 /// Dispatch a `workflows` subcommand over the shared engine.
 pub(crate) fn run_workflows(adi: Adi, command: WorkflowsCommand) -> Result<(), String> {
-    if let WorkflowsCommand::Llm {
-        command: LlmCommand::Help,
-    } = command
-    {
+    if let WorkflowsCommand::Llm { .. } = command {
         print!("{LLM_HELP}");
         return Ok(());
     }
@@ -372,7 +370,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             WorkflowsCommand::Llm {
-                command: LlmCommand::Help
+                command: Some(LlmCommand::Help)
             }
         ));
         for needle in [
@@ -382,6 +380,12 @@ mod tests {
         ] {
             assert!(LLM_HELP.contains(needle), "missing {needle:?} in LLM_HELP");
         }
+    }
+
+    #[test]
+    fn bare_llm_parses_and_answers_the_same_help() {
+        let cli = Harness::try_parse_from(["workflows", "llm"]).expect("parses");
+        assert!(matches!(cli.command, WorkflowsCommand::Llm { command: None }));
     }
 
     #[test]
