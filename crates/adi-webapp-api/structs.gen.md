@@ -4,13 +4,13 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-334 structs · 20 enums across 13 files.
+334 structs · 20 enums · 1 type alias across 13 files.
 
 ## Index
 
 - [`src/handlers/agents.rs`](#srchandlersagentsrs) — `FleetSender`, `RunCaps`, `RunFilter`, `Waiting`, `Awaiting`
 - [`src/handlers/fleet.rs`](#srchandlersfleetrs) — `DroppedSources`, `DroppedSource`
-- [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
+- [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`, `Shipped`
 - [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
 - [`src/handlers/llm.rs`](#srchandlersllmrs) — `Filter`, `RequestAnalysis`, `ResponseAnalysis`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
@@ -117,6 +117,14 @@ pub struct Guide {
     pub summary: &'static str,
     pub body: &'static str,
 }
+```
+
+### type `Shipped`
+
+file name -> hash of the content ADI last wrote there.
+
+```rust
+type Shipped = HashMap<String, String>;
 ```
 
 ---

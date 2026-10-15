@@ -70,6 +70,10 @@ server = [
     # Pairing mints an invite here and answers with it drawn as a QR, so the encoder is a server
     # dependency and the page stays a `<svg>` it inlines.
     "dep:qrcode",
+    # Guide-refresh (`handlers::guides`) hashes the rendered and on-disk copy of each shipped
+    # guide to tell an untouched file from an edited one. Server-only: seeding guides is an
+    # `/api/meta` side effect, never something the wasm page does itself.
+    "dep:sha2",
 ]
 
 [dependencies]
@@ -115,6 +119,7 @@ reqwest = { workspace = true, features = ["blocking", "multipart"], optional = t
 # installed by hand on the way to the first request.
 rustls = { workspace = true, optional = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
 serde_yaml_ng = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }

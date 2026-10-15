@@ -6,7 +6,9 @@ store paths, the CLI and API to use, and a worked example, so you act with this 
 conventions instead of guessing.
 
 Guides live in `~/.adi/mono/guides/` and are plain Markdown. Edit them as your setup evolves;
-a later run of the agent picks up the changes.
+a later run of the agent picks up the changes. When a newer ADI ships an updated guide, it
+refreshes any copy you haven't touched; if you've edited one, your copy is left alone and the
+new version is written beside it as `<file>.new` for you to merge by hand.
 
 | Guide | Read it when you… |
 | --- | --- |

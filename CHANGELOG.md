@@ -44,6 +44,12 @@ extraction script cares about.
 
 ### Changed
 
+- **A built-in guide you haven't edited now refreshes itself when a newer ADI ships a newer
+  version**, instead of staying frozen at whatever was seeded the day it first appeared (agents.md
+  was stale for everyone, and the README index was missing `channels.md`/`workflows.md` on
+  installs seeded before those shipped). A guide you've edited is left alone — the new version is
+  written beside it as `<file>.new` for you to merge by hand.
+
 - **The control panel's first load is ~6x smaller over the wire.** Its webapp bundle (wasm + JS
   + CSS) is now precompressed at build time (brotli, falling back to gzip, then identity) and
   served with the matching `Content-Encoding`, rather than always sending raw bytes regardless
