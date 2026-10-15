@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.30.0 — 2026-10-15
+
 ### Added
 
 - **Clicking a workflow now opens its own page, with tabs for Input shape, Output shape, Code,
