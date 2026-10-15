@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-107 structs · 34 enums · 5 type aliases across 44 files.
+107 structs · 35 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -47,7 +47,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
-- [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
+- [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`, `WorkflowTab`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
@@ -1660,6 +1660,7 @@ pub(crate) enum Route {
     EmbeddingBackends,
     Triggers,
     Workflows,
+    WorkflowDetail,
     Dashboards,
     Marketplace,
     LiveGraph,
@@ -1694,6 +1695,21 @@ pub(crate) enum ProjectSection {
     Services,
     Workspaces,
     Files,
+}
+```
+
+### enum `WorkflowTab`
+
+A tab on a workflow's own page (`/workflows/<id>`), selected by `?tab=`. The URL carries it as a query param rather than a trailing path segment because a workflow id itself may contain a slash (`<project>/<stem>`) — keeping the id as the whole path after the prefix and the tab out of it entirely avoids having to tell the two apart.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowTab {
+    Input,
+    Output,
+    Code,
+    Run,
+    Runs,
 }
 ```
 
@@ -2419,7 +2435,9 @@ pub(crate) struct WorkflowsConsole {
     pub(crate) workflows: RwSignal<Option<WorkflowsState>>,
     pub(crate) error: RwSignal<Option<String>>,
     pub(crate) selected: RwSignal<String>,
+    pub(crate) tab: RwSignal<WorkflowTab>,
     pub(crate) run_input: RwSignal<String>,
+    pub(crate) seeded_for: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) runs: RwSignal<Option<RunsState>>,
     pub(crate) selected_run: RwSignal<String>,

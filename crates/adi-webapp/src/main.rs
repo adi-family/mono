@@ -63,11 +63,11 @@ use pages::{
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
     start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view, triggers_view,
-    workflows_view,
+    workflow_detail_view, workflows_view,
 };
 use routing::{
-    ProjectSection, Route, current_path, open_project_section, project_id_from_path,
-    project_section_from_path, query_param, replace_state, spa_click,
+    ProjectSection, Route, WorkflowTab, current_path, open_project_section, project_id_from_path,
+    project_section_from_path, query_param, replace_state, spa_click, workflow_id_from_path,
 };
 use state::{
     AgentsForm, AgentsWatch, ChannelsConsole, DashboardsForm, DbConsole, EmbeddingsConsole,
@@ -1118,6 +1118,12 @@ fn App() -> impl IntoView {
     // The Workflows page's own console — page-local for the same reason: no live-channel
     // subscription for `/api/workflows*`.
     let workflows_console = WorkflowsConsole::new();
+    // Seeded from the URL the same way `current_agent` is, so a deep link or a reload opens
+    // straight on the right workflow and tab rather than the bare list.
+    workflows_console
+        .selected
+        .set(workflow_id_from_path(&current_path()).unwrap_or_default());
+    workflows_console.tab.set(WorkflowTab::from_query());
 
     let managed_only = RwSignal::new(true);
 
@@ -1138,7 +1144,7 @@ fn App() -> impl IntoView {
     // `/files/<path>` to `/files` and lose the file before it is ever read.
     if !matches!(
         route.get_untracked(),
-        Route::ProjectDetail | Route::StoreFile | Route::AgentDetail
+        Route::ProjectDetail | Route::StoreFile | Route::AgentDetail | Route::WorkflowDetail
     ) && current_path() != route.get_untracked().path()
     {
         replace_state(route.get_untracked().path());
@@ -1172,6 +1178,14 @@ fn App() -> impl IntoView {
         current_project.set(project_id_from_path(&path).unwrap_or_default());
         current_section.set(project_section_from_path(&path));
         current_agent.set(routing::agent_form_from_path(&path).unwrap_or_default());
+        // A workflow detail URL carries both the workflow and the tab; `open` resets everything
+        // scoped to whichever workflow was open before (same as a fresh click would), so Back
+        // between two different workflows' pages never shows one's stale source/runs under the
+        // other's header for more than an instant.
+        match workflow_id_from_path(&path) {
+            Some(id) => workflows_console.open(&id, WorkflowTab::from_query()),
+            None => workflows_console.selected.set(String::new()),
+        }
         // A /files/<path> entry carries the file, so history navigation reloads it. Only when
         // it actually changes, or Back onto the page you are on would discard your edits.
         match routing::store_path_from_path(&path) {
@@ -1476,7 +1490,8 @@ fn App() -> impl IntoView {
                         | Route::StoreFile
                         | Route::LiveGraph
                         | Route::Agents
-                        | Route::AgentDetail => None,
+                        | Route::AgentDetail
+                        | Route::WorkflowDetail => None,
                         other => Some(view! {
                             <header class="adi-bar">
                                 <h1 class="adi-bar__title">{other.title()}</h1>
@@ -1501,6 +1516,7 @@ fn App() -> impl IntoView {
                         Route::Llm => llm_view(state, llm),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Workflows => workflows_view(state, route, workflows_console),
+                        Route::WorkflowDetail => workflow_detail_view(state, route, workflows_console),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::LiveGraph => live_graph_view(state, graph, agents_watch, route),

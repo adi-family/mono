@@ -1,6 +1,5 @@
-//! The Workflows page (ADI-MONO-141 §F): every discovered workflow file, each expandable into
-//! its own starters/shapes/enable toggle/run-now box and its own runs list; a run expands
-//! further into its saved-step timeline, with a rewind button on each step.
+//! The Workflows page (ADI-MONO-141 §F): every discovered workflow file, listed as a row that
+//! opens its own detail page ([`crate::pages::workflow_detail`]) rather than expanding in place.
 //!
 //! Page-local, like [`super::embedding_backends_view`] beside it: nothing here rides the shell's
 //! 4s poll or the live channel, so it is fetched once when the page opens and refreshed after
@@ -8,19 +7,22 @@
 //!
 //! This page shows every workflow, global and project; a project's own Workflows section shows
 //! only its own, filtered client-side from the same load — there is no per-project list endpoint.
-//! [`project_rows_view`] and [`refresh`] are `pub(crate)` so that panel can reuse this page's row,
-//! detail and run views instead of forking them.
+//! [`project_rows_view`], [`refresh`] and the handful of view/fetch helpers marked `pub(crate)`
+//! below exist so the detail page and that panel can reuse this module's rows, runs list and
+//! source view instead of forking them.
 
 use adi_ui::{CodeEditor, CodeFrame, CodeHeight, Lang};
-use adi_webapp_api::types::{RunDto, RunWorkflow, RunsQuery, StepDto, WorkflowDto};
+use adi_webapp_api::types::{RunDto, RunsQuery, StepDto, WorkflowDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::pages::store_file::load_store_file;
-use crate::routing::{Route, push_state, scroll_top, store_file_path};
+use crate::routing::{
+    Route, WorkflowTab, push_state, scroll_top, spa_nav, store_file_path, workflow_detail_path,
+};
 use crate::state::{Flash, State, WorkflowsConsole};
-use crate::ui::{apply_mutation, confirm, field_hint, flash_view};
+use crate::ui::{apply_mutation, confirm, flash_view};
 
 /// The Workflows page.
 pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole) -> AnyView {
@@ -29,22 +31,6 @@ pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: Work
         if loaded.is_none() {
             spawn_local(refresh(console));
         }
-    });
-    // Fetch the expanded workflow's own runs whenever which one is expanded changes.
-    Effect::new(move |prev: Option<String>| {
-        let id = console.selected.get();
-        if !id.is_empty() && prev.as_deref() != Some(id.as_str()) {
-            spawn_local(refresh_runs(console, id.clone()));
-        }
-        id
-    });
-    // Fetch the expanded run's own timeline whenever which one is expanded changes.
-    Effect::new(move |prev: Option<String>| {
-        let run_key = console.selected_run.get();
-        if !run_key.is_empty() && prev.as_deref() != Some(run_key.as_str()) {
-            spawn_local(refresh_run_detail(console, run_key.clone()));
-        }
-        run_key
     });
 
     view! {
@@ -64,8 +50,8 @@ pub(crate) fn workflows_view(state: State, route: RwSignal<Route>, console: Work
             {flash_view(state.flash)}
             <p class="adi-hint">
                 "A workflow file nobody has told this store about yet is disabled by default — "
-                <code>"Run now"</code>" still works on one regardless, which is how a draft is
-                 tried before it is trusted with its own schedule/event triggers."
+                <code>"Run now"</code>" on its own page still works regardless, which is how a
+                 draft is tried before it is trusted with its own schedule/event triggers."
             </p>
         </section>
     }
@@ -140,27 +126,22 @@ pub(crate) fn project_rows_view(
         .into_any()
 }
 
-/// One workflow's header row — its id, project, enabled state, and the enable/disable toggle —
-/// expanding into [`workflow_detail`] when clicked.
+/// One workflow's row — its id, project, enabled state, and the enable/disable toggle. Clicking
+/// anywhere on the row but the toggle navigates to its own page ([`Route::WorkflowDetail`],
+/// [`crate::pages::workflow_detail_view`]) rather than expanding in place.
 fn workflow_block(state: State, route: RwSignal<Route>, console: WorkflowsConsole, w: WorkflowDto) -> AnyView {
     let id = w.id.clone();
-    let caret_id = id.clone();
-    let toggle_id = id.clone();
+    let open_id = id.clone();
     let enable_id = id.clone();
-    let detail_id = id.clone();
     let enabled = w.enabled;
-    let source_path = w.path.clone();
 
     view! {
         <div class="adi-field adi-field--full">
             <div class="adi-copyrow">
-                <button class="adi-btn adi-btn--quiet" type="button"
-                    on:click=move |_| toggle_workflow(console, &toggle_id, source_path.clone())>
-                    <span class="adi-mono">
-                        {move || if console.selected.get() == caret_id { "\u{25be}" } else { "\u{25b8}" }}
-                        " "{w.id.clone()}
-                    </span>
-                </button>
+                <a class="adi-btn adi-btn--quiet" href=workflow_detail_path(&id, WorkflowTab::Input)
+                    on:click=move |ev| open_workflow(&ev, route, console, &open_id)>
+                    <span class="adi-mono">{w.id.clone()}</span>
+                </a>
                 {match w.project.clone() {
                     Some(p) => view! { <span class="adi-chip">{p}</span> }.into_any(),
                     None => view! { <span class="adi-muted">"Global"</span> }.into_any(),
@@ -174,83 +155,29 @@ fn workflow_block(state: State, route: RwSignal<Route>, console: WorkflowsConsol
                     {if enabled { "Disable" } else { "Enable" }}
                 </button>
             </div>
-            {move || (console.selected.get() == detail_id).then(|| workflow_detail(state, route, console, &w))}
         </div>
     }
     .into_any()
 }
 
-/// Expand/collapse `id` (the header row's click), starting the source read the moment it opens —
-/// not from a page-level `Effect` keyed on [`WorkflowsConsole::selected`], because that console is
-/// shared between the global page and a project's own Workflows section (`workflows_panel.rs`),
-/// and only the former currently sets up effects for anything past the initial list load. Doing
-/// the fetch right here works on both without needing that effect at all.
-fn toggle_workflow(console: WorkflowsConsole, id: &str, path: String) {
-    let opening = console.selected.get_untracked() != id;
-    console.toggle_selected(id);
-    if opening && !path.is_empty() {
-        spawn_local(refresh_source(console, path));
+/// Navigate to `id`'s own page — a row click on the global list or a project's panel. A real
+/// `<a href>` (see [`crate::routing::spa_nav`]), so a modified click (new tab, etc.) still falls
+/// through to the browser rather than being swallowed.
+fn open_workflow(ev: &web_sys::MouseEvent, route: RwSignal<Route>, console: WorkflowsConsole, id: &str) {
+    if !spa_nav(ev) {
+        return;
     }
+    push_state(&workflow_detail_path(id, WorkflowTab::Input));
+    console.open(id, WorkflowTab::Input);
+    route.set(Route::WorkflowDetail);
+    scroll_top();
 }
 
-/// A workflow's expanded detail: its starters, its declared input/output shapes, a describe
-/// error if it has one, its own TypeScript source, the run-now box, and its own runs list.
-fn workflow_detail(state: State, route: RwSignal<Route>, console: WorkflowsConsole, w: &WorkflowDto) -> AnyView {
-    let run_id = w.id.clone();
-    view! {
-        <div class="adi-field adi-field--full">
-            {(!w.triggers.is_empty()).then(|| view! {
-                <p class="adi-cell__sub">
-                    {w.triggers.join(" · ")}
-                </p>
-            })}
-            {w.describe_error.clone().map(|e| view! {
-                <p class="adi-error">"Couldn't read this file's `on` export: "{e}</p>
-            })}
-            {schema_view("Input", w.input_schema.clone())}
-            {schema_view("Output", w.output_schema.clone())}
-
-            {source_view(state, route, console, w.path.clone())}
-
-            <div class="adi-copyrow">
-                <textarea class="adi-textarea adi-mono" rows="2" placeholder="{} (the workflow's own input, as JSON)"
-                    prop:value=move || console.run_input.get()
-                    on:input=move |ev| console.run_input.set(event_target_value(&ev))></textarea>
-                <button class="adi-btn adi-btn--primary" type="button"
-                    prop:disabled=move || console.busy.get()
-                    on:click=move |_| run_now(state, console, &run_id)>
-                    "Run now"
-                </button>
-            </div>
-            {field_hint("starts `wf@manual:<id>` by hand — works even while disabled")}
-
-            {move || runs_view(state, console)}
-        </div>
-    }
-    .into_any()
-}
-
-fn schema_view(label: &'static str, schema: Option<serde_json::Value>) -> AnyView {
-    match schema {
-        Some(schema) => view! {
-            <details class="adi-field">
-                <summary class="adi-field__label">{label}" shape"</summary>
-                <pre class="adi-mono adi-cell__sub">
-                    {serde_json::to_string_pretty(&schema).unwrap_or_default()}
-                </pre>
-            </details>
-        }
-        .into_any(),
-        None => ().into_any(),
-    }
-}
-
-/// The workflow file's own TypeScript source, read-only and syntax-highlighted — shown
-/// unconditionally, even when [`WorkflowDto::describe_error`] is set: that is exactly when
-/// reading the file by eye matters most. The content comes from the store browser's own
-/// `/api/fs/read` (what [`crate::pages::store_file`] itself reads through), fetched once when the
-/// row opens ([`toggle_workflow`]) rather than on every render.
-fn source_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole, path: String) -> AnyView {
+/// A workflow file's own TypeScript source, read-only and syntax-highlighted — shown even when
+/// [`WorkflowDto::describe_error`] is set: that is exactly when reading the file by eye matters
+/// most. The content comes from the store browser's own `/api/fs/read` (what
+/// [`crate::pages::store_file`] itself reads through).
+pub(crate) fn source_view(state: State, route: RwSignal<Route>, console: WorkflowsConsole, path: String) -> AnyView {
     if path.is_empty() {
         return ().into_any();
     }
@@ -294,9 +221,8 @@ fn open_in_editor(state: State, route: RwSignal<Route>, path: String) {
     load_store_file(state, path);
 }
 
-/// A workflow's own runs list, under its expanded detail — each row expands into
-/// [`run_timeline_view`].
-fn runs_view(state: State, console: WorkflowsConsole) -> AnyView {
+/// A workflow's own runs list (the Runs tab) — each row expands into [`run_timeline_view`].
+pub(crate) fn runs_view(state: State, console: WorkflowsConsole) -> AnyView {
     let Some(st) = console.runs.get() else {
         return view! { <p class="adi-empty">"Loading runs…"</p> }.into_any();
     };
@@ -347,7 +273,7 @@ fn status_dot(status: &str) -> &'static str {
 
 /// A run's expanded timeline: every journaled step, in resolution order, each with a "rewind to
 /// here" button that keeps everything before it and redoes it (and everything after) for real.
-fn run_timeline_view(state: State, console: WorkflowsConsole, run_key: &str) -> AnyView {
+pub(crate) fn run_timeline_view(state: State, console: WorkflowsConsole, run_key: &str) -> AnyView {
     let Some(detail) = console.run_detail.get() else {
         return view! { <p class="adi-empty">"Loading…"</p> }.into_any();
     };
@@ -403,8 +329,8 @@ pub(crate) async fn refresh(console: WorkflowsConsole) {
 }
 
 /// Read a workflow file's own source through the store browser's `/api/fs/read` — called once,
-/// when its row opens ([`toggle_workflow`]).
-async fn refresh_source(console: WorkflowsConsole, path: String) {
+/// when its detail page opens on the Code tab.
+pub(crate) async fn refresh_source(console: WorkflowsConsole, path: String) {
     console.source.set(None);
     console.source_error.set(None);
     match fetch::fs_read(&path).await {
@@ -416,7 +342,7 @@ async fn refresh_source(console: WorkflowsConsole, path: String) {
     }
 }
 
-async fn refresh_runs(console: WorkflowsConsole, workflow: String) {
+pub(crate) async fn refresh_runs(console: WorkflowsConsole, workflow: String) {
     console.runs.set(None);
     match fetch::workflow_runs(RunsQuery {
         workflow: Some(workflow),
@@ -432,7 +358,7 @@ async fn refresh_runs(console: WorkflowsConsole, workflow: String) {
     }
 }
 
-async fn refresh_run_detail(console: WorkflowsConsole, run_key: String) {
+pub(crate) async fn refresh_run_detail(console: WorkflowsConsole, run_key: String) {
     console.run_detail.set(None);
     match fetch::workflow_run_detail(run_key).await {
         Ok(d) => {
@@ -443,49 +369,15 @@ async fn refresh_run_detail(console: WorkflowsConsole, run_key: String) {
     }
 }
 
-/// Flip a workflow's enabled flag (the Enable/Disable button).
-fn toggle_enabled(state: State, console: WorkflowsConsole, id: String, enable: bool) {
+/// Flip a workflow's enabled flag (the Enable/Disable button — on a list row and on its own
+/// page's header).
+pub(crate) fn toggle_enabled(state: State, console: WorkflowsConsole, id: String, enable: bool) {
     let store = move |_s: State, fresh| console.workflows.set(Some(fresh));
     if enable {
         apply_mutation(state, None, store, fetch::enable_workflow(id));
     } else {
         apply_mutation(state, None, store, fetch::disable_workflow(id));
     }
-}
-
-/// Start a workflow by hand (the Run now button) — an explicit action, so it works even while
-/// disabled. The box's text is parsed as the workflow's own input JSON; blank means `{}`.
-fn run_now(state: State, console: WorkflowsConsole, workflow_id: &str) {
-    let raw = console.run_input.get_untracked();
-    let input = if raw.trim().is_empty() {
-        None
-    } else {
-        match serde_json::from_str(&raw) {
-            Ok(v) => Some(v),
-            Err(e) => {
-                state.flash.set(Some(Flash::err(format!("the input box isn't valid JSON: {e}"))));
-                return;
-            }
-        }
-    };
-    console.busy.set(true);
-    let wf = workflow_id.to_string();
-    spawn_local(async move {
-        match fetch::run_workflow(RunWorkflow {
-            id: wf.clone(),
-            input,
-            request_id: None,
-        })
-        .await
-        {
-            Ok(_) => {
-                state.flash.set(None);
-                refresh_runs(console, wf).await;
-            }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
-        }
-        console.busy.set(false);
-    });
 }
 
 /// Discard a run's journal from `index` onward (the Rewind to here button) — a genuine redo, not

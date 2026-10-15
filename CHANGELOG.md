@@ -22,6 +22,17 @@ extraction script cares about.
 
 ### Added
 
+- **Clicking a workflow now opens its own page, with tabs for Input shape, Output shape, Code,
+  Run manually and Runs.** It replaces the inline expand on the list: the header names the
+  workflow, its scope (Global or the project it's filed under, linking back to wherever you came
+  from), its enabled toggle and any describe error. Input/Output shape and Code are read-only,
+  in the same highlighted frame the old inline expand used. Run manually pre-fills a JSON
+  skeleton from the workflow's own input schema (respecting any `default`/`examples` it
+  declares), validates the box before posting, and then shows the started run's step timeline
+  live, polling until it settles. Runs keeps the existing runs list, timeline and rewind. Every
+  tab deep-links (`/extended/workflows/<id>?tab=…`) and survives a reload or Back/Forward, the
+  same way the agent editor's own page does.
+
 - **Workflows are in the explorer's sidebar, and a project has its own Workflows section.** The
   global `/workflows` page was reachable only from ⌘K before; it now lists under Global beside
   Secrets and Triggers, and each row says `Global` or the project it's filed under. A project's

@@ -23,7 +23,7 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::live::Sub;
-use crate::routing::{ProjectSection, Route, current_path, project_id_from_path};
+use crate::routing::{ProjectSection, Route, WorkflowTab, current_path, project_id_from_path};
 use crate::ui::TableState;
 
 /// The well-known root agent: the one onboarding sets up, the one the chat home opens on, and the
@@ -2063,15 +2063,29 @@ pub(crate) struct WorkflowsConsole {
     /// The discovered workflows, or `None` before the first load.
     pub(crate) workflows: RwSignal<Option<WorkflowsState>>,
     pub(crate) error: RwSignal<Option<String>>,
-    /// The workflow id currently expanded (its starters, shapes, enable toggle, run-now box, and
-    /// its own runs list) — empty for none expanded.
+    /// The workflow id whose own page ([`Route::WorkflowDetail`]) is open — empty when on the
+    /// list. Set by [`Self::open`] (a row click), and by the shell's routing on a deep link,
+    /// reload or Back/Forward — the way `State::current_agent` is for the agent editor.
     pub(crate) selected: RwSignal<String>,
-    /// The "run now" box's raw JSON input text, kept across a re-render of the expanded row.
+    /// Which tab of that page is showing. Lives beside `selected` rather than being derived from
+    /// the URL on every read, since nothing here re-parses `?tab=` reactively — see
+    /// [`crate::routing::WorkflowTab`].
+    pub(crate) tab: RwSignal<WorkflowTab>,
+    /// The "run manually" box's raw JSON input text. Reseeded from the open workflow's own input
+    /// schema when [`Self::selected`] changes to a workflow it hasn't been seeded for yet (see
+    /// [`Self::seeded_for`]) — kept across tab switches and re-renders after that, so editing it
+    /// and then checking the Code tab doesn't lose the draft.
     pub(crate) run_input: RwSignal<String>,
+    /// The id [`Self::run_input`] was last seeded for — `""` for never. Compared against
+    /// `selected` rather than reseeding unconditionally, so a schema landing late (the list load
+    /// racing the page open) seeds exactly once and an edit already in progress is never clobbered
+    /// by the same workflow's schema arriving a second time.
+    pub(crate) seeded_for: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     /// The selected workflow's runs, or `None` before the first load for it.
     pub(crate) runs: RwSignal<Option<RunsState>>,
-    /// The run key currently expanded into its own timeline — empty for none expanded.
+    /// The run key currently expanded into its own timeline (Runs tab) or just started (Run
+    /// manually tab) — empty for none.
     pub(crate) selected_run: RwSignal<String>,
     pub(crate) run_detail: RwSignal<Option<RunDetailDto>>,
     /// The selected workflow's own TypeScript source, read through the store browser's
@@ -2092,7 +2106,9 @@ impl WorkflowsConsole {
             workflows: RwSignal::new(None),
             error: RwSignal::new(None),
             selected: RwSignal::new(String::new()),
+            tab: RwSignal::new(WorkflowTab::Input),
             run_input: RwSignal::new(String::new()),
+            seeded_for: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             runs: RwSignal::new(None),
             selected_run: RwSignal::new(String::new()),
@@ -2103,15 +2119,12 @@ impl WorkflowsConsole {
         }
     }
 
-    /// Expand `id` (or collapse it back if it is already the one open) — closes whichever run
-    /// timeline was open, since it belonged to the previously expanded workflow's own runs list.
-    pub(crate) fn toggle_selected(self, id: &str) {
-        if self.selected.get_untracked() == id {
-            self.selected.set(String::new());
-        } else {
-            self.selected.set(id.to_string());
-            self.run_input.set(String::new());
-        }
+    /// Open `id`'s own page on `tab` — a row click on the list (global or a project's panel).
+    /// Resets everything scoped to whichever workflow was open before, the same way navigating
+    /// from one agent's editor to another's would.
+    pub(crate) fn open(self, id: &str, tab: WorkflowTab) {
+        self.selected.set(id.to_string());
+        self.tab.set(tab);
         self.runs.set(None);
         self.source.set(None);
         self.source_buffer.set(String::new());
@@ -2119,7 +2132,8 @@ impl WorkflowsConsole {
         self.close_run();
     }
 
-    /// Expand `run_key`'s own timeline (or collapse it back if it is already the one open).
+    /// Expand `run_key`'s own timeline (or collapse it back if it is already the one open) — the
+    /// Runs tab's row click.
     pub(crate) fn toggle_run(self, run_key: &str) {
         if self.selected_run.get_untracked() == run_key {
             self.close_run();

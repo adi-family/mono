@@ -152,7 +152,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::LlmBackends => Icon::Model,
         Route::EmbeddingBackends => Icon::Vector,
         Route::Triggers => Icon::Trigger,
-        Route::Workflows => Icon::Workflow,
+        Route::Workflows | Route::WorkflowDetail => Icon::Workflow,
         Route::Dashboards => Icon::Dashboard,
         Route::Marketplace => Icon::Box,
         Route::LiveGraph => Icon::Graph,

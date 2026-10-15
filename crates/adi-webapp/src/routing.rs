@@ -88,6 +88,11 @@ pub(crate) enum Route {
     /// Workflow definitions — a TypeScript file per workflow, run with checkpoints
     /// (ADI-MONO-141 §F) (`/workflows`).
     Workflows,
+    /// One workflow's own page — input/output shape, source, manual run, runs
+    /// (`/workflows/<id>`, [`workflow_id_from_path`]). Which workflow and which tab live in
+    /// [`crate::state::WorkflowsConsole::selected`]/`detail_tab`, the way an agent editor's
+    /// subject lives in `State::current_agent`.
+    WorkflowDetail,
     /// Agent-authored dashboards (`/dashboards`).
     Dashboards,
     /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
@@ -127,9 +132,9 @@ impl Route {
     /// Every page that can be opened by name alone, in the order the explorer lists them.
     ///
     /// This is what the ⌘K menu navigates by (see [`crate::menu`]) and the one place to add a page
-    /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
-    /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
-    /// would open an error rather than a page.
+    /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`], [`Route::WorkflowDetail`] and
+    /// [`Route::StoreFile`] are deliberately absent: each needs a subject the menu has no way to
+    /// supply, so a row for one would open an error rather than a page.
     pub(crate) const NAV: [Route; 27] = [
         Route::Meta,
         Route::Analytics,
@@ -187,6 +192,9 @@ impl Route {
         if agent_form_from_path(path).is_some() {
             return Route::AgentDetail;
         }
+        if workflow_id_from_path(path).is_some() {
+            return Route::WorkflowDetail;
+        }
         // Match the remainder after the `/extended` prefix, so the arms stay the short,
         // canonical names. A path without the prefix falls through to Projects.
         match path.strip_prefix(BASE).unwrap_or(path) {
@@ -239,7 +247,9 @@ impl Route {
             Route::Database => "/extended/database",
             Route::Llm => "/extended/llm",
             Route::Triggers => "/extended/triggers",
-            Route::Workflows => "/extended/workflows",
+            // The real path carries the workflow id (and maybe `?tab=`); this base is only
+            // used for nav fallbacks, the same way the agent editor's is.
+            Route::Workflows | Route::WorkflowDetail => "/extended/workflows",
             Route::Dashboards => "/extended/dashboards",
             Route::Marketplace => "/extended/marketplace",
             Route::LiveGraph => "/extended/live-graph",
@@ -277,6 +287,7 @@ impl Route {
             Route::Llm => "LLM traffic",
             Route::Triggers => "Triggers",
             Route::Workflows => "Workflows",
+            Route::WorkflowDetail => "Workflow",
             Route::Dashboards => "Dashboards",
             Route::Marketplace => "Marketplace",
             Route::LiveGraph => "Live graph",
@@ -316,6 +327,7 @@ impl Route {
             Route::Llm => "Every prompt and answer through the gateway — tokens, models, cost",
             Route::Triggers => "What runs when something happens",
             Route::Workflows => "TypeScript workflows: schedules, events, runs, rewind",
+            Route::WorkflowDetail => "One workflow's shapes, source, manual run and runs",
             Route::Dashboards => "Create, archive, transfer",
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
@@ -576,6 +588,89 @@ pub(crate) fn store_file_path(rel: &str) -> String {
     format!("{BASE}/files/{}", encoded.join("/"))
 }
 
+/// A tab on a workflow's own page (`/workflows/<id>`), selected by `?tab=`. The URL carries it
+/// as a query param rather than a trailing path segment because a workflow id itself may contain
+/// a slash (`<project>/<stem>`) — keeping the id as the whole path after the prefix and the tab
+/// out of it entirely avoids having to tell the two apart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowTab {
+    Input,
+    Output,
+    Code,
+    Run,
+    Runs,
+}
+
+impl WorkflowTab {
+    /// Every tab, in the order they're shown.
+    pub(crate) const ALL: [WorkflowTab; 5] = [
+        WorkflowTab::Input,
+        WorkflowTab::Output,
+        WorkflowTab::Code,
+        WorkflowTab::Run,
+        WorkflowTab::Runs,
+    ];
+
+    /// The `?tab=` value for this tab. [`WorkflowTab::Input`] is the default, so it has none —
+    /// the bare `/workflows/<id>` opens on it rather than redundantly spelling `?tab=input`.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            WorkflowTab::Input => "",
+            WorkflowTab::Output => "output",
+            WorkflowTab::Code => "code",
+            WorkflowTab::Run => "run",
+            WorkflowTab::Runs => "runs",
+        }
+    }
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            WorkflowTab::Input => "Input shape",
+            WorkflowTab::Output => "Output shape",
+            WorkflowTab::Code => "Code",
+            WorkflowTab::Run => "Run manually",
+            WorkflowTab::Runs => "Runs",
+        }
+    }
+
+    /// The tab a `?tab=` value names; an unknown or absent value is the default.
+    pub(crate) fn from_query() -> Self {
+        let Some(v) = query_param("tab") else {
+            return WorkflowTab::Input;
+        };
+        WorkflowTab::ALL
+            .into_iter()
+            .find(|t| t.slug() == v)
+            .unwrap_or(WorkflowTab::Input)
+    }
+}
+
+/// The workflow id in a `/workflows/<id>` path, or `None` for any other path (including the bare
+/// `/workflows` list). No percent-decoding, unlike [`store_path_from_path`]: a workflow id is
+/// either a bare file stem or `<project>/<stem>` ([`adi_workflows::discover`]), and both halves
+/// are filesystem names this store already discovered on disk — not arbitrary text a form field
+/// could put a `/` or `?` into — so this is as literal as [`project_id_from_path`].
+pub(crate) fn workflow_id_from_path(path: &str) -> Option<String> {
+    // Defensive: `current_path()` never carries a query string in practice (it's the bare
+    // pathname), but a caller that passes a full `href` (a test, say) shouldn't see `?tab=…`
+    // tacked onto the id it gets back.
+    let path = path.split('?').next().unwrap_or(path);
+    let rest = path
+        .strip_prefix(BASE)
+        .and_then(|p| p.strip_prefix("/workflows/"))?;
+    let id: Vec<&str> = rest.split('/').filter(|seg| !seg.is_empty()).collect();
+    (!id.is_empty()).then(|| id.join("/"))
+}
+
+/// The `/workflows/<id>?tab=…` URL for one workflow's page.
+pub(crate) fn workflow_detail_path(id: &str, tab: WorkflowTab) -> String {
+    let base = format!("{BASE}/workflows/{id}");
+    match tab.slug() {
+        "" => base,
+        slug => format!("{base}?tab={slug}"),
+    }
+}
+
 /// The section in a `/projects/<id>/<section>` path; the bare project path is its overview.
 pub(crate) fn project_section_from_path(path: &str) -> ProjectSection {
     let Some(rest) = path
@@ -657,15 +752,57 @@ mod tests {
         }
     }
 
-    /// [`Route::SharedAssets`] specifically, by its settings URL rather than the round-trip above —
-    /// pinned so a rename of the segment (`/settings/shared-assets`) is caught here rather than in
-    /// a browser.
+
+
+    /// A global workflow's id (no slash) round-trips through [`workflow_detail_path`] /
+    /// [`workflow_id_from_path`], and the path it builds resolves to [`Route::WorkflowDetail`].
     #[test]
-    fn the_shared_assets_settings_path_resolves() {
-        assert!(Route::from_path("/extended/settings/shared-assets") == Route::SharedAssets);
+    fn a_global_workflow_id_round_trips() {
+        let path = workflow_detail_path("weekly-report", WorkflowTab::Input);
+        assert_eq!(path, "/extended/workflows/weekly-report");
         assert_eq!(
-            Route::SharedAssets.path(),
-            "/extended/settings/shared-assets"
+            workflow_id_from_path(&path).as_deref(),
+            Some("weekly-report")
         );
+        assert!(Route::from_path(&path) == Route::WorkflowDetail);
+    }
+
+    /// A project-scoped workflow's id carries its own slash (`<project>/<stem>`) straight through
+    /// the URL — this is the case the id-vs-tab ambiguity the module doc warns about would bite,
+    /// which is why the tab lives in `?tab=` instead of a trailing path segment.
+    #[test]
+    fn a_project_scoped_workflow_id_round_trips() {
+        let path = workflow_detail_path("crm-suite/sample-ping", WorkflowTab::Input);
+        assert_eq!(path, "/extended/workflows/crm-suite/sample-ping");
+        assert_eq!(
+            workflow_id_from_path(&path).as_deref(),
+            Some("crm-suite/sample-ping")
+        );
+        assert!(Route::from_path(&path) == Route::WorkflowDetail);
+    }
+
+    /// Every tab builds a path that both resolves to the detail route and reports the same id —
+    /// the query string must never be mistaken for part of the id.
+    #[test]
+    fn every_workflow_tab_round_trips_for_a_slashed_id() {
+        for tab in WorkflowTab::ALL {
+            let path = workflow_detail_path("crm-suite/sample-ping", tab);
+            assert!(
+                Route::from_path(&path) == Route::WorkflowDetail,
+                "{path} did not resolve to WorkflowDetail"
+            );
+            assert_eq!(
+                workflow_id_from_path(&path).as_deref(),
+                Some("crm-suite/sample-ping"),
+                "{path} did not report the id it was built from"
+            );
+        }
+    }
+
+    /// The bare list path is never mistaken for a workflow id.
+    #[test]
+    fn the_bare_workflows_list_path_has_no_workflow_id() {
+        assert_eq!(workflow_id_from_path("/extended/workflows"), None);
+        assert!(Route::from_path("/extended/workflows") == Route::Workflows);
     }
 }

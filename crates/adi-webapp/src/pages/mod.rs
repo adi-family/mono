@@ -32,6 +32,7 @@ mod system;
 mod tasks;
 mod tools;
 mod triggers;
+mod workflow_detail;
 mod workflows;
 mod workspaces;
 
@@ -110,6 +111,7 @@ pub(crate) use system::system_view;
 pub(crate) use tasks::tasks_view;
 pub(crate) use tools::tools_view;
 pub(crate) use triggers::{poll_trigger_log, triggers_view};
+pub(crate) use workflow_detail::workflow_detail_view;
 pub(crate) use workflows::workflows_view;
 pub(crate) use workspaces::{poll_hook_log, poll_term};
 
