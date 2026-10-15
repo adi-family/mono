@@ -42,6 +42,10 @@ extraction script cares about.
   editor** action that jumps to the store-file editor for the real thing — including when the
   file fails to describe, which is exactly when reading it by eye matters most.
 
+- **`adi-workflows`**, a system tool for running and inspecting workflows from an agent's own
+  `.bin` (list/show/run/runs/rewind/enable/disable), alongside `adi-tasks`, `adi-agents` and the
+  rest.
+
 ### Changed
 
 - **A built-in guide you haven't edited now refreshes itself when a newer ADI ships a newer

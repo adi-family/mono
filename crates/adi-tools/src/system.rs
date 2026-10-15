@@ -119,6 +119,12 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         subcommand: "dns",
     },
     SystemTool {
+        id: "sys-workflows",
+        name: "adi-workflows",
+        description: "Run and inspect TypeScript workflows (list/show/run/runs/rewind/enable/disable).",
+        subcommand: "workflows",
+    },
+    SystemTool {
         id: "sys-db",
         name: "adi-db",
         description: "Run SQL against the shared SQLite store (query/exec/tables/schema/list). `--project P` for a project's database.",
