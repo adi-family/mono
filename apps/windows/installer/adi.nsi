@@ -61,7 +61,7 @@ VIAddVersionKey "ProductName" "${APP}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
-VIAddVersionKey "LegalCopyright" "© With ADI, Inc."
+VIAddVersionKey "LegalCopyright" "Copyright (c) With ADI, Inc."
 VIAddVersionKey "FileDescription" "ADI installer"
 
 ; -- pages ------------------------------------------------------------------------------------
