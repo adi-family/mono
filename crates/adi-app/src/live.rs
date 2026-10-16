@@ -72,7 +72,8 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/settings/shared-assets"
             | "/api/tasks"
             | "/api/tools"
-            | "/api/triggers" => Some(SLOW),
+            | "/api/triggers"
+            | "/api/usage-events" => Some(SLOW),
             p if p.starts_with("/api/projects/") => Some(SLOW),
             _ => None,
         },

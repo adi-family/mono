@@ -34,6 +34,7 @@ use adi_secrets::Secrets;
 use adi_tasks::Tasks;
 use adi_tools::Tools;
 use adi_triggers::{EventDispatcher, Supervisor, Triggers};
+use adi_usage::Usage;
 use adi_webapp_api::handlers::Response;
 use adi_webapp_api::{handlers, http, origin};
 use include_dir::{Dir, include_dir};
@@ -261,6 +262,16 @@ async fn main() -> anyhow::Result<()> {
         triggers.clone(),
         awaits::start(agents.clone(), workflows.clone()),
     );
+    // Its own cursor on the same log, exactly like the dispatcher above — see that field's own
+    // comment. Off by default on this branch (ADI-MONO-157; `adi_usage::DEFAULT_ENABLED`); while
+    // off it still catches up and acks, but queues and sends nothing.
+    let usage = Usage::start_watched(
+        projects.config().clone(),
+        events.clone(),
+        agents.clone(),
+        projects.clone(),
+        VERSION,
+    );
     event_log::start(tasks.clone(), events.clone());
     prober::start(agents.clone());
     let dist = webapp_dist_override();
@@ -331,6 +342,7 @@ async fn main() -> anyhow::Result<()> {
     // Trigger process groups outlive this process unless explicitly stopped.
     app.trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
     event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
+    usage.stop(TRIGGER_STOP_GRACE).await;
     app.mesh.stop().await;
     Ok(())
 }
@@ -507,6 +519,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/tools",
     "/api/triggers",
     "/api/update",
+    "/api/usage-events",
     "/api/voice",
     "/api/workflows",
 ];
@@ -590,6 +603,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/system/diagnose") => handlers::diagnose_system(),
         ("GET", "/api/settings/shared-assets") => handlers::shared_assets_state(),
         ("POST", "/api/settings/shared-assets") => handlers::set_shared_assets(&req.body),
+        ("GET", "/api/usage-events") => handlers::usage_events_state(projects.config()),
+        ("POST", "/api/usage-events/toggle") => {
+            handlers::set_usage_events(projects.config(), &req.body)
+        }
+        ("POST", "/api/usage-events/forget") => handlers::forget_usage_events(projects.config()),
         ("GET", "/api/ports") => handlers::ports(ports),
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
         ("POST", "/api/ports/reserve") => handlers::reserve(ports, &req.body),

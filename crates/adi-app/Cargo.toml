@@ -52,6 +52,10 @@ adi-events = { workspace = true }
 
 adi-workflows = { workspace = true }
 
+# First-party usage events (ADI-MONO-157): reads the bus beside EventDispatcher, applies the
+# collector's allowlist, and flushes to relay.withadi.dev.
+adi-usage = { workspace = true }
+
 chrono = { workspace = true }
 
 adi-mesh = { workspace = true }
