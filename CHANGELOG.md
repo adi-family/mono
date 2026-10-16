@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.31.0 — 2026-10-16
+
 ### Added
 
 - **First-party usage events, on by default.** ADI now sends a fixed, published list of
