@@ -281,9 +281,10 @@
       <div>
         <h2>Part of your machine, not a tab in someone's cloud.</h2>
         <p>There is no account to create. Your projects, your database, your secrets and your agents' memory sit in one directory on your own disk, under your own backups. Pull the network and the store is still yours.</p>
-        <p>You bring your own model account — that call goes to whichever provider you already pay for. A few other things reach the network, and they're named right here. None of them reports you: there is no telemetry or product-analytics SDK anywhere in the source.</p>
+        <p>You bring your own model account — that call goes to whichever provider you already pay for. A few other things reach the network, and they're named right here. ADI sends a fixed, published list of usage events to a collector we run ourselves, unless it is switched off — nothing else reports you, and there is no third-party telemetry or product-analytics SDK anywhere in the source.</p>
         <ul class="net">
           <li><b>Your model provider</b> — inference goes to the account you already pay for.</li>
+          <li><b>Usage events</b> — a fixed, published list of install-level events (first start, setup, agent runs), sent to <code>relay.withadi.dev</code>, a collector we run ourselves. On by default; every field is listed at <a class="link" href="https://withadi.dev/privacy#usage">withadi.dev/privacy#usage</a>. <code>adi-mono analytics disable</code> or <code>DO_NOT_TRACK=1</code> turns it off.</li>
           <li><b>The update check</b> — one static file from GitHub Releases, at login and every six hours. <code>adi-mono update disable</code> stops it.</li>
           <li><b>The mesh relay</b>, if you pair two machines over the internet — iroh's public relays by default; name your own in <code>mesh.toml</code>.</li>
           <li><b>Signing in with Google or GitHub</b> — a router we run trades the sign-in for your token and hands it into your own secrets store. No database, no session, no ADI account.</li>

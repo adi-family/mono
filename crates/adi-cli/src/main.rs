@@ -251,7 +251,8 @@ enum Command {
         command: UpdateCommand,
     },
     /// Usage events commands (ADI-MONO-157): on/off, status, this install's id, and forgetting
-    /// it. Off by default until the operator chooses — see `adi_usage::settings::DEFAULT_ENABLED`.
+    /// it. On by default — see `adi_usage::settings::DEFAULT_ENABLED` — turn off here with
+    /// `disable`, or with `DO_NOT_TRACK=1`/`ADI_ANALYTICS=0` in the environment.
     Analytics {
         #[command(subcommand)]
         command: AnalyticsCommand,

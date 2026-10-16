@@ -1,6 +1,6 @@
 [package]
 name = "adi-usage"
-description = "First-party usage events (ADI-MONO-157): reads the platform event bus, applies the collector's allowlist, and POSTs batches to relay.withadi.dev/v1/app. Off by default on this branch — see settings::DEFAULT_ENABLED."
+description = "First-party usage events (ADI-MONO-157): reads the platform event bus, applies the collector's allowlist, and POSTs batches to relay.withadi.dev/v1/app. On by default — see settings::DEFAULT_ENABLED."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

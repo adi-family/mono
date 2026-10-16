@@ -6,10 +6,11 @@
 //! `~/.adi/mono/analytics/queue.jsonl`. A timer flushes the queue to the collector
 //! (`POST <relay>/v1/app`) every ten minutes and once more at shutdown.
 //!
-//! **Off by default on this branch** — [`settings::DEFAULT_ENABLED`] is the one constant that
-//! decides, until the operator chooses. While it (or an env override, or the panel's toggle) says
-//! off, [`dispatch::Usage`] still catches up on the bus and acks every event — so switching this
-//! on later resumes from "now" rather than replaying a backlog — but queues and sends nothing.
+//! **On by default** (operator decision, 2026-10-16) — [`settings::DEFAULT_ENABLED`] is the one
+//! constant that decides. `DO_NOT_TRACK=1`, `ADI_ANALYTICS=0` or the Settings page toggle switch
+//! it off. While it (or an env override, or the panel's toggle) says off, [`dispatch::Usage`]
+//! still catches up on the bus and acks every event — so switching this on later resumes from
+//! "now" rather than replaying a backlog — but queues and sends nothing.
 //!
 //! ```text
 //! bus (adi_events) ──▶ dispatch::Usage ──▶ queue.jsonl ──▶ client::flush ──▶ POST /v1/app

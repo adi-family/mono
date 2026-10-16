@@ -263,8 +263,8 @@ async fn main() -> anyhow::Result<()> {
         awaits::start(agents.clone(), workflows.clone()),
     );
     // Its own cursor on the same log, exactly like the dispatcher above — see that field's own
-    // comment. Off by default on this branch (ADI-MONO-157; `adi_usage::DEFAULT_ENABLED`); while
-    // off it still catches up and acks, but queues and sends nothing.
+    // comment. On by default (ADI-MONO-157; `adi_usage::DEFAULT_ENABLED`); switched off, it still
+    // catches up and acks, but queues and sends nothing.
     let usage = Usage::start_watched(
         projects.config().clone(),
         events.clone(),

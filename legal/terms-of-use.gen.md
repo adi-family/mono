@@ -176,12 +176,16 @@ This section states facts, not intentions. Each line was checked against the sou
 date given below. Where a line speaks about something ADI does not currently do, it is an
 undertaking about how such a thing would be introduced if it ever were.
 
-Verified on 2026-08-22 by reading the source tree of this repository:
+Verified on 2026-10-16 by reading the source tree of this repository:
 
-- ADI contains no telemetry and no phone-home of any kind.
-- If anything of that kind is ever added, its entire payload is documented before it ships.
-- Anything of that kind has an obvious way to turn it off.
-- Everything ADI holds lives in `~/.adi/mono`, on the machine you run it on.
+- ADI sends a fixed, published list of usage events to a collector we run ourselves
+  (relay.withadi.dev), unless it is switched off.
+- Every event's complete field list is documented at withadi.dev/privacy#usage.
+- If anything beyond that published list is ever added, its entire payload is documented before it
+  ships.
+- Turn it off in Settings → Usage events, with `adi-mono analytics disable`, or by setting
+  `DO_NOT_TRACK=1` in the environment.
+- Everything else ADI holds lives in `~/.adi/mono`, on the machine you run it on.
 
 ## 5. Open questions carried by the territory list — *informational*
 

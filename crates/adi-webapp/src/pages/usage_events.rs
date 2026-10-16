@@ -48,11 +48,16 @@ pub(crate) fn usage_events_view(state: State) -> AnyView {
                             <span class="adi-field__label">"Send usage events"</span>
                         </label>
                         <p class="adi-field__note">
-                            "A fixed, short list of events — the first start, the setup wizard's \
-                             Save, agent runs in the first week, once a day while it runs, and a \
-                             few more — each carrying a random install id, the ADI version, the \
-                             operating system and its architecture. Never a prompt, an answer, a \
-                             file, a path, a project or agent name, or a secret."
+                            "On by default. A fixed, short list of events — the first start, \
+                             the setup wizard's Save, agent runs in the first week, once a day \
+                             while it runs, and a few more — each carrying a random install id, \
+                             the ADI version, the operating system and its architecture. Never \
+                             a prompt, an answer, a file, a path, a project or agent name, or a \
+                             secret."
+                        </p>
+                        <p class="adi-field__note">
+                            "Turn it off here, with "<code>"adi-mono analytics disable"</code>
+                            ", or by setting "<code>"DO_NOT_TRACK=1"</code>" in the environment."
                         </p>
                         {u.env_override.clone().map(|name| view! {
                             <p class="adi-field__note">

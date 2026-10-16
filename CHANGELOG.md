@@ -20,6 +20,18 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **First-party usage events, on by default.** ADI now sends a fixed, published list of
+  install-level events — the first start, the setup wizard's Save, agent runs in the first week,
+  once a day while it runs, and a few more — to a collector we run ourselves
+  (`relay.withadi.dev`), each carrying a random install id, the ADI version, the operating
+  system and its architecture. Never a prompt, an answer, a file, a path, a project or agent
+  name, or a secret — the full field list for every event is published. Turn it off from
+  Settings → Usage events, with `adi-mono analytics disable`, or by setting `DO_NOT_TRACK=1`
+  (or `ADI_ANALYTICS=0`) in the environment; `adi-mono analytics status`/`id`/`forget` round out
+  the CLI.
+
 ## 1.30.0 — 2026-10-15
 
 ### Added

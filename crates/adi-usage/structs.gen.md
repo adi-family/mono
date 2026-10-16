@@ -2,7 +2,7 @@
 
 # `adi-usage` — types
 
-> First-party usage events (ADI-MONO-157): reads the platform event bus, applies the collector's allowlist, and POSTs batches to relay.withadi.dev/v1/app. Off by default on this branch — see settings::DEFAULT_ENABLED.
+> First-party usage events (ADI-MONO-157): reads the platform event bus, applies the collector's allowlist, and POSTs batches to relay.withadi.dev/v1/app. On by default — see settings::DEFAULT_ENABLED.
 
 4 structs · 1 enum across 5 files.
 

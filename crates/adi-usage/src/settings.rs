@@ -7,10 +7,11 @@
 use adi_config::Module;
 use serde::{Deserialize, Serialize};
 
-/// What a fresh install does until the operator chooses (ADI-MONO-157 — the brief this crate
-/// implements was approved before that choice was made). Flip this one constant when they do;
-/// every reader here goes through [`effective`], so nothing else needs to change.
-pub const DEFAULT_ENABLED: bool = false;
+/// What a fresh install does until the operator changes it. The operator decided 2026-10-16
+/// (ADI-MONO-157 follow-up): on by default, with an opt-out — [`ENV_VAR`] and
+/// [`DO_NOT_TRACK_ENV`] still switch it off, and so does the Settings page toggle. Every reader
+/// here goes through [`effective`], so nothing else needs to change if this is ever flipped again.
+pub const DEFAULT_ENABLED: bool = true;
 
 /// Set to `0`/`false`/`off`/`no` to force usage events off regardless of [`Settings::enabled`],
 /// or to anything else non-empty to force them on. Checked ahead of the stored setting but behind
@@ -139,10 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_store_defaults_to_off() {
+    fn a_fresh_store_defaults_to_enabled() {
         let module = scratch("default");
-        // DEFAULT_ENABLED is `false` on this branch (ADI-MONO-157: the operator has not chosen
-        // yet) — this just checks that a fresh store actually reads that constant back.
+        // DEFAULT_ENABLED is `true` on this branch (ADI-MONO-157 follow-up, 2026-10-16) — this
+        // just checks that a fresh store actually reads that constant back.
         assert_eq!(Settings::load(&module).enabled, DEFAULT_ENABLED);
         assert!(module.dir().join(SETTINGS_FILE).exists());
     }
