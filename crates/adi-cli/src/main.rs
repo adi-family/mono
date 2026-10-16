@@ -3,6 +3,7 @@
 //! platform actions by running this binary.
 
 mod agents;
+mod analytics;
 mod channels;
 mod db;
 mod dns;
@@ -30,6 +31,7 @@ use adi_core::{Adi, Service, VERSION};
 use clap::{Parser, Subcommand};
 
 use crate::agents::{AgentsCommand, run_agents};
+use crate::analytics::{AnalyticsCommand, run_analytics};
 use crate::channels::{ChannelsCommand, run_channels};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
@@ -247,6 +249,12 @@ enum Command {
     Update {
         #[command(subcommand)]
         command: UpdateCommand,
+    },
+    /// Usage events commands (ADI-MONO-157): on/off, status, this install's id, and forgetting
+    /// it. Off by default until the operator chooses — see `adi_usage::settings::DEFAULT_ENABLED`.
+    Analytics {
+        #[command(subcommand)]
+        command: AnalyticsCommand,
     },
     /// Collect one sendable archive of this machine's ADI state — versions, setup, services,
     /// routes, ports, logs and crash reports — for somebody debugging it from the outside.
@@ -485,6 +493,13 @@ fn main() {
             }
         }
         Command::Update { command } => run_update(adi, command),
+        // Like `mesh`/`marketplace`: no `adi` facade — this is `adi-usage`'s own settings/state.
+        Command::Analytics { command } => {
+            if let Err(e) = run_analytics(command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Command::Diagnose { out, json } => run_diagnose(adi, out.as_deref(), json),
         // stdout is the MCP transport, so a failure cannot be reported there — only on stderr,
         // which the engine's CLI surfaces as the server's own log.

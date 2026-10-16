@@ -60,6 +60,10 @@ adi-marketplace = { workspace = true }
 # reqwest + rustls in this binary, and this reuses it rather than pulling a second copy.
 adi-channels = { workspace = true }
 
+# The `analytics` command group (ADI-MONO-157): on/off, status, install id, forget — this is
+# `adi-usage`'s own settings/state under the store, not `adi-core`'s.
+adi-usage = { workspace = true }
+
 clap = { workspace = true }
 # `mesh invite` draws its token as a QR (see `src/qr.rs`). Encoder only — the decoder is the
 # browser client's problem, and this binary never reads an image.
