@@ -465,10 +465,16 @@ mod tests {
         settings::set_enabled(&h.usage.module(), true).expect("enable");
     }
 
+    fn disable(h: &Harness) {
+        settings::set_enabled(&h.usage.module(), false).expect("disable");
+    }
+
     #[test]
     fn while_off_nothing_is_queued_but_the_cursor_still_advances() {
         let h = harness("off");
-        // Left at the default (off) deliberately.
+        // Explicit: DEFAULT_ENABLED is now `true`, so this exercises "switched off" rather than
+        // "never touched the setting".
+        disable(&h);
         h.usage.events.emit("adi.fleet.invite.created", "{}").expect("emit");
         h.usage.tick_blocking();
         assert!(queued(&h).is_empty(), "off means nothing is queued");
