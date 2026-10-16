@@ -4,11 +4,12 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 28 enums across 22 files.
+5 structs · 29 enums across 23 files.
 
 ## Index
 
 - [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `AwaitsCommand`, `RunRow`
+- [`src/analytics.rs`](#srcanalyticsrs) — `AnalyticsCommand`
 - [`src/channels.rs`](#srcchannelsrs) — `ChannelsCommand`
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
@@ -286,6 +287,26 @@ struct RunRow {
     message: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     result_head: String,
+}
+```
+
+---
+
+## `src/analytics.rs`
+
+### enum `AnalyticsCommand`
+
+```rust
+#[derive(Debug, Clone, Copy, Subcommand)]
+pub(crate) enum AnalyticsCommand {
+    Enable,
+    Disable,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Id,
+    Forget,
 }
 ```
 
@@ -1128,6 +1149,10 @@ enum Command {
     Update {
         #[command(subcommand)]
         command: UpdateCommand,
+    },
+    Analytics {
+        #[command(subcommand)]
+        command: AnalyticsCommand,
     },
     Diagnose {
         #[arg(long, value_name = "PATH")]

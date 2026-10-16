@@ -54,6 +54,7 @@ dependencies = [
  "adi-tasks",
  "adi-tools",
  "adi-triggers",
+ "adi-usage",
  "adi-webapp-api",
  "adi-workflows",
  "anyhow",
@@ -128,6 +129,7 @@ dependencies = [
  "adi-knowledge",
  "adi-marketplace",
  "adi-mesh",
+ "adi-usage",
  "clap",
  "qrcode",
  "quircs",
@@ -605,6 +607,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-usage"
+version = "0.1.0"
+dependencies = [
+ "adi-agents",
+ "adi-config",
+ "adi-events",
+ "adi-projects",
+ "chrono",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "adi-webapp"
 version = "0.1.0"
 dependencies = [
@@ -649,6 +669,7 @@ dependencies = [
  "adi-tools",
  "adi-triggers",
  "adi-update",
+ "adi-usage",
  "adi-workflows",
  "anyhow",
  "base64 0.22.1",

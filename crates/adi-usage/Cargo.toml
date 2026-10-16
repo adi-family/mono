@@ -1,0 +1,26 @@
+[package]
+name = "adi-usage"
+description = "First-party usage events (ADI-MONO-157): reads the platform event bus, applies the collector's allowlist, and POSTs batches to relay.withadi.dev/v1/app. Off by default on this branch — see settings::DEFAULT_ENABLED."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-agents = { workspace = true }
+adi-config = { workspace = true }
+adi-events = { workspace = true }
+adi-projects = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true
