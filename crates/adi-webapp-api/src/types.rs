@@ -192,6 +192,38 @@ pub struct SetSharedAssets {
     pub mode: SharedAssetsMode,
 }
 
+/// `GET /api/usage-events` — usage events (ADI-MONO-157): the on/off switch, and the install id
+/// it pins events to once it is on. Read by both the Settings page's toggle and the onboarding
+/// welcome screen, which needs [`install_id`](Self::install_id) for its "Getting started" link.
+///
+/// Named apart from `Route::Analytics`/`pages::analytics` (what every agent on this machine has
+/// actually run) on purpose — that page is this instance's own local history and shares nothing
+/// with this one, which is about events sent off this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsageEventsState {
+    /// Whether usage events are actually sent right now — the persisted switch, folding in
+    /// `ADI_ANALYTICS`/`DO_NOT_TRACK` if either overrides it. What a toggle should show as "on".
+    pub enabled: bool,
+    /// The switch as it is stored on disk, before either env var — what a `POST` would change,
+    /// and why a toggle may read differently from [`enabled`](Self::enabled) (an env override is
+    /// in force) with [`env_override`](Self::env_override) saying which.
+    pub persisted: bool,
+    /// The env var currently overriding the stored setting, if either is — `ADI_ANALYTICS` or
+    /// `DO_NOT_TRACK` — so the panel can say *why* the toggle doesn't do anything right now.
+    pub env_override: Option<String>,
+    /// The random id this install's events carry, once there have been any. `None` until usage
+    /// events have run at least once while on, and always `None` while they are off — an
+    /// install that keeps them off never has one to show.
+    pub install_id: Option<String>,
+}
+
+/// `POST /api/usage-events/toggle` — the whole body is the new value of
+/// [`UsageEventsState::persisted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetUsageEvents {
+    pub enabled: bool,
+}
+
 /// An inclusive `[start, end]` port interval — used for both the allocatable range and
 /// each reserved band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

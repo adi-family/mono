@@ -98,7 +98,10 @@ pub fn fleet(store: &Config) -> Response {
 #[must_use]
 pub fn fleet_invite(store: &Config) -> Response {
     match mint(store, ticket::published(), adi_config::now_unix()) {
-        Ok(invite) => ok_json(&invite),
+        Ok(invite) => {
+            super::usage_events::fleet_invite_created(store);
+            ok_json(&invite)
+        }
         Err(response) => response,
     }
 }

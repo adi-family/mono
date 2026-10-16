@@ -203,11 +203,46 @@ pub fn install_marketplace_app(cfg: &Config, body: &[u8]) -> Response {
         Err(e) => return refusal(&e),
     };
     match adi_marketplace::bundle::install(&market, &spec, &req.name, req.start, &scope) {
-        Ok(done) => ok_json(&MarketplaceDone {
-            message: install_message(&done),
-            state: state(&market),
-        }),
+        Ok(done) => {
+            publish_installed(cfg, &req.marketplace, &req.slug, &done);
+            ok_json(&MarketplaceDone {
+                message: install_message(&done),
+                state: state(&market),
+            })
+        }
         Err(e) => refusal(&e),
+    }
+}
+
+/// `adi.marketplace.installed` once for the legacy single-dashboard path, or once per element
+/// that actually landed in a general bundle (`ElementOutcome::id` is `Some` only for one that
+/// did — blocked, already-installed and failed elements publish nothing).
+fn publish_installed(
+    cfg: &Config,
+    marketplace: &str,
+    slug: &str,
+    done: &adi_marketplace::BundleOutcome,
+) {
+    use adi_marketplace::BundleOutcome;
+    match done {
+        BundleOutcome::Legacy(_) => {
+            super::usage_events::marketplace_installed(
+                cfg,
+                marketplace,
+                slug,
+                Kind::Dashboard.wire(),
+            );
+        }
+        BundleOutcome::Bundle(bundle) => {
+            for element in bundle.elements.iter().filter(|e| e.id.is_some()) {
+                super::usage_events::marketplace_installed(
+                    cfg,
+                    marketplace,
+                    slug,
+                    element.kind.wire(),
+                );
+            }
+        }
     }
 }
 

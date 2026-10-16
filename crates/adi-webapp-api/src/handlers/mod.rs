@@ -52,6 +52,10 @@ mod tasks;
 mod tools;
 mod triggers;
 mod update;
+mod usage;
+/// Bus events `dashboards`/`marketplace`/`fleet` publish for `adi-usage` to pick up
+/// (ADI-MONO-157). Internal plumbing, not an endpoint of its own — nothing re-exports it.
+mod usage_events;
 mod voice;
 mod workflows;
 mod workspaces;
@@ -82,6 +86,7 @@ pub use tasks::*;
 pub use tools::*;
 pub use triggers::*;
 pub use update::*;
+pub use usage::*;
 pub use voice::*;
 pub use workflows::*;
 pub use workspaces::*;

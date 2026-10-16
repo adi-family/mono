@@ -109,6 +109,7 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
         return error(500, &format!("could not create dashboard: {e}"));
     }
 
+    super::usage_events::dashboard_created(cfg, "blank");
     ok_json(&read_dashboard(&dir, ports, &[]))
 }
 
@@ -565,6 +566,7 @@ pub fn import_dashboard(
     // parked outside the supervisor's glob. Two files would then describe one dashboard.
     let _ = std::fs::remove_file(dir.join(".adi").join(HIVE_ARCHIVED));
 
+    super::usage_events::dashboard_created(&cfg, "import");
     ok_json(&read_dashboard(&dir, ports, live))
 }
 
