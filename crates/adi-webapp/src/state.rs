@@ -16,7 +16,8 @@ use adi_webapp_api::types::{
     MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectsState, RunDetailDto, RunRef, RunsState, SecretsState,
     SharedAssetsState, TasksState,
-    TestResultDto, ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState, UsedPorts,
+    TestResultDto, ToolsState, TranscriptView, TriggerLog, TriggerRef, TriggersState,
+    UsageEventsState, UsedPorts,
     WorkflowsState, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
@@ -171,6 +172,10 @@ pub(crate) struct State {
     /// page: whether the webapp bundle is served from the CDN instead of this instance, and the
     /// base URL it would use.
     pub(crate) shared_assets: RwSignal<Option<SharedAssetsState>>,
+    /// Usage events (ADI-MONO-157): the on/off switch and the install id (`/api/usage-events`).
+    /// Read by its own settings page and by the onboarding welcome screen, which needs the
+    /// install id for its "Getting started" link and must not show it while this is off.
+    pub(crate) usage_events: RwSignal<Option<UsageEventsState>>,
     /// The dashboards listing (`/dashboards`).
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
     /// The apps marketplace (`/marketplace`): configured sources and the cached entries. Read
@@ -501,6 +506,7 @@ impl State {
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
             shared_assets: RwSignal::new(None),
+            usage_events: RwSignal::new(None),
             dashboards: RwSignal::new(None),
             marketplace: RwSignal::new(None),
             fleet_dashboards: RwSignal::new(None),
@@ -3170,6 +3176,13 @@ pub(crate) fn subscriptions(
                 set_if_changed(s.shared_assets, v);
             },
         ));
+    }
+    if route == Route::UsageEvents {
+        // Always this machine's own switch and install id, like `/api/update/*` (§14's L3) — a
+        // picked node's usage events are a different setting entirely.
+        subs.push(Sub::get("/api/usage-events", move |v: UsageEventsState| {
+            set_if_changed(s.usage_events, v);
+        }));
     }
     if route == Route::LlmBackends {
         // Polled rather than fetched once, because the interesting half of this page is not the

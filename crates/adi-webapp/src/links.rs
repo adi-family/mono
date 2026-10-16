@@ -53,3 +53,11 @@ pub(crate) const FLEET_SESSIONS: &str =
 /// `?` on the picker menu's head (`docs/fleet.md` §14).
 pub(crate) const FLEET_PANEL_SOURCE: &str =
     doc_section!("fleet.md", "14-pointing-the-whole-panel-at-a-node");
+
+/// The onboarding welcome screen's "Getting started" link (ADI-MONO-157): opens in the browser,
+/// which — unlike this panel — may already have accepted the site's cookie banner, so the site
+/// can join this install to whatever brought that browser here (the download it clicked).
+/// `install_id` is a random UUID, never anything that names this machine or its owner.
+pub(crate) fn welcome_url(install_id: &str) -> String {
+    format!("https://withadi.dev/welcome/?i={install_id}")
+}

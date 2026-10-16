@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use adi_webapp_api::types::{
     Accepted, AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentPrompts, AgentRef,
     AgentReviewStarted, AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState,
-    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel, AnswerRun,
-    ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
+    AgentSimTurn, AgentSteps, AgentTokens, AgentsState, AllAgentRuns, AllowChannel,
+    AnswerRun, ApiError, ChannelAllowlistDto, ChannelConnected, ChannelConnectionDto, ChannelProviderStatus,
     ChannelRef, ChannelTargetDto, ChannelsState, CloseGoal, CompleteTask, ConnectChannel, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DiagnosticReport,
@@ -29,14 +29,14 @@ use adi_webapp_api::types::{
     SaveAgent, SaveEmbeddingBackend,
     SaveEmbeddingSettings, SaveLlmBackend, SaveLlmSettings, SaveTrigger, SecretRef, SecretsState,
     SetAutoTitle, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
-    SetSharedAssets, SetSpawnPolicy, SetSystemPower, SharedAssetsMode, SharedAssetsState,
+    SetSharedAssets, SetSpawnPolicy, SetSystemPower, SetUsageEvents, SharedAssetsMode, SharedAssetsState,
     SimulateAgent, SimulateTurn, SpawnRuleEdit, StarRun, StartMarketplaceApp,
     StartMarketplaceService, StartResult, StartService, StopResult, SystemStatus, TaskRef,
     TasksState, TestEmbeddingBackend,
     TestLlmBackend, TestResultDto, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
     TranscriptView, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
     UninstallMarketplaceElement, UnlockNode, UnqueueFromRun, UpdateMarketplaceApp,
-    UpdateMarketplaceBundle, UpdateState, UsedPorts, VoiceState, WorkflowRef, WorkflowRunRef,
+    UpdateMarketplaceBundle, UpdateState, UsageEventsState, UsedPorts, VoiceState, WorkflowRef, WorkflowRunRef,
     WorkflowStarted, WorkflowsState, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile, WriteToolScript,
@@ -101,6 +101,26 @@ pub async fn check_update() -> Result<UpdateState, String> {
 /// app on its way through, so the socket this reply came over is expected to drop.
 pub async fn run_update() -> Result<UpdateState, String> {
     post_local("/api/update/run", &()).await
+}
+
+// Usage events (ADI-MONO-157). Named apart from `/api/analytics` (the unrelated, pre-existing
+// per-agent run stats page) — see `UsageEventsState`'s own doc comment. Always local, like
+// `/api/update/*` above: the switch and the install id it pins events to are this machine's own,
+// whatever the panel-wide source picker is pointed at.
+
+/// The Settings page's toggle, and the onboarding welcome screen's own read of the same state —
+/// the install id its "Getting started" link needs is only ever set once this is on.
+pub async fn usage_events() -> Result<UsageEventsState, String> {
+    get_local("/api/usage-events").await
+}
+
+pub async fn set_usage_events(enabled: bool) -> Result<UsageEventsState, String> {
+    post_local("/api/usage-events/toggle", &SetUsageEvents { enabled }).await
+}
+
+/// `adi-mono analytics forget`'s panel counterpart — clears `install_id`.
+pub async fn forget_usage_events() -> Result<UsageEventsState, String> {
+    post_local("/api/usage-events/forget", &()).await
 }
 
 // The System page (`docs/fleet.md` §14's L3): the same exemption as `/api/update/*` above, for

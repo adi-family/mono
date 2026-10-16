@@ -285,7 +285,7 @@ pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) 
                 let name = if target.is_empty() { m.name.clone() } else { target.clone() };
                 let mode = form.mode.get();
                 if mode.is_none() {
-                    return welcome_view(form, m.form.presets.clone(), creating, name);
+                    return welcome_view(state, form, m.form.presets.clone(), creating, name);
                 }
                 let m = m.clone();
                 view! {
@@ -304,7 +304,12 @@ pub(crate) fn onboarding_view(state: State, form: OnboardingForm, m: MetaState) 
 /// not a step — and no form, because the only question here is which of the two people you are.
 /// A first run greets a stranger; a reconfigure — of the root agent or any other — names what it
 /// is about to go through again and offers a way back to the chat instead.
+///
+/// `creating` also gates the "Getting started" link (ADI-MONO-157): it opens
+/// `withadi.dev/welcome/?i=<install_id>` in the browser, only once usage events are on and an
+/// install id exists to put there — a reconfigure never shows it, having shown it once already.
 fn welcome_view(
+    state: State,
     form: OnboardingForm,
     presets: Vec<AgentSetupPreset>,
     creating: bool,
@@ -348,6 +353,7 @@ fn welcome_view(
                 )}
             </div>
             <p class="adi-onb__welcome-note">"Either way, you can change all of it later."</p>
+            {creating.then(|| getting_started_link(state))}
             {(!creating).then(|| view! {
                 <div class="adi-onb__actions">
                     <button class="adi-btn adi-btn--ghost" type="button"
@@ -355,6 +361,33 @@ fn welcome_view(
                 </div>
             })}
         </div>
+    }
+    .into_any()
+}
+
+/// The welcome screen's "Getting started" link (ADI-MONO-157, §3.4 of the plan): opens
+/// `withadi.dev/welcome/?i=<install_id>` in the browser. Shown only once usage events are on and
+/// an install id exists to put in it — the first tick of `adi-usage`'s dispatch loop mints one,
+/// so a reader who opens the panel before that has landed sees nothing here rather than a link
+/// that would 404 on the query string. Nothing here names the switch: that lives on its own
+/// settings page, reached from the explorer, not from this one-time screen.
+fn getting_started_link(state: State) -> AnyView {
+    // Read inside the call this is always made from (`welcome_view`, itself called from
+    // `onboarding_view`'s own `{move || …}`), so the enclosing reactive scope picks up this
+    // signal too and re-renders once the one-shot fetch in `main::Home` lands — no closure of
+    // its own needed here.
+    let Some(u) = state.usage_events.get().filter(|u| u.enabled) else {
+        return ().into_any();
+    };
+    let Some(id) = u.install_id else {
+        return ().into_any();
+    };
+    view! {
+        <p class="adi-onb__welcome-note">
+            <a class="adi-link" href=crate::links::welcome_url(&id) target="_blank" rel="noopener">
+                "Getting started"
+            </a>
+        </p>
     }
     .into_any()
 }

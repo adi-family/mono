@@ -123,6 +123,10 @@ pub(crate) enum Route {
     /// Whether the webapp bundle is served from the shared-assets CDN instead of this instance's
     /// own `dist/` (`/settings/shared-assets`).
     SharedAssets,
+    /// Usage events on/off, and this install's id (ADI-MONO-157) (`/settings/usage-events`). Named
+    /// apart from [`Route::Analytics`] (this instance's own run history) — this is about events
+    /// sent off this machine.
+    UsageEvents,
     /// One file from the ADI store, open in the full-width editor (`/files/<path>`). The path
     /// lives in `StoreBrowser::open_file`, the way a project id lives in `current_project`.
     StoreFile,
@@ -135,7 +139,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`], [`Route::WorkflowDetail`] and
     /// [`Route::StoreFile`] are deliberately absent: each needs a subject the menu has no way to
     /// supply, so a row for one would open an error rather than a page.
-    pub(crate) const NAV: [Route; 27] = [
+    pub(crate) const NAV: [Route; 28] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -162,14 +166,15 @@ impl Route {
         Route::EmbeddingBackends,
         Route::Channels,
         Route::SharedAssets,
+        Route::UsageEvents,
         Route::System,
     ];
 
-    /// The nine pages Settings gathers, in the order the explorer nests them and the Settings
+    /// The ten pages Settings gathers, in the order the explorer nests them and the Settings
     /// landing page ([`crate::pages::settings_view`]) lists them. The explorer's own
     /// `GLOBAL_SCOPES` and the landing page both read off this rather than each writing the
-    /// nine out — one list, the way [`NAV`] is for the ⌘K menu.
-    pub(crate) const SETTINGS: [Route; 9] = [
+    /// ten out — one list, the way [`NAV`] is for the ⌘K menu.
+    pub(crate) const SETTINGS: [Route; 10] = [
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
@@ -178,6 +183,7 @@ impl Route {
         Route::EmbeddingBackends,
         Route::Channels,
         Route::SharedAssets,
+        Route::UsageEvents,
         Route::System,
     ];
 
@@ -223,6 +229,7 @@ impl Route {
             "/settings/llm-backends" => Route::LlmBackends,
             "/settings/embedding-backends" => Route::EmbeddingBackends,
             "/settings/shared-assets" => Route::SharedAssets,
+            "/settings/usage-events" => Route::UsageEvents,
             "/settings/system" => Route::System,
             _ => Route::Projects,
         }
@@ -263,6 +270,7 @@ impl Route {
             Route::LlmBackends => "/extended/settings/llm-backends",
             Route::EmbeddingBackends => "/extended/settings/embedding-backends",
             Route::SharedAssets => "/extended/settings/shared-assets",
+            Route::UsageEvents => "/extended/settings/usage-events",
             Route::System => "/extended/settings/system",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
@@ -301,6 +309,7 @@ impl Route {
             Route::LlmBackends => "LLM backends",
             Route::EmbeddingBackends => "Embedding backends",
             Route::SharedAssets => "Shared assets",
+            Route::UsageEvents => "Usage events",
             Route::System => "System",
             Route::StoreFile => "File",
         }
@@ -332,7 +341,7 @@ impl Route {
             Route::Marketplace => "Install an app someone else published",
             Route::LiveGraph => "Who started what: agents, chats and the flow between them",
             Route::Elements => "Buttons, tables, fields — every component, live, with its markup",
-            Route::Settings => "Hive, ports, mesh, fleet, backends, shared assets and system",
+            Route::Settings => "Hive, ports, mesh, fleet, backends, shared assets, usage events and system",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",
@@ -341,6 +350,7 @@ impl Route {
             Route::LlmBackends => "Models an agent can fall back to when a quota runs out",
             Route::EmbeddingBackends => "How indexer, knowledge and facts turn text into a vector",
             Route::SharedAssets => "Serve the webapp bundle from a shared CDN cache",
+            Route::UsageEvents => "Turn ADI's own usage events on or off",
             Route::System => "Services, power, restart, updates, diagnostics",
             Route::StoreFile => "One file from the ADI store",
         }

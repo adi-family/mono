@@ -63,7 +63,7 @@ use pages::{
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
     start_onb_reconfigure_agent, store_file_view, system_view, tasks_view, tools_view, triggers_view,
-    workflow_detail_view, workflows_view,
+    usage_events_view, workflow_detail_view, workflows_view,
 };
 use routing::{
     ProjectSection, Route, WorkflowTab, current_path, open_project_section, project_id_from_path,
@@ -176,6 +176,14 @@ fn Home() -> impl IntoView {
     spawn_local(async move {
         if let Ok(s) = fetch::secrets().await {
             state.secrets.set(Some(s));
+        }
+    });
+    // Whether the welcome screen's "Getting started" link may show at all, and the install id
+    // it needs if so (ADI-MONO-157). The wizard never polls this live — it is shown once, on
+    // the way in, and the Settings page is where the switch actually lives.
+    spawn_local(async move {
+        if let Ok(u) = fetch::usage_events().await {
+            state.usage_events.set(Some(u));
         }
     });
 
@@ -949,6 +957,7 @@ fn App() -> impl IntoView {
         hive,
         // Filled only on its own settings page, like `llm_backends` above.
         shared_assets: RwSignal::new(None),
+        usage_events: RwSignal::new(None),
         dashboards,
         marketplace,
         // The workbench shell has no dashboards rail, so nothing here ever asks the fleet what it
@@ -1530,6 +1539,7 @@ fn App() -> impl IntoView {
                         Route::LlmBackends => llm_backends_view(state, llm_backends_form, route),
                         Route::EmbeddingBackends => embedding_backends_view(state, embeddings_console),
                         Route::SharedAssets => shared_assets_view(state),
+                        Route::UsageEvents => usage_events_view(state),
                         Route::System => system_view(state, updates),
                     }}
 

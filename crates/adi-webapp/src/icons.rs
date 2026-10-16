@@ -85,6 +85,8 @@ pub(crate) enum Icon {
     Rerenders,
     /// Channels — one agent reachable from Telegram/Slack.
     Channels,
+    /// Usage events — leaving the machine, as against `Chart`'s own local history.
+    Send,
 }
 
 impl Icon {
@@ -131,6 +133,7 @@ impl Icon {
             Icon::ExternalLink => Lucide::ArrowUpRight,
             Icon::Rerenders => Lucide::Eye,
             Icon::Channels => Lucide::Radio,
+            Icon::Send => Lucide::Send,
         }
     }
 }
@@ -164,6 +167,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Fleet => Icon::Node,
         Route::Channels => Icon::Channels,
         Route::SharedAssets => Icon::Cloud,
+        Route::UsageEvents => Icon::Send,
         Route::System => Icon::Power,
         // Reached from the Store rail rather than the explorer, so this icon is a fallback.
         Route::StoreFile => Icon::Doc,
