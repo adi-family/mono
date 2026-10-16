@@ -1,4 +1,4 @@
-// Copyright (c) 2024-2025 Ihor
+// Copyright (c) 2024-2026 With ADI, Inc.
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE file for details
 

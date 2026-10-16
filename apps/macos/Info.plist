@@ -21,7 +21,7 @@
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
-    <string>adi-family</string>
+    <string>© With ADI, Inc.</string>
     <!-- Where the bundled faces live, relative to Contents/Resources: Geist and Geist Mono
          (design/DESIGN.md §4), copied there by build.sh from Resources/Fonts. -->
     <key>ATSApplicationFontsPath</key>

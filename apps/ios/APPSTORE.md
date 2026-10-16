@@ -235,7 +235,7 @@ Delete them with `xcrun simctl delete adi-shot-iphone adi-shot-ipad` if this app
 | Secondary category | **Utilities** |
 | Age rating | 4+ — no user-generated content, no web browsing of arbitrary URLs (the web view only ever loads a service on a node you paired with) |
 | Price | Free |
-| Copyright | `2026 Ihor Herasymovych` — **confirm the legal name to use** |
+| Copyright | `2026 With ADI, Inc. · Ihor Herasymovych` — as settled in appstore-connect.md |
 
 On the category: Developer Tools is right for what it is — a viewer for services running on
 machines you administer. Productivity was the other candidate and is a worse fit; nothing here
