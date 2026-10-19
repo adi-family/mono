@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS goals (
     nudges        INTEGER NOT NULL DEFAULT 0,
     closed_at     INTEGER,
     note          TEXT    NOT NULL DEFAULT '',
+    delivery_failures INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (agent, session, id),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
@@ -230,6 +231,11 @@ const MIGRATIONS: &[&str] = &[
     // before this existed and for one that has never yet ended a turn still waiting — both read as
     // "not announced", which is the truth for them.
     "ALTER TABLE sessions ADD COLUMN idle_notified_turn INTEGER",
+    // How many goal-check deliveries into this conversation have failed in a row (ADI-TIKTOK-168)
+    // — reset to 0 the moment one lands. `NOT NULL DEFAULT 0` for the same reason `starred` has
+    // one: every goal ever nudged before this existed had, at that moment, failed zero deliveries
+    // in a row, which is exactly what 0 says. See `adi_agents::goals::DELIVERY_FAILURE_CAP`.
+    "ALTER TABLE goals ADD COLUMN delivery_failures INTEGER NOT NULL DEFAULT 0",
 ];
 
 // One connection per thread per database.

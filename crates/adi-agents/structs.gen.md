@@ -3017,6 +3017,8 @@ pub struct Goal {
     pub closed_at: Option<u64>,
     #[serde(default)]
     pub note: String,
+    #[serde(default)]
+    pub delivery_failures: u64,
 }
 ```
 
