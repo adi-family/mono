@@ -383,6 +383,20 @@ Finished in 21.06s</adi-code>
       }
     },
   }),
+
+  section({
+    id: "chat",
+    title: "Chat",
+    tag: "adi-chat",
+    blurb: "A chat window over /api/agents: transcript, composer, goals, and a picker. sidebar turns the picker's conversation list into a persistent rail beside the transcript instead of swapping the transcript out for it, and collapses itself (toggle in the bar) under 640px of the element's own width.",
+    rows: [
+      ["Picker + sidebar", `
+        <div style="width: 100%; max-width: 760px; height: 420px; border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden">
+          <adi-chat picker sidebar windows></adi-chat>
+        </div>
+      `],
+    ],
+  }),
 ];
 
 function said(text: string): HTMLSpanElement {

@@ -726,6 +726,10 @@ a { color: inherit; text-decoration: none; }
 :host(adi-chat) .bar { flex: none; display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s4);
   border-bottom: 1px solid var(--line); }
 :host(adi-chat) .bar[hidden] { display: none; }
+:host(adi-chat) .railToggle { flex: none; display: grid; place-items: center; width: 28px; height: 28px;
+  border-radius: var(--r); color: var(--ink-2); transition: background var(--transition), color var(--transition); }
+:host(adi-chat) .railToggle:hover { background: var(--bg-hover); color: var(--ink); }
+:host(adi-chat) .railToggle[hidden] { display: none; }
 :host(adi-chat) select { min-width: 0; padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: var(--r);
   background: var(--bg-raise); color: var(--ink); font: inherit; font-size: var(--fs-small); }
 :host(adi-chat) .agent { flex: 0 1 200px; }
@@ -768,9 +772,11 @@ a { color: inherit; text-decoration: none; }
 :host(adi-chat) .pick { display: flex; align-items: center; gap: var(--s2); flex: 1; min-width: 0; }
 :host(adi-chat) .pickhint { font-size: var(--fs-small); color: var(--ink-3); }
 :host(adi-chat) .pickhint:empty { display: none; }
+:host(adi-chat) .body { display: flex; flex: 1; min-height: 0; }
 :host(adi-chat) .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 :host(adi-chat) .chat[hidden], :host(adi-chat) .list[hidden] { display: none; }
 :host(adi-chat) .list { flex: 1; min-height: 0; overflow-y: auto; padding: var(--s3) var(--s2); }
+:host(adi-chat[sidebar]) .list { flex: none; width: 264px; background: var(--bg-side); border-right: 1px solid var(--line); }
 :host(adi-chat) .fresh { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
   font-size: var(--fs-ui-sm); color: var(--ink-2); transition: background var(--transition), color var(--transition); }
 :host(adi-chat) .fresh:hover { background: var(--bg-hover); color: var(--ink); }
@@ -778,6 +784,7 @@ a { color: inherit; text-decoration: none; }
 :host(adi-chat) .row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border-radius: var(--r);
   text-align: left; transition: background var(--transition); }
 :host(adi-chat) .row:hover { background: var(--bg-hover); }
+:host(adi-chat) .row.active { background: var(--bg-active); }
 :host(adi-chat) .row .text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 :host(adi-chat) .row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-ui-sm); color: var(--ink); }
 :host(adi-chat) .row .meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-label); color: var(--ink-3); }

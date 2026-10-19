@@ -79,7 +79,9 @@ Clipboard calls are stubbed; file-picker events carry in-memory test files.
 Coverage includes form submission/reset and events, focus preservation, button and segmented
 keyboard interaction, composer send/stop/asap and attachments, question replies, table sorting
 and row actions, transcript reconciliation, modal closing/focus, dismissal, removal, and copying.
-The API-backed `adi-chat` and microphone integration are not covered by this behavioral suite.
+`adi-chat`'s `sidebar` rail is covered against a stubbed `window.fetch` (listing, opening a
+conversation, starting a new one, the 640px collapse); the rest of `adi-chat` against a live API,
+and microphone integration, are not covered by this behavioral suite.
 
 Run a focused case (still type-checks and rebuilds), or rerun an already built suite:
 
@@ -120,7 +122,7 @@ Uncaught browser errors fail the test automatically.
 | `adi-transcript` | newest-first feed keyed by `entries[].key` | §2.1 |
 | `adi-message` `adi-note` `adi-tool-run` | chat message · platform note · grouped tool-call receipt | §6 |
 | `adi-composer` `adi-mic` `adi-ask` | message and attachment composer · dictation · question card | §6 |
-| `adi-chat` | chat window over `/api/agents`, including pickers, goals, transcript, composer, and queue | — |
+| `adi-chat` | chat window over `/api/agents`, including pickers, a `sidebar` rail of conversations, goals, transcript, composer, and queue | — |
 | `adi-gallery` | all of the above, on one page | — |
 
 Events are plain `CustomEvent`s on the element itself, `composed` so they cross the shadow

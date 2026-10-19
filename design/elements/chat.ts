@@ -1,4 +1,6 @@
-// Attributes: agent, node (paired machine), run (`new` for a fresh conversation), picker, windows, api.
+// Attributes: agent, node (paired machine), run (`new` for a fresh conversation), picker, sidebar
+// (a persistent conversation rail beside the transcript, collapsing under 640px of the element's
+// own width), windows, api.
 // Events: `place` and `open-window` carry `{ node, agent, run, title }`.
 // The host persists the location through attributes; each chat instance is independent.
 
@@ -236,7 +238,7 @@ function ago(ms: number): string {
 }
 
 class AdiChat extends AdiElement {
-  static observedAttributes = ["agent", "run", "picker", "api", "node"];
+  static observedAttributes = ["agent", "run", "picker", "sidebar", "api", "node"];
 
   #sources: Source[] = [];
   #node: string | null = null;
@@ -260,10 +262,18 @@ class AdiChat extends AdiElement {
   #mode: "list" | "chat" = "list";
   /** Bumped on every switch, so an answer for a conversation the window has left is dropped. */
   #epoch = 0;
+  #railCollapsed = false;
+  /** Which side of the 640px breakpoint the host was on last; a manual toggle holds until it crosses again. */
+  #railNarrow = false;
+  #railLimit = PAGE;
+  #resize: ResizeObserver | null = null;
 
   override template(): string {
     return `
       <div class="bar" part="bar" hidden>
+        <button class="railToggle" type="button" hidden title="Show or hide the conversation list">
+          <adi-icon name="panel-left" size="16"></adi-icon>
+        </button>
         <div class="pick">
           <select class="agent" aria-label="Agent"
             title="which agent this chat runs on — starred agents only"></select>
@@ -276,28 +286,30 @@ class AdiChat extends AdiElement {
           <span class="title"></span>
         </div>
       </div>
-      <div class="list" hidden>
-        <button class="fresh" type="button"><adi-icon name="message-square-plus" size="16"></adi-icon>New conversation</button>
-        <div class="rows" role="list"></div>
+      <div class="body">
+        <div class="list" part="sidebar" hidden>
+          <button class="fresh" type="button"><adi-icon name="message-square-plus" size="16"></adi-icon>New conversation</button>
+          <div class="rows" role="list"></div>
+        </div>
+        <div class="chat">
+        <div class="top" hidden>
+          <div class="goals"></div>
+          <div class="awaits"></div>
+          <adi-composer attach><adi-mic slot="tools"></adi-mic></adi-composer>
+          <div class="note"></div>
+        </div>
+        <p class="error" role="alert"></p>
+        <adi-transcript>
+          <div class="lead" slot="lead"><adi-ask hidden></adi-ask><div class="queued"></div></div>
+          <div slot="foot" class="foot">
+            <div class="empty"></div>
+            <pre class="log"></pre>
+            <button class="earlier" type="button" hidden></button>
+          </div>
+        </adi-transcript>
+        </div>
       </div>
       <div class="menu" role="menu" hidden></div>
-      <div class="chat">
-      <div class="top" hidden>
-        <div class="goals"></div>
-        <div class="awaits"></div>
-        <adi-composer attach><adi-mic slot="tools"></adi-mic></adi-composer>
-        <div class="note"></div>
-      </div>
-      <p class="error" role="alert"></p>
-      <adi-transcript>
-        <div class="lead" slot="lead"><adi-ask hidden></adi-ask><div class="queued"></div></div>
-        <div slot="foot" class="foot">
-          <div class="empty"></div>
-          <pre class="log"></pre>
-          <button class="earlier" type="button" hidden></button>
-        </div>
-      </adi-transcript>
-      </div>
     `;
   }
 
@@ -309,6 +321,11 @@ class AdiChat extends AdiElement {
     });
     this.must(".back").addEventListener("click", () => this.#showList());
     this.must(".fresh").addEventListener("click", () => this.#openRun(null));
+    this.must(".railToggle").addEventListener("click", () => {
+      this.#railCollapsed = !this.#railCollapsed;
+      this.#drawMode();
+    });
+    this.must(".list").addEventListener("scroll", () => this.#railScrolled());
     this.shadowRoot.addEventListener("click", () => (this.must(".menu").hidden = true));
     this.addEventListener("contextmenu", (ev) => {
       if (!ev.composedPath().some((n) => n instanceof Element && n.classList.contains("row"))) this.must(".menu").hidden = true;
@@ -339,12 +356,24 @@ class AdiChat extends AdiElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.#live = true;
+    this.#resize ??= new ResizeObserver(([entry]) => this.#checkWidth(entry?.contentRect.width ?? 0));
+    this.#resize.observe(this);
     this.#start();
   }
 
   disconnectedCallback(): void {
     this.#live = false;
     window.clearTimeout(this.#timer);
+    this.#resize?.disconnect();
+  }
+
+  /** Crossing the 640px breakpoint sets the rail's collapse; a manual toggle holds until it crosses back. */
+  #checkWidth(width: number): void {
+    const narrow = width < 640;
+    if (narrow === this.#railNarrow) return;
+    this.#railNarrow = narrow;
+    this.#railCollapsed = narrow;
+    this.#drawMode();
   }
 
   override attributeChangedCallback(name: string, old: string | null, value: string | null): void {
@@ -377,7 +406,9 @@ class AdiChat extends AdiElement {
 
   override update(): void {
     const picker = this.hasAttribute("picker");
-    this.must(".bar").hidden = !picker;
+    const sidebar = this.hasAttribute("sidebar");
+    this.must(".bar").hidden = !picker && !sidebar;
+    this.must(".railToggle").hidden = !sidebar;
     if (!picker) this.#mode = "chat";
     this.#drawMode();
     this.must("adi-mic").setAttribute("api", this.attr("api"));
@@ -520,6 +551,7 @@ class AdiChat extends AdiElement {
   async #openAgent(name: string, run?: string | null, node: string | null = this.#node): Promise<void> {
     this.#agent = name;
     this.#node = node ?? null;
+    this.#railLimit = PAGE;
     this.#drawAgents();
     this.#epoch += 1;
     const epoch = this.#epoch;
@@ -534,7 +566,7 @@ class AdiChat extends AdiElement {
     }
     if (run === "new") return this.#openRun(null);
     if (run) return this.#openRun(run);
-    if (this.hasAttribute("picker")) return this.#showList();
+    if (this.hasAttribute("picker") && !this.hasAttribute("sidebar")) return this.#showList();
     this.#openRun(this.#runs[0]?.run_id ?? null);
   }
 
@@ -551,12 +583,13 @@ class AdiChat extends AdiElement {
   }
 
   #drawMode(): void {
-    const list = this.#mode === "list";
-    this.must(".list").hidden = !list;
+    const sidebar = this.hasAttribute("sidebar");
+    const list = !sidebar && this.#mode === "list";
+    this.must(".list").hidden = sidebar ? this.#railCollapsed : !list;
     this.must(".chat").hidden = list;
-    this.must(".pick").hidden = !list;
-    this.must(".crumb").hidden = list;
-    if (!list) {
+    this.must(".pick").hidden = sidebar ? !this.hasAttribute("picker") : !list;
+    this.must(".crumb").hidden = sidebar || list;
+    if (!list && !sidebar) {
       const run = this.#runs.find((r) => r.run_id === this.#run);
       this.must(".crumb .title").textContent = this.#run ? titleOf(run) : "New conversation";
       this.must(".crumb .to").textContent = this.#node ? `${this.#agent} on ${this.#node}` : (this.#agent ?? "");
@@ -577,6 +610,7 @@ class AdiChat extends AdiElement {
     this.must(".error").textContent = "";
     this.must<AdiTranscript>("adi-transcript").entries = [];
     this.#drawMode();
+    this.#drawRuns();
     const shown = this.#runs.find((r) => r.run_id === run);
     this.emit("place", { node: this.#node, agent: this.#agent, run, title: run ? titleOf(shown) : "" });
     this.#draw();
@@ -589,18 +623,29 @@ class AdiChat extends AdiElement {
       box.innerHTML = `<div class="none">No conversations with this agent yet.</div>`;
       return;
     }
-    const signature = JSON.stringify(
-      this.#runs.map((run) => [run.run_id, run.title, run.running, run.starred, run.last_activity]),
-    );
+    const visible = this.#runs.slice(0, this.#railLimit);
+    const signature = JSON.stringify([
+      this.#run,
+      visible.map((run) => [run.run_id, run.title, run.running, run.starred, run.last_activity]),
+    ]);
     if (signature === this.#runsDrawn) return;
     this.#runsDrawn = signature;
-    box.replaceChildren(...this.#runs.map((run) => this.#runRow(run)));
+    box.replaceChildren(...visible.map((run) => this.#runRow(run)));
+  }
+
+  /** The list is also the sidebar rail; load more of the already-fetched runs as it scrolls near the end. */
+  #railScrolled(): void {
+    if (this.#railLimit >= this.#runs.length) return;
+    const box = this.must(".list");
+    if (box.scrollTop + box.clientHeight < box.scrollHeight - 48) return;
+    this.#railLimit += PAGE;
+    this.#drawRuns();
   }
 
   #runRow(run: AgentRunInfo): HTMLButtonElement {
     const row = document.createElement("button");
     row.type = "button";
-    row.className = "row";
+    row.className = run.run_id === this.#run ? "row active" : "row";
     row.setAttribute("role", "listitem");
     row.innerHTML = `${run.running ? `<span class="live" aria-label="running"></span>` : ""}
       <span class="text"><span class="name"></span><span class="meta"></span></span>
@@ -645,7 +690,7 @@ class AdiChat extends AdiElement {
     window.clearTimeout(this.#timer);
     if (!this.#live) return;
     const epoch = this.#epoch;
-    if (this.#mode === "list" && this.#agent) {
+    if ((this.#mode === "list" || this.hasAttribute("sidebar")) && this.#agent) {
       try {
         const res = await this.#call<{ runs?: AgentRunInfo[] }>("/agents/runs", { name: this.#agent });
         if (epoch !== this.#epoch) return;
