@@ -12,17 +12,30 @@
 //!                └── goals knowingly-give-up <id> ──▶ GIVEN_UP
 //! ```
 //!
-//! # Nothing here decides a goal is over
+//! # Nothing here decides a goal is over — except a conversation that never existed to begin with
 //!
-//! There is no attempt cap and no sweep that gives up on the run's behalf. The two verbs are the
-//! only exits and both are somebody's judgement, written down — a run that cannot get there says so
-//! with `knowingly-give-up` and a reason, which is a sentence worth reading afterward in a way that
-//! "exceeded 10 attempts" never is. The consequence is deliberate and worth stating plainly: a run
-//! that neither finishes nor gives up is asked again for as long as its conversation exists.
+//! There is no attempt cap and no sweep that gives up on a *live* run's behalf. The two verbs are
+//! the only exits for one of those, and both are somebody's judgement, written down — a run that
+//! cannot get there says so with `knowingly-give-up` and a reason, which is a sentence worth reading
+//! afterward in a way that "exceeded 10 attempts" never is. The consequence is deliberate and worth
+//! stating plainly: a run that neither finishes nor gives up is asked again for as long as its
+//! conversation exists.
 //!
-//! The one thing that *is* enforced is [`NUDGE_FLOOR_MS`], and it is not a limit on the run — it is
-//! a limit on this sweep, so an engine that dies on startup cannot be respawned as fast as `send`
-//! returns.
+//! "As long as its conversation exists" is the load-bearing clause.
+//! [`crate::store::RunOutcome::terminal_reason`] of [`LAUNCH_FAILED`](crate::LAUNCH_FAILED) means
+//! the engine never started at all — there is no
+//! conversation to re-ask, and never was one, and retrying `send` is not patience, it is asking a
+//! phone that was never plugged in to pick up. [`tick`] gives up such a goal itself, the moment it
+//! sees it (ADI-TIKTOK-168) — not a cap on attempts at a goal that might still be met, but the
+//! recognition that this one has nothing left behind it to meet it. Every *other* delivery failure
+//! (an engine that started fine once and is merely refusing this particular attempt) is still
+//! retried without limit, exactly as before — [`DELIVERY_FAILURE_CAP`] catches only a run that fails
+//! identically, over and over, which is itself evidence of the same thing a `launch_failed` outcome
+//! says outright.
+//!
+//! The one thing that *is* enforced on an otherwise-live goal is [`NUDGE_FLOOR_MS`], and it is not a
+//! limit on the run — it is a limit on this sweep, so an engine that dies on startup cannot be
+//! respawned as fast as `send` returns.
 //!
 //! # A run can set its own goal
 //!
@@ -49,7 +62,7 @@ use crate::events::{
 };
 use crate::marker::Marker;
 use crate::runner::runner_of;
-use crate::store::{Goal, GoalClosed, GoalState, SetBy, now_ms};
+use crate::store::{Goal, GoalClosed, GoalState, SessionRecord, SetBy, now_ms};
 use crate::{Agents, answerable};
 
 /// The shortest gap between two nudges into the same conversation.
@@ -60,6 +73,16 @@ use crate::{Agents, answerable};
 /// that lasted. Thirty seconds is short enough to be invisible behind real work and long enough
 /// that a crash loop is a trickle rather than a flood.
 pub const NUDGE_FLOOR_MS: u64 = 30_000;
+
+/// Consecutive goal-check *delivery* failures — never successes, and never counted against
+/// [`Goal::nudges`] — before the goal gives up on its own (ADI-TIKTOK-168).
+///
+/// Scoped to failures specifically because a goal nudged a hundred times with no answer is exactly
+/// what the module doc says is fine; a goal that cannot even be *delivered* a hundred times in a row
+/// is not "not met yet", it is a conversation nothing will ever reach. Five is generous: a
+/// `launch_failed` run is caught on the very first attempt by [`dead_beyond_resume`] and never gets
+/// here at all — this cap is the net under failures that outcome doesn't already name.
+pub(crate) const DELIVERY_FAILURE_CAP: u64 = 5;
 
 /// One conversation that was asked about its goals.
 #[derive(Debug, Clone)]
@@ -95,7 +118,21 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
 
     let mut nudged = Vec::new();
     for ((agent, conv), goals) in by_conversation {
-        if !quiet(agents, &awaits, &agent, &conv, &goals, now) {
+        // No conversation to re-ask at all (deleted out from under the goal) — nothing to nudge,
+        // nothing to give up on by name either, so just wait for whatever would otherwise clean
+        // this up (there is nothing this sweep itself can do to a goal it cannot even read the
+        // session for).
+        let Some(record) = store.get(&agent, &conv) else {
+            continue;
+        };
+        // ADI-TIKTOK-168: a run that never started cannot be nudged back to life, and retrying it
+        // is not patience — see the module doc. Give the goal up right here, instead of stamping a
+        // nudge that would only fail the exact same way every floor from now on.
+        if let Some(reason) = dead_beyond_resume(&record) {
+            give_up_all(agents, &goals, &reason);
+            continue;
+        }
+        if !quiet(agents, &awaits, &agent, &conv, &record, &goals, now) {
             continue;
         }
         // Stamped before the message goes out, for the reason the `error` field exists: a delivery
@@ -125,6 +162,23 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
             )
             .err()
             .map(|e| e.to_string());
+        // Counted separately from `nudges` (see `DELIVERY_FAILURE_CAP`'s own doc): a success resets
+        // it, so only a run failing *identically, every single time* ever reaches the cap.
+        let failures = store
+            .record_goal_delivery(&agent, &conv, error.is_some())
+            .unwrap_or(0);
+        if let Some(error) = &error
+            && failures >= DELIVERY_FAILURE_CAP
+        {
+            give_up_all(
+                agents,
+                &goals,
+                &format!(
+                    "goal-check delivery has failed {failures} times in a row, every one the same \
+                     way ({error}) — giving up automatically rather than retrying forever"
+                ),
+            );
+        }
         nudged.push(Nudged {
             agent,
             conv,
@@ -133,6 +187,34 @@ pub fn tick(agents: &Agents) -> Vec<Nudged> {
         });
     }
     nudged
+}
+
+/// Why this conversation's own run can never be nudged back to life, or `None` if it still can be
+/// — the one case [`tick`] gives up on outright rather than ever attempting delivery.
+///
+/// [`LAUNCH_FAILED`](crate::LAUNCH_FAILED) is written once, the first time anybody notices a run's
+/// engine never started (`Agents::send_or_note_failure`), and never revised — so this is a durable
+/// fact about the run, not a guess from one failed attempt. Nothing else sets it, including a
+/// retry of the same *task* on a fresh run: that is a different conversation, with its own record.
+fn dead_beyond_resume(record: &SessionRecord) -> Option<String> {
+    let outcome = record.outcome.as_ref()?;
+    (outcome.terminal_reason.as_deref() == Some(crate::LAUNCH_FAILED)).then(|| {
+        let said = outcome.result_head.trim();
+        if said.is_empty() {
+            "the run's engine never started and this conversation cannot be resumed".to_string()
+        } else {
+            format!("the run's engine never started and cannot be resumed: {said}")
+        }
+    })
+}
+
+/// Give up on every still-open goal of one conversation, the same verb `adi-mono goals
+/// knowingly-give-up` uses — so a goal this sweep closes reads in `decisions`/events exactly like
+/// one a person or a run closed by hand, just with its own reason in place of theirs.
+fn give_up_all(agents: &Agents, goals: &[Goal], why: &str) {
+    for goal in goals.iter().filter(|g| g.open()) {
+        let _ = give_up(agents, &goal.id, why);
+    }
 }
 
 /// Whether this conversation has actually fallen quiet — the whole of the condition for a nudge.
@@ -153,6 +235,7 @@ fn quiet(
     awaits: &Awaits,
     agent: &str,
     conv: &str,
+    record: &SessionRecord,
     goals: &[Goal],
     now: u64,
 ) -> bool {
@@ -165,12 +248,9 @@ fn quiet(
         return false;
     }
     let store = agents.sessions();
-    let Some(record) = store.get(agent, conv) else {
-        return false;
-    };
     // Asked of the runner that started *this* conversation, not of the agent's current backend —
     // the two disagree for a simulated run, and a goal set on one is still a goal.
-    let Some(runner) = runner_of(&record) else {
+    let Some(runner) = runner_of(record) else {
         return false;
     };
     // A conversation nothing can be said into cannot be nudged. The goal stays open: it is a
@@ -340,8 +420,8 @@ fn close(agents: &Agents, goal_id: &str, state: GoalState, note: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{AskRequest, Goal, GoalState, Question, QueueMode, SetBy};
-    use crate::{AgentManifest, Launch, SimBlock};
+    use crate::store::{AskRequest, Goal, GoalState, Question, QueueMode, RunOutcome, SetBy};
+    use crate::{AgentManifest, Backend, Launch, SimBlock};
     use adi_config::Config;
 
     fn scratch(tag: &str) -> Agents {
@@ -560,6 +640,7 @@ mod tests {
             nudges: 0,
             closed_at: None,
             note: String::new(),
+            delivery_failures: 0,
         }
     }
 
@@ -598,5 +679,97 @@ mod tests {
             text.contains("goals met <id>"),
             "with several there is no one id to substitute, and the list is right above: {text}"
         );
+    }
+
+    /// ADI-TIKTOK-168's actual bug: a task retried onto a fresh run leaves its *first* run's own
+    /// goal behind, open, on a conversation whose engine recorded `launch_failed` — there is no
+    /// process left and never will be. The sweep must give that goal up itself, the moment it sees
+    /// it, rather than stamping (and failing) a nudge every floor forever.
+    #[test]
+    fn a_goal_on_a_run_that_never_started_is_given_up_without_ever_being_nudged() {
+        let agents = scratch("launch-failed");
+        let store = agents.sessions();
+        let record = store
+            .create("worker", Backend::ProcessCodex, "/tmp", "go")
+            .expect("create session");
+        let outcome = RunOutcome {
+            terminal_reason: Some("launch_failed".to_string()),
+            is_error: true,
+            result_head: "cannot safely resume the Codex conversation: start a new conversation"
+                .to_string(),
+            ..RunOutcome::default()
+        };
+        store
+            .record_outcome("worker", &record.id, &outcome)
+            .expect("record outcome");
+        let goal = create(&agents, "worker", &record.id, "task ADI-TIKTOK-144 is done", SetBy::Automation)
+            .expect("create goal");
+
+        let nudged = tick(&agents);
+
+        assert!(
+            nudged.is_empty(),
+            "gave up outright — never even attempted a delivery: {nudged:?}"
+        );
+        let closed = by_id(&agents, &goal.id).expect("read").expect("there");
+        assert_eq!(closed.state, GoalState::GivenUp);
+        assert!(closed.note.contains("cannot be resumed"), "{}", closed.note);
+        assert_eq!(
+            closed.nudges, 0,
+            "never stamped a nudge it was never going to deliver"
+        );
+
+        let _ = std::fs::remove_dir_all(agents.config().root());
+    }
+
+    /// The nudge floor is a *rate* limit, not a *count* one, on purpose (see the module doc) — a
+    /// goal nudged a hundred times with no answer is fine. [`DELIVERY_FAILURE_CAP`] is the one
+    /// exception, and only for a conversation whose delivery fails for a reason `launch_failed`
+    /// doesn't already name (its `Runner::check` rejects the agent's own arguments, so every
+    /// attempt fails before `send` is ever reached, and no outcome is ever recorded) — proving a
+    /// goal stuck that way still stops being retried forever.
+    #[test]
+    fn a_goal_whose_delivery_keeps_failing_a_different_way_gives_up_at_the_cap() {
+        let agents = scratch("delivery-cap");
+        agents
+            .save(
+                "worker",
+                AgentManifest::<serde_json::Value> {
+                    backend: Some(Backend::HarnessAdi),
+                    // Valid arguments — `provider` is optional and decodes fine unset — but
+                    // `Runner::check` refuses to run an agent that hasn't picked one
+                    // (`harness::adi_loop::validate`), on every single attempt, before `send` —
+                    // and so before anything could ever record a `launch_failed` outcome — is
+                    // reached at all.
+                    arguments: serde_json::json!({}),
+                    ..AgentManifest::default()
+                },
+            )
+            .expect("save");
+        let store = agents.sessions();
+        let record = store
+            .create("worker", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create session");
+        let goal = create(&agents, "worker", &record.id, "task is done", SetBy::Automation)
+            .expect("create goal");
+        for _ in 0..DELIVERY_FAILURE_CAP - 1 {
+            store
+                .record_goal_delivery("worker", &record.id, true)
+                .expect("seed a prior failure");
+        }
+
+        let nudged = tick(&agents);
+
+        assert_eq!(nudged.len(), 1, "{nudged:?}");
+        assert!(nudged[0].error.is_some(), "{nudged:?}");
+        let closed = by_id(&agents, &goal.id).expect("read").expect("there");
+        assert_eq!(
+            closed.state,
+            GoalState::GivenUp,
+            "the cap-th consecutive failure gives up automatically"
+        );
+        assert!(closed.note.contains("failed"), "{}", closed.note);
+
+        let _ = std::fs::remove_dir_all(agents.config().root());
     }
 }

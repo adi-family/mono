@@ -1128,6 +1128,17 @@ impl SessionStore {
         goals::mark_nudged(&conn, agent, id, at)
     }
 
+    /// Record whether a goal-check delivery into this conversation landed, returning its resulting
+    /// streak of consecutive failures (0 the instant one succeeds). See
+    /// [`crate::goals::DELIVERY_FAILURE_CAP`] for the one reader that caps anything on it.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub(crate) fn record_goal_delivery(&self, agent: &str, conv: &str, failed: bool) -> Result<u64> {
+        let conn = self.conn()?;
+        goals::record_delivery(&conn, agent, conv, failed)
+    }
+
     /// One goal by id, wherever it lives.
     ///
     /// # Errors

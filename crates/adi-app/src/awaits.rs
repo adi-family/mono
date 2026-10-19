@@ -78,21 +78,47 @@ fn run(agents: &Agents, workflows: &WorkflowEngine, rx: &Receiver<Posted>) {
             Err(RecvTimeoutError::Disconnected) => break,
         }
         if Instant::now() >= next_tick {
-            report(&awaits::tick(agents));
-            report_settled(&questions::tick(agents));
+            report(&isolated("awaits", || awaits::tick(agents)));
+            report_settled(&isolated("questions", || questions::tick(agents)));
             // Awaits and question defaults may wake a conversation before its goal check.
-            report_nudged(&goals::tick(agents));
+            report_nudged(&isolated("goals", || goals::tick(agents)));
             // Last: a task just finished by a goal check above is exactly the kind of "not
             // working any more" the dispatch tick looks for, so it should see today's freshest
-            // state rather than next second's.
-            report_dispatched(&dispatch::tick(agents));
+            // state rather than next second's. `isolated` is what actually keeps this promise
+            // under a bug, not just the ordering: without it, a panic inside the goals tick above
+            // would unwind straight through this whole loop and silently end it, which is the one
+            // way "ran right before" could turn into "never ran again" (ADI-TIKTOK-168 asked this
+            // of exactly this pair — they share no lock and nothing here blocks on the other, so
+            // today this is a safety net against a future bug rather than a fix for a present one).
+            report_dispatched(&isolated("dispatch", || dispatch::tick(agents)));
             // The workflow engine's two starters — schedule and event — pour a new run's row and
             // root task; `run_workflow_attempts`' own dedicated thread is what actually drives one
             // (spawning a fresh `bun` attempt for every due run), off this shared loop entirely so
             // a waiting run can never delay the ticks above (ADI-MONO-150).
-            report_workflows_started(&workflows.schedule_tick(chrono::Utc::now()));
-            report_workflows_started(&workflows.event_tick());
+            report_workflows_started(&isolated("workflows-schedule", || {
+                workflows.schedule_tick(chrono::Utc::now())
+            }));
+            report_workflows_started(&isolated("workflows-event", || workflows.event_tick()));
             next_tick = Instant::now() + TICK;
+        }
+    }
+}
+
+/// Run one sweep of this loop in isolation from its neighbours: a panic inside `f` (a bug this
+/// sweep's own tests missed) is caught, logged, and answered with "nothing happened" rather than
+/// unwinding through [`run`]'s loop and silently ending every tick after it, forever — the one way
+/// a single bad sweep could turn into the whole dispatch/goals/awaits loop never running again.
+fn isolated<T>(label: &str, f: impl FnOnce() -> Vec<T>) -> Vec<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "panicked with a non-string payload".to_string());
+            tracing::error!(tick = label, %message, "a tick panicked — every other tick still ran");
+            Vec::new()
         }
     }
 }
@@ -198,6 +224,20 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         adi_config::Config::with_root(root)
+    }
+
+    /// ADI-TIKTOK-168 asked whether one tick's own failure could stop every other tick in `run`'s
+    /// loop from running again. It cannot block them today (they share no lock), but a panic — a
+    /// bug none of these ticks' own tests caught — would otherwise unwind straight through the
+    /// shared loop and end it for good. `isolated` is the guard against that: catching it here and
+    /// a later call on the same thread still running proves the panic never left this frame.
+    #[test]
+    fn a_panicking_tick_does_not_stop_the_ones_after_it() {
+        let first = isolated::<u8>("boom", || panic!("simulated failure"));
+        assert!(first.is_empty(), "a panicked tick reports nothing happened");
+
+        let second = isolated("ok", || vec![1, 2, 3]);
+        assert_eq!(second, vec![1, 2, 3], "the next tick on this thread still runs");
     }
 
     // These conversation ids do not exist; failed delivery still claims each await.

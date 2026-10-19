@@ -131,6 +131,11 @@ pub struct Goal {
     /// The evidence a `met` carried, or the reason a give-up did. Empty when the goal is open.
     #[serde(default)]
     pub note: String,
+    /// Consecutive goal-check *deliveries* that failed outright — reset to 0 the moment one lands,
+    /// so it counts a run failing identically over and over, never a run that is merely quiet. See
+    /// `adi_agents::goals::DELIVERY_FAILURE_CAP`, the only reader that gives this a cap at all.
+    #[serde(default)]
+    pub delivery_failures: u64,
 }
 
 impl Goal {
@@ -211,6 +216,7 @@ pub(super) fn create(
         nudges: 0,
         closed_at: None,
         note: String::new(),
+        delivery_failures: 0,
     };
     conn.execute(
         "INSERT INTO goals
@@ -342,6 +348,36 @@ pub(super) fn mark_nudged(conn: &Connection, agent: &str, conv: &str, at: u64) -
     Ok(())
 }
 
+/// Record whether the delivery half of a nudge actually landed, returning the conversation's
+/// resulting streak of consecutive failures.
+///
+/// A separate write from [`mark_nudged`] because whether delivery failed is only known *after* it —
+/// `tick`'s own doc says why the stamp itself cannot wait that long. Per conversation, like the
+/// nudge stamp itself: every open goal of one conversation is put, and answered or not, together.
+///
+/// # Errors
+/// Returns database errors.
+pub(super) fn record_delivery(conn: &Connection, agent: &str, conv: &str, failed: bool) -> Result<u64> {
+    let sql = if failed {
+        "UPDATE goals SET delivery_failures = delivery_failures + 1
+         WHERE agent = ?1 AND session = ?2 AND state = 'open'"
+    } else {
+        "UPDATE goals SET delivery_failures = 0
+         WHERE agent = ?1 AND session = ?2 AND state = 'open'"
+    };
+    conn.execute(sql, rusqlite::params![agent, conv])
+        .map_err(|e| sql_err("record a delivery outcome in", e))?;
+    conn.query_row(
+        "SELECT delivery_failures FROM goals WHERE agent = ?1 AND session = ?2 AND state = 'open' \
+         ORDER BY created_at, id LIMIT 1",
+        [agent, conv],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| sql_err("read a delivery streak from", e))
+    .map(|streak| streak.unwrap_or(0))
+}
+
 /// One goal by id, wherever it lives.
 pub(super) fn by_id(conn: &Connection, id: &str) -> Result<Option<Goal>> {
     conn.query_row(
@@ -398,7 +434,7 @@ pub(super) fn forget_agent(conn: &Connection, agent: &str) -> usize {
 
 /// The columns [`from_row`] reads, in its order.
 const COLUMNS: &str = "id, agent, session, text, state, set_by, created_at, last_nudge_at, \
-                       nudges, closed_at, note";
+                       nudges, closed_at, note, delivery_failures";
 
 fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
     let state: String = row.get(4)?;
@@ -415,6 +451,7 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Goal> {
         nudges: row.get(8)?,
         closed_at: row.get(9)?,
         note: row.get(10)?,
+        delivery_failures: row.get(11)?,
     })
 }
 
@@ -577,6 +614,51 @@ mod tests {
         assert_eq!(
             store.goal(&third.id).expect("read").expect("there").nudges,
             1
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-TIKTOK-168: a count distinct from `nudges` — a success resets it, so it only ever grows
+    /// while delivery keeps failing *identically*, never while a goal is merely unmet. Shared
+    /// across every open goal of one conversation, like the nudge stamp itself.
+    #[test]
+    fn delivery_failures_count_consecutive_failures_and_reset_on_success() {
+        let store = scratch("delivery-failures");
+        let conv = open_session(&store, "chat");
+        store
+            .create_goal("chat", &conv, "ship it", SetBy::Human)
+            .expect("create");
+        let second = open_session(&store, "chat");
+        store
+            .create_goal("chat", &second, "a different conversation", SetBy::Human)
+            .expect("create");
+
+        assert_eq!(
+            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            1
+        );
+        assert_eq!(
+            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            2
+        );
+        assert_eq!(
+            store.record_goal_delivery("chat", &conv, false).expect("record"),
+            0,
+            "a landed delivery resets the streak"
+        );
+        assert_eq!(
+            store.record_goal_delivery("chat", &conv, true).expect("record"),
+            1
+        );
+        assert_eq!(
+            store
+                .open_goals("chat", &second)
+                .first()
+                .expect("there")
+                .delivery_failures,
+            0,
+            "a sibling conversation's own streak is untouched either way"
         );
 
         let _ = std::fs::remove_dir_all(store.dir());
