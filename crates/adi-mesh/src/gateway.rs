@@ -3282,9 +3282,20 @@ mod tests {
             .bind()
             .await
             .expect("bind the client endpoint");
-        eprintln!("[bench] both bound; reading node_ep.addr()");
-        let node_addr = node_ep.addr();
-        eprintln!("[bench] node_addr = {node_addr:?}");
+        // `node_ep.addr()` hands back the netcheck-discovered *public* address even with
+        // relaying disabled — on this box that is a real routable IP, so dialling it would
+        // send this "loopback" test's bulk data out through the real NIC and back (NAT
+        // hairpin) rather than through the kernel's loopback path, which is a confound this
+        // test exists to rule out. Dial the actual bound port on 127.0.0.1 directly instead.
+        let node_port = node_ep
+            .bound_sockets()
+            .into_iter()
+            .find(SocketAddr::is_ipv4)
+            .expect("bound an ipv4 socket")
+            .port();
+        let node_addr = iroh::EndpointAddr::new(node_ep.id())
+            .with_ip_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, node_port)));
+        eprintln!("[bench] node_addr (loopback-only) = {node_addr:?}");
 
         // Stands in for the leased bun port: accept once, discard the request, answer with a
         // large body as fast as the loopback TCP pipe allows.
