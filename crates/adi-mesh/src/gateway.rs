@@ -3258,24 +3258,22 @@ mod tests {
 
     // -- throughput: isolating code limits from the network -------------------------------
 
-    /// Two real, direct-only, loopback iroh endpoints driving the production `serve_stream` →
-    /// `tunnel::splice` path, so the only things that can cap this transfer are our own buffer
-    /// sizes, flow-control windows, and the negotiate/splice code — never a real network's RTT,
-    /// loss, or a relay's rate limit. Slow mesh throughput traced to the network (a relay's
-    /// `[limits.client.rx]`, `scripts/deploy-relay.sh`) should leave this fast; a regression in
-    /// our own copy path should not.
+    /// Two real, direct-only, loopback iroh endpoints driving the production `serve_peer` →
+    /// `negotiate` → `tunnel::splice` path, so the only things that can cap this transfer are
+    /// our own buffer sizes, flow-control windows, and the negotiate/splice code — never a real
+    /// network's RTT, loss, or a relay's rate limit. Slow mesh throughput traced to the network
+    /// (a relay's `[limits.client.rx]`, `scripts/deploy-relay.sh`) should leave this fast; a
+    /// regression in our own copy path should not.
     #[tokio::test]
     async fn loopback_mesh_throughput_is_not_limited_by_our_own_code() {
         const PAYLOAD: usize = 32 * 1024 * 1024;
 
-        eprintln!("[bench] binding node_ep");
         let node_ep = Endpoint::builder(iroh::endpoint::presets::N0)
             .alpns(vec![protocol::HTTP_ALPN.to_vec()])
             .relay_mode(iroh::RelayMode::Disabled)
             .bind()
             .await
             .expect("bind the node endpoint");
-        eprintln!("[bench] binding client_ep");
         let client_ep = Endpoint::builder(iroh::endpoint::presets::N0)
             .alpns(vec![protocol::HTTP_ALPN.to_vec()])
             .relay_mode(iroh::RelayMode::Disabled)
@@ -3295,7 +3293,6 @@ mod tests {
             .port();
         let node_addr = iroh::EndpointAddr::new(node_ep.id())
             .with_ip_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, node_port)));
-        eprintln!("[bench] node_addr (loopback-only) = {node_addr:?}");
 
         // Stands in for the leased bun port: accept once, discard the request, answer with a
         // large body as fast as the loopback TCP pipe allows.
@@ -3322,28 +3319,23 @@ mod tests {
                 .with_peer(key, peer_named("viewer", &["http:video"], "igor", "hunter2")),
         );
 
+        // `serve_peer`, not a one-shot `accept_bi` + `serve_stream`: the real node side never
+        // drops a peer's connection after a single stream, it loops accepting more until the
+        // peer closes it (`docs/fleet.md` — "connections are pooled"). Ending this task's
+        // connection the moment one stream's bytes are *handed to quinn* raced the client's
+        // receipt of the stream's tail against the connection's teardown and lost — not a
+        // transfer stall, a dropped `Connection` racing its own last bytes.
         let server = tokio::spawn(async move {
-            eprintln!("[bench] server: waiting for a connection");
             let incoming = node_ep.accept().await.expect("a connection arrives");
-            eprintln!("[bench] server: incoming; awaiting handshake");
             let conn = incoming.await.expect("the handshake completes");
-            eprintln!("[bench] server: handshake complete; accepting bi-stream");
-            let (send, recv) = conn.accept_bi().await.expect("the client opens a stream");
-            eprintln!("[bench] server: bi-stream open; serving");
-            serve_stream(key, node, send, recv)
-                .await
-                .expect("serve_stream");
-            eprintln!("[bench] server: serve_stream done");
+            serve_peer(conn, node).await;
         });
 
-        eprintln!("[bench] client: dialling");
         let conn = client_ep
             .connect(node_addr, protocol::HTTP_ALPN)
             .await
             .expect("dial the node directly, loopback only");
-        eprintln!("[bench] client: connected; opening bi-stream");
         let (mut send, mut recv) = conn.open_bi().await.expect("open a bi-stream");
-        eprintln!("[bench] client: writing frame + head");
         protocol::write_http_request(&mut send, "video")
             .await
             .expect("write the frame");
@@ -3352,12 +3344,16 @@ mod tests {
         )
         .await
         .expect("write the head");
+        // This request carries no body, so the write side is done — and the server's reverse
+        // pump (`tunnel::pump`'s `to_local`, copying this stream onto the upstream's write half)
+        // blocks on EOF from exactly this stream. A real browser eventually supplies that EOF by
+        // closing its own TCP connection; nothing here ever will unless told to, so `serve_stream`
+        // — and the `server.await` below — would hang forever without this.
+        send.finish().expect("finish the write side");
 
-        eprintln!("[bench] client: reading status byte");
         let status = protocol::read_http_status(&mut recv)
             .await
             .expect("a status byte");
-        eprintln!("[bench] client: status = {status:?}");
         assert_eq!(status, HttpStatus::Ok);
 
         let start = Instant::now();
@@ -3365,6 +3361,10 @@ mod tests {
             .await
             .expect("read the body to eof");
         let elapsed = start.elapsed();
+        // Tells `serve_peer`'s `accept_bi` loop the peer is done, so the server task returns and
+        // this `.await` completes — nothing else ever closes this connection, by design (see
+        // above).
+        conn.close(0u32.into(), b"test done");
         server.await.expect("the server task did not panic");
 
         let mib_per_s = (copied as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
