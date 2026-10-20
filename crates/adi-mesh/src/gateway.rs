@@ -3255,4 +3255,112 @@ mod tests {
             "{challenge}"
         );
     }
+
+    // -- throughput: isolating code limits from the network -------------------------------
+
+    /// Two real, direct-only, loopback iroh endpoints driving the production `serve_stream` →
+    /// `tunnel::splice` path, so the only things that can cap this transfer are our own buffer
+    /// sizes, flow-control windows, and the negotiate/splice code — never a real network's RTT,
+    /// loss, or a relay's rate limit. Slow mesh throughput traced to the network (a relay's
+    /// `[limits.client.rx]`, `scripts/deploy-relay.sh`) should leave this fast; a regression in
+    /// our own copy path should not.
+    #[tokio::test]
+    async fn loopback_mesh_throughput_is_not_limited_by_our_own_code() {
+        const PAYLOAD: usize = 32 * 1024 * 1024;
+
+        eprintln!("[bench] binding node_ep");
+        let node_ep = Endpoint::builder(iroh::endpoint::presets::N0)
+            .alpns(vec![protocol::HTTP_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind()
+            .await
+            .expect("bind the node endpoint");
+        eprintln!("[bench] binding client_ep");
+        let client_ep = Endpoint::builder(iroh::endpoint::presets::N0)
+            .alpns(vec![protocol::HTTP_ALPN.to_vec()])
+            .relay_mode(iroh::RelayMode::Disabled)
+            .bind()
+            .await
+            .expect("bind the client endpoint");
+        eprintln!("[bench] both bound; reading node_ep.addr()");
+        let node_addr = node_ep.addr();
+        eprintln!("[bench] node_addr = {node_addr:?}");
+
+        // Stands in for the leased bun port: accept once, discard the request, answer with a
+        // large body as fast as the loopback TCP pipe allows.
+        let (upstream, port) = idle_upstream().await;
+        tokio::spawn(async move {
+            let (mut sock, _) = upstream.accept().await.expect("one connection");
+            let mut discard = [0u8; 1024];
+            let _ = sock.read(&mut discard).await;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                 Content-Length: {PAYLOAD}\r\n\r\n"
+            );
+            sock.write_all(head.as_bytes())
+                .await
+                .expect("write the response head");
+            sock.write_all(&vec![7u8; PAYLOAD])
+                .await
+                .expect("write the body");
+        });
+
+        let key = client_ep.id();
+        let node = Arc::new(
+            StubNode::new(routes(&[("video", "video.adi", None, port)]))
+                .with_peer(key, peer_named("viewer", &["http:video"], "igor", "hunter2")),
+        );
+
+        let server = tokio::spawn(async move {
+            eprintln!("[bench] server: waiting for a connection");
+            let incoming = node_ep.accept().await.expect("a connection arrives");
+            eprintln!("[bench] server: incoming; awaiting handshake");
+            let conn = incoming.await.expect("the handshake completes");
+            eprintln!("[bench] server: handshake complete; accepting bi-stream");
+            let (send, recv) = conn.accept_bi().await.expect("the client opens a stream");
+            eprintln!("[bench] server: bi-stream open; serving");
+            serve_stream(key, node, send, recv)
+                .await
+                .expect("serve_stream");
+            eprintln!("[bench] server: serve_stream done");
+        });
+
+        eprintln!("[bench] client: dialling");
+        let conn = client_ep
+            .connect(node_addr, protocol::HTTP_ALPN)
+            .await
+            .expect("dial the node directly, loopback only");
+        eprintln!("[bench] client: connected; opening bi-stream");
+        let (mut send, mut recv) = conn.open_bi().await.expect("open a bi-stream");
+        eprintln!("[bench] client: writing frame + head");
+        protocol::write_http_request(&mut send, "video")
+            .await
+            .expect("write the frame");
+        send.write_all(
+            get_head("video.laptop-b.n.adi", "/", &basic("igor", "hunter2")).as_bytes(),
+        )
+        .await
+        .expect("write the head");
+
+        eprintln!("[bench] client: reading status byte");
+        let status = protocol::read_http_status(&mut recv)
+            .await
+            .expect("a status byte");
+        eprintln!("[bench] client: status = {status:?}");
+        assert_eq!(status, HttpStatus::Ok);
+
+        let start = Instant::now();
+        let copied = tokio::io::copy(&mut recv, &mut tokio::io::sink())
+            .await
+            .expect("read the body to eof");
+        let elapsed = start.elapsed();
+        server.await.expect("the server task did not panic");
+
+        let mib_per_s = (copied as f64 / (1024.0 * 1024.0)) / elapsed.as_secs_f64();
+        println!("loopback mesh throughput: {copied} bytes in {elapsed:?} ({mib_per_s:.1} MiB/s)");
+        assert!(
+            copied as usize >= PAYLOAD,
+            "the whole body, plus the response head splice copied along with it, arrived"
+        );
+    }
 }
