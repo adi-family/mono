@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::config::MeshConfig;
 use crate::gateway::{self, Gateway, NodeCredentials};
-use crate::{client, dns, host, identity, join, protocol, relay, ticket};
+use crate::{client, dns, host, identity, join, protocol, relay, roam, ticket};
 
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
 const TICKET_RELAY_WAIT: Duration = Duration::from_secs(8);
@@ -89,9 +89,6 @@ impl Daemon {
         let (shutdown, rx) = watch::channel(false);
         let mut tasks = Vec::new();
 
-        // Publish this run's ticket once its relay is up, so tools can share it.
-        tasks.push(tokio::spawn(publish_ticket(endpoint.clone())));
-
         // Both roles served over the endpoint share this: the forward loop dispatches the
         // gateway's ALPN to it, and the local listener below calls out through it.
         let gateway = Gateway::new(endpoint.clone());
@@ -99,6 +96,15 @@ impl Daemon {
             Some(credentials) => gateway.with_credentials(credentials),
             None => gateway,
         });
+
+        // Publish this run's ticket once its relay is up, so tools can share it — and keep it,
+        // and the gateway's pool, current for as long as the process outlives the network it
+        // started on ([`roam`]).
+        tasks.push(tokio::spawn(follow_network(
+            endpoint.clone(),
+            Arc::clone(&gateway),
+            rx.clone(),
+        )));
 
         // The node side's demand awareness: the same tick a routes-only front door runs, picking
         // up a phase the supervising hive just published or a wake left behind for it
@@ -237,18 +243,11 @@ pub async fn current_ticket() -> anyhow::Result<String> {
     Ok(token)
 }
 
-/// Publish + log this run's ticket once its relay is up.
-async fn publish_ticket(endpoint: Endpoint) {
-    let addr = wait_for_relay_addr(&endpoint).await;
-    match ticket::encode(&addr) {
-        Ok(token) => {
-            if let Err(e) = ticket::publish(&token) {
-                warn!(error = %e, "could not persist this machine's ticket");
-            }
-            info!(ticket = %token, "share this ticket with a peer to reach this machine");
-        }
-        Err(e) => warn!(error = %e, "could not encode this machine's ticket"),
-    }
+/// Wait for a home relay, then hand the address to [`roam::follow`]. The wait is the reason this
+/// is not `roam::follow` itself: the first ticket should be reachable off the LAN.
+async fn follow_network(endpoint: Endpoint, gateway: Arc<Gateway>, rx: watch::Receiver<bool>) {
+    let first = wait_for_relay_addr(&endpoint).await;
+    roam::follow(endpoint, first, gateway, rx).await;
 }
 
 /// Poll the endpoint's address until it has a home relay, bounded by [`TICKET_RELAY_WAIT`],

@@ -531,6 +531,11 @@ impl Gateway {
     pub fn demand(&self) -> Arc<Demand> {
         Arc::clone(&self.demand)
     }
+
+    /// [`Pool::retire_relayed`] on the calling side's pool, for the daemon's network-change follower (`roam.rs`) to drive.
+    pub fn retire_relayed(&self, dialled_before: Instant) -> usize {
+        self.pool.retire_relayed(dialled_before)
+    }
 }
 
 impl NodeSide for Gateway {
@@ -1200,6 +1205,10 @@ pub trait Dialer: Send + Sync + 'static {
 
     /// Is a pooled connection still worth handing out?
     fn is_usable(&self, conn: &Self::Conn) -> bool;
+
+    /// Is this connection riding the relay with no direct path at all? What
+    /// [`Pool::retire_relayed`] asks before it lets a connection go — see the daemon's network-change follower (`roam.rs`).
+    fn is_relay_only(&self, conn: &Self::Conn) -> bool;
 }
 
 /// The production dialer: an iroh connection on the gateway ALPN.
@@ -1232,6 +1241,26 @@ impl Dialer for IrohDialer {
     fn is_usable(&self, conn: &Connection) -> bool {
         conn.close_reason().is_none()
     }
+
+    fn is_relay_only(&self, conn: &Connection) -> bool {
+        relay_only(conn.paths().iter().map(|path| path.is_ip()))
+    }
+}
+
+/// Given whether each open path of a connection is direct, is the connection relay-only?
+///
+/// A connection with **no** open path is not relay-only: it is closing or not yet established,
+/// and [`Dialer::is_usable`] is the question that settles it. Retiring it here as well would only
+/// double-count it.
+fn relay_only(paths_are_direct: impl IntoIterator<Item = bool>) -> bool {
+    let mut any = false;
+    for direct in paths_are_direct {
+        if direct {
+            return false;
+        }
+        any = true;
+    }
+    any
 }
 
 /// Base delay after a peer's first failed dial.
@@ -1263,6 +1292,9 @@ struct Slot<C> {
 #[derive(Debug)]
 struct SlotState<C> {
     conn: Option<Arc<C>>,
+    /// When `conn` was dialled. [`Pool::retire_relayed`] spares a connection dialled after its
+    /// cut-off: that one already had its chance on the current network.
+    dialled_at: Instant,
     failures: u32,
     /// When the next dial may be attempted, after a failure.
     retry_after: Option<Instant>,
@@ -1273,6 +1305,7 @@ impl<C> Default for Slot<C> {
         Self {
             state: Mutex::new(SlotState {
                 conn: None,
+                dialled_at: Instant::now(),
                 failures: 0,
                 retry_after: None,
             }),
@@ -1332,6 +1365,7 @@ impl<D: Dialer> Pool<D> {
             Ok(conn) => {
                 let conn = Arc::new(conn);
                 state.conn = Some(Arc::clone(&conn));
+                state.dialled_at = Instant::now();
                 state.failures = 0;
                 state.retry_after = None;
                 Ok(conn)
@@ -1343,6 +1377,44 @@ impl<D: Dialer> Pool<D> {
                 Err(e.context(format!("dialling {peer} (next attempt in {delay:.1?})")))
             }
         }
+    }
+
+    /// Drop every pooled connection that is relay-only and was dialled before `dialled_before`,
+    /// so the next request to that peer dials fresh and hole-punches again. Returns how many went.
+    ///
+    /// **Retired, not closed.** A request already on the connection — a WebSocket, a download —
+    /// holds its own reference through its streams, so it runs to the end on the old path and the
+    /// connection closes when its last stream does. Closing it here would cut those off to save a
+    /// relay hop nobody asked to save.
+    ///
+    /// A slot whose lock is held is skipped rather than waited on: its holder is a request
+    /// dialling right now, and whatever it stores was dialled on the network this sweep is about.
+    /// Backoff state is left alone — a retired connection is not a failed dial.
+    pub fn retire_relayed(&self, dialled_before: Instant) -> usize {
+        let slots: Vec<_> = {
+            let peers = self.peers.lock().unwrap_or_else(PoisonError::into_inner);
+            peers
+                .iter()
+                .map(|(peer, slot)| (*peer, Arc::clone(slot)))
+                .collect()
+        };
+        let mut retired = 0;
+        for (peer, slot) in slots {
+            let Ok(mut state) = slot.state.try_lock() else {
+                continue;
+            };
+            let predates = state.dialled_at < dialled_before;
+            if let Some(conn) = &state.conn
+                && predates
+                && self.dialer.is_usable(conn)
+                && self.dialer.is_relay_only(conn)
+            {
+                info!(%peer, "pool: retiring a relay-only connection so the next request hole-punches afresh");
+                state.conn = None;
+                retired += 1;
+            }
+        }
+        retired
     }
 }
 
@@ -2795,6 +2867,7 @@ mod tests {
     #[derive(Debug)]
     struct StubConn {
         alive: AtomicBool,
+        relayed: AtomicBool,
     }
 
     #[derive(Debug, Default)]
@@ -2802,6 +2875,8 @@ mod tests {
         dials: AtomicUsize,
         fail: bool,
         delay: Duration,
+        /// Whether what it dials comes up relay-only.
+        relayed: bool,
     }
 
     impl CountingDialer {
@@ -2821,11 +2896,16 @@ mod tests {
             anyhow::ensure!(!self.fail, "stub dial failure");
             Ok(StubConn {
                 alive: AtomicBool::new(true),
+                relayed: AtomicBool::new(self.relayed),
             })
         }
 
         fn is_usable(&self, conn: &StubConn) -> bool {
             conn.alive.load(Ordering::SeqCst)
+        }
+
+        fn is_relay_only(&self, conn: &StubConn) -> bool {
+            conn.relayed.load(Ordering::SeqCst)
         }
     }
 
@@ -2915,6 +2995,77 @@ mod tests {
         assert_eq!(backoff_delay(3, base, cap), base * 4);
         assert_eq!(backoff_delay(9, base, cap), cap);
         assert_eq!(backoff_delay(u32::MAX, base, cap), cap, "no overflow wrap");
+    }
+
+    /// The network-change recovery (`crate::roam`): a relay-only connection from before the
+    /// move is let go, and the next request dials the peer again.
+    #[tokio::test]
+    async fn a_stale_relay_only_connection_is_retired_and_redialled() {
+        let pool = Pool::new(CountingDialer {
+            relayed: true,
+            ..CountingDialer::default()
+        });
+        let peer = some_key();
+        let first = pool.get(peer).await.expect("dialled");
+
+        assert_eq!(pool.retire_relayed(Instant::now()), 1);
+        assert!(
+            first.alive.load(Ordering::SeqCst),
+            "retired, not closed: a stream still on it runs to the end"
+        );
+        let second = pool.get(peer).await.expect("re-dialled");
+        assert_eq!(pool.dialer.count(), 2);
+        assert!(!Arc::ptr_eq(&second, &first));
+    }
+
+    /// What the sweep must leave alone: a direct connection, and a relay-only one dialled after
+    /// the cut-off — it was dialled on the current network and already had its hole-punch.
+    #[tokio::test]
+    async fn retiring_spares_direct_and_fresh_connections() {
+        let pool = Pool::new(CountingDialer::default());
+        let direct = some_key();
+        let fresh = some_key();
+        pool.get(direct).await.expect("dialled");
+        let cutoff = Instant::now();
+        let conn = pool.get(fresh).await.expect("dialled");
+        conn.relayed.store(true, Ordering::SeqCst);
+
+        assert_eq!(pool.retire_relayed(cutoff), 0);
+        pool.get(direct).await.expect("reused");
+        pool.get(fresh).await.expect("reused");
+        assert_eq!(pool.dialer.count(), 2, "nothing was re-dialled");
+    }
+
+    /// A sweep must not turn a peer in backoff into a hot loop, nor clear its failures.
+    #[tokio::test]
+    async fn retiring_leaves_a_failing_peer_in_backoff() {
+        let pool = Pool::with_backoff(
+            CountingDialer {
+                fail: true,
+                relayed: true,
+                ..CountingDialer::default()
+            },
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+        );
+        let peer = some_key();
+        assert!(pool.get(peer).await.is_err());
+
+        assert_eq!(pool.retire_relayed(Instant::now()), 0, "nothing pooled");
+        assert!(pool.get(peer).await.is_err(), "still backing off");
+        assert_eq!(pool.dialer.count(), 1);
+    }
+
+    #[test]
+    fn relay_only_means_open_paths_and_none_of_them_direct() {
+        assert!(relay_only([false]));
+        assert!(relay_only([false, false]));
+        assert!(!relay_only([false, true]), "a direct path exists");
+        assert!(!relay_only([true]));
+        assert!(
+            !relay_only([]),
+            "no open path is a closing connection, not a relayed one"
+        );
     }
 
     // -- head parsing ---------------------------------------------------------------------

@@ -30,5 +30,6 @@ pub mod tunnel;
 mod client;
 mod daemon;
 mod host;
+mod roam;
 
 pub use daemon::{Daemon, current_ticket};

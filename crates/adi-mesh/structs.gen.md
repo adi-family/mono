@@ -4,7 +4,7 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-26 structs · 8 enums across 8 files.
+27 structs · 8 enums across 9 files.
 
 ## Index
 
@@ -16,6 +16,7 @@
 - [`src/join.rs`](#srcjoinrs) — `Invite`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
+- [`src/roam.rs`](#srcroamrs) — `Recycle`
 
 ---
 
@@ -345,6 +346,7 @@ struct Slot<C> {
 #[derive(Debug)]
 struct SlotState<C> {
     conn: Option<Arc<C>>,
+    dialled_at: Instant,
     failures: u32,
     retry_after: Option<Instant>,
 }
@@ -526,6 +528,22 @@ The whole `node.toml`: what this machine calls itself.
 #[serde(default)]
 pub struct NodeConfig {
     pub nickname: String,
+}
+```
+
+---
+
+## `src/roam.rs`
+
+### struct `Recycle`
+
+The next retirement: when it runs, and the dial time a connection must predate to go.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Recycle {
+    at: Instant,
+    dialled_before: Instant,
 }
 ```
 
