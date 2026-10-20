@@ -20,6 +20,22 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.32.0 — 2026-10-21
+
+### Added
+
+- **A chat can tell you when it goes quiet.** A bell toggle above the composer, once armed, plays a short chime and raises a desktop notification the moment the open conversation stops — whether it finished or paused to ask you something. The setting is per-browser, and the click that arms it is what unlocks the notification and the sound.
+- **A sidebar for the chat.** `<adi-chat>` gains a persistent conversation rail beside the transcript, in place of the old full-screen list swap, so you can switch conversations without leaving the one you are reading. It collapses on a narrow layout, with a manual toggle.
+
+### Changed
+
+- **The mesh follows your machine across networks.** Change Wi-Fi or move networks and a peer connection no longer gets stuck on the relay (slow) until you restart ADI: your address is re-published and a direct, hole-punched connection is re-established on its own within seconds of the move (with a 10-minute sweep as a backstop). Transfers already in flight are not interrupted.
+- **The macOS control panel now opens over `https://app.adi`**, trusting the front door's own local certificate — so it works before you have trusted that certificate system-wide.
+
+### Fixed
+
+- **A goal tied to a run that can never answer is now given up, not nudged forever.** When a conversation's engine failed to start, the goal check used to retry on a 30-second loop indefinitely; it now recognises that case and gives the goal up once.
+
 ## 1.31.0 — 2026-10-16
 
 ### Added
