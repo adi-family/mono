@@ -22,6 +22,10 @@ server = [
     "dep:adi-osext",
     "dep:adi-ports-manager",
     "dep:adi-mesh",
+    # `shared::Wake` + `config::route_key` — `POST /api/hive/start` asks the hive's own on-demand
+    # supervisor to start a service rather than spawning one itself (see services.rs). Already in
+    # this feature's dependency graph via adi-mesh, which depends on it directly.
+    "dep:adi-hive",
     "dep:adi-projects",
     "dep:adi-secrets",
     # The shared SQLite store. Native-only (it compiles SQLite in), which is exactly why it
@@ -97,6 +101,7 @@ adi-core = { workspace = true, optional = true }
 adi-osext = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
+adi-hive = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
 adi-secrets = { workspace = true, optional = true }
 adi-db = { workspace = true, optional = true }

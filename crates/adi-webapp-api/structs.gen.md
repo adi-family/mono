@@ -251,6 +251,8 @@ struct YamlService {
 #[derive(Deserialize)]
 struct HiveProxy {
     host: String,
+    #[serde(default)]
+    path: Option<String>,
 }
 ```
 

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use adi_hive::config::route_key;
+use adi_hive::shared::Wake;
 use adi_projects::Projects;
 use serde::Deserialize;
 
@@ -14,9 +16,12 @@ use super::projects::project_detail;
 use super::response::{Response, error, ok_json};
 
 // A read-only view of the subset of adi-hive's `hive.yaml` schema the detail page shows.
-// adi-hive owns the authoritative schema (`crates/adi-hive/src/config.rs`); it's a binary
-// crate with no lib target, so this mirrors just the fields surfaced here rather than
-// pulling its full dependency tree (tokio, …) into this library. Unknown fields are ignored.
+// adi-hive owns the authoritative schema (`crates/adi-hive/src/config.rs`); this mirrors just
+// the fields surfaced here rather than parsing through its full `Hive`/`Service` config types,
+// which resolve imports, ports-manager leases and TLS for a handful of read-only fields. Unknown
+// fields are ignored. (`start_service` below does use `adi_hive::shared`/`config::route_key`
+// directly — those are plain, dependency-light leaves of the same crate, already pulled in via
+// adi-mesh.)
 #[derive(Deserialize)]
 struct HiveDoc {
     #[serde(default)]
@@ -45,6 +50,11 @@ struct YamlService {
 #[derive(Deserialize)]
 struct HiveProxy {
     host: String,
+    /// The prefix this route claims on `host` — needed alongside it to name the route the same way
+    /// adi-hive does (`adi_hive::config::route_key`), so a wake stamp lands under the key the
+    /// supervisor actually registered.
+    #[serde(default)]
+    path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +126,12 @@ const ALWAYS: &str = "always";
 /// that actually supervises something on demand writes it — which on a machine with a route-only
 /// front door is the per-user supervisor, not the front door.
 const DEMAND_FILE: &str = "demand.json";
+
+/// Where the local hive supervisor polls for a request to wake an on-demand service: the same
+/// store-level file a front door stamps for one it routes but does not itself supervise (adi-hive's
+/// `shared::wake_path`). `start_service` writes here for the same reason a split-install front door
+/// does — this handler is itself a third process, with no runner of its own to hand a start to.
+const WAKE_FILE: &str = "wake.json";
 
 /// What the hive daemon says its on-demand services are doing, keyed exactly as the hive keys them:
 /// `<project>/<service>` for an imported service, the bare name for one declared in the front-door
@@ -423,10 +439,18 @@ fn refuse_front_door_write(verb: &str, service: &str) -> Response {
     )
 }
 
-/// `POST /api/hive/start` — launch a hive service's runner (its `run` command) with the
-/// ports-manager-allocated `PORT` injected, in its working directory. The child is detached (its
-/// own process group) and its output goes to `<workdir>/server.log`; status then reflects the
-/// service's primary port listening.
+/// `POST /api/hive/start` — start a hive service. An **on-demand** service is woken exactly as a
+/// visit to its host would wake it: a stamp in [`WAKE_FILE`], which only asks the hive that
+/// actually supervises it to do so. An **always** service (or an on-demand one with no
+/// `proxy.host`, which nothing could ever wake that way) is launched directly: its runner's `run`
+/// command, with the ports-manager-allocated `PORT` injected, in its working directory, detached
+/// (its own process group) with output going to `<workdir>/server.log`.
+///
+/// On-demand services used to always be launched directly, which is exactly the bug this handler
+/// must not have: a process spawned here answers to nobody's idle clock (the supervisor never
+/// registered it, so it is never idle-stopped) and to nobody's `wait()` either (this handler
+/// returns long before the process does, so it outlives the request as a zombie once it exits).
+/// Either way, status then reflects the service's primary port listening.
 #[must_use]
 pub fn start_service(store: &Projects, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<StartService>(body) else {
@@ -473,15 +497,36 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
         );
     }
 
-    // A docker runner: start just its container (`docker start <name>`), never a script and never
-    // the host port.
+    let port = service_http_port(svc);
+
+    // On demand, and with a route to wake it on: ask the hive that actually supervises this
+    // service, exactly as a visit to its host would — whichever runner kind it declares, since
+    // that choice is the supervisor's to make, not this handler's. See the function doc for why
+    // this matters more than it looks like it should.
+    let host = given(svc.proxy.as_ref().map(|p| p.host.as_str()));
+    if is_on_demand(svc.start.as_deref(), host.is_some())
+        && let Some(host) = host
+    {
+        let path = svc.proxy.as_ref().and_then(|p| p.path.as_deref());
+        let wake_path = store.config().module("hive").raw_path(WAKE_FILE);
+        Wake::new(wake_path).stamp(&route_key(host, path), true);
+        return ok_json(&StartResult {
+            service: req.service,
+            port,
+            pid: 0,
+        });
+    }
+
+    // Always (or on-demand with no host, which nothing could ever wake that way): launch it
+    // ourselves. A docker runner: start just its container (`docker start <name>`), never a
+    // script and never the host port.
     if let Some(docker) = runner.docker.as_ref() {
         let name = docker_container_name(&req.service, docker);
         return match docker_container("start", &name) {
             // The container runs inside the docker daemon, so there is no local pid to report.
             Ok(()) => ok_json(&StartResult {
                 service: req.service,
-                port: service_http_port(svc),
+                port,
                 pid: 0,
             }),
             Err(e) => error(500, &format!("starting container `{name}`: {e}")),
@@ -498,7 +543,6 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
         );
     };
 
-    let port = service_http_port(svc);
     // Don't spawn a doomed process if the port is already taken — the service looks up already.
     if let Some(p) = port
         && !adi_ports_manager::is_bindable(p)
@@ -508,6 +552,7 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
             &format!("service `{}` looks already running on :{p}", req.service),
         );
     }
+
     let workdir = resolve_workdir(script.working_dir.as_deref(), default_dir.as_deref());
     match spawn_runner(&script.run, &workdir, port) {
         Ok(pid) => ok_json(&StartResult {
@@ -972,7 +1017,15 @@ fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    Ok(cmd.spawn()?.id())
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+    // This process is the child's parent, and nothing else here ever calls `wait` on it — an
+    // unwaited child is a zombie from the moment it exits. The thread outlives the request and
+    // blocks only on the child, which is exactly what reaps it without the handler waiting too.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
 }
 
 #[cfg(test)]
@@ -1005,6 +1058,39 @@ mod tests {
         let stopped = stop_service(&store, body);
         assert_eq!(stopped.status, 409);
         assert!(stopped.body.contains("adi-mono dns"), "{}", stopped.body);
+    }
+
+    /// Starting an on-demand service by hand must ask the hive that supervises it, by stamping
+    /// the wake file — not spawn a process of its own. A process spawned here answers to no
+    /// supervisor's idle clock and no supervisor's `wait()`: exactly the bug (idle-stop never
+    /// firing, a zombie left behind after stop) this handler exists to not have.
+    #[test]
+    fn starting_an_on_demand_service_stamps_the_wake_file_instead_of_spawning() {
+        let store = temp_store("on-demand-start");
+        let hive_path = store.hive_path("proj").unwrap();
+        std::fs::create_dir_all(hive_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &hive_path,
+            "services:\n  \
+               watch:\n    \
+                 proxy: { host: watch.adi }\n    \
+                 rollout: { recreate: { ports: { http: 8941 } } }\n    \
+                 start: on-demand\n    \
+                 idle_stop: 30m\n    \
+                 runner: { script: { run: 'sleep 1' } }\n",
+        )
+        .unwrap();
+        // The directory the wake file lives in is the supervisor's to create (see
+        // `adi_hive::shared::write`) — stand in for a supervisor that is already running, which
+        // is the only situation a service with an `idle_stop` to honour is ever in for real.
+        std::fs::create_dir_all(store.config().module("hive").dir()).unwrap();
+
+        let res = start_service(&store, br#"{"project":"proj","service":"watch"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+
+        let wake_path = store.config().module("hive").raw_path(WAKE_FILE);
+        let written = std::fs::read_to_string(&wake_path).expect("the wake file");
+        assert!(written.contains("watch.adi"), "{written}");
     }
 
     fn docker(name: Option<&str>) -> HiveDocker {

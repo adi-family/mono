@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **Manually starting an on-demand hive service from the control panel (`POST /api/hive/start`)
+  now wakes it the same way a visit to its host would**, instead of spawning a second, unrelated
+  process of its own. That process ran outside the hive's supervisor, so its `idle_stop` window
+  never applied — a service manually started this way stayed up indefinitely — and nothing ever
+  called `wait()` on it, so it was left as a zombie once stopped or killed. A service with no
+  `proxy.host` to wake, or one that isn't on-demand, is unaffected.
+
 ## 1.32.0 — 2026-10-21
 
 ### Added
