@@ -124,7 +124,7 @@ pub fn run_update() -> Response {
         }
     }
 
-    let child = match cmd.spawn() {
+    let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(e) => return error(500, &format!("could not start the update: {e}")),
     };
@@ -137,6 +137,13 @@ pub fn run_update() -> Response {
     if let Ok(bytes) = serde_json::to_vec(&marker) {
         let _ = module.write_raw(MARKER, &bytes);
     }
+    // Reaped on a thread of its own. A successful install restarts the stack and orphans this
+    // child to init anyway, but the ordinary case — offline, a bad manifest, anything that fails
+    // before the swap — exits without ever doing that, and without a `wait()` it would sit as a
+    // zombie for as long as this process runs.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 
     let mut state = snapshot();
     // Say so on this reply rather than making the page wait a poll to find out: the marker

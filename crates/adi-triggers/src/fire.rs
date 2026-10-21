@@ -208,11 +208,18 @@ pub(crate) fn fire(
         cmd.current_dir(home);
     }
 
-    let child = cmd
+    let mut child = cmd
         .spawn()
         .map_err(|e| Error::Launch(format!("couldn't spawn {}: {e}", spec.program)))?;
+    let pid = child.id();
+    // Reaped on a thread of its own: this is the launch every event source funnels into
+    // (`Triggers::fire`/`fire_event`), so on a long-running daemon a fire that is never waited
+    // on is a zombie left behind on every matching event, not a one-off leak.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(Firing {
-        pid: child.id(),
+        pid,
         log: log_path(module_dir, &trigger.name),
     })
 }

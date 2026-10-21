@@ -144,9 +144,19 @@ fn spawn_detached(args: &[&str], log_name: &str) -> Result<u32, String> {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
     }
-    cmd.spawn()
-        .map(|child| child.id())
-        .map_err(|e| format!("could not start `adi-mono {}`: {e}", args.join(" ")))
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start `adi-mono {}`: {e}", args.join(" ")))?;
+    let pid = child.id();
+    // Reaped on a thread of its own: this almost always restarts or stops the very process
+    // spawning it, which would otherwise orphan the child to init anyway — but a `power`/
+    // `restart` that fails before it gets that far leaves this process running, and without a
+    // `wait()` the child would sit as a zombie for as long as it does (same fix as `update.rs`'s
+    // `run_update` and `services.rs`'s on-demand hive start).
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
 }
 
 /// `POST /api/system/diagnose` — collect one archive now and say where the page can download it.

@@ -29,6 +29,11 @@ extraction script cares about.
   called `wait()` on it, so it was left as a zombie once stopped or killed. A service with no
   `proxy.host` to wake, or one that isn't on-demand, is unaffected.
 
+- **Three more places that spawn a detached process now reap it instead of leaving a zombie
+  behind**: a trigger's one-off fire (every webhook delivery and matched event, on a long-running
+  install this could add up), and the control panel's `restart`/`power`/`update run` actions.
+  Each spawned its process correctly but never called `wait()` on it afterwards.
+
 ## 1.32.0 — 2026-10-21
 
 ### Added
