@@ -7,18 +7,27 @@
 //! Three words and an absence:
 //!
 //! * [`HUMAN`] — a person asked for it. The control panel (somebody is looking at it), or a
-//!   terminal somebody typed into.
+//!   terminal somebody typed into. [`HUMAN_PREFIX`] is the same word, named: `human:<user>` when
+//!   the request crossed the mesh under a credential (`adi_mesh`'s `FLEET_USER_HEADER`), which is
+//!   what tells one person's launches apart from another's once a fleet (`docs/fleet.md` §13) can
+//!   put more than one in the same session store. The bare word is still every local launch — a
+//!   machine paired with nobody, or a peer who verified with no username on the credential, is
+//!   only ever one person, and naming the only person it could be would be noise.
 //! * `agent:<name>` — another agent's run asked for it, through a tool on its PATH. See
 //!   [`by_caller`].
 //! * [`AUTOMATION`] — something started it with nobody there: a trigger, a cron, a script.
 //! * `""` — nobody wrote it down. Every session opened before this existed, and any launcher that
-//!   declines to say. Never treated as [`HUMAN`]: a filter for "mine" that swept in everything
+//!   declines to say. Never treated as human: a filter for "mine" that swept in everything
 //!   unattributed would be no filter at all on a machine with a year of history.
 //!   [`created_by`](crate::AgentManifest::created_by) reads this one differently — see [`is_mine`]
 //!   for why.
 
-/// A person asked for this run.
+/// A person asked for this run, with no name on it.
 pub const HUMAN: &str = "human";
+
+/// The prefix a human launch carries once it names who asked — `human:<user>`, the credential
+/// that named them. See the module doc for when a launch is named and when it stays bare.
+pub const HUMAN_PREFIX: &str = "human:";
 
 /// Something with nobody watching asked for this run — a trigger, a schedule, a script.
 pub const AUTOMATION: &str = "automation";
@@ -40,7 +49,14 @@ pub fn by_caller() -> Option<String> {
 
 #[must_use]
 pub fn is_human(launched_by: &str) -> bool {
-    launched_by == HUMAN
+    launched_by == HUMAN || launched_by.starts_with(HUMAN_PREFIX)
+}
+
+/// The named person behind a human launch — the part after [`HUMAN_PREFIX`] — or `None` for a
+/// bare [`HUMAN`] launch, which names nobody in particular.
+#[must_use]
+pub fn human_user(launched_by: &str) -> Option<&str> {
+    launched_by.strip_prefix(HUMAN_PREFIX).filter(|u| !u.is_empty())
 }
 
 /// Whether this vocabulary's owner counts as "mine" for the **Agents page's** Mine filter — a
@@ -71,9 +87,18 @@ mod tests {
     #[test]
     fn only_the_word_human_reads_as_a_person() {
         assert!(is_human(HUMAN));
+        assert!(is_human("human:igor"), "a named launch is still a person's");
         assert!(!is_human(""));
         assert!(!is_human(AUTOMATION));
         assert!(!is_human("agent:adi-agent"));
+    }
+
+    #[test]
+    fn human_user_names_only_a_tagged_launch() {
+        assert_eq!(human_user(HUMAN), None);
+        assert_eq!(human_user("human:igor"), Some("igor"));
+        assert_eq!(human_user("human:"), None, "an empty name is no name at all");
+        assert_eq!(human_user(AUTOMATION), None);
     }
 
     #[test]

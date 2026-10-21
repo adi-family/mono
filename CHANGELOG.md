@@ -20,6 +20,13 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The sessions rail's filter box can now tell your own conversations apart from a paired
+  teammate's.** "Only started by me" (the default) is narrowed to launches made under your own
+  mesh credential; the old behaviour — any person's launch, on any merged machine — is still
+  there as "Only started any user". On a machine paired with nobody the two are the same thing.
+
 ### Fixed
 
 - **Manually starting an on-demand hive service from the control panel (`POST /api/hive/start`)

@@ -224,10 +224,11 @@ pub(crate) struct State {
     /// block that no longer exists costs nothing.
     pub(crate) rail_collapsed_bands: RwSignal<BTreeSet<String>>,
     /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::Mine`] by default:
-    /// the rail opens on the conversations a person started, because a working fleet starts most of
-    /// its own work and the handful you had is otherwise buried under hundreds the machine spawned
-    /// for itself. The funnel takes the accent while it is narrowed, and **All sessions** is one
-    /// press away, so nothing is hidden without the head saying so.
+    /// the rail opens on the conversations *you* started, because a working fleet starts most of
+    /// its own work and the handful you had is otherwise buried under hundreds the machine (or a
+    /// paired teammate's machine) spawned for itself. The funnel takes the accent while it is
+    /// narrowed, and **All sessions** is one press away, so nothing is hidden without the head
+    /// saying so.
     ///
     /// Page state rather than a stored preference, like the two signals around it — a reload comes
     /// back to your own sessions, not to the last narrowing.
@@ -540,23 +541,33 @@ impl State {
 /// What the chat rail is narrowed to — the Sessions head's filter box.
 ///
 /// A fleet grows a long tail of one-off and machine-made agents, and their conversations land in
-/// the same flat list as the handful a person actually had. Two narrowings answer that, and they
+/// the same flat list as the handful a person actually had. Three narrowings answer that, and they
 /// are different questions: *which agents matter* (the shortlist starred on the Agents page, which
-/// is also what the agent picker draws from), and *which conversations are mine* (the ones a person
-/// started, as against the ones agents spawned for themselves).
+/// is also what the agent picker draws from), *which conversations are anybody's* (the ones a
+/// person started, as against the ones agents spawned for themselves), and, of those, *which are
+/// yours* — a question [`Self::AnyUser`] cannot answer once a fleet (`docs/fleet.md` §13) can put
+/// somebody else's launches in the same merged rail, because every human launch used to read the
+/// same regardless of whose credential made it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum SessionFilter {
     /// Every conversation, whoever it belongs to and whoever started it.
     All,
     /// Only sessions of agents starred on the Agents page.
     Starred,
-    /// Only sessions a person started — `launched_by: "human"` on the run. A session opened before
-    /// the store recorded who started it is *not* one of these: nobody wrote it down, and a filter
-    /// that assumed a person would be showing a year of agent-spawned runs under that name.
+    /// Only sessions a person started, named or not — `launched_by: "human"` or `"human:<user>"`
+    /// on the run. A session opened before the store recorded who started it is *not* one of
+    /// these: nobody wrote it down, and a filter that assumed a person would be showing a year of
+    /// agent-spawned runs under that name.
+    AnyUser,
+    /// Only sessions started under *your own* name — the same runs [`Self::AnyUser`] keeps,
+    /// narrowed to the one whose credential matches the identity the request asked under
+    /// (`AllAgentRuns::asking_user`). On a machine paired with nobody there is only one person it
+    /// could ever be, so this and [`Self::AnyUser`] agree there; the two only part ways once a
+    /// paired node's own launches can land in the same rail.
     ///
     /// The default, and the one narrowing worth opening on: the rail's job is the conversations you
-    /// are having, and on a machine whose agents launch each other those are the minority of what
-    /// is in it.
+    /// are having, and on a machine whose agents launch each other — or whose fleet now includes
+    /// somebody else's machine — those are the minority of what is in it.
     #[default]
     Mine,
 }
@@ -567,22 +578,25 @@ impl SessionFilter {
         match self {
             Self::All => "All sessions",
             Self::Starred => "Only starred",
+            Self::AnyUser => "Only started any user",
             Self::Mine => "Only started by me",
         }
     }
 
     /// Every option the box offers, in the order it offers them.
-    pub(crate) const ALL: [Self; 3] = [Self::All, Self::Starred, Self::Mine];
+    pub(crate) const ALL: [Self; 4] = [Self::All, Self::Starred, Self::AnyUser, Self::Mine];
 
     /// The `filter=` value that tells the server to narrow the index this way before it pages it,
     /// or `None` for [`Self::All`] — which sends no parameter, so the unnarrowed rail keeps the
     /// exact request path (and so the exact live topic) it has always used. The strings are the
-    /// wire contract with `RunFilter::from_query` on the backend.
+    /// wire contract with `RunFilter::from_query` on the backend; `"mine"` keeps its old meaning
+    /// (any person) so an older paired node answers [`Self::AnyUser`] exactly as it always did.
     pub(crate) fn query_value(self) -> Option<&'static str> {
         match self {
             Self::All => None,
             Self::Starred => Some("starred"),
-            Self::Mine => Some("mine"),
+            Self::AnyUser => Some("mine"),
+            Self::Mine => Some("me"),
         }
     }
 }

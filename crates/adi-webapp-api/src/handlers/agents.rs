@@ -343,6 +343,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         .map(str::trim)
         .filter(|by| !by.is_empty())
         .unwrap_or(adi_agents::launcher::HUMAN);
+    let launched_by = attribute_human(launched_by, sender);
     // What this one run runs the agent *as* — see `adi_agents::overrides` for why an absent key and
     // an empty one mean different things. Nothing sent is the ordinary launch.
     let overrides = req.overrides.as_ref().map(|o| adi_agents::RunOverrides {
@@ -379,7 +380,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
             force: req.force,
             image_ids: &req.attachments,
             pre_run: &req.pre_run,
-            launched_by: Some(launched_by),
+            launched_by: Some(&launched_by),
             overrides: overrides.as_ref(),
             owner_instructions: owner_instructions.as_deref(),
             markers: &markers,
@@ -1272,14 +1273,21 @@ pub fn rename_run(store: &Agents, body: &[u8]) -> Response {
 /// [`filter_by_hidden`]), `Some(true)` for the Hidden band, fetched only while it is open, and
 /// `None` for everyone else — a workbench, Analytics, an older client that sends no such
 /// parameter — which gets the whole history exactly as it always has.
-/// The sessions rail's `?filter=` narrowing — its "Only starred" / "Only started by me" box, moved
-/// server-side (`docs/sessions.md`). `All` is the *absence* of the parameter, so an unnarrowed rail
-/// sends the same request it always did; only these two ever reach [`all_agent_runs`]. The wire
-/// strings are the contract with the client's `SessionFilter::query_value`.
+/// The sessions rail's `?filter=` narrowing — its "Only starred" / "Only started any user" /
+/// "Only started by me" box, moved server-side (`docs/sessions.md`). `All` is the *absence* of the
+/// parameter, so an unnarrowed rail sends the same request it always did; only these three ever
+/// reach [`all_agent_runs`]. The wire strings are the contract with the client's
+/// `SessionFilter::query_value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunFilter {
-    /// Only runs a person started — `launched_by == human`.
+    /// Only runs a person started, named or not — `launched_by == human` or `human:<user>`.
     Mine,
+    /// Only runs *this* person started — the same runs [`Self::Mine`] keeps, narrowed to the one
+    /// whose name (`adi_agents::launcher::human_user`) matches whoever is asking (`asking_user`).
+    /// On a machine paired with nobody there is only one person it could ever be, so this and
+    /// [`Self::Mine`] answer the same question until a fleet (`docs/fleet.md` §13) puts somebody
+    /// else's launches in the same store.
+    Me,
     /// Only runs whose agent is starred on the Agents page.
     Starred,
 }
@@ -1292,6 +1300,7 @@ impl RunFilter {
     pub fn from_query(value: &str) -> Option<Self> {
         match value {
             "mine" => Some(Self::Mine),
+            "me" => Some(Self::Me),
             "starred" => Some(Self::Starred),
             _ => None,
         }
@@ -1304,6 +1313,7 @@ pub fn all_agent_runs(
     limit: Option<usize>,
     hidden: Option<bool>,
     filter: Option<RunFilter>,
+    sender: Option<FleetSender<'_>>,
 ) -> Response {
     match store.list() {
         Ok(agents) => {
@@ -1327,8 +1337,13 @@ pub fn all_agent_runs(
             if let Some(only_hidden) = hidden {
                 runs = filter_by_hidden(runs, only_hidden);
             }
+            // Who is asking, by the same identity a human launch is named with (`asking_user`) —
+            // computed whether or not `filter` narrows by it, because it also rides along in the
+            // answer for the client to mirror `?filter=me` over `watch.runs`, which never asks the
+            // server (`docs/sessions.md`).
+            let who = asking_user(sender);
             if let Some(filter) = filter {
-                runs = filter_by_run(runs, filter, &starred);
+                runs = filter_by_run(runs, filter, &starred, who);
             }
             // Counted after the `hidden` and `filter` narrowings and before the `limit` cut, so the
             // rail's "N older", the Hidden band's count and a narrowed view's count each describe the
@@ -1337,9 +1352,37 @@ pub fn all_agent_runs(
             if let Some(limit) = limit {
                 runs = newest(runs, limit);
             }
-            ok_json(&AllAgentRuns { agents: runs, total })
+            ok_json(&AllAgentRuns {
+                agents: runs,
+                total,
+                asking_user: who.map(ToString::to_string),
+            })
         }
         Err(e) => Response::from(&e),
+    }
+}
+
+/// The username behind this specific request — the mesh credential's own name
+/// ([`FleetSender::user`]), when the gateway attached one, or `None` for a request that never
+/// left this machine. The same identity [`sender_marker`] tags a message with, read instead for
+/// what a human launch is named with and what `?filter=me` narrows by.
+fn asking_user<'a>(sender: Option<FleetSender<'a>>) -> Option<&'a str> {
+    sender
+        .filter(|s| !s.nickname.is_empty() && !s.user.is_empty())
+        .map(|s| s.user)
+}
+
+/// Name a plain person launch with whoever is asking (`asking_user`) — `human:<user>` instead of
+/// the bare word, so `?filter=me` can tell this person's launches apart from a paired peer's
+/// later. Anything that already names an agent or automation is left exactly as sent: only the
+/// bare word, [`adi_agents::launcher::HUMAN`], is ever enriched.
+fn attribute_human(launched_by: &str, sender: Option<FleetSender<'_>>) -> String {
+    if launched_by != adi_agents::launcher::HUMAN {
+        return launched_by.to_string();
+    }
+    match asking_user(sender) {
+        Some(user) => format!("{}{user}", adi_agents::launcher::HUMAN_PREFIX),
+        None => launched_by.to_string(),
     }
 }
 
@@ -1364,13 +1407,15 @@ fn filter_by_hidden(mut agents: Vec<AgentRuns>, only_hidden: bool) -> Vec<AgentR
 }
 
 /// The `?filter=` narrowing: keep only the runs the sessions rail's box would draw, per agent —
-/// the same job [`filter_by_hidden`] does for `?hidden=`, for the "Only starred" / "Only started by
-/// me" choice instead. Applied here so the `?limit=` page and `total` describe the narrowed
-/// population, which is the whole point of pushing the filter down: a `limit` of 100 over the *whole*
-/// index leaves a filtered view showing a handful of rows with the rest stranded behind "Load more".
+/// the same job [`filter_by_hidden`] does for `?hidden=`, for the "Only starred" / "Only started
+/// any user" / "Only started by me" choice instead. Applied here so the `?limit=` page and `total`
+/// describe the narrowed population, which is the whole point of pushing the filter down: a
+/// `limit` of 100 over the *whole* index leaves a filtered view showing a handful of rows with the
+/// rest stranded behind "Load more".
 ///
-/// [`RunFilter::Mine`] keeps a run a person started; [`RunFilter::Starred`] keeps a run whose agent
-/// is in `starred`. A run carrying a [`AgentRunInfo::pending_question`] survives either, whatever the
+/// [`RunFilter::Mine`] keeps a run any person started; [`RunFilter::Me`] narrows that to the one
+/// whose name matches `asking_user`; [`RunFilter::Starred`] keeps a run whose agent is in
+/// `starred`. A run carrying a [`AgentRunInfo::pending_question`] survives all three, whatever the
 /// choice — a question addressed to a person is stranded the instant nothing shows it, the exemption
 /// `filter_by_hidden`, `newest` and the client's own `source_rows` all already make.
 ///
@@ -1382,13 +1427,18 @@ fn filter_by_run(
     mut agents: Vec<AgentRuns>,
     filter: RunFilter,
     starred: &std::collections::HashSet<&str>,
+    asking_user: Option<&str>,
 ) -> Vec<AgentRuns> {
     for a in &mut agents {
         let agent_starred = starred.contains(a.name.as_str());
         a.runs.retain(|r| {
             r.pending_question.is_some()
                 || match filter {
-                    RunFilter::Mine => r.launched_by == adi_agents::launcher::HUMAN,
+                    RunFilter::Mine => adi_agents::launcher::is_human(&r.launched_by),
+                    RunFilter::Me => {
+                        adi_agents::launcher::is_human(&r.launched_by)
+                            && adi_agents::launcher::human_user(&r.launched_by) == asking_user
+                    }
                     RunFilter::Starred => agent_starred,
                 }
         });
@@ -3387,6 +3437,22 @@ mod tests {
     #[test]
     fn the_wire_and_the_store_agree_on_what_a_person_is_called() {
         assert_eq!(crate::types::LAUNCHED_BY_HUMAN, adi_agents::launcher::HUMAN);
+        assert_eq!(
+            crate::types::LAUNCHED_BY_HUMAN_PREFIX,
+            adi_agents::launcher::HUMAN_PREFIX
+        );
+        for value in ["human", "human:igor", "", "automation", "agent:reviewer"] {
+            assert_eq!(
+                crate::types::launched_by_is_human(value),
+                adi_agents::launcher::is_human(value),
+                "{value:?}"
+            );
+            assert_eq!(
+                crate::types::launched_by_user(value),
+                adi_agents::launcher::human_user(value),
+                "{value:?}"
+            );
+        }
     }
 
     /// Same duplication, same reason, for the Agents page's Mine filter: `created_by_is_mine` is a
@@ -4364,14 +4430,14 @@ mod tests {
                 .expect("open a session");
         }
 
-        let Response { status, body } = all_agent_runs(&store, Some(2), None, None);
+        let Response { status, body } = all_agent_runs(&store, Some(2), None, None, None);
         assert_eq!(status, 200);
         let page: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(page.total, 5, "what exists, not what was sent");
         assert_eq!(page.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 2);
 
         // And no limit is the whole history, for the pages that read all of it.
-        let Response { body, .. } = all_agent_runs(&store, None, None, None);
+        let Response { body, .. } = all_agent_runs(&store, None, None, None, None);
         let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
         assert_eq!(all.total, 5);
         assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);
@@ -4410,9 +4476,10 @@ mod tests {
         );
     }
 
-    /// The rail's "All / Only starred / Only started by me" box, moved server-side. `Mine` keeps the
-    /// runs a person started; `Starred` keeps the runs of a starred agent — and, like `hidden`, a run
-    /// asking a person a question rides through either narrowing, because nothing else would show it.
+    /// The rail's "All / Only starred / Only started any user / Only started by me" box, moved
+    /// server-side. `Mine` keeps the runs any person started; `Starred` keeps the runs of a
+    /// starred agent — and, like `hidden`, a run asking a person a question rides through either
+    /// narrowing, because nothing else would show it.
     #[test]
     fn filter_narrows_by_launcher_or_star_but_never_drops_a_pending_question() {
         let mut agents = vec![
@@ -4437,18 +4504,41 @@ mod tests {
 
         let starred: std::collections::HashSet<&str> = ["looper"].into_iter().collect();
 
-        let mine = filter_by_run(agents.clone(), RunFilter::Mine, &starred);
+        let mine = filter_by_run(agents.clone(), RunFilter::Mine, &starred, None);
         assert_eq!(
             kept(&mine),
             ["solver-500", "solver-400"],
             "only what a person launched, plus the asking one whoever launched it",
         );
 
-        let starred_only = filter_by_run(agents, RunFilter::Starred, &starred);
+        let starred_only = filter_by_run(agents, RunFilter::Starred, &starred, None);
         assert_eq!(
             kept(&starred_only),
             ["solver-400", "looper-200", "looper-100"],
             "every run of the starred agent, plus the asking one under an unstarred agent",
+        );
+    }
+
+    /// `Me` is `Mine` narrowed to the one name that matches whoever is asking — a named run of
+    /// somebody else's does not count, and neither does an unnamed local launch once somebody is
+    /// asking under a name of their own.
+    #[test]
+    fn me_narrows_mine_to_the_asking_identity() {
+        let mut agents = vec![listing("solver", &[500, 400, 300])];
+        agents[0].runs[0].launched_by = "human:igor".to_string();
+        agents[0].runs[1].launched_by = "human:pat".to_string();
+        agents[0].runs[2].launched_by = "human".to_string(); // a local, unnamed launch
+
+        let no_star = std::collections::HashSet::new();
+
+        let as_igor = filter_by_run(agents.clone(), RunFilter::Me, &no_star, Some("igor"));
+        assert_eq!(kept(&as_igor), ["solver-500"], "only the run named for the asker");
+
+        let as_nobody = filter_by_run(agents, RunFilter::Me, &no_star, None);
+        assert_eq!(
+            kept(&as_nobody),
+            ["solver-300"],
+            "asked locally, only the unnamed launch is the only person it could be",
         );
     }
 
@@ -4530,6 +4620,49 @@ mod tests {
                 user: String::new(),
             }),
             "a peer holds http:app, so who is talking is now a question"
+        );
+    }
+
+    /// A plain launch is named with whoever asked, exactly when a message would be tagged with
+    /// them too — a bare local launch, or one with no username on the credential, stays bare.
+    #[test]
+    fn attribute_human_names_a_plain_launch_when_the_sender_can_say_who() {
+        assert_eq!(
+            attribute_human(
+                adi_agents::launcher::HUMAN,
+                Some(FleetSender {
+                    nickname: "laptop-b",
+                    user: "igor",
+                })
+            ),
+            "human:igor",
+        );
+        assert_eq!(
+            attribute_human(adi_agents::launcher::HUMAN, None),
+            "human",
+            "a local launch names nobody",
+        );
+        assert_eq!(
+            attribute_human(
+                adi_agents::launcher::HUMAN,
+                Some(FleetSender {
+                    nickname: "laptop-b",
+                    user: "",
+                })
+            ),
+            "human",
+            "a peer with no username on its credential names nobody either",
+        );
+        assert_eq!(
+            attribute_human(
+                "agent:planner",
+                Some(FleetSender {
+                    nickname: "laptop-b",
+                    user: "igor",
+                })
+            ),
+            "agent:planner",
+            "already named a caller, so left exactly as sent",
         );
     }
 

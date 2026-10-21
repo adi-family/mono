@@ -614,14 +614,18 @@ fn chat_meta(agent: &str, defined: Option<&AgentDto>, r: &AgentRunInfo) -> Strin
         Some(a) => format!("Chat of {agent} · {}", scope_of(a)),
         None => format!("Chat of {agent} · no longer defined"),
     };
-    let who = match r.launched_by.as_str() {
-        LAUNCHED_BY_HUMAN => "started by you".to_string(),
-        AUTOMATION => "started by automation".to_string(),
-        "" => "nobody recorded who started it".to_string(),
-        other => match other.strip_prefix(AGENT_PREFIX) {
-            Some(name) => format!("started by {name}"),
-            None => format!("started by {other}"),
-        },
+    let who = if let Some(user) = adi_webapp_api::types::launched_by_user(&r.launched_by) {
+        format!("started by {user}")
+    } else {
+        match r.launched_by.as_str() {
+            LAUNCHED_BY_HUMAN => "started by you".to_string(),
+            AUTOMATION => "started by automation".to_string(),
+            "" => "nobody recorded who started it".to_string(),
+            other => match other.strip_prefix(AGENT_PREFIX) {
+                Some(name) => format!("started by {name}"),
+                None => format!("started by {other}"),
+            },
+        }
     };
     let state = match mark_of(r) {
         Mark::Running => "running",
@@ -673,26 +677,32 @@ impl Builder {
 
     /// The root a `launched_by` that is not an agent points at.
     fn origin(&mut self, launched_by: &str) -> usize {
-        let origin = match launched_by {
-            LAUNCHED_BY_HUMAN => Origin::Human,
-            AUTOMATION => Origin::Automation,
-            "" => Origin::Unknown,
-            // A word from a launcher this client does not know. Saying so beats filing it under
-            // one of ours.
-            other => {
-                return self.node(Node {
-                    id: format!("origin:{other}"),
-                    label: other.to_string(),
-                    agent: String::new(),
-                    meta: format!("Started work here, and called itself {other}"),
-                    kind: Kind::Origin,
-                    mark: Mark::None,
-                    chat: None,
-                    role: Role::Plain,
-                    layer: 0,
-                    x: 0.0,
-                    y: 0.0,
-                });
+        // A named human launch (`human:<user>`) folds into the one person pill same as the bare
+        // word: the graph draws who started work, not which credential did, and a `match` below
+        // would otherwise file it under "a launcher this client does not know".
+        let origin = if adi_webapp_api::types::launched_by_is_human(launched_by) {
+            Origin::Human
+        } else {
+            match launched_by {
+                AUTOMATION => Origin::Automation,
+                "" => Origin::Unknown,
+                // A word from a launcher this client does not know. Saying so beats filing it
+                // under one of ours.
+                other => {
+                    return self.node(Node {
+                        id: format!("origin:{other}"),
+                        label: other.to_string(),
+                        agent: String::new(),
+                        meta: format!("Started work here, and called itself {other}"),
+                        kind: Kind::Origin,
+                        mark: Mark::None,
+                        chat: None,
+                        role: Role::Plain,
+                        layer: 0,
+                        x: 0.0,
+                        y: 0.0,
+                    });
+                }
             }
         };
         self.node(Node {
@@ -988,6 +998,7 @@ mod tests {
     fn chain() -> (Vec<AgentDto>, AllAgentRuns) {
         let agents = vec![agent("one"), agent("two"), agent("three")];
         let all = AllAgentRuns {
+            asking_user: None,
             total: 3,
             agents: vec![
                 runs("one", vec![run("r1", LAUNCHED_BY_HUMAN)]),
@@ -1089,6 +1100,26 @@ mod tests {
         );
     }
 
+    /// A named human launch (`human:<user>`, once a fleet lets more than one person's launches
+    /// land in the same index) still folds into the one person pill rather than drawing a second
+    /// origin — and the hover line names exactly who, instead of "started by you".
+    #[test]
+    fn a_named_human_launch_shares_the_person_pill_and_names_itself_in_the_hover_line() {
+        let agents = vec![agent("one")];
+        let all = AllAgentRuns {
+            asking_user: None,
+            total: 1,
+            agents: vec![runs("one", vec![run("r1", "human:igor")])],
+        };
+        let g = build(&agents, &all, None);
+        assert!(
+            g.nodes.iter().all(|n| n.id != "origin:human:igor"),
+            "a named launch must not draw a second origin pill"
+        );
+        node(&g, "origin:human");
+        assert_eq!(node(&g, "chat:one/r1").meta, "Chat of one · global · started by igor · finished");
+    }
+
     /// Two branches, which is the shape a chain cannot show: a person opens two conversations, and
     /// each of those starts two more. Everything in the second row belongs to `hub` or to `mid`,
     /// and the whole of this page is being able to tell which.
@@ -1100,6 +1131,7 @@ mod tests {
         };
         let agents = vec![agent("hub"), agent("mid"), agent("kid")];
         let all = AllAgentRuns {
+            asking_user: None,
             total: 6,
             agents: vec![
                 runs("hub", vec![at("h", LAUNCHED_BY_HUMAN, 10)]),
@@ -1225,6 +1257,7 @@ mod tests {
             })
             .collect();
         let all = AllAgentRuns {
+            asking_user: None,
             total: rs.len(),
             agents: vec![runs("one", rs)],
         };
@@ -1261,6 +1294,7 @@ mod tests {
     #[test]
     fn a_chat_of_a_deleted_agent_is_still_drawn() {
         let all = AllAgentRuns {
+            asking_user: None,
             total: 1,
             agents: vec![runs("gone", vec![run("r1", LAUNCHED_BY_HUMAN)])],
         };
@@ -1284,6 +1318,7 @@ mod tests {
             .collect();
         rs.reverse();
         let all = AllAgentRuns {
+            asking_user: None,
             total: rs.len(),
             agents: vec![runs("one", rs)],
         };
@@ -1312,6 +1347,7 @@ mod tests {
         child.started_at = 9_000;
         child.last_activity = 9_000;
         let all = AllAgentRuns {
+            asking_user: None,
             total: 2,
             agents: vec![
                 runs("starter", vec![starter]),
@@ -1338,6 +1374,7 @@ mod tests {
         let mut child = run("child", "agent:one");
         (child.started_at, child.last_activity) = (60, 60);
         let all = AllAgentRuns {
+            asking_user: None,
             total: 4,
             agents: vec![
                 runs("one", vec![early, mid, late]),
@@ -1371,6 +1408,7 @@ mod tests {
             })
             .collect();
         let all = AllAgentRuns {
+            asking_user: None,
             total: 6,
             agents: vec![runs("one", vec![spawner]), runs("two", workers)],
         };
@@ -1422,6 +1460,7 @@ mod tests {
         let mut worker = run("w", "agent:one");
         (worker.started_at, worker.last_activity) = (200, 200);
         let all = AllAgentRuns {
+            asking_user: None,
             total: 8,
             agents: vec![runs("one", launcher_runs), runs("two", vec![worker])],
         };
@@ -1454,6 +1493,7 @@ mod tests {
         let mut worker = run("w", "agent:one");
         (worker.started_at, worker.last_activity) = (10, 10);
         let all = AllAgentRuns {
+            asking_user: None,
             total: 2,
             agents: vec![runs("one", vec![late]), runs("two", vec![worker])],
         };
@@ -1471,6 +1511,7 @@ mod tests {
     #[test]
     fn every_launcher_lands_on_its_own_root() {
         let all = AllAgentRuns {
+            asking_user: None,
             total: 3,
             agents: vec![runs(
                 "one",
@@ -1493,6 +1534,7 @@ mod tests {
     #[test]
     fn a_cycle_between_two_agents_still_lays_out() {
         let all = AllAgentRuns {
+            asking_user: None,
             total: 2,
             agents: vec![
                 runs("one", vec![run("r1", "agent:two")]),
@@ -1540,6 +1582,7 @@ mod tests {
         let g = build(
             &[],
             &AllAgentRuns {
+                asking_user: None,
                 agents: Vec::new(),
                 total: 0,
             },
@@ -1560,6 +1603,7 @@ mod tests {
     fn a_machine_with_eighty_agents_and_a_thousand_conversations_stays_a_picture() {
         let agents: Vec<AgentDto> = (0..80).map(|i| agent(&format!("a{i}"))).collect();
         let all = AllAgentRuns {
+            asking_user: None,
             total: 80 * 50,
             agents: (0..80)
                 .map(|i| {

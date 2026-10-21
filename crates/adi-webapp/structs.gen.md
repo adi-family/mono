@@ -1846,6 +1846,7 @@ What the chat rail is narrowed to — the Sessions head's filter box.
 pub(crate) enum SessionFilter {
     All,
     Starred,
+    AnyUser,
     #[default]
     Mine,
 }

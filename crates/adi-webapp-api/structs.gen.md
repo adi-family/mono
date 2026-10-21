@@ -58,6 +58,7 @@ struct RunCaps {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunFilter {
     Mine,
+    Me,
     Starred,
 }
 ```
@@ -2666,6 +2667,8 @@ pub struct AllAgentRuns {
     pub agents: Vec<AgentRuns>,
     #[serde(default)]
     pub total: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asking_user: Option<String>,
 }
 ```
 

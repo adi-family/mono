@@ -4819,13 +4819,21 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
     r.last_activity.max(r.started_at)
 }
 
-/// Whether a person asked for this run, as the server recorded at its launch.
+/// Whether a person asked for this run, as the server recorded at its launch — named or not.
 ///
-/// The word rather than a flag, and matched exactly: everything else the field can hold —
-/// `agent:<name>`, `automation`, and the empty string every session opened before the store began
-/// writing this down carries — is *not* a person. See `adi_agents::launcher`.
+/// Everything else the field can hold — `agent:<name>`, `automation`, and the empty string every
+/// session opened before the store began writing this down carries — is *not* a person. See
+/// `adi_agents::launcher`.
 fn launched_by_human(r: &AgentRunInfo) -> bool {
-    r.launched_by == adi_webapp_api::types::LAUNCHED_BY_HUMAN
+    adi_webapp_api::types::launched_by_is_human(&r.launched_by)
+}
+
+/// Whether *this* person asked for this run — [`launched_by_human`] narrowed to the one name that
+/// matches `asking_user`, the identity the source's own listing asked under
+/// ([`adi_webapp_api::types::AllAgentRuns::asking_user`]). `None` is what a local, unnamed launch
+/// compares equal to: asked locally, there is only one person it could be.
+fn launched_by_me(r: &AgentRunInfo, asking_user: Option<&str>) -> bool {
+    launched_by_human(r) && adi_webapp_api::types::launched_by_user(&r.launched_by) == asking_user
 }
 
 /// Cut the *watched* agent's own run list to the page its source's block is showing, by the rule
@@ -4862,18 +4870,19 @@ fn paged(runs: Vec<AgentRunInfo>, state: State, node: Option<&str>) -> Vec<Agent
 /// The rail's **filter box**, in the Sessions head beside "+ New".
 ///
 /// A fleet grows a long tail of one-off and machine-made agents, and their chats land in the same
-/// flat list as the handful of conversations a person actually had. The box narrows the rail two
+/// flat list as the handful of conversations a person actually had. The box narrows the rail three
 /// ways, because they are different questions: to the agents starred on the Agents page — the same
-/// shortlist the agent picker draws from — or to the sessions a person started, as against the ones
-/// agents spawned for themselves ([`SessionFilter`]).
+/// shortlist the agent picker draws from — to the sessions any person started, as against the ones
+/// agents spawned for themselves, or, narrower still, to the ones *you* started ([`SessionFilter`]).
 ///
-/// [`SessionFilter::Mine`] by default: the rail opens on the sessions a person started, because
-/// that is the list it exists to be — a fleet that launches its own work buries the handful of
-/// conversations you had under hundreds it spawned for itself, and a rail nobody can find their own
-/// chat in is worse than one they have to widen. It takes the accent while it is narrowed, because
-/// a list showing less than everything has to say so — and at this size the colour is the whole of
-/// what says it, which is why it is lit from the first draw rather than only after a choice. The
-/// choice is not stored, so a reload comes back to your own sessions.
+/// [`SessionFilter::Mine`] by default: the rail opens on the sessions you started, because
+/// that is the list it exists to be — a fleet that launches its own work (or that merges in a
+/// paired teammate's machine) buries the handful of conversations you had under hundreds somebody
+/// or something else spawned, and a rail nobody can find their own chat in is worse than one they
+/// have to widen. It takes the accent while it is narrowed, because a list showing less than
+/// everything has to say so — and at this size the colour is the whole of what says it, which is
+/// why it is lit from the first draw rather than only after a choice. The choice is not stored, so
+/// a reload comes back to your own sessions.
 ///
 /// A funnel button rather than a dropdown in the head: the head already carries "+ New" and a close
 /// ✕ on a 264px rail, and a control wide enough to print "Only started by me" would take the room
@@ -4889,9 +4898,14 @@ fn chat_session_filter(state: State) -> AnyView {
     let narrowed = match current {
         SessionFilter::All => "narrow the sessions listed here",
         SessionFilter::Starred => "showing sessions from starred agents only",
-        SessionFilter::Mine => {
-            "showing sessions a person started \u{2014} not the ones agents started for \
+        SessionFilter::AnyUser => {
+            "showing sessions any person started \u{2014} not the ones agents started for \
              themselves. Sessions from before ADI recorded who started a run are not listed here."
+        }
+        SessionFilter::Mine => {
+            "showing sessions you started \u{2014} not the ones agents started for themselves, \
+             or that somebody else started on a paired machine. Sessions from before ADI recorded \
+             who started a run are not listed here."
         }
     };
     // The grouping lives behind this button too, and a preference nothing on screen advertises is
@@ -4938,7 +4952,7 @@ fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
     state.session_filter_menu.set(Some(at));
 }
 
-/// The filter menu itself: the three narrowings, then the two groupings, the current one of each
+/// The filter menu itself: the four narrowings, then the two groupings, the current one of each
 /// ticked.
 ///
 /// Two sections in one menu because they are the two halves of "what does this rail look like" and
@@ -4959,7 +4973,7 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
                 on_dismiss=Callback::new(move |()| state.session_filter_menu.set(None))>
                 <adi_ui::MenuHead>"Show"</adi_ui::MenuHead>
                 {SessionFilter::ALL.into_iter().map(|f| {
-                    // Radio, not checkbox: picking one of these un-picks the other two.
+                    // Radio, not checkbox: picking one of these un-picks the other three.
                     view! {
                         <adi_ui::MenuItem checked=f == current radio=true
                             on_select=Callback::new(move |()| {
@@ -5559,25 +5573,44 @@ fn session_rows(state: State, watch: AgentsWatch) -> (Vec<SessionRow>, SessionFi
             );
         }
     }
-    // "Started by me": applied here rather than inside `source_rows`, because it asks about the
-    // session rather than the agent it belongs to and so cannot skip a whole listing the way ★ does.
+    // "Started any user"/"Started by me": applied here rather than inside `source_rows`, because it
+    // asks about the session rather than the agent it belongs to and so cannot skip a whole listing
+    // the way ★ does.
     //
     // A row with no run record is a pty agent's live terminal — nobody wrote down who opened it, and
     // it is a thing a person opens and sits in front of, so it stays. The conversation on screen
-    // stays whoever started it. Everything else has to say `human`: an unattributed session is one
-    // nobody recorded, not one a person is owed. A pending question is the fourth exemption: a
-    // subagent-launched run that stops to ask a person is exactly the "mine" case in every way that
-    // matters — someone has to see it — and the filter isn't the one asking who launched it.
-    if filter == SessionFilter::Mine {
+    // stays whoever started it. A pending question is the other exemption: a subagent-launched run
+    // that stops to ask a person is exactly the "mine" case in every way that matters — someone has
+    // to see it — and the filter isn't the one asking who launched it.
+    //
+    // `Mine` additionally narrows by name: `launched_by_me` compares a row's own `launched_by`
+    // against the identity *that row's own source* asked under
+    // (`AllAgentRuns::asking_user`), read once per source here rather than once per row — a
+    // source's own answer to "who is asking" does not change mid-sort.
+    if filter == SessionFilter::AnyUser || filter == SessionFilter::Mine {
+        let local_asking = state.all_chats.get_untracked().and_then(|c| c.asking_user);
+        let node_chats = state.rail_node_chats.get_untracked();
         rows.retain(|row| match &row.run {
             None => true,
             Some(r) => {
                 r.pending_question.is_some()
-                    || launched_by_human(r)
                     || (row.node == watched_node
                         && row.agent == watched
                         && !open.is_empty()
                         && r.run_id == open)
+                    || match filter {
+                        SessionFilter::AnyUser => launched_by_human(r),
+                        SessionFilter::Mine => {
+                            let asking = match &row.node {
+                                None => local_asking.as_deref(),
+                                Some(n) => {
+                                    node_chats.get(n).and_then(|c| c.asking_user.as_deref())
+                                }
+                            };
+                            launched_by_me(r, asking)
+                        }
+                        SessionFilter::All | SessionFilter::Starred => true,
+                    }
             }
         });
     }
@@ -5840,11 +5873,20 @@ fn rail_layout(state: State, bands: &[RailBand], filter: SessionFilter) -> RailL
             SessionFilter::Starred => {
                 "No chats from starred agents — star one on the Agents page, or show all sessions."
             }
+            SessionFilter::AnyUser if !any_session(state) => {
+                "No chats yet — press New to start one."
+            }
+            SessionFilter::AnyUser => {
+                "No sessions started by a person — the ones agents start for themselves are \
+                 filtered out, as are sessions from before ADI recorded who started a run. Show \
+                 all sessions from the filter box above to see them."
+            }
             SessionFilter::Mine if !any_session(state) => "No chats yet — press New to start one.",
             SessionFilter::Mine => {
                 "No sessions started by you — the ones agents start for themselves are filtered \
-                 out, as are sessions from before ADI recorded who started a run. Show all \
-                 sessions from the filter box above to see them."
+                 out, as are sessions from before ADI recorded who started a run, and so is \
+                 anything a paired teammate started. Show all sessions from the filter box above \
+                 to see them."
             }
         });
     }

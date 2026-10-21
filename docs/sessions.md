@@ -343,6 +343,29 @@ moved here, so the rail no longer re-implements a rule the server can just answe
   `limit`/`before`/`fold` on `peek_run` applies here too, rather than reintroducing the filter this
   change exists to remove from the client.
 
+### Narrowing (`?filter=`) and naming who asked
+
+The sessions head's box, moved server-side (`RunFilter`, `handlers/agents.rs`): `starred` keeps a
+run whose agent is starred, `mine` keeps any run a person started (named or not), `me` narrows
+`mine` further to the one name that matches whoever is asking. Absent is `All`, which sends no
+parameter at all so an unnarrowed rail keeps the exact request path — and so the exact live topic —
+it always used. A pending question rides through every one of them, same exemption as `?hidden=`.
+
+A plain launch is named with whoever asked **when the mesh gateway can say who** — the same
+identity a shared machine already tags a chat message with (`sender_marker`, `Marker::From`):
+`launched_by: "human:<user>"` instead of the bare word, where `<user>` is the credential that
+authenticated the request (`adi_mesh`'s `FLEET_USER_HEADER`, read into `handlers::FleetSender`).
+A request that never left this machine, or a peer whose credential carries no username, stays the
+bare `"human"` — `adi_agents::launcher::is_human` reads both as a person, and `human_user` is `None`
+for the bare word. `me` compares that name against `asking_user` — the same identity, resolved for
+*this* request and carried on [`AllAgentRuns::asking_user`] so the client can mirror the narrowing
+over `watch.runs`, which `?filter=` never touches (Layer 5).
+
+On a machine paired with nobody every human launch is the bare word, there is only one person it
+could ever be, and `mine`/`me` agree. The two only part ways once a paired node's own launches
+(`docs/fleet.md` §13) can land in the same merged rail — a teammate's own conversations read
+`launched_by: human` exactly the way yours do, and only the name tells them apart.
+
 ### Paging (`?limit=N`)
 
 The rail asks for a page; every other reader asks for all of it.
@@ -531,8 +554,9 @@ chat_rail                               the whole left rail
 │   │   │   │   │             copy only — runs.filter(pending_question.is_some() || !hidden)
 │   │   │   │   └─ paged                       the *watched* agent's own list, cut to its own
 │   │   │   │                                  source's page (`source_limit`)
-│   │   │   ├─ "Mine" filter            launched_by == human — a run with pending_question is
-│   │   │   │                            kept regardless of who launched it
+│   │   │   ├─ "Mine"/"any user" filter launched_by is human, by name or not (`AnyUser`) or
+│   │   │   │                            narrowed to the asking identity (`Mine`, the default) —
+│   │   │   │                            a run with pending_question is kept regardless
 │   │   │   └─ sort by last_touch desc  last_touch = max(last_activity, started_at)
 │   │   ├─ activity_bands               five partitions: asking, running, awaiting, starred, the
 │   │   │                               rest — the rail's reading ORDER, not headings any more;
@@ -768,10 +792,13 @@ Work down this list when one is missing:
    multi-select — a fact about one source's agent list that a same-named agent on another source
    does not inherit. A run with a pending question is the one exception: it is kept whatever this
    filter says about the agent it belongs to.
-5. **"Mine" is on** (the default) and the run's `launched_by` isn't `human` — the common case for a
-   run a subagent launched for itself, which is otherwise the majority of what a busy fleet accrues.
-   A pending question is the exception here too: a subagent-launched run stopping to ask a person is
-   exactly the run an operator has to be able to see and answer, filter or no filter.
+5. **"Mine" is on** (the default) and the run's `launched_by` isn't a person's — either not human at
+   all (the common case: a subagent launched it for itself, which is otherwise the majority of what
+   a busy fleet accrues), or human but named for somebody else (`human:<user>`, once a paired
+   machine's own launches can land in the same merged rail — `adi_agents::launcher::HUMAN_PREFIX`).
+   "Only started any user" drops only the first kind. A pending question is the exception to both:
+   a subagent-launched run stopping to ask a person is exactly the run an operator has to be able to
+   see and answer, filter or no filter.
 6. Its `chat_machine_block` is **folded shut** (`state.rail_collapsed_bands`, `SessionGroup::Machine`
    with several sources ticked) — the row is still in `RailBand::rows`, still counted by the
    block's header, and still reachable by `chat_inbox` if it is asking a question; folding only

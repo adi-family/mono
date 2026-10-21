@@ -93,15 +93,17 @@ fn replied(conn: &Connection, agent: &str) -> Vec<(u64, String)> {
 fn started(conn: &Connection, agent: &str) -> Vec<(u64, String)> {
     let Ok(mut stmt) = conn.prepare_cached(
         "SELECT s.started_at, s.message FROM sessions s
-          WHERE s.agent = ?1 AND s.launched_by = ?2
+          WHERE s.agent = ?1 AND (s.launched_by = ?2 OR s.launched_by LIKE ?4)
             AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.agent = s.agent AND t.session = s.id)
           ORDER BY s.started_at DESC LIMIT ?3",
     ) else {
         return Vec::new();
     };
-    stmt.query_map(rusqlite::params![agent, launcher::HUMAN, WINDOW], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    })
+    let human_named = format!("{}%", launcher::HUMAN_PREFIX);
+    stmt.query_map(
+        rusqlite::params![agent, launcher::HUMAN, WINDOW, human_named],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    )
     .map(|rows| {
         rows.flatten()
             .filter_map(|(at, message)| {
@@ -128,7 +130,7 @@ fn spoken(turn: &Turn, launched_by: &str) -> Option<String> {
     }
     // Empty is every session opened before `launched_by` existed, which a person started far more
     // often than not; the marker check above has already dropped the wakes among them.
-    let person = !markers.is_empty() || launched_by == launcher::HUMAN || launched_by.is_empty();
+    let person = !markers.is_empty() || launcher::is_human(launched_by) || launched_by.is_empty();
     let body = body.trim();
     (person && !body.is_empty()).then(|| body.to_string())
 }
@@ -170,6 +172,12 @@ mod tests {
         let mut turn = super::super::user_turn("woke up");
         turn.markers = vec![Marker::GoalCheck { open: 1 }];
         assert_eq!(spoken(&turn, launcher::HUMAN), None);
+    }
+
+    #[test]
+    fn a_named_human_launch_still_reads_as_a_persons_prompt() {
+        let turn = super::super::user_turn("ship it");
+        assert_eq!(spoken(&turn, "human:igor").as_deref(), Some("ship it"));
     }
 
     #[test]

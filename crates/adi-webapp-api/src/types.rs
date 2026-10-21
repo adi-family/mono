@@ -2681,6 +2681,27 @@ pub enum RunState {
 /// `adi_agents::launcher::HUMAN` by a test in `handlers::agents`, where both are in scope.
 pub const LAUNCHED_BY_HUMAN: &str = "human";
 
+/// The prefix on [`AgentRunInfo::launched_by`] that names which person started the run —
+/// `human:<user>`. Mirrors `adi_agents::launcher::HUMAN_PREFIX` for the same reason
+/// [`LAUNCHED_BY_HUMAN`] is restated here.
+pub const LAUNCHED_BY_HUMAN_PREFIX: &str = "human:";
+
+/// Whether [`AgentRunInfo::launched_by`] reads as a person, named or not. Mirrors
+/// `adi_agents::launcher::is_human`.
+#[must_use]
+pub fn launched_by_is_human(launched_by: &str) -> bool {
+    launched_by == LAUNCHED_BY_HUMAN || launched_by.starts_with(LAUNCHED_BY_HUMAN_PREFIX)
+}
+
+/// The named person behind a human launch, or `None` for a bare [`LAUNCHED_BY_HUMAN`] launch,
+/// which names nobody in particular. Mirrors `adi_agents::launcher::human_user`.
+#[must_use]
+pub fn launched_by_user(launched_by: &str) -> Option<&str> {
+    launched_by
+        .strip_prefix(LAUNCHED_BY_HUMAN_PREFIX)
+        .filter(|u| !u.is_empty())
+}
+
 /// Whether [`AgentDto::created_by`] counts as "mine" for the **Agents page's** Mine filter and the
 /// agent pickers built on it.
 ///
@@ -2867,6 +2888,13 @@ pub struct AllAgentRuns {
     /// back. Equal to the number carried when the answer is whole.
     #[serde(default)]
     pub total: usize,
+    /// The username this request asked as — the mesh credential's own name, when the gateway
+    /// attached one (`adi_mesh`'s `FLEET_USER_HEADER`, read into `handlers::agents::FleetSender`)
+    /// — or `None` for a request that never left this machine. What `?filter=me` narrows the
+    /// index by, and what the client reads to mirror that narrowing over `watch.runs`, which this
+    /// parameter never touches (`docs/sessions.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asking_user: Option<String>,
 }
 
 /// A zero capability profile — the `serde` default when an older/absent response omits `caps`.
