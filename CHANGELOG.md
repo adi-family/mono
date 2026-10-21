@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.33.0 — 2026-10-21
+
 ### Added
 
 - **The sessions rail's filter box can now tell your own conversations apart from a paired
