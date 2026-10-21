@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-107 structs · 35 enums · 5 type aliases across 44 files.
+108 structs · 35 enums · 5 type aliases across 44 files.
 
 ## Index
 
@@ -48,7 +48,7 @@
 - [`src/pages/system.rs`](#srcpagessystemrs) — `Outage`, `ReportState`, `SystemWatch`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`, `TermPhase`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`, `WorkflowTab`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `SessionSources`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `SessionGroup`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `Destination`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `LlmBackendsForm`, `WorkflowsConsole`, `EmbeddingsConsole`, `ChannelsConsole`, `FleetUnlock`, `Status`, `Simulate`, `Flash`, `LastAgent`, `SessionSources`
 - [`src/ui.rs`](#srcuirs) — `LogPhase`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `AgentChat`, `PickerArgs`, `Session`, `RealtimeLive`
@@ -821,7 +821,6 @@ One option `chat_agent_picker` offers: an agent, and which of the rail's current
 struct PickerOption {
     node: Option<String>,
     name: String,
-    running: bool,
 }
 ```
 
@@ -2551,6 +2550,18 @@ Why the last action failed — one line, and nothing else.
 #[derive(Clone)]
 pub(crate) struct Flash {
     pub(crate) msg: String,
+}
+```
+
+### struct `LastAgent`
+
+What the picker round-trips through `localStorage`: the agent's own name, and which source it was on (`docs/fleet.md` §13) — `None` for this machine.
+
+```rust
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LastAgent {
+    node: Option<String>,
+    name: String,
 }
 ```
 

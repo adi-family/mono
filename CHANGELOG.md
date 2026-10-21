@@ -34,6 +34,11 @@ extraction script cares about.
   install this could add up), and the control panel's `restart`/`power`/`update run` actions.
   Each spawned its process correctly but never called `wait()` on it afterwards.
 
+- **The chat home's agent picker remembers its last pick.** Reloading the control panel used to
+  always open on the root agent; now it reopens on whichever agent (and source — this machine or
+  a paired node) you last picked from the dropdown, kept per browser. The picker no longer marks
+  a running agent with a dot in its own option text.
+
 ## 1.32.0 — 2026-10-21
 
 ### Added

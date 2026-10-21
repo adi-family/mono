@@ -63,7 +63,7 @@ mod simulate;
 use actions::apply_agents;
 pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, adopt_run_settings, agent_actions,
-    all_chats_view, auto_title_view, chat_home_view, live_view, open_conversation,
+    all_chats_view, auto_title_view, chat_home_view, land_last_agent, live_view, open_conversation,
     open_run_answerable_untracked, poll_watch, project_run_limit_view, reset_chat_home,
     run_limit_view,
 };

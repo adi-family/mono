@@ -2715,6 +2715,55 @@ pub(crate) fn set_panel_source(s: State, node: Option<String>) {
     s.panel_source.set(node);
 }
 
+/// The `localStorage` key the chat home's agent picker remembers its last pick under — distinct
+/// from [`PANEL_SOURCE_KEY`], which points the whole panel at a node (`docs/fleet.md` §14) rather
+/// than one agent on one of the rail's selected sources (§13).
+const LAST_AGENT_KEY: &str = "adi-last-agent";
+
+/// What the picker round-trips through `localStorage`: the agent's own name, and which source it
+/// was on (`docs/fleet.md` §13) — `None` for this machine.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LastAgent {
+    node: Option<String>,
+    name: String,
+}
+
+/// The browser's last pick from the chat home's agent picker, or `None` on a first run, in private
+/// mode, or if the stored value is not readable JSON. Handed back unchanged, same as
+/// [`load_panel_source`] — whether it still names a real agent is for the caller to find out.
+pub(crate) fn load_last_agent() -> Option<(Option<String>, String)> {
+    let last: LastAgent = crate::ui::storage()
+        .and_then(|s| s.get_item(LAST_AGENT_KEY).ok().flatten())
+        .and_then(|raw| serde_json::from_str(&raw).ok())?;
+    Some((last.node, last.name))
+}
+
+/// Remember the picker's choice, so the next reload opens on it instead of the root agent.
+pub(crate) fn save_last_agent(node: Option<&str>, name: &str) {
+    let Some(storage) = crate::ui::storage() else {
+        return;
+    };
+    if let Ok(raw) = serde_json::to_string(&LastAgent {
+        node: node.map(str::to_string),
+        name: name.to_string(),
+    }) {
+        let _ = storage.set_item(LAST_AGENT_KEY, &raw);
+    }
+}
+
+/// Whether [`load_last_agent`]'s remembered source might still answer: a paired node this browser
+/// still has selected ([`State::session_nodes`]), but whose own agent list
+/// ([`State::rail_node_agents`]) has not landed yet. The chat home's root-agent default holds off
+/// while this is true, rather than claim the chat before the remembered source ever gets its
+/// chance.
+pub(crate) fn last_agent_pending(s: State) -> bool {
+    let Some((Some(node), _)) = load_last_agent() else {
+        return false;
+    };
+    s.session_nodes.get_untracked().contains(&node)
+        && !s.rail_node_agents.get_untracked().contains_key(&node)
+}
+
 /// The `localStorage` key the sessions rail's selected sources are kept under (`docs/fleet.md` §13,
 /// multi-select) — see [`Self::session_local`] on [`State`] for why this one, unlike the single-node
 /// pick it replaces, is worth persisting.

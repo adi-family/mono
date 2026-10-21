@@ -24,7 +24,7 @@ use crate::launcher::{self, Launcher};
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionGroup,
-    SessionMenu, State, refresh_fleet_dashboards, source_limit,
+    SessionMenu, State, load_last_agent, refresh_fleet_dashboards, save_last_agent, source_limit,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, display_message, field_hint, prompt, sort_rows,
@@ -4594,7 +4594,6 @@ fn toggle_drawer(state: State, which: ChatDrawer) {
 struct PickerOption {
     node: Option<String>,
     name: String,
-    running: bool,
 }
 
 /// The agent chooser — which agent this screen is a chat with, and (with more than one source
@@ -4646,7 +4645,6 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
                     .map(|a| PickerOption {
                         node: None,
                         name: a.name,
-                        running: a.running,
                     }),
             ),
             None => loading = true,
@@ -4665,7 +4663,6 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
                     .map(|a| PickerOption {
                         node: Some(node.clone()),
                         name: a.name.clone(),
-                        running: a.running,
                     }),
             ),
             None => loading = true,
@@ -4756,20 +4753,13 @@ fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// One `<option>` of [`chat_agent_picker`]: an agent's name, and a dot when it is live right now.
+/// One `<option>` of [`chat_agent_picker`]: an agent's name.
 ///
 /// `i` is the option's index in the picker's own list rather than the agent's name, because a name is
 /// only unique on the machine that defines it (`docs/fleet.md` §13): two selected sources may star
 /// the same name, and a `<select>` needs one value per option to tell them apart.
 fn picker_option(i: usize, o: &PickerOption, selected: bool) -> AnyView {
-    // An option carries no markup, so the live dot rides in its text — worth spotting in a
-    // collapsed select, which is all you see of the other agents until you open it.
-    let label = if o.running {
-        format!("\u{25CF} {}", o.name)
-    } else {
-        o.name.clone()
-    };
-    view! { <option value=i.to_string() selected=selected>{label}</option> }.into_any()
+    view! { <option value=i.to_string() selected=selected>{o.name.clone()}</option> }.into_any()
 }
 
 /// Switch the chat home to another agent, on `node` (`docs/fleet.md` §13) — `None` for this machine,
@@ -4787,7 +4777,24 @@ fn switch_agent(state: State, watch: AgentsWatch, node: Option<String>, name: St
     let Some(interactive) = agent_interactive(state, node.as_deref(), &name) else {
         return;
     };
+    save_last_agent(node.as_deref(), &name);
     point_watch(watch, node, name, interactive);
+}
+
+/// Point the chat at whichever agent (and source) this browser's picker was last set to —
+/// [`switch_agent`]'s own [`save_last_agent`] call, read back. Tried before the root-agent default
+/// claims the chat, the one time it matters: nothing has been watched yet this load. `false` when
+/// there is nothing remembered, or its source has no such agent (yet, or ever) — the caller's cue
+/// to fall back.
+pub(crate) fn land_last_agent(state: State, watch: AgentsWatch) -> bool {
+    let Some((node, name)) = load_last_agent() else {
+        return false;
+    };
+    let Some(interactive) = agent_interactive(state, node.as_deref(), &name) else {
+        return false;
+    };
+    point_watch(watch, node, name, interactive);
+    true
 }
 
 /// Whether `name` is a pty (interactive) agent on `node`, or `None` when that source's loaded agents

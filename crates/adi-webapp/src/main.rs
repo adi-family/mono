@@ -57,9 +57,9 @@ use pages::{
     FactsConsole, GraphView, LlmConsole, OnboardingForm, adopt_run_settings, agent_detail_view,
     agents_view, analytics_view, channels_view, chat_home_view, dashboards_view, database_view,
     elements_view,
-    embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, live_graph_view,
-    live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir, load_store_file,
-    market_view, marketplace_view, mesh_view, meta_view, onboarding_view,
+    embedding_backends_view, facts_view, fleet_view, hive_view, knowledge_view, land_last_agent,
+    live_graph_view, live_view, llm_backends_view, llm_view, load_agent_into_form, load_dir,
+    load_store_file, market_view, marketplace_view, mesh_view, meta_view, onboarding_view,
     open_run_answerable_untracked, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, settings_view, shared_assets_view, start_onb_reconfigure,
@@ -76,7 +76,7 @@ use state::{
     MarketplaceForm, MeshForm,
     MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, SessionFilter, Simulate, State, Status,
     TasksForm, TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView,
-    WorkflowsConsole, load, refresh_fleet_dashboards,
+    WorkflowsConsole, last_agent_pending, load, refresh_fleet_dashboards,
 };
 use ui::fmt_uptime;
 
@@ -222,8 +222,18 @@ fn Home() -> impl IntoView {
         spawn_local(async move {
             if let Ok(a) = fetch::agents().await {
                 let watched = watch.name.get_untracked();
+                // The chat's own picker remembers its last pick (`land_last_agent`) across a
+                // reload; the root agent is only the fallback for a browser with nothing
+                // remembered, or whose remembered source has had its chance and still has
+                // nothing to say.
+                let landed = watched.is_none() && land_last_agent(state, watch);
+                let watched = watch.name.get_untracked();
+                let waiting = watched.is_none() && last_agent_pending(state);
                 let on = watched.clone().unwrap_or_else(|| ROOT_AGENT.to_string());
-                if let Some(d) = a.agents.iter().find(|d| d.name == on) {
+                if !landed
+                    && !waiting
+                    && let Some(d) = a.agents.iter().find(|d| d.name == on)
+                {
                     let interactive = d.executor == "pty";
                     if watch.interactive.get_untracked() != interactive {
                         watch.interactive.set(interactive);
@@ -338,8 +348,17 @@ fn Home() -> impl IntoView {
         subs.push(live::Sub::get("/api/agents", move |a: AgentsState| {
             // Keep the live view shaped to *the agent it is on*: a pty backend is interactive.
             let watched = watch.name.get_untracked();
+            // See the same guard in `refresh` above: the picker's remembered pick gets first
+            // claim on an unwatched chat, and the root-agent default waits for it rather than
+            // racing it.
+            let landed = watched.is_none() && land_last_agent(state, watch);
+            let watched = watch.name.get_untracked();
+            let waiting = watched.is_none() && last_agent_pending(state);
             let on = watched.clone().unwrap_or_else(|| ROOT_AGENT.to_string());
-            if let Some(d) = a.agents.iter().find(|d| d.name == on) {
+            if !landed
+                && !waiting
+                && let Some(d) = a.agents.iter().find(|d| d.name == on)
+            {
                 let interactive = d.executor == "pty";
                 if watch.interactive.get_untracked() != interactive {
                     watch.interactive.set(interactive);
