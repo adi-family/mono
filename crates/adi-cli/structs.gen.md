@@ -231,6 +231,8 @@ pub(crate) enum AwaitsCommand {
         #[arg(long)]
         session: Option<String>,
         #[arg(long)]
+        history: bool,
+        #[arg(long)]
         json: bool,
     },
     Ignore {

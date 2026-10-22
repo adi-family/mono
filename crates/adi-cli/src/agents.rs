@@ -386,6 +386,11 @@ pub(crate) enum AwaitsCommand {
         /// The conversation id. Defaults to `$ADI_RUN_ID`.
         #[arg(long)]
         session: Option<String>,
+        /// Also show awaits the system retired without ever waking you — a dead job's own poll,
+        /// most often (ADI-MONO-165). These never cost you a turn; this is the only place they
+        /// still show up.
+        #[arg(long)]
+        history: bool,
         #[arg(long)]
         json: bool,
     },
@@ -1520,17 +1525,38 @@ fn run_awaits(store: &Agents, command: AwaitsCommand) -> Result<(), String> {
         AwaitsCommand::List {
             agent,
             session,
+            history,
             json,
         } => {
             let (agent, conv) = awaits_address(agent, session)?;
             let held = pending.for_conversation(&agent, &conv);
+            let retired = history.then(|| pending.retired_for_conversation(&agent, &conv));
             if json {
-                print_json(&held);
+                #[derive(serde::Serialize)]
+                struct Listed<'a> {
+                    pending: &'a [awaits::Await],
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    retired: Option<&'a Vec<awaits::Retired>>,
+                }
+                print_json(&Listed {
+                    pending: &held,
+                    retired: retired.as_ref(),
+                });
             } else if held.is_empty() {
                 println!("{agent}/{conv} is waiting on nothing.");
             } else {
                 for a in &held {
                     print_await(a);
+                }
+            }
+            if !json && let Some(retired) = &retired {
+                if retired.is_empty() {
+                    println!("Nothing retired without waking you.");
+                } else {
+                    println!("Retired without waking you:");
+                    for r in retired {
+                        println!("{}  {}", r.id, title(&r.reason));
+                    }
                 }
             }
         }

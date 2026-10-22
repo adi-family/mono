@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-153 structs · 41 enums · 5 type aliases across 60 files.
+154 structs · 41 enums · 5 type aliases across 60 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
 - [`src/auto_title.rs`](#srcauto_titlers) — `AutoTitleSettings`
-- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
+- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Retired`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/codex_stream.rs`](#srcbackendscodex_streamrs) — `Failure`
@@ -652,6 +652,21 @@ pub struct Woken {
     pub conv: String,
     pub cause: String,
     pub error: Option<String>,
+}
+```
+
+### struct `Retired`
+
+A pending await the system retired without ever waking its conversation (ADI-MONO-165).
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Retired {
+    pub id: String,
+    pub agent: String,
+    pub conv: String,
+    pub reason: String,
+    pub at: u64,
 }
 ```
 

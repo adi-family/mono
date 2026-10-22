@@ -80,6 +80,15 @@ use crate::marker::{Marker, Woke};
 const MODULE: &str = "awaits";
 const RECORD_EXT: &str = "json";
 
+/// Where retired-without-delivery records live — see [`Retired`]. Not `.json`, on purpose: [`list`]
+/// scans [`RECORD_EXT`] for pending awaits, and this file must never be read back as one.
+const RETIRED_FILE: &str = "retired.log";
+
+/// How many [`Retired`] records [`Awaits::retired_for_conversation`] keeps. Bounded so a
+/// conversation that triggers this often cannot grow the file without limit — the newest entries
+/// are the ones worth a look, and `agents awaits list --history` is a diagnostic, not an archive.
+const HISTORY_LIMIT: usize = 200;
+
 /// How many awaits one conversation may have pending. A run that registers a wake per turn without
 /// ever consuming one would otherwise fill the store; hitting this is a mistake the model should
 /// read about and correct, hence the message rather than a silent drop.
@@ -311,6 +320,22 @@ pub struct Woken {
     pub error: Option<String>,
 }
 
+/// A pending await the system retired without ever waking its conversation (ADI-MONO-165).
+///
+/// The one case today is a dead job's own poll: once the job it was watching has exited, running
+/// its check could only ever read "not yet" at best, and at worst the await is a second wake for
+/// something the job's own exit-wake already covers — see [`dead_job_subject`]. Delivering that as
+/// a wake would cost the run a whole turn to be told "this was redundant", so it is not delivered
+/// at all. This record is the only trace that it happened, for `agents awaits list --history`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Retired {
+    pub id: String,
+    pub agent: String,
+    pub conv: String,
+    pub reason: String,
+    pub at: u64,
+}
+
 /// The await store: one JSON record per pending wake under `~/.adi/mono/awaits`. Cheap to clone —
 /// all state is on disk, like every other store here.
 #[derive(Debug, Clone)]
@@ -488,6 +513,55 @@ impl Awaits {
             .filter(|a| a.agent == agent)
             .filter(|a| self.claim(&a.id))
             .count()
+    }
+
+    /// Every [`Retired`] record belonging to one conversation, oldest first.
+    #[must_use]
+    pub fn retired_for_conversation(&self, agent: &str, conv: &str) -> Vec<Retired> {
+        self.read_retired()
+            .into_iter()
+            .filter(|r| r.agent == agent && r.conv == conv)
+            .collect()
+    }
+
+    /// Every [`Retired`] record this store still has, oldest first. An unreadable or unparseable
+    /// line is skipped rather than failing the read, the same reasoning [`list`](Self::list) uses.
+    fn read_retired(&self) -> Vec<Retired> {
+        std::fs::read_to_string(self.config.module(MODULE).raw_path(RETIRED_FILE))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect()
+    }
+
+    /// Claim `a` and record why it was retired, without delivering a wake — see [`Retired`].
+    /// `false` when something else claimed it first, same as [`claim_current`](Self::claim_current).
+    fn retire_quietly(&self, a: &Await, reason: &str) -> bool {
+        if !self.claim_current(a) {
+            return false;
+        }
+        let _guard = self.mutation_lock();
+        let mut history = self.read_retired();
+        history.push(Retired {
+            id: a.id.clone(),
+            agent: a.agent.clone(),
+            conv: a.conv.clone(),
+            reason: reason.to_string(),
+            at: now_unix(),
+        });
+        if history.len() > HISTORY_LIMIT {
+            let drop = history.len() - HISTORY_LIMIT;
+            history.drain(..drop);
+        }
+        let lines: Vec<String> = history
+            .iter()
+            .filter_map(|r| serde_json::to_string(r).ok())
+            .collect();
+        let _ = self
+            .config
+            .module(MODULE)
+            .write_raw(RETIRED_FILE, lines.join("\n").as_bytes());
+        true
     }
 }
 
@@ -899,10 +973,18 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
     let now = now_unix();
     let mut woken = Vec::new();
     for a in store.list() {
+        // Retired, not delivered (ADI-MONO-165): the job's own exit-wake already covers this —
+        // or would have, if anything still needed telling — so waking the run here would cost it
+        // a whole turn to be told exactly that.
         if let Some(job) = dead_job_subject(agents, &a) {
-            if let Some(w) = wake(agents, &store, &a, Cause::Dead { job_id: &job.id }, None) {
-                woken.push(w);
-            }
+            store.retire_quietly(
+                &a,
+                &format!(
+                    "job {} had already exited before this await's own check could run; its own \
+                     exit-wake already covers it",
+                    job.id
+                ),
+            );
             continue;
         }
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
@@ -2044,6 +2126,10 @@ mod tests {
     /// conversation on its own, and a hand-written await is still out there watching the same job by
     /// a check that can never agree. `tick` must not wait for that check; the job having already
     /// exited is enough on its own.
+    ///
+    /// ADI-MONO-165: and once it is found, the right answer is not to wake the run and say so — a
+    /// wake whose only content is "this was redundant" still costs a whole turn. It is retired
+    /// quietly, found a different way, through [`Awaits::retired_for_conversation`].
     #[cfg(unix)]
     #[test]
     fn tick_retires_an_await_still_watching_a_job_that_has_already_exited() {
@@ -2082,13 +2168,19 @@ mod tests {
         .expect("register");
 
         let woken = tick(&agents);
-        assert_eq!(woken.len(), 1, "the dead job is found on its own, not on `at`");
-        assert_eq!(woken[0].id, saved.id);
-        assert_eq!(woken[0].cause, "dead");
+        assert!(
+            woken.is_empty(),
+            "a wake that only says \"this was redundant\" must never start a turn: {woken:?}"
+        );
         assert!(
             store.get(&saved.id).is_none(),
             "retired rather than left pending for its own bad check to never agree with"
         );
+
+        let retired = store.retired_for_conversation("watcher", "conv-1");
+        assert_eq!(retired.len(), 1, "{retired:?}");
+        assert_eq!(retired[0].id, saved.id);
+        assert!(retired[0].reason.contains(&job.id), "{}", retired[0].reason);
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
