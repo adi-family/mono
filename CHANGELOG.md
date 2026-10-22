@@ -20,6 +20,24 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **Backgrounding `adi-mono agents run` no longer costs a second wake (ADI-MONO-163).** A job
+  started with `Bash(background: true)` registers an await of its own, watching the job's
+  process exit. When the command running inside it is itself something that starts a second,
+  longer-running thing and registers a wake for *that* — as `agents run` does — the job's own
+  exit-wake now has nothing left to say and is dropped once the launch's own await registers:
+  the launcher merely printed an id, and the only wake worth holding is the one just registered.
+- **A redundant dead-job wake no longer costs a turn to say so (ADI-MONO-163).** The GC path for
+  an await whose job has already exited used to deliver a new turn whose only content was "this
+  was redundant" — costing a whole turn to be told exactly that. It's now retired quietly, with
+  why recorded in a small history instead of ever starting a turn over it; `adi-mono agents
+  awaits list --history` surfaces it, for the one place it would otherwise be invisible.
+- **Agents are told not to background `adi-mono agents run` (ADI-MONO-163).** It returns in about
+  a second either way and already hands back its own await for the run it started, so
+  backgrounding it only adds a second, pointless wake once the launcher process exits — now said
+  plainly in the Bash tool's own description and in the agents guide.
+
 ## 1.33.0 — 2026-10-21
 
 ### Added
