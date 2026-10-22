@@ -147,6 +147,9 @@ question you ask the store rather than a stack of logs.
   you something on purpose), `adi.agents.question.asked` (it needs a person, and you should relay
   the question rather than answer it yourself), or `adi.agents.run.idle` (a turn ended and left it
   waiting on something of its own). The event name carried in the wake says which.
+- **Don't run it through `Bash`'s `background: true`.** `{{cli}} agents run` returns in about a
+  second either way — it starts the run and hands back that wake itself — so backgrounding it buys
+  nothing and costs a second, pointless wake when the launcher process exits almost immediately.
 - The ending is noticed by whoever looks first — the panel's poll, this command, a trigger's child
   — and written down exactly once, so the event does not repeat.
 - `unknown` means the run stopped without leaving anything an engine parser could read. That is the

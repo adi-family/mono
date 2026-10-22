@@ -77,8 +77,11 @@ const BASH: &str = "Run a shell command and return its output (stdout and stderr
                     `background` for a command that will outlast the turn: it is started and you \
                     get a job id back straight away, then **end your turn** — you are woken when it \
                     exits, carrying its exit status and the tail of its output. That is how to run \
-                    a build, a test suite, or another agent without sitting inside the call waiting \
-                    for it. Do not poll a job you started; being woken is the whole point.";
+                    a build or a test suite without sitting inside the call waiting for it. Do not \
+                    poll a job you started; being woken is the whole point. Never `background` \
+                    `adi-mono agents run` — it already returns in about a second and hands you its \
+                    own await for the run it started; backgrounding it only adds a second, \
+                    redundant wake for the launcher exiting.";
 #[cfg(windows)]
 const BASH: &str = "Run a shell command in the working directory and return its output (stdout \
                     and stderr together, with the exit status when it is not zero). Each call is \
@@ -146,7 +149,7 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
                 "properties": {
                     "command": { "type": "string", "description": "The command line to run." },
                     "timeout_ms": { "type": "integer", "description": "Give up after this long. Defaults to 120000. Ignored when `background` is set — a job has no deadline." },
-                    "background": { "type": "boolean", "description": "Start the command and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes — a build, a test suite, a deploy, another agent. You are woken when it exits, with its status and the tail of its log." },
+                    "background": { "type": "boolean", "description": "Start the command and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes — a build, a test suite, a deploy. Don't background `adi-mono agents run` — it already returns in about a second and hands you its own await for the run; backgrounding it only adds a second, redundant wake for the launcher exiting. You are woken when it exits, with its status and the tail of its log." },
                 },
                 "required": ["command"],
             })
