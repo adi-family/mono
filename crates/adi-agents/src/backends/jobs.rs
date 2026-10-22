@@ -42,6 +42,15 @@ const WAKE_TAIL_BYTES: u64 = 4_000;
 /// this is about how promptly a finish is noticed rather than about load.
 pub(crate) const LOOK_EVERY_SECONDS: u64 = 5;
 
+/// This job's own id, in the environment of the command it runs (ADI-MONO-164).
+///
+/// A command backgrounded this way can itself go on to start something longer-running and
+/// register its own await for *that* — `adi-mono agents run` is the case this exists for, but
+/// nothing here names it. Reading this is what lets such a command find the job it is running
+/// inside of, so [`crate::awaits::follow_up`] can drop that job's own exit-wake once its own
+/// wake supersedes it, rather than leaving the caller to hold both.
+pub(crate) const JOB_ENV: &str = "ADI_JOB";
+
 /// A detached command and the two files that say what became of it.
 #[derive(Debug, Clone)]
 pub(crate) struct Job {
@@ -93,6 +102,7 @@ pub(crate) fn start(
         c
     };
     cmd.current_dir(start_dir)
+        .env(JOB_ENV, &id)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));

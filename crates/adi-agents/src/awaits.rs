@@ -655,19 +655,59 @@ pub fn follow_up(store: &Awaits, who: &Caller, req: &Request) -> String {
             .unwrap_or_default();
     }
     match register(store, &who.agent, &who.conv, &req) {
-        Ok(registered) => format!(
-            "Registered await {id} for you — you will be woken here {what}. Finish your turn; \
-             don't poll for it.\n  don't want it:  adi-mono agents awaits ignore {id}\n  change \
-             it:      adi-mono agents awaits update {id} --note '…'",
-            id = registered.id,
-            what = registered.describe(),
-        ),
+        Ok(registered) => {
+            supersede_enclosing_job(store, who, &registered.id, enclosing_job().as_deref());
+            format!(
+                "Registered await {id} for you — you will be woken here {what}. Finish your turn; \
+                 don't poll for it.\n  don't want it:  adi-mono agents awaits ignore {id}\n  change \
+                 it:      adi-mono agents awaits update {id} --note '…'",
+                id = registered.id,
+                what = registered.describe(),
+            )
+        }
         // The work is already running and only the wake is missing. Say which is which, the way a
         // background job does, so the run corrects the right half.
         Err(e) => format!(
             "Nothing will wake you when this ends: {e}\nIt is running either way — look in on it \
              yourself, or register your own wake once you have room."
         ),
+    }
+}
+
+/// The job this command is itself running inside of, if [`jobs::start`] set one — see
+/// [`jobs::JOB_ENV`].
+#[must_use]
+fn enclosing_job() -> Option<String> {
+    std::env::var(jobs::JOB_ENV)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// Drop the enclosing background job's own exit-wake, now that `keep` is registered in its place
+/// (ADI-MONO-164).
+///
+/// A job started by [`crate::backends::harness::tools::bash`]'s `background` path registers its
+/// own await watching the job's own process exit. When the command running inside that job is
+/// itself something like `adi-mono agents run` — one that starts something longer-running and
+/// calls [`follow_up`] to register a wake for *that* — the job's own wake has nothing left to
+/// say: the launcher merely printed an id and returned, and the only reason anyone cares was
+/// already registered under `keep`. Generic on purpose: nothing here names what the command was,
+/// only that it ran inside a job (`job_id`) and went on to register its own await.
+///
+/// `job_id` is taken as a parameter rather than read here so the match it drives can be tested
+/// without touching the process environment [`enclosing_job`] reads — [`follow_up`] is the one
+/// real caller, and it is the one that reads it.
+fn supersede_enclosing_job(store: &Awaits, who: &Caller, keep: &str, job_id: Option<&str>) {
+    let Some(job_id) = job_id else {
+        return;
+    };
+    let superseded = store
+        .for_conversation(&who.agent, &who.conv)
+        .into_iter()
+        .find(|a| a.id != keep && a.check.as_deref().is_some_and(|c| c.contains(job_id)));
+    if let Some(a) = superseded {
+        let _ = store.claim_current(&a);
     }
 }
 
@@ -1374,6 +1414,102 @@ mod tests {
         assert!(
             !pending[0].cwd.trim().is_empty(),
             "a check added later has to run somewhere"
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// ADI-MONO-164: a command running inside a backgrounded job that goes on to register its own
+    /// await — `adi-mono agents run`, launched through `Bash(background: true)`, is the real case —
+    /// must not leave the caller holding both that job's own exit-wake and the new one. The job's
+    /// own wake is the one `jobs::done_check` writes into an await's `check`, found by its id and
+    /// dropped the moment the new one is registered in its place. Exercised at the level
+    /// `follow_up` actually works at — `enclosing_job` reading the environment — rather than
+    /// mocking that away, since that plumbing (ADI-MONO-164's "find how the job id reaches the
+    /// child process") is exactly what this test is for.
+    #[test]
+    fn follow_up_drops_the_enclosing_jobs_own_exit_wake() {
+        let store = scratch("follow-up-supersedes-job");
+        let who = Caller {
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+        };
+        let job_await = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "you started this in the background".into(),
+                every_seconds: Some(5),
+                check: Some("test -f job-9000.exit".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register the job's own wake");
+
+        // SAFETY: this is the one test in this crate that touches `ADI_JOB`.
+        let previous = std::env::var("ADI_JOB").ok();
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(jobs::JOB_ENV, "job-9000");
+        }
+
+        let mut req = request("the agent you started ended");
+        req.events = vec![AgentRunFinished::NAME.into()];
+        let note = follow_up(&store, &who, &req);
+
+        #[allow(unsafe_code)]
+        unsafe {
+            match previous {
+                Some(v) => std::env::set_var(jobs::JOB_ENV, v),
+                None => std::env::remove_var(jobs::JOB_ENV),
+            }
+        }
+
+        let pending = store.for_conversation("watcher", "conv-1");
+        assert_eq!(
+            pending.len(),
+            1,
+            "exactly one wake per launch, not the job's and the run's: {pending:?}"
+        );
+        assert!(note.contains(&pending[0].id), "{note}");
+        assert!(
+            store.get(&job_await.id).is_none(),
+            "the job's own exit-wake is superseded, not left pending"
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A job this command is not running inside of is none of its business — nothing is dropped
+    /// when there is no enclosing job to supersede.
+    #[test]
+    fn follow_up_leaves_other_awaits_alone_with_no_enclosing_job() {
+        let store = scratch("follow-up-no-job");
+        let who = Caller {
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+        };
+        let unrelated = register(
+            &store,
+            "watcher",
+            "conv-1",
+            &Request {
+                note: "something else entirely".into(),
+                every_seconds: Some(60),
+                check: Some("test -f job-42.exit".into()),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let mut req = request("the agent you started ended");
+        req.events = vec![AgentRunFinished::NAME.into()];
+        let _ = follow_up(&store, &who, &req);
+
+        assert!(
+            store.get(&unrelated.id).is_some(),
+            "with no enclosing job, nothing here is superseded"
         );
 
         let _ = std::fs::remove_dir_all(store.dir());
