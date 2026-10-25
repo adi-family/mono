@@ -87,6 +87,24 @@ pub(crate) enum MeshCommand {
         no_qr: bool,
         #[arg(long)]
         json: bool,
+        /// Pin the node to this petname instead of the one it offers at the handshake
+        /// (ADI-MONO-171 G1). A name already taken by a *different* key refuses the join rather
+        /// than falling back to a suggestion.
+        #[arg(long)]
+        petname: Option<String>,
+        /// The username the minted credential authenticates as, instead of the default `adi`.
+        #[arg(long)]
+        user: Option<String>,
+        /// What the node may reach here, instead of the default `http:app`. Repeatable.
+        #[arg(long = "grant")]
+        grants: Vec<String>,
+        /// A `key=value` label filed on the node's record once it pairs. Repeatable.
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// `admin` or `member` (`docs/fleet.md`'s peer role), instead of the default `admin`.
+        /// Only takes effect on a fresh pairing — never on a re-pair.
+        #[arg(long)]
+        role: Option<String>,
     },
     /// Join a fleet with an invite token (run this on the node). Dials out; opens nothing.
     Join {
@@ -94,6 +112,13 @@ pub(crate) enum MeshCommand {
         token: String,
         #[arg(long)]
         json: bool,
+        /// Don't grant the viewer anything back on this machine (ADI-MONO-171 G4): pairing is
+        /// otherwise mutual, so by default this machine hands the viewer exactly what it
+        /// granted us — `http:app`, ordinarily. A one-way join files the viewer, but with no
+        /// grants at all, so it may reach nothing here even though this machine can now reach
+        /// it.
+        #[arg(long)]
+        no_grant_back: bool,
     },
     /// Turn the mesh on for this machine — the opt-in a fresh install needs before it dials
     /// anywhere or answers anything (`mesh.toml`'s `enabled`).
@@ -196,8 +221,17 @@ pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
             qr,
             no_qr,
             json,
-        } => invite(ttl, qr, no_qr, json),
-        MeshCommand::Join { token, json } => join_fleet(&token, json),
+            petname,
+            user,
+            grants,
+            labels,
+            role,
+        } => invite(ttl, qr, no_qr, json, petname, user, grants, labels, role),
+        MeshCommand::Join {
+            token,
+            json,
+            no_grant_back,
+        } => join_fleet(&token, json, !no_grant_back),
         MeshCommand::Enable { json } => enable_or_disable(true, json),
         MeshCommand::Disable { json } => enable_or_disable(false, json),
         MeshCommand::Status { json } => status(json),
@@ -229,10 +263,21 @@ pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
 ///
 /// The token is always printed as text as well. A code the camera cannot read is a dead end unless
 /// there is something to copy, and some terminals render half-blocks with seams.
-fn invite(ttl_minutes: u64, qr: bool, no_qr: bool, json: bool) -> Result<(), String> {
+fn invite(
+    ttl_minutes: u64,
+    qr: bool,
+    no_qr: bool,
+    json: bool,
+    petname: Option<String>,
+    user: Option<String>,
+    grants: Vec<String>,
+    labels: Vec<String>,
+    role: Option<String>,
+) -> Result<(), String> {
     use std::io::IsTerminal as _;
 
-    let token = join::mint_invite(Duration::from_secs(ttl_minutes.saturating_mul(60)))
+    let spec = invite_spec(petname, user, grants, labels, role)?;
+    let token = join::mint_invite_with(Duration::from_secs(ttl_minutes.saturating_mul(60)), spec)
         .map_err(|e| e.to_string())?;
     // Read the expiry back out of the token we just minted rather than recomputing it, so what is
     // reported is what the node will actually be checked against.
@@ -281,14 +326,53 @@ fn invite(ttl_minutes: u64, qr: bool, no_qr: bool, json: bool) -> Result<(), Str
     Ok(())
 }
 
+/// Build the [`join::InviteSpec`] `mesh invite`'s flags name — every field empty or `None` when
+/// none of `--petname`/`--user`/`--grant`/`--label`/`--role` was given, which is the no-flags
+/// call's whole contract: mint exactly what `mesh invite` always has.
+///
+/// # Errors
+/// If a `--grant` does not parse as a [`Grant`], a `--label` is not `key=value`, or `--role` is
+/// neither `admin` nor `member`.
+fn invite_spec(
+    petname: Option<String>,
+    user: Option<String>,
+    grants: Vec<String>,
+    labels: Vec<String>,
+    role: Option<String>,
+) -> Result<join::InviteSpec, String> {
+    let grants = grants
+        .iter()
+        .map(|g| g.parse::<Grant>().map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut label_map = std::collections::BTreeMap::new();
+    for raw in &labels {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| format!("label {raw:?} is not key=value"))?;
+        label_map.insert(key.trim().to_string(), value.trim().to_string());
+    }
+    let role = role
+        .map(|r| r.parse::<adi_mesh::fleet::Role>().map_err(|e| e.to_string()))
+        .transpose()?;
+    Ok(join::InviteSpec {
+        petname,
+        username: user,
+        role,
+        grants,
+        labels: label_map,
+    })
+}
+
 /// Dial the viewer, complete the handshake, and print the credentials **once**.
-fn join_fleet(token: &str, json: bool) -> Result<(), String> {
+///
+/// `grant_back` is ADI-MONO-171 G4's one-way-join choice — see `adi_mesh::join::record_viewer`.
+fn join_fleet(token: &str, json: bool, grant_back: bool) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("starting a runtime for the mesh handshake: {e}"))?;
     let joined = runtime
-        .block_on(join::join(token))
+        .block_on(join::join_with(token, grant_back))
         .map_err(|e| format!("{e:#}"))?;
     // The registry has saved by now, so this machine's next front-door certificate can cover
     // `*.<viewer>.n.adi` and the node can browse back.
@@ -302,10 +386,11 @@ fn join_fleet(token: &str, json: bool) -> Result<(), String> {
             "username": joined.username,
             "password": joined.password,
             "grants": joined.grants,
+            "grant_back": grant_back,
         }));
         return Ok(());
     }
-    print_joined(&joined);
+    print_joined(&joined, grant_back);
     Ok(())
 }
 
@@ -316,11 +401,18 @@ fn join_fleet(token: &str, json: bool) -> Result<(), String> {
 /// is what the *far* side calls this machine and resolves only in that machine's registry; the one
 /// this machine can open is the name it filed the far side under. Printing the other one sent the
 /// operator to a host their own gateway has never heard of.
-fn print_joined(joined: &Joined) {
+fn print_joined(joined: &Joined, grant_back: bool) {
     println!("Joined the fleet as `{}`.", joined.petname);
     println!("  the viewer is filed here as: {}", joined.viewer);
     println!("  viewer key: {}", joined.viewer_key);
     println!("  it may reach: {}", grants_line(&joined.grants));
+    if grant_back {
+        println!("  and the viewer may reach this machine's `http:app` back (the default, mutual pairing).");
+    } else {
+        println!(
+            "  one-way join: the viewer is filed here, but may reach nothing on this machine."
+        );
+    }
     println!();
     println!("  username: {}", joined.username);
     println!("  password: {}", joined.password);
@@ -703,11 +795,19 @@ mod tests {
                 qr,
                 no_qr,
                 json,
+                petname,
+                user,
+                grants,
+                labels,
+                role,
             } => {
                 assert_eq!(ttl, expected);
                 // Neither flag set is the interesting default: whether a QR is drawn is then
                 // decided by whether stdout is a terminal, which is not clap's business.
                 assert!(!qr && !no_qr && !json);
+                // And the invite spec is entirely unset — the no-flags call's whole contract.
+                assert!(petname.is_none() && user.is_none() && role.is_none());
+                assert!(grants.is_empty() && labels.is_empty());
             }
             other => panic!("expected invite, got {other:?}"),
         }
@@ -724,12 +824,94 @@ mod tests {
         rejects(&["invite", "--qr", "--no-qr"]);
     }
 
+    /// ADI-MONO-171 G1: `--petname`, `--user`, `--role`, and repeated `--grant`/`--label`.
+    #[test]
+    fn invite_takes_the_spec_flags_including_repeated_grants_and_labels() {
+        match parse(&[
+            "invite",
+            "--petname",
+            "p42-device",
+            "--user",
+            "p42",
+            "--role",
+            "member",
+            "--grant",
+            "http:app",
+            "--grant",
+            "http:hub",
+            "--label",
+            "principal=p42",
+            "--label",
+            "cabinet=c7",
+        ]) {
+            MeshCommand::Invite {
+                petname,
+                user,
+                role,
+                grants,
+                labels,
+                ..
+            } => {
+                assert_eq!(petname.as_deref(), Some("p42-device"));
+                assert_eq!(user.as_deref(), Some("p42"));
+                assert_eq!(role.as_deref(), Some("member"));
+                assert_eq!(grants, vec!["http:app", "http:hub"]);
+                assert_eq!(labels, vec!["principal=p42", "cabinet=c7"]);
+            }
+            other => panic!("expected invite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invite_spec_parses_grants_labels_and_role_or_says_which_one_is_bad() {
+        let spec = invite_spec(
+            Some("p42-device".to_string()),
+            Some("p42".to_string()),
+            vec!["http:app".to_string(), "http:hub".to_string()],
+            vec!["principal=p42".to_string()],
+            Some("member".to_string()),
+        )
+        .expect("a valid spec");
+        assert_eq!(spec.petname.as_deref(), Some("p42-device"));
+        assert_eq!(spec.username.as_deref(), Some("p42"));
+        assert_eq!(spec.role, Some(adi_mesh::fleet::Role::Member));
+        assert_eq!(
+            spec.grants,
+            vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
+        );
+        assert_eq!(spec.labels.get("principal").map(String::as_str), Some("p42"));
+
+        assert!(invite_spec(None, None, vec!["ftp:*".to_string()], vec![], None).is_err());
+        assert!(invite_spec(None, None, vec![], vec!["no-equals-sign".to_string()], None).is_err());
+        assert!(invite_spec(None, None, vec![], vec![], Some("owner".to_string())).is_err());
+
+        // No flags at all is the empty spec — the no-flags call's whole contract.
+        assert_eq!(
+            invite_spec(None, None, vec![], vec![], None).expect("default"),
+            join::InviteSpec::default()
+        );
+    }
+
+    /// ADI-MONO-171 G4: `--no-grant-back` on `mesh join`.
+    #[test]
+    fn join_takes_a_no_grant_back_flag() {
+        match parse(&["join", "adi-invite:beef", "--no-grant-back"]) {
+            MeshCommand::Join { no_grant_back, .. } => assert!(no_grant_back),
+            other => panic!("expected join, got {other:?}"),
+        }
+    }
+
     #[test]
     fn join_takes_the_token_positionally() {
         match parse(&["join", "adi-invite:beef"]) {
-            MeshCommand::Join { token, json } => {
+            MeshCommand::Join {
+                token,
+                json,
+                no_grant_back,
+            } => {
                 assert_eq!(token, "adi-invite:beef");
                 assert!(!json);
+                assert!(!no_grant_back, "mutual pairing is the default");
             }
             other => panic!("expected join, got {other:?}"),
         }
