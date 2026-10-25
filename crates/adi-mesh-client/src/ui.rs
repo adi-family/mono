@@ -108,6 +108,25 @@ fn read_deep_link() -> Option<String> {
     Some(token)
 }
 
+/// A standing reminder, in the sandbox build only (ADI-SELLER-PORTAL-10): this origin is for the
+/// partner sandbox, and its `IndexedDB` must never hold a key or a password for a real node —
+/// that is the entire reason the sandbox is a separate origin rather than a mode flag on this
+/// one. Drawn whether or not a deep link is present, since the one reader who most needs to see
+/// it is the one who has not yet scanned anything.
+#[cfg(feature = "sandbox")]
+fn sandbox_banner() -> impl IntoView {
+    view! {
+        <p class="sandbox-banner">"Sandbox — never pair a real ADI install here."</p>
+    }
+    .into_any()
+}
+
+/// The ordinary build draws nothing here.
+#[cfg(not(feature = "sandbox"))]
+fn sandbox_banner() -> impl IntoView {
+    ().into_any()
+}
+
 #[component]
 fn App() -> impl IntoView {
     let key = RwSignal::new(String::new());
@@ -167,6 +186,8 @@ fn App() -> impl IntoView {
                         <p class="sub">"Your machines, over the mesh."</p>
                     </div>
                 </header>
+
+                {sandbox_banner()}
 
                 <Show when=move || !problem.get().is_empty()>
                     <p class="problem">{move || problem.get()}</p>

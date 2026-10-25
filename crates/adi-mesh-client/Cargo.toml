@@ -13,6 +13,17 @@ repository.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# `sandbox` builds the same client for a second, separate origin (ADI-SELLER-PORTAL-10):
+# https://sandbox-client.withadi.dev, for partners who scan a QR before they have ever paired
+# anything real. It changes nothing about the wire protocol or the storage model — a sandbox
+# browser's IndexedDB holds a key and node passwords exactly like any other, just never for a
+# real install, because nobody ever points a real node's invite at this origin. What it changes
+# is cosmetic and deliberately small: the pairing nickname this browser offers a node
+# (`invite::nickname_for`) and a banner telling the reader where they are (`ui::sandbox_banner`).
+[features]
+default = []
+sandbox = []
+
 [dependencies]
 # The version the tree pins. Pinned exactly, for the reason the spike pinned it: what this
 # version does in a browser is the whole premise, and iroh's browser support is a cfg its own

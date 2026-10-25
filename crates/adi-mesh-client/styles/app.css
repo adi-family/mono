@@ -79,6 +79,22 @@ header .sub {
   font-size: 13px;
 }
 
+/* --- the sandbox build (ADI-SELLER-PORTAL-10) ------------------------------------------------ */
+
+/* `--warn`, not `--err`: nothing has gone wrong, this is a standing reminder of where the reader
+   is. The soft tint is the one §3 allows outside a status pill, for exactly this — a sentence
+   that has to read before anything else does. */
+.sandbox-banner {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 /* --- what went wrong ------------------------------------------------------------------------ */
 
 /* A sentence in the error colour, and nothing around it (§3). It sometimes carries a key; let it

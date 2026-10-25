@@ -7,6 +7,35 @@
 > **One thing is still wrong on the custom domain**, and it is a zone setting rather than anything
 > in this build — see *[The zone overrides `_headers`](#the-zone-overrides-_headers-on-the-custom-domain)*.
 
+## A second origin for the partner sandbox (ADI-SELLER-PORTAL-10)
+
+**`sandbox-client.withadi.dev`**, Cloudflare Pages project **`sandbox-client`**, is the same
+build with the `sandbox` cargo feature on — the pairing nickname this browser offers a node
+becomes `sandbox-<key>` instead of `browser-<key>`, and the shell draws a standing banner
+("Sandbox — never pair a real ADI install here."). Nothing about the wire protocol or the
+storage model changes; the entire point of a second *origin* is that its `IndexedDB` is a
+different database from `mono-mesh-client`'s and can never hold a key or a password for
+anyone's real node, however the build is flagged.
+
+```
+scripts/build-mesh-client.sh --sandbox     # → crates/adi-mesh-client/dist/, sandbox feature on
+```
+
+The project was created and the custom domain attached the same way the first one was (below):
+Pages project write, then `POST …/pages/projects/sandbox-client/domains`. **The DNS `CNAME` still
+needs a human** — `sandbox-client` → `sandbox-client.pages.dev`, proxied — exactly as it did for
+the first domain; see *[Attaching the custom domain](#attaching-the-custom-domain--done-and-what-it-took)*.
+Until it exists, the project is fully live at <https://sandbox-client.pages.dev>.
+
+**Building either target needs a clang with the wasm32 backend**, which this crate's own
+`.cargo/config.toml` points at Homebrew's LLVM — fine on the maintainer's Mac, dead on every
+other host. `.github/workflows/mesh-client.yml` (`workflow_dispatch`, pick `target:`) builds and
+deploys from a GitHub Ubuntu runner instead, whose stock `clang` already has the backend; the
+workflow exports `CC_wasm32-unknown-unknown=clang` ahead of the build, which cargo's `[env]`
+table takes only when the variable is *not already set* — so the runner's plain clang wins over
+the hardcoded Homebrew path without that file needing to change. Use this job on any host where
+`scripts/build-mesh-client.sh` reports `ring` cannot compile for wasm32.
+
 The artefact is `crates/adi-mesh-client/dist/` — **static files, no server, no build step on the
 host, no environment variables.** Everything the client shows it fetched itself over QUIC from a
 machine that is listening on nothing, so there is no backend to point at and no secret to configure.
@@ -121,21 +150,26 @@ POST /client/v4/accounts/<account>/pages/projects/mono-mesh-client/domains
 ```
 
 **Needed a human** — the `CNAME`. (Added by the operator on 2026-08-27; the domain went `active`
-and the certificate issued. Recorded because the next deploy to a new hostname will hit it again.)
-The zone `withadi.dev` (`7dcdc690ed524a9d1ede599897066c0f`) is on the same account and active, but
-**Pages did not create the record**, and creating it by hand fails:
+and the certificate issued. Recorded because the next deploy to a new hostname will hit it again —
+and did, for `sandbox-client.withadi.dev`: that domain was registered the same way on 2026-10-25
+and is `initializing`, waiting on exactly this.) The zone `withadi.dev`
+(`7dcdc690ed524a9d1ede599897066c0f`) is on the same account and active, but **Pages did not create
+the record**, and creating it by hand fails — with the `CLOUDFLARE_API_TOKEN` this repo's CI uses
+no less than with the original wrangler OAuth token:
 
 ```
 POST /client/v4/zones/<zone>/dns_records   → 10000 Authentication error
 ```
 
-The wrangler OAuth token carries **`zone (read)`**, not DNS edit, and no `pages (write)` call
-creates a record on your behalf with it. Until the record exists the custom domain stays `pending`,
-no certificate is issued, and the name does not resolve at all. **This is the one step that needs a
-human at a browser** — and the reason to write it down is that it looks like a Pages problem and is
-not one.
+Neither token carries DNS edit on this zone — the wrangler OAuth token has **`zone (read)`**, and
+`CLOUDFLARE_API_TOKEN` (`adi-mono secrets get CLOUDFLARE_API_TOKEN`) fails the same list call —
+and no `pages (write)` call creates a record on your behalf with either. Until the record exists
+the custom domain stays `pending`, no certificate is issued, and the name does not resolve at all.
+**This is the one step that needs a human at a browser** — and the reason to write it down is that
+it looks like a Pages problem and is not one.
 
-Either fix works:
+Either fix works, for either project — substitute `sandbox-client` for `mono-mesh-client` for the
+one still pending:
 
 - **Dashboard** → *Workers & Pages* → `mono-mesh-client` → *Custom domains* → *Set up a custom
   domain*. A dashboard session has the permission the token lacks and creates both halves at once.

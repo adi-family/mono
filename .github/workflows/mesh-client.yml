@@ -1,0 +1,86 @@
+name: Mesh client
+
+# Builds and deploys the browser mesh client (`crates/adi-mesh-client`) by hand, the same two
+# commands `DEPLOY.md` has always described (`scripts/build-mesh-client.sh` then `wrangler pages
+# deploy`) — just run here instead of from a laptop with Homebrew LLVM on it, because `ring`
+# needs a clang with the wasm32 backend and that is what GitHub's Ubuntu runner already ships,
+# no Homebrew hack required (see the `CC_wasm32-unknown-unknown` override below).
+#
+# Not push-triggered: a deploy of either target has always been something a human (or an agent)
+# decides to run, not a consequence of merging to main, and this keeps it that way — just without
+# needing a Mac to do it from (ADI-SELLER-PORTAL-10).
+#
+# Required repository secret:
+#   CLOUDFLARE_API_TOKEN   already used by the Docs and Release workflows — Pages:Edit on this
+#                          account is what both `wrangler pages project create` and `wrangler
+#                          pages deploy` need.
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which site to build and deploy'
+        required: true
+        type: choice
+        options:
+          - sandbox-client
+          - mono-mesh-client
+        default: sandbox-client
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Matches `release.yml`'s webapp job, which pins the same tool for the same reason.
+  TRUNK_VERSION: v0.21.14
+  WRANGLER_VERSION: 4.129.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      # The two targets build into the same `dist/`; a second run for either one mid-build
+      # would deploy a mix of both.
+      group: mesh-client-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Toolchain (wasm)
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xzf - -C /usr/local/bin
+          trunk --version
+
+      - name: Build
+        # `crates/adi-mesh-client/.cargo/config.toml` points `CC_wasm32-unknown-unknown` at a
+        # Homebrew path that only exists on the maintainer's Mac — but cargo's `[env]` table
+        # never overrides a variable the environment already set (it is written without
+        # `force = true`), so exporting the plain, already-wasm-capable `clang`/`llvm-ar` this
+        # runner ships with here takes precedence over it.
+        env:
+          CC_wasm32-unknown-unknown: clang
+          AR_wasm32-unknown-unknown: llvm-ar
+        run: |
+          flags=(--sandbox)
+          [[ "${{ inputs.target }}" == "mono-mesh-client" ]] && flags=()
+          scripts/build-mesh-client.sh "${flags[@]}"
+
+      - name: Node (for wrangler — see the Docs workflow for why not bun)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install wrangler
+        run: npm install -g "wrangler@$WRANGLER_VERSION"
+
+      - name: Deploy to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: 5b81c76ca545338aa9e85215c001a768
+        run: |
+          npx wrangler pages deploy crates/adi-mesh-client/dist \
+            --project-name="${{ inputs.target }}" --branch=main

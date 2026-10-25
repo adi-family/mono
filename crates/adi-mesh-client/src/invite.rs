@@ -257,14 +257,21 @@ const ADMIT_POLL: std::time::Duration = std::time::Duration::from_millis(750);
 /// reason is what it means; both come from `adi-mesh`'s own `protocol.rs`, included here.
 const NOT_AUTHORIZED: &str = "this machine holds no grant for that service";
 
-/// A nickname to offer a node for this browser: `browser-<10 hex of the key>`.
+/// A nickname to offer a node for this browser: `browser-<10 hex of the key>`, or
+/// `sandbox-<10 hex of the key>` from a sandbox build (ADI-SELLER-PORTAL-10) — so a node's
+/// operator can tell at a glance, in their own fleet list, that the row is this build and not
+/// someone's real browser.
 ///
 /// Derived from the key rather than asked for, because it is what the *node's* operator will see
 /// in their fleet list and a name they can tie back to a key is worth more there than a name the
 /// reader typed on a phone. One DNS label, which is what §2 requires.
 #[must_use]
 pub fn nickname_for(key: EndpointId) -> String {
-    format!("browser-{}", key.fmt_short())
+    #[cfg(feature = "sandbox")]
+    let prefix = "sandbox";
+    #[cfg(not(feature = "sandbox"))]
+    let prefix = "browser";
+    format!("{prefix}-{}", key.fmt_short())
 }
 
 /// The [`SecretKey`] 64 hex characters name.

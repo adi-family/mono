@@ -6,7 +6,12 @@
 # is copying `crates/adi-mesh-client/dist/` onto any static host that serves it over **HTTPS**
 # (see that crate's DEPLOY.md; a service worker and `crypto.subtle` need a secure context).
 #
-# Usage: scripts/build-mesh-client.sh [--debug]   (default: release)
+# Usage: scripts/build-mesh-client.sh [--debug] [--sandbox]   (default: release, mono-mesh-client)
+#
+# --sandbox builds the second origin (ADI-SELLER-PORTAL-10): the partner-sandbox client at
+# sandbox-client.withadi.dev, which differs only by the `sandbox` cargo feature — the pairing
+# nickname this browser offers and a banner, nothing about the wire protocol or storage model
+# (see `Cargo.toml` and `DEPLOY.md`).
 #
 # Why this exists rather than a bare `trunk build`: cargo reads `.cargo/config.toml` from the
 # **current directory** upward, and the one that points cc-rs at Homebrew's LLVM lives in the crate
@@ -15,7 +20,14 @@
 set -euo pipefail
 
 trunk_flags=(--release)
-[[ "${1:-}" == "--debug" ]] && trunk_flags=()
+sandbox=0
+for arg in "$@"; do
+  case "$arg" in
+    --debug) trunk_flags=() ;;
+    --sandbox) sandbox=1 ;;
+  esac
+done
+[[ "$sandbox" == 1 ]] && trunk_flags+=(--features sandbox)
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 crate="$repo_root/crates/adi-mesh-client"
