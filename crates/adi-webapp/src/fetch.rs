@@ -338,8 +338,11 @@ pub async fn fleet_invite() -> Result<adi_webapp_api::types::FleetInvite, String
 /// machine and waits for the handshake — and the only one that answers with a credential: the
 /// password inside is the single copy either side will ever hold, so what shows it is what has to
 /// let it go.
-pub async fn fleet_join(token: String) -> Result<adi_webapp_api::types::FleetJoined, String> {
-    post_local("/api/fleet/join", &FleetJoinRef { token }).await
+pub async fn fleet_join(
+    token: String,
+    grant_back: bool,
+) -> Result<adi_webapp_api::types::FleetJoined, String> {
+    post_local("/api/fleet/join", &FleetJoinRef { token, grant_back }).await
 }
 
 pub async fn fleet_rename(petname: String, to: String) -> Result<FleetState, String> {

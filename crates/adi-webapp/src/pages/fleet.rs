@@ -612,15 +612,23 @@ fn join_panel(state: State, form: FleetForm) -> AnyView {
                     "Join"
                 </button>
             </form>
+            <label class="adi-field adi-field--check">
+                <input type="checkbox"
+                    prop:checked=move || form.grant_back.get()
+                    on:change=move |ev| form.grant_back.set(event_target_checked(&ev)) />
+                <span class="adi-field__label">"Grant the viewer back what it granted us"</span>
+            </label>
             <div class="adi-hint">
                 "Minted on the machine you want to pair with \u{2014} its own Fleet page, or "
                 <code>"adi-mono mesh invite"</code>" there. This machine dials out, so nothing has
                  to be open here. Same token either way: this field is "
-                <code>"adi-mono mesh join"</code>" without the terminal. Pairing is mutual: the far
-                 side files this machine with "<code>"http:app"</code>" \u{2014} its panel, and
-                 nothing else here \u{2014} and this machine files it the same way, under the name
-                 it appears by in the table above. Both directions are gated by the one password
-                 below."
+                <code>"adi-mono mesh join"</code>" without the terminal. Pairing is mutual by
+                 default: the far side files this machine with "<code>"http:app"</code>"
+                 \u{2014} its panel, and nothing else here \u{2014} and this machine files it the
+                 same way, under the name it appears by in the table above. Both directions are
+                 gated by the one password below. Untick the box above for a one-way join \u{2014}
+                 the choice to make before pairing with somewhere you are only being shown around:
+                 the far side is filed here, but may reach nothing on this machine."
             </div>
             {move || joined_view(form)}
         </section>
@@ -787,12 +795,13 @@ fn join(state: State, form: FleetForm) {
     if token.is_empty() || form.joining.get_untracked() {
         return;
     }
+    let grant_back = form.grant_back.get_untracked();
     form.joining.set(true);
     // A previous credential belongs to a previous pairing: leaving it under a form that is now
     // dialling somewhere else would attach it to the wrong machine.
     form.joined.set(None);
     spawn_local(async move {
-        match fetch::fleet_join(token).await {
+        match fetch::fleet_join(token, grant_back).await {
             Ok(joined) => {
                 // `joined_view` says who this machine paired with and what it is filed as, beside
                 // the password — a flash repeating it would only push that block down.

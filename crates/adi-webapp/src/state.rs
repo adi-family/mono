@@ -1884,6 +1884,9 @@ pub(crate) struct FleetForm {
     /// exactly as long as the screen showing it: [`clear_pairing`](Self::clear_pairing) takes it
     /// away with the invite when the page is left.
     pub(crate) joined: RwSignal<Option<adi_webapp_api::types::FleetJoined>>,
+    /// Whether to grant the viewer back what it granted us (ADI-MONO-171 G4) — on by default,
+    /// matching pairing's ordinary mutual grant.
+    pub(crate) grant_back: RwSignal<bool>,
 }
 
 impl FleetForm {
@@ -1900,6 +1903,7 @@ impl FleetForm {
             join_token: RwSignal::new(String::new()),
             joining: RwSignal::new(false),
             joined: RwSignal::new(None),
+            grant_back: RwSignal::new(true),
         }
     }
 
