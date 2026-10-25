@@ -55,12 +55,20 @@ jobs:
             | sudo tar -xzf - -C /usr/local/bin
           trunk --version
 
+      # `ring` compiles C for every target it supports, wasm32-unknown-unknown included, and
+      # wants a `clang`/`llvm-ar` pair that knows that target. The runner's own clang does (it is
+      # a full LLVM build, unlike Apple's), but neither binary is on PATH unversioned until the
+      # `clang`/`llvm` packages are actually installed — cc-rs's own complaint for the missing
+      # one is "failed to find tool", which looks like a wasm-support problem and isn't.
+      - name: Install clang/llvm (for ring's wasm32 build)
+        run: sudo apt-get update && sudo apt-get install -y clang llvm
+
       - name: Build
         # `crates/adi-mesh-client/.cargo/config.toml` points `CC_wasm32-unknown-unknown` at a
         # Homebrew path that only exists on the maintainer's Mac — but cargo's `[env]` table
         # never overrides a variable the environment already set (it is written without
-        # `force = true`), so exporting the plain, already-wasm-capable `clang`/`llvm-ar` this
-        # runner ships with here takes precedence over it.
+        # `force = true`), so exporting the plain `clang`/`llvm-ar` just installed above takes
+        # precedence over it.
         env:
           CC_wasm32-unknown-unknown: clang
           AR_wasm32-unknown-unknown: llvm-ar
