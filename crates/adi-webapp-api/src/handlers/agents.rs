@@ -7,6 +7,7 @@ use adi_agents::Error as AgentStoreError;
 use adi_agents::Marker;
 use adi_agents::SecretAttachment;
 use adi_agents::StoredAgent;
+use adi_agents::StoredAgentManifest;
 use adi_agents::contains_json_null;
 
 use crate::types::{
@@ -26,15 +27,21 @@ use crate::types::{
     UnqueueFromRun,
 };
 
-use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, ok_json, parse_body};
 
 /// The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a
 /// peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/
-/// `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `nickname` is the identity that header carries, and
-/// `user` the credential it authenticated as. `None` for a request that never left this machine,
-/// which is what the control panel's own composer always sends.
+/// `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`, `docs/fleet.md` §13). `None` for a request that
+/// never left this machine, which is what the control panel's own composer always sends.
+///
+/// `petname` is this machine's own, pinned registry key for the connection — the one identity
+/// here that cannot be moved by the peer's own say-so, and so the only one ADI-MONO-171 G3's role
+/// check (or any other security-relevant lookup) may trust. `nickname` is the peer's
+/// self-declared, presentation-only name (`docs/fleet.md` §2 rule 3); `user` is the credential it
+/// authenticated as.
 #[derive(Debug, Clone, Copy)]
 pub struct FleetSender<'a> {
+    pub petname: &'a str,
     pub nickname: &'a str,
     pub user: &'a str,
 }
@@ -1197,10 +1204,14 @@ fn agent_goal(goal: &adi_agents::store::Goal) -> AgentGoal {
 /// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. For a
 /// conversation this also drops anything queued behind the answer being cut short. Idempotent for an
 /// already-finished run; only an unknown agent is a 404.
+///
+/// A member peer (ADI-MONO-171 G3) may only stop a session it launched itself — see
+/// [`member_run_refusal`]. `sender` is `None` for a local caller and every admin peer's request
+/// is unrestricted, exactly as this endpoint has always behaved.
 #[must_use]
-pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
+pub fn stop_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, RunRef);
-    run_mutation(store, req.name.trim(), |name| {
+    restricted_run_mutation(store, req.name.trim(), req.run_id.trim(), sender, |name| {
         store.stop_run(name, req.run_id.trim())
     })
 }
@@ -1209,10 +1220,12 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
 /// harness agent this is the whole conversation: transcript, log, queue and all. A live run is
 /// stopped first. Idempotent for a run that is already gone; only an unknown agent is a 404, and a
 /// backend that keeps no run history is a 400.
+///
+/// Member-restricted exactly as [`stop_run`] is.
 #[must_use]
-pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
+pub fn delete_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, RunRef);
-    run_mutation(store, req.name.trim(), |name| {
+    restricted_run_mutation(store, req.name.trim(), req.run_id.trim(), sender, |name| {
         store.delete_run(name, req.run_id.trim())
     })
 }
@@ -1222,10 +1235,12 @@ pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
 /// running and keeps everything it has written, and the history still carries it — flagged `hidden`,
 /// which is what the rail leaves out. Idempotent, and for a run that is already gone a no-op; only an
 /// unknown agent is a 404, and a backend that keeps no run history is a 400.
+///
+/// Member-restricted exactly as [`stop_run`] is.
 #[must_use]
-pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
+pub fn hide_run(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, HideRun);
-    run_mutation(store, req.name.trim(), |name| {
+    restricted_run_mutation(store, req.name.trim(), req.run_id.trim(), sender, |name| {
         store.set_run_hidden(name, req.run_id.trim(), req.hidden)
     })
 }
@@ -1883,8 +1898,12 @@ fn agent_metrics(m: adi_agents::TurnMetrics) -> AgentTurnMetrics {
 /// `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`),
 /// then report the fresh list. `name` and `backend` are required. Passing `rename_from` renames an
 /// existing agent to `name` before applying the edit, instead of leaving the old manifest behind.
+///
+/// A member peer (ADI-MONO-171 G3) may only edit an agent it created — see
+/// [`member_agent_refusal`]. `sender` is `None` for a local caller and every admin peer's request
+/// is unrestricted, exactly as this endpoint has always behaved.
 #[must_use]
-pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
+pub fn save_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
     let req = require!(body, SaveAgent);
     if req.arguments.values().any(contains_json_null) {
         return error(
@@ -1893,10 +1912,20 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         );
     }
     let name = req.name.trim().to_string();
+    // The ownership check is against whichever name this save is editing *before* any rename —
+    // `from` when this save also renames the agent, else `name` itself — and it runs before the
+    // rename, not after: otherwise a member could rename somebody else's agent on the way to
+    // being refused the rest of the edit.
+    let rename_from = clean(req.rename_from).filter(|from| *from != name);
+    let existing_name = rename_from.clone().unwrap_or_else(|| name.clone());
+    let existing = store.get(&existing_name).ok().flatten().map(|a| a.manifest);
+    if let Some(refusal) = member_agent_refusal(store, existing.as_ref(), sender) {
+        return refusal;
+    }
     // Move the manifest first, so the save below is an ordinary edit of an existing file — that is
     // what preserves `created_at`. A failed rename must abort the save, or the edit would land on
     // a fresh agent and strand the original.
-    if let Some(from) = clean(req.rename_from).filter(|from| *from != name) {
+    if let Some(from) = rename_from {
         if let Err(e) = store.rename(&from, &name) {
             return Response::from(&e);
         }
@@ -2059,13 +2088,14 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         // is a resave. Absent is a person: this endpoint's caller is the control panel, and somebody
         // is looking at it. Everything else that creates a definition has its own path (the CLI,
         // which reads its caller from the environment).
-        created_by: req
-            .created_by
-            .as_deref()
-            .map(str::trim)
-            .filter(|by| !by.is_empty())
-            .unwrap_or(adi_agents::launcher::HUMAN)
-            .to_string(),
+        created_by: match req.created_by.as_deref().map(str::trim) {
+            Some(by) if !by.is_empty() => by.to_string(),
+            // Absent is a person: named with whoever is asking (`attribute_human`, the same
+            // identity a human run launch gets), so ADI-MONO-171 G3's "edit only agents they
+            // created" has a `human:<user>` to compare a mesh member's own agents against. A local
+            // caller (`sender: None`) still gets the bare word, unchanged.
+            _ => attribute_human(adi_agents::launcher::HUMAN, sender),
+        },
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -2077,13 +2107,20 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
 }
 
 /// `POST /api/agents/delete` — delete an agent definition, then report the fresh list.
+///
+/// Member-restricted exactly as [`save_agent`] is.
 #[must_use]
-pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
-    mutate(
-        body,
-        |req: AgentRef| store.delete(req.name.trim()),
-        || agents(store),
-    )
+pub fn delete_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
+    let req = require!(body, AgentRef);
+    let name = req.name.trim();
+    let existing = store.get(name).ok().flatten().map(|a| a.manifest);
+    if let Some(refusal) = member_agent_refusal(store, existing.as_ref(), sender) {
+        return refusal;
+    }
+    match store.delete(name) {
+        Ok(_) => agents(store),
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// `POST /api/agents/peek` — a read-only snapshot of a running agent's pty screen, for the live
@@ -2149,6 +2186,96 @@ fn run_mutation<R>(
         return Response::from(&e);
     }
     ok_json(&runs_response(store, &agent))
+}
+
+/// [`run_mutation`], refused for a member peer acting on a session it did not launch
+/// (ADI-MONO-171 G3) — the gate [`stop_run`], [`delete_run`] and [`hide_run`] share. `star_run`
+/// and `rename_run` are *not* behind this gate: the task names only stop/delete/hide, and a star
+/// or a title is cosmetic enough that the sandbox's "everyone can still read and run everything"
+/// rule covers it.
+fn restricted_run_mutation<R>(
+    store: &Agents,
+    name: &str,
+    run_id: &str,
+    sender: Option<FleetSender<'_>>,
+    op: impl FnOnce(&str) -> Result<R, AgentStoreError>,
+) -> Response {
+    let agent = match get_agent(store, name) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Some(refusal) = member_run_refusal(store, &agent, run_id, sender) {
+        return refusal;
+    }
+    if let Err(e) = op(&agent.name) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
+}
+
+/// This peer's role (`adi_mesh::fleet::Role`) — [`adi_mesh::fleet::Role::Admin`] for a local
+/// caller (`sender: None`, every request before ADI-MONO-171 G3 existed), and
+/// [`adi_mesh::fleet::Role::Member`] — the safe default, not an open one — when the registry
+/// cannot be read or no longer carries this petname.
+fn peer_role(store: &Agents, sender: Option<FleetSender<'_>>) -> adi_mesh::fleet::Role {
+    let Some(sender) = sender else {
+        return adi_mesh::fleet::Role::Admin;
+    };
+    adi_mesh::fleet::FleetRegistry::load_from(store.config())
+        .ok()
+        .and_then(|registry| registry.get(sender.petname).map(|record| record.role))
+        .unwrap_or(adi_mesh::fleet::Role::Member)
+}
+
+/// 403 when `sender` is a member peer acting on a run somebody else launched — "members may
+/// stop/delete/hide only sessions with `launched_by == human:<self>`" (ADI-MONO-171 G3). `None`
+/// (proceed) for a local caller, an admin peer, or a run that is not found at all, so the
+/// idempotent no-op every one of these already is for an unknown run id stays exactly that
+/// instead of turning into a 403 a member could not act on anyway.
+fn member_run_refusal(
+    store: &Agents,
+    agent: &StoredAgent,
+    run_id: &str,
+    sender: Option<FleetSender<'_>>,
+) -> Option<Response> {
+    if peer_role(store, sender) != adi_mesh::fleet::Role::Member {
+        return None;
+    }
+    let refusal = || Some(error(403, "members may only act on sessions they launched"));
+    let Some(self_user) = asking_user(sender) else {
+        return refusal();
+    };
+    let owner = format!("{}{self_user}", adi_agents::launcher::HUMAN_PREFIX);
+    match store.runs(agent).into_iter().find(|r| r.run_id == run_id) {
+        Some(found) if found.launched_by == owner => None,
+        Some(_) => refusal(),
+        None => None,
+    }
+}
+
+/// 403 when `sender` is a member peer editing or deleting an agent it did not create — "members
+/// may edit only agents they created (`created_by`)" (ADI-MONO-171 G3). `existing` is `None` for
+/// a brand-new agent, which is always allowed: the restriction is about *somebody else's*
+/// definition, and a save that creates one has nobody else's to clash with.
+fn member_agent_refusal(
+    store: &Agents,
+    existing: Option<&StoredAgentManifest>,
+    sender: Option<FleetSender<'_>>,
+) -> Option<Response> {
+    if peer_role(store, sender) != adi_mesh::fleet::Role::Member {
+        return None;
+    }
+    let existing = existing?;
+    let refusal = || Some(error(403, "members may only edit agents they created"));
+    let Some(self_user) = asking_user(sender) else {
+        return refusal();
+    };
+    let owner = format!("{}{self_user}", adi_agents::launcher::HUMAN_PREFIX);
+    if existing.created_by == owner {
+        None
+    } else {
+        refusal()
+    }
 }
 
 /// Look an agent up, folding "not registered" into [`AgentStoreError::NotFound`] (→ 404).
@@ -3477,13 +3604,13 @@ mod tests {
     #[test]
     fn a_save_with_no_created_by_defaults_to_human_and_a_later_save_cannot_change_it() {
         let store = scratch("created-by-default");
-        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
         assert_eq!(saved(&store).created_by, adi_agents::launcher::HUMAN);
 
         let resaved = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
         });
-        assert_eq!(save_agent(&store, resaved.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, resaved.to_string().as_bytes(), None).status, 200);
         assert_eq!(
             saved(&store).created_by,
             adi_agents::launcher::HUMAN,
@@ -3499,7 +3626,7 @@ mod tests {
         let with = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "created_by": "agent:reviewer",
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
         assert_eq!(saved(&store).created_by, "agent:reviewer");
     }
 
@@ -3513,6 +3640,7 @@ mod tests {
             save_agent(
                 &store,
                 br#"{"name":"solver","backend":"process:claude"}"#,
+                None,
             )
             .status,
             200,
@@ -3578,11 +3706,11 @@ mod tests {
     fn a_save_that_omits_the_run_environment_keeps_it() {
         let store = scratch("keep");
         assert_eq!(
-            save_agent(&store, &body(Some("~/node22/bin"), Some("dev"))).status,
+            save_agent(&store, &body(Some("~/node22/bin"), Some("dev")), None).status,
             200
         );
 
-        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
 
         let m = saved(&store);
         assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
@@ -3595,7 +3723,7 @@ mod tests {
     fn stating_them_empty_clears_them() {
         let store = scratch("clear");
         assert_eq!(
-            save_agent(&store, &body(Some("~/node22/bin"), Some("dev"))).status,
+            save_agent(&store, &body(Some("~/node22/bin"), Some("dev")), None).status,
             200
         );
 
@@ -3603,7 +3731,7 @@ mod tests {
             "name": "solver", "backend": "pty:claude", "path": [], "env": {},
         });
         assert_eq!(
-            save_agent(&store, cleared.to_string().as_bytes()).status,
+            save_agent(&store, cleared.to_string().as_bytes(), None).status,
             200
         );
 
@@ -3621,17 +3749,17 @@ mod tests {
         let with = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "bin_tools": ["sys-tasks", "sys-status"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
 
         // A body from a form that never offered the checkboxes.
-        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
         assert_eq!(saved(&store).bin_tools, ["sys-tasks", "sys-status"]);
 
         // …and stating them empty is how they are actually taken away.
         let none = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "bin_tools": [],
         });
-        assert_eq!(save_agent(&store, none.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, none.to_string().as_bytes(), None).status, 200);
         assert!(saved(&store).bin_tools.is_empty());
     }
 
@@ -3645,10 +3773,10 @@ mod tests {
             "name": "solver", "backend": "pty:claude",
             "knowledge": ["global/runbooks", "agent:reviewer/memory"], "memory": true,
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
 
         // A body from a form that never offered them.
-        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
         let m = saved(&store);
         assert_eq!(m.knowledge, ["global/runbooks", "agent:reviewer/memory"]);
         assert!(m.memory);
@@ -3657,7 +3785,7 @@ mod tests {
         let none = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "knowledge": [], "memory": false,
         });
-        assert_eq!(save_agent(&store, none.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, none.to_string().as_bytes(), None).status, 200);
         let m = saved(&store);
         assert!(m.knowledge.is_empty());
         assert!(!m.memory);
@@ -3675,7 +3803,7 @@ mod tests {
             "name": "caller", "backend": "pty:claude",
             "arguments": { "model": "opus" }, "tags": ["prod"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
 
         let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": true });
         let resp = set_spawn_rule(&store, req.to_string().as_bytes());
@@ -3694,7 +3822,7 @@ mod tests {
         let with = serde_json::json!({
             "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "b"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
 
         let req = serde_json::json!({ "agent": "caller", "rule": "b", "add": false });
         assert_eq!(set_spawn_rule(&store, req.to_string().as_bytes()).status, 200);
@@ -3713,14 +3841,15 @@ mod tests {
         let with = serde_json::json!({
             "name": "caller", "backend": "pty:claude", "can_spawn": ["dr-*", "solo"],
         });
-        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
         for name in ["dr-1", "dr-2", "solo", "unrelated"] {
             assert_eq!(
                 save_agent(
                     &store,
                     serde_json::json!({ "name": name, "backend": "pty:claude" })
                         .to_string()
-                        .as_bytes()
+                        .as_bytes(),
+                    None,
                 )
                 .status,
                 200
@@ -3748,14 +3877,15 @@ mod tests {
             ("d", serde_json::json!(["targ*"])),
         ] {
             let with = serde_json::json!({ "name": name, "backend": "pty:claude", "can_spawn": can_spawn });
-            assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+            assert_eq!(save_agent(&store, with.to_string().as_bytes(), None).status, 200);
         }
         assert_eq!(
             save_agent(
                 &store,
                 serde_json::json!({ "name": "target", "backend": "pty:claude" })
                     .to_string()
-                    .as_bytes()
+                    .as_bytes(),
+                None,
             )
             .status,
             200
@@ -3797,7 +3927,7 @@ mod tests {
     fn agents_state_carries_an_empty_spawn_refusals_list_with_nothing_recorded() {
         let store = scratch("spawn-refusals-empty");
         assert_eq!(
-            save_agent(&store, br#"{"name":"caller","backend":"pty:claude"}"#).status,
+            save_agent(&store, br#"{"name":"caller","backend":"pty:claude"}"#, None).status,
             200
         );
         assert!(agents_state(&store).expect("state").spawn_refusals.is_empty());
@@ -3812,18 +3942,18 @@ mod tests {
         let on = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "unattended": true,
         });
-        assert_eq!(save_agent(&store, on.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, on.to_string().as_bytes(), None).status, 200);
         assert!(saved(&store).unattended);
 
         // A body from a form that never offered it.
-        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(save_agent(&store, &body(None, None), None).status, 200);
         assert!(saved(&store).unattended, "still unattended");
 
         // …and stating it false is how it is actually turned off.
         let off = serde_json::json!({
             "name": "solver", "backend": "pty:claude", "unattended": false,
         });
-        assert_eq!(save_agent(&store, off.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, off.to_string().as_bytes(), None).status, 200);
         assert!(!saved(&store).unattended);
     }
 
@@ -3839,12 +3969,12 @@ mod tests {
             "tags": ["bugbounty", "v2"], "starred": true, "project": "bugbounty",
             "secrets": [{ "project": null, "name": "VIRUSTOTAL_API" }],
         });
-        assert_eq!(save_agent(&store, full.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, full.to_string().as_bytes(), None).status, 200);
 
         // A body from a form that never offered any of them — the meta setup's shape.
         let partial = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
         assert_eq!(
-            save_agent(&store, partial.to_string().as_bytes()).status,
+            save_agent(&store, partial.to_string().as_bytes(), None).status,
             200
         );
         let kept = saved(&store);
@@ -3859,7 +3989,7 @@ mod tests {
             "tags": [], "starred": false, "project": "", "secrets": [],
         });
         assert_eq!(
-            save_agent(&store, cleared.to_string().as_bytes()).status,
+            save_agent(&store, cleared.to_string().as_bytes(), None).status,
             200
         );
         let now = saved(&store);
@@ -3884,6 +4014,7 @@ mod tests {
                 serde_json::json!({ "name": "solver", "backend": "harness:adi" })
                     .to_string()
                     .as_bytes(),
+                None,
             )
             .status,
             200
@@ -3931,6 +4062,7 @@ mod tests {
                 serde_json::json!({ "name": "solver", "backend": "harness:adi" })
                     .to_string()
                     .as_bytes(),
+                None,
             )
             .status,
             200
@@ -3988,6 +4120,7 @@ mod tests {
                 serde_json::json!({ "name": "solver", "backend": "harness:adi" })
                     .to_string()
                     .as_bytes(),
+                None,
             )
             .status,
             200
@@ -4055,6 +4188,7 @@ mod tests {
                 serde_json::json!({ "name": "solver", "backend": "harness:adi" })
                     .to_string()
                     .as_bytes(),
+                None,
             )
             .status,
             200
@@ -4167,7 +4301,7 @@ mod tests {
             "path": ["  ", "~/node22/bin", ""],
             "env": { "  ": "ignored", "NODE_ENV": "dev" },
         });
-        assert_eq!(save_agent(&store, body.to_string().as_bytes()).status, 200);
+        assert_eq!(save_agent(&store, body.to_string().as_bytes(), None).status, 200);
 
         let m = saved(&store);
         assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
@@ -4414,7 +4548,7 @@ mod tests {
         let store = scratch("page");
         for name in ["solver", "looper"] {
             let save = serde_json::json!({ "name": name, "backend": "harness:adi" });
-            assert_eq!(save_agent(&store, save.to_string().as_bytes()).status, 200);
+            assert_eq!(save_agent(&store, save.to_string().as_bytes(), None).status, 200);
         }
         let sessions =
             adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
@@ -4570,6 +4704,7 @@ mod tests {
             sender_marker(
                 &store,
                 Some(FleetSender {
+                    petname: "laptop-b",
                     nickname: "laptop-b",
                     user: "igor",
                 })
@@ -4583,6 +4718,7 @@ mod tests {
             sender_marker(
                 &store,
                 Some(FleetSender {
+                    petname: "laptop-b",
                     nickname: "laptop-b",
                     user: "",
                 })
@@ -4631,6 +4767,7 @@ mod tests {
             attribute_human(
                 adi_agents::launcher::HUMAN,
                 Some(FleetSender {
+                    petname: "laptop-b",
                     nickname: "laptop-b",
                     user: "igor",
                 })
@@ -4646,6 +4783,7 @@ mod tests {
             attribute_human(
                 adi_agents::launcher::HUMAN,
                 Some(FleetSender {
+                    petname: "laptop-b",
                     nickname: "laptop-b",
                     user: "",
                 })
@@ -4657,6 +4795,7 @@ mod tests {
             attribute_human(
                 "agent:planner",
                 Some(FleetSender {
+                    petname: "laptop-b",
                     nickname: "laptop-b",
                     user: "igor",
                 })

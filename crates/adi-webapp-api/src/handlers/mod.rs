@@ -659,9 +659,9 @@ mod tests {
     #[test]
     fn agents_report_runnable_for_pty_and_process_backends() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
-        let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#);
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
+        let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#, None);
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
 
         let Response { status, body } = agents(&store);
         assert_eq!(status, 200);
@@ -687,7 +687,7 @@ mod tests {
     #[test]
     fn peek_reports_not_running_for_a_sessionless_agent() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
 
         let Response { status, body } = peek_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn peek_run_carries_waiting_then_finished_as_an_await_resolves() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"process:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"process:claude"}"#, None);
         let sessions = SessionStore::new(store.config().module("sessions").dir());
         let conv = sessions
             .create(
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn send_keys_validates_body_and_run_state() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
 
         assert_eq!(
             send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).status,
@@ -768,7 +768,7 @@ mod tests {
     #[test]
     fn stop_is_idempotent_and_404s_unknown() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
 
         let Response { status, body } = stop_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn run_of_a_headless_backend_with_no_task_is_400() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
         let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#, None);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -807,7 +807,7 @@ mod tests {
     #[test]
     fn run_of_an_unrunnable_backend_is_400() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
         let Response { status, body } =
             run_agent(&store, br#"{"name":"looper","message":"go"}"#, None);
         assert_eq!(status, 400);
@@ -850,7 +850,7 @@ mod tests {
     #[test]
     fn a_review_with_no_root_agent_says_which_agent_is_missing() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
         let (run_id, dossier) = seed_conversation(&store, "solver");
 
         let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
@@ -869,8 +869,8 @@ mod tests {
     #[test]
     fn a_review_of_a_silent_conversation_is_refused() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
-        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
+        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#, None);
         let sessions = SessionStore::new(store.config().module("sessions").dir());
         let record = sessions
             .create("solver", Backend::from("harness:adi"), "/tmp", "hello")
@@ -893,8 +893,8 @@ mod tests {
     #[test]
     fn a_refused_launch_still_leaves_the_dossier_on_disk() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
-        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#, None);
+        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#, None);
         let (run_id, dossier) = seed_conversation(&store, "solver");
 
         let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn the_run_limit_is_stated_settable_and_refuses_a_launch_past_it() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#, None);
 
         let Response { status, body } = agents(&store);
         assert_eq!(status, 200);
@@ -955,8 +955,9 @@ mod tests {
         let _ = save_agent(
             &store,
             br#"{"name":"solver","backend":"harness:adi","project":"bugbounty"}"#,
+            None,
         );
-        let _ = save_agent(&store, br#"{"name":"loose","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"loose","backend":"harness:adi"}"#, None);
 
         let Response { status, body } = set_run_limit(
             &store,
@@ -1044,6 +1045,7 @@ mod tests {
                     }
                 }
             }"#,
+            None,
         );
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -1093,6 +1095,7 @@ mod tests {
                 "backend":"harness:claude-sdk",
                 "prelude":["bb-brief","  ","adi-mono tasks list --project bugbounty"]
             }"#,
+            None,
         );
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -1107,6 +1110,7 @@ mod tests {
         let Response { body, .. } = save_agent(
             &store,
             br#"{"name":"target-agent","backend":"harness:claude-sdk"}"#,
+            None,
         );
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["agents"][0]["prelude"][0], "bb-brief");
@@ -1115,6 +1119,7 @@ mod tests {
         let Response { body, .. } = save_agent(
             &store,
             br#"{"name":"target-agent","backend":"harness:claude-sdk","prelude":[]}"#,
+            None,
         );
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(
@@ -1149,6 +1154,7 @@ mod tests {
                 "backend":"process:codex",
                 "arguments":{"max_truns":12}
             }"#,
+            None,
         );
         assert_eq!(status, 400);
         assert!(body.contains("max_truns"), "{body}");

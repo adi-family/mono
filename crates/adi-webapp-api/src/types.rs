@@ -469,6 +469,19 @@ pub struct FleetNode {
     /// absent, so a panel older than the field reads every node as it always did.
     #[serde(default = "yes")]
     pub source: bool,
+    /// `"admin"` or `"member"` (`adi_mesh::fleet::Role`, ADI-MONO-171 G3). Defaults to `"admin"`
+    /// for a record paired before this existed, matching the registry's own default.
+    #[serde(default = "admin_role")]
+    pub role: String,
+    /// Free-form labels filed at pairing (ADI-MONO-171 G1) — an invite's `labels`, applied once,
+    /// on the fresh pairing that spends it. Empty for every node paired before this existed.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// `"admin"`, for a `#[serde(default)]` that must agree with `adi_mesh::fleet::Role::default()`.
+fn admin_role() -> String {
+    "admin".to_string()
 }
 
 /// `true`, for a `#[serde(default)]` that must not read as `false`.
@@ -585,6 +598,68 @@ pub struct FleetInvite {
 pub struct FleetJoinRef {
     /// The `adi-invite:` token, exactly as the far side minted it.
     pub token: String,
+    /// Whether to hand the viewer back what it granted us, as pairing has always done
+    /// (ADI-MONO-171 G4). `true` when absent — a no-body-field call joins exactly as it always
+    /// has. `false` is the one-way join: the viewer is filed, but with no grants at all, so it
+    /// may reach nothing on this machine even though this machine can now reach it.
+    #[serde(default = "yes")]
+    pub grant_back: bool,
+}
+
+/// Request body for `POST /api/fleet/invite` — optional (ADI-MONO-171 G1). Every field absent or
+/// blank is the pre-G1 call: the node's own offered nickname, the default username, and
+/// `http:app`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FleetInviteRequest {
+    /// Pin the node to this petname instead of the one it offers at the handshake. A name already
+    /// taken by a *different* key refuses the join rather than falling back to a suggestion.
+    pub petname: Option<String>,
+    /// The username the minted credential authenticates as, instead of the default `adi`.
+    pub username: Option<String>,
+    /// `"admin"` or `"member"` (`adi_mesh::fleet::Role`), instead of the default `admin`. Only
+    /// takes effect on a *fresh* pairing — never on a re-pair, so a re-invite with no role cannot
+    /// quietly reset a member back to admin.
+    pub role: Option<String>,
+    /// What the node may reach here, in the string form an operator types, instead of the default
+    /// `http:app`.
+    #[serde(default)]
+    pub grants: Vec<String>,
+    /// Labels filed on the node's record once it pairs, applied on a fresh pairing only — see
+    /// `role` above.
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// `GET /api/fleet/invites` — every invite minted here that is still open (unspent and
+/// unexpired); a spent or expired one is pruned rather than listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInvites {
+    pub invites: Vec<FleetPendingInvite>,
+}
+
+/// One entry in [`FleetInvites`] — enough to show what it was minted for, and to cancel it by.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetPendingInvite {
+    /// Identifies this invite for `POST /api/fleet/invites/cancel` — the nonce inside its token.
+    /// Already a bearer secret kept to this machine's own panel, and not a new exposure: anything
+    /// that can reach the panel can mint a fresh invite outright (`fleet_invite`'s own rule).
+    pub nonce: String,
+    /// Unix seconds after which it is refused.
+    pub expires: u64,
+    pub petname: Option<String>,
+    pub username: Option<String>,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub grants: Vec<String>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+
+/// Request body for `POST /api/fleet/invites/cancel`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInviteCancel {
+    pub nonce: String,
 }
 
 /// What a spent invite bought — the answer to `POST /api/fleet/join`.

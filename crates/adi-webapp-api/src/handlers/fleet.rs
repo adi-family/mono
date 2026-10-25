@@ -43,13 +43,15 @@ use std::time::Duration;
 
 use adi_config::Config;
 use adi_db::Db;
-use adi_mesh::fleet::{FleetRegistry, Grant};
+use adi_mesh::fleet::{FleetRegistry, Grant, Role};
+use adi_mesh::join::InviteSpec;
 use adi_mesh::{activity, join, ticket};
 use serde::de::DeserializeOwned;
 
 use crate::types::{
-    FleetGrantRef, FleetInstructions, FleetInvite, FleetJoinRef, FleetJoined, FleetNode, FleetRef,
-    FleetRename, FleetState,
+    FleetGrantRef, FleetInstructions, FleetInvite, FleetInviteCancel, FleetInviteRequest,
+    FleetInvites, FleetJoinRef, FleetJoined, FleetNode, FleetPendingInvite, FleetRef, FleetRename,
+    FleetState,
 };
 
 use super::response::{Response, error, ok_json};
@@ -78,8 +80,9 @@ pub fn fleet(store: &Config) -> Response {
 /// `POST /api/fleet/invite` — mint a single-use pairing invite and draw it as a QR code.
 ///
 /// The other half of pairing, and the only endpoint here that *adds* a node rather than editing
-/// one already filed. It mints through [`join::mint_invite_for`] — the same call `adi-mono mesh
-/// invite` makes — so there is one way an invite comes into existence and one book recording it.
+/// one already filed. It mints through [`join::mint_invite_for_with`] — the same call `adi-mono
+/// mesh invite` makes — so there is one way an invite comes into existence and one book recording
+/// it.
 ///
 /// **Anything that can reach this panel can mint an invite, and that is deliberate.** The panel
 /// binds loopback locally; over the mesh it sits behind the node's password *and* an `http:app`
@@ -92,12 +95,22 @@ pub fn fleet(store: &Config) -> Response {
 /// logs it, nothing routes to it, and the only copy that outlives the response is the one on the
 /// operator's screen.
 ///
+/// **The body is optional** (ADI-MONO-171 G1): absent or blank mints exactly what this always
+/// has — the node's own offered nickname, the default username, and `http:app`. Given, it may
+/// pin a petname, a username, a role (`admin`/`member`, applied only on a fresh pairing), a set
+/// of grants, and free-form labels — see [`FleetInviteRequest`].
+///
 /// # Errors
-/// 409 when the mesh is not running here (a token nobody is listening behind cannot work), 500 if
-/// the invite book cannot be written or the token cannot be drawn.
+/// 400 when the body is present but not the shape `FleetInviteRequest` wants, or names a grant or
+/// role that does not parse. 409 when the mesh is not running here (a token nobody is listening
+/// behind cannot work). 500 if the invite book cannot be written or the token cannot be drawn.
 #[must_use]
-pub fn fleet_invite(store: &Config) -> Response {
-    match mint(store, ticket::published(), adi_config::now_unix()) {
+pub fn fleet_invite(store: &Config, body: &[u8]) -> Response {
+    let spec = match invite_spec(body) {
+        Ok(spec) => spec,
+        Err(response) => return response,
+    };
+    match mint(store, ticket::published(), adi_config::now_unix(), spec) {
         Ok(invite) => {
             super::usage_events::fleet_invite_created(store);
             ok_json(&invite)
@@ -106,9 +119,46 @@ pub fn fleet_invite(store: &Config) -> Response {
     }
 }
 
+/// An empty (or whitespace-only) body is the no-body call; so, on the wire, is a bare `null` —
+/// the webapp's own "mint a code" button sends `()` as its JSON body (`adi-webapp`'s
+/// `fetch::fleet_invite`, predating this spec), which serialises to the four bytes `null`, not to
+/// nothing. Otherwise decode `FleetInviteRequest` and convert each field into its typed form,
+/// failing on the first that does not parse.
+fn invite_spec(body: &[u8]) -> Result<InviteSpec, Response> {
+    if body.iter().all(u8::is_ascii_whitespace) || body == b"null" {
+        return Ok(InviteSpec::default());
+    }
+    let req: FleetInviteRequest = serde_json::from_slice(body)
+        .map_err(|e| error(400, &format!("invalid request body: {e}")))?;
+    let grants = req
+        .grants
+        .iter()
+        .map(|raw| raw.parse::<Grant>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| error(400, &format!("invalid grant: {e}")))?;
+    let role = req
+        .role
+        .as_deref()
+        .map(str::parse::<Role>)
+        .transpose()
+        .map_err(|e| error(400, &format!("invalid role: {e}")))?;
+    Ok(InviteSpec {
+        petname: req.petname.map(|p| p.trim().to_string()).filter(|p| !p.is_empty()),
+        username: req.username.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
+        role,
+        grants,
+        labels: req.labels,
+    })
+}
+
 /// [`fleet_invite`] with the endpoint and the clock passed in — the seam the tests mint through,
 /// since [`ticket::published`] reads the real store whatever store the handler was given.
-fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvite, Response> {
+fn mint(
+    store: &Config,
+    endpoint: Option<String>,
+    now: u64,
+    spec: InviteSpec,
+) -> Result<FleetInvite, Response> {
     let Some(endpoint) = endpoint else {
         return Err(error(
             409,
@@ -116,7 +166,7 @@ fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvit
              on the Mesh page and try again",
         ));
     };
-    let token = join::mint_invite_for(&endpoint, INVITE_TTL, store, now)
+    let token = join::mint_invite_for_with(&endpoint, INVITE_TTL, store, now, spec)
         .map_err(|e| error(500, &format!("minting an invite: {e}")))?;
     // Read the expiry back out of the token rather than recomputing it, so the page counts down to
     // what the minter will actually check the nonce against.
@@ -134,7 +184,65 @@ fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvit
     })
 }
 
-/// The token from a `POST /api/fleet/join` body, checked as far as it can be checked *here*.
+/// `GET /api/fleet/invites` — every invite minted here that is still open.
+///
+/// # Errors
+/// 500 if the invite book cannot be read.
+#[must_use]
+pub fn fleet_invites(store: &Config) -> Response {
+    match join::InviteBook::load_from(store) {
+        Ok(book) => ok_json(&FleetInvites {
+            invites: book
+                .open(adi_config::now_unix())
+                .map(pending_invite)
+                .collect(),
+        }),
+        Err(e) => error(500, &format!("reading the invite book: {e}")),
+    }
+}
+
+fn pending_invite(invite: &join::PendingInvite) -> FleetPendingInvite {
+    FleetPendingInvite {
+        nonce: invite.nonce.clone(),
+        expires: invite.expires,
+        petname: invite.spec.petname.clone(),
+        username: invite.spec.username.clone(),
+        role: invite.spec.role.map(|r| r.to_string()),
+        grants: invite.spec.grants.iter().map(ToString::to_string).collect(),
+        labels: invite.spec.labels.clone(),
+    }
+}
+
+/// `POST /api/fleet/invites/cancel` — revoke an open invite before anybody spends it.
+///
+/// # Errors
+/// 400 for an unusable body, 404 when no open invite here carries that nonce (unknown, already
+/// spent, or already expired), 500 if the book cannot be read or written.
+#[must_use]
+pub fn fleet_invite_cancel(store: &Config, body: &[u8]) -> Response {
+    let req: FleetInviteCancel = match parse(body) {
+        Ok(req) => req,
+        Err(response) => return response,
+    };
+    let nonce = trimmed(&req.nonce);
+    if nonce.is_empty() {
+        return error(400, "expected JSON body { \"nonce\": \"<hex>\" }");
+    }
+    let mut book = match join::InviteBook::load_from(store) {
+        Ok(book) => book,
+        Err(e) => return error(500, &format!("reading the invite book: {e}")),
+    };
+    if let Err(problem) = book.cancel(&nonce, adi_config::now_unix()) {
+        return error(404, &problem.to_string());
+    }
+    if let Err(e) = book.save_to(store) {
+        return error(500, &format!("saving the invite book: {e}"));
+    }
+    fleet_invites(store)
+}
+
+/// The token from a `POST /api/fleet/join` body, checked as far as it can be checked *here*, and
+/// whether to grant the viewer back what it granted us (ADI-MONO-171 G4).
 ///
 /// The two halves of that endpoint are split because only one of them is synchronous: this reads
 /// the body and the clock, and the caller does the dialling (`adi-app`'s `fleet_join`, which owns
@@ -144,7 +252,7 @@ fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvit
 ///
 /// # Errors
 /// 400 for an unusable body, an empty token, or one that does not decode as a live invite.
-pub fn fleet_join_token(body: &[u8], now: u64) -> Result<String, Response> {
+pub fn fleet_join_token(body: &[u8], now: u64) -> Result<(String, bool), Response> {
     let req: FleetJoinRef = parse(body)?;
     let token = trimmed(&req.token);
     if token.is_empty() {
@@ -158,7 +266,7 @@ pub fn fleet_join_token(body: &[u8], now: u64) -> Result<String, Response> {
     // the request that carried it.
     join::decode_invite(&token, now)
         .map_err(|e| error(400, &format!("that invite cannot be spent: {e}")))?;
-    Ok(token)
+    Ok((token, req.grant_back))
 }
 
 /// `POST /api/fleet/join` — the answer once the handshake has been accepted.
@@ -539,6 +647,8 @@ fn snapshot(store: &Config) -> Result<FleetState, String> {
                     last_reached,
                     source,
                     agent_instructions: record.agent_instructions,
+                    role: record.role.to_string(),
+                    labels: record.labels,
                 }
             })
             .collect(),
@@ -732,6 +842,29 @@ mod tests {
         // The node that calls itself something else than we file it under still reads clearly.
         assert_eq!(nodes[0]["nickname"], "workstation");
         assert!(nodes[0]["grants"].as_array().unwrap().is_empty());
+    }
+
+    /// `GET /api/fleet` reports a node's role and labels (ADI-MONO-171 G1/G3) — defaulting to
+    /// admin and no labels for a record paired before either existed.
+    #[test]
+    fn fleet_reports_role_and_labels() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        let v = ok_body(&fleet(&store));
+        assert_eq!(v["nodes"][0]["role"], "admin", "no role on file is admin");
+        assert_eq!(v["nodes"][0]["labels"], serde_json::json!({}));
+
+        let mut registry = FleetRegistry::load_from(&store).expect("load");
+        let record = registry.get_mut("laptop-b").expect("record");
+        record.role = Role::Member;
+        record
+            .labels
+            .insert("principal".to_string(), "p42".to_string());
+        registry.save_to(&store).expect("save");
+
+        let v = ok_body(&fleet(&store));
+        assert_eq!(v["nodes"][0]["role"], "member");
+        assert_eq!(v["nodes"][0]["labels"]["principal"], "p42");
     }
 
     #[test]
@@ -1162,7 +1295,8 @@ mod tests {
         let store = temp_store();
         let now = 1_700_000_000;
 
-        let invite = mint(&store, Some(sample_endpoint()), now).expect("the mesh is running");
+        let invite = mint(&store, Some(sample_endpoint()), now, InviteSpec::default())
+            .expect("the mesh is running");
 
         // Ten minutes, and the expiry is the token's own — not a number computed twice.
         assert_eq!(u64::from(invite.ttl_secs), INVITE_TTL.as_secs());
@@ -1189,14 +1323,16 @@ mod tests {
 
         // A second call is a second invite: minting is never idempotent, or two nodes would race
         // for one nonce and the second would be told it was replayed.
-        let again = mint(&store, Some(sample_endpoint()), now).expect("mint again");
+        let again = mint(&store, Some(sample_endpoint()), now, InviteSpec::default())
+            .expect("mint again");
         assert_ne!(again.token, invite.token);
     }
 
     #[test]
     fn minting_without_a_running_mesh_is_refused_rather_than_answered_with_a_dead_token() {
         let store = temp_store();
-        let response = mint(&store, None, 1_700_000_000).expect_err("nothing to dial");
+        let response = mint(&store, None, 1_700_000_000, InviteSpec::default())
+            .expect_err("nothing to dial");
         assert_eq!(response.status, 409, "{}", response.body);
         assert!(
             response.body.contains("mesh is not running"),
@@ -1214,15 +1350,19 @@ mod tests {
     fn a_live_invite_is_accepted_for_spending_however_it_was_pasted() {
         let store = temp_store();
         let now = 1_700_000_000;
-        let token = mint(&store, Some(sample_endpoint()), now)
+        let token = mint(&store, Some(sample_endpoint()), now, InviteSpec::default())
             .expect("mint")
             .token;
 
         let body = serde_json::to_vec(&FleetJoinRef {
             token: format!("  {token}\n"),
+            grant_back: true,
         })
         .expect("a body");
-        assert_eq!(fleet_join_token(&body, now).expect("live"), token);
+        assert_eq!(
+            fleet_join_token(&body, now).expect("live"),
+            (token, true)
+        );
     }
 
     /// Everything refusable about a token is refused *before* the dial, so the operator reads why
@@ -1231,13 +1371,14 @@ mod tests {
     fn an_unspendable_invite_is_a_400_before_anything_is_dialled() {
         let store = temp_store();
         let now = 1_700_000_000;
-        let token = mint(&store, Some(sample_endpoint()), now)
+        let token = mint(&store, Some(sample_endpoint()), now, InviteSpec::default())
             .expect("mint")
             .token;
 
         // Expired: live at `now`, dead ten minutes and a second later.
         let body = serde_json::to_vec(&FleetJoinRef {
             token: token.clone(),
+            grant_back: true,
         })
         .expect("a body");
         let late = fleet_join_token(&body, now + INVITE_TTL.as_secs() + 1).expect_err("expired");
@@ -1259,6 +1400,155 @@ mod tests {
                 response.body
             );
         }
+    }
+
+    // -- the invite spec, over the handler (ADI-MONO-171 G1) ------------------------------
+
+    /// An empty body parses to the all-default spec — the no-body call's whole contract. `null`
+    /// is in the same bucket: `adi-webapp`'s own `fetch::fleet_invite` sends `()` as its JSON
+    /// body, which serialises to literal `null`, not to an empty string.
+    #[test]
+    fn an_empty_blank_or_null_body_is_the_default_invite_spec() {
+        for body in [b"".as_slice(), b"   \n".as_slice(), b"null".as_slice()] {
+            assert_eq!(invite_spec(body).expect("default"), InviteSpec::default());
+        }
+    }
+
+    #[test]
+    fn a_full_invite_body_becomes_the_matching_spec() {
+        let body = br#"{
+            "petname": "p42-device",
+            "username": "p42",
+            "role": "member",
+            "grants": ["http:app", "http:hub"],
+            "labels": {"principal": "p42"}
+        }"#;
+        let spec = invite_spec(body).expect("a valid spec");
+        assert_eq!(spec.petname.as_deref(), Some("p42-device"));
+        assert_eq!(spec.username.as_deref(), Some("p42"));
+        assert_eq!(spec.role, Some(Role::Member));
+        assert_eq!(
+            spec.grants,
+            vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
+        );
+        assert_eq!(spec.labels.get("principal").map(String::as_str), Some("p42"));
+    }
+
+    #[test]
+    fn an_invalid_grant_or_role_in_the_body_is_a_400() {
+        assert_eq!(
+            invite_spec(br#"{"grants":["ftp:*"]}"#).expect_err("bad grant").status,
+            400
+        );
+        assert_eq!(
+            invite_spec(br#"{"role":"owner"}"#).expect_err("bad role").status,
+            400
+        );
+        assert_eq!(invite_spec(b"not json").expect_err("bad json").status, 400);
+    }
+
+    /// `POST /api/fleet/invite` with a body mints exactly the spec it was given, recorded in the
+    /// book so `decide()` can apply it once the node spends it (the applying half is pinned in
+    /// `adi_mesh::join`'s own tests; this is the handler's half — the body becomes the book entry).
+    #[test]
+    fn fleet_invite_with_a_body_records_the_spec_in_the_book() {
+        let store = temp_store();
+        let now = 1_700_000_000;
+        let response = fleet_invite(
+            &store,
+            br#"{"petname":"p42-device","username":"p42","role":"member","grants":["http:hub"]}"#,
+        );
+        let invite: FleetInvite = serde_json::from_str(&response.body).expect("a fleet invite");
+        let decoded = adi_mesh::join::decode_invite(&invite.token, now).expect("live");
+
+        let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
+        let pending = book
+            .invites
+            .iter()
+            .find(|i| i.nonce == decoded.nonce)
+            .expect("recorded");
+        assert_eq!(pending.spec.petname.as_deref(), Some("p42-device"));
+        assert_eq!(pending.spec.username.as_deref(), Some("p42"));
+        assert_eq!(pending.spec.role, Some(Role::Member));
+        assert_eq!(pending.spec.grants, vec!["http:hub".parse().unwrap()]);
+    }
+
+    /// A no-body call still mints the empty spec — nothing about the book changed by this feature
+    /// existing.
+    #[test]
+    fn fleet_invite_with_no_body_mints_the_default_spec() {
+        let store = temp_store();
+        let response = fleet_invite(&store, b"");
+        let invite: FleetInvite = serde_json::from_str(&response.body).expect("a fleet invite");
+        let decoded =
+            adi_mesh::join::decode_invite(&invite.token, 1_700_000_000).expect("live");
+        let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
+        let pending = book
+            .invites
+            .iter()
+            .find(|i| i.nonce == decoded.nonce)
+            .expect("recorded");
+        assert_eq!(pending.spec, InviteSpec::default());
+    }
+
+    #[test]
+    fn invites_lists_only_whats_open_and_cancel_closes_one() {
+        let store = temp_store();
+        let first = fleet_invite(&store, br#"{"petname":"p1-device"}"#);
+        let first: FleetInvite = serde_json::from_str(&first.body).expect("invite");
+        let _second = fleet_invite(&store, br#"{"petname":"p2-device"}"#);
+
+        let listed: FleetInvites =
+            serde_json::from_str(&fleet_invites(&store).body).expect("invites");
+        assert_eq!(listed.invites.len(), 2);
+        assert!(
+            listed
+                .invites
+                .iter()
+                .any(|i| i.petname.as_deref() == Some("p1-device"))
+        );
+
+        let nonce = adi_mesh::join::decode_invite(&first.token, 1_700_000_000)
+            .expect("live")
+            .nonce;
+        let after_cancel: FleetInvites = serde_json::from_str(
+            &fleet_invite_cancel(&store, format!(r#"{{"nonce":"{nonce}"}}"#).as_bytes()).body,
+        )
+        .expect("invites");
+        assert_eq!(after_cancel.invites.len(), 1, "the cancelled one is gone");
+
+        // Cancelling again, or an unknown nonce, is a 404 — nothing to cancel.
+        assert_eq!(
+            fleet_invite_cancel(&store, format!(r#"{{"nonce":"{nonce}"}}"#).as_bytes()).status,
+            404
+        );
+        assert_eq!(
+            fleet_invite_cancel(&store, br#"{"nonce":"deadbeef"}"#).status,
+            404
+        );
+        assert_eq!(fleet_invite_cancel(&store, br#"{"nonce":"  "}"#).status, 400);
+
+        // And the cancelled nonce can no longer be spent.
+        let mut registry = FleetRegistry::default();
+        let mut book = adi_mesh::join::InviteBook::load_from(&store).expect("book");
+        let reply = adi_mesh::join::decide(
+            &mut registry,
+            &mut book,
+            &"0ccefa176ef3183396e0f13bff258ccefa0d045a0be2f9b412b3c0ee9ea80f78"
+                .parse()
+                .expect("a key"),
+            &adi_mesh::join::JoinRequest {
+                v: 1,
+                nonce,
+                nickname: "node".to_string(),
+            },
+            "pw",
+            1_700_000_000,
+        );
+        assert!(
+            matches!(reply, adi_mesh::join::JoinReply::Refused { .. }),
+            "{reply:?}"
+        );
     }
 
     /// The answer carries both names and both books: what the far side calls this machine, what
