@@ -353,6 +353,72 @@ screen.
   (§5) and which, if it ever *is* wired up, would splice a raw socket past the HTTP password layer
   entirely.
 
+### 8a. Invite spec, peer roles, and one-way joins (ADI-MONO-171)
+
+**`POST /api/fleet/invite` (and `adi-mono mesh invite`) takes an optional spec that replaces the
+defaults above, and only the defaults above — a no-body call still mints exactly what §8 just
+described.** The body (`FleetInviteRequest`/`adi_mesh::join::InviteSpec`) may name:
+
+- `petname` — pin the dialler to this name instead of letting it offer its own nickname. Applied
+  with `FleetRegistry::pair_as`, so a name already taken by a *different* key refuses the join
+  rather than falling back to a suggestion (an explicit ask gets an explicit answer, unlike the
+  nickname path's rule 3).
+- `username` — the credential's username, instead of the fixed `adi`.
+- `role` — `admin` or `member` (below). Applied only on a **fresh** pairing, never on a re-pair, so
+  re-inviting a node you already hold (the password got lost) cannot quietly reset a member back
+  to admin.
+- `grants` — instead of the default `["http:app"]`.
+- `labels` — free-form key/value pairs filed on the record, for whoever minted the invite to
+  recognise the peer by later (a principal, a cabinet, a display name). Never read for anything
+  this machine enforces, and applied only on a fresh pairing, like `role`.
+
+The CLI reaches every field: `adi-mono mesh invite --petname p42-device --user p42 --role member
+--grant http:app --grant http:hub --label principal=p42`. `GET /api/fleet/invites` lists every
+invite minted here that is still open (unspent, unexpired) with the spec it carries, and `POST
+/api/fleet/invites/cancel { "nonce": "…" }` revokes one before anybody spends it — marking it spent
+rather than removing it, so a node mid-dial when it is cancelled is refused *already used*, the
+honest answer, rather than *unknown*.
+
+**`NodeRecord` gains `role` (default `admin`) and `labels` (default empty).** Every record paired
+before this existed reads as admin with no labels — unrestricted, exactly as every peer always has
+been. `GET /api/fleet` reports both.
+
+**A member is a peer with less than the full run of the panel.** `adi-app`'s dispatch refuses a
+member on: `/api/system/*`, `/api/update/*`, `/api/licence*`, `/api/mesh*` outright; every
+`/api/fleet/*` write except granting itself an `http:<label>` on its own record (the one thing the
+fleet page already let a peer do for a scratch dashboard — "listing may also grant"); the global
+`/api/secrets/{reveal,set,remove}`; `/api/agents/limit`; and creating a hive service. Within
+sessions and agents, a member may stop, delete or hide only a run with `launched_by ==
+human:<self>` (`self` being the username on its credential — see the header below), and may edit
+or delete only an agent it created (`created_by`). Everyone, admin or member, can still read and
+run everything else — the restriction is about who may change shared or machine-wide state, not
+about who may use the panel.
+
+**Identity for this check is the gateway's own `X-Adi-Fleet-Petname` header, never
+`X-Adi-Fleet-Node`.** The node header carries the peer's self-declared nickname, which rule 3 above
+requires to be a mere *suggestion* a clash can resolve differently next time — so it is not a name
+a security check may trust. The petname is this machine's own, pinned registry key for the
+connection, resolved by `gateway::admit` the same way every grant check already is, and attached
+alongside the other two identity headers once a request clears both of §5's gates. `adi-app`'s
+`fleet_sender` reads it to decide the role; `X-Adi-Fleet-Node` is kept only for presentation (the
+conversation marker, §13).
+
+**One-way join (`grant_back: false` on `POST /api/fleet/join`, `--no-grant-back` on `adi-mono mesh
+join`, a checkbox on the Fleet page's "Join a fleet" panel).** Pairing is mutual by default: the
+dialling side normally grants the minting side back exactly what it was granted — `record_viewer`
+hands the viewer `accepted.grants`, ordinarily `http:app`. That is the right default between two
+machines that trust each other, and the wrong one for a node joining somewhere it is only being
+shown around: the sandbox would then hold `http:app` — full admin — on the node's *own* control
+panel. A one-way join still files the viewer (nameable, known) but with no grants at all, so it may
+reach nothing here even though this machine can now reach it.
+
+**The browser client reads a pairing deep link from the URL (`#adi-invite:<token>`), wipes it with
+`history.replaceState`, and asks before spending it** — "Pair with `<node>`?", naming the short
+form of the invite's own key, which is the most a reader can be shown before they have paired.
+A link can be opened by anything a QR cannot — a message, a screen-share, a browser restoring
+yesterday's tabs — so it gets the same deliberate tap a camera scan already requires, rather than
+pairing the instant the page loads.
+
 ## 9. Relay and offline
 
 Measured, not assumed (2026-07-31, two consumer NATs in Moscow, both on the public n0 relays):
