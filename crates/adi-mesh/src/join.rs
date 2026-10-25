@@ -50,6 +50,7 @@
 //! in the operator's terminal, on the far end of a QUIC session, for as long as they leave it on
 //! the screen.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
@@ -64,7 +65,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tracing::{debug, info, warn};
 
 use crate::config::MeshConfig;
-use crate::fleet::{FleetRegistry, Grant, Pairing, Scope};
+use crate::fleet::{FleetRegistry, Grant, Pairing, Role, Scope};
 use crate::{dns, identity, node, ticket};
 
 /// The ALPN identifying the join protocol during the iroh/QUIC handshake. The trailing `/1` is
@@ -242,19 +243,68 @@ fn valid_nonce(nonce: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------------------
+// The invite spec (ADI-MONO-171 G1)
+// ---------------------------------------------------------------------------------------
+
+/// What the minter asked for, beyond the defaults — carried with the nonce in [`PendingInvite`]
+/// and applied by [`decide`] once the node spends it.
+///
+/// **Every field empty is the no-body call, and reads exactly as [`decide`] always has**: the
+/// node's own offered nickname (resolved through the usual clash-suggestion), [`PAIR_USER`], and
+/// [`default_grants`]. A field here only ever *replaces* the matching default; nothing is layered
+/// on top of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InviteSpec {
+    /// Pin the node to this petname instead of the one it offers at the handshake. Applied with
+    /// [`FleetRegistry::pair_as`], so a name already taken by a *different* key refuses the join
+    /// rather than silently falling back to a suggestion — an operator who asked for a specific
+    /// name is told when they cannot have it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub petname: Option<String>,
+    /// The username the minted credential authenticates as, instead of [`PAIR_USER`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// The role to file the node under, instead of [`Role::Admin`] — only on a *fresh* pairing
+    /// (never on a re-pair: see [`decide`]), so a re-invite that says nothing about role cannot
+    /// quietly promote a member back to admin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    /// What the node may reach here, instead of [`default_grants`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<Grant>,
+    /// Labels filed on the node's record, applied only on a fresh pairing (see [`role`](Self::role)).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+}
+
+impl InviteSpec {
+    /// Whether every field is at its default — the no-body invite.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // The viewer's book of minted invites
 // ---------------------------------------------------------------------------------------
 
 /// One invite this machine minted, as it sits in `invites.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PendingInvite {
     /// The one-time secret, in the form it appears in the token.
     pub nonce: String,
     /// Unix seconds after which it is refused.
     pub expires: u64,
-    /// When it was claimed. `Some` makes every later claim a [`ClaimError::Spent`].
+    /// When it was claimed — by a node spending it, or by [`InviteBook::cancel`]. `Some` makes
+    /// every later claim a [`ClaimError::Spent`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_at: Option<u64>,
+    /// What this invite asked for, beyond the defaults — see [`InviteSpec`].
+    #[serde(skip_serializing_if = "InviteSpec::is_empty")]
+    pub spec: InviteSpec,
 }
 
 /// Why an offered nonce was not accepted.
@@ -323,12 +373,13 @@ impl InviteBook {
     }
 
     /// Record a freshly minted invite, pruning anything long dead while we are here.
-    pub fn mint(&mut self, nonce: String, expires: u64, now: u64) {
+    pub fn mint(&mut self, nonce: String, expires: u64, now: u64, spec: InviteSpec) {
         self.prune(now);
         self.invites.push(PendingInvite {
             nonce,
             expires,
             spent_at: None,
+            spec,
         });
     }
 
@@ -336,11 +387,12 @@ impl InviteBook {
     ///
     /// The single-use rule lives here and nowhere else, and it is a mutation: a successful claim
     /// stamps `spent_at`, so the caller's only remaining job is to persist the book *before* it
-    /// answers.
+    /// answers. The [`InviteSpec`] it was minted with comes back too — a clone, since the slot
+    /// stays in the book (spent, not removed) until it is pruned.
     ///
     /// # Errors
     /// [`ClaimError`] when the nonce is unknown here, past its expiry, or already spent.
-    pub fn claim(&mut self, nonce: &str, now: u64) -> Result<(), ClaimError> {
+    pub fn claim(&mut self, nonce: &str, now: u64) -> Result<InviteSpec, ClaimError> {
         let slot = self
             .invites
             .iter_mut()
@@ -355,7 +407,7 @@ impl InviteBook {
             return Err(ClaimError::Spent);
         }
         slot.spent_at = Some(now);
-        Ok(())
+        Ok(slot.spec.clone())
     }
 
     /// Is `nonce` still claimable at `now`? A read-only peek, for status output.
@@ -364,6 +416,27 @@ impl InviteBook {
         self.invites.iter().any(|invite| {
             invite.nonce == nonce && invite.spent_at.is_none() && now < invite.expires
         })
+    }
+
+    /// Every invite this machine minted that is still claimable at `now` — `GET /api/fleet/invites`.
+    pub fn open(&self, now: u64) -> impl Iterator<Item = &PendingInvite> {
+        self.invites
+            .iter()
+            .filter(move |invite| invite.spent_at.is_none() && now < invite.expires)
+    }
+
+    /// Revoke an open invite before anybody spends it — `POST /api/fleet/invites/cancel`.
+    ///
+    /// Marks it spent rather than removing it, so a node that was mid-dial when it was cancelled
+    /// is refused [`ClaimError::Spent`] — the honest answer, since the invite did get used up, by
+    /// the cancellation — rather than [`ClaimError::Unknown`], which would read as a token that
+    /// never existed.
+    ///
+    /// # Errors
+    /// [`ClaimError`] exactly as [`claim`](Self::claim): unknown, already expired, or already
+    /// spent (including a second cancellation).
+    pub fn cancel(&mut self, nonce: &str, now: u64) -> Result<(), ClaimError> {
+        self.claim(nonce, now).map(|_| ())
     }
 
     /// Drop entries whose expiry passed more than [`INVITE_KEEP`] ago. Safe against replay by
@@ -512,6 +585,13 @@ pub fn default_grants() -> Vec<Grant> {
 ///
 /// Order is policy. The nonce is checked first, so a caller with no valid invite cannot learn
 /// whether a name is taken here; only then does §2's naming run, and it *cannot* refuse.
+///
+/// **The invite's [`InviteSpec`] (ADI-MONO-171 G1) replaces the defaults it names, and nothing
+/// else.** A no-body invite's empty spec reproduces exactly what this used to do unconditionally:
+/// the node's own offered nickname, [`PAIR_USER`], and [`default_grants`]. `role` and `labels`
+/// are applied only on a **fresh** pairing — never on a re-pair — so re-inviting a node you
+/// already hold (to rotate a lost password, say) cannot silently reset a member's role back to
+/// admin or overwrite labels an operator never meant to touch twice.
 pub fn decide(
     registry: &mut FleetRegistry,
     invites: &mut InviteBook,
@@ -526,37 +606,76 @@ pub fn decide(
             request.v
         ));
     }
-    if let Err(problem) = invites.claim(&request.nonce, now) {
-        return JoinReply::refused(problem.to_string());
-    }
-
-    let petname = match pair_or_suggest(registry, key, &request.nickname) {
-        Ok(petname) => petname,
-        Err(e) => return JoinReply::refused(format!("could not file the node locally: {e}")),
+    let spec = match invites.claim(&request.nonce, now) {
+        Ok(spec) => spec,
+        Err(problem) => return JoinReply::refused(problem.to_string()),
     };
-    let grants = default_grants();
+
+    let (petname, fresh) =
+        match resolve_petname(registry, key, &request.nickname, spec.petname.as_deref()) {
+            Ok(result) => result,
+            Err(e) => return JoinReply::refused(format!("could not file the node locally: {e}")),
+        };
+    let username = spec.username.as_deref().unwrap_or(PAIR_USER);
+    let grants = if spec.grants.is_empty() {
+        default_grants()
+    } else {
+        spec.grants.clone()
+    };
     let Some(record) = registry.get_mut(&petname) else {
         return JoinReply::refused(format!("the record for {petname:?} vanished mid-pairing"));
     };
-    // A re-pair rotates the password rather than keeping the old one: re-inviting a node you
-    // already have is what an operator does when the password is lost, and quietly re-issuing a
-    // secret they no longer hold would answer the wrong question.
-    record.set_password(PAIR_USER, password);
+    // A re-pair rotates the password (and, now, the username) rather than keeping the old ones:
+    // re-inviting a node you already have is what an operator does when the password is lost, and
+    // quietly re-issuing a secret they no longer hold would answer the wrong question.
+    record.set_password(username, password);
     for grant in grants.clone() {
         record.grant(grant);
+    }
+    if fresh {
+        record.role = spec.role.unwrap_or_default();
+        record.labels = spec.labels.clone();
     }
 
     JoinReply::Accepted(Accepted {
         petname,
-        username: PAIR_USER.to_string(),
+        username: username.to_string(),
         password: password.to_string(),
         grants,
         nickname: Some(node::nickname()),
     })
 }
 
+/// Resolve `key`'s petname, honouring an explicit `requested` name (an invite's `InviteSpec::petname`)
+/// when there is one, or falling back to [`pair_or_suggest`]'s usual nickname-with-suggestion
+/// behaviour when there isn't. Returns whether this is a **fresh** pairing (a new key, not one
+/// already on file), which [`decide`] needs to know before it touches role or labels.
+///
+/// # Errors
+/// If `requested` is not a valid label, or already names a different node (an explicit petname is
+/// an operator's ask for exactly that name, so unlike the no-name path it refuses rather than
+/// falling back to a suggestion), or [`pair_or_suggest`] fails.
+fn resolve_petname(
+    registry: &mut FleetRegistry,
+    key: &EndpointId,
+    nickname: &str,
+    requested: Option<&str>,
+) -> anyhow::Result<(String, bool)> {
+    let Some(petname) = requested else {
+        return pair_or_suggest(registry, key, nickname);
+    };
+    match registry.pair_as(petname, key, nickname)? {
+        Pairing::Paired { petname } => Ok((petname, true)),
+        Pairing::AlreadyPaired { petname, .. } => Ok((petname, false)),
+        Pairing::NeedsPetname { .. } => {
+            unreachable!("pair_as never answers with NeedsPetname")
+        }
+    }
+}
+
 /// Pair `key` under `nickname`, falling back to the registry's own suggestion when that name is
-/// taken or unusable — §2 rule 3: a clash resolves, it never refuses.
+/// taken or unusable — §2 rule 3: a clash resolves, it never refuses. The `bool` says whether this
+/// filed a **fresh** key (`true`) or found one already on record (`false`).
 ///
 /// # Errors
 /// Only if pairing under a name the registry itself proposed still fails, which would mean the
@@ -565,16 +684,20 @@ fn pair_or_suggest(
     registry: &mut FleetRegistry,
     key: &EndpointId,
     nickname: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, bool)> {
     match registry.pair(key, nickname) {
+        Pairing::Paired { petname } => Ok((petname, true)),
         // An already-paired key keeps its pinned petname, and `pair` has already filed any
         // changed nickname as a pending notification (B4) — never a silent re-point.
-        Pairing::Paired { petname } | Pairing::AlreadyPaired { petname, .. } => Ok(petname),
-        Pairing::NeedsPetname { suggestion, .. } => registry
-            .pair_as(&suggestion, key, nickname)?
-            .petname()
-            .map(ToString::to_string)
-            .with_context(|| format!("pairing under the suggested name {suggestion:?}")),
+        Pairing::AlreadyPaired { petname, .. } => Ok((petname, false)),
+        Pairing::NeedsPetname { suggestion, .. } => {
+            let petname = registry
+                .pair_as(&suggestion, key, nickname)?
+                .petname()
+                .map(ToString::to_string)
+                .with_context(|| format!("pairing under the suggested name {suggestion:?}"))?;
+            Ok((petname, true))
+        }
     }
 }
 
@@ -586,12 +709,20 @@ fn pair_or_suggest(
 /// cosmetic — so it is filed under its key's short form. That is an honest name for a peer we
 /// know only by key, and [`FleetRegistry::rename`] is one command away.
 ///
+/// `grant_back` is ADI-MONO-171 G4's one-way join: pairing is otherwise mutual (`docs/fleet.md`
+/// §8), so by default this hands the viewer back exactly what it granted *us* (`accepted.grants`,
+/// ordinarily `http:app`) — the viewer can now reach this node's panel over the mesh, same as this
+/// node can reach the viewer's. A node dialling a viewer it does not want that kind of relationship
+/// with — a sandbox it is only being shown around, say — passes `false`, and the viewer is filed
+/// with no grants at all: known, nameable, but able to reach nothing here.
+///
 /// # Errors
 /// If the registry cannot file the viewer under any name.
 pub fn record_viewer(
     registry: &mut FleetRegistry,
     key: &EndpointId,
     accepted: &Accepted,
+    grant_back: bool,
 ) -> anyhow::Result<String> {
     // The name the far side gave for itself, when it gave one; otherwise the key-derived fallback.
     // `pair_or_suggest` still resolves a clash, so a second machine calling itself `adi-demo` gets
@@ -602,13 +733,15 @@ pub fn record_viewer(
         .map(crate::fleet::sanitize_name)
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| viewer_nickname(key));
-    let petname = pair_or_suggest(registry, key, &offered)?;
+    let (petname, _fresh) = pair_or_suggest(registry, key, &offered)?;
     let record = registry
         .get_mut(&petname)
         .with_context(|| format!("the record for {petname:?} vanished mid-pairing"))?;
     record.set_password(&accepted.username, &accepted.password);
-    for grant in accepted.grants.iter().cloned() {
-        record.grant(grant);
+    if grant_back {
+        for grant in accepted.grants.iter().cloned() {
+            record.grant(grant);
+        }
     }
     Ok(petname)
 }
@@ -668,11 +801,20 @@ pub fn random_password() -> String {
 /// # Errors
 /// If the mesh is not running (no published ticket), or the book cannot be read or written.
 pub fn mint_invite(ttl: Duration) -> anyhow::Result<String> {
+    mint_invite_with(ttl, InviteSpec::default())
+}
+
+/// [`mint_invite`] with an [`InviteSpec`] (ADI-MONO-171 G1) — `adi-mono mesh invite`'s
+/// `--petname`/`--user`/`--grant`/`--label`/`--role`.
+///
+/// # Errors
+/// As [`mint_invite`].
+pub fn mint_invite_with(ttl: Duration, spec: InviteSpec) -> anyhow::Result<String> {
     let endpoint = ticket::published().context(
         "the mesh is not running here, so a node would have nothing to dial — start it \
          (`adi-mesh run`, or the control panel) and try again",
     )?;
-    mint_invite_for(&endpoint, ttl, &Config::open(), adi_config::now_unix())
+    mint_invite_for_with(&endpoint, ttl, &Config::open(), adi_config::now_unix(), spec)
 }
 
 /// [`mint_invite`] with the endpoint, store and clock passed in — the seam the tests mint
@@ -686,12 +828,27 @@ pub fn mint_invite_for(
     store: &Config,
     now: u64,
 ) -> anyhow::Result<String> {
+    mint_invite_for_with(endpoint, ttl, store, now, InviteSpec::default())
+}
+
+/// [`mint_invite_for`] with an [`InviteSpec`] (ADI-MONO-171 G1) — `POST /api/fleet/invite`'s
+/// optional body goes through this.
+///
+/// # Errors
+/// As [`mint_invite_for`].
+pub fn mint_invite_for_with(
+    endpoint: &str,
+    ttl: Duration,
+    store: &Config,
+    now: u64,
+    spec: InviteSpec,
+) -> anyhow::Result<String> {
     let _guard = PAIRING.lock().unwrap_or_else(PoisonError::into_inner);
     let mut invites = InviteBook::load_from(store)?;
     let nonce = random_nonce();
     // At least a second, so a zero TTL is a very short invite rather than a dead one.
     let expires = now.saturating_add(ttl.as_secs().max(1));
-    invites.mint(nonce.clone(), expires, now);
+    invites.mint(nonce.clone(), expires, now, spec);
     invites.save_to(store)?;
     encode_invite(&Invite {
         v: VERSION,
@@ -801,6 +958,14 @@ fn decide_and_persist(key: &EndpointId, request: &JoinRequest) -> anyhow::Result
 /// If the token is malformed or expired, the identity or registry cannot be read, the viewer
 /// cannot be reached within [`HANDSHAKE_TIMEOUT`], or the viewer refuses.
 pub async fn join(token: &str) -> anyhow::Result<Joined> {
+    join_with(token, true).await
+}
+
+/// [`join`] with ADI-MONO-171 G4's one-way-join choice — see [`record_viewer`]'s `grant_back`.
+///
+/// # Errors
+/// As [`join`].
+pub async fn join_with(token: &str, grant_back: bool) -> anyhow::Result<Joined> {
     let secret = identity::load_or_create()?;
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
@@ -811,7 +976,7 @@ pub async fn join(token: &str) -> anyhow::Result<Joined> {
         .bind()
         .await?;
 
-    let joined = join_on(&endpoint, token).await;
+    let joined = join_on_with(&endpoint, token, grant_back).await;
     endpoint.close().await;
     joined
 }
@@ -835,6 +1000,18 @@ pub async fn join(token: &str) -> anyhow::Result<Joined> {
 /// As [`join`], minus the bind: a malformed or expired token, an unreadable identity or registry,
 /// a viewer that does not answer within [`HANDSHAKE_TIMEOUT`], or a refusal.
 pub async fn join_on(endpoint: &Endpoint, token: &str) -> anyhow::Result<Joined> {
+    join_on_with(endpoint, token, true).await
+}
+
+/// [`join_on`] with ADI-MONO-171 G4's one-way-join choice — see [`record_viewer`]'s `grant_back`.
+///
+/// # Errors
+/// As [`join_on`].
+pub async fn join_on_with(
+    endpoint: &Endpoint,
+    token: &str,
+    grant_back: bool,
+) -> anyhow::Result<Joined> {
     let invite = decode_invite(token, adi_config::now_unix())?;
     let addr = ticket::parse_target(&invite.endpoint)
         .context("the invite does not name a reachable endpoint")?;
@@ -854,7 +1031,7 @@ pub async fn join_on(endpoint: &Endpoint, token: &str) -> anyhow::Result<Joined>
 
     let store = Config::open();
     let mut registry = FleetRegistry::load_from(&store)?;
-    let viewer = record_viewer(&mut registry, &viewer_key, &accepted)?;
+    let viewer = record_viewer(&mut registry, &viewer_key, &accepted, grant_back)?;
     registry.save_to(&store)?;
 
     // Asking to join a fleet is consent to run the mesh: a join that appeared to do nothing —
@@ -1002,9 +1179,14 @@ mod tests {
 
     /// A book holding one open invite, plus the nonce it holds.
     fn book_with_open_invite(expires: u64) -> (InviteBook, String) {
+        book_with_open_invite_spec(expires, InviteSpec::default())
+    }
+
+    /// [`book_with_open_invite`], minted with a specific [`InviteSpec`].
+    fn book_with_open_invite_spec(expires: u64, spec: InviteSpec) -> (InviteBook, String) {
         let mut book = InviteBook::default();
         let nonce = random_nonce();
-        book.mint(nonce.clone(), expires, 0);
+        book.mint(nonce.clone(), expires, 0, spec);
         (book, nonce)
     }
 
@@ -1117,7 +1299,7 @@ mod tests {
     fn a_nonce_can_be_claimed_exactly_once() {
         let (mut book, nonce) = book_with_open_invite(1_000);
         assert!(book.is_open(&nonce, 500));
-        assert_eq!(book.claim(&nonce, 500), Ok(()));
+        assert_eq!(book.claim(&nonce, 500), Ok(InviteSpec::default()));
         assert!(!book.is_open(&nonce, 500), "spending closes it");
         assert_eq!(
             book.claim(&nonce, 500),
@@ -1141,7 +1323,7 @@ mod tests {
         assert_eq!(book.claim(&nonce, 2_000), Err(ClaimError::Expired));
         // And it does not become claimable again by turning the clock back inside a live TTL:
         // the entry is still there and unspent, so this is the honest behaviour to pin.
-        assert_eq!(book.claim(&nonce, 500), Ok(()));
+        assert_eq!(book.claim(&nonce, 500), Ok(InviteSpec::default()));
         assert_eq!(book.claim(&nonce, 500), Err(ClaimError::Spent));
     }
 
@@ -1150,9 +1332,14 @@ mod tests {
         let mut book = InviteBook::default();
         let old = random_nonce();
         let fresh = random_nonce();
-        book.mint(old.clone(), 1_000, 0);
+        book.mint(old.clone(), 1_000, 0, InviteSpec::default());
         let long_after = 1_000 + INVITE_KEEP.as_secs() + 1;
-        book.mint(fresh.clone(), long_after + 900, long_after);
+        book.mint(
+            fresh.clone(),
+            long_after + 900,
+            long_after,
+            InviteSpec::default(),
+        );
 
         assert_eq!(
             book.invites.len(),
@@ -1160,7 +1347,29 @@ mod tests {
             "the minting prune dropped the dead one"
         );
         assert_eq!(book.claim(&old, long_after), Err(ClaimError::Unknown));
-        assert_eq!(book.claim(&fresh, long_after), Ok(()));
+        assert_eq!(book.claim(&fresh, long_after), Ok(InviteSpec::default()));
+    }
+
+    #[test]
+    fn open_lists_only_unspent_unexpired_invites_and_cancel_closes_one() {
+        let mut book = InviteBook::default();
+        let live = random_nonce();
+        let dead = random_nonce();
+        book.mint(live.clone(), 1_000, 0, InviteSpec::default());
+        book.mint(dead.clone(), 100, 0, InviteSpec::default());
+
+        let open: Vec<&str> = book.open(500).map(|i| i.nonce.as_str()).collect();
+        assert_eq!(open, vec![live.as_str()], "the expired one is not open");
+
+        book.cancel(&live, 500).expect("cancel");
+        assert!(book.open(500).next().is_none(), "cancelling closes it");
+        assert_eq!(
+            book.claim(&live, 500),
+            Err(ClaimError::Spent),
+            "a cancelled invite reads as spent, not unknown"
+        );
+        assert_eq!(book.cancel(&live, 500), Err(ClaimError::Spent), "idempotent-ish: refused again");
+        assert_eq!(book.cancel("deadbeef", 500), Err(ClaimError::Unknown));
     }
 
     #[test]
@@ -1172,7 +1381,7 @@ mod tests {
         let mut book = InviteBook::load_from(&store).expect("first load");
         assert!(book.invites.is_empty());
         let nonce = random_nonce();
-        book.mint(nonce.clone(), 9_999_999_999, 0);
+        book.mint(nonce.clone(), 9_999_999_999, 0, InviteSpec::default());
         book.claim(&nonce, 1).expect("claim");
         book.save_to(&store).expect("save");
 
@@ -1196,7 +1405,7 @@ mod tests {
 
         let mut book = InviteBook::load_from(&store).expect("load");
         assert!(book.is_open(&decoded.nonce, 1_000), "minted and claimable");
-        assert_eq!(book.claim(&decoded.nonce, 1_000), Ok(()));
+        assert_eq!(book.claim(&decoded.nonce, 1_000), Ok(InviteSpec::default()));
 
         // Two mints are two independent invites.
         let other = mint_invite_for(&sample_ticket(), Duration::from_secs(600), &store, 1_000)
@@ -1375,7 +1584,7 @@ mod tests {
         registry.rename("laptop-b", "desk").expect("local rename");
 
         let second = random_nonce();
-        book.mint(second.clone(), 1_000, 500);
+        book.mint(second.clone(), 1_000, 500, InviteSpec::default());
         let reply = decide(
             &mut registry,
             &mut book,
@@ -1397,6 +1606,135 @@ mod tests {
         assert_eq!(registry.len(), 1);
     }
 
+    // -- the invite spec (ADI-MONO-171 G1) ------------------------------------------------
+
+    #[test]
+    fn a_no_body_invite_still_mints_exactly_what_it_always_did() {
+        // Pinned so a refactor of `decide` cannot quietly start reading the spec on the no-body
+        // path: an empty `InviteSpec` must produce byte-for-byte the pre-G1 defaults.
+        let (mut book, nonce) = book_with_open_invite_spec(1_000, InviteSpec::default());
+        let mut registry = FleetRegistry::default();
+        let reply = decide(
+            &mut registry,
+            &mut book,
+            &some_key(),
+            &request(&nonce, "laptop-b"),
+            "hunter2",
+            500,
+        );
+        let accepted = accepted_of(&reply);
+        assert_eq!(accepted.petname, "laptop-b");
+        assert_eq!(accepted.username, PAIR_USER);
+        assert_eq!(accepted.grants, default_grants());
+        let record = registry.get("laptop-b").expect("filed");
+        assert_eq!(record.role, Role::Admin, "unspecified role is admin");
+        assert!(record.labels.is_empty());
+    }
+
+    #[test]
+    fn an_invite_spec_pins_the_petname_username_role_grants_and_labels() {
+        let mut labels = BTreeMap::new();
+        labels.insert("principal".to_string(), "p42".to_string());
+        let spec = InviteSpec {
+            petname: Some("p42-device".to_string()),
+            username: Some("p42".to_string()),
+            role: Some(Role::Member),
+            grants: vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()],
+            labels,
+        };
+        let (mut book, nonce) = book_with_open_invite_spec(1_000, spec);
+        let mut registry = FleetRegistry::default();
+
+        // The node offers an entirely different nickname — the spec wins regardless.
+        let reply = decide(
+            &mut registry,
+            &mut book,
+            &some_key(),
+            &request(&nonce, "whatever-the-node-calls-itself"),
+            "hunter2",
+            500,
+        );
+        let accepted = accepted_of(&reply);
+        assert_eq!(accepted.petname, "p42-device");
+        assert_eq!(accepted.username, "p42");
+        assert_eq!(
+            accepted.grants,
+            vec!["http:app".parse().unwrap(), "http:hub".parse().unwrap()]
+        );
+
+        let record = registry.get("p42-device").expect("filed under the spec's petname");
+        assert_eq!(record.role, Role::Member);
+        assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
+        assert!(record.verify_password("p42", "hunter2"));
+        assert!(record.allows(Target::Http("hub")));
+    }
+
+    #[test]
+    fn an_invite_spec_naming_a_petname_already_taken_by_another_key_refuses_rather_than_suggests() {
+        let mut registry = FleetRegistry::default();
+        assert!(matches!(
+            registry.pair(&some_key(), "p42-device"),
+            Pairing::Paired { .. }
+        ));
+
+        let spec = InviteSpec {
+            petname: Some("p42-device".to_string()),
+            ..InviteSpec::default()
+        };
+        let (mut book, nonce) = book_with_open_invite_spec(1_000, spec);
+        let reply = decide(
+            &mut registry,
+            &mut book,
+            &some_key(),
+            &request(&nonce, "node"),
+            "pw",
+            500,
+        );
+        assert!(
+            refusal_of(&reply).contains("could not file the node"),
+            "{reply:?}"
+        );
+        assert_eq!(registry.len(), 1, "nothing new was filed by the refusal");
+    }
+
+    #[test]
+    fn a_re_pair_with_no_role_in_the_spec_never_resets_an_existing_members_role() {
+        let mut registry = FleetRegistry::default();
+        let key = some_key();
+        let member_spec = InviteSpec {
+            role: Some(Role::Member),
+            ..InviteSpec::default()
+        };
+        let (mut book, first) = book_with_open_invite_spec(1_000, member_spec);
+        decide(
+            &mut registry,
+            &mut book,
+            &key,
+            &request(&first, "laptop-b"),
+            "old",
+            500,
+        );
+        assert_eq!(registry.get("laptop-b").expect("filed").role, Role::Member);
+
+        // Re-inviting the same key with a bare, no-body invite (the operator just lost the
+        // password) must not quietly promote it back to admin.
+        let (mut book, second) = book_with_open_invite_spec(1_000, InviteSpec::default());
+        let reply = decide(
+            &mut registry,
+            &mut book,
+            &key,
+            &request(&second, "laptop-b"),
+            "new",
+            600,
+        );
+        assert_eq!(accepted_of(&reply).petname, "laptop-b");
+        assert_eq!(
+            registry.get("laptop-b").expect("still filed").role,
+            Role::Member,
+            "role is only ever set on a fresh pairing"
+        );
+    }
+
     // -- the node's side of the bookkeeping ----------------------------------------------
 
     #[test]
@@ -1411,7 +1749,8 @@ mod tests {
             nickname: None,
         };
 
-        let petname = record_viewer(&mut registry, &viewer, &accepted).expect("file the viewer");
+        let petname =
+            record_viewer(&mut registry, &viewer, &accepted, true).expect("file the viewer");
         assert!(petname.starts_with("viewer-"), "{petname}");
         assert!(crate::fleet::valid_name(&petname), "{petname}");
 
@@ -1426,9 +1765,30 @@ mod tests {
         assert!(!record.allows(Target::Http("nosh")));
 
         // Re-running the same join is idempotent, not a second entry.
-        let again = record_viewer(&mut registry, &viewer, &accepted).expect("again");
+        let again = record_viewer(&mut registry, &viewer, &accepted, true).expect("again");
         assert_eq!(again, petname);
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn a_one_way_join_grants_the_viewer_nothing() {
+        let mut registry = FleetRegistry::default();
+        let viewer = some_key();
+        let accepted = Accepted {
+            petname: "laptop-b".to_string(),
+            username: PAIR_USER.to_string(),
+            password: "hunter2".to_string(),
+            grants: default_grants(),
+            nickname: None,
+        };
+
+        let petname =
+            record_viewer(&mut registry, &viewer, &accepted, false).expect("file the viewer");
+        let record = registry.get(&petname).expect("record");
+        // The viewer is known and the password still verifies — but it may reach nothing here.
+        assert!(record.verify_password(PAIR_USER, "hunter2"));
+        assert!(!record.allows(Target::Http("app")), "no grant-back");
+        assert!(record.grants.is_empty());
     }
 
     // -- randomness ----------------------------------------------------------------------

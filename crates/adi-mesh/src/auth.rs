@@ -78,6 +78,22 @@ pub const FLEET_USER_HEADER: &str = "X-Adi-Fleet-User";
 /// [`FLEET_USER_HEADER`] lowercased, for [`strip_header`].
 pub const FLEET_USER_HEADER_LOWER: &[u8] = b"x-adi-fleet-user";
 
+/// The header carrying the calling node's **petname** — what *this* machine calls it
+/// ([`crate::fleet::Peer::petname`]), pinned at pairing and never the node's own say-so.
+///
+/// This is the one fleet-identity header a caller behind the gateway may trust for anything
+/// security-sensitive (ADI-MONO-171 G3's peer role, say): [`FLEET_NODE_HEADER`] carries the
+/// node's self-declared nickname, which §2 rule 3 requires to be a *suggestion* a clash can
+/// silently rename out from under — so two different peers can carry the same `X-Adi-Fleet-Node`
+/// across two requests, one pinned name re-suggested after a collision resolved differently. The
+/// petname is the registry's own key for the record, exactly as the gateway resolved the peer by
+/// it (`admit`), so it is always a 1:1 name for the connection's real identity. Same attach point
+/// and forgery guard as the other two.
+pub const FLEET_PETNAME_HEADER: &str = "X-Adi-Fleet-Petname";
+
+/// [`FLEET_PETNAME_HEADER`] lowercased, for [`strip_header`].
+pub const FLEET_PETNAME_HEADER_LOWER: &[u8] = b"x-adi-fleet-petname";
+
 /// The body of the challenge response. Short and plain: a browser shows its own password
 /// prompt, and only a non-browser client ever reads this.
 const CHALLENGE_BODY: &str = "401 Unauthorized: this adi node requires a username and password.\n";

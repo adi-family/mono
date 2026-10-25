@@ -179,8 +179,8 @@ impl Daemon {
     /// # Errors
     /// As [`join::join_on`]: a malformed or expired token, an unreadable identity or registry, a
     /// viewer that does not answer in time, or a refusal.
-    pub async fn join(&self, token: &str) -> anyhow::Result<join::Joined> {
-        join::join_on(&self.endpoint, token).await
+    pub async fn join(&self, token: &str, grant_back: bool) -> anyhow::Result<join::Joined> {
+        join::join_on_with(&self.endpoint, token, grant_back).await
     }
 
     /// Signal every task to stop, wait for them (for [`STOP_GRACE`] at most, aborting whatever

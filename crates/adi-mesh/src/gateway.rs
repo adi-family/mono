@@ -807,6 +807,11 @@ where
     // to mistake a caller's own header for one the gateway vouches for.
     let head = auth::strip_header(&head, auth::FLEET_NODE_HEADER_LOWER);
     let head = auth::strip_header(&head, auth::FLEET_USER_HEADER_LOWER);
+    let head = auth::strip_header(&head, auth::FLEET_PETNAME_HEADER_LOWER);
+    // `with_header` inserts right after the request line each time, so the *last* call lands
+    // *first* on the wire — insert in reverse of the order they should appear: Node, User,
+    // Petname.
+    let head = with_header(&head, auth::FLEET_PETNAME_HEADER, &peer_record.petname);
     let head = with_header(
         &head,
         auth::FLEET_USER_HEADER,
@@ -1998,17 +2003,25 @@ mod tests {
         format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n")
     }
 
-    /// The two headers [`negotiate`] attaches for an admitted peer, in the order they land —
-    /// `Node` above `User`. For building an expected head in the tests below.
-    fn fleet_headers(nickname: &str, user: &str) -> String {
-        format!("X-Adi-Fleet-Node: {nickname}\r\nX-Adi-Fleet-User: {user}\r\n")
+    /// The three headers [`negotiate`] attaches for an admitted peer, in the order they land —
+    /// `Node`, then `User`, then `Petname`. For building an expected head in the tests below.
+    /// Every call site here uses `peer_named`, which pins the same string as both nickname and
+    /// petname, so `petname` equals `nickname` throughout this module's tests.
+    fn fleet_headers(nickname: &str, user: &str, petname: &str) -> String {
+        format!(
+            "X-Adi-Fleet-Node: {nickname}\r\nX-Adi-Fleet-User: {user}\r\n\
+             X-Adi-Fleet-Petname: {petname}\r\n"
+        )
     }
 
     /// `head` with the sender's identity spliced in where [`negotiate`] puts it — directly below
     /// the request line, ahead of everything else including `Host`.
     fn with_fleet_headers(head: &str, nickname: &str, user: &str) -> String {
         let (request_line, rest) = head.split_once("\r\n").expect("a request line");
-        format!("{request_line}\r\n{}{rest}", fleet_headers(nickname, user))
+        format!(
+            "{request_line}\r\n{}{rest}",
+            fleet_headers(nickname, user, nickname)
+        )
     }
 
     /// A listening socket nothing will ever answer on — enough for `connect` to succeed.
@@ -2280,7 +2293,8 @@ mod tests {
             "nosh.laptop-b.n.adi",
             "/dash",
             &format!(
-                "X-Adi-Fleet-Node: someone-else\r\nX-Adi-Fleet-User: root\r\n{}",
+                "X-Adi-Fleet-Node: someone-else\r\nX-Adi-Fleet-User: root\r\n\
+                 X-Adi-Fleet-Petname: not-laptop-a\r\n{}",
                 basic("igor", "hunter2")
             ),
         );
@@ -2300,7 +2314,11 @@ mod tests {
             "the gate's own value wins: {got}"
         );
         assert!(
-            !got.contains("someone-else") && !got.contains("root"),
+            got.contains("X-Adi-Fleet-Petname: laptop-a\r\n"),
+            "the gate's own value wins: {got}"
+        );
+        assert!(
+            !got.contains("someone-else") && !got.contains("root") && !got.contains("not-laptop-a"),
             "nothing the peer sent under these names survives: {got}"
         );
     }
@@ -2622,6 +2640,7 @@ mod tests {
             got.starts_with(
                 "GET /api/tasks HTTP/1.1\r\n\
                  X-Adi-Fleet-Node: laptop-a\r\nX-Adi-Fleet-User: igor\r\n\
+                 X-Adi-Fleet-Petname: laptop-a\r\n\
                  Host: nosh.laptop-b.n.adi\r\n"
             ),
             "the request line and `Host` stay untouched: {got}"
@@ -2765,6 +2784,7 @@ mod tests {
             got.starts_with(
                 "GET /api/health HTTP/1.1\r\n\
                  X-Adi-Fleet-Node: laptop-a\r\nX-Adi-Fleet-User: igor\r\n\
+                 X-Adi-Fleet-Petname: laptop-a\r\n\
                  Host: app.laptop-b.n.adi\r\n"
             ),
             "and nothing else about the head changed: {got}"

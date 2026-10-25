@@ -327,6 +327,55 @@ impl From<Grant> for String {
 // comparison is constant time in both halves.
 
 // ---------------------------------------------------------------------------------------
+// B7 — peer roles (ADI-MONO-171 G3)
+// ---------------------------------------------------------------------------------------
+
+/// What a paired peer may do on this machine, beyond what its [`Grant`]s already name.
+///
+/// **Default [`Self::Admin`]**, so every record paired before this field existed — and every
+/// fresh pairing from an invite that does not say otherwise (`docs/fleet.md`'s existing
+/// behaviour, ADI-MONO-171 G1) — reads exactly as unrestricted as a peer always has been here.
+/// [`Self::Member`] is the new, narrower case: a peer `adi-app`'s dispatch refuses on the
+/// system/update/licence/mesh surfaces, on fleet writes other than granting itself an
+/// `http:<label>`, on global secrets and the run-limit setting, and on its own sessions and
+/// agents only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    #[default]
+    Admin,
+    Member,
+}
+
+impl Role {
+    #[must_use]
+    pub fn is_admin(self) -> bool {
+        matches!(self, Self::Admin)
+    }
+}
+
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+        })
+    }
+}
+
+impl FromStr for Role {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> anyhow::Result<Self> {
+        match raw.trim() {
+            "admin" => Ok(Self::Admin),
+            "member" => Ok(Self::Member),
+            other => bail!("{other:?} is not a role (expected `admin` or `member`)"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 // B2 — the record and the registry
 // ---------------------------------------------------------------------------------------
 
@@ -353,6 +402,11 @@ pub struct NodeRecord {
     /// notification: it never moves the petname. See [`FleetRegistry::accept_nickname`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_nickname: Option<String>,
+    /// What this peer may do here, beyond its [`Grant`]s — see [`Role`] (ADI-MONO-171 G3).
+    /// Defaults to [`Role::Admin`], so a record filed before this field existed is unrestricted,
+    /// exactly as every peer always has been.
+    #[serde(default)]
+    pub role: Role,
     /// What this peer may reach here. **Empty denies everything.**
     pub grants: Vec<Grant>,
     /// Extra system-prompt instructions for any agent conversation *this node* opens here over the
@@ -361,6 +415,12 @@ pub struct NodeRecord {
     /// node). `None` adds nothing, which is every node until an operator sets one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_instructions: Option<String>,
+    /// Free-form labels filed at pairing (ADI-MONO-171 G1) — an invite's `InviteSpec::labels`,
+    /// applied once, on the fresh pairing that spends it. Never read for anything this machine
+    /// enforces; a label is metadata for whoever minted the invite to recognise the peer by later
+    /// (a principal, a cabinet, a display name), not a grant.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
     /// The Basic-auth credential this node's requests must carry.
     pub auth: Credential,
 }
@@ -732,8 +792,10 @@ impl FleetRegistry {
                 nickname: nickname.to_string(),
                 paired_at: adi_config::now_unix(),
                 pending_nickname: None,
+                role: Role::default(),
                 grants: Vec::new(),
                 agent_instructions: None,
+                labels: BTreeMap::new(),
                 auth: Credential::default(),
             },
         );
@@ -1536,6 +1598,51 @@ grants = ["ftp:*"]
         // Not its parent, and not a sibling: `nosh.adi` and `app.nosh.adi` are two services.
         assert!(!record.allows(Target::Http("nosh")));
         assert!(!record.allows(Target::Http("app")));
+    }
+
+    // -- B7 ------------------------------------------------------------------------------
+
+    #[test]
+    fn a_record_with_no_role_is_an_admin() {
+        let record = NodeRecord::default();
+        assert_eq!(record.role, Role::Admin);
+        assert!(record.role.is_admin());
+
+        // A `fleet.toml` written before this field existed loads the same way.
+        let toml = "key = \"aa\"\nnickname = \"laptop-b\"\npaired_at = 1\ngrants = []\n";
+        let loaded: NodeRecord = toml::from_str(toml).expect("an existing record loads");
+        assert_eq!(loaded.role, Role::Admin);
+        assert!(loaded.labels.is_empty());
+    }
+
+    #[test]
+    fn role_round_trips_through_its_string_form() {
+        for (raw, role) in [("admin", Role::Admin), ("member", Role::Member)] {
+            assert_eq!(raw.parse::<Role>().expect(raw), role);
+            assert_eq!(role.to_string(), raw);
+        }
+        assert!("owner".parse::<Role>().is_err());
+    }
+
+    #[test]
+    fn a_members_role_and_labels_round_trip_through_toml() {
+        let mut registry = FleetRegistry::default();
+        pair_ok(&mut registry, &some_key(), "laptop-b");
+        let record = registry.get_mut("laptop-b").expect("record");
+        record.role = Role::Member;
+        record
+            .labels
+            .insert("principal".to_string(), "p42".to_string());
+
+        let written = toml::to_string(&registry).expect("save");
+        assert!(written.contains("role = \"member\""), "{written}");
+        assert!(written.contains("[nodes.laptop-b.labels]"), "{written}");
+        assert!(written.contains("principal = \"p42\""), "{written}");
+
+        let reloaded: FleetRegistry = toml::from_str(&written).expect("reload");
+        let record = reloaded.get("laptop-b").expect("laptop-b");
+        assert_eq!(record.role, Role::Member);
+        assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
     }
 
     // -- B2/B6: the stored credential ----------------------------------------------------

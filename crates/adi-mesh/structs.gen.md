@@ -4,16 +4,16 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-27 structs · 8 enums across 9 files.
+28 structs · 9 enums across 9 files.
 
 ## Index
 
 - [`src/auth.rs`](#srcauthrs) — `Credential`
 - [`src/config.rs`](#srcconfigrs) — `MeshConfig`, `HostConfig`, `Forward`
 - [`src/daemon.rs`](#srcdaemonrs) — `Daemon`
-- [`src/fleet.rs`](#srcfleetrs) — `Scope`, `Grant`, `Target`, `NodeRecord`, `NameProblem`, `Pairing`, `NicknameChange`, `FleetRegistry`
+- [`src/fleet.rs`](#srcfleetrs) — `Scope`, `Grant`, `Target`, `Role`, `NodeRecord`, `NameProblem`, `Pairing`, `NicknameChange`, `FleetRegistry`
 - [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `Admitted`, `Verified`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
-- [`src/join.rs`](#srcjoinrs) — `Invite`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
+- [`src/join.rs`](#srcjoinrs) — `Invite`, `InviteSpec`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
 - [`src/roam.rs`](#srcroamrs) — `Recycle`
@@ -145,6 +145,20 @@ pub enum Target<'a> {
 }
 ```
 
+### enum `Role`
+
+What a paired peer may do on this machine, beyond what its `Grant`s already name.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    #[default]
+    Admin,
+    Member,
+}
+```
+
 ### struct `NodeRecord`
 
 Everything this machine knows about one paired node.
@@ -158,9 +172,13 @@ pub struct NodeRecord {
     pub paired_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending_nickname: Option<String>,
+    #[serde(default)]
+    pub role: Role,
     pub grants: Vec<Grant>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_instructions: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
     pub auth: Credential,
 }
 ```
@@ -370,17 +388,41 @@ pub struct Invite {
 }
 ```
 
+### struct `InviteSpec`
+
+What the minter asked for, beyond the defaults — carried with the nonce in `PendingInvite` and applied by `decide` once the node spends it.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InviteSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub petname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<Grant>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
+}
+```
+
 ### struct `PendingInvite`
 
 One invite this machine minted, as it sits in `invites.toml`.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PendingInvite {
     pub nonce: String,
     pub expires: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spent_at: Option<u64>,
+    #[serde(skip_serializing_if = "InviteSpec::is_empty")]
+    pub spec: InviteSpec,
 }
 ```
 

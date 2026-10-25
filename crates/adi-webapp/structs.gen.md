@@ -2396,6 +2396,7 @@ pub(crate) struct FleetForm {
     pub(crate) join_token: RwSignal<String>,
     pub(crate) joining: RwSignal<bool>,
     pub(crate) joined: RwSignal<Option<adi_webapp_api::types::FleetJoined>>,
+    pub(crate) grant_back: RwSignal<bool>,
 }
 ```
 

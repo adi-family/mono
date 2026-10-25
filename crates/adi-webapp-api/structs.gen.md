@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-339 structs · 20 enums · 1 type alias across 14 files.
+343 structs · 20 enums · 1 type alias across 14 files.
 
 ## Index
 
@@ -21,7 +21,7 @@
 - [`src/handlers/voice.rs`](#srchandlersvoicers) — `Wire`, `Engine`
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/origin.rs`](#srcoriginrs) — `Refusal`
-- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `UsageEventsState`, `SetUsageEvents`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `CompleteTask`, `GiveUpTask`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `WorkflowsState`, `WorkflowDto`, `WorkflowRef`, `RunWorkflow`, `WorkflowStarted`, `RunsQuery`, `RunsState`, `RunDto`, `WorkflowRunRef`, `RunDetailDto`, `StepDto`, `RewindRun`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
+- [`src/types.rs`](#srctypesrs) — `Health`, `UpdateState`, `SystemStatus`, `SystemService`, `SystemAction`, `SystemSetup`, `RunSystemAction`, `SetSystemPower`, `Accepted`, `DiagnosticReport`, `SharedAssetsMode`, `SharedAssetsState`, `SetSharedAssets`, `UsageEventsState`, `SetUsageEvents`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `FleetInstructions`, `FleetInvite`, `FleetJoinRef`, `FleetInviteRequest`, `FleetInvites`, `FleetPendingInvite`, `FleetInviteCancel`, `FleetJoined`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `RenameProject`, `ProjectRenamed`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServiceState`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `CompleteTask`, `GiveUpTask`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFieldOwner`, `AgentFormOption`, `AgentFormFieldKind`, `AgentBackendRowDto`, `AgentDto`, `AgentsState`, `CanSpawnRuleDto`, `SpawnedByDto`, `SpawnRefusalDto`, `ProjectRunLimit`, `SetRunLimit`, `SetSpawnPolicy`, `SpawnRuleEdit`, `SetAutoTitle`, `SaveAgent`, `AgentRef`, `RunAgent`, `AgentRunOverrides`, `TranscriptView`, `RunRef`, `RunSteps`, `AgentSteps`, `HideRun`, `StarRun`, `RenameRun`, `ReplyToRun`, `QueueMode`, `AgentAttachment`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `AgentGoal`, `PromptsOf`, `AgentPrompt`, `AgentPrompts`, `GoalsOf`, `SetGoal`, `CloseGoal`, `AgentGoals`, `AgentAwait`, `IgnoreAwait`, `AgentAwaits`, `UnqueueFromRun`, `AgentTurn`, `TurnMarker`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `RunState`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentStepRef`, `AgentToolUse`, `AgentChatStats`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `SimulateAgent`, `AgentToken`, `AgentSimSection`, `AgentSimField`, `AgentSimFieldKind`, `AgentSimTool`, `AgentSimState`, `AgentSimBlock`, `SimulateTurn`, `AgentSimResult`, `AgentSimTurn`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `WorkflowsState`, `WorkflowDto`, `WorkflowRef`, `RunWorkflow`, `WorkflowStarted`, `RunsQuery`, `RunsState`, `RunDto`, `WorkflowRunRef`, `RunDetailDto`, `StepDto`, `RewindRun`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `FrontDoorStatus`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `MarketplaceState`, `MarketplaceSource`, `MarketplaceApp`, `MarketplaceElementPreview`, `MarketplaceBundleStatus`, `MarketplaceBundleInstall`, `MarketplaceBundleElement`, `MarketplaceMedia`, `MarketplaceMediaKind`, `MarketplaceInstall`, `InstallMarketplaceApp`, `UninstallMarketplaceElement`, `StartMarketplaceApp`, `StartMarketplaceService`, `UpdateMarketplaceApp`, `UpdateMarketplaceBundle`, `MarketplaceDone`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `FleetNodes`, `FleetNodeAccess`, `FleetReach`, `NodeReach`, `Reach`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `LimitRuleDto`, `ProbeDto`, `LlmBackendDto`, `HoldDto`, `LlmBackendsDto`, `ContextWarningDto`, `DanglingRowDto`, `LlmSettingsDto`, `SaveLlmBackend`, `LlmBackendRef`, `SaveLlmSettings`, `TestLlmBackend`, `TestResultDto`, `EmbeddingBackendDto`, `EmbeddingBackendsDto`, `ConsumerAssignmentDto`, `SaveEmbeddingBackend`, `EmbeddingBackendRef`, `SaveEmbeddingSettings`, `TestEmbeddingBackend`, `LlmQuery`, `LlmCallRef`, `LlmTokens`, `LlmCallDto`, `LlmGroupDto`, `LlmSummary`, `LlmBucketDto`, `LlmCalls`, `LlmHeaderDto`, `LlmBlockDto`, `LlmCallDetail`, `LlmEventCountDto`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`, `VoiceEngineDto`, `VoiceState`, `VoiceAgentDto`, `Transcript`, `RealtimeSessionRequest`, `RealtimeSessionDto`, `ChannelTargetDto`, `ChannelAllowlistDto`, `ChannelConnectionDto`, `ChannelsState`, `ConnectChannel`, `ChannelConnected`, `ChannelRef`, `RouteChannel`, `PauseChannel`, `AllowChannel`, `ChannelReplyRequest`, `ChannelProviderStatus`
 
 ---
 
@@ -29,11 +29,12 @@
 
 ### struct `FleetSender`
 
-The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/ `FLEET_USER_HEADER`, `docs/fleet.md` §13) — `nickname` is the identity that header carries, and `user` the credential it authenticated as. `None` for a request that never left this machine, which is what the control panel's own composer always sends.
+The fleet node behind a request, off the headers the mesh gateway attaches when it forwards a peer's request to this machine's own `/api/*` (`adi_mesh::auth::FLEET_NODE_HEADER`/ `FLEET_USER_HEADER`/`FLEET_PETNAME_HEADER`, `docs/fleet.md` §13). `None` for a request that never left this machine, which is what the control panel's own composer always sends.
 
 ```rust
 #[derive(Debug, Clone, Copy)]
 pub struct FleetSender<'a> {
+    pub petname: &'a str,
     pub nickname: &'a str,
     pub user: &'a str,
 }
@@ -902,6 +903,10 @@ pub struct FleetNode {
     pub agent_instructions: Option<String>,
     #[serde(default = "yes")]
     pub source: bool,
+    #[serde(default = "admin_role")]
+    pub role: String,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
 }
 ```
 
@@ -974,6 +979,67 @@ Request body for `POST /api/fleet/join` — the invite this machine is about to 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FleetJoinRef {
     pub token: String,
+    #[serde(default = "yes")]
+    pub grant_back: bool,
+}
+```
+
+### struct `FleetInviteRequest`
+
+Request body for `POST /api/fleet/invite` — optional (ADI-MONO-171 G1). Every field absent or blank is the pre-G1 call: the node's own offered nickname, the default username, and `http:app`.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FleetInviteRequest {
+    pub petname: Option<String>,
+    pub username: Option<String>,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub grants: Vec<String>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+```
+
+### struct `FleetInvites`
+
+`GET /api/fleet/invites` — every invite minted here that is still open (unspent and unexpired); a spent or expired one is pruned rather than listed.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInvites {
+    pub invites: Vec<FleetPendingInvite>,
+}
+```
+
+### struct `FleetPendingInvite`
+
+One entry in `FleetInvites` — enough to show what it was minted for, and to cancel it by.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetPendingInvite {
+    pub nonce: String,
+    pub expires: u64,
+    pub petname: Option<String>,
+    pub username: Option<String>,
+    pub role: Option<String>,
+    #[serde(default)]
+    pub grants: Vec<String>,
+    #[serde(default)]
+    pub labels: BTreeMap<String, String>,
+}
+```
+
+### struct `FleetInviteCancel`
+
+Request body for `POST /api/fleet/invites/cancel`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInviteCancel {
+    pub nonce: String,
 }
 ```
 

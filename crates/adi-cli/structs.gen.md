@@ -1260,11 +1260,23 @@ pub(crate) enum MeshCommand {
         no_qr: bool,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        petname: Option<String>,
+        #[arg(long)]
+        user: Option<String>,
+        #[arg(long = "grant")]
+        grants: Vec<String>,
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        #[arg(long)]
+        role: Option<String>,
     },
     Join {
         token: String,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        no_grant_back: bool,
     },
     Enable {
         #[arg(long)]
