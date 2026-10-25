@@ -39,6 +39,9 @@ web-sys = { version = "0.3", features = [
     "Performance",
     "Navigator",
     "Location",
+    # The deep link's own history entry (ADI-MONO-171 G5): `History::replace_state_with_url`
+    # wipes `#adi-invite:<token>` from the address bar without leaving it in a back-button entry.
+    "History",
     "Document",
     "Element",
     "HtmlElement",

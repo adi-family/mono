@@ -79,6 +79,35 @@ pub fn mount() {
     leptos::mount::mount_to_body(App);
 }
 
+/// The token in a `#adi-invite:<token>` location hash, if the hash carries one and it decodes as
+/// a live invite this build can read — pure, so it is testable without a DOM (`cargo test -p
+/// adi-mesh-client`, which runs everything not behind `wasm_bindgen`). ADI-MONO-171 G5.
+fn token_from_hash(hash: &str) -> Option<&str> {
+    let token = hash.strip_prefix('#')?;
+    invite::decode_invite(token).ok()?;
+    Some(token)
+}
+
+/// Read a deep link's token out of the URL, and wipe it immediately — ADI-MONO-171 G5. A token
+/// is a bearer credential, and the one place it must not linger is the address bar, browser
+/// history, or a screenshot of either. `None` when there is no hash, or it is not a pairing token
+/// this build can read (in which case nothing about the URL is touched, so an ordinary `#fragment`
+/// a reader navigated to by hand is left alone).
+fn read_deep_link() -> Option<String> {
+    let window = web_sys::window()?;
+    let location = window.location();
+    let hash = location.hash().ok()?;
+    let token = token_from_hash(&hash)?.to_string();
+    // `replace_state` and not `location.hash = ""`: the latter still leaves a history entry
+    // carrying the token behind it, reachable with the back button.
+    if let Ok(history) = window.history() {
+        let href = location.href().unwrap_or_default();
+        let wiped = href.split('#').next().unwrap_or(&href);
+        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(wiped));
+    }
+    Some(token)
+}
+
 #[component]
 fn App() -> impl IntoView {
     let key = RwSignal::new(String::new());
@@ -90,6 +119,10 @@ fn App() -> impl IntoView {
     // `Send` nor `Sync`, and a signal is. The endpoint lives in [`crate::bridge`], which is where
     // the browser's own callbacks reach it from anyway.
     let ready = RwSignal::new(false);
+    // A deep link's token (ADI-MONO-171 G5), read and wiped once at mount — before the confirm
+    // is ever answered, so a reader who never taps anything still never has it sitting in the
+    // address bar.
+    let deep_link = RwSignal::new(read_deep_link());
 
     spawn_local(async move {
         match boot().await {
@@ -141,6 +174,9 @@ fn App() -> impl IntoView {
 
                 <NodeList nodes screen boards ready=ready.into() />
                 <AddNode nodes ready problem />
+                <Show when=move || deep_link.get().is_some()>
+                    <DeepLinkConfirm deep_link nodes problem ready />
+                </Show>
 
                 <footer>
                     // Closed by default. What is in here is what a reader needs when a node
@@ -591,6 +627,83 @@ fn AddNode(
     }
 }
 
+/// The deep-link confirm (ADI-MONO-171 G5): a QR's camera-side equivalent is a link, and a link
+/// can be opened by anything — a message, a screen-share, a browser restoring yesterday's tabs.
+/// Pairing is as consequential as a QR scan (it hands the node this browser's key and spends the
+/// invite's one use), so it gets the same deliberate tap a scan already requires, rather than
+/// pairing itself the instant the page loads.
+#[component]
+fn DeepLinkConfirm(
+    deep_link: RwSignal<Option<String>>,
+    nodes: RwSignal<Vec<NodeRecord>>,
+    problem: RwSignal<String>,
+    ready: RwSignal<bool>,
+) -> impl IntoView {
+    let busy = RwSignal::new(false);
+
+    // The best name a reader can be shown before they have paired: an invite carries no node
+    // name, only its address, so this is the short form of the key underneath — the same
+    // rendering a peer known only by key gets elsewhere (`docs/fleet.md` §2).
+    let node_name = move || {
+        deep_link
+            .get()
+            .as_deref()
+            .and_then(|token| invite::decode_invite(token).ok())
+            .and_then(|invite| invite::endpoint_short(&invite).ok())
+            .unwrap_or_else(|| "this node".to_string())
+    };
+
+    let confirm = move || {
+        let Some(token) = deep_link.get_untracked() else {
+            return;
+        };
+        let Some(mesh) = crate::bridge::endpoint() else {
+            problem.set("the mesh endpoint is still starting — try again in a moment".into());
+            return;
+        };
+        busy.set(true);
+        problem.set(String::new());
+        spawn_local(async move {
+            match pair_with(&mesh, &token).await {
+                Ok(record) => match store::add_node(record).await {
+                    Ok(all) => {
+                        crate::bridge::set_nodes(all.clone());
+                        nodes.set(all);
+                    }
+                    Err(e) => problem.set(e),
+                },
+                Err(e) => problem.set(e),
+            }
+            busy.set(false);
+            deep_link.set(None);
+        });
+    };
+
+    view! {
+        <div class="confirm-overlay">
+            <div class="confirm">
+                <p>{move || format!("Pair with {}?", node_name())}</p>
+                <div class="actions">
+                    <button
+                        class="strong"
+                        disabled=move || busy.get() || !ready.get()
+                        on:click=move |_| confirm()
+                    >
+                        {move || if busy.get() { "Pairing…" } else { "Pair" }}
+                    </button>
+                    <button
+                        class="ghost"
+                        disabled=move || busy.get()
+                        on:click=move |_| deep_link.set(None)
+                    >
+                        "Cancel"
+                    </button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
 // The icons are Lucide, the one set the product uses (`design/DESIGN.md` §9), read out of the
 // shared directory at compile time. Inlined rather than fetched, for the reason [`crate::mark`]
 // is: this client fetches nothing from anywhere, and an icon file would be a second request on a
@@ -812,4 +925,49 @@ fn event_value(event: &leptos::ev::Event) -> String {
                 .map(|area| area.value())
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A token minted the way `adi-mono mesh invite` would, for a hash fragment to carry.
+    fn sample_token() -> String {
+        let json = br#"{"v":1,"endpoint":"adimesh:00","nonce":"aabbccddeeff00112233445566778899","expires":9999999999}"#;
+        format!(
+            "adi-invite:{}",
+            json.iter().fold(String::new(), |mut s, b| {
+                use std::fmt::Write as _;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
+        )
+    }
+
+    #[test]
+    fn token_from_hash_reads_a_deep_link_and_rejects_everything_else() {
+        let token = sample_token();
+        assert_eq!(
+            token_from_hash(&format!("#{token}")),
+            Some(token.as_str()),
+            "a hash carrying a live invite is read"
+        );
+
+        assert_eq!(token_from_hash(""), None, "no hash at all");
+        assert_eq!(
+            token_from_hash("#not-an-invite"),
+            None,
+            "a hash that is not an invite"
+        );
+        assert_eq!(
+            token_from_hash(&token),
+            None,
+            "missing the leading `#` is not a hash"
+        );
+        assert_eq!(
+            token_from_hash("#adi-invite:zz"),
+            None,
+            "an invite-shaped hash that does not actually decode"
+        );
+    }
 }

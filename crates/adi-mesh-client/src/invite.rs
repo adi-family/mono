@@ -307,6 +307,20 @@ pub fn addr_from(node: &str, relay: &str) -> Result<EndpointAddr> {
     Ok(EndpointAddr::new(id).with_relay_url(relay))
 }
 
+/// A short, human-legible name for the machine an invite names — the short form of its key, the
+/// same rendering a peer known only by key gets elsewhere (`docs/fleet.md` §2).
+///
+/// There is no node *name* in an invite, only its address: this is the best a reader can be shown
+/// before they have paired with it, which is what the deep-link confirm needs
+/// (ADI-MONO-171 G5, [`crate::ui`]).
+///
+/// # Errors
+/// If the invite's endpoint does not parse as an `adimesh:` ticket.
+pub fn endpoint_short(invite: &Invite) -> Result<String> {
+    let addr = parse_ticket(&invite.endpoint)?;
+    Ok(addr.id.fmt_short().to_string())
+}
+
 /// Decode an `adimesh:` ticket into the address it names.
 fn parse_ticket(token: &str) -> Result<EndpointAddr> {
     let hex = token
@@ -449,6 +463,31 @@ mod tests {
             serde_json::from_str(r#"{"result":"refused","reason":"that invite has expired"}"#)
                 .expect("parse");
         assert!(matches!(refused, JoinReply::Refused { .. }));
+    }
+
+    #[test]
+    fn endpoint_short_names_the_invites_own_key() {
+        let id = SecretKey::from_bytes(&[9u8; 32]).public();
+        let addr = EndpointAddr::new(id);
+        let ticket = format!("{TICKET_PREFIX}{}", to_hex(&serde_json::to_vec(&addr).unwrap()));
+        let invite = Invite {
+            v: VERSION,
+            endpoint: ticket,
+            nonce: "aa".to_string(),
+            expires: 9,
+        };
+        assert_eq!(
+            endpoint_short(&invite).expect("a parseable ticket"),
+            id.fmt_short().to_string()
+        );
+
+        let bad = Invite {
+            v: VERSION,
+            endpoint: "not-a-ticket".to_string(),
+            nonce: "aa".to_string(),
+            expires: 9,
+        };
+        assert!(endpoint_short(&bad).is_err());
     }
 
     #[test]

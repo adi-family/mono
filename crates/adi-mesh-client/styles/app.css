@@ -376,6 +376,36 @@ footer .key {
   background: rgba(255, 255, 255, .18);
 }
 
+/* --- the deep-link confirm (ADI-MONO-171 G5) -------------------------------------------------- */
+
+/* A link can be opened by anything, so pairing from one gets the same deliberate tap a QR scan
+   already requires rather than firing the instant the page loads. A dim backdrop and a raised
+   surface — no shadow (§6): the separation is the backdrop's own opacity, not a drop shadow on
+   the panel sitting on it. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, .5);
+}
+.confirm {
+  width: 100%;
+  max-width: 22rem;
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--bg-raise);
+  color: var(--ink);
+  text-align: center;
+}
+.confirm .actions { display: grid; gap: 8px; }
+
 /* --- a machine's page ------------------------------------------------------------------------ */
 
 .panel { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
