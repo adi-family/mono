@@ -93,10 +93,13 @@ impl MeshCtl {
 
     /// Reuse the running endpoint: a second endpoint with the same identity races for its relay.
     /// Hold the lock across the handshake so a concurrent start cannot bind another endpoint.
-    async fn join(&self, token: &str) -> anyhow::Result<join::Joined> {
+    ///
+    /// `grant_back` is ADI-MONO-171 G4's one-way-join choice — see
+    /// `adi_mesh::join::record_viewer`.
+    async fn join(&self, token: &str, grant_back: bool) -> anyhow::Result<join::Joined> {
         match self.daemon.lock().await.as_ref() {
-            Some(daemon) => daemon.join(token).await,
-            None => join::join(token).await,
+            Some(daemon) => daemon.join(token, grant_back).await,
+            None => join::join_with(token, grant_back).await,
         }
     }
 }
@@ -422,7 +425,15 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
 }
 
 /// Common routing for HTTP requests and live subscriptions.
+///
+/// The member-role gate (ADI-MONO-171 G3) runs first, ahead of both routers below: a blocked
+/// route is blocked whether it would otherwise have been answered on the async path (most of
+/// `/api/fleet/*`, `/api/mesh*`) or the blocking one (`/api/system/*`, `/api/secrets/*`, …), and
+/// computing it once here is what lets neither router repeat the check.
 async fn answer(app: &Arc<App>, req: http::Request) -> Arc<Response> {
+    if let Some(refusal) = member_refusal(&app.projects, &req) {
+        return Arc::new(refusal);
+    }
     match async_route(app, &req).await {
         Some(response) => Arc::new(response),
         None => app.answer(req).await,
@@ -561,12 +572,79 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
 }
 
 /// Identity attached by the mesh gateway; absent on local panel requests.
+///
+/// Keyed on `X-Adi-Fleet-Petname`, not `X-Adi-Fleet-Node`: the petname is this machine's own,
+/// pinned registry key for the connection (`adi_mesh::auth::FLEET_PETNAME_HEADER`), while the
+/// node header carries the peer's self-declared nickname — a presentation-only value a name
+/// clash can resolve differently next time (`docs/fleet.md` §2 rule 3). ADI-MONO-171 G3's role
+/// check has to name the peer by something that cannot move out from under it, so it reads the
+/// petname; `nickname` stays around for the conversation marker, which only ever wanted a label.
 fn fleet_sender(req: &http::Request) -> Option<handlers::FleetSender<'_>> {
-    let nickname = req.header("x-adi-fleet-node")?;
+    let petname = req.header("x-adi-fleet-petname")?;
     Some(handlers::FleetSender {
-        nickname,
+        petname,
+        nickname: req.header("x-adi-fleet-node").unwrap_or_default(),
         user: req.header("x-adi-fleet-user").unwrap_or_default(),
     })
+}
+
+/// This peer's role (`adi_mesh::fleet::Role`, ADI-MONO-171 G3): [`adi_mesh::fleet::Role::Admin`]
+/// for a local caller (`sender: None`), which is every request this panel answered before roles
+/// existed; [`adi_mesh::fleet::Role::Member`] — the safe default, not an open one — when the
+/// registry cannot be read or no longer carries this petname, since both are reasons to trust a
+/// peer with *less*, never more; otherwise whatever role the registry has on file for it.
+fn peer_role(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> adi_mesh::fleet::Role {
+    let Some(sender) = sender else {
+        return adi_mesh::fleet::Role::Admin;
+    };
+    adi_mesh::fleet::FleetRegistry::load_from(projects.config())
+        .ok()
+        .and_then(|registry| registry.get(sender.petname).map(|record| record.role))
+        .unwrap_or(adi_mesh::fleet::Role::Member)
+}
+
+/// Refuse a member peer's request to a route ADI-MONO-171 G3 reserves for an admin — computed
+/// once, ahead of both the async and blocking routers (`answer`), so neither has to repeat it.
+/// `None` for a local caller, an admin peer, or a route the role does not restrict; everyone can
+/// still read and run everything, because that part of the panel is collaborative by design.
+fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> {
+    let sender = fleet_sender(req)?;
+    if peer_role(projects, Some(sender)) != adi_mesh::fleet::Role::Member {
+        return None;
+    }
+    member_blocked(req.method.as_str(), req.route_path(), &req.body, sender.petname)
+}
+
+/// The routes a member may never reach — `/api/system/*`, `/api/update/*`, `/api/licence*`,
+/// `/api/mesh*`; every `/api/fleet/*` write except adding an `http:<label>` grant to its own
+/// record; the global secrets actions; the run-limit setting; and creating a hive service.
+/// Everything else (including every `GET`) is unrestricted.
+fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Option<Response> {
+    let blocked = path.starts_with("/api/system")
+        || path.starts_with("/api/update")
+        || path.starts_with("/api/licence")
+        || path.starts_with("/api/mesh")
+        || (method == "POST"
+            && path.starts_with("/api/fleet/")
+            && !is_own_http_grant(path, body, petname))
+        || (method == "POST"
+            && matches!(
+                path,
+                "/api/secrets/reveal" | "/api/secrets/set" | "/api/secrets/remove"
+            ))
+        || (method == "POST" && path == "/api/agents/limit")
+        || (method == "POST" && path == "/api/hive/create");
+    blocked.then(|| handlers::error(403, "a member peer may not reach this"))
+}
+
+/// The one `/api/fleet/*` write a member keeps: granting itself an `http:<label>` scratch
+/// dashboard grant, which the panel already allows ("listing may also grant" — the fleet page's
+/// own rule, not a new exception).
+fn is_own_http_grant(path: &str, body: &[u8], petname: &str) -> bool {
+    path == "/api/fleet/grants/add"
+        && serde_json::from_slice::<adi_webapp_api::types::FleetGrantRef>(body).is_ok_and(|req| {
+            req.petname.trim() == petname && req.grant.trim_start().starts_with("http:")
+        })
 }
 
 /// Runs on the blocking pool because handlers perform file I/O and spawn subprocesses.
@@ -678,7 +756,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/fleet") => handlers::fleet(projects.config()),
         ("GET", "/api/fleet/nodes") => viewer::nodes(secrets),
         // Minting creates a new nonce, so it must not be treated as a shareable read.
-        ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config()),
+        ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config(), &req.body),
+        ("GET", "/api/fleet/invites") => handlers::fleet_invites(projects.config()),
+        ("POST", "/api/fleet/invites/cancel") => {
+            handlers::fleet_invite_cancel(projects.config(), &req.body)
+        }
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
         // Unpair only after both directions have been dropped.
@@ -768,8 +850,12 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("GET", "/api/meta") => handlers::meta(agents, tools),
         ("GET", "/api/agents") => handlers::agents(agents),
-        ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
-        ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
+        ("POST", "/api/agents/save") => {
+            handlers::save_agent(agents, &req.body, fleet_sender(req))
+        }
+        ("POST", "/api/agents/delete") => {
+            handlers::delete_agent(agents, &req.body, fleet_sender(req))
+        }
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body, fleet_sender(req)),
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/spawn-policy") => handlers::set_spawn_policy(agents, &req.body),
@@ -812,9 +898,15 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/simulate/turn") => handlers::simulate_turn(agents, &req.body),
         ("POST", "/api/agents/simulate/reply") => handlers::simulate_reply(agents, &req.body),
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
-        ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
-        ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),
-        ("POST", "/api/agents/run/hide") => handlers::hide_run(agents, &req.body),
+        ("POST", "/api/agents/run/stop") => {
+            handlers::stop_run(agents, &req.body, fleet_sender(req))
+        }
+        ("POST", "/api/agents/run/delete") => {
+            handlers::delete_run(agents, &req.body, fleet_sender(req))
+        }
+        ("POST", "/api/agents/run/hide") => {
+            handlers::hide_run(agents, &req.body, fleet_sender(req))
+        }
         ("POST", "/api/agents/run/star") => handlers::star_run(agents, &req.body),
         ("POST", "/api/agents/run/rename") => handlers::rename_run(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
@@ -954,11 +1046,11 @@ fn persist_mesh_enabled(enabled: bool) -> anyhow::Result<()> {
 /// Join a fleet and return the minted credential once. Joining persists `enabled=true`
 /// and starts the mesh immediately (`docs/fleet.md` §8).
 async fn fleet_join(app: &App, body: &[u8]) -> Response {
-    let token = match handlers::fleet_join_token(body, now_secs()) {
-        Ok(token) => token,
+    let (token, grant_back) = match handlers::fleet_join_token(body, now_secs()) {
+        Ok(parsed) => parsed,
         Err(response) => return response,
     };
-    match app.mesh.join(&token).await {
+    match app.mesh.join(&token, grant_back).await {
         Ok(joined) => {
             record_front_door(&joined.viewer);
             // Idempotent when the join reused the running daemon.
@@ -1334,6 +1426,212 @@ mod tests {
         }
     }
 
+    /// A store rooted in a scratch dir, like `awaits.rs`'s own `scratch` — the one other place
+    /// this crate names the config layer directly (`adi-config` is a dev-dependency precisely
+    /// for tests like these).
+    fn scratch(tag: &str) -> Projects {
+        let root = std::env::temp_dir().join(format!(
+            "adi-app-main-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Projects::with_config(adi_config::Config::with_root(root))
+    }
+
+    /// File a fleet record under `petname` with the given role — enough to drive [`peer_role`]
+    /// and [`member_refusal`] without pairing a real peer.
+    fn pair_with_role(projects: &Projects, petname: &str, role: adi_mesh::fleet::Role) {
+        let mut registry =
+            adi_mesh::fleet::FleetRegistry::load_from(projects.config()).expect("load");
+        registry.nodes.insert(
+            petname.to_string(),
+            adi_mesh::fleet::NodeRecord {
+                key: std::iter::repeat_n('a', 52).collect(),
+                nickname: petname.to_string(),
+                role,
+                ..adi_mesh::fleet::NodeRecord::default()
+            },
+        );
+        registry.save_to(projects.config()).expect("save");
+    }
+
+    fn with_petname(mut req: http::Request, petname: &str) -> http::Request {
+        req.headers
+            .insert("x-adi-fleet-petname".to_string(), petname.to_string());
+        req
+    }
+
+    #[test]
+    fn peer_role_is_admin_for_a_local_caller_and_for_an_unknown_or_unreadable_petname() {
+        let projects = scratch("peer-role-defaults");
+        assert_eq!(
+            peer_role(&projects, None),
+            adi_mesh::fleet::Role::Admin,
+            "a local caller is unrestricted"
+        );
+
+        let sender = handlers::FleetSender {
+            petname: "ghost",
+            nickname: "ghost",
+            user: "igor",
+        };
+        assert_eq!(
+            peer_role(&projects, Some(sender)),
+            adi_mesh::fleet::Role::Member,
+            "an unknown petname fails safe, not open"
+        );
+    }
+
+    #[test]
+    fn peer_role_reads_whatever_the_registry_has_on_file() {
+        let projects = scratch("peer-role-on-file");
+        pair_with_role(&projects, "laptop-b", adi_mesh::fleet::Role::Admin);
+        pair_with_role(&projects, "p42-device", adi_mesh::fleet::Role::Member);
+
+        let admin = handlers::FleetSender {
+            petname: "laptop-b",
+            nickname: "laptop-b",
+            user: "igor",
+        };
+        let member = handlers::FleetSender {
+            petname: "p42-device",
+            nickname: "p42-device",
+            user: "p42",
+        };
+        assert_eq!(peer_role(&projects, Some(admin)), adi_mesh::fleet::Role::Admin);
+        assert_eq!(
+            peer_role(&projects, Some(member)),
+            adi_mesh::fleet::Role::Member
+        );
+    }
+
+    /// The exact route list ADI-MONO-171 G3 names: system/update/licence/mesh outright, every
+    /// fleet write except granting itself an `http:<label>`, the global secrets actions, the
+    /// run-limit setting, and creating a hive service. Everything else — including every `GET` —
+    /// is unrestricted.
+    #[test]
+    fn member_blocked_matches_the_documented_route_list() {
+        let petname = "p42-device";
+        for (method, path) in [
+            ("GET", "/api/system"),
+            ("POST", "/api/system/restart"),
+            ("GET", "/api/update"),
+            ("POST", "/api/update/run"),
+            ("GET", "/api/licence"),
+            ("GET", "/api/mesh"),
+            ("POST", "/api/mesh/start"),
+            ("POST", "/api/secrets/reveal"),
+            ("POST", "/api/secrets/set"),
+            ("POST", "/api/secrets/remove"),
+            ("POST", "/api/agents/limit"),
+            ("POST", "/api/hive/create"),
+            ("POST", "/api/fleet/unpair"),
+            ("POST", "/api/fleet/invite"),
+            ("POST", "/api/fleet/rename"),
+        ] {
+            assert!(
+                member_blocked(method, path, b"", petname).is_some(),
+                "{method} {path} should be blocked for a member"
+            );
+        }
+
+        for (method, path, body) in [
+            ("GET", "/api/fleet", b"".as_slice()),
+            ("GET", "/api/agents", b""),
+            ("POST", "/api/agents/run", b"{}"),
+            ("POST", "/api/agents/run/stop", b"{}"),
+            ("POST", "/api/agents/save", b"{}"),
+            (
+                "POST",
+                "/api/fleet/grants/add",
+                br#"{"petname":"p42-device","grant":"http:nosh"}"#,
+            ),
+        ] {
+            assert!(
+                member_blocked(method, path, body, petname).is_none(),
+                "{method} {path} should be open to a member"
+            );
+        }
+    }
+
+    /// The one `/api/fleet/*` write a member keeps: granting itself an `http:<label>` on its own
+    /// record. The same path refuses a grant for anybody else's record, a non-`http:` grant, or
+    /// the one other fleet write (`grants/remove`) the task names as still restricted.
+    #[test]
+    fn a_member_may_only_grant_itself_an_http_label_on_its_own_record() {
+        let petname = "p42-device";
+        assert!(
+            member_blocked(
+                "POST",
+                "/api/fleet/grants/add",
+                br#"{"petname":"p42-device","grant":"http:nosh"}"#,
+                petname
+            )
+            .is_none(),
+            "granting itself an http label is the one exception"
+        );
+        assert!(
+            member_blocked(
+                "POST",
+                "/api/fleet/grants/add",
+                br#"{"petname":"someone-else","grant":"http:nosh"}"#,
+                petname
+            )
+            .is_some(),
+            "granting another record anything is still blocked"
+        );
+        assert!(
+            member_blocked(
+                "POST",
+                "/api/fleet/grants/add",
+                br#"{"petname":"p42-device","grant":"tcp:127.0.0.1:22"}"#,
+                petname
+            )
+            .is_some(),
+            "a non-http grant is still blocked"
+        );
+        assert!(
+            member_blocked(
+                "POST",
+                "/api/fleet/grants/remove",
+                br#"{"petname":"p42-device","grant":"http:nosh"}"#,
+                petname
+            )
+            .is_some(),
+            "removing a grant is not the exception, only adding one is"
+        );
+    }
+
+    #[test]
+    fn member_refusal_refuses_a_member_peer_and_lets_everyone_else_through() {
+        let projects = scratch("member-refusal");
+        pair_with_role(&projects, "p42-device", adi_mesh::fleet::Role::Member);
+        pair_with_role(&projects, "laptop-b", adi_mesh::fleet::Role::Admin);
+
+        let blocked = with_petname(request("GET", "/api/system", ""), "p42-device");
+        let refusal = member_refusal(&projects, &blocked).expect("a member is refused");
+        assert_eq!(refusal.status, 403);
+
+        let admin_same_route = with_petname(request("GET", "/api/system", ""), "laptop-b");
+        assert!(
+            member_refusal(&projects, &admin_same_route).is_none(),
+            "an admin peer is unrestricted"
+        );
+
+        let local = request("GET", "/api/system", "");
+        assert!(
+            member_refusal(&projects, &local).is_none(),
+            "a local caller is unrestricted"
+        );
+
+        let open_route = with_petname(request("GET", "/api/fleet", ""), "p42-device");
+        assert!(
+            member_refusal(&projects, &open_route).is_none(),
+            "a route the role does not restrict is unaffected"
+        );
+    }
+
     #[test]
     fn fleet_sender_reads_the_mesh_gateways_identity_headers() {
         let mut forwarded = request("POST", "/api/agents/run", "{}");
@@ -1343,13 +1641,30 @@ mod tests {
         forwarded
             .headers
             .insert("x-adi-fleet-user".to_string(), "igor".to_string());
+        forwarded
+            .headers
+            .insert("x-adi-fleet-petname".to_string(), "laptop-b".to_string());
         let sender = fleet_sender(&forwarded).expect("a sender");
         assert_eq!(sender.nickname, "laptop-b");
         assert_eq!(sender.user, "igor");
+        assert_eq!(sender.petname, "laptop-b");
 
         assert!(
             fleet_sender(&request("POST", "/api/agents/run", "{}")).is_none(),
             "a local request carries no fleet identity"
+        );
+        // The petname is what identity hinges on now, never the dialler-chosen nickname —
+        // ADI-MONO-171 G1 (`docs/fleet.md` §2 rule 3: a nickname is only ever a suggestion).
+        let mut no_petname = request("POST", "/api/agents/run", "{}");
+        no_petname
+            .headers
+            .insert("x-adi-fleet-node".to_string(), "laptop-b".to_string());
+        no_petname
+            .headers
+            .insert("x-adi-fleet-user".to_string(), "igor".to_string());
+        assert!(
+            fleet_sender(&no_petname).is_none(),
+            "a node header with no petname is not a fleet sender"
         );
     }
 
