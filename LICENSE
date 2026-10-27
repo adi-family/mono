@@ -11,8 +11,8 @@ separate commercial license from the Licensor.
 
 "Commercial Purpose" means use of the Licensed Work in any manner that
 is primarily intended for or directed toward commercial advantage or
-monetary compensation by an entity with more than $1,000,000 USD in
-annual revenue or more than 10 employees.
+monetary compensation by any business or organization, whatever its
+annual revenue or number of employees.
 
 Grant of Rights:
 
@@ -21,11 +21,8 @@ non-exclusive, worldwide, royalty-free license to:
 
 1. Use the Licensed Work for personal, educational, research, and
    non-commercial purposes
-2. Use the Licensed Work for commercial purposes if you are an
-   individual or organization with less than $1,000,000 USD in annual
-   revenue AND fewer than 10 employees
-3. View, study, and modify the source code for the above permitted uses
-4. Create derivative works for the above permitted uses
+2. View, study, and modify the source code for the above permitted uses
+3. Create derivative works for the above permitted uses
 
 Restrictions:
 
@@ -40,19 +37,21 @@ Restrictions:
    d. run the Licensed Work as a service for other companies.
    A separate commercial or reseller license covering any of these is
    available from the Licensor; see Contact below.
-   Restrictions 1(c) and 1(d) do not apply to a licensee permitted
-   commercial use under Grant of Rights item 2 (under $1,000,000 USD in
-   annual revenue and fewer than 10 employees), provided every other
-   company that uses the Licensed Work through that product, service or
-   deployment holds its own license to it. A license covers one company
-   only: making the Licensed Work available to another company does not
-   extend your license to that company.
+   A license covers one company only: making the Licensed Work
+   available to another company does not extend your license to that
+   company.
 2. You may NOT use the Licensed Work to create a competing product or
    service
 3. You may NOT remove or alter any copyright notices, license terms,
    or attribution in the Licensed Work
-4. Large corporations (>$1M revenue or >10 employees) may NOT use this
-   software without a commercial license
+4. A business or organization of any size may NOT use this software
+   for a Commercial Purpose without a commercial license
+
+Startup Program:
+
+The Licensor may, on request and at its sole discretion, grant a
+startup a license under the ADI Startup Program, on terms it sets case
+by case.
 
 No Warranty:
 
