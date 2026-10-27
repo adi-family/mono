@@ -38,6 +38,17 @@ extraction script cares about.
   backgrounding it only adds a second, pointless wake once the launcher process exits — now said
   plainly in the Bash tool's own description and in the agents guide.
 
+### Changed
+
+- **Commercial use is no longer free for small organisations.** The licence used to let a
+  business under $1,000,000 in revenue and under 10 employees use adi commercially — and embed it
+  or run it as a service — without a licence. That band is gone: commercial use by a business of
+  any size needs a commercial licence. A startup can ask for one under the ADI Startup Program
+  ([withadi.dev/startups](https://withadi.dev/startups)); the Licensor decides each request at
+  its discretion. Personal, educational, research and non-commercial use stay free, and a licence
+  still covers one company only. Nothing in the software behaves differently — read
+  [LICENSE](LICENSE).
+
 ## 1.33.0 — 2026-10-21
 
 ### Added
