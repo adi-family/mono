@@ -179,6 +179,8 @@ pub struct NodeRecord {
     pub agent_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    #[serde(default)]
+    pub minted_user: bool,
     pub auth: Credential,
 }
 ```

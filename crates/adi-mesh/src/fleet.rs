@@ -421,6 +421,15 @@ pub struct NodeRecord {
     /// (a principal, a cabinet, a display name), not a grant.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
+    /// Whether `auth.user` is a random id [`crate::join::decide`] minted itself, rather than
+    /// `PAIR_USER`, a pinned [`crate::join::InviteSpec::username`], or whatever a
+    /// [`crate::join::record_viewer`] filing copied from the far side (`docs/byo-credentials.md`
+    /// §3.2). Only `decide` ever sets this, and only for an id it generated — never for a pin,
+    /// never for `record_viewer`. `#[serde(default)]` reads every record filed before this field
+    /// existed as `false`, which is the right answer: an `adi` record has no user scope until it
+    /// is re-paired.
+    #[serde(default)]
+    pub minted_user: bool,
     /// The Basic-auth credential this node's requests must carry.
     pub auth: Credential,
 }
@@ -796,6 +805,7 @@ impl FleetRegistry {
                 grants: Vec::new(),
                 agent_instructions: None,
                 labels: BTreeMap::new(),
+                minted_user: false,
                 auth: Credential::default(),
             },
         );
@@ -1080,6 +1090,10 @@ grants = []
         );
         assert_eq!(laptop.auth.user, "igor");
         assert!(laptop.pending_nickname.is_none());
+        assert!(
+            !laptop.minted_user,
+            "a record filed before this field existed has no user scope"
+        );
 
         let desk = registry.get("desk").expect("desk");
         assert_eq!(desk.pending_nickname.as_deref(), Some("main"));

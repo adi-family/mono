@@ -104,12 +104,25 @@ const INVITES_FILE: &str = "invites.toml";
 /// answer said less helpfully.
 const INVITE_KEEP: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The username minted credentials carry.
-///
-/// Constant on purpose: the credential is already per-node (each viewer gets its own record on
-/// the node, each with its own salt and password), so the username carries no security weight and
-/// only has to be something a human can retype into a browser prompt without a note.
+/// The username minted credentials carried before `docs/byo-credentials.md` §3.2. Still what a
+/// pinned [`InviteSpec::username`] falls back to meaning in prose (a record pairing as a shared
+/// `PAIR_USER` carries no security weight), but [`decide`] no longer writes it: §3.2's threat is
+/// that two members paired without a `username` in the invite become the *same* user to
+/// ADI-MONO-171's ownership checks, which do carry security weight. Kept only as the marker a
+/// legacy record's `auth.user` reads, and in tests that still exercise the no-body-invite shape.
 pub const PAIR_USER: &str = "adi";
+
+/// Characters a minted user id is drawn from: lowercase Crockford base32 — no `0`/`o`, `1`/`i`/`l`
+/// ambiguity — because `mesh join` prints this for a person to retype into a browser prompt
+/// (`adi-cli/src/mesh.rs:417`, `docs/byo-credentials.md` §3.2).
+const USER_ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// Characters in a minted user id's random part: 130 bits at 5 bits/char.
+const USER_ID_CHARS: usize = 26;
+
+/// Bytes of randomness a minted user id is drawn from: `ceil(130 / 8)`, so the last byte
+/// contributes only 2 of its 8 bits to the 26th character and the rest are discarded.
+const USER_ID_BYTES: usize = 17;
 
 /// Characters and length of a generated password: 24 characters from a 56-symbol alphabet is
 /// ~139 bits. The alphabet omits `0`/`O`, `1`/`l`/`I` — this string gets read off one screen and
@@ -616,7 +629,6 @@ pub fn decide(
             Ok(result) => result,
             Err(e) => return JoinReply::refused(format!("could not file the node locally: {e}")),
         };
-    let username = spec.username.as_deref().unwrap_or(PAIR_USER);
     let grants = if spec.grants.is_empty() {
         default_grants()
     } else {
@@ -625,10 +637,23 @@ pub fn decide(
     let Some(record) = registry.get_mut(&petname) else {
         return JoinReply::refused(format!("the record for {petname:?} vanished mid-pairing"));
     };
-    // A re-pair rotates the password (and, now, the username) rather than keeping the old ones:
-    // re-inviting a node you already have is what an operator does when the password is lost, and
-    // quietly re-issuing a secret they no longer hold would answer the wrong question.
-    record.set_password(username, password);
+    // A re-pair rotates the password rather than keeping the old one: re-inviting a node you
+    // already have is what an operator does when the password is lost, and quietly re-issuing a
+    // secret they no longer hold would answer the wrong question. The username is different: once
+    // `decide` has minted one, a re-pair keeps it (`docs/byo-credentials.md` §3.2), because
+    // rotating it would orphan every value stored under the old id. Only a record that never got a
+    // minted id — a legacy `adi` record, or one re-paired without `minted_user` set — mints (or
+    // re-pins) a username here, same as a fresh pairing does.
+    let (username, minted) = if !fresh && record.minted_user {
+        (record.auth.user.clone(), true)
+    } else {
+        match spec.username.clone() {
+            Some(pinned) => (pinned, false),
+            None => (random_user_id(), true),
+        }
+    };
+    record.set_password(&username, password);
+    record.minted_user = minted;
     for grant in grants.clone() {
         record.grant(grant);
     }
@@ -639,7 +664,7 @@ pub fn decide(
 
     JoinReply::Accepted(Accepted {
         petname,
-        username: username.to_string(),
+        username,
         password: password.to_string(),
         grants,
         nickname: Some(node::nickname()),
@@ -768,6 +793,40 @@ pub fn random_nonce() -> String {
         .try_fill_bytes(&mut bytes)
         .expect("the OS random source is unavailable");
     ticket::to_hex(&bytes)
+}
+
+/// A fresh minted user id: `u-` followed by [`USER_ID_CHARS`] lowercase Crockford base32
+/// characters, 130 random bits (`docs/byo-credentials.md` §3.2).
+///
+/// Random, not derived from the peer's key or its petname — see §3.2 for why either of those
+/// would be the wrong answer (it would link the user across fleets, or move on a rename).
+///
+/// # Panics
+/// Never in practice: only if the OS random source is unavailable.
+#[must_use]
+pub fn random_user_id() -> String {
+    use rand::TryRng as _;
+    let mut bytes = [0u8; USER_ID_BYTES];
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the OS random source is unavailable");
+    let mut id = String::with_capacity(2 + USER_ID_CHARS);
+    id.push_str("u-");
+    for i in 0..USER_ID_CHARS {
+        id.push(USER_ID_ALPHABET[usize::from(bits5(&bytes, i * 5))] as char);
+    }
+    id
+}
+
+/// 5 bits of `bytes`, starting at bit offset `offset` (bit 0 is the MSB of `bytes[0]`).
+fn bits5(bytes: &[u8], offset: usize) -> u8 {
+    let mut value = 0u8;
+    for i in 0..5 {
+        let bit_index = offset + i;
+        let bit = (bytes[bit_index / 8] >> (7 - bit_index % 8)) & 1;
+        value = (value << 1) | bit;
+    }
+    value
 }
 
 /// A fresh password from [`PASSWORD_ALPHABET`], drawn without modulo bias.
@@ -1436,15 +1495,16 @@ mod tests {
         );
         let accepted = accepted_of(&reply);
         assert_eq!(accepted.petname, "laptop-b");
-        assert_eq!(accepted.username, PAIR_USER);
+        assert!(is_minted_user_id(&accepted.username), "{accepted:?}");
         assert_eq!(accepted.password, "hunter2");
         assert_eq!(accepted.grants, default_grants());
 
         let record = registry.get("laptop-b").expect("filed under the petname");
         assert_eq!(record.key, key.to_string());
-        assert!(record.verify_password(PAIR_USER, "hunter2"));
+        assert!(record.minted_user, "decide minted this id itself");
+        assert!(record.verify_password(&accepted.username, "hunter2"));
         assert!(
-            !record.verify_password(PAIR_USER, "hunter3"),
+            !record.verify_password(&accepted.username, "hunter3"),
             "wrong password"
         );
         assert!(!record.verify_password("root", "hunter2"), "wrong user");
@@ -1453,6 +1513,45 @@ mod tests {
             "the default grant is live"
         );
         assert!(!record.allows(Target::Http("nosh")), "and nothing else is");
+    }
+
+    /// `u-` followed by 26 lowercase Crockford base32 characters.
+    fn is_minted_user_id(username: &str) -> bool {
+        username.len() == 2 + USER_ID_CHARS
+            && username.starts_with("u-")
+            && username[2..]
+                .bytes()
+                .all(|b| USER_ID_ALPHABET.contains(&b))
+    }
+
+    #[test]
+    fn two_no_body_pairings_mint_distinct_ids() {
+        let mut registry = FleetRegistry::default();
+
+        let (mut book_a, nonce_a) = book_with_open_invite(1_000);
+        let a = decide(
+            &mut registry,
+            &mut book_a,
+            &some_key(),
+            &request(&nonce_a, "laptop-a"),
+            "pw",
+            500,
+        );
+        let (mut book_b, nonce_b) = book_with_open_invite(1_000);
+        let b = decide(
+            &mut registry,
+            &mut book_b,
+            &some_key(),
+            &request(&nonce_b, "laptop-b"),
+            "pw",
+            500,
+        );
+
+        let username_a = accepted_of(&a).username.clone();
+        let username_b = accepted_of(&b).username.clone();
+        assert!(is_minted_user_id(&username_a), "{username_a}");
+        assert!(is_minted_user_id(&username_b), "{username_b}");
+        assert_ne!(username_a, username_b);
     }
 
     #[test]
@@ -1569,11 +1668,11 @@ mod tests {
     }
 
     #[test]
-    fn re_pairing_a_known_key_keeps_its_petname_and_rotates_the_password() {
+    fn re_pairing_a_known_key_keeps_its_petname_rotates_the_password_and_keeps_the_minted_id() {
         let mut registry = FleetRegistry::default();
         let key = some_key();
         let (mut book, first) = book_with_open_invite(1_000);
-        decide(
+        let first_reply = decide(
             &mut registry,
             &mut book,
             &key,
@@ -1581,6 +1680,7 @@ mod tests {
             "old",
             500,
         );
+        let first_username = accepted_of(&first_reply).username.clone();
         registry.rename("laptop-b", "desk").expect("local rename");
 
         let second = random_nonce();
@@ -1597,13 +1697,48 @@ mod tests {
         // The pinned petname wins over the offered nickname (§2 rule 4), and the rename is only
         // a notification.
         assert_eq!(accepted_of(&reply).petname, "desk");
+        // The re-pair keeps the minted id rather than minting a fresh one: re-inviting a peer to
+        // rotate a lost password must not orphan values stored under its old id.
+        assert_eq!(accepted_of(&reply).username, first_username);
         let record = registry.get("desk").expect("record");
-        assert!(record.verify_password(PAIR_USER, "new"));
+        assert!(record.minted_user);
+        assert!(record.verify_password(&first_username, "new"));
         assert!(
-            !record.verify_password(PAIR_USER, "old"),
-            "the old one is gone"
+            !record.verify_password(&first_username, "old"),
+            "the old password is gone"
         );
         assert_eq!(registry.len(), 1);
+    }
+
+    #[test]
+    fn a_re_pair_of_a_legacy_adi_record_mints_a_fresh_id() {
+        // A record paired before this shipped (or re-paired without `decide` ever minting an id
+        // for it) carries `PAIR_USER` and `minted_user = false`. Re-inviting it is how such a
+        // record gets a user scope (`docs/byo-credentials.md` §3.2).
+        let mut registry = FleetRegistry::default();
+        let key = some_key();
+        let _ = registry.pair(&key, "laptop-b");
+        {
+            let record = registry.get_mut("laptop-b").expect("filed");
+            record.set_password(PAIR_USER, "old");
+            record.minted_user = false;
+        }
+
+        let (mut book, nonce) = book_with_open_invite(1_000);
+        let reply = decide(
+            &mut registry,
+            &mut book,
+            &key,
+            &request(&nonce, "laptop-b"),
+            "new",
+            500,
+        );
+
+        let accepted = accepted_of(&reply);
+        assert!(is_minted_user_id(&accepted.username), "{accepted:?}");
+        let record = registry.get("laptop-b").expect("record");
+        assert!(record.minted_user);
+        assert!(record.verify_password(&accepted.username, "new"));
     }
 
     // -- the invite spec (ADI-MONO-171 G1) ------------------------------------------------
@@ -1611,7 +1746,8 @@ mod tests {
     #[test]
     fn a_no_body_invite_still_mints_exactly_what_it_always_did() {
         // Pinned so a refactor of `decide` cannot quietly start reading the spec on the no-body
-        // path: an empty `InviteSpec` must produce byte-for-byte the pre-G1 defaults.
+        // path: an empty `InviteSpec` must produce the pre-G1 defaults — except the username,
+        // which §3.2 (ADI-MONO-177) now mints at random instead of writing `PAIR_USER`.
         let (mut book, nonce) = book_with_open_invite_spec(1_000, InviteSpec::default());
         let mut registry = FleetRegistry::default();
         let reply = decide(
@@ -1624,11 +1760,12 @@ mod tests {
         );
         let accepted = accepted_of(&reply);
         assert_eq!(accepted.petname, "laptop-b");
-        assert_eq!(accepted.username, PAIR_USER);
+        assert!(is_minted_user_id(&accepted.username), "{accepted:?}");
         assert_eq!(accepted.grants, default_grants());
         let record = registry.get("laptop-b").expect("filed");
         assert_eq!(record.role, Role::Admin, "unspecified role is admin");
         assert!(record.labels.is_empty());
+        assert!(record.minted_user);
     }
 
     #[test]
@@ -1667,6 +1804,10 @@ mod tests {
         assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
         assert!(record.verify_password("p42", "hunter2"));
         assert!(record.allows(Target::Http("hub")));
+        assert!(
+            !record.minted_user,
+            "a pinned username is never treated as minted (§15 Q13)"
+        );
     }
 
     #[test]
@@ -1758,6 +1899,10 @@ mod tests {
         assert_eq!(record.key, viewer.to_string());
         assert!(record.verify_password(PAIR_USER, "hunter2"));
         assert!(!record.verify_password(PAIR_USER, "nope"));
+        assert!(
+            !record.minted_user,
+            "the far side chose this username, so this machine never minted it (§15 Q14)"
+        );
         assert!(
             record.allows(Target::Http("app")),
             "the viewer may reach exactly what it granted itself"

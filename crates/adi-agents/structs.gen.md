@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-154 structs · 41 enums · 5 type aliases across 60 files.
+155 structs · 41 enums · 5 type aliases across 61 files.
 
 ## Index
 
@@ -30,6 +30,7 @@
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
+- [`src/lease.rs`](#srcleasers) — `LeaseRef`
 - [`src/lib.rs`](#srclibrs) — `TurnGuard`, `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
@@ -1463,6 +1464,22 @@ pub(crate) struct RunKnowledge {
 
 ---
 
+## `src/lease.rs`
+
+### struct `LeaseRef`
+
+Whose lease a session's turns look for, and which names they may use from it — resolved once at `crate::store::SessionStore::create_as` and never re-derived, the same reason `crate::RunOverrides` and a pinned backend chain aren't either: a conversation is answered by whatever *started* it, not by whatever the agent or the server policy says today.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseRef {
+    pub user: String,
+    pub names: Vec<String>,
+}
+```
+
+---
+
 ## `src/lib.rs`
 
 ### struct `TurnGuard`
@@ -2511,6 +2528,7 @@ pub struct LaunchOptions<'a> {
     pub markers: &'a [crate::marker::Marker],
     pub start_at: Option<&'a crate::llm::StartAt>,
     pub only: Option<&'a str>,
+    pub lease: Option<crate::LeaseRef>,
 }
 ```
 
@@ -3237,6 +3255,8 @@ pub struct SessionRecord {
     pub chain: Option<crate::llm::PinnedChain>,
     pub runner_state: Option<serde_json::Value>,
     pub outcome: Option<RunOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<crate::LeaseRef>,
 }
 ```
 

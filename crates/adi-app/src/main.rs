@@ -603,6 +603,21 @@ fn peer_role(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> 
         .unwrap_or(adi_mesh::fleet::Role::Member)
 }
 
+/// This peer's user scope (`docs/byo-credentials.md` §3.2): `Some(<u>)` only for a peer whose
+/// registry record has `minted_user` set — a random id [`adi_mesh::join::decide`] minted for it
+/// itself, never a pin, never one copied in by [`adi_mesh::join::record_viewer`] — and whose
+/// `auth.user` still matches the header's user. `None` for a local caller (`sender: None`), an
+/// `adi` peer paired before this shipped, an unknown or unreadable petname, or a stale header that
+/// no longer names the record's current credential. On doubt it trusts the peer with less, exactly
+/// as [`peer_role`] does when it defaults to [`adi_mesh::fleet::Role::Member`]: "no user layer,
+/// the server's values" rather than guessing at whose values they are.
+fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> Option<String> {
+    let sender = sender?;
+    let registry = adi_mesh::fleet::FleetRegistry::load_from(projects.config()).ok()?;
+    let record = registry.get(sender.petname)?;
+    (record.minted_user && record.auth.user == sender.user).then(|| record.auth.user.clone())
+}
+
 /// Refuse a member peer's request to a route ADI-MONO-171 G3 reserves for an admin — computed
 /// once, ahead of both the async and blocking routers (`answer`), so neither has to repeat it.
 /// `None` for a local caller, an admin peer, or a route the role does not restrict; everyone can
@@ -862,7 +877,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/delete") => {
             handlers::delete_agent(agents, &req.body, fleet_sender(req))
         }
-        ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body, fleet_sender(req)),
+        ("POST", "/api/agents/run") => {
+            let sender = fleet_sender(req);
+            handlers::run_agent(agents, &req.body, sender, user_scope(projects, sender))
+        }
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/spawn-policy") => handlers::set_spawn_policy(agents, &req.body),
         ("POST", "/api/agents/spawn-rule") => handlers::set_spawn_rule(agents, &req.body),
@@ -1462,6 +1480,22 @@ mod tests {
         registry.save_to(projects.config()).expect("save");
     }
 
+    /// File a fleet record under `petname` with the given username and `minted_user` flag —
+    /// enough to drive [`user_scope`] without pairing a real peer.
+    fn pair_with_user(projects: &Projects, petname: &str, username: &str, minted_user: bool) {
+        let mut registry =
+            adi_mesh::fleet::FleetRegistry::load_from(projects.config()).expect("load");
+        let mut record = adi_mesh::fleet::NodeRecord {
+            key: std::iter::repeat_n('a', 52).collect(),
+            nickname: petname.to_string(),
+            ..adi_mesh::fleet::NodeRecord::default()
+        };
+        record.set_password(username, "pw");
+        record.minted_user = minted_user;
+        registry.nodes.insert(petname.to_string(), record);
+        registry.save_to(projects.config()).expect("save");
+    }
+
     fn with_petname(mut req: http::Request, petname: &str) -> http::Request {
         req.headers
             .insert("x-adi-fleet-petname".to_string(), petname.to_string());
@@ -1509,6 +1543,85 @@ mod tests {
         assert_eq!(
             peer_role(&projects, Some(member)),
             adi_mesh::fleet::Role::Member
+        );
+    }
+
+    #[test]
+    fn user_scope_is_none_for_a_local_caller_an_adi_peer_and_an_unknown_petname() {
+        let projects = scratch("user-scope-none");
+        assert_eq!(
+            user_scope(&projects, None),
+            None,
+            "a local caller is the owner, on global secrets"
+        );
+
+        pair_with_user(&projects, "legacy", "adi", false);
+        let legacy = handlers::FleetSender {
+            petname: "legacy",
+            nickname: "legacy",
+            user: "adi",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(legacy)),
+            None,
+            "an adi peer has no scope until it is re-paired"
+        );
+
+        let ghost = handlers::FleetSender {
+            petname: "ghost",
+            nickname: "ghost",
+            user: "u-whatever000000000000000",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(ghost)),
+            None,
+            "an unknown petname fails safe, not open"
+        );
+    }
+
+    #[test]
+    fn user_scope_is_none_for_an_unreadable_registry() {
+        let projects = scratch("user-scope-unreadable");
+        let module = projects.config().module(adi_mesh::config::MODULE);
+        module.ensure_dir().expect("mkdir");
+        std::fs::write(module.dir().join("fleet.toml"), "not = [ toml").expect("write garbage");
+
+        let sender = handlers::FleetSender {
+            petname: "laptop-b",
+            nickname: "laptop-b",
+            user: "u-aaa",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(sender)),
+            None,
+            "an unreadable registry fails safe, not open"
+        );
+    }
+
+    #[test]
+    fn user_scope_is_the_minted_id_only_when_the_header_matches_the_records_credential() {
+        let projects = scratch("user-scope-minted");
+        pair_with_user(&projects, "laptop-b", "u-abc123", true);
+
+        let matching = handlers::FleetSender {
+            petname: "laptop-b",
+            nickname: "laptop-b",
+            user: "u-abc123",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(matching)),
+            Some("u-abc123".to_string())
+        );
+
+        let stale = handlers::FleetSender {
+            petname: "laptop-b",
+            nickname: "laptop-b",
+            user: "u-stale00000000000000000",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(stale)),
+            None,
+            "a header that no longer matches the record's credential is no scope"
         );
     }
 

@@ -4,13 +4,14 @@
 
 > Encrypted, scoped secrets for the adi platform: one AEAD-encrypted <name>.toml per secret under ~/.adi/mono/secrets, in a global or per-project scope, resolved (project overrides global) into a run's environment. Pure library.
 
-6 structs · 1 enum · 1 type alias across 3 files.
+8 structs · 3 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/lib.rs`](#srclibrs) — `Secrets`
+- [`src/lib.rs`](#srclibrs) — `Scope`, `Secrets`
 - [`src/secret.rs`](#srcsecretrs) — `Manifest`, `OAuthMeta`, `Secret`, `OAuthInfo`, `OAuthToken`
+- [`src/settings.rs`](#srcsettingsrs) — `Missing`, `UserSecretsPolicy`, `UserSettings`
 
 ---
 
@@ -43,6 +44,19 @@ pub enum Error {
 ---
 
 ## `src/lib.rs`
+
+### enum `Scope`
+
+Where a secret lives (`docs/byo-credentials.md` §4.2) — a **third kind of scope**, not a reserved project id: `adi-app` keeps node passwords in a pseudo-project called `fleet-nodes` (`adi-app/src/viewer.rs:27`), which works only because nothing resolves that scope into a run. A user scope exists *to be* resolved into runs, so `User`'s id must never be mistaken for a `Project` id even though both pass the same filesystem-name check (`validate_project`).
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    Global,
+    Project(&'a str),
+    User(&'a str),
+}
+```
 
 ### struct `Secrets`
 
@@ -147,6 +161,54 @@ pub struct OAuthToken {
     pub refresh_token: Option<String>,
     pub expires_at: Option<u64>,
     pub scope: Option<String>,
+}
+```
+
+---
+
+## `src/settings.rs`
+
+### enum `Missing`
+
+What a turn does when it would use a user's value for a name and no live lease holds one (`docs/byo-credentials.md` §4.1, §10). Declared `Server < Wait < Fail` on purpose: deriving `Ord` off that order is what makes `effective_missing` "the stricter of the two" a one-line `max`, and it is also the order the spec states its reason in — `fail` ranks above `wait` because it is the one that also stops work piling up behind a missing value.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Missing {
+    #[default]
+    Server,
+    Wait,
+    Fail,
+}
+```
+
+### struct `UserSecretsPolicy`
+
+`secrets/settings.toml`'s `[user_secrets]` table — the one switch that turns the whole feature on, and the one list that says which env-var names a user may ever replace.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserSecretsPolicy {
+    pub enabled: bool,
+    pub overridable: Vec<String>,
+    pub missing: Missing,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lease: Option<String>,
+}
+```
+
+### struct `UserSettings`
+
+`secrets/users/<u>/.settings.toml` — one user's own, strictly-tightening-only override of `UserSecretsPolicy::missing` (§4.2).
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing: Option<Missing>,
 }
 ```
 
