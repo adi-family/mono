@@ -895,6 +895,10 @@ pub(crate) struct TasksForm {
 pub(crate) struct DashboardsForm {
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
+    /// Which scaffold the create form asks for — empty (or `"dashboard"`) is the dependency-free
+    /// default; `"vite-react"` the Vite + React one. A plain string, not an enum, so a template
+    /// a newer server knows about but this build doesn't still round-trips through the picker.
+    pub(crate) template: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_archived: RwSignal<bool>,
     /// The dashboard being transferred (its id), or empty when the panel is closed.

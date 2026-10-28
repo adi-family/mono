@@ -462,6 +462,7 @@ fn land(
             // the widgets it offers.
             icon: shipped.icon,
             widget: shipped.widget,
+            created_from: shipped.created_from,
         },
     )?;
     write_record(

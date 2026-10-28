@@ -1032,6 +1032,7 @@ fn App() -> impl IntoView {
     let dashboards_form = DashboardsForm {
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
+        template: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
         transfer_id: RwSignal::new(String::new()),

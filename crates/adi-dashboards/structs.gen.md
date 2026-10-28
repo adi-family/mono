@@ -47,6 +47,8 @@ pub struct DashboardBundle {
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub widget: std::collections::BTreeMap<String, crate::Widget>,
+    #[serde(default)]
+    pub template: Option<String>,
     pub files: Vec<BundleFile>,
 }
 ```
@@ -196,6 +198,8 @@ pub struct Manifest {
     pub icon: Option<String>,
     #[serde(default)]
     pub widget: BTreeMap<String, Widget>,
+    #[serde(default)]
+    pub created_from: Option<String>,
 }
 ```
 

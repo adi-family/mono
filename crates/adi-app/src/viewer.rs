@@ -574,6 +574,7 @@ mod tests {
             moved_to: None,
             never_started: false,
             icon: None,
+            created_from: None,
         }
     }
 

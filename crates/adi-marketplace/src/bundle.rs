@@ -1997,6 +1997,7 @@ fn land_dashboard(
             // The only fields kept from the app's own `config.toml`, which the import just wrote.
             icon: shipped.icon,
             widget: shipped.widget,
+            created_from: shipped.created_from,
         },
     ) {
         return Landed::Failed(e.to_string());

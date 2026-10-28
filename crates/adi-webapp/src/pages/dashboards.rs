@@ -78,6 +78,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                     return;
                 }
                 let description = form.description.get().trim().to_string();
+                let template = form.template.get();
                 form.busy.set(true);
                 spawn_local(async move {
                     let body = NewDashboard {
@@ -85,6 +86,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                         description: (!description.is_empty()).then_some(description),
                         // New dashboards start unfiled; file them from the row's Project picker.
                         project: None,
+                        template: (!template.is_empty()).then_some(template),
                     };
                     match fetch::create_dashboard(body).await {
                         Ok(_) => {
@@ -101,6 +103,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 <TextField id="dash-name" label="Name" placeholder="Metrics" value=form.name />
                 <TextField id="dash-desc" label="Description" placeholder="What it is for"
                     value=form.description wide=true field_class="adi-field--grow" />
+                {template_picker(form)}
                 <button class="adi-btn adi-btn--primary" type="submit"
                     prop:disabled=move || form.busy.get()>
                     "New dashboard"
@@ -111,6 +114,26 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
         </section>
 
         {archived_section(state, form)}
+    }
+    .into_any()
+}
+
+/// Which scaffold the create form asks for. An empty value is the dependency-free default —
+/// offered first and selected by default, so the common case needs no choice at all.
+fn template_picker(form: DashboardsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="dash-template">"Template"</label>
+            <select class="adi-input" id="dash-template"
+                on:change=move |ev| form.template.set(event_target_value(&ev))>
+                <option value="" selected=move || form.template.get().is_empty()>
+                    "Dependency-free (bun, no build step)"
+                </option>
+                <option value="vite-react" selected=move || form.template.get() == "vite-react">
+                    "Vite + React (TypeScript, Tailwind, shadcn/ui)"
+                </option>
+            </select>
+        </div>
     }
     .into_any()
 }
