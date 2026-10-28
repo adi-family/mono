@@ -302,41 +302,71 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
     Ok(())
 }
 
-/// `secrets leases --node <server>` — the caller's own live leases there (§7). The local,
-/// no-`--node` admin listing of every lease on this machine's own server has no established way
-/// for this CLI to reach a *running* `adi-app` process yet (leases live only in its memory, never
-/// on disk) — refused for now rather than guessed at.
+/// `secrets leases`: with `--node <server>`, the caller's own live leases there (§7); with
+/// neither, every live lease on this machine's own, currently running `adi-app` (ADI-MONO-181
+/// closes the gap ADI-MONO-180 P2.5 left: there is now an established way for this CLI to reach a
+/// running instance's HTTP API locally — see [`local_leases`]).
 fn run_leases(node: Option<String>, json: bool) -> Result<(), String> {
-    let Some(node) = node else {
-        return Err(
-            "the local admin listing isn't available from this CLI yet — pass --node <server> \
-             for your own leases there"
-                .to_string(),
-        );
+    let (label, answer) = match node {
+        Some(node) => {
+            let answer = node_request(&node, "GET", "/api/leases", None)?;
+            (node, answer)
+        }
+        None => ("this machine".to_string(), local_leases()?),
     };
-    let answer = node_request(&node, "GET", "/api/leases", None)?;
     if json {
         print_json(&answer);
-    } else {
-        let leases = answer["leases"].as_array().cloned().unwrap_or_default();
-        if leases.is_empty() {
-            println!("{node}: no live leases.");
-        }
-        for lease in leases {
-            println!(
-                "{node}: {} ({}) — {} — lease {} — last seen {}s ago",
-                lease["user"].as_str().unwrap_or("?"),
-                lease["petname"].as_str().unwrap_or("?"),
-                lease["names"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_default(),
-                lease["lease"].as_str().unwrap_or("?"),
-                lease["last_seen_secs_ago"].as_u64().unwrap_or(0),
-            );
-        }
+        return Ok(());
+    }
+    let leases = answer["leases"].as_array().cloned().unwrap_or_default();
+    if leases.is_empty() {
+        println!("{label}: no live leases.");
+    }
+    for lease in leases {
+        println!(
+            "{label}: {} ({}) — {} — lease {} — last seen {}s ago",
+            lease["user"].as_str().unwrap_or("?"),
+            lease["petname"].as_str().unwrap_or("?"),
+            lease["names"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                .unwrap_or_default(),
+            lease["lease"].as_str().unwrap_or("?"),
+            lease["last_seen_secs_ago"].as_u64().unwrap_or(0),
+        );
     }
     Ok(())
+}
+
+/// `secrets leases` with no `--node`: every live lease on this machine's own `adi-app` (§7 —
+/// leases live only in its memory, never on disk). Addressed directly on loopback, not through
+/// the mesh gateway `--node` uses: [`adi_core::app::port`] is the one source of truth for which
+/// port it actually bound — the same the ports manager handed its `LaunchAgent`/service unit and
+/// the front door's own proxy rule — so this never hard-codes a default that an installed service
+/// could already disagree with (the gap P2.5 flagged rather than guessed at). A request with no
+/// mesh identity headers reads, on the other end, as the machine's own operator
+/// (`docs/byo-credentials.md` §3.2) — an admin, so this sees every lease, not just one user's.
+fn local_leases() -> Result<serde_json::Value, String> {
+    local_leases_at(adi_core::app::port())
+}
+
+/// [`local_leases`] against an explicit port — split out so a test can point it at one nothing is
+/// listening on, rather than this machine's own real, reserved `adi-app` port.
+fn local_leases_at(port: u16) -> Result<serde_json::Value, String> {
+    let client = adi_mesh::node_api::gateway_client(NODE_TIMEOUT).map_err(|e| e.to_string())?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/leases"))
+        .send()
+        .map_err(|e| format!("reaching this machine's own adi-app on 127.0.0.1:{port}: {e} — is it running?"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .map_err(|e| format!("reading adi-app's answer: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("this machine's own adi-app: {status} {text}"));
+    }
+    serde_json::from_str(&text)
+        .map_err(|e| format!("adi-app answered something that is not JSON: {e}"))
 }
 
 /// `--node` needs `--user` to make sense of, and the reverse too: there is no user scope on
@@ -678,10 +708,23 @@ mod tests {
         }
     }
 
+    /// `local_leases_at` is what `run_leases(None, ..)` calls once pointed at this machine's real,
+    /// reserved `adi-app` port (`local_leases`) — tested here against a port deliberately bound
+    /// to nothing instead, so the test depends on no ambient service (this machine, in fact, has
+    /// a real `adi-app` listening on its own reserved port, which a test must never touch). The
+    /// gap this closes is the refusal `run_leases(None, ..)` used to answer unconditionally.
     #[test]
-    fn run_leases_without_node_refuses_before_any_network_call() {
-        let err = run_leases(None, false).expect_err("refused");
-        assert!(err.contains("--node"), "{err}");
+    fn local_leases_at_an_unreachable_port_names_it_in_the_error() {
+        // Bind to port 0 to let the OS hand back a free one, then drop the listener immediately
+        // — nothing is listening on it a moment later, and it is vanishingly unlikely anything
+        // else on the machine grabs the exact same number before the next line runs.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind an ephemeral port")
+            .local_addr()
+            .expect("read it back")
+            .port();
+        let err = local_leases_at(port).expect_err("nothing listens there any more");
+        assert!(err.contains(&port.to_string()), "{err}");
     }
 
     #[test]
