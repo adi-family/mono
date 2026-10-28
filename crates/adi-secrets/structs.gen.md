@@ -4,13 +4,13 @@
 
 > Encrypted, scoped secrets for the adi platform: one AEAD-encrypted <name>.toml per secret under ~/.adi/mono/secrets, in a global or per-project scope, resolved (project overrides global) into a run's environment. Pure library.
 
-8 structs · 3 enums · 1 type alias across 4 files.
+10 structs · 3 enums · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/lib.rs`](#srclibrs) — `Scope`, `Secrets`
-- [`src/secret.rs`](#srcsecretrs) — `Manifest`, `OAuthMeta`, `Secret`, `OAuthInfo`, `OAuthToken`
+- [`src/secret.rs`](#srcsecretrs) — `Manifest`, `Wrap`, `OAuthMeta`, `Secret`, `WrappedSecret`, `OAuthInfo`, `OAuthToken`
 - [`src/settings.rs`](#srcsettingsrs) — `Missing`, `UserSecretsPolicy`, `UserSettings`
 
 ---
@@ -90,6 +90,21 @@ pub(crate) struct Manifest {
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oauth: Option<OAuthMeta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wraps: Vec<Wrap>,
+}
+```
+
+### struct `Wrap`
+
+One device's wrapped copy of a user secret's DEK (`docs/byo-credentials.md` §8). Exactly one in v1 ("a user is one peer"), but a `Vec` on `Manifest` so a later person-with-several- devices scheme adds entries rather than changing the format.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Wrap {
+    pub kind: String,
+    pub nonce: String,
+    pub wrapped: String,
 }
 ```
 
@@ -129,6 +144,23 @@ pub struct Secret {
     pub updated_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth: Option<OAuthInfo>,
+}
+```
+
+### struct `WrappedSecret`
+
+One of a user's own values, wrapped — `crate::Secrets::list_mine_wrapped`'s own shape, for a device's unlock path (`docs/byo-credentials.md` §9 step 2). Carries exactly what a device needs to unwrap and open the value itself: still **never a plaintext**, since every one of these fields is already-sealed, opaque to anything without the device's own key.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WrappedSecret {
+    pub name: String,
+    pub description: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub nonce: String,
+    pub ciphertext: String,
+    pub wraps: Vec<Wrap>,
 }
 ```
 

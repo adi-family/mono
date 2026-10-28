@@ -203,6 +203,17 @@ rand = "0.10"
 # `scan.rs`'s tests hold it to a photograph of one lit from a single side.
 qrcode = { version = "0.14", default-features = false }
 quircs = "0.10"
+# The device-to-session-key ECDH that seals a device's unwrapped values on the way to
+# `adi-app`'s in-memory lease table (`docs/byo-credentials.md` §8/§9): an ephemeral keypair per
+# party, never a password-derived or long-lived key, so `x25519-dalek` rather than hand-rolling
+# scalar clamping over `curve25519-dalek`.
+x25519-dalek = { version = "2", default-features = false, features = ["alloc", "zeroize", "static_secrets"] }
+# 0.13, not the more commonly cited 0.12: 0.12 pulls `hmac`/`digest` 0.10, which conflicts with
+# this tree's `sha2 = "0.11"` (`digest` 0.11) and fails to resolve `Hkdf<Sha256>`'s trait bounds.
+hkdf = "0.13"
+# Dropped from memory on `Drop` — the device-unwrapped values in `adi-app`'s in-memory `Lease`
+# table (§9) and the ECDH secrets above.
+zeroize = "1"
 # Mints the front door's local CA and leaf in-process, so a fresh machine needs no openssl/mkcert.
 rcgen = "0.14"
 # Scratch directories for tests.

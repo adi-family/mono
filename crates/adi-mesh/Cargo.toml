@@ -53,6 +53,18 @@ sha2 = { workspace = true }
 subtle = "2"
 rand = { workspace = true }
 
+# The device-to-session-key sealing for BYO-credentials unlocks (`docs/byo-credentials.md` §8/§9,
+# ADI-MONO-180 P2.3), and `node_api`'s loopback request to a paired node's own `app` service
+# (lifted out of `adi-cli`, ADI-MONO-178 P1.12 / ADI-MONO-180 P2.5) — the same
+# `rustls-no-provider` + blocking client `adi-cli` already builds one of.
+chacha20poly1305 = { workspace = true }
+hex = { workspace = true }
+hkdf = { workspace = true }
+x25519-dalek = { workspace = true }
+zeroize = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
+rustls = { workspace = true }
+
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "io-util", "sync", "time"] }
 
 tracing = { workspace = true }

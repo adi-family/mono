@@ -4,18 +4,21 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-28 structs · 9 enums across 9 files.
+33 structs · 10 enums · 1 type alias across 12 files.
 
 ## Index
 
 - [`src/auth.rs`](#srcauthrs) — `Credential`
 - [`src/config.rs`](#srcconfigrs) — `MeshConfig`, `HostConfig`, `Forward`
+- [`src/connections.rs`](#srcconnectionsrs) — `LeaseLength`, `Connection`, `SecretsSettings`, `Connections`
 - [`src/daemon.rs`](#srcdaemonrs) — `Daemon`
 - [`src/fleet.rs`](#srcfleetrs) — `Scope`, `Grant`, `Target`, `Role`, `NodeRecord`, `NameProblem`, `Pairing`, `NicknameChange`, `FleetRegistry`
 - [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `Admitted`, `Verified`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
 - [`src/join.rs`](#srcjoinrs) — `Invite`, `InviteSpec`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
+- [`src/lease_seal.rs`](#srclease_sealrs) — `SessionKey`, `Sealed`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
+- [`src/node_api.rs`](#srcnode_apirs) — `GatewayClient`
 - [`src/roam.rs`](#srcroamrs) — `Recycle`
 
 ---
@@ -81,6 +84,63 @@ pub struct Forward {
     pub listen: u16,
     pub peer: String,
     pub port: u16,
+}
+```
+
+---
+
+## `src/connections.rs`
+
+### enum `LeaseLength`
+
+How long a device's lease outlives the connection (`docs/byo-credentials.md` §4.3) — `0` | `"<n>h"` | `"forever"` on the wire, via `FromStr`/`fmt::Display`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum LeaseLength {
+    #[default]
+    Connected,
+    Hours(u64),
+    Forever,
+}
+```
+
+### struct `Connection`
+
+One server connection's BYO-credentials settings (`docs/byo-credentials.md` §4.3).
+
+```rust
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Connection {
+    pub secrets: SecretsSettings,
+}
+```
+
+### struct `SecretsSettings`
+
+The `[connections.<server>.secrets]` table.
+
+```rust
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretsSettings {
+    pub share: Vec<String>,
+    pub lease: LeaseLength,
+    pub auto_unlock: bool,
+}
+```
+
+### struct `Connections`
+
+The whole `connections.toml`, keyed by petname — this device's own name for the server.
+
+```rust
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Connections {
+    pub connections: BTreeMap<String, Connection>,
 }
 ```
 
@@ -517,6 +577,35 @@ pub struct Joined {
 
 ---
 
+## `src/lease_seal.rs`
+
+### struct `SessionKey`
+
+`adi-app`'s own session half of the ECDH, minted once at boot (`docs/byo-credentials.md` §9). Never serialized, never written to disk — a restart simply mints a new one, which is the whole mechanism behind "a server restart drops every lease".
+
+```rust
+pub struct SessionKey {
+    secret: StaticSecret,
+    public: [u8; 32],
+    epoch: String,
+}
+```
+
+### struct `Sealed`
+
+One value, sealed by the device to the session's public key — what the device sends back in `POST /api/leases/unlock`'s `sealed[]`.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Sealed {
+    pub device_public: [u8; 32],
+    pub nonce: String,
+    pub ciphertext: String,
+}
+```
+
+---
+
 ## `src/main.rs`
 
 ### struct `Cli`
@@ -575,6 +664,18 @@ The whole `node.toml`: what this machine calls itself.
 pub struct NodeConfig {
     pub nickname: String,
 }
+```
+
+---
+
+## `src/node_api.rs`
+
+### type `GatewayClient`
+
+A type alias rather than every caller naming `reqwest::blocking::Client` itself — so a crate that only ever reaches a node through this module (ADI-MONO-180 P2.5's `mesh` `share`/`unlock`/`lock`) doesn't need its own direct `reqwest` dependency just to spell the client's type in a function signature.
+
+```rust
+pub type GatewayClient = reqwest::blocking::Client;
 ```
 
 ---

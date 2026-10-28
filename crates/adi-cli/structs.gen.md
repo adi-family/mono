@@ -1328,6 +1328,29 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
+    Share {
+        server: String,
+        #[arg(value_delimiter = ',')]
+        names: Vec<String>,
+        #[arg(long)]
+        lease: Option<String>,
+        #[arg(long)]
+        auto_unlock: bool,
+        #[arg(long, conflicts_with = "auto_unlock")]
+        no_auto_unlock: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Unlock {
+        server: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Lock {
+        server: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 ```
 
@@ -1563,6 +1586,12 @@ pub(crate) enum SecretsCommand {
         missing: Option<String>,
         #[arg(long = "max-lease")]
         max_lease: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Leases {
+        #[arg(long)]
+        node: Option<String>,
         #[arg(long)]
         json: bool,
     },

@@ -4,11 +4,12 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-16 structs · 1 enum · 2 type aliases across 8 files.
+23 structs · 1 enum · 2 type aliases across 9 files.
 
 ## Index
 
 - [`src/awaits.rs`](#srcawaitsrs) — `Posted`
+- [`src/leases.rs`](#srcleasesrs) — `Lease`, `LeaseTable`, `LeaseSummary`, `SessionInfo`, `SealedEntry`, `UnlockRequest`, `RenewRequest`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
@@ -27,6 +28,92 @@ Owned event name and payload.
 
 ```rust
 type Posted = (String, String);
+```
+
+---
+
+## `src/leases.rs`
+
+### struct `Lease`
+
+One user's live lease: the values a device unlocked, and how long they outlive it.
+
+```rust
+struct Lease {
+    petname: String,
+    values: BTreeMap<String, Zeroizing<String>>,
+    length: LeaseLength,
+    last_seen: Instant,
+}
+```
+
+### struct `LeaseTable`
+
+`adi-app`'s whole lease table: one `Lease` per user id (`docs/byo-credentials.md` §9 — "a user is one peer, so a second unlock from the same peer replaces the lease in place").
+
+```rust
+#[derive(Default)]
+pub struct LeaseTable(Mutex<HashMap<String, Lease>>);
+```
+
+### struct `LeaseSummary`
+
+```rust
+#[derive(Debug, Serialize)]
+struct LeaseSummary {
+    user: String,
+    petname: String,
+    names: Vec<String>,
+    lease: String,
+    last_seen_secs_ago: u64,
+}
+```
+
+### struct `SessionInfo`
+
+`GET /api/leases/session` (§9 step 1): this boot's session public key and epoch, plus the id the caller's own lease (if they unlock one) will be filed under — so a device building its unlock's AAD (`docs/byo-credentials.md` §9 step 3) never has to already know its own minted id out of band; the server, which just resolved it from the caller's own authenticated identity, hands it over right here.
+
+```rust
+#[derive(Serialize)]
+struct SessionInfo {
+    user: String,
+    public_key: String,
+    epoch: String,
+}
+```
+
+### struct `SealedEntry`
+
+```rust
+#[derive(Deserialize)]
+struct SealedEntry {
+    name: String,
+    device_public: String,
+    nonce: String,
+    ciphertext: String,
+}
+```
+
+### struct `UnlockRequest`
+
+```rust
+#[derive(Deserialize)]
+struct UnlockRequest {
+    epoch: String,
+    #[serde(default)]
+    lease: String,
+    #[serde(default)]
+    sealed: Vec<SealedEntry>,
+}
+```
+
+### struct `RenewRequest`
+
+```rust
+#[derive(Deserialize)]
+struct RenewRequest {
+    epoch: String,
+}
 ```
 
 ---
@@ -98,6 +185,8 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
+    leases: Arc<leases::LeaseTable>,
+    lease_session: adi_mesh::lease_seal::SessionKey,
     knowledge: KnowledgeStore,
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,

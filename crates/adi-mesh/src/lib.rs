@@ -11,12 +11,16 @@
 pub mod activity;
 pub mod auth;
 pub mod config;
+pub mod connections;
+pub mod devicekey;
 pub mod dns;
 pub mod fleet;
 pub mod gateway;
 pub mod identity;
 pub mod join;
+pub mod lease_seal;
 pub mod node;
+pub mod node_api;
 pub mod protocol;
 pub mod relay;
 pub mod ticket;

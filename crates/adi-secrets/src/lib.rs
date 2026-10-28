@@ -34,6 +34,7 @@ mod crypto;
 mod error;
 mod secret;
 mod settings;
+pub mod wrap;
 
 use adi_config::{clean, optional};
 use std::collections::BTreeMap;
@@ -42,7 +43,7 @@ use std::path::{Path, PathBuf};
 use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
-pub use secret::{OAuthInfo, OAuthToken, Secret};
+pub use secret::{OAuthInfo, OAuthToken, Secret, Wrap, WrappedSecret};
 pub use settings::{Missing, UserSecretsPolicy, UserSettings, effective_missing};
 
 use secret::{Manifest, OAuthMeta, validate_name, validate_project};
@@ -163,6 +164,9 @@ impl Secrets {
             // A plain `set` makes (or keeps) this a text secret — any prior OAuth provenance is
             // dropped, since the value no longer came from a provider.
             oauth: None,
+            // `set`/`set_oauth` are the master-key path (global/project scopes); a wrapped
+            // manifest is only ever built by `set_wrapped`.
+            wraps: Vec::new(),
         };
         file.save(&manifest)?;
         harden_file(file.path())?;
@@ -219,6 +223,7 @@ impl Secrets {
                 refresh_nonce,
                 refresh_ciphertext,
             }),
+            wraps: Vec::new(),
         };
         file.save(&manifest)?;
         harden_file(file.path())?;
@@ -418,6 +423,9 @@ impl Secrets {
                 created_at: manifest.created_at,
                 updated_at: manifest.updated_at,
                 oauth,
+                // Project scope is always master-key encrypted — wraps belong to `Scope::User`
+                // alone, and a project rename never touches that scope.
+                wraps: Vec::new(),
             })?;
             harden_file(target.path())?;
             optional(std::fs::remove_file(source.path()))?;
@@ -471,6 +479,96 @@ impl Secrets {
             }
             let manifest = self.manifest_file(scope, name)?.load()?;
             secrets.push(view(None, name, &manifest));
+        }
+        secrets.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(secrets)
+    }
+
+    /// Store one of `user`'s own values, already sealed on their device (`docs/byo-credentials.md`
+    /// §8, P2.1) — the only way a [`Scope::User`] secret is ever written. Unlike [`set`](Self::set),
+    /// this never touches the master key and never sees a plaintext value: `nonce`/`ciphertext`
+    /// are the value already sealed under a DEK the caller generated, and `wraps` is that DEK
+    /// sealed to one or more devices. `created_at` is preserved across an overwrite, exactly like
+    /// [`set`](Self::set).
+    ///
+    /// Callers (the own-scope HTTP route) are responsible for the checks §7/§8 name before this is
+    /// reached — that `wraps` is non-empty, that `name` is on the server's `overridable` list, and
+    /// that `user` has a scope at all. This method itself only validates the name (so it can never
+    /// be used for path traversal) and persists exactly what it is given.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe user id or secret name, or [`Error::Config`]/
+    /// [`Error::Io`] on a write failure.
+    pub fn set_wrapped(
+        &self,
+        user: &str,
+        name: &str,
+        description: Option<&str>,
+        nonce: String,
+        ciphertext: String,
+        wraps: Vec<Wrap>,
+    ) -> Result<Secret> {
+        let scope = Scope::User(user);
+        let file = self.manifest_file(scope, name)?;
+        self.ensure_scope_dir(scope)?;
+
+        let now = now_unix();
+        let created_at = file.carried_created_at(now);
+
+        let manifest = Manifest {
+            description: clean(description),
+            nonce,
+            ciphertext,
+            created_at,
+            updated_at: now,
+            oauth: None,
+            wraps,
+        };
+        file.save(&manifest)?;
+        harden_file(file.path())?;
+        Ok(view(None, name, &manifest))
+    }
+
+    /// One user's own values, **wrapped** — every field a device needs to unwrap and open them
+    /// itself (`docs/byo-credentials.md` §9 step 2), never a plaintext. This is a different type
+    /// from [`list_mine`](Self::list_mine)'s [`Secret`] on purpose: `Secret` is the admin-facing
+    /// metadata shape used everywhere else in this crate, and must never grow a ciphertext field
+    /// that some *other* caller could be tempted to serialize somewhere it shouldn't.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe user id, [`Error::Io`] on a read failure, or
+    /// [`Error::Config`] if a manifest is invalid TOML.
+    pub fn list_mine_wrapped(&self, user: &str) -> Result<Vec<WrappedSecret>> {
+        let scope = Scope::User(user);
+        let dir = self.scope_dir(scope)?;
+        let Some(entries) = optional(std::fs::read_dir(dir))? else {
+            return Ok(Vec::new());
+        };
+        let mut secrets = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let Ok(file_name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(name) = file_name.strip_suffix(".toml") else {
+                continue;
+            };
+            if validate_name(name).is_err() {
+                continue;
+            }
+            let manifest: Manifest = self.manifest_file(scope, name)?.load()?;
+            secrets.push(WrappedSecret {
+                name: name.to_string(),
+                description: manifest.description,
+                created_at: manifest.created_at,
+                updated_at: manifest.updated_at,
+                nonce: manifest.nonce,
+                ciphertext: manifest.ciphertext,
+                wraps: manifest.wraps,
+            });
         }
         secrets.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(secrets)
@@ -1126,6 +1224,7 @@ mod tests {
             created_at: now_unix(),
             updated_at: now_unix(),
             oauth: None,
+            wraps: Vec::new(),
         })
         .expect("save");
     }
@@ -1273,6 +1372,139 @@ mod tests {
             "also-mine",
             "a different user's scope is untouched"
         );
+    }
+
+    #[test]
+    fn list_mine_wrapped_carries_everything_a_device_needs_and_nothing_more() {
+        let store = scratch("list-mine-wrapped");
+        store
+            .set_wrapped(
+                "u-aaa",
+                "K",
+                Some("my key"),
+                "n".into(),
+                "c".into(),
+                vec![Wrap {
+                    kind: "device-key-v1".to_string(),
+                    nonce: "wn".into(),
+                    wrapped: "wc".into(),
+                }],
+            )
+            .expect("set_wrapped");
+        set_scoped(&store, Scope::User("u-bbb"), "K", "not mine");
+
+        let mine = store.list_mine_wrapped("u-aaa").expect("list");
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].name, "K");
+        assert_eq!(mine[0].description.as_deref(), Some("my key"));
+        assert_eq!(mine[0].nonce, "n");
+        assert_eq!(mine[0].ciphertext, "c");
+        assert_eq!(mine[0].wraps.len(), 1);
+        assert_eq!(mine[0].wraps[0].kind, "device-key-v1");
+    }
+
+    #[test]
+    fn list_mine_wrapped_skips_the_users_own_settings_file() {
+        let store = scratch("list-mine-wrapped-skips-settings");
+        store
+            .set_wrapped("u-aaa", "K", None, "n".into(), "c".into(), vec![])
+            .expect("set_wrapped");
+        UserSettings::default()
+            .save(&store.config, "u-aaa")
+            .expect("write the user's own settings file");
+        assert_eq!(store.list_mine_wrapped("u-aaa").expect("list").len(), 1);
+    }
+
+    // -- set_wrapped (ADI-MONO-180 P2.1) ----------------------------------------------------
+
+    /// A full device-side round trip through [`wrap`]: seal a value under a fresh DEK, wrap the
+    /// DEK to a device key, store it with [`Secrets::set_wrapped`] exactly as the own-scope API
+    /// will, then read it back the way the same device's unlock path would — all without the
+    /// server ever touching the master key or a plaintext value.
+    #[test]
+    fn set_wrapped_round_trips_through_a_devices_own_crypto() {
+        let store = scratch("set-wrapped-roundtrip");
+        let wrap_key = wrap::generate_dek();
+        let dek = wrap::generate_dek();
+        let (value_nonce, ciphertext) =
+            wrap::seal_value(&dek, "u-aaa", "K", b"sk-mine").expect("seal value");
+        let (wrap_nonce, wrapped) =
+            wrap::wrap_dek(&wrap_key, "u-aaa", "K", &dek).expect("wrap dek");
+
+        let meta = store
+            .set_wrapped(
+                "u-aaa",
+                "K",
+                Some("my key"),
+                value_nonce.clone(),
+                ciphertext.clone(),
+                vec![Wrap {
+                    kind: "device-key-v1".to_string(),
+                    nonce: wrap_nonce.clone(),
+                    wrapped: wrapped.clone(),
+                }],
+            )
+            .expect("set_wrapped");
+        assert_eq!(meta.name, "K");
+        assert_eq!(meta.project, None, "a user id is never shown as a project id");
+
+        // Nothing resembling the plaintext landed on disk.
+        let raw = std::fs::read_to_string(store.dir().join("users/u-aaa/K.toml")).expect("read");
+        assert!(!raw.contains("sk-mine"), "{raw}");
+        assert!(raw.contains("device-key-v1"), "{raw}");
+
+        // The device's own unlock path: unwrap the DEK, then open the value.
+        let manifest: Manifest = store
+            .manifest_file(Scope::User("u-aaa"), "K")
+            .expect("manifest file")
+            .load()
+            .expect("load");
+        assert_eq!(manifest.wraps.len(), 1);
+        let recovered_dek = wrap::unwrap_dek(
+            &wrap_key,
+            "u-aaa",
+            "K",
+            &manifest.wraps[0].nonce,
+            &manifest.wraps[0].wrapped,
+        )
+        .expect("unwrap dek");
+        assert_eq!(recovered_dek, dek);
+        assert_eq!(
+            wrap::open_value(&recovered_dek, "u-aaa", "K", &manifest.nonce, &manifest.ciphertext)
+                .expect("open value"),
+            b"sk-mine"
+        );
+
+        // It lists like any other user secret, metadata only.
+        let mine = store.list_mine("u-aaa").expect("list");
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].description.as_deref(), Some("my key"));
+    }
+
+    #[test]
+    fn set_wrapped_preserves_created_at_across_an_overwrite() {
+        let store = scratch("set-wrapped-overwrite");
+        let first = store
+            .set_wrapped("u-aaa", "K", None, "n1".into(), "c1".into(), vec![])
+            .expect("first");
+        let second = store
+            .set_wrapped("u-aaa", "K", None, "n2".into(), "c2".into(), vec![])
+            .expect("second");
+        assert_eq!(first.created_at, second.created_at);
+        assert!(second.updated_at >= first.updated_at);
+    }
+
+    #[test]
+    fn set_wrapped_validates_the_user_id_and_name() {
+        let store = scratch("set-wrapped-invalid");
+        assert!(matches!(
+            store.set_wrapped("../escape", "K", None, "n".into(), "c".into(), vec![]),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            store.set_wrapped("u-aaa", "../escape", None, "n".into(), "c".into(), vec![]),
+            Err(Error::InvalidName(_))
+        ));
     }
 
     #[test]

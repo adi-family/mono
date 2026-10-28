@@ -17,7 +17,15 @@ const IDENTITY_FILE: &str = "identity.key";
 /// # Errors
 /// Fails if the key file exists but is not exactly 32 bytes, or on any store I/O error.
 pub fn load_or_create() -> anyhow::Result<SecretKey> {
-    let module = Config::open().module(crate::config::MODULE);
+    load_or_create_in(&Config::open())
+}
+
+/// [`load_or_create`] against an explicit store — for tests and alternate installs.
+///
+/// # Errors
+/// Fails if the key file exists but is not exactly 32 bytes, or on any store I/O error.
+pub fn load_or_create_in(store: &Config) -> anyhow::Result<SecretKey> {
+    let module = store.module(crate::config::MODULE);
     if let Some(bytes) = module.read_raw(IDENTITY_FILE)? {
         let bytes: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
             anyhow::anyhow!(
