@@ -290,6 +290,7 @@ mod tests {
             cwd: cwd.to_path_buf(),
             path: std::env::var("PATH").unwrap_or_default(),
             env: vec![("ADI_PRELUDE_TEST".to_string(), "carried".to_string())],
+            inherited_strip: Vec::new(),
             arguments: serde_json::Value::Null,
             tools: Vec::new(),
             tool_help: None,

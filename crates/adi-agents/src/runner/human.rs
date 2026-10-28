@@ -235,6 +235,7 @@ mod tests {
             cwd: cwd.to_path_buf(),
             path: String::new(),
             env: Vec::new(),
+            inherited_strip: Vec::new(),
             arguments: Value::Null,
             tools: Vec::new(),
             tool_help: None,

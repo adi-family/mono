@@ -11,6 +11,7 @@
 //! Where the pid file goes is still decided here ([`pid_path_in`]) because the reaper thread has to
 //! delete it after [`spawn_child`] returns — the one piece of layout that a caller cannot own.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,29 @@ use crate::error::{Error, Result};
 pub(crate) struct Spawned {
     pub(crate) pid: u32,
     pub(crate) started: Option<u64>,
+}
+
+/// What a child would inherit from `ambient` with every `ADI_*` run-identity variable and every
+/// name in `strip` removed (ADI-MONO-175).
+///
+/// Unconditional on `ADI_*`: a spawned child's own identity is set explicitly, in its own
+/// `run_env`, by whoever is launching it (see [`crate::workspace::env`]), so nothing it legitimately
+/// needs is lost by refusing to let it inherit somebody else's. `strip` carries the one thing that
+/// needs a lookup to know — the attached-secret names of whichever agent's run this process is
+/// itself already running inside, if any (see [`crate::Agents::inherited_strip`]).
+///
+/// Takes `ambient` as an iterator rather than reading `std::env` itself, so [`spawn_child`] and
+/// [`crate::runner::detached::hash_child_environment`] — which must never disagree about what a
+/// child actually receives — can both call this and a test can call it against a fixed map
+/// instead of the real process environment.
+pub(crate) fn scrub_ambient(
+    ambient: impl IntoIterator<Item = (String, String)>,
+    strip: &[String],
+) -> BTreeMap<String, String> {
+    ambient
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("ADI_") && !strip.iter().any(|name| name == key))
+        .collect()
 }
 
 /// Spawn one detached child of a run: `argv` writing its combined stdout+stderr to `log`, its PID
@@ -57,9 +81,10 @@ pub(crate) struct Spawned {
 /// Shared by the one-shot [`launch`] and the harness conversation turns, which spawn a fresh child
 /// into the *same* `run_id` slot for each answer — so this is the single place the detached-child
 /// wiring (secrets, `PATH`, working dir, process group, reaping) lives.
-// Eight, and every one of them is a distinct decision the caller has already made — where to file
-// it, where to run it, what to run, what to run it with, and who to tell when it ends. Bundling
-// them into a struct would move the same list one line up and give the caller a type to fill in.
+// Nine, and every one of them is a distinct decision the caller has already made — where to file
+// it, where to run it, what to run, what to run it with, who it must not inherit from, and who to
+// tell when it ends. Bundling them into a struct would move the same list one line up and give
+// the caller a type to fill in.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_child(
     dir: &Path,
@@ -69,6 +94,7 @@ pub(crate) fn spawn_child(
     run_path: &str,
     argv: &[String],
     run_env: &[(String, String)],
+    inherited_strip: &[String],
     on_exit: impl FnOnce(Spawned) + Send + 'static,
 ) -> Result<Spawned> {
     archive_previous_turn(dir, run_id, log);
@@ -79,11 +105,15 @@ pub(crate) fn spawn_child(
         .split_first()
         .ok_or_else(|| Error::Launch("backend built an empty command".to_string()))?;
 
+    let base = scrub_ambient(std::env::vars(), inherited_strip);
     let mut command = Command::new(program);
     command
         .args(command_args)
-        // Injected secrets and the agent's declared vars go in first, under their literal names;
+        .env_clear()
+        // The scrubbed ambient environment first, so a name it kept can still be shadowed by what
+        // follows; then injected secrets and the agent's declared vars, under their literal names;
         // `PATH` is set right after so nothing there can shadow the tool path.
+        .envs(&base)
         .envs(run_env.iter().map(|(k, v)| (k, v)))
         .env("PATH", run_path)
         .stdin(Stdio::null())
@@ -284,6 +314,47 @@ mod tests {
         dir
     }
 
+    /// A name no other test's env var could collide with, for the ADI-MONO-175 tests below: they
+    /// mutate the real process environment (there is no per-child view to fake it with), and
+    /// `cargo test` runs this file's tests concurrently in the same process. Deliberately not
+    /// `ADI_`-prefixed — most of these tests are about a name that is *not* `ADI_*`, and an
+    /// accidental prefix match would strip it for the wrong reason.
+    fn unique_probe_name(tag: &str) -> String {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        format!("AGENTS_TEST_PROBE_{tag}_{}_{n}", std::process::id())
+    }
+
+    /// Same uniqueness guarantee as [`unique_probe_name`], but for the one test that needs its
+    /// probe to actually be an `ADI_*` name.
+    fn unique_adi_probe_name(tag: &str) -> String {
+        format!("ADI_{}", unique_probe_name(tag))
+    }
+
+    /// A command that writes `$VAR`/`%VAR%` to `file` — empty (unix) or the literal `%VAR%` token
+    /// back (Windows) when the child never had it. Read with [`contains_marker`] rather than
+    /// parsed exactly, since the two platforms spell "unset" differently.
+    fn write_env_probe_argv(file: &str, var: &str) -> Vec<String> {
+        #[cfg(unix)]
+        {
+            vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("echo \"${var}\" > {file}"),
+            ]
+        }
+        #[cfg(not(unix))]
+        {
+            vec!["cmd".into(), "/c".into(), format!("echo %{var}% > {file}")]
+        }
+    }
+
+    /// Whether a probe file written by [`write_env_probe_argv`] shows `marker` — the one check
+    /// that reads the same on every platform `write_env_probe_argv` targets.
+    fn contains_marker(file: &Path, marker: &str) -> bool {
+        std::fs::read_to_string(file).is_ok_and(|s| s.contains(marker))
+    }
+
     /// A command that writes its working directory to `file`. `sh -c 'pwd > file'` on Unix;
     /// `cmd /c 'cd > file'` on Windows (`cd` with no args prints the cwd).
     fn write_cwd_argv(file: &str) -> Vec<String> {
@@ -313,6 +384,7 @@ mod tests {
             &base,
             "",
             &write_cwd_argv("cwd.txt"),
+            &[],
             &[],
             |_| {},
         )
@@ -355,6 +427,7 @@ mod tests {
             "",
             &argv,
             &[],
+            &[],
             |_| {},
         )
         .expect("spawn");
@@ -394,6 +467,7 @@ mod tests {
             "",
             &argv,
             &[],
+            &[],
             |_| {},
         )
         .expect("spawn");
@@ -430,6 +504,7 @@ mod tests {
             &dir,
             "",
             &argv,
+            &[],
             &[],
             move |finished| {
                 let _ = tx.send(finished);
@@ -481,14 +556,16 @@ mod tests {
         let log = dir.join("run-1.log");
         let exit_now = vec!["/bin/sh".to_string(), "-c".to_string(), "echo first".to_string()];
 
-        spawn_child(&dir, "run-1", &log, &dir, "", &exit_now, &[], |_| {}).expect("first turn");
+        spawn_child(&dir, "run-1", &log, &dir, "", &exit_now, &[], &[], |_| {})
+            .expect("first turn");
         wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
         let first_turn = std::fs::read_to_string(&log).expect("first turn's log");
         assert!(first_turn.contains("turn started"), "{first_turn}");
         assert!(first_turn.contains("first"), "{first_turn}");
 
         let exit_again = vec!["/bin/sh".to_string(), "-c".to_string(), "echo second".to_string()];
-        spawn_child(&dir, "run-1", &log, &dir, "", &exit_again, &[], |_| {}).expect("second turn");
+        spawn_child(&dir, "run-1", &log, &dir, "", &exit_again, &[], &[], |_| {})
+            .expect("second turn");
         wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
         let second_turn = std::fs::read_to_string(&log).expect("second turn's log");
         assert!(
@@ -518,7 +595,7 @@ mod tests {
         let log = dir.join("run-1.log");
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
 
-        spawn_child(&dir, "run-1", &log, &dir, "", &argv, &[], |_| {}).expect("spawn");
+        spawn_child(&dir, "run-1", &log, &dir, "", &argv, &[], &[], |_| {}).expect("spawn");
         wait_for(|| std::fs::read_to_string(&log).is_ok_and(|s| s.contains("turn ended")));
 
         let others: Vec<_> = std::fs::read_dir(&dir)
@@ -528,6 +605,241 @@ mod tests {
             .filter(|name| name != "run-1.log" && name != "run-1.pid")
             .collect();
         assert!(others.is_empty(), "nothing archived yet: {others:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// [`scrub_ambient`] alone, with no process spawned: `ADI_*` goes unconditionally, `strip`'s
+    /// names go too, and everything else survives untouched.
+    #[test]
+    fn scrub_ambient_drops_adi_star_and_the_strip_list_and_nothing_else() {
+        let ambient = vec![
+            ("ADI_AGENT".to_string(), "caller".to_string()),
+            ("ADI_RUN_ID".to_string(), "conv-1".to_string()),
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN".to_string(),
+                "caller-secret".to_string(),
+            ),
+            ("HOME".to_string(), "/home/someone".to_string()),
+            ("LANG".to_string(), "en_US.UTF-8".to_string()),
+        ];
+        let strip = vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()];
+
+        let scrubbed = scrub_ambient(ambient, &strip);
+
+        assert!(
+            !scrubbed.contains_key("ADI_AGENT"),
+            "ADI_* is unconditional"
+        );
+        assert!(
+            !scrubbed.contains_key("ADI_RUN_ID"),
+            "ADI_* is unconditional"
+        );
+        assert!(
+            !scrubbed.contains_key("CLAUDE_CODE_OAUTH_TOKEN"),
+            "named in strip"
+        );
+        assert_eq!(
+            scrubbed.get("HOME").map(String::as_str),
+            Some("/home/someone")
+        );
+        assert_eq!(
+            scrubbed.get("LANG").map(String::as_str),
+            Some("en_US.UTF-8")
+        );
+    }
+
+    /// An empty strip list still drops every `ADI_*` — the one rule [`scrub_ambient`] never needs
+    /// data to apply.
+    #[test]
+    fn scrub_ambient_strips_adi_star_even_with_an_empty_strip_list() {
+        let ambient = vec![("ADI_LEASE".to_string(), "cap".to_string())];
+        assert!(scrub_ambient(ambient, &[]).is_empty());
+    }
+
+    /// The end-to-end case ADI-MONO-175 is about: a value this test process has in its own
+    /// environment — standing in for a secret a parent run's process was handed — must not reach
+    /// a child [`spawn_child`] launches, once its name is in `inherited_strip`. Real process
+    /// spawn, real OS environment inheritance, nothing faked.
+    #[test]
+    fn a_strip_listed_ambient_value_never_reaches_the_spawned_child() {
+        let dir = scratch_dir("strip-listed");
+        let probe = unique_probe_name("stripped");
+        // SAFETY: `probe` is unique to this call, so no other test's env read or write can race it.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(&probe, "leaked-parent-secret");
+        }
+
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &write_env_probe_argv("probe.txt", &probe),
+            &[],
+            &[probe.clone()],
+            |_| {},
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var(&probe);
+        }
+        child.expect("spawn");
+
+        let out = dir.join("probe.txt");
+        for _ in 0..100 {
+            if out.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !contains_marker(&out, "leaked-parent-secret"),
+            "a name in inherited_strip must not reach the child"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The companion case: a name that is *not* in `inherited_strip` is an ordinary inherited
+    /// variable, and [`scrub_ambient`] must leave it alone — the fix strips named secrets and
+    /// `ADI_*`, nothing broader.
+    #[test]
+    fn an_unlisted_ambient_value_still_reaches_the_spawned_child() {
+        let dir = scratch_dir("unlisted-kept");
+        let probe = unique_probe_name("kept");
+        // SAFETY: `probe` is unique to this call, so no other test's env read or write can race it.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(&probe, "ordinary-inherited-value");
+        }
+
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &write_env_probe_argv("probe.txt", &probe),
+            &[],
+            &[],
+            |_| {},
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var(&probe);
+        }
+        child.expect("spawn");
+
+        let out = dir.join("probe.txt");
+        for _ in 0..100 {
+            if out.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            contains_marker(&out, "ordinary-inherited-value"),
+            "a name nobody asked to strip is still inherited"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every `ADI_*` name is stripped from the ambient environment unconditionally, regardless of
+    /// `inherited_strip` — the other half of ADI-MONO-175, which matters most for a name like
+    /// `ADI_LEASE` that a spawn's own `run_env` does not always set.
+    #[test]
+    fn an_ambient_adi_star_variable_never_reaches_the_spawned_child() {
+        let dir = scratch_dir("adi-star-kept-out");
+        let probe = unique_adi_probe_name("adi-star");
+        assert!(probe.starts_with("ADI_"), "the case under test: {probe}");
+        // SAFETY: `probe` is unique to this call, so no other test's env read or write can race it.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(&probe, "leaked-identity");
+        }
+
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &write_env_probe_argv("probe.txt", &probe),
+            &[],
+            &[],
+            |_| {},
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var(&probe);
+        }
+        child.expect("spawn");
+
+        let out = dir.join("probe.txt");
+        for _ in 0..100 {
+            if out.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !contains_marker(&out, "leaked-identity"),
+            "ADI_* is stripped unconditionally, with no strip entry needed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stripping the ambient copy of a name must not block the run's own, deliberate value for
+    /// that same name: `run_env` is layered on top of the scrubbed base, so a child's attached
+    /// secret still reaches it even when the same name happened to be in `inherited_strip` too
+    /// (the ordinary case: the caller's own secret and the child's own secret share a name).
+    #[test]
+    fn run_env_still_wins_over_a_stripped_name() {
+        let dir = scratch_dir("run-env-wins");
+        let probe = unique_probe_name("overridden");
+        // SAFETY: `probe` is unique to this call, so no other test's env read or write can race it.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var(&probe, "parents-value");
+        }
+
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &write_env_probe_argv("probe.txt", &probe),
+            &[(probe.clone(), "childs-own-value".to_string())],
+            &[probe.clone()],
+            |_| {},
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var(&probe);
+        }
+        child.expect("spawn");
+
+        let out = dir.join("probe.txt");
+        for _ in 0..100 {
+            if out.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            contains_marker(&out, "childs-own-value"),
+            "the run's own explicit value for a stripped name still wins"
+        );
+        assert!(
+            !contains_marker(&out, "parents-value"),
+            "the parent's ambient value for that name is gone"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

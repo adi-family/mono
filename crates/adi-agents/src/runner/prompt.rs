@@ -213,6 +213,7 @@ mod tests {
             cwd: std::path::PathBuf::from("/tmp"),
             path: String::new(),
             env: Vec::new(),
+            inherited_strip: Vec::new(),
             arguments: serde_json::Value::Null,
             tools: Vec::new(),
             tool_help: None,

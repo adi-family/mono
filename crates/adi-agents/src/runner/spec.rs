@@ -28,6 +28,13 @@ pub struct RunSpec {
     /// The run's environment: attached secrets, its scope's database pointer, the workspace vars,
     /// and the agent's own declared entries — already merged, in precedence order.
     pub env: Vec<(String, String)>,
+    /// Names to remove from the ambient environment before [`env`](Self::env) is applied — the
+    /// attached-secret names of whichever agent's run this process is itself already running
+    /// inside, when it is (ADI-MONO-175). A spawned child otherwise inherits the whole process
+    /// environment it was launched from, which defeats the per-agent secrets allowlist the moment
+    /// one run launches another. Every `ADI_*` run-identity variable is stripped the same way
+    /// unconditionally, wherever a child is actually spawned, and needs no entry here.
+    pub inherited_strip: Vec<String>,
     /// The engine's own configuration, exactly as stored. Uninterpreted here: each runner
     /// deserializes its own typed argument struct out of this in [`check`](super::Runner::check),
     /// which is why no layer above needs a table of every backend's argument type.

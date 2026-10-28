@@ -51,7 +51,7 @@ pub fn open(project_id: &str, workspace: &str, dir: &Path) -> Result<TerminalSes
     }
     let session = session_name(project_id, workspace);
     if !adi_pty::is_running(&session) {
-        adi_pty::launch(&session, &shell_argv(), dir, &[])
+        adi_pty::launch(&session, &shell_argv(), dir, &[], &[])
             .map_err(|e| Error::Terminal(e.to_string()))?;
     }
     Ok(TerminalSession {

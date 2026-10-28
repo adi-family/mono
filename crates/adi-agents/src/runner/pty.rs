@@ -126,7 +126,8 @@ impl Runner for PtyRunner {
             quiet_codex_env(&mut env);
         }
         env.push(("PATH".to_string(), spec.path.clone()));
-        adi_pty::launch(&name, &argv, &spec.cwd, &env).map_err(|e| Error::Launch(e.to_string()))?;
+        adi_pty::launch(&name, &argv, &spec.cwd, &env, &spec.inherited_strip)
+            .map_err(|e| Error::Launch(e.to_string()))?;
 
         session.set_state(
             State {
@@ -327,6 +328,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             path: "/usr/bin:/bin".to_string(),
             env: Vec::new(),
+            inherited_strip: Vec::new(),
             arguments,
             tools: Vec::new(),
             tool_help: None,
@@ -498,7 +500,7 @@ mod tests {
         session
             .set_state(json!({ "session": name }))
             .expect("state");
-        adi_pty::launch(&name, &["/bin/cat".to_string()], &std::env::temp_dir(), &[])
+        adi_pty::launch(&name, &["/bin/cat".to_string()], &std::env::temp_dir(), &[], &[])
             .expect("launch a pane");
         assert!(runner.is_alive(&session));
 
@@ -551,6 +553,7 @@ mod tests {
                 "trap '' INT; echo ready; while :; do sleep 1; done".to_string(),
             ],
             &std::env::temp_dir(),
+            &[],
             &[],
         )
         .expect("launch a pane");

@@ -2883,6 +2883,7 @@ pub struct RunSpec {
     pub cwd: PathBuf,
     pub path: String,
     pub env: Vec<(String, String)>,
+    pub inherited_strip: Vec<String>,
     pub arguments: serde_json::Value,
     pub tools: Vec<ToolHelp>,
     pub tool_help: Option<String>,

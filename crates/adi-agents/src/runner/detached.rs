@@ -345,6 +345,7 @@ impl Runner for DetachedRunner {
             &spec.path,
             &argv,
             &self.run_env(spec),
+            &spec.inherited_strip,
             move |child| {
                 if let Some(writer) = writer {
                     let discovered_thread_id = capture_codex_thread
@@ -1399,15 +1400,18 @@ fn path_bytes(path: &Path) -> Vec<u8> {
     }
 }
 
+/// Hashed from exactly the same base [`spawn_child`](detached::spawn_child) builds its `Command`
+/// from — [`detached::scrub_ambient`] with `spec.inherited_strip`, never raw `std::env::vars_os`
+/// — so this fingerprint can never disagree with what the child the next line actually spawns
+/// receives. [`Agents::inherited_strip`](crate::Agents::inherited_strip) is re-derived every turn
+/// from the calling process's own `$ADI_AGENT`, same as the rest of `spec`, so it is as stable
+/// across a session's turns as everything else this digest already covers (ADI-MONO-175).
 fn hash_child_environment(digest: &mut Sha256, spec: &RunSpec) {
-    let mut env: BTreeMap<String, String> = std::env::vars_os()
-        .map(|(key, value)| {
-            (
-                normalized_env_key(&key.to_string_lossy()),
-                value.to_string_lossy().into_owned(),
-            )
-        })
-        .collect();
+    let mut env: BTreeMap<String, String> =
+        detached::scrub_ambient(std::env::vars(), &spec.inherited_strip)
+            .into_iter()
+            .map(|(key, value)| (normalized_env_key(&key), value))
+            .collect();
     let mut overlay = spec.env.clone();
     quiet_codex_env(&mut overlay);
     for (key, value) in overlay {
@@ -2146,6 +2150,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             path: test_run_path(),
             env: Vec::new(),
+            inherited_strip: Vec::new(),
             arguments,
             tools: Vec::new(),
             tool_help: None,
@@ -4317,6 +4322,7 @@ mod tests {
             dir,
             "/usr/bin:/bin",
             &["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
+            &[],
             &[],
             |_| {},
         )

@@ -2394,6 +2394,41 @@ impl Agents {
         )
     }
 
+    /// Names to strip from the ambient environment before a child's own [`RunSpec::env`] is laid
+    /// over it (ADI-MONO-175): the attached-secret names of whichever agent's run this process is
+    /// itself already running inside, if any.
+    ///
+    /// [`awaits::caller`] answers that question from `$ADI_AGENT`/`$ADI_RUN_ID` — the same pair a
+    /// tool an agent runs is handed, and the same pair [`launcher::by_caller`] reads to say who a
+    /// fresh launch is `launched_by`. A process with neither set (a human's shell, an automation,
+    /// `adi-app` itself) has no caller to strip after, and returns nothing. A caller naming an
+    /// agent that no longer exists, or one with no secrets attached, is read the same way.
+    ///
+    /// Called once per [`spec_in`](Self::spec_in) — every launch and every later turn, since a
+    /// turn resumed from inside a different ambient process (a reply typed by a person, a trigger)
+    /// is answered by that process's own caller, not whichever launched the session originally.
+    fn inherited_strip(&self) -> Vec<String> {
+        awaits::caller().map_or_else(Vec::new, |caller| self.secret_names_of(&caller.agent))
+    }
+
+    /// `name`'s own attached-secret names, or nothing for an agent that no longer exists —
+    /// [`inherited_strip`](Self::inherited_strip)'s lookup, split out so it is testable without
+    /// touching `$ADI_AGENT`.
+    fn secret_names_of(&self, name: &str) -> Vec<String> {
+        self.get(name)
+            .ok()
+            .flatten()
+            .map(|agent| {
+                agent
+                    .manifest
+                    .secrets
+                    .iter()
+                    .map(|secret| secret.name.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Everything a run needs, resolved and already on disk: where it starts, the `PATH` it
     /// resolves commands on, the environment it is launched with, its engine's configuration, and
     /// its tools' own help as data.
@@ -2449,6 +2484,7 @@ impl Agents {
             cwd,
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
             env,
+            inherited_strip: self.inherited_strip(),
             arguments: agent.manifest.arguments_value(),
             tools: if bin_tools.is_empty() {
                 Vec::new()
@@ -4932,6 +4968,46 @@ mod tests {
         assert!(!env.contains_key("NOT_ATTACHED"));
     }
 
+    /// [`Agents::secret_names_of`] — the data half of ADI-MONO-175's `inherited_strip`, tested
+    /// without touching `$ADI_AGENT` (see `backends::detached::tests` for the env-mutating
+    /// end-to-end cases, and [`launcher`]'s own tests for `by_caller`).
+    #[test]
+    fn secret_names_of_names_without_revealing_values() {
+        let store = scratch("caller-secret-names");
+        let secrets = adi_secrets::Secrets::with_config(store.config().clone());
+        secrets
+            .set(None, "CLAUDE_CODE_OAUTH_TOKEN", "sk-caller", None)
+            .expect("set");
+        let mut caller = spec("process:claude");
+        caller.secrets = vec![SecretAttachment {
+            project: None,
+            name: "CLAUDE_CODE_OAUTH_TOKEN".into(),
+        }];
+        store.save("caller-agent", caller).expect("save caller");
+
+        let names = store.secret_names_of("caller-agent");
+
+        assert_eq!(names, vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()]);
+    }
+
+    /// An agent with nothing attached strips nothing — the common case, since most agents never
+    /// run inside another agent's turn at all.
+    #[test]
+    fn secret_names_of_is_empty_for_an_agent_with_no_secrets() {
+        let store = scratch("caller-no-secrets");
+        store.save("bare", spec("process:claude")).expect("save");
+        assert!(store.secret_names_of("bare").is_empty());
+    }
+
+    /// A caller that no longer exists — its definition deleted mid-conversation, say — strips
+    /// nothing rather than erroring: there is no allowlist left to protect, and refusing the
+    /// *child's* launch over the *parent's* missing definition would be the wrong failure to pick.
+    #[test]
+    fn secret_names_of_is_empty_for_an_agent_that_does_not_exist() {
+        let store = scratch("caller-missing");
+        assert!(store.secret_names_of("no-such-agent").is_empty());
+    }
+
     #[test]
     fn a_declared_run_environment_reaches_the_launch_context() {
         let store = scratch("declared-run-env");
@@ -5951,6 +6027,7 @@ mod tests {
             cwd: std::env::temp_dir(),
             path: String::new(),
             env: Vec::new(),
+            inherited_strip: Vec::new(),
             arguments: serde_json::Value::Null,
             tools: Vec::new(),
             tool_help: None,
