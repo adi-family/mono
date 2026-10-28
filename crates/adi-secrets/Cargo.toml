@@ -12,6 +12,7 @@ repository.workspace = true
 adi-config = { workspace = true }
 
 serde = { workspace = true }
+tracing = { workspace = true }
 
 # Authenticated encryption for secret values at rest (XChaCha20-Poly1305) + base64 for the
 # stored nonce/ciphertext and the master-key file.

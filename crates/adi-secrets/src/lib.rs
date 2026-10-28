@@ -33,6 +33,7 @@
 mod crypto;
 mod error;
 mod secret;
+mod settings;
 
 use adi_config::{clean, optional};
 use std::collections::BTreeMap;
@@ -42,13 +43,52 @@ use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
 pub use secret::{OAuthInfo, OAuthToken, Secret};
+pub use settings::{Missing, UserSecretsPolicy, UserSettings, effective_missing};
 
 use secret::{Manifest, OAuthMeta, validate_name, validate_project};
 
-/// The store module secrets live under, and the two scope subdirectories within it.
+/// The store module secrets live under, and the scope subdirectories within it.
 const SECRETS_MODULE: &str = "secrets";
 const GLOBAL_DIR: &str = "global";
 const PROJECTS_DIR: &str = "projects";
+const USERS_DIR: &str = "users";
+
+/// Where a secret lives (`docs/byo-credentials.md` §4.2) — a **third kind of scope**, not a
+/// reserved project id: `adi-app` keeps node passwords in a pseudo-project called `fleet-nodes`
+/// (`adi-app/src/viewer.rs:27`), which works only because nothing resolves that scope into a run.
+/// A user scope exists *to be* resolved into runs, so `User`'s id must never be mistaken for a
+/// [`Project`](Self::Project) id even though both pass the same filesystem-name check
+/// ([`validate_project`]).
+///
+/// [`Secrets::set`]/[`list`](Secrets::list)/[`get`](Secrets::get)/[`reveal`](Secrets::reveal)/
+/// [`remove`](Secrets::remove) — the ones whose public signature is `project: Option<&str>` —
+/// are thin wrappers over this: `None` is [`Global`](Self::Global), `Some(id)` is
+/// [`Project`](Self::Project). There is no `Option`-shaped convenience for [`User`](Self::User),
+/// because a user scope is a capability with its own rules (§4.2, §7), not a drop-in third
+/// `Option` variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// `secrets/global/<name>.toml` — available everywhere.
+    Global,
+    /// `secrets/projects/<id>/<name>.toml` — scoped to an [`adi-projects`](adi_config) id.
+    Project(&'a str),
+    /// `secrets/users/<u>/<name>.toml` — scoped to one minted user id
+    /// (`docs/byo-credentials.md` §3.2). Wrapped to the user's device from phase 2 on; in phase 1
+    /// nothing writes one.
+    User(&'a str),
+}
+
+impl<'a> Scope<'a> {
+    /// The platform-wide `project: Option<&str>` convention, lifted into a [`Scope`]: `None` is
+    /// [`Global`](Self::Global), `Some(id)` is [`Project`](Self::Project). Never produces
+    /// [`User`](Self::User) — there is no `Option` shape for it.
+    fn from_project(project: Option<&'a str>) -> Self {
+        match project {
+            None => Self::Global,
+            Some(id) => Self::Project(id),
+        }
+    }
+}
 
 /// The secrets store: sets, reads, and resolves per-scope encrypted secrets under the
 /// `secrets` module dir. Cheap to clone; all state is on disk.
@@ -104,11 +144,12 @@ impl Secrets {
         value: &str,
         description: Option<&str>,
     ) -> Result<Secret> {
-        let file = self.manifest_file(project, name)?;
-        self.ensure_scope_dir(project)?;
+        let scope = Scope::from_project(project);
+        let file = self.manifest_file(scope, name)?;
+        self.ensure_scope_dir(scope)?;
 
         let key = crypto::load_or_create_key(&self.dir())?;
-        let (nonce, ciphertext) = crypto::encrypt(&key, &aad(project, name), value.as_bytes())?;
+        let (nonce, ciphertext) = crypto::encrypt(&key, &aad(scope, name), value.as_bytes())?;
 
         let now = now_unix();
         let created_at = file.carried_created_at(now);
@@ -143,18 +184,19 @@ impl Secrets {
         token: &OAuthToken,
         description: Option<&str>,
     ) -> Result<Secret> {
-        let file = self.manifest_file(project, name)?;
+        let scope = Scope::from_project(project);
+        let file = self.manifest_file(scope, name)?;
         // The provider is later joined into a URL path (`/refresh/<provider>`), so it must be a
         // safe segment too.
         validate_project(&token.provider)?;
-        self.ensure_scope_dir(project)?;
+        self.ensure_scope_dir(scope)?;
 
         let key = crypto::load_or_create_key(&self.dir())?;
         let (nonce, ciphertext) =
-            crypto::encrypt(&key, &aad(project, name), token.access_token.as_bytes())?;
+            crypto::encrypt(&key, &aad(scope, name), token.access_token.as_bytes())?;
         let (refresh_nonce, refresh_ciphertext) = match token.refresh_token.as_deref() {
             Some(rt) if !rt.is_empty() => {
-                let (n, c) = crypto::encrypt(&key, &aad_refresh(project, name), rt.as_bytes())?;
+                let (n, c) = crypto::encrypt(&key, &aad_refresh(scope, name), rt.as_bytes())?;
                 (Some(n), Some(c))
             }
             _ => (None, None),
@@ -191,7 +233,8 @@ impl Secrets {
     /// [`Error::InvalidName`] for an unsafe name/id, [`Error::Decrypt`] if it can't be decrypted,
     /// or [`Error::Config`]/[`Error::Crypto`] on a load/key failure.
     pub fn reveal_refresh(&self, project: Option<&str>, name: &str) -> Result<Option<String>> {
-        let file = self.manifest_file(project, name)?;
+        let scope = Scope::from_project(project);
+        let file = self.manifest_file(scope, name)?;
         if !file.exists() {
             return Ok(None);
         }
@@ -204,7 +247,7 @@ impl Secrets {
             return Ok(None);
         };
         let key = crypto::load_or_create_key(&self.dir())?;
-        let plaintext = crypto::decrypt(&key, &aad_refresh(project, name), &nonce, &ciphertext)?;
+        let plaintext = crypto::decrypt(&key, &aad_refresh(scope, name), &nonce, &ciphertext)?;
         Ok(Some(decode_value(plaintext)?))
     }
 
@@ -218,7 +261,8 @@ impl Secrets {
     /// [`Error::InvalidName`] for an unsafe project id, [`Error::Io`] on a read failure, or
     /// [`Error::Config`] if a manifest is invalid TOML.
     pub fn list(&self, project: Option<&str>) -> Result<Vec<Secret>> {
-        let dir = self.scope_dir(project)?;
+        let scope = Scope::from_project(project);
+        let dir = self.scope_dir(scope)?;
         let Some(entries) = optional(std::fs::read_dir(dir))? else {
             return Ok(Vec::new());
         };
@@ -239,7 +283,7 @@ impl Secrets {
             if validate_name(name).is_err() {
                 continue;
             }
-            let manifest = self.manifest_file(project, name)?.load()?;
+            let manifest = self.manifest_file(scope, name)?.load()?;
             secrets.push(view(project, name, &manifest));
         }
         secrets.sort_by(|a, b| a.name.cmp(&b.name));
@@ -249,6 +293,11 @@ impl Secrets {
     /// Every secret across every scope — the global set plus each project's — metadata only,
     /// sorted by scope then name (global first). This is what a UI lists once and filters by
     /// `project` client-side; a run uses [`resolve`](Self::resolve) instead.
+    ///
+    /// **Never walks `users/`.** This backs the admin-facing secrets page (`GET /api/secrets`,
+    /// `docs/byo-credentials.md` §7), and a user scope is write-only: an admin and the user
+    /// themselves can set, replace and remove a user secret, but no API — this one included —
+    /// ever lists or reveals its value.
     ///
     /// # Errors
     /// [`Error::Io`] on a read failure, or [`Error::Config`] if a manifest is invalid TOML.
@@ -281,7 +330,7 @@ impl Secrets {
     /// # Errors
     /// [`Error::InvalidName`] for an unsafe name/id, or [`Error::Config`] on invalid TOML.
     pub fn get(&self, project: Option<&str>, name: &str) -> Result<Option<Secret>> {
-        let file = self.manifest_file(project, name)?;
+        let file = self.manifest_file(Scope::from_project(project), name)?;
         if !file.exists() {
             return Ok(None);
         }
@@ -296,7 +345,8 @@ impl Secrets {
     /// [`Error::InvalidName`] for an unsafe name/id, [`Error::Decrypt`] if the value can't be
     /// decrypted, or [`Error::Config`]/[`Error::Crypto`] on a load/key failure.
     pub fn reveal(&self, project: Option<&str>, name: &str) -> Result<Option<String>> {
-        let file = self.manifest_file(project, name)?;
+        let scope = Scope::from_project(project);
+        let file = self.manifest_file(scope, name)?;
         if !file.exists() {
             return Ok(None);
         }
@@ -304,7 +354,7 @@ impl Secrets {
         let key = crypto::load_or_create_key(&self.dir())?;
         let plaintext = crypto::decrypt(
             &key,
-            &aad(project, name),
+            &aad(scope, name),
             &manifest.nonce,
             &manifest.ciphertext,
         )?;
@@ -341,26 +391,26 @@ impl Secrets {
         }
 
         let key = crypto::load_or_create_key(&self.dir())?;
-        self.ensure_scope_dir(Some(to))?;
+        self.ensure_scope_dir(Scope::Project(to))?;
         let mut moved = 0;
         for secret in secrets {
             let name = secret.name.as_str();
-            let source = self.manifest_file(Some(from), name)?;
+            let source = self.manifest_file(Scope::Project(from), name)?;
             let manifest: Manifest = source.load()?;
 
             let value = crypto::decrypt(
                 &key,
-                &aad(Some(from), name),
+                &aad(Scope::Project(from), name),
                 &manifest.nonce,
                 &manifest.ciphertext,
             )?;
-            let (nonce, ciphertext) = crypto::encrypt(&key, &aad(Some(to), name), &value)?;
+            let (nonce, ciphertext) = crypto::encrypt(&key, &aad(Scope::Project(to), name), &value)?;
             let oauth = match manifest.oauth {
                 Some(meta) => Some(recrypt_refresh(&key, from, to, name, meta)?),
                 None => None,
             };
 
-            let target = self.manifest_file(Some(to), name)?;
+            let target = self.manifest_file(Scope::Project(to), name)?;
             target.save(&Manifest {
                 description: manifest.description,
                 nonce,
@@ -375,7 +425,7 @@ impl Secrets {
         }
         // Only when it is empty — anything left behind is somebody else's, and a rename is not a
         // licence to delete it.
-        optional(std::fs::remove_dir(self.scope_dir(Some(from))?))?;
+        optional(std::fs::remove_dir(self.scope_dir(Scope::Project(from))?))?;
         Ok(moved)
     }
 
@@ -384,7 +434,7 @@ impl Secrets {
     /// # Errors
     /// [`Error::InvalidName`] for an unsafe name/id, or [`Error::Io`] on a removal failure.
     pub fn remove(&self, project: Option<&str>, name: &str) -> Result<bool> {
-        let file = self.manifest_file(project, name)?;
+        let file = self.manifest_file(Scope::from_project(project), name)?;
         Ok(optional(std::fs::remove_file(file.path()))?.is_some())
     }
 
@@ -423,10 +473,11 @@ impl Secrets {
 
     /// Load and decrypt one secret's value with an already-loaded key.
     fn decrypt_named(&self, key: &[u8; 32], project: Option<&str>, name: &str) -> Result<String> {
-        let manifest = self.manifest_file(project, name)?.load()?;
+        let scope = Scope::from_project(project);
+        let manifest = self.manifest_file(scope, name)?.load()?;
         let plaintext = crypto::decrypt(
             key,
-            &aad(project, name),
+            &aad(scope, name),
             &manifest.nonce,
             &manifest.ciphertext,
         )?;
@@ -434,54 +485,72 @@ impl Secrets {
     }
 
     /// The manifest-file handle for a secret in a scope (touches no disk). Validates the name
-    /// (and the project id, if any) before joining onto the store path.
-    fn manifest_file(&self, project: Option<&str>, name: &str) -> Result<ConfigFile<Manifest>> {
+    /// (and the scope's project/user id, if any) before joining onto the store path.
+    fn manifest_file(&self, scope: Scope<'_>, name: &str) -> Result<ConfigFile<Manifest>> {
         validate_name(name)?;
-        let rel = match project {
-            None => format!("{GLOBAL_DIR}/{name}.toml"),
-            Some(id) => {
+        let rel = match scope {
+            Scope::Global => format!("{GLOBAL_DIR}/{name}.toml"),
+            Scope::Project(id) => {
                 validate_project(id)?;
                 format!("{PROJECTS_DIR}/{id}/{name}.toml")
+            }
+            Scope::User(user) => {
+                validate_project(user)?;
+                format!("{USERS_DIR}/{user}/{name}.toml")
             }
         };
         Ok(self.config.module(SECRETS_MODULE).file(&rel))
     }
 
     /// The directory a scope's secrets live in (touches no disk).
-    fn scope_dir(&self, project: Option<&str>) -> Result<PathBuf> {
-        Ok(match project {
-            None => self.dir().join(GLOBAL_DIR),
-            Some(id) => {
+    fn scope_dir(&self, scope: Scope<'_>) -> Result<PathBuf> {
+        Ok(match scope {
+            Scope::Global => self.dir().join(GLOBAL_DIR),
+            Scope::Project(id) => {
                 validate_project(id)?;
                 self.dir().join(PROJECTS_DIR).join(id)
+            }
+            Scope::User(user) => {
+                validate_project(user)?;
+                self.dir().join(USERS_DIR).join(user)
             }
         })
     }
 
     /// Create a scope's directory tree with `0700` throughout, before a secret is written into
     /// it — so the file's parents are never left world-readable by the default umask.
-    fn ensure_scope_dir(&self, project: Option<&str>) -> Result<()> {
+    fn ensure_scope_dir(&self, scope: Scope<'_>) -> Result<()> {
         let base = self.dir();
         std::fs::create_dir_all(&base)?;
         harden_dir(&base)?;
-        if project.is_some() {
-            let projects = base.join(PROJECTS_DIR);
-            std::fs::create_dir_all(&projects)?;
-            harden_dir(&projects)?;
+        let parent = match scope {
+            Scope::Global => None,
+            Scope::Project(_) => Some(PROJECTS_DIR),
+            Scope::User(_) => Some(USERS_DIR),
+        };
+        if let Some(parent) = parent {
+            let parent_dir = base.join(parent);
+            std::fs::create_dir_all(&parent_dir)?;
+            harden_dir(&parent_dir)?;
         }
-        let scope = self.scope_dir(project)?;
-        std::fs::create_dir_all(&scope)?;
-        harden_dir(&scope)?;
+        let dir = self.scope_dir(scope)?;
+        std::fs::create_dir_all(&dir)?;
+        harden_dir(&dir)?;
         Ok(())
     }
 }
 
 /// The additional-authenticated-data string binding a ciphertext to its exact location, so a
-/// value copied to a different scope/name won't decrypt.
-fn aad(project: Option<&str>, name: &str) -> String {
-    match project {
-        None => format!("{GLOBAL_DIR}/{name}"),
-        Some(id) => format!("{PROJECTS_DIR}/{id}/{name}"),
+/// value copied to a different scope/name won't decrypt. A user secret's AAD is
+/// `user:<u>/<NAME>` (`docs/byo-credentials.md` §4.2) — the `user:` prefix, unlike
+/// `global/`/`projects/`, isn't a path segment, since nothing ever lists `users/` the way it
+/// lists the other two scopes (`list_all`), but the binding works the same way: it can't collide
+/// with `global/<NAME>` or `projects/<id>/<NAME>`, so a ciphertext moved between scopes won't open.
+fn aad(scope: Scope<'_>, name: &str) -> String {
+    match scope {
+        Scope::Global => format!("{GLOBAL_DIR}/{name}"),
+        Scope::Project(id) => format!("{PROJECTS_DIR}/{id}/{name}"),
+        Scope::User(user) => format!("user:{user}/{name}"),
     }
 }
 
@@ -498,9 +567,9 @@ fn recrypt_refresh(
     let (Some(nonce), Some(ciphertext)) = (&meta.refresh_nonce, &meta.refresh_ciphertext) else {
         return Ok(meta);
     };
-    let refresh = crypto::decrypt(key, &aad_refresh(Some(from), name), nonce, ciphertext)?;
+    let refresh = crypto::decrypt(key, &aad_refresh(Scope::Project(from), name), nonce, ciphertext)?;
     let (refresh_nonce, refresh_ciphertext) =
-        crypto::encrypt(key, &aad_refresh(Some(to), name), &refresh)?;
+        crypto::encrypt(key, &aad_refresh(Scope::Project(to), name), &refresh)?;
     Ok(OAuthMeta {
         refresh_nonce: Some(refresh_nonce),
         refresh_ciphertext: Some(refresh_ciphertext),
@@ -510,8 +579,8 @@ fn recrypt_refresh(
 
 /// The AAD binding an OAuth secret's **refresh token** to its location — distinct from the
 /// value's AAD so the two ciphertexts in one file can't be swapped for each other.
-fn aad_refresh(project: Option<&str>, name: &str) -> String {
-    format!("{}#refresh", aad(project, name))
+fn aad_refresh(scope: Scope<'_>, name: &str) -> String {
+    format!("{}#refresh", aad(scope, name))
 }
 
 /// Build the metadata view of a stored secret — including OAuth provenance, but never a token.
@@ -964,12 +1033,115 @@ mod tests {
         let store = scratch("aadmove");
         store.set(None, "K", "v", None).expect("set");
         let from = store.dir().join("global/K.toml");
-        store.ensure_scope_dir(Some("proj")).expect("scope dir");
+        store
+            .ensure_scope_dir(Scope::Project("proj"))
+            .expect("scope dir");
         let to = store.dir().join("projects/proj/K.toml");
         std::fs::copy(&from, &to).expect("copy");
         assert!(matches!(
             store.reveal(Some("proj"), "K"),
             Err(Error::Decrypt)
         ));
+    }
+
+    // -- Scope::User (ADI-MONO-177 P1.3) --------------------------------------------------
+
+    /// Write a secret directly into `scope`, the way a future `set --user` will, without going
+    /// through the two-argument `project: Option<&str>` surface — there is no `Option` shape for
+    /// [`Scope::User`].
+    fn set_scoped(store: &Secrets, scope: Scope<'_>, name: &str, value: &str) {
+        let file = store.manifest_file(scope, name).expect("manifest file");
+        store.ensure_scope_dir(scope).expect("scope dir");
+        let key = crypto::load_or_create_key(&store.dir()).expect("key");
+        let (nonce, ciphertext) =
+            crypto::encrypt(&key, &aad(scope, name), value.as_bytes()).expect("encrypt");
+        file.save(&Manifest {
+            description: None,
+            nonce,
+            ciphertext,
+            created_at: now_unix(),
+            updated_at: now_unix(),
+            oauth: None,
+        })
+        .expect("save");
+    }
+
+    /// [`Secrets::reveal`] has no `Scope` overload either; this is its test-only mirror.
+    fn reveal_scoped(store: &Secrets, scope: Scope<'_>, name: &str) -> Result<String> {
+        let manifest: Manifest = store.manifest_file(scope, name)?.load()?;
+        let key = crypto::load_or_create_key(&store.dir())?;
+        let plaintext = crypto::decrypt(&key, &aad(scope, name), &manifest.nonce, &manifest.ciphertext)?;
+        decode_value(plaintext)
+    }
+
+    #[test]
+    fn a_user_secret_lives_under_users_u_and_round_trips() {
+        let store = scratch("user-roundtrip");
+        set_scoped(&store, Scope::User("u-aaa"), "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
+
+        assert!(
+            store
+                .dir()
+                .join("users/u-aaa/CLAUDE_CODE_OAUTH_TOKEN.toml")
+                .exists(),
+            "stored at the documented path"
+        );
+        assert_eq!(
+            reveal_scoped(&store, Scope::User("u-aaa"), "CLAUDE_CODE_OAUTH_TOKEN").expect("reveal"),
+            "sk-mine"
+        );
+    }
+
+    #[test]
+    fn a_user_ciphertext_fails_to_open_in_global_or_another_users_scope() {
+        let store = scratch("user-aadmove");
+        set_scoped(&store, Scope::User("u-aaa"), "K", "mine");
+
+        let from = store.dir().join("users/u-aaa/K.toml");
+
+        // Copied into global.
+        store.ensure_scope_dir(Scope::Global).expect("scope dir");
+        let to_global = store.dir().join("global/K.toml");
+        std::fs::copy(&from, &to_global).expect("copy to global");
+        assert!(matches!(store.reveal(None, "K"), Err(Error::Decrypt)));
+
+        // Copied into another user's scope.
+        store
+            .ensure_scope_dir(Scope::User("u-bbb"))
+            .expect("scope dir");
+        let to_other_user = store.dir().join("users/u-bbb/K.toml");
+        std::fs::copy(&from, &to_other_user).expect("copy to another user");
+        assert!(matches!(
+            reveal_scoped(&store, Scope::User("u-bbb"), "K"),
+            Err(Error::Decrypt)
+        ));
+
+        // The original is untouched.
+        assert_eq!(
+            reveal_scoped(&store, Scope::User("u-aaa"), "K").expect("reveal"),
+            "mine"
+        );
+    }
+
+    #[test]
+    fn list_all_never_walks_users() {
+        let store = scratch("user-listall");
+        store.set(None, "G", "g", None).expect("global");
+        store.set(Some("proj"), "P", "p", None).expect("project");
+        set_scoped(&store, Scope::User("u-aaa"), "SECRET", "mine");
+
+        let all = store.list_all().expect("list_all");
+        let names: Vec<&str> = all.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["G", "P"], "no user secret ever appears here");
+    }
+
+    #[test]
+    fn a_user_id_is_validated_the_same_way_a_project_id_is() {
+        let store = scratch("user-validate");
+        assert!(matches!(
+            store.manifest_file(Scope::User("../escape"), "K"),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(store.manifest_file(Scope::User("u-aaa"), "K").is_ok());
     }
 }
