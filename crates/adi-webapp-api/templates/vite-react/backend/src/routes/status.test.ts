@@ -9,7 +9,7 @@ describe("GET /status", () => {
   it("answers ok", async () => {
     const res = await app.request("/status");
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as { ok: boolean };
     expect(body.ok).toBe(true);
   });
 });

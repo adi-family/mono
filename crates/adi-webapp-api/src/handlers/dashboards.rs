@@ -91,6 +91,8 @@ const VITE_FRONTEND_MAIN_TSX: &str =
 const VITE_FRONTEND_APP_TSX: &str = include_str!("../../templates/vite-react/frontend/src/App.tsx");
 const VITE_FRONTEND_INDEX_CSS: &str =
     include_str!("../../templates/vite-react/frontend/src/index.css");
+const VITE_FRONTEND_VITE_ENV_DTS: &str =
+    include_str!("../../templates/vite-react/frontend/src/vite-env.d.ts");
 const VITE_FRONTEND_UTILS_TS: &str =
     include_str!("../../templates/vite-react/frontend/src/lib/utils.ts");
 const VITE_FRONTEND_API_TS: &str = include_str!("../../templates/vite-react/frontend/src/lib/api.ts");
@@ -440,6 +442,10 @@ fn scaffold_vite_react(
         (frontend.join("src").join("main.tsx"), VITE_FRONTEND_MAIN_TSX),
         (frontend.join("src").join("App.tsx"), VITE_FRONTEND_APP_TSX),
         (frontend.join("src").join("index.css"), VITE_FRONTEND_INDEX_CSS),
+        (
+            frontend.join("src").join("vite-env.d.ts"),
+            VITE_FRONTEND_VITE_ENV_DTS,
+        ),
         (
             frontend.join("src").join("lib").join("utils.ts"),
             VITE_FRONTEND_UTILS_TS,
@@ -2086,6 +2092,7 @@ mod tests {
         // Its own package-per-service layout, not the dependency-free scaffold's bare scripts.
         assert!(dir.join("frontend").join("package.json").exists());
         assert!(dir.join("backend").join("package.json").exists());
+        assert!(dir.join("frontend").join("src").join("vite-env.d.ts").exists());
         assert!(!dir.join("frontend").join("index.ts").exists());
         assert!(!dir.join("backend").join("index.ts").exists());
 

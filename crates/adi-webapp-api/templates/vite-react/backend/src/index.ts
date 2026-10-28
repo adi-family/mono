@@ -31,7 +31,7 @@ Bun.serve({
     const url = new URL(req.url);
     const rewritten = new URL(req.url);
     rewritten.pathname = withoutApiPrefix(url.pathname);
-    return app.fetch(new Request(rewritten, req));
+    return app.fetch(new Request(rewritten.toString(), req));
   },
 });
 

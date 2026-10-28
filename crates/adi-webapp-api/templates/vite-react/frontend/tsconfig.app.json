@@ -16,7 +16,8 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
-    "baseUrl": ".",
+    // No `baseUrl` — `typescript` 7.0.2 removed it; a `paths` value is resolved against the
+    // tsconfig file's own directory now, which is exactly what `baseUrl: "."` meant here.
     "paths": {
       "@/*": ["./src/*"]
     }
