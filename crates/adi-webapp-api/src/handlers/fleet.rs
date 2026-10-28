@@ -325,8 +325,22 @@ pub fn fleet_rename(store: &Config, body: &[u8]) -> Response {
         }
         registry
             .rename(&from, &to)
-            .map_err(|e| error(400, &e.to_string()))
+            .map_err(|e| error(400, &e.to_string()))?;
+        // `connections.toml` (`docs/byo-credentials.md` §4.3) is keyed by the same petname but
+        // lives in its own file, so the registry's own rename never moves it — run here, the one
+        // coupling between the two files. Best-effort, like `unpair_and_forget_user`'s secrets
+        // cleanup below: the rename itself already succeeded.
+        move_connection(store, &from, &to);
+        Ok(())
     })
+}
+
+/// Move this box's own `connections.toml` entry (if it has one) when a petname is renamed.
+fn move_connection(store: &Config, from: &str, to: &str) {
+    if let Ok(mut connections) = adi_mesh::connections::Connections::load_from(store) {
+        connections.rename(from, to);
+        let _ = connections.save_to(store);
+    }
 }
 
 /// `POST /api/fleet/unpair` — forget a node: its key, its grants, and its credential.
@@ -367,6 +381,13 @@ fn unpair_and_forget_user(
         && !registry.has_user(user)
     {
         let _ = adi_secrets::Secrets::with_config(store.clone()).forget_user(user);
+    }
+    // This box's own `connections.toml` entry for `petname`, if any (`docs/byo-credentials.md`
+    // §4.3) — the other half of the coupling `move_connection` handles for a rename.
+    if let Ok(mut connections) = adi_mesh::connections::Connections::load_from(store) {
+        if connections.remove(petname) {
+            let _ = connections.save_to(store);
+        }
     }
     Some(record)
 }

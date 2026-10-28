@@ -62,6 +62,14 @@ adi-mesh = { workspace = true }
 
 adi-css = { workspace = true }
 
+# `/api/leases/session`'s `[user_secrets]` read, direct (`docs/byo-credentials.md` §9,
+# ADI-MONO-180 P2.3) — previously only a dev-dependency, reused for the await worker's test store.
+adi-config = { workspace = true }
+
+# Zeroed on drop: every value a BYO-credentials lease holds in `leases::LeaseTable`
+# (`docs/byo-credentials.md` §9).
+zeroize = { workspace = true }
+
 # The webapp's Trunk build output (`crates/adi-webapp/dist`), embedded at compile time so
 # the binary is self-contained — no runtime asset paths.
 include_dir = "0.7"
@@ -85,9 +93,6 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-# The await worker's test points a real `Agents`/`Awaits` pair at a scratch store root, which is
-# the one place this crate names the config layer directly.
-adi-config = { workspace = true }
 
 # build.rs precompresses the embedded webapp dist (brotli max quality + gzip) once at build
 # time, so adi-app itself never compresses a response per request.

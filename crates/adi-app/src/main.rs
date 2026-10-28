@@ -6,6 +6,7 @@
 mod awaits;
 mod channels;
 mod event_log;
+mod leases;
 mod live;
 mod node;
 mod prober;
@@ -51,6 +52,12 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
+    /// The BYO-credentials lease table and this boot's session key (`docs/byo-credentials.md`
+    /// §9, ADI-MONO-180 P2.3) — the same `Arc` `agents` was opened with via
+    /// `Agents::with_lease_values`, kept here too because the `/api/leases/*` routes act on it
+    /// directly and `Agents` exposes no mutator for it.
+    leases: Arc<leases::LeaseTable>,
+    lease_session: adi_mesh::lease_seal::SessionKey,
     /// Keep the lazily loaded embedding model alive across requests.
     knowledge: KnowledgeStore,
     triggers: Triggers,
@@ -222,7 +229,12 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = db.bootstrap() {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
-    let agents = Agents::open();
+    // The BYO-credentials lease table (`docs/byo-credentials.md` §9, ADI-MONO-180 P2.3) — built
+    // before `Agents::open` so the same `Arc` goes into both `App` and `Agents::with_lease_values`.
+    let leases = Arc::new(leases::LeaseTable::default());
+    let lease_session = adi_mesh::lease_seal::SessionKey::generate();
+    let agents =
+        Agents::open().with_lease_values(Arc::clone(&leases) as Arc<dyn adi_agents::LeaseValues>);
     // Migrate before consumers read definitions; log failures so the panel remains usable.
     match adi_agents::migrations::on_boot(&agents) {
         Ok(applied) => {
@@ -291,6 +303,8 @@ async fn main() -> anyhow::Result<()> {
         tasks,
         tools,
         agents,
+        leases,
+        lease_session,
         knowledge,
         triggers,
         trigger_supervisor,
@@ -625,6 +639,16 @@ fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) ->
     record.user.clone().filter(|_| record.auth.user == sender.user)
 }
 
+/// The caller's own `EndpointId`, from this machine's own pairing record of them — part of a
+/// BYO-credentials unlock's AAD (`docs/byo-credentials.md` §9, `adi_mesh::lease_seal`), never
+/// taken from anything the request itself claims. `None` under exactly the same conditions
+/// [`user_scope`] answers `None` for.
+fn sender_device_key(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> Option<String> {
+    let sender = sender?;
+    let registry = adi_mesh::fleet::FleetRegistry::load_from(projects.config()).ok()?;
+    Some(registry.get(sender.petname)?.key.clone())
+}
+
 /// Refuse a member peer's request to a route ADI-MONO-171 G3 reserves for an admin — computed
 /// once, ahead of both the async and blocking routers (`answer`), so neither has to repeat it.
 /// `None` for a local caller, an admin peer, or a route the role does not restrict; everyone can
@@ -690,6 +714,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         tasks,
         tools,
         agents,
+        leases,
+        lease_session,
         knowledge: knowledge_store,
         triggers,
         trigger_supervisor,
@@ -890,6 +916,32 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ),
         ("GET", "/api/secrets/policy") => handlers::secrets_policy(secrets),
         ("POST", "/api/secrets/policy") => handlers::set_secrets_policy(secrets, &req.body),
+        ("GET", "/api/leases/session") => {
+            leases::session(lease_session, user_scope(projects, fleet_sender(req)).as_deref())
+        }
+        ("POST", "/api/leases/unlock") => leases::unlock(
+            leases,
+            lease_session,
+            projects.config(),
+            user_scope(projects, fleet_sender(req)).as_deref(),
+            fleet_sender(req).map(|s| s.petname),
+            sender_device_key(projects, fleet_sender(req)).as_deref(),
+            &req.body,
+        ),
+        ("POST", "/api/leases/renew") => leases::renew(
+            leases,
+            lease_session,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+            &req.body,
+        ),
+        ("POST", "/api/leases/revoke") => {
+            leases::revoke(leases, user_scope(projects, fleet_sender(req)).as_deref())
+        }
+        ("GET", "/api/leases") => leases::list(
+            leases,
+            peer_role(projects, fleet_sender(req)).is_admin(),
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
         ("GET", "/api/voice") => handlers::voice(secrets),
         ("POST", "/api/voice/transcribe") => handlers::transcribe(
             secrets,
