@@ -41,6 +41,7 @@ pub mod goals;
 mod knowledge;
 mod launch;
 pub mod launcher;
+mod lease;
 mod limits;
 pub mod llm;
 pub mod marker;
@@ -82,6 +83,7 @@ pub use events::{
     AgentRunReported, AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused,
     RUN_REPORTED, event_catalog, event_types,
 };
+pub use lease::LeaseRef;
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
     AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
@@ -1320,6 +1322,7 @@ impl Agents {
             markers,
             start_at,
             only,
+            ref lease,
             ..
         } = *options;
         let stored = self
@@ -1420,6 +1423,13 @@ impl Agents {
         // this over it.
         if let Some(overrides) = overrides {
             store.set_overrides(&agent.name, &record.id, overrides)?;
+        }
+        // Written for the same reason, at the same moment: whose lease this conversation's turns
+        // look for is decided at launch, from the mesh identity that opened it, and must not
+        // change because a later turn is read under different server policy or caller identity.
+        // See `docs/byo-credentials.md` §11 and `LaunchOptions::lease`.
+        if let Some(lease) = lease {
+            store.set_lease(&agent.name, &record.id, lease)?;
         }
         // Written for the same reason and at the same moment, and it is the stronger of the two: the
         // agent and every backend it names are re-read on every turn, so without this a definition

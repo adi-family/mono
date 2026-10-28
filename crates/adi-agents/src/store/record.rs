@@ -110,6 +110,15 @@ pub struct SessionRecord {
     /// rather than re-read from the log, because "did it work?" is the question every listing is
     /// really asking and the log is a megabyte of somebody else's wire format.
     pub outcome: Option<RunOutcome>,
+    /// Whose lease this session's turns look for, and which names (`docs/byo-credentials.md`
+    /// §11). `None` means "server values only" — every session opened before this column existed,
+    /// every automation launch, and every launch not made by a person whose mesh identity carries
+    /// a user scope (§3.2). Written once, at
+    /// [`create_as`](super::SessionStore::create_as), the same reason
+    /// [`overrides`](Self::overrides) and [`chain`](Self::chain) are: a conversation is answered
+    /// by whatever *started* it, not by whatever today's server policy or mesh identity says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease: Option<crate::LeaseRef>,
 }
 
 /// What became of a run: the engine's own verdict, its telemetry, and the head of what it said.
@@ -223,6 +232,7 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
     let runner: Option<String> = row.get(10)?;
     let chain: Option<String> = row.get(15)?;
     let chain_at: i64 = row.get(16)?;
+    let lease: Option<String> = row.get(17)?;
     Ok(SessionRecord {
         agent: row.get(0)?,
         id: row.get(1)?,
@@ -263,6 +273,10 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         // Same rule, and it matters more here: an outcome written by a newer build must not make
         // an older one unable to list the session at all.
         outcome: outcome.and_then(|t| serde_json::from_str(&t).ok()),
+        // Same rule again: a lease written by a newer build that this one cannot parse reads as
+        // "no lease", which is a session running on the server's values — the strictly safer
+        // misreading, never the other way round.
+        lease: lease.and_then(|t| serde_json::from_str(&t).ok()),
     })
 }
 

@@ -92,6 +92,16 @@ pub struct LaunchOptions<'a> {
     /// [`start_at`](Self::start_at). For asking a specific model a specific question, and for the
     /// prober, which is testing one backend and must not be silently answered by another.
     pub only: Option<&'a str>,
+    /// Whose lease this session's turns look for, and which names — `docs/byo-credentials.md`
+    /// §11. `None` is every launch today: an automation, a local caller, or a mesh peer with no
+    /// user scope.
+    ///
+    /// **No HTTP handler ever fills this from the request body.** It is computed once, by
+    /// `run_agent`, from the caller's `FleetSender` and the fleet registry alone
+    /// (`adi_mesh`'s `user_scope`) — never from anything the peer sent, because a lease names
+    /// whose credential a run may spend and a body field a peer controls is exactly the thing
+    /// that must not decide that (§5 Q6's forgery, one layer down).
+    pub lease: Option<crate::LeaseRef>,
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent

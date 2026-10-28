@@ -1115,6 +1115,7 @@ mod tests {
             chain: None,
             runner_state: None,
             outcome: None,
+            lease: None,
         }
     }
 

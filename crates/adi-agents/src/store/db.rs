@@ -85,6 +85,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     chain         TEXT,
     chain_at      INTEGER NOT NULL DEFAULT 0,
     idle_notified_turn INTEGER,
+    lease         TEXT,
+    lease_cap     TEXT,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -236,6 +238,15 @@ const MIGRATIONS: &[&str] = &[
     // one: every goal ever nudged before this existed had, at that moment, failed zero deliveries
     // in a row, which is exactly what 0 says. See `adi_agents::goals::DELIVERY_FAILURE_CAP`.
     "ALTER TABLE goals ADD COLUMN delivery_failures INTEGER NOT NULL DEFAULT 0",
+    // Whose lease a session's turns look for, and which names — JSON, NULL on every session ever
+    // opened before this existed and on any launch with no user scope to give it (every
+    // automation, every local launch). NULL reads as "server values only"
+    // (`docs/byo-credentials.md` §11). See `SessionRecord::lease`.
+    "ALTER TABLE sessions ADD COLUMN lease TEXT",
+    // SHA-256 of the session's `ADI_LEASE` capability (ADI-MONO-177 P1.6; minted and read from
+    // phase 3 on). NULL whenever `lease` is NULL, and also NULL for a leased session until its
+    // first turn mints one.
+    "ALTER TABLE sessions ADD COLUMN lease_cap TEXT",
 ];
 
 // One connection per thread per database.

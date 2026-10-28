@@ -87,7 +87,7 @@ const EVENT_SOURCE: &str = "agents";
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
                               hidden, runner_state, outcome, runner, starred, launched_by, \
-                              overrides, title, chain, chain_at";
+                              overrides, title, chain, chain_at, lease";
 
 /// The sessions under one root.
 ///
@@ -336,6 +336,11 @@ impl SessionStore {
             chain: None,
             runner_state: None,
             outcome: None,
+            // Set by `set_lease` immediately after, by the one caller that has computed one
+            // (`run_agent`, over `user_scope` — see `docs/byo-credentials.md` §11). Every other
+            // caller — every automation, every launch with no mesh identity attached — leaves
+            // this `None`, which reads as "server values only".
+            lease: None,
         };
         self.conn()?
             .execute(
@@ -499,6 +504,29 @@ impl SessionStore {
                 rusqlite::params![agent, id, json],
             )
             .map_err(|e| db::sql_err("record a session's overrides in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Record whose lease a session's turns look for, and which names (`docs/byo-credentials.md`
+    /// §11, [`SessionRecord::lease`]).
+    ///
+    /// Written once, right after the session is opened — the same contract
+    /// [`set_overrides`](Self::set_overrides) keeps, and for the same reason: which user's
+    /// values a conversation looks for is decided at launch, from the mesh identity that opened
+    /// it, and a later edit would let today's server policy or identity reach back into a
+    /// transcript already running under yesterday's.
+    ///
+    /// # Errors
+    /// Returns serialization and database errors.
+    pub fn set_lease(&self, agent: &str, id: &str, lease: &crate::LeaseRef) -> Result<bool> {
+        let json = serde_json::to_string(lease).map_err(|e| Error::Arguments(e.to_string()))?;
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET lease = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, json],
+            )
+            .map_err(|e| db::sql_err("record a session's lease in", e))?;
         Ok(changed > 0)
     }
 
@@ -1492,6 +1520,43 @@ mod tests {
             stored.current().map(|row| row.backend.as_str()),
             Some("anthropic")
         );
+    }
+
+    /// ADI-MONO-177 P1.6: a fresh session has no lease, `set_lease` records one, and the ALTER
+    /// TABLE columns survive a round trip through the store the way every other session column
+    /// does.
+    #[test]
+    fn a_fresh_session_has_no_lease_and_set_lease_records_one() {
+        let store = scratch("lease");
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+        assert!(
+            store.get("solver", &run.id).expect("get").lease.is_none(),
+            "no lease until something sets one — NULL reads as server values only",
+        );
+
+        let lease = crate::LeaseRef {
+            user: "u-aaa".to_string(),
+            names: vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()],
+        };
+        assert!(
+            store.set_lease("solver", &run.id, &lease).expect("set"),
+            "the write touched the row",
+        );
+
+        let stored = store.get("solver", &run.id).expect("get").lease.expect("set");
+        assert_eq!(stored, lease);
+
+        // Listing reads it back the same way `get` does.
+        let listed = store
+            .list("solver")
+            .into_iter()
+            .find(|r| r.id == run.id)
+            .expect("in the listing")
+            .lease
+            .expect("set");
+        assert_eq!(listed, lease);
     }
 
     #[test]
