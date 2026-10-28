@@ -179,8 +179,8 @@ pub struct NodeRecord {
     pub agent_instructions: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
-    #[serde(default)]
-    pub minted_user: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     pub auth: Credential,
 }
 ```
@@ -242,6 +242,8 @@ The whole `fleet.toml`: every node this machine has paired with, keyed by petnam
 #[serde(default)]
 pub struct FleetRegistry {
     pub nodes: BTreeMap<String, NodeRecord>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub users: BTreeMap<String, String>,
 }
 ```
 

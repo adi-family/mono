@@ -609,19 +609,20 @@ fn peer_role(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> 
         .unwrap_or(adi_mesh::fleet::Role::Member)
 }
 
-/// This peer's user scope (`docs/byo-credentials.md` §3.2): `Some(<u>)` only for a peer whose
-/// registry record has `minted_user` set — a random id [`adi_mesh::join::decide`] minted for it
-/// itself, never a pin, never one copied in by [`adi_mesh::join::record_viewer`] — and whose
-/// `auth.user` still matches the header's user. `None` for a local caller (`sender: None`), an
-/// `adi` peer paired before this shipped, an unknown or unreadable petname, or a stale header that
-/// no longer names the record's current credential. On doubt it trusts the peer with less, exactly
-/// as [`peer_role`] does when it defaults to [`adi_mesh::fleet::Role::Member`]: "no user layer,
-/// the server's values" rather than guessing at whose values they are.
+/// This peer's user scope (`docs/byo-credentials.md` §3): `Some(<id>)` — the **id**, never the
+/// username — only for a peer whose registry record carries a [`user`](adi_mesh::fleet::NodeRecord::user),
+/// minted or resolved for it by [`adi_mesh::join::decide`], never one copied in by
+/// [`adi_mesh::join::record_viewer`] — and whose `auth.user` still matches the header's user.
+/// `None` for a local caller (`sender: None`), an `adi` peer paired before this shipped, an
+/// unknown or unreadable petname, or a stale header that no longer names the record's current
+/// credential. On doubt it trusts the peer with less, exactly as [`peer_role`] does when it
+/// defaults to [`adi_mesh::fleet::Role::Member`]: "no user layer, the server's values" rather than
+/// guessing at whose values they are.
 fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) -> Option<String> {
     let sender = sender?;
     let registry = adi_mesh::fleet::FleetRegistry::load_from(projects.config()).ok()?;
     let record = registry.get(sender.petname)?;
-    (record.minted_user && record.auth.user == sender.user).then(|| record.auth.user.clone())
+    record.user.clone().filter(|_| record.auth.user == sender.user)
 }
 
 /// Refuse a member peer's request to a route ADI-MONO-171 G3 reserves for an admin — computed
@@ -1513,9 +1514,10 @@ mod tests {
         registry.save_to(projects.config()).expect("save");
     }
 
-    /// File a fleet record under `petname` with the given username and `minted_user` flag —
-    /// enough to drive [`user_scope`] without pairing a real peer.
-    fn pair_with_user(projects: &Projects, petname: &str, username: &str, minted_user: bool) {
+    /// File a fleet record under `petname` with the given username and user id — enough to drive
+    /// [`user_scope`] without pairing a real peer. `user: None` is what a record with no user
+    /// scope (a legacy `adi` pairing, or one `record_viewer` filed) looks like.
+    fn pair_with_user(projects: &Projects, petname: &str, username: &str, user: Option<&str>) {
         let mut registry =
             adi_mesh::fleet::FleetRegistry::load_from(projects.config()).expect("load");
         let mut record = adi_mesh::fleet::NodeRecord {
@@ -1524,7 +1526,7 @@ mod tests {
             ..adi_mesh::fleet::NodeRecord::default()
         };
         record.set_password(username, "pw");
-        record.minted_user = minted_user;
+        record.user = user.map(ToString::to_string);
         registry.nodes.insert(petname.to_string(), record);
         registry.save_to(projects.config()).expect("save");
     }
@@ -1588,7 +1590,7 @@ mod tests {
             "a local caller is the owner, on global secrets"
         );
 
-        pair_with_user(&projects, "legacy", "adi", false);
+        pair_with_user(&projects, "legacy", "adi", None);
         let legacy = handlers::FleetSender {
             petname: "legacy",
             nickname: "legacy",
@@ -1632,9 +1634,9 @@ mod tests {
     }
 
     #[test]
-    fn user_scope_is_the_minted_id_only_when_the_header_matches_the_records_credential() {
+    fn user_scope_is_the_id_only_when_the_header_matches_the_records_credential() {
         let projects = scratch("user-scope-minted");
-        pair_with_user(&projects, "laptop-b", "u-abc123", true);
+        pair_with_user(&projects, "laptop-b", "u-abc123", Some("u-abc123"));
 
         let matching = handlers::FleetSender {
             petname: "laptop-b",
@@ -1655,6 +1657,25 @@ mod tests {
             user_scope(&projects, Some(stale)),
             None,
             "a header that no longer matches the record's credential is no scope"
+        );
+    }
+
+    #[test]
+    fn user_scope_answers_the_id_never_the_pinned_username() {
+        // A pinned username (ADI-MONO-179: the partner sandbox's `p<uid>`) is not the id —
+        // `user_scope` must answer `NodeRecord.user`, never `auth.user`.
+        let projects = scratch("user-scope-pinned");
+        pair_with_user(&projects, "p42-device", "p42", Some("u-shared0000000000000000"));
+
+        let sender = handlers::FleetSender {
+            petname: "p42-device",
+            nickname: "p42-device",
+            user: "p42",
+        };
+        assert_eq!(
+            user_scope(&projects, Some(sender)),
+            Some("u-shared0000000000000000".to_string()),
+            "the id, not the username the peer authenticated as"
         );
     }
 

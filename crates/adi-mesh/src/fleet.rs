@@ -421,15 +421,19 @@ pub struct NodeRecord {
     /// (a principal, a cabinet, a display name), not a grant.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub labels: BTreeMap<String, String>,
-    /// Whether `auth.user` is a random id [`crate::join::decide`] minted itself, rather than
-    /// `PAIR_USER`, a pinned [`crate::join::InviteSpec::username`], or whatever a
-    /// [`crate::join::record_viewer`] filing copied from the far side (`docs/byo-credentials.md`
-    /// §3.2). Only `decide` ever sets this, and only for an id it generated — never for a pin,
-    /// never for `record_viewer`. `#[serde(default)]` reads every record filed before this field
-    /// existed as `false`, which is the right answer: an `adi` record has no user scope until it
-    /// is re-paired.
-    #[serde(default)]
-    pub minted_user: bool,
+    /// The user id this peer's credential belongs to (`docs/byo-credentials.md` §3, ADI-MONO-179)
+    /// — `Some` for a peer this server has minted or pinned a user for, `None` for the legacy
+    /// default `adi` pairing and for a [`crate::join::record_viewer`] filing (the far side chose
+    /// the username, so this machine never minted or pinned anything for it). Distinct from
+    /// `auth.user`, the credential's username: the id never changes once assigned, while the
+    /// username is just the label it currently answers to — [`FleetRegistry::users`] is what maps
+    /// a username back to this same id across a re-pair or a later rename of the label. Only
+    /// [`crate::join::decide`] ever sets this, through [`FleetRegistry::resolve_user`].
+    /// `#[serde(default)]` reads every record filed before this field existed — including one
+    /// ADI-MONO-177 had already set `minted_user = true` on — as `None`, which is the right
+    /// answer: a record has no user until it is (re-)paired under this scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
     /// The Basic-auth credential this node's requests must carry.
     pub auth: Credential,
 }
@@ -579,6 +583,12 @@ impl fmt::Display for NicknameChange {
 pub struct FleetRegistry {
     /// Paired nodes by petname.
     pub nodes: BTreeMap<String, NodeRecord>,
+    /// Username → user id (`docs/byo-credentials.md` §3, ADI-MONO-179). The only place a
+    /// username is bound to an id: the mapping outlives any one [`NodeRecord`], so a username
+    /// stays unique on this server and the id it names survives a re-pair and a later rename of
+    /// the label, neither of which ever touches this map. See [`resolve_user`](Self::resolve_user).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub users: BTreeMap<String, String>,
 }
 
 impl FleetRegistry {
@@ -805,7 +815,7 @@ impl FleetRegistry {
                 grants: Vec::new(),
                 agent_instructions: None,
                 labels: BTreeMap::new(),
-                minted_user: false,
+                user: None,
                 auth: Credential::default(),
             },
         );
@@ -930,6 +940,86 @@ impl FleetRegistry {
     pub fn unpair(&mut self, petname: &str) -> Option<NodeRecord> {
         self.nodes.remove(petname)
     }
+
+    // -- B8: users -------------------------------------------------------------------------
+
+    /// Resolve the user id `username` names on this server, minting a fresh one the first time it
+    /// is seen and remembering the mapping — so a second peer pinned to the same name (the
+    /// partner sandbox's several devices under one `p<uid>`) shares the id the first one got, and
+    /// a later rename of the label never moves it. `None` mints a fresh id and uses it as its own
+    /// username too, which is what makes an unpinned peer its own user
+    /// (`docs/byo-credentials.md` §3, ADI-MONO-179).
+    ///
+    /// Called only by [`crate::join::decide`], before it touches the record: resolving the
+    /// mapping has to happen before the username and id it decided can be written to one.
+    pub fn resolve_user(&mut self, username: Option<&str>) -> (String, String) {
+        if let Some(name) = username {
+            let id = self.users.get(name).cloned().unwrap_or_else(random_user_id);
+            self.users.insert(name.to_string(), id.clone());
+            (name.to_string(), id)
+        } else {
+            let id = random_user_id();
+            self.users.insert(id.clone(), id.clone());
+            (id.clone(), id)
+        }
+    }
+
+    /// Does any node here still carry `user`? The question to ask before deleting
+    /// `secrets/users/<id>/` on an unpair — the id is never reissued, so the directory is only
+    /// safe to delete once nothing paired here could ever open it again.
+    #[must_use]
+    pub fn has_user(&self, user: &str) -> bool {
+        self.nodes
+            .values()
+            .any(|record| record.user.as_deref() == Some(user))
+    }
+}
+
+/// Characters a minted user id is drawn from: lowercase Crockford base32 — no `0`/`o`, `1`/`i`/`l`
+/// ambiguity — because `mesh join` prints this for a person to retype into a browser prompt
+/// (`adi-cli/src/mesh.rs:417`, `docs/byo-credentials.md` §3).
+const USER_ID_ALPHABET: &[u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+/// Characters in a minted user id's random part: 130 bits at 5 bits/char.
+const USER_ID_CHARS: usize = 26;
+
+/// Bytes of randomness a minted user id is drawn from: `ceil(130 / 8)`, so the last byte
+/// contributes only 2 of its 8 bits to the 26th character and the rest are discarded.
+const USER_ID_BYTES: usize = 17;
+
+/// A fresh minted user id: `u-` followed by [`USER_ID_CHARS`] lowercase Crockford base32
+/// characters, 130 random bits (`docs/byo-credentials.md` §3).
+///
+/// Random, not derived from the peer's key, its petname, or its username — a key-derived id would
+/// be the same on every server the peer pairs with and so link the user across fleets; a petname-
+/// or username-derived one would move the moment either is renamed or re-pinned.
+///
+/// # Panics
+/// Never in practice: only if the OS random source is unavailable.
+#[must_use]
+pub fn random_user_id() -> String {
+    use rand::TryRng as _;
+    let mut bytes = [0u8; USER_ID_BYTES];
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the OS random source is unavailable");
+    let mut id = String::with_capacity(2 + USER_ID_CHARS);
+    id.push_str("u-");
+    for i in 0..USER_ID_CHARS {
+        id.push(USER_ID_ALPHABET[usize::from(bits5(&bytes, i * 5))] as char);
+    }
+    id
+}
+
+/// 5 bits of `bytes`, starting at bit offset `offset` (bit 0 is the MSB of `bytes[0]`).
+fn bits5(bytes: &[u8], offset: usize) -> u8 {
+    let mut value = 0u8;
+    for i in 0..5 {
+        let bit_index = offset + i;
+        let bit = (bytes[bit_index / 8] >> (7 - bit_index % 8)) & 1;
+        value = (value << 1) | bit;
+    }
+    value
 }
 
 #[cfg(test)]
@@ -1091,7 +1181,7 @@ grants = []
         assert_eq!(laptop.auth.user, "igor");
         assert!(laptop.pending_nickname.is_none());
         assert!(
-            !laptop.minted_user,
+            laptop.user.is_none(),
             "a record filed before this field existed has no user scope"
         );
 
@@ -1500,6 +1590,28 @@ grants = ["ftp:*"]
     }
 
     #[test]
+    fn rename_does_not_move_a_nodes_user_id_or_the_username_mapping() {
+        let mut registry = FleetRegistry::default();
+        pair_ok(&mut registry, &some_key(), "laptop-b");
+        let (username, id) = registry.resolve_user(Some("p42"));
+        registry.get_mut("laptop-b").expect("record").user = Some(id.clone());
+        registry.get_mut("laptop-b").expect("record").set_password(&username, "pw");
+
+        registry.rename("laptop-b", "desk").expect("rename");
+
+        assert_eq!(
+            registry.get("desk").expect("moved").user.as_deref(),
+            Some(id.as_str()),
+            "a petname rename never touches the user id"
+        );
+        assert_eq!(
+            registry.users.get(&username),
+            Some(&id),
+            "the username → id mapping is untouched by a petname rename"
+        );
+    }
+
+    #[test]
     fn unpair_removes_the_node() {
         let mut registry = FleetRegistry::default();
         let key = some_key();
@@ -1657,6 +1769,67 @@ grants = ["ftp:*"]
         let record = reloaded.get("laptop-b").expect("laptop-b");
         assert_eq!(record.role, Role::Member);
         assert_eq!(record.labels.get("principal").map(String::as_str), Some("p42"));
+    }
+
+    // -- B8 ------------------------------------------------------------------------------
+
+    #[test]
+    fn a_minted_user_id_is_well_formed_and_random() {
+        let a = random_user_id();
+        let b = random_user_id();
+        assert!(a.starts_with("u-"), "{a}");
+        assert_eq!(a.len(), 2 + 26, "{a}");
+        assert!(
+            a[2..].bytes().all(|b| USER_ID_ALPHABET.contains(&b)),
+            "{a}"
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn resolve_user_mints_a_fresh_id_for_an_unpinned_peer_and_uses_it_as_the_username() {
+        let mut registry = FleetRegistry::default();
+        let (username, id) = registry.resolve_user(None);
+        assert_eq!(username, id, "an unpinned peer is its own user");
+        assert!(id.starts_with("u-"), "{id}");
+        assert_eq!(registry.users.get(&username), Some(&id));
+
+        let (other_username, other_id) = registry.resolve_user(None);
+        assert_ne!(id, other_id, "two unpinned peers never share an id");
+        assert_ne!(username, other_username);
+    }
+
+    #[test]
+    fn resolve_user_shares_one_id_across_two_pins_of_the_same_username() {
+        let mut registry = FleetRegistry::default();
+        let (username_a, id_a) = registry.resolve_user(Some("p42"));
+        let (username_b, id_b) = registry.resolve_user(Some("p42"));
+        assert_eq!(username_a, "p42");
+        assert_eq!(username_a, username_b);
+        assert_eq!(id_a, id_b, "the second device pinned to p42 is the same user");
+
+        let (_, id_other) = registry.resolve_user(Some("p43"));
+        assert_ne!(id_a, id_other, "a different pin is a different user");
+    }
+
+    #[test]
+    fn has_user_answers_from_the_nodes_on_file() {
+        let mut registry = FleetRegistry::default();
+        pair_ok(&mut registry, &some_key(), "laptop-b");
+        pair_ok(&mut registry, &some_key(), "laptop-c");
+        registry.get_mut("laptop-b").expect("record").user = Some("u-aaa".to_string());
+        registry.get_mut("laptop-c").expect("record").user = Some("u-aaa".to_string());
+
+        assert!(registry.has_user("u-aaa"));
+        assert!(!registry.has_user("u-bbb"));
+
+        registry.unpair("laptop-b");
+        assert!(
+            registry.has_user("u-aaa"),
+            "laptop-c still carries the id"
+        );
+        registry.unpair("laptop-c");
+        assert!(!registry.has_user("u-aaa"), "the last peer is gone");
     }
 
     // -- B2/B6: the stored credential ----------------------------------------------------

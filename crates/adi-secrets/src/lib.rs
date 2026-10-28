@@ -487,6 +487,21 @@ impl Secrets {
         Ok(optional(std::fs::remove_file(file.path()))?.is_some())
     }
 
+    /// Delete everything `user` ever stored here: `secrets/users/<u>/`, whole. The id is never
+    /// reissued (`docs/byo-credentials.md` §3), so this is safe only once nothing paired could
+    /// ever open those wraps again — the caller's job, not this one's, since this crate has no
+    /// idea whether a second peer still shares the id (`adi_mesh::fleet::FleetRegistry::has_user`
+    /// answers that, in the crate that owns the fleet registry). A no-op, not an error, if the
+    /// directory was never created (phase 1 writes nothing into it yet).
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe user id, or [`Error::Io`] on a removal failure.
+    pub fn forget_user(&self, user: &str) -> Result<()> {
+        let dir = self.scope_dir(Scope::User(user))?;
+        optional(std::fs::remove_dir_all(dir))?;
+        Ok(())
+    }
+
     /// The resolved environment for a run: every global secret, then every secret of `project`
     /// overlaid on top (so a project secret **overrides** a global one of the same name). This
     /// is the single function the run-injection paths call. `None` resolves the global set only.
@@ -1243,5 +1258,28 @@ mod tests {
             "also-mine",
             "a different user's copy is untouched"
         );
+    }
+
+    #[test]
+    fn forget_user_deletes_the_whole_scope_and_leaves_others_alone() {
+        let store = scratch("forget-user");
+        set_scoped(&store, Scope::User("u-aaa"), "K", "mine");
+        set_scoped(&store, Scope::User("u-bbb"), "K", "also-mine");
+
+        store.forget_user("u-aaa").expect("forget");
+        assert!(!store.dir().join("users/u-aaa").exists());
+        assert_eq!(
+            reveal_scoped(&store, Scope::User("u-bbb"), "K").expect("reveal"),
+            "also-mine",
+            "a different user's scope is untouched"
+        );
+    }
+
+    #[test]
+    fn forget_user_is_a_no_op_when_nothing_was_ever_stored() {
+        let store = scratch("forget-user-never-written");
+        store
+            .forget_user("u-never-stored-anything000")
+            .expect("forgetting an empty scope is not an error");
     }
 }

@@ -343,11 +343,32 @@ pub fn fleet_unpair(store: &Config, body: &[u8]) -> Response {
         Err(response) => return response,
     };
     fleet_edit(store, move |registry| {
-        registry
-            .unpair(&petname)
+        unpair_and_forget_user(store, registry, &petname)
             .map(|_| ())
             .ok_or_else(|| not_paired(&petname))
     })
+}
+
+/// [`FleetRegistry::unpair`], and — only when that was the **last** peer still carrying a user id
+/// here — delete `secrets/users/<id>/` (`docs/byo-credentials.md` §3, ADI-MONO-179). The id is
+/// never reissued, so this is the one moment it is safe to delete what it names; a second peer
+/// still sharing the id (the partner sandbox's several devices pinned to one `p<uid>`) keeps the
+/// storage alive.
+///
+/// A deletion failure is swallowed, not surfaced: the unpair itself already succeeded, and an
+/// operator who asked to forget a node should not be told to go check `secrets/` by hand.
+fn unpair_and_forget_user(
+    store: &Config,
+    registry: &mut FleetRegistry,
+    petname: &str,
+) -> Option<adi_mesh::fleet::NodeRecord> {
+    let record = registry.unpair(petname)?;
+    if let Some(user) = &record.user
+        && !registry.has_user(user)
+    {
+        let _ = adi_secrets::Secrets::with_config(store.clone()).forget_user(user);
+    }
+    Some(record)
 }
 
 /// `POST /api/fleet/sources/drop` — stop this machine reading a node, and unpair it if that was
@@ -370,7 +391,7 @@ pub fn fleet_drop_source(store: &Config, body: &[u8]) -> Response {
     fleet_edit(store, move |registry| {
         let record = registry.get(&petname).ok_or_else(|| not_paired(&petname))?;
         if record.grants.is_empty() {
-            registry.unpair(&petname);
+            unpair_and_forget_user(store, registry, &petname);
             return Ok(());
         }
         let mut dropped = DroppedSources::load(store);
@@ -406,7 +427,7 @@ pub fn fleet_drop_viewer(store: &Config, body: &[u8]) -> Response {
         }
         // The entry is for a pairing about to be gone; nothing could ever match it again.
         dropped.remove(&record.key, record.paired_at);
-        registry.unpair(&petname);
+        unpair_and_forget_user(store, registry, &petname);
         dropped
             .save(store)
             .map_err(|e| error(500, &format!("writing the dropped sources: {e}")))
@@ -1028,6 +1049,56 @@ mod tests {
             404
         );
         assert_eq!(fleet_unpair(&store, br#"{"petname":"  "}"#).status, 400);
+    }
+
+    /// File `petname`'s record with the given user id — the ADI-MONO-179 counterpart of [`pair`].
+    fn pair_with_user(store: &Config, petname: &str, user: &str) {
+        let mut registry = FleetRegistry::load_from(store).expect("load");
+        registry.get_mut(petname).expect("just paired").user = Some(user.to_string());
+        registry.save_to(store).expect("save");
+    }
+
+    #[test]
+    fn unpairing_the_last_peer_of_a_user_deletes_its_secrets() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        pair_with_user(&store, "laptop-b", "u-aaa");
+        let secrets = adi_secrets::Secrets::with_config(store.clone());
+        secrets.set(None, "K", "v", None).expect("global secret");
+        // There is no API that writes a user-scoped secret yet (phase 1), so the scope directory
+        // is created directly — the same thing a later phase's `set --user` would leave behind.
+        let user_dir = secrets.dir().join("users/u-aaa");
+        std::fs::create_dir_all(&user_dir).expect("mkdir");
+        std::fs::write(user_dir.join("K.toml"), "stub").expect("write");
+
+        let _ = fleet_unpair(&store, br#"{"petname":"laptop-b"}"#);
+
+        assert!(!user_dir.exists(), "the last peer of u-aaa is gone");
+        assert!(
+            secrets.dir().join("global/K.toml").exists(),
+            "an unrelated scope is untouched"
+        );
+    }
+
+    #[test]
+    fn unpairing_one_of_two_peers_sharing_a_user_keeps_its_secrets() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        pair(&store, "phone-b", "phone-b", &[], false);
+        pair_with_user(&store, "laptop-b", "u-aaa");
+        pair_with_user(&store, "phone-b", "u-aaa");
+        let secrets = adi_secrets::Secrets::with_config(store.clone());
+        let user_dir = secrets.dir().join("users/u-aaa");
+        std::fs::create_dir_all(&user_dir).expect("mkdir");
+        std::fs::write(user_dir.join("K.toml"), "stub").expect("write");
+
+        let _ = fleet_unpair(&store, br#"{"petname":"laptop-b"}"#);
+
+        assert!(user_dir.exists(), "phone-b still carries u-aaa");
+
+        let _ = fleet_unpair(&store, br#"{"petname":"phone-b"}"#);
+
+        assert!(!user_dir.exists(), "now the last peer is gone too");
     }
 
     #[test]

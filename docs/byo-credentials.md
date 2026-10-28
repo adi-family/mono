@@ -68,16 +68,26 @@ serves exactly one request per connection (`adi-webapp-api/src/http.rs:2`, `Conn
 headers are attached to the first head on a stream, and on the panel there is no second head.
 Anything that moves an identity-bearing endpoint behind a keep-alive server has to re-check this.
 
-**The user is the credential username, and it is a random id minted for each paired peer.**
-`<u>` in this document is `X-Adi-Fleet-User`, which is the server's pairing record's `auth.user`
-(`gateway.rs:816-819`). It is registry data, not something the peer sends with a request. It is
-also what `launched_by = human:<u>` and ADI-MONO-171's ownership checks already use
-(`asking_user`, `adi-webapp-api/src/handlers/agents.rs:1384`).
+**The user is a server-minted id, never the username (decided 2026-10-28, ADI-MONO-179).** `<u>`
+in this document is that id: `users/<u>/` secret storage, the AAD, `LeaseRef`, and the hold key
+`#user:<u>` (§6) are all keyed on it, and it is what `launched_by = human:<u>` and
+ADI-MONO-171's ownership checks already use (`asking_user`,
+`adi-webapp-api/src/handlers/agents.rs:1384`). It is **immutable** once minted and **always
+unique** on this server, and it is never derived from, or equal to, a username — see §3.2.
 
-**One peer is one user in v1.** A person's Mac and their browser client are two pairings, so they
-are two users, each with its own values and its own lease. Grouping several devices under one
-person is later work. Everything below is simpler for it: a user has exactly one device, so a lease
-belongs to one device, revoking it is revoking that device, and §8 needs one wrap per value.
+The **username** is the human label and the credential username a peer authenticates with: the
+server's pairing record's `auth.user`, attached as `X-Adi-Fleet-User`
+(`gateway.rs:816-819`). It is registry data, not something the peer sends with a request. An
+invite may pin it (`InviteSpec.username`); unpinned, it defaults to the id minted for it, which is
+what makes an unpinned peer its own user.
+
+**A pinned username now counts as a user too.** The earlier v1 reading — that a pin got no user
+scope at all, so the partner sandbox's several devices pinned to one `p<uid>` had none — is
+withdrawn (settles §15 Q13, see §3.2). What "one peer is one user" meant before this decision —
+that a lease belongs to exactly one device, so revoking it is revoking that device (§8) — now
+has an exception: several peers pinned to the same username share one user, and so share one
+lease once phase 2 ships it. That is unchanged work for phase 1 (nothing in it wraps a value to a
+device yet) and an open question for phase 2, not answered here.
 
 - **Never `X-Adi-Fleet-Node`.** That is the peer's self-declared nickname, and `docs/fleet.md` §2
   rule 3 lets a clash rename it.
@@ -113,11 +123,19 @@ ownership checks included: each can stop or delete the other's runs as "their ow
 `PAIR_USER` says the username "carries no security weight". That stopped being true when
 ADI-MONO-171's ownership checks started reading it.
 
-### 3.2 The change: a random user id, minted by the server
+### 3.2 The change: separating the id from the username
 
-**`decide` mints a random id where it used to write `PAIR_USER`,** and it is returned in
-`Accepted.username` as the username is today. Neither the wire format nor any dialler changes:
-the Mac's `record_viewer` and the browser client already store whatever `Accepted.username` says.
+**ADI-MONO-177 first (`decide` mints a random id where it used to write `PAIR_USER`); ADI-MONO-179
+then separates that id from the username it is returned under.** Two things happen now, in order:
+
+1. **The username is resolved.** `spec.username` — an invite's pin — if there is one; otherwise
+   there is no username to resolve yet, because an unpinned peer's username is decided by the next
+   step, not chosen ahead of it.
+2. **The username is resolved to an id**, through `FleetRegistry::resolve_user` (`fleet.rs`): look
+   it up in `self.users`; if it is already there — because another peer pinned the same name
+   before — reuse that id; otherwise mint a fresh one and record the mapping. An unpinned peer has
+   no username to look up, so this mints a fresh id and uses it as the username too — the `u-…` a
+   person retypes into a browser prompt is both.
 
 ```
 u-<26 characters, lowercase Crockford base32>      130 random bits, e.g. u-7f3kq9…
@@ -127,36 +145,52 @@ u-<26 characters, lowercase Crockford base32>      130 random bits, e.g. u-7f3kq
   under `secrets/users/` (it passes `validate_project`'s filesystem-name rule, `secret.rs:136-138`),
   part of an AAD, and the tail of `launched_by = human:<u>`. Lowercase base32 has no ambiguous
   glyphs, which matters because `mesh join` prints it for a person to retype into a browser prompt
-  (`adi-cli/src/mesh.rs:417`). That is the cost of the change: the old prompt took `adi` from memory.
+  (`adi-cli/src/mesh.rs:417`).
 - **Random, not derived.** Not from the peer's key, which would make the id the same on every server
-  the peer pairs with and so link the user across fleets. Not from the petname, which can be renamed.
-- **The record remembers that this machine minted it.** `NodeRecord` gains
-  `minted_user: bool` (`fleet.rs:392`, a plain value, so it goes before `auth` per the field-order
-  note). Only `decide` sets it, and only for an id it generated itself. `#[serde(default)]` makes
-  every existing record `false`.
-- **A user scope needs `minted_user`.** `adi-app` gains `user_scope(projects, sender)` beside
-  `peer_role` (`adi-app/src/main.rs:596`). It loads the registry, finds the sender's petname, and
-  answers `Some(auth.user)` only when `minted_user` is set and the header's user matches the record.
-  Anything else answers `None`, which means "no user layer: the server's values". On doubt it
-  trusts the peer with less, as `peer_role` does when it defaults to `Member`.
+  the peer pairs with and so link the user across fleets. Not from the petname or the username,
+  either of which can be renamed or re-pinned without the id moving.
+- **`FleetRegistry.users` is the username → id mapping**, kept beside `nodes` (`fleet.rs`), the only
+  place a username is ever bound to an id. It is what lets several peers pinned to the same
+  username — the partner sandbox's several devices, each pinned to one `p<uid>` — share the id the
+  first one got, and what lets the id survive a re-pair or a later rename of the label untouched.
+- **`NodeRecord` carries the id itself, not a flag.** The earlier `minted_user: bool`
+  (ADI-MONO-177) is gone; `NodeRecord.user: Option<String>` (`fleet.rs:392`, a plain value, so it
+  goes before `auth` per the field-order note) holds the id. `None` for a peer this server has
+  never minted or pinned one for. `#[serde(default)]` reads every record filed before this field
+  existed as `None` — including a record ADI-MONO-177 had already set `minted_user = true` on,
+  which is a deliberate loss, not a migration bug: re-pairing is how such a record gets a user
+  again, the same as a legacy `adi` record always has.
+- **A user scope needs `NodeRecord.user`.** `adi-app`'s `user_scope(projects, sender)` (beside
+  `peer_role`, `adi-app/src/main.rs:596`) loads the registry, finds the sender's petname, and
+  answers `Some(user.clone())` — the **id**, never the username — only when `user` is `Some` and
+  the header's user still matches `auth.user`. Anything else answers `None`, which means "no user
+  layer: the server's values". On doubt it trusts the peer with less, as `peer_role` does when it
+  defaults to `Member`.
 
 That rule gives the decided answers directly:
 
-| peer | `auth.user` | user scope |
-|---|---|---|
-| paired after this ships, no username in the invite | `u-…`, minted by `decide` | yes |
-| paired before this ships | `adi` | **none until re-paired** |
-| filed by `record_viewer`, because the server dialled the peer's invite | whatever the peer's side minted | none (§15 Q14) |
-| an invite that pins `username` | the pinned name | none in v1 (§15 Q13) |
-| a local caller | — | none: the owner, on global secrets |
+| peer | `auth.user` (the username) | `NodeRecord.user` (the id) | user scope |
+|---|---|---|---|
+| paired after ADI-MONO-177, no username in the invite | `u-…`, minted by `decide` | the same `u-…` | yes |
+| an invite that pins `username` | the pinned name | resolved by `resolve_user`: shared with any other record already pinned to it, else freshly minted | yes (ADI-MONO-179, settles §15 Q13 — was none in v1) |
+| paired before ADI-MONO-177 | `adi` | `None` | **none until re-paired** |
+| filed by `record_viewer`, because the server dialled the peer's invite | whatever the peer's side minted | `None` | none (§15 Q14) |
+| a local caller | — | — | none: the owner, on global secrets |
 
-**A re-pair keeps a minted id.** `decide` rotates the username on a re-pair today (`:628-631`).
-Re-inviting a peer to rotate a lost password must not orphan the values stored under its id, so a
-re-pair of a record with `minted_user` keeps `auth.user` and rotates only the password. A re-pair
-of an `adi` record mints a fresh id, which is how a legacy pairing gets a user scope.
+**A re-pair keeps a record's id and username together, or resolves both together — never one
+without the other.** A record that already carries a `user` keeps both `auth.user` and `user`
+across a re-pair, rotating only the password: re-inviting a peer to recover a lost password must
+not orphan the values stored under its id, and must not let a differently-pinned re-invite
+quietly move which user it is. A record with no `user` yet — a legacy `adi` record, or one
+`record_viewer` filed — resolves a username and an id exactly as a fresh pairing does, which is
+how such a record gets a user at all.
 
-**Unpairing ends the user.** The id is never reissued, so unpairing the peer revokes its lease
-(§10.1) and deletes `secrets/users/<u>/`. Nothing else could ever open those wraps.
+**Unpairing ends the user, once nothing else needs it.** The id is never reissued, so unpairing
+the **last** peer that carries a given id (`FleetRegistry::has_user`, checked before the delete)
+revokes its lease (§10.1) and deletes `secrets/users/<u>/`
+(`adi_secrets::Secrets::forget_user`, wired into `/api/fleet/unpair` and the two drop endpoints).
+A second peer still sharing the id — the partner sandbox's several devices pinned to one
+`p<uid>` — keeps the storage alive until it, too, is unpaired.
 
 ## 4. The settings layer
 
@@ -985,18 +1019,22 @@ refusal, so `secrets set --user` and `mesh unlock` from a terminal may have to g
 
 **Q13 — An invite that pins `username`.** `InviteSpec.username` (`join.rs:265-267`) lets the minter
 choose the username, and the partner-sandbox plan uses it to give one person (`p<uid>`) several
-devices. That is exactly the device grouping "one peer = one user" puts off, and a pinned name can
-be given to two peers. This spec gives a pinned username **no user scope** in v1 (§3.2), which
-leaves the partner sandbox without BYO until it stops pinning or grouping is built. The
-alternatives: honour a pin as a user id and have `decide` refuse a pin another record already
-carries, or have the sandbox stop pinning and keep `p<uid>` in `labels` instead.
+devices.
+
+**Settled 2026-10-28 (ADI-MONO-179): honour it.** A pinned username now resolves to a user id
+through `FleetRegistry::resolve_user` (§3.2) — shared with any other record already pinned to the
+same name, rather than refused and rather than denied a user scope. That is exactly what the
+partner sandbox needs: several devices pinned to one `p<uid>` share a user, and get BYO without
+the sandbox changing how it mints invites. It does reopen the device-grouping question §3's "one
+peer is one user" was meant to put off — see the note added there — but only for the pinned case,
+and only once phase 2 has to decide what a shared lease means for several devices.
 
 **Q14 — The server dialling a device's invite.** When the server spends an invite the *device*
 minted, the server files the device through `record_viewer`, and the username is whatever the
 device's side chose (`join.rs:740`). The design says the id is "minted at pairing and returned in
 the join response", which describes the server minting. A device-chosen id could equal another
-user's, so this spec gives such a record no user scope (`minted_user` stays `false`, §3.2). Is that
-enough, or should the server refuse to be the dialler for a peer that wants a user scope?
+user's, so this spec gives such a record no user scope (`NodeRecord.user` stays `None`, §3.2). Is
+that enough, or should the server refuse to be the dialler for a peer that wants a user scope?
 
 **Q15 — An unreadable `users/<u>/settings.toml`.** The server policy fails closed by turning the
 feature off (§4.1). The per-user file can only tighten, so the analogous readings are "as if it said
@@ -1043,9 +1081,18 @@ in-memory lease source.
       re-pair keeps a minted id and replaces an `adi` one. Tests: two no-body pairings get distinct
       ids; a re-pair keeps the id and rotates the password; a pinned username and a `record_viewer`
       record have `minted_user = false`; a legacy record reads `false`.
+      **Reworked by ADI-MONO-179 (§3.2):** the id and the username are now separate —
+      `NodeRecord.user: Option<String>` replaces `minted_user: bool`, and `FleetRegistry.users`
+      maps a username to the id `resolve_user` resolved or minted for it. A pinned username now
+      gets a user id too, shared across every record pinned to the same name. Tests added: two
+      peers pinned to the same username share one id; a petname rename never moves the id or the
+      mapping; unpairing the last peer of a user deletes `secrets/users/<u>/`, unpairing one of two
+      keeps it.
 - [x] P1.2 `adi-app`: `user_scope(projects, sender)` beside `peer_role`, `Some(<u>)` only for a
       `minted_user` record whose `auth.user` matches the header. `None` for `adi`, a local caller,
       an unknown petname or an unreadable registry.
+      **Reworked by ADI-MONO-179:** answers `record.user.clone()` — the id — gated on
+      `record.auth.user == header.user`, not on `minted_user`, which no longer exists.
 - [x] P1.3 `adi-secrets`: `Scope::User`, `users/<u>/` paths, AAD `user:<u>/<NAME>`. `list_all`
       skips `users/`. A user ciphertext copied into global or another user's scope fails to open.
 - [x] P1.4 `secrets/settings.toml` `[user_secrets]` (`enabled`, `overridable`, `missing`,
