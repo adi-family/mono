@@ -291,6 +291,7 @@ jobs:
           name: macos
           path: apps/macos/build/ADI.dmg
           if-no-files-found: error
+          retention-days: 3
 
   # ── Linux: the static musl node package ──────────────────────────────────────────────────
   linux:
@@ -346,6 +347,7 @@ jobs:
           name: linux-x86_64
           path: apps/linux/build/adi-linux-x64.tar.gz
           if-no-files-found: error
+          retention-days: 3
 
   # ── Windows: cross-compiled with mingw, same as the local packaging route ────────────────
   windows:
@@ -407,6 +409,7 @@ jobs:
             apps/windows/build/ADI-windows-x64.zip
             apps/windows/build/ADI-Setup-x64.exe
           if-no-files-found: error
+          retention-days: 3
 
   # ── the manifest, and the release itself ─────────────────────────────────────────────────
   publish:
