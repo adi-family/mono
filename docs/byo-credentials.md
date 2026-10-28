@@ -511,7 +511,7 @@ created_at  = 1793000000
 updated_at  = 1793000000
 
 [[wraps]]                   # the DEK, sealed to the device's key; exactly one in v1
-kind    = "keychain-v1"     # | "webauthn-prf-v1"
+kind    = "device-key-v1"   # | "keychain-v1" | "webauthn-prf-v1" — later hardening, §15 Q12
 nonce   = "…"
 wrapped = "…"
 ```
@@ -532,16 +532,21 @@ wrapped = "…"
   as a raw file at `~/.adi/mono/mesh/identity.key` (`adi-mesh/src/identity.rs:19`) and in browser
   IndexedDB (`adi-mesh-client/src/store.rs`), both readable by anything running as that user.
   Reusing it would make "can pair as you" and "can read your subscription" one capability.
-- **macOS: a key in the Keychain.** A random 256-bit key-wrapping key, stored as a Keychain item
-  with device-only accessibility. **No macOS Keychain code exists in the tree today.** Only
-  `apps/ios/AdiFleet/Keychain.swift` does, so it is added to `adi-app`, which is the device on a Mac.
-  Whether the separate `adi-mono` binary can use that item is §15 Q12.
-- **Browser client: WebAuthn PRF.** A passkey with the `prf` extension, its output put through HKDF
-  into the key-wrapping key. Nothing of the kind exists in `crates/adi-mesh-client` today.
+- **The device key is a `0600` key file, on every platform (decided 2026-10-28, Igor, revising
+  this section's original Keychain/WebAuthn plan for v1).** A random 256-bit key-wrapping key,
+  persisted as 32 raw bytes at `~/.adi/mono/mesh/wrap.key` (`adi-mesh/src/devicekey.rs`) — beside
+  [identity.key](adi-mesh/src/identity.rs), in the same module, but never the same file or key
+  (previous bullet). `kind = "device-key-v1"` is the only wrap this build produces or opens. A
+  macOS Keychain item and a browser `adi-mesh-client` WebAuthn PRF key are **later hardening**,
+  not v1: §15 Q12 (whether the separate `adi-mono` binary can use a Keychain item `adi-app`
+  created) is moot for exactly that reason — nothing here calls the Keychain at all, so there is
+  no prompt to worry a second binary with.
 - **The unwrap runs in device-owned code, never in the server's panel.** A node's panel is HTML and
   wasm *served by the node*, and a server can change a page it serves to keep the plaintext it was
-  trusted to unwrap. So unlocking happens in the Mac's own `adi-app` and in the browser client's own
-  shell, never inside the iframe rendering `app.<node>.n.adi`.
+  trusted to unwrap. So unlocking happens in the Mac's own `adi-app` (the auto-unlock case, §4.3) or
+  the device's own `adi-mono mesh unlock` (the CLI verb, §4.4, ADI-MONO-180 P2.5 — the only one
+  built so far; see that item's own note), and in the browser client's own shell — never inside the
+  iframe rendering `app.<node>.n.adi`.
 
 ## 9. Unlock and leases
 
@@ -555,7 +560,7 @@ device                                         server: adi-app (in memory)
 ──────                                         ───────────────────────────
 1  GET  /api/leases/session                    → adi-app's session public key + epoch
 2  GET  /api/secrets/mine                      → this device's wraps for the shared names
-3  unwrap each DEK locally (Keychain / PRF), open the value,
+3  unwrap each DEK locally (the device key file, §8), open the value,
    seal it to the session key: X25519 + XChaCha20-Poly1305,
    AAD = user:<u>/<NAME> | epoch | device
 4  POST /api/leases/unlock { lease, sealed[] } → checks AAD user == header user, names ⊆ overridable,
@@ -566,8 +571,17 @@ device                                         server: adi-app (in memory)
 
 - **The routes are `/api/leases/*`, not `/api/mesh/*`.** `member_blocked` refuses a member every
   `/api/mesh*` path (`main.rs:626`), and unlocking is exactly what a member does.
-- **"Re-encrypted to the server session" is read as: to an ephemeral key `adi-app` generates at boot
-  and never writes down.** A restart makes every earlier unlock undecryptable on its own. §15 Q9.
+- **"Re-encrypted to the server session" is read as: to an ephemeral key `adi-app` generates at
+  boot and never writes down.** A restart makes every earlier unlock undecryptable on its own.
+  **Settled by ADI-MONO-180 (§15 Q9):** exactly this reading, built as `adi_mesh::lease_seal` —
+  `adi-app` mints an X25519 keypair once per boot (`SessionKey::generate`, never persisted) plus a
+  random epoch token; `GET /api/leases/session` hands back the public key, the epoch, **and the
+  caller's own minted id** — settling, in passing, how a device whose username is a *pinned* one
+  (§3.2) ever learns the real id its AAD in step 3 has to name: it asks, right here, rather than
+  being expected to know it already. Step 3's seal is a fresh ephemeral X25519 keypair *per call*
+  (never reused), HKDF-SHA256 over the raw ECDH output, XChaCha20-Poly1305 with the stated AAD; the
+  `device` component is the caller's own `EndpointId`, read off the gateway's pairing record on
+  each side independently, never sent in the body.
 - **QUIC already encrypts the hop.** `adi/mesh/http/1` runs inside a QUIC connection between the
   device's key and the node's key, and the relay sees only ciphertext (`docs/fleet.md` §9). The seal
   in step 3 keeps plaintext out of anything that logs request bodies on the way in.
@@ -593,8 +607,19 @@ struct Lease {
   are zeroed on drop. A server restart ends every lease, the device's next renew gets
   "unknown epoch, re-unlock", and with `auto_unlock` it redoes steps 1–4 by itself.
 - **The renewing side.** On a Mac, `adi-app` runs as a LaunchAgent whether or not anybody is looking,
-  so `lease = 0` means *while this Mac is awake and online*. The renew loop is a background worker in
-  the device's `adi-app`. In the browser it means *while a tab of the client is open*.
+  so `lease = 0` means *while this Mac is awake and online*. The renew loop is meant to be a
+  background worker in the device's `adi-app`; **ADI-MONO-180 ships only the manual half** —
+  `adi-mono mesh unlock <server>` does steps 1-4 by hand, and nothing yet calls step 5
+  automatically or acts on `auto_unlock` on its own. The server side of every step (session,
+  unlock, renew, revoke, the TTL math) is built and tested either way, so the worker itself —
+  reading `connections.toml` for `auto_unlock`/`lease` and calling steps 1-5 on a timer from inside
+  `adi-app` — is what's left, and it was left out because unattended, autonomous calls need the
+  device's own credential available without a human retyping a password each cycle, which collides
+  with §3.1's "neither side stores it" the moment nobody is at the keyboard; `adi-app` already has
+  a precedent for holding a node password at the user's own request
+  (`adi-app/src/viewer.rs`'s `HeldCredentials`, used for dashboard transfer's outbound calls) and
+  reusing that mechanism here, rather than inventing a second one, is the shape the worker should
+  take. In the browser `lease = 0` means *while a tab of the client is open*.
 - **Server-side presence is a different clock.** `fleet_activity` (`adi-mesh/src/activity.rs`) is
   keyed on the *nickname*, uses a 60-second window (`ACTIVE_WINDOW_SECS`, `activity.rs:25`), and
   sits in a database every agent can write. None of that fits a lease, whose `last_seen` lives in
@@ -873,7 +898,7 @@ Values reach runs as environment variables. Within that mechanism, this is what 
 | **the server's operator, or root** | everything above, plus `adi-app`'s memory while a lease is live, and change the code so the next unlock is kept | read your value while no lease is live and no code has been changed |
 | **the network and the relay** | see that two keys talk | read anything: QUIC end to end, plus the seal to the session key |
 | **a thief with your device** | unlock on your behalf, since in v1 the device *is* the user | — the server's operator unpairs its petname: the lease is revoked and its runs stopped (§10.1), and `users/<u>/` is deleted (§3.2). There is no "revoke from your other device" in v1, because your other device is another user |
-| **an agent run on your own device** | edit your device's `connections.toml` (readable and writable by that Unix user), or ask your local `adi-app` to unlock | read the device key out of the Keychain without the item's access rule |
+| **an agent run on your own device** | edit your device's `connections.toml` (readable and writable by that Unix user), or ask your local `adi-app` to unlock; **and, since the 2026-10-28 decision at §8, read the device key file directly** — it is a plain `0600` file, the same exposure the mesh identity key and the server's master key already have to a co-resident process | fetch a value the server no longer serves (`secrets rm --user`, unpair, a later rename of the AAD label) — the device key alone opens nothing without the wrapped blob the server still has to hand back |
 
 The limits, said plainly:
 
@@ -1003,8 +1028,24 @@ Leave it `Unreachable`?
 key `adi-app` generates at boot (§9). If the mesh connection's own keys were meant, §9's flow
 changes.
 
+**Settled by ADI-MONO-180: the ephemeral-boot-key reading, built as written.** `adi_mesh::lease_seal::SessionKey`
+is an X25519 keypair generated in `App::leases`/`App::lease_session`
+(`adi-app/src/main.rs`) once at startup and never serialized; a restart mints a new one and a new
+epoch, which is exactly what makes "unknown epoch, re-unlock" (§9) a real answer rather than a
+placeholder. The mesh connection's own keys (iroh/QUIC) are not reused for this — they authenticate
+the *connection*, same reasoning as §8's "the device key is not the mesh identity key".
+
 **Q10 — Numbers.** The renew interval `H`, the grace after the last renew for `lease = 0`, and
 whether an absent `max_lease` really means "no cap".
+
+**Settled by ADI-MONO-180.** `lease = 0`'s grace is 90 seconds (`CONNECTED_GRACE`,
+`adi-app/src/leases.rs`) — long enough that a renew loop ticking every few seconds never races it,
+short enough that a device that actually went away reads as gone within about a minute and a half.
+`H` itself (how often the renew loop ticks) is left to the renewing side, as the body already says;
+no number is fixed here because nothing calls it automatically yet (§9's renewing-side note). An
+absent `max_lease` means no cap, confirmed by `LeaseLength::clamp(self, max: Option<LeaseLength>)`:
+`None` is a no-op, `Some` always shortens — `Forever` becomes `max`, anything longer than `max` is
+cut to it, anything shorter is untouched.
 
 **Q11 — Codex and a user key.** `ambient_credential_env` assumes `OPENAI_API_KEY`
 (`ondemand.rs:273`). The Codex runner knows `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN`
@@ -1016,6 +1057,12 @@ runs need their own `CODEX_HOME`, has to be shown before Codex is BYO.
 creates (§8). On a Mac, the separate `adi-mono` binary asking for that item may get a prompt or a
 refusal, so `secrets set --user` and `mesh unlock` from a terminal may have to go through the local
 `adi-app` instead of opening the Keychain themselves. To be shown on a signed build before phase 2.
+
+**Moot, by the decision at §8: there is no Keychain item.** The device key is a `0600` file
+(`adi-mesh/src/devicekey.rs`) both `adi-mono` and `adi-app` read the same way any other store file
+is read — no OS prompt, no per-binary entitlement, no cross-process ownership question. A Keychain
+item (and the browser's WebAuthn PRF key) are later hardening, and whichever of them is built first
+will have to answer this question for real; it is reopened then, not here.
 
 **Q13 — An invite that pins `username`.** `InviteSpec.username` (`join.rs:265-267`) lets the minter
 choose the username, and the partner-sandbox plan uses it to give one person (`p<uid>`) several
@@ -1147,22 +1194,72 @@ in-memory lease source.
 
 ### Phase 2 — device wraps, the per-connection setting, unlock, leases, revoke, waiting on unlock
 
-- [ ] P2.1 The wrapped manifest: DEK and one `[[wraps]]` entry. `set` accepts wraps only, and stops
+- [x] P2.1 The wrapped manifest: DEK and one `[[wraps]]` entry. `set` accepts wraps only, and stops
       refusing. Plaintext never reaches the server.
-- [ ] P2.2 macOS device key in the Keychain (`adi-app`), WebAuthn PRF device key in
+      **ADI-MONO-180:** `adi_secrets::Wrap` + `Manifest.wraps` (empty for every global/project
+      secret, which still goes through the master key as always); `adi_secrets::wrap` is the pure
+      DEK crypto (`generate_dek`/`seal_value`/`open_value`/`wrap_dek`/`unwrap_dek`), independent of
+      the master key and callable by device-owned code with no store of its own.
+      `Secrets::set_wrapped` is the only writer of a `Scope::User` secret, and never touches the
+      master key. `POST /api/secrets/mine/set` stores exactly what it is given — `wraps.len() != 1`
+      is the one shape check left (§8: "one DEK per secret, one wrap in v1") — and `GET
+      /api/secrets/mine` now also returns the sealed `nonce`/`ciphertext`/`wraps` (still never a
+      plaintext) for the owning user's own unlock path (§9 step 2).
+- [x] P2.2 macOS device key in the Keychain (`adi-app`), WebAuthn PRF device key in
       `adi-mesh-client`. The unwrap runs in device-owned code only (settle Q12).
-- [ ] P2.3 `adi-app`'s ephemeral session key, `/api/leases/{session,unlock,renew,revoke}` and
+      **Reworked by the 2026-10-28 decision at §8: a `0600` key file instead, on every platform.**
+      `adi_mesh::devicekey` (`wrap.key`, beside `identity.key`, never the same key). The Keychain
+      item and the browser's WebAuthn PRF key are later hardening, not built; Q12 is moot under
+      this decision (§15).
+- [x] P2.3 `adi-app`'s ephemeral session key, `/api/leases/{session,unlock,renew,revoke}` and
       `GET /api/leases`, the in-memory `Lease`, one per user, with zeroize. `max_lease` clamp.
       Restart answers "unknown epoch" (settle Q9, Q10).
-- [ ] P2.4 The device's `connections.toml` in the `mesh` module dir (and its own object store in the
+      **ADI-MONO-180:** `adi_mesh::lease_seal::SessionKey` (X25519 + HKDF-SHA256 +
+      XChaCha20-Poly1305, fresh ephemeral key per *unlock call* on the device side, one per *boot*
+      on the server side) and `adi-app/src/leases.rs`'s `LeaseTable`. `GET /api/leases/session`
+      also returns the caller's own id, settling how a device under a *pinned* username — whose
+      `Accepted.username` the join protocol never equalled the real id for (§3.2) — learns what to
+      put in its own AAD (§9's note on this). `unlock` opens each sealed value, drops any name
+      outside `overridable`, clamps the lease, and replaces the user's prior lease in place; `renew`
+      evicts rather than revives a lease that has already run out its grace; `revoke` always
+      succeeds, even against nothing. `GET /api/leases` is admin-sees-all / member-sees-own, by
+      `peer_role`, matching §7.
+- [x] P2.4 The device's `connections.toml` in the `mesh` module dir (and its own object store in the
       browser client), moved by a rename and deleted by an unpair. The renew worker in the device's
       `adi-app`, TTL from last seen.
-- [ ] P2.5 CLI: `mesh share`, `mesh unlock`, `mesh lock`, `secrets leases`.
+      **ADI-MONO-180, partially.** `adi_mesh::connections` (file, schema, `LeaseLength` parse/
+      display/clamp) ships, and both couplings ship too: `adi-cli`'s local `mesh rename`/`unpair`
+      and `adi-webapp-api`'s `fleet_rename`/`fleet_unpair` each move or delete the matching
+      `connections.toml` entry right after the registry mutation that makes it stale. **The renew
+      worker itself — reading `auto_unlock`/`lease` off this file and driving steps 1-5 on a timer
+      inside `adi-app` — is not built**; see §9's own note on the renewing side for why (an
+      unattended loop needs a credential available without a human retyping a password, which
+      `viewer.rs`'s `HeldCredentials` precedent is the shape to reuse, not yet done) and what's left
+      to do it. The browser client's own object store is untouched (`adi-mesh-client` has no part
+      of this yet).
+- [x] P2.5 CLI: `mesh share`, `mesh unlock`, `mesh lock`, `secrets leases`.
+      **ADI-MONO-180, with one gap flagged rather than guessed at.** All four ship: `mesh share`
+      edits `connections.toml` only; `mesh unlock` does §9 steps 1-4 by hand (one password prompt
+      per invocation, reused across all three HTTP calls it makes — `adi_mesh::node_api`, lifted
+      out of `adi-cli/src/secrets.rs` where P1.12 left it, now shared by both); `mesh lock` calls
+      `/api/leases/revoke`; `secrets leases --node <server>` lists the caller's own. **`secrets
+      leases` with no `--node` — the local admin's "every lease on my own server" listing — is
+      refused rather than guessed at**: leases live only in a *running* `adi-app`'s memory, and this
+      CLI has no established way to reach a local running instance's HTTP API the way it reaches a
+      *remote* paired one (through the mesh gateway); that address is left for whoever builds it,
+      rather than hard-coding a default port that `PORT`/an installed service could already disagree
+      with. `secrets set --user --node` now actually seals and uploads (P2.1/P2.2), closing P1.12's
+      own placeholder.
 - [ ] P2.6 Revoke (§10.1): drop the lease, void every `lease_cap` of `<u>`,
       `SessionStore::with_lease_user`, stop each live session through the runner stop without the
       agent-exists gate, `adi.secrets.lease.revoked`. Also on unpair, which deletes `users/<u>/`.
       Runs with no lease in the table. Tests: a running turn and a running child are both stopped; a
       parked session keeps its queue; a forwarded launch after the revoke gets `403`.
+      **Step 1 already lands with P2.3**: `POST /api/leases/revoke` drops the lease from the table
+      and zeroes its values, unconditionally (even against nothing — the §10.1 requirement this
+      item's own text names). ADI-MONO-181 only has to add steps 2-5: voiding `lease_cap` (which
+      nothing mints yet either — that's phase 3's `ADI_LEASE`, P3.1), `with_lease_user`, and the
+      actual runner stop.
 - [ ] P2.7 `missing` per turn: `server` / `wait` / `fail`. The unlock check runs before `dequeue` in
       `advance_queue` and before the start decision in `deliver_with`.
 - [ ] P2.8 Waiting on unlock: queue-held turn, `RunLifecycle::Waiting`,
