@@ -55,10 +55,10 @@ pub use adi_agents::migrations;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, AgentQuestionAsked, AgentRunFinished, AgentRunIdle, AgentRunReported,
-    Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError, Launch, LaunchOptions,
-    MANIFEST_VERSION, RawAgentArguments, RunInfo, RunLifecycle, RunLimits, RunOverrides,
-    SecretAttachment, Sent, SpawnPolicy, StoredAgent, StoredAgentManifest, UNVERSIONED,
-    contains_json_null,
+    Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError, LEASE_CAP_ENV,
+    LEASE_CAP_URL_ENV, Launch, LaunchOptions, MANIFEST_VERSION, RawAgentArguments, RunInfo,
+    RunLifecycle, RunLimits, RunOverrides, SecretAttachment, Sent, SpawnPolicy, StoredAgent,
+    StoredAgentManifest, UNVERSIONED, contains_json_null,
 };
 
 /// The whole platform event catalog — task + agent + channel + workflow events. `adi-channels`

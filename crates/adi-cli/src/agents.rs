@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 
 use adi_core::{
     Adi, AgentManifest, AgentQuestionAsked, AgentRunFinished, AgentRunIdle, AgentRunReported,
-    AgentSummaryArguments, Agents, AgentsError, Backend, Event, Launch, LaunchOptions,
-    MANIFEST_VERSION, RunInfo, RunLifecycle, RunOverrides, SecretAttachment, StoredAgent,
-    UNVERSIONED, awaits, launcher, llm::LlmBackends, migrations,
+    AgentSummaryArguments, Agents, AgentsError, Backend, Event, LEASE_CAP_ENV, LEASE_CAP_URL_ENV,
+    Launch, LaunchOptions, MANIFEST_VERSION, RunInfo, RunLifecycle, RunOverrides, SecretAttachment,
+    StoredAgent, UNVERSIONED, awaits, launcher, llm::LlmBackends, migrations,
 };
 use clap::Subcommand;
 
@@ -741,8 +741,36 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             let given = task.or(message);
             let no_task_given = given.is_none();
             let message = given.unwrap_or_else(|| "run".to_string());
-            let by = launched_by();
             let overrides = RunOverrides::parse_pairs(&set)?;
+
+            // A run started inside a leased run forwards to `adi-app` instead of launching
+            // in-process (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3): `adi-app` is the
+            // only process that can provision the lease's values, so a child that inherited
+            // `$ADI_LEASE` has to ask it, not guess at the server's own values locally.
+            if let Ok(capability) = std::env::var(LEASE_CAP_ENV) {
+                let lease_url = std::env::var(LEASE_CAP_URL_ENV).map_err(|_| {
+                    format!(
+                        "${LEASE_CAP_ENV} is set but ${LEASE_CAP_URL_ENV} is not — refusing \
+                         rather than launching in-process on different credentials"
+                    )
+                })?;
+                return run_leased(
+                    &store,
+                    &lease_url,
+                    &capability,
+                    &name,
+                    &message,
+                    dir.as_deref(),
+                    force,
+                    &pre_run,
+                    (!overrides.is_empty()).then_some(&overrides),
+                    no_task_given,
+                    wait,
+                    no_await,
+                );
+            }
+
+            let by = launched_by();
             let launch = store
                 .launch(
                     &name,
@@ -1518,6 +1546,97 @@ fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> O
     ))
 }
 
+/// Forward `agents run` to `$ADI_LEASE_URL/api/agents/run` with `X-Adi-Lease: $ADI_LEASE`
+/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.3) — the body `run_agent_leased` expects, in
+/// `RunAgent`'s own field names. `adi-app` ignores whatever `launched_by` this sends (it derives
+/// the real caller from the capability itself, P3.2), so nothing here bothers naming one.
+///
+/// `--wait` and the follow-up wake both work unmodified once the run exists, because both key
+/// their polling on `run_id` alone, real from the moment `adi-app`'s own session is created, and
+/// read the *same* `sessions.db` this process does — the same claim the design makes for them
+/// (§11: "the CLI prints the answer exactly as it prints a local launch today, and
+/// `follow_the_run` registers the wake locally as before").
+///
+/// Refuses, rather than falling back to an in-process launch, the moment anything about reaching
+/// `adi-app` goes wrong — an unreachable app, a non-2xx answer, or an answer that isn't JSON —
+/// settling §15 Q3 as the body already does: moving credentials without `adi-app` ever seeing the
+/// launch is the one thing this must never do.
+#[allow(clippy::too_many_arguments)]
+fn run_leased(
+    store: &Agents,
+    lease_url: &str,
+    capability: &str,
+    name: &str,
+    message: &str,
+    dir: Option<&str>,
+    force: bool,
+    pre_run: &[String],
+    overrides: Option<&RunOverrides>,
+    no_task_given: bool,
+    wait: bool,
+    no_await: bool,
+) -> Result<(), String> {
+    let mut body = serde_json::json!({ "name": name, "message": message, "force": force });
+    if let Some(dir) = dir {
+        body["working_dir"] = serde_json::Value::String(dir.to_string());
+    }
+    if !pre_run.is_empty() {
+        body["pre_run"] = serde_json::json!(pre_run);
+    }
+    if let Some(overrides) = overrides {
+        body["overrides"] = serde_json::to_value(overrides).map_err(|e| e.to_string())?;
+    }
+
+    let client = adi_mesh::node_api::gateway_client(crate::secrets::NODE_TIMEOUT)
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .post(format!("{lease_url}/api/agents/run"))
+        .header("X-Adi-Lease", capability)
+        .json(&body)
+        .send()
+        .map_err(|e| format!("reaching adi-app at {lease_url}: {e} — is it running?"))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .map_err(|e| format!("reading adi-app's answer: {e}"))?;
+    let answer: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("adi-app answered something that is not JSON: {e}"))?;
+    if !status.is_success() {
+        let msg = answer["error"].as_str().unwrap_or(&text);
+        return Err(format!("adi-app: {msg}"));
+    }
+
+    if no_task_given {
+        eprintln!(
+            "no task given — sent the placeholder task \"run\"; pass one as \
+             `adi-mono agents run {name} \"<task>\"` or `-m`"
+        );
+    }
+    let run_id = answer["run_id"].as_str().unwrap_or_default();
+    if run_id.is_empty() {
+        // A pty launch: no run to follow or wait on, same as a local one.
+        if wait {
+            return Err(
+                "--wait needs a run that ends; a pty agent opens a pane instead".to_string(),
+            );
+        }
+        println!("{}", answer["message"].as_str().unwrap_or_default());
+        return Ok(());
+    }
+    if wait {
+        return await_run(store, name, run_id);
+    }
+    println!("Started agent {name} through its lease at {lease_url}.");
+    println!("  run:     {run_id}");
+    if !no_await
+        && let Some(note) = follow_the_run(store, name, run_id, message)
+    {
+        println!();
+        println!("{note}");
+    }
+    Ok(())
+}
+
 /// Dispatch an `agents awaits` subcommand over one conversation's pending wakes.
 fn run_awaits(store: &Agents, command: AwaitsCommand) -> Result<(), String> {
     let pending = awaits::Awaits::with_config(store.config().clone());
@@ -1815,6 +1934,43 @@ mod tests {
             "giving both the positional task and -m is a mistake worth refusing, not guessing \
              between"
         );
+    }
+
+    /// ADI-MONO-182 P3.3, settling §15 Q3: when `adi-app` can't be reached, `run_leased` refuses
+    /// rather than falling back to an in-process launch on the server's own values — tested
+    /// against a port deliberately bound to nothing and immediately dropped, the same way
+    /// `secrets::local_leases_at_an_unreachable_port_names_it_in_the_error` proves the parallel
+    /// case for `secrets leases`.
+    #[test]
+    fn run_leased_refuses_rather_than_falling_back_when_adi_app_is_unreachable() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind an ephemeral port")
+            .local_addr()
+            .expect("read it back")
+            .port();
+        let store = Agents::with_config(adi_config::Config::with_root(std::env::temp_dir().join(
+            format!(
+                "adi-cli-run-leased-unreachable-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id(),
+            ),
+        )));
+        let err = run_leased(
+            &store,
+            &format!("http://127.0.0.1:{port}"),
+            "whatever-capability",
+            "solver",
+            "go",
+            None,
+            false,
+            &[],
+            None,
+            false,
+            false,
+            true,
+        )
+        .expect_err("nothing listens there any more");
+        assert!(err.contains("adi-app"), "{err}");
     }
 
     /// `$ADI_AGENT` set (a turn) records `agent:<name>`; unset (a person at a terminal, or a script)
