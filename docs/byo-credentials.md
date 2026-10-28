@@ -607,19 +607,20 @@ struct Lease {
   are zeroed on drop. A server restart ends every lease, the device's next renew gets
   "unknown epoch, re-unlock", and with `auto_unlock` it redoes steps 1–4 by itself.
 - **The renewing side.** On a Mac, `adi-app` runs as a LaunchAgent whether or not anybody is looking,
-  so `lease = 0` means *while this Mac is awake and online*. The renew loop is meant to be a
-  background worker in the device's `adi-app`; **ADI-MONO-180 ships only the manual half** —
-  `adi-mono mesh unlock <server>` does steps 1-4 by hand, and nothing yet calls step 5
-  automatically or acts on `auto_unlock` on its own. The server side of every step (session,
-  unlock, renew, revoke, the TTL math) is built and tested either way, so the worker itself —
-  reading `connections.toml` for `auto_unlock`/`lease` and calling steps 1-5 on a timer from inside
-  `adi-app` — is what's left, and it was left out because unattended, autonomous calls need the
-  device's own credential available without a human retyping a password each cycle, which collides
-  with §3.1's "neither side stores it" the moment nobody is at the keyboard; `adi-app` already has
-  a precedent for holding a node password at the user's own request
-  (`adi-app/src/viewer.rs`'s `HeldCredentials`, used for dashboard transfer's outbound calls) and
-  reusing that mechanism here, rather than inventing a second one, is the shape the worker should
-  take. In the browser `lease = 0` means *while a tab of the client is open*.
+  so `lease = 0` means *while this Mac is awake and online*. **Built by ADI-MONO-181**:
+  `adi-app/src/lease_worker.rs` is the background loop this note described, `tokio::spawn`'d from
+  `main()` beside every other background worker in the crate and ticking every 20 seconds. It
+  reads `connections.toml` fresh each tick; for a connection with `auto_unlock` and a non-empty
+  `share` it renews against the epoch it already knows, or redoes the full unlock (steps 1-4)
+  when there isn't one yet or the server answered `404`/`409` (no live lease, or an unknown epoch
+  — a restart). The credential problem this bullet named is solved exactly as it suggested:
+  `adi-app/src/viewer.rs`'s `HeldCredentials` (the dashboard-transfer precedent) supplies the
+  Basic-auth password, so a connection this device has never also unlocked a dashboard on is
+  skipped — logged, not an error — until the operator does, once, from the Fleet page. `adi-mono
+  mesh unlock <server>` (ADI-MONO-180) is still there for a one-off manual unlock, unchanged; the
+  worker is this plus the timer. In the browser `lease = 0` means *while a tab of the client is
+  open*, and the browser client's own renew loop remains unbuilt (`adi-mesh-client` has no part of
+  any of this yet).
 - **Server-side presence is a different clock.** `fleet_activity` (`adi-mesh/src/activity.rs`) is
   keyed on the *nickname*, uses a 60-second window (`ACTIVE_WINDOW_SECS`, `activity.rs:25`), and
   sits in a database every agent can write. None of that fits a lease, whose `last_seen` lives in
@@ -982,6 +983,20 @@ session and queues its opening message (§10). `Launch` is `Pty | Process { pid,
 `follow_the_run` and the panel all expect a process. Add a variant, or refuse such a launch with
 "unlock first"?
 
+**Settled by ADI-MONO-181: neither, quite — `fail` refuses (before anything is written down, the
+same contract a bad argument already gets); `wait` creates the session exactly as the body
+already said, and returns the existing `Launch::Process { pid: 0, .. }` rather than a new
+variant.** `pid: 0` is not a new meaning invented for this: `launch_of` (`lib.rs`) already uses it
+for "a runner whose engine lives elsewhere records no pid … the run is still addressed by its id"
+— a session with nothing sent yet is one more case of exactly that, not a different one. Every
+reader of a `Process` launch today (`adi-mono agents run --wait`, `follow_the_run`,
+`adi-webapp-api`'s own run-started response) uses `pid` for *display* alone and keys its actual
+polling on `run_id`, which is real the moment the session is created — so none of the three had to
+change for this to work, and a new variant would have meant touching all three for a distinction
+none of them needed to make. `follow_the_run`'s wake already matches `adi.agents.run.idle`, and a
+parked launch is one more run that produces it (via `adi.agents.run.waiting_on_unlock` first, then
+`idle` on the same poll) the first time anyone looks.
+
 **Q3 — The CLI when the app is unreachable.** A leased run's `agents run` forwards to `adi-app`
 (§11). If the app is down or restarting, this spec refuses the launch. The alternative is to apply
 the user's `missing` policy locally. That means the CLI reading `sessions.lease_cap` and both
@@ -1227,50 +1242,139 @@ in-memory lease source.
 - [x] P2.4 The device's `connections.toml` in the `mesh` module dir (and its own object store in the
       browser client), moved by a rename and deleted by an unpair. The renew worker in the device's
       `adi-app`, TTL from last seen.
-      **ADI-MONO-180, partially.** `adi_mesh::connections` (file, schema, `LeaseLength` parse/
+      **ADI-MONO-180.** `adi_mesh::connections` (file, schema, `LeaseLength` parse/
       display/clamp) ships, and both couplings ship too: `adi-cli`'s local `mesh rename`/`unpair`
       and `adi-webapp-api`'s `fleet_rename`/`fleet_unpair` each move or delete the matching
-      `connections.toml` entry right after the registry mutation that makes it stale. **The renew
-      worker itself — reading `auto_unlock`/`lease` off this file and driving steps 1-5 on a timer
-      inside `adi-app` — is not built**; see §9's own note on the renewing side for why (an
-      unattended loop needs a credential available without a human retyping a password, which
-      `viewer.rs`'s `HeldCredentials` precedent is the shape to reuse, not yet done) and what's left
-      to do it. The browser client's own object store is untouched (`adi-mesh-client` has no part
-      of this yet).
+      `connections.toml` entry right after the registry mutation that makes it stale.
+      **The renew worker itself (ADI-MONO-181):** `adi-app/src/lease_worker.rs`, started from
+      `main()` exactly like every other background loop in that crate (`prober::start`,
+      `event_log::start` — a `tokio::spawn`'d loop, not a spawned process, so it dies with the
+      app the way §9's own note on this said it had to). Every `TICK` (20s, comfortably inside
+      `leases::CONNECTED_GRACE`'s 90s) it reads `connections.toml` fresh and, for every connection
+      with `auto_unlock` and a non-empty `share`, either renews against the epoch it already knows
+      or redoes the full unlock sequence — on the first tick, or whenever the server answers
+      `404`/`409` (no live lease, or unknown epoch after a restart). **The credential**, exactly as
+      flagged here: `crate::viewer::HeldCredentials`, the dashboard-transfer precedent this note
+      named, reused as-is rather than duplicated — a connection this device has never also
+      unlocked a dashboard on (no password held yet) is skipped with a debug log until the
+      operator does, once, from the Fleet page. The browser client's own object store is still
+      untouched (`adi-mesh-client` has no part of this yet).
 - [x] P2.5 CLI: `mesh share`, `mesh unlock`, `mesh lock`, `secrets leases`.
-      **ADI-MONO-180, with one gap flagged rather than guessed at.** All four ship: `mesh share`
+      **ADI-MONO-180**, plus ADI-MONO-181 closing the one gap it flagged. All four ship: `mesh share`
       edits `connections.toml` only; `mesh unlock` does §9 steps 1-4 by hand (one password prompt
       per invocation, reused across all three HTTP calls it makes — `adi_mesh::node_api`, lifted
       out of `adi-cli/src/secrets.rs` where P1.12 left it, now shared by both); `mesh lock` calls
       `/api/leases/revoke`; `secrets leases --node <server>` lists the caller's own. **`secrets
-      leases` with no `--node` — the local admin's "every lease on my own server" listing — is
-      refused rather than guessed at**: leases live only in a *running* `adi-app`'s memory, and this
-      CLI has no established way to reach a local running instance's HTTP API the way it reaches a
-      *remote* paired one (through the mesh gateway); that address is left for whoever builds it,
-      rather than hard-coding a default port that `PORT`/an installed service could already disagree
-      with. `secrets set --user --node` now actually seals and uploads (P2.1/P2.2), closing P1.12's
-      own placeholder.
-- [ ] P2.6 Revoke (§10.1): drop the lease, void every `lease_cap` of `<u>`,
+      leases` with no `--node` (ADI-MONO-181):** the established way to reach a *local* running
+      instance's HTTP API this note said was missing turned out to already exist one layer down —
+      `adi_core::app::port()` is the exact port the ports manager handed this machine's own
+      `adi-app` (the same number its `LaunchAgent`/service unit and the front door's proxy rule
+      both read), so the local listing dials `127.0.0.1:<that port>/api/leases` directly, no mesh
+      gateway involved. A request with no mesh identity headers reads, server-side, as the
+      machine's own operator (§3.2) — an admin, so this sees every lease, not just one user's,
+      matching `--node`'s own admin-sees-all rule. `secrets set --user --node` now actually seals
+      and uploads (P2.1/P2.2), closing P1.12's own placeholder.
+- [x] P2.6 Revoke (§10.1): drop the lease, void every `lease_cap` of `<u>`,
       `SessionStore::with_lease_user`, stop each live session through the runner stop without the
       agent-exists gate, `adi.secrets.lease.revoked`. Also on unpair, which deletes `users/<u>/`.
       Runs with no lease in the table. Tests: a running turn and a running child are both stopped; a
       parked session keeps its queue; a forwarded launch after the revoke gets `403`.
-      **Step 1 already lands with P2.3**: `POST /api/leases/revoke` drops the lease from the table
-      and zeroes its values, unconditionally (even against nothing — the §10.1 requirement this
-      item's own text names). ADI-MONO-181 only has to add steps 2-5: voiding `lease_cap` (which
-      nothing mints yet either — that's phase 3's `ADI_LEASE`, P3.1), `with_lease_user`, and the
-      actual runner stop.
-- [ ] P2.7 `missing` per turn: `server` / `wait` / `fail`. The unlock check runs before `dequeue` in
+      **ADI-MONO-181.** Step 1 (drop the lease) already landed with P2.3. Steps 2-4 are
+      `Agents::stop_runs_for_lease_user(user)` (`adi-agents/src/lib.rs`):
+      `SessionStore::void_lease_cap_for_user` (a no-op today — nothing mints `lease_cap` until phase 3's
+      `ADI_LEASE`, P3.1 — written now so this path does not change shape again once it does),
+      `SessionStore::with_lease_user` (one `json_extract(lease,'$.user')` walk across every
+      agent), then for each session `Self::session_is_alive` reports alive, the same runner
+      `Agents::stop_run` uses — `Agents::stop_run`'s own "the agent still exists" gate is simply
+      not in this path, since the record (and its runner) comes straight from the session, never
+      from a re-looked-up agent. A session that isn't alive (parked, or already finished) is left
+      untouched, queue included — "a parked session stays parked" is true by construction here,
+      not by a special case, since only the alive ones are ever touched. Step 5 is
+      `adi.secrets.lease.revoked { user, stopped }`, published by `adi-app/src/leases.rs`'s new
+      `revoke_user`, the one function both `POST /api/leases/revoke` and unpairing a user's last
+      peer now call (`fleet_unpair_revoking`/`fleet_drop_source_revoking`/
+      `fleet_drop_viewer_revoking` in `adi-webapp-api`, each taking an `on_user_removed` hook
+      the plain, pre-existing verb still ignores, so every existing caller and test is untouched).
+      **The "forwarded launch after revoke gets `403`" sub-test is phase 3's to write, not this
+      one's**: nothing mints `lease_cap` yet, so there is no capability to forge or to check —
+      voiding a column nothing has written to is not yet observable from outside. Everything else
+      in the Checklist's own test list is proven, the first two against a *real* spawned child
+      (`adi_agents::tests::end_to_end_a_real_child_sees_the_lease_value_and_a_revoke_stops_it`),
+      not a fake.
+- [x] P2.7 `missing` per turn: `server` / `wait` / `fail`. The unlock check runs before `dequeue` in
       `advance_queue` and before the start decision in `deliver_with`.
-- [ ] P2.8 Waiting on unlock: queue-held turn, `RunLifecycle::Waiting`,
+      **ADI-MONO-181.** `adi_agents::lease::readiness` is the one function both call: `Ready`
+      (no lease, or every narrowed name already live, or the effective `missing` is `"server"` —
+      §5's own fallback, nothing to gate), `Wait { user, names }`, or `Fail { user, names }`, where
+      `names` is only the ones actually missing a live value right now. `advance_queue` asks it
+      immediately after re-confirming the session is idle and *before* `store.dequeue` — `Wait`
+      leaves the message queued and announces it once (`note_waiting_on_unlock`); `Fail` dequeues
+      (a message that fails to launch has still had its turn, same as any real launch failure) and
+      writes the refusal into the transcript (`fail_turn_for_missing_lease`, `terminal_reason =
+      "lease_missing"`), the same shape `send_or_note_failure` already gives a dead launch.
+      `deliver_with` asks the same question right after its own busy/idle gate and **does not tell
+      `wait` and `fail` apart**: both simply enqueue the fresh message and answer
+      `Sent::Queued`, leaving the actual `wait`-or-`fail` decision to `advance_queue`'s next poll,
+      which dequeues *in the order messages were actually typed* — deciding it here, ahead of
+      whatever this session already had queued, would answer a message typed second before one
+      typed first. `launch_run` (a **fresh** launch, no session yet) asks it once, right after
+      building the spec: `Fail` refuses before `runner.check`/`store.create_as` run at all, the
+      same "fail before anything is written down" contract a bad argument already gets; `Wait` is
+      §10 §15 Q2, settled below.
+- [x] P2.8 Waiting on unlock: queue-held turn, `RunLifecycle::Waiting`,
       `adi.agents.run.waiting_on_unlock`. Resume on `adi.secrets.lease.granted`. A fresh launch that
       waits (settle Q2).
+      **ADI-MONO-181.** `RunLifecycle::Waiting` needs no new code: a parked turn's message simply
+      stays in `queue`, which `Pending::queued` (and so `state_of`) already reads as `Waiting` —
+      the same mechanism a message queued for any other reason already produces. The new event,
+      `adi.agents.run.waiting_on_unlock { agent, run_id, user, names }`, is gated through a new
+      `sessions.lease_wait_notified_turn` column (`SessionStore::note_lease_wait`) — the same
+      turn-gated dedup `idle_notified_turn`/`adi.agents.run.idle` uses, kept as its own column so
+      the two events can never suppress each other on the same poll. **Resume needs no explicit
+      subscriber at all**: once a name is live again, the very next `advance_queue` poll (the
+      app's own listing, or a transcript read) finds `Readiness::Ready` and dequeues normally —
+      `adi.secrets.lease.granted`, published by `adi-app/src/leases.rs`'s `unlock`, is for the
+      rail and anyone else watching, not a mechanism anything here waits on. Proven end to end,
+      not just at the fixture level, by
+      `adi_agents::tests::end_to_end_a_real_child_sees_the_lease_value_and_a_revoke_stops_it`'s
+      third phase: a queued turn parks under `wait` with an empty lease source, then the same
+      store, read through an `Agents` handed a live source again, drains it on its very next
+      `runs()` call.
+      **Q2, settled: a refusal for `fail`, a real "created, waiting" session for `wait`.** The
+      body's own text (§10, "a launch whose first turn has no live value creates the session and
+      queues its opening message") already decided the `wait` half; what was open was only what
+      `launch_run` *returns*, since `Launch` is `Pty | Process` and neither shape says "parked".
+      Answered without adding a variant: `Launch::Process { pid: 0, log, run_id }`, reusing the
+      sentinel `launch_of` already gives "a runner whose engine lives elsewhere records no pid …
+      the run is still addressed by its id" (`lib.rs`, next to `launch_of`). Every caller that
+      reads a `Process` today — `agents run --wait`, `follow_the_run`, the panel's own launch
+      response — only ever reads `pid` for *display*; none dereferences it to find a real
+      process, and `run_id` alone is already what `--wait`/`follow_the_run` key their polling on.
+      A new variant would have rippled into all three for a shape none of them actually needed.
 
 ### Phase 3 — subagent and turn inheritance of the lease
 
+**What ADI-MONO-181 leaves exactly here, for this phase to build on.** `adi_agents::lease::
+readiness` (P2.7) already asks "does this turn's lease hold a live value for every name it
+needs, right now" and answers `Ready`/`Wait`/`Fail` purely from the server's `missing` policy —
+it has no opinion on *which process* is asking, and under `missing = "server"` it answers `Ready`
+for any `Agents`, `lease_values()` or not, because the server fallback is the same value
+wherever it runs. **P3.4 is a different, stronger rule, still to add**: regardless of what
+`readiness` says, a leased session's turn must not start at all in a process that isn't
+`adi-app`'s own `Agents` (`lease_values()` is `None` there today only because nothing has called
+`with_lease_values` on it — `None` doesn't yet *mean* "refuse," which is what P3.4 has to make it
+mean, exactly where the body already says: `deliver_with` → `Sent::Queued`, `advance_queue` →
+`false` before dequeue). Until P3.4 lands, a leased session answered from `agents answer` or a
+CLI listing on this same machine will start a turn under `missing = "server"` — on the server's
+own value, same as `adi-app` would give it, so nothing is misattributed, but not yet routed
+through the one process §11 says should be doing the routing. `fail_turn_for_missing_lease` and
+`note_waiting_on_unlock` (P2.7/P2.8, both `Agents` methods) are safe to call from any process
+that reaches them; they write to `sessions.db`, not to anything process-local.
+
 - [ ] P3.1 Capability: minted per leased session, SHA-256 in `sessions.lease_cap`, `ADI_LEASE` and
       `ADI_LEASE_URL` pushed after `ADI_RUN_ID`, stable across turns and app restarts, re-minted
-      after a revoke (settle Q5).
+      after a revoke (settle Q5). `SessionStore::void_lease_cap_for_user` (ADI-MONO-181, §10.1
+      step 2) already clears the column on revoke — it has simply had nothing to clear until now.
 - [ ] P3.2 `run_agent` honours `X-Adi-Lease` only without a `FleetSender`. It derives `launched_by`
       and the `can_spawn` caller from the capability's session and builds the child's `LeaseRef`
       from the child's own attachments. An unknown or voided capability is `403`.
@@ -1278,7 +1382,8 @@ in-memory lease source.
       when the app is unreachable (settle Q3).
 - [ ] P3.4 Only `adi-app`'s `Agents` carries a lease source. Elsewhere a leased session's turn is
       queued, never started (`deliver_with` → `Sent::Queued`; `advance_queue` → `false` before
-      dequeue).
+      dequeue). See this phase's own intro above — this is additional to, not replaced by,
+      P2.7's `readiness` gate.
 - [ ] P3.5 A reply, from anyone, runs on the session's `lease.user`. Test: member B's reply into A's
       leased conversation gets A's value, and B's own lease is never consulted.
 - [ ] P3.6 Tests: a grandchild of a leased run gets the user's value for a name it attaches; a child
