@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 pub use duration::parse_duration;
 pub use error::{Error, Result};
 pub use file::{ConfigFile, Timestamped};
-pub use flavor::{DEFAULT_FLAVOR, FLAVOR_ENV, Flavor};
+pub use flavor::{DEFAULT_FLAVOR, ENV_KEYS as FLAVOR_ENV_KEYS, FLAVOR_ENV, Flavor};
 pub use ids::{ALIASES_FILE, Aliases, MAX_ID, mint, slug, unique_id};
 pub use launch::{augmented_path, launch_env};
 pub use layout::{dir, dir_name, home};

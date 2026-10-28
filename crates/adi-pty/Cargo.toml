@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+adi-config = { workspace = true }
 portable-pty = { workspace = true }
 vt100 = { workspace = true }
 

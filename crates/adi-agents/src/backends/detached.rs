@@ -36,13 +36,23 @@ pub(crate) struct Spawned {
 }
 
 /// What a child would inherit from `ambient` with every `ADI_*` run-identity variable and every
-/// name in `strip` removed (ADI-MONO-175).
+/// name in `strip` removed (ADI-MONO-175), except the small allowlist of install-configuration
+/// variables in [`adi_config::FLAVOR_ENV_KEYS`] (ADI-MONO-185).
 ///
-/// Unconditional on `ADI_*`: a spawned child's own identity is set explicitly, in its own
+/// `ADI_*` otherwise unconditional: a spawned child's own identity is set explicitly, in its own
 /// `run_env`, by whoever is launching it (see [`crate::workspace::env`]), so nothing it legitimately
-/// needs is lost by refusing to let it inherit somebody else's. `strip` carries the one thing that
-/// needs a lookup to know — the attached-secret names of whichever agent's run this process is
-/// itself already running inside, if any (see [`crate::Agents::inherited_strip`]).
+/// needs is lost by refusing to let it inherit somebody else's. The allowlisted exception exists
+/// because *which install* a run belongs to — `ADI_DIR`, `ADI_FLAVOR`, and the rest of a
+/// [`adi_config::Flavor`]'s own overrides — is not something any launcher re-exports per run; it is
+/// set once, ambiently, by whatever started this process, and a child that lost it would silently
+/// address `release` instead of the install it was actually launched under. An allowlist rather than
+/// a longer strip list because install configuration is the closed, rarely-changing side of this
+/// boundary — every other `ADI_*` name this tree defines is per-run and grows with every new
+/// feature, so naming those instead would mean this filter silently stops covering the next one.
+/// `strip` carries the one thing that needs a lookup to know — the attached-secret names of
+/// whichever agent's run this process is itself already running inside, if any (see
+/// [`crate::Agents::inherited_strip`]) — and wins over the allowlist, on the off chance a declared
+/// secret is itself named like one of its keys.
 ///
 /// Takes `ambient` as an iterator rather than reading `std::env` itself, so [`spawn_child`] and
 /// [`crate::runner::detached::hash_child_environment`] — which must never disagree about what a
@@ -54,7 +64,12 @@ pub(crate) fn scrub_ambient(
 ) -> BTreeMap<String, String> {
     ambient
         .into_iter()
-        .filter(|(key, _)| !key.starts_with("ADI_") && !strip.iter().any(|name| name == key))
+        .filter(|(key, _)| {
+            let named_to_strip = strip.iter().any(|name| name == key);
+            let run_identity = key.starts_with("ADI_")
+                && !adi_config::FLAVOR_ENV_KEYS.contains(&key.as_str());
+            !named_to_strip && !run_identity
+        })
         .collect()
 }
 
@@ -665,6 +680,47 @@ mod tests {
         assert!(scrub_ambient(ambient, &[]).is_empty());
     }
 
+    /// ADI-MONO-185: the one carve-out in the otherwise-unconditional `ADI_*` rule above. A child
+    /// still needs to know which install launched it — `ADI_DIR`/`ADI_FLAVOR` are read by every
+    /// later `adi_config::Flavor::current()` in that process — and nothing re-exports them per
+    /// run the way `ADI_AGENT`/`ADI_RUN_ID` are, so losing them here silently addressed `release`
+    /// from underneath a dev install or a relocated store.
+    #[test]
+    fn scrub_ambient_keeps_the_flavor_allowlist_but_nothing_else_adi_star() {
+        let ambient = vec![
+            ("ADI_DIR".to_string(), ".adi-dev".to_string()),
+            ("ADI_FLAVOR".to_string(), "dev".to_string()),
+            ("ADI_AGENT".to_string(), "caller".to_string()),
+            ("ADI_RUN_ID".to_string(), "conv-1".to_string()),
+            ("ADI_LEASE".to_string(), "cap".to_string()),
+        ];
+        let scrubbed = scrub_ambient(ambient, &[]);
+
+        assert_eq!(scrubbed.get("ADI_DIR").map(String::as_str), Some(".adi-dev"));
+        assert_eq!(scrubbed.get("ADI_FLAVOR").map(String::as_str), Some("dev"));
+        assert!(
+            !scrubbed.contains_key("ADI_AGENT"),
+            "run identity is still unconditional"
+        );
+        assert!(
+            !scrubbed.contains_key("ADI_RUN_ID"),
+            "run identity is still unconditional"
+        );
+        assert!(
+            !scrubbed.contains_key("ADI_LEASE"),
+            "a capability is still unconditional"
+        );
+    }
+
+    /// `strip` wins even over the flavor allowlist, for the corner case of a declared secret that
+    /// happens to share a name with one of its keys.
+    #[test]
+    fn scrub_ambient_strip_list_overrides_the_flavor_allowlist() {
+        let ambient = vec![("ADI_DIR".to_string(), ".adi".to_string())];
+        let strip = vec!["ADI_DIR".to_string()];
+        assert!(scrub_ambient(ambient, &strip).is_empty());
+    }
+
     /// The end-to-end case ADI-MONO-175 is about: a value this test process has in its own
     /// environment — standing in for a secret a parent run's process was handed — must not reach
     /// a child [`spawn_child`] launches, once its name is in `inherited_strip`. Real process
@@ -797,6 +853,75 @@ mod tests {
         assert!(
             !contains_marker(&out, "leaked-identity"),
             "ADI_* is stripped unconditionally, with no strip entry needed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADI-MONO-185, end to end: a child spawned by a process running under a non-release
+    /// install still lands in that same install, because `ADI_FLAVOR`/`ADI_DIR` are the one part
+    /// of the ambient `ADI_*` set [`spawn_child`] does not scrub away. No other test in this file
+    /// reads either name via the real process environment, so setting them here — rather than a
+    /// [`unique_probe_name`] — cannot race a concurrent test the way mutating, say, `ADI_AGENT`
+    /// would.
+    #[test]
+    fn a_child_keeps_the_launching_installs_flavor_and_dir() {
+        let dir = scratch_dir("flavor-kept");
+        // SAFETY: nothing else in this test binary reads `ADI_FLAVOR`/`ADI_DIR` from the real
+        // process environment, so no concurrent test can observe or race this.
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::set_var("ADI_FLAVOR", "dev");
+            std::env::set_var("ADI_DIR", ".adi-dev");
+        }
+
+        let flavor_argv = write_env_probe_argv("flavor.txt", "ADI_FLAVOR");
+        let child_flavor = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &flavor_argv,
+            &[],
+            &[],
+            |_| {},
+        );
+        let dir_argv = write_env_probe_argv("dir.txt", "ADI_DIR");
+        let child_dir = spawn_child(
+            &dir,
+            "run-2",
+            &dir.join("run-2.log"),
+            &dir,
+            "",
+            &dir_argv,
+            &[],
+            &[],
+            |_| {},
+        );
+        #[allow(unsafe_code)]
+        unsafe {
+            std::env::remove_var("ADI_FLAVOR");
+            std::env::remove_var("ADI_DIR");
+        }
+        child_flavor.expect("spawn");
+        child_dir.expect("spawn");
+
+        let flavor_out = dir.join("flavor.txt");
+        let dir_out = dir.join("dir.txt");
+        for _ in 0..100 {
+            if flavor_out.is_file() && dir_out.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            contains_marker(&flavor_out, "dev"),
+            "the launching install's flavor survives the scrub"
+        );
+        assert!(
+            contains_marker(&dir_out, ".adi-dev"),
+            "the launching install's store directory survives the scrub"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

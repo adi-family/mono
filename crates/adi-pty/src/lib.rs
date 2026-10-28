@@ -50,9 +50,12 @@ static SESSIONS: LazyLock<Mutex<BTreeMap<String, Session>>> =
 /// inherited environment. `strip` names additional inherited variables to remove before `env` is
 /// applied, for a caller that holds secrets of its own a child must not see (ADI-MONO-175); every
 /// `ADI_*` run-identity variable is removed unconditionally, independent of `strip`, since a pty
-/// session has no business inheriting whichever run happened to open it. Caller must ensure no
-/// live session of that name exists (check [`is_running`]); a dead session of that name is
-/// replaced.
+/// session has no business inheriting whichever run happened to open it — except the
+/// [`adi_config::FLAVOR_ENV_KEYS`] install-configuration allowlist (ADI-MONO-185), which a pty
+/// session needs for the same reason a detached one does: nothing re-exports *which install*
+/// launched this process per session, so scrubbing it away would address `release` from under a
+/// dev install or a relocated store. Caller must ensure no live session of that name exists
+/// (check [`is_running`]); a dead session of that name is replaced.
 pub fn launch(
     name: &str,
     argv: &[String],
@@ -77,7 +80,9 @@ pub fn launch(
     // `CommandBuilder::new` seeds its own env map from this same ambient environment, so a key
     // read here is still there to remove.
     for (key, _) in std::env::vars() {
-        if key.starts_with("ADI_") || strip.iter().any(|s| s == &key) {
+        let run_identity =
+            key.starts_with("ADI_") && !adi_config::FLAVOR_ENV_KEYS.contains(&key.as_str());
+        if run_identity || strip.iter().any(|s| s == &key) {
             cmd.env_remove(&key);
         }
     }

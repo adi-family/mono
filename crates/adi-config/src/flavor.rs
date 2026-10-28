@@ -40,6 +40,25 @@ const SUPERVISOR_PORT_ENV: &str = "ADI_SUPERVISOR_PORT";
 const MESH_GATEWAY_PORT_ENV: &str = "ADI_MESH_GATEWAY_PORT";
 const AUTO_UPDATE_ENV: &str = "ADI_AUTO_UPDATE";
 
+/// Every variable [`Flavor::resolve`] reads and [`Flavor::env`] exports — the whole surface of
+/// an install's own identity, as opposed to any one run's. This is the allowlist a child-process
+/// launcher strips `ADI_*` *around*: install configuration must survive a scrub that exists to
+/// drop run identity (`ADI_AGENT`, `ADI_RUN_ID`, a lease), not to strand a child launched under a
+/// non-release flavour, or one whose store moved, back on `release`'s own (ADI-MONO-185).
+pub const ENV_KEYS: &[&str] = &[
+    FLAVOR_ENV,
+    APP_NAME_ENV,
+    BUNDLE_ID_ENV,
+    DOMAIN_ENV,
+    LABEL_PREFIX_ENV,
+    DIR_ENV,
+    RESOLVER_PORT_ENV,
+    FRONTDOOR_ADDR_ENV,
+    SUPERVISOR_PORT_ENV,
+    MESH_GATEWAY_PORT_ENV,
+    AUTO_UPDATE_ENV,
+];
+
 /// Ports for derived flavours. Above the release resolver (10053) and the `dev` one (10063),
 /// below nothing in particular — the band is simply out of the way of both, of ADI DNS on
 /// 15353, and of the ports manager's `8000..=9999`.
@@ -527,6 +546,15 @@ mod tests {
             DEFAULT_FLAVOR,
             "a blank flag is not an id"
         );
+    }
+
+    /// [`ENV_KEYS`] is read by a different crate's allowlist (ADI-MONO-185) specifically so it
+    /// never has to be kept in sync by hand. If a field gains its own override variable without
+    /// a matching entry here, that allowlist silently stops covering it.
+    #[test]
+    fn env_keys_names_exactly_what_env_exports() {
+        let exported: Vec<&str> = flavor(&[]).env().into_iter().map(|(k, _)| k).collect();
+        assert_eq!(ENV_KEYS, exported.as_slice());
     }
 
     /// A child re-resolving from what its parent exported must land on the same identity, or
