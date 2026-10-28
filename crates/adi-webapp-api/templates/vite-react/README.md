@@ -28,8 +28,10 @@ backend/                a Hono app on Bun, its own Bun package
 .adi/hive.yaml          the hive services, sharing one host             (do not edit)
 ```
 
-Only the four marked "do not edit" files are fixed. Everything a user sees or calls comes from
-`src/pages/`, `src/App.tsx`, `src/app.ts` and `src/routes/`.
+The four marked "do not edit" files are written once, when the dashboard is created, and the
+platform never rewrites them afterwards — editing one is on you to keep working, not something
+a later migration undoes or restores. Everything a user sees or calls comes from `src/pages/`,
+`src/App.tsx`, `src/app.ts` and `src/routes/`.
 
 ## How types flow from the backend to the frontend
 
@@ -155,12 +157,12 @@ bun run build        # tsc -b && vite build — must pass on a fresh scaffold
 
 Two hive services, both supervised by the per-user dashboards hive, sharing **one hostname**
 (`.adi/hive.yaml` declares the same `proxy.host` on both) — exactly the dependency-free
-template's shape, except each service's `working_dir` is its own package directory and its `run`
-is that package's `dev` script (`vite` for the frontend, a watching Bun process for the backend)
-instead of a bare file path:
+template's shape, except each service's `working_dir` is its own package directory and `run`
+names the real command directly, never a `package.json` script the hive file would have to
+trust:
 
-- **frontend** — `bun run dev` in `frontend/`, Vite's own dev server, owning `/` on the host
-- **backend** — `bun run dev` in `backend/`, Hono on Bun with `--watch`, claiming `/api`
+- **frontend** — `bun x vite` in `frontend/`, Vite's own dev server, owning `/` on the host
+- **backend** — `bun --watch src/index.ts` in `backend/`, Hono on Bun, claiming `/api`
 
 No port is hardcoded anywhere: adi-hive leases one per service and injects it as `$PORT` —
 `vite.config.ts` and `backend/src/index.ts` read it from there. Vite's HMR WebSocket needs no

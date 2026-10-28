@@ -1,8 +1,3 @@
-// adi-vite-backend-entry: 1 — this file's generation. The control panel replaces any copy that
-// does not spell the current one (`handlers/dashboards.rs`); bump it whenever this file changes.
-// It is generated, so a hand-edited one is replaced — endpoints belong in `routes/` plus one
-// `.route()` line in `app.ts`, which migration never reads.
-//
 // Dashboard backend — Hono on Bun. `app.ts` assembles the typed route tree and exports `AppType`;
 // this file only runs it, on the port the hive runner leases, after stripping the `/api` mount
 // prefix the front door forwards requests with — so route files keep writing plain paths

@@ -1,8 +1,3 @@
-// adi-vite-frontend-entry: 1 — this file's generation. The control panel replaces any copy that
-// does not spell the current one (`handlers/dashboards.rs`); bump it whenever this file changes.
-// It is generated, so a hand-edited one is replaced — the dashboard's own UI belongs in
-// `src/App.tsx` and `src/pages/`, which migration never reads.
-
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

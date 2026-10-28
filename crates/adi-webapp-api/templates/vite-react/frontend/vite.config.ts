@@ -1,6 +1,3 @@
-// adi-vite-config: 1 — this file's generation. The control panel replaces any copy that does not
-// spell the current one (`handlers/dashboards.rs`); bump it whenever this file changes.
-//
 // One dashboard is one origin (`guides/dashboards.md`): the front door and the mesh gateway both
 // proxy by `Host`, never by port, so this dev server never learns — and never needs to learn —
 // its own public address.
