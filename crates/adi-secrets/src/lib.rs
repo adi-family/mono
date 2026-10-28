@@ -438,6 +438,55 @@ impl Secrets {
         Ok(optional(std::fs::remove_file(file.path()))?.is_some())
     }
 
+    /// One user's own secret names, metadata only — never a value, and never which scope at all
+    /// beyond "this user's own" (`docs/byo-credentials.md` §7). `project` on the returned
+    /// [`Secret`] is always `None`: a user id must never be mistaken for a project id (§4.2), and
+    /// nothing reads this field for a `/mine` listing anyway.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe user id, [`Error::Io`] on a read failure, or
+    /// [`Error::Config`] if a manifest is invalid TOML.
+    pub fn list_mine(&self, user: &str) -> Result<Vec<Secret>> {
+        let scope = Scope::User(user);
+        let dir = self.scope_dir(scope)?;
+        let Some(entries) = optional(std::fs::read_dir(dir))? else {
+            return Ok(Vec::new());
+        };
+        let mut secrets = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            let Ok(file_name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Some(name) = file_name.strip_suffix(".toml") else {
+                continue;
+            };
+            // `.settings.toml` (§15 Q1) and any other dotfile can never be a secret name, so this
+            // skips it the same way `list` skips anything `validate_name` would refuse.
+            if validate_name(name).is_err() {
+                continue;
+            }
+            let manifest = self.manifest_file(scope, name)?.load()?;
+            secrets.push(view(None, name, &manifest));
+        }
+        secrets.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(secrets)
+    }
+
+    /// Delete one of `user`'s own secrets. Returns `false` if it wasn't there — the user-scope
+    /// counterpart of [`remove`](Self::remove), which has no `Option`-shaped overload for
+    /// [`Scope::User`] either (§4.2).
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe user id/name, or [`Error::Io`] on a removal failure.
+    pub fn remove_mine(&self, user: &str, name: &str) -> Result<bool> {
+        let file = self.manifest_file(Scope::User(user), name)?;
+        Ok(optional(std::fs::remove_file(file.path()))?.is_some())
+    }
+
     /// The resolved environment for a run: every global secret, then every secret of `project`
     /// overlaid on top (so a project secret **overrides** a global one of the same name). This
     /// is the single function the run-injection paths call. `None` resolves the global set only.
@@ -1143,5 +1192,56 @@ mod tests {
             Err(Error::InvalidName(_))
         ));
         assert!(store.manifest_file(Scope::User("u-aaa"), "K").is_ok());
+    }
+
+    // -- list_mine / remove_mine (ADI-MONO-178 P1.11) ---------------------------------------
+
+    #[test]
+    fn list_mine_is_empty_for_a_user_with_nothing_stored() {
+        let store = scratch("list-mine-empty");
+        assert!(store.list_mine("u-aaa").expect("list").is_empty());
+    }
+
+    #[test]
+    fn list_mine_sees_only_this_users_own_names_metadata_only() {
+        let store = scratch("list-mine-own");
+        set_scoped(&store, Scope::User("u-aaa"), "CLAUDE_CODE_OAUTH_TOKEN", "sk-mine");
+        set_scoped(&store, Scope::User("u-bbb"), "OTHER_USERS_KEY", "not-mine");
+        store.set(None, "GLOBAL", "g", None).expect("global");
+
+        let mine = store.list_mine("u-aaa").expect("list");
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].name, "CLAUDE_CODE_OAUTH_TOKEN");
+        assert_eq!(mine[0].project, None, "a user id is never shown as a project id");
+    }
+
+    /// `.settings.toml` (§15 Q1) sits beside a user's own secrets on disk and must never be
+    /// listed as one.
+    #[test]
+    fn list_mine_skips_the_users_own_settings_file() {
+        let store = scratch("list-mine-skips-settings");
+        set_scoped(&store, Scope::User("u-aaa"), "REAL_SECRET", "value");
+        UserSettings::default()
+            .save(&store.config, "u-aaa")
+            .expect("write the user's own settings file");
+
+        let mine = store.list_mine("u-aaa").expect("list");
+        assert_eq!(mine.len(), 1, "{mine:?}");
+        assert_eq!(mine[0].name, "REAL_SECRET");
+    }
+
+    #[test]
+    fn remove_mine_deletes_only_this_users_own_copy() {
+        let store = scratch("remove-mine");
+        set_scoped(&store, Scope::User("u-aaa"), "K", "mine");
+        set_scoped(&store, Scope::User("u-bbb"), "K", "also-mine");
+
+        assert!(store.remove_mine("u-aaa", "K").expect("remove"));
+        assert!(!store.remove_mine("u-aaa", "K").expect("remove again"), "already gone");
+        assert_eq!(
+            reveal_scoped(&store, Scope::User("u-bbb"), "K").expect("reveal"),
+            "also-mine",
+            "a different user's copy is untouched"
+        );
     }
 }

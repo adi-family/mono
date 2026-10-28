@@ -370,7 +370,8 @@ pub(crate) fn run_llm(adi: Adi, command: LlmCommand) -> Result<(), String> {
             report_sweep(&swept, json);
         }
         LlmCommand::Test { id, json } => {
-            let result = test_backend(&config, id.trim()).map_err(|e| e.to_string())?;
+            // A local CLI run has no user to ask as — the server's own values, as always.
+            let result = test_backend(&config, id.trim(), None).map_err(|e| e.to_string())?;
             if json {
                 print_json(&serde_json::json!({
                     "backend": id.trim(),

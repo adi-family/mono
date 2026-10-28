@@ -507,6 +507,12 @@ impl App {
 }
 
 /// Read-only GET routes eligible for coalescing.
+///
+/// `/api/secrets/mine` deliberately never goes here: [`shared_read_key`] keys on
+/// `method + path + body` alone, with no identity in it, so two different users' `GET`s (same
+/// empty body) would coalesce into one answer and leak one user's own names to the other's poll.
+/// `/api/secrets/policy` has no such hazard (it names nobody), but is left off too rather than
+/// drawing the one-route-is-safe-and-its-sibling-isn't line for a read this rare.
 const SHARED_GETS: &[&str] = &[
     "/api/agents",
     "/api/agents/runs/all",
@@ -633,9 +639,11 @@ fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> 
 /// The routes a member may never reach — `/api/system/*`, `/api/update/*`, `/api/licence*`,
 /// `/api/mesh*`; every `/api/fleet/*` write except adding an `http:<label>` grant to its own
 /// record; every secrets action that can read, write or refresh a secret (there is only one
-/// scope today, global, but the gate is written to cover every scope there ever is); the
-/// run-limit setting; and creating a hive service. Everything else (including every `GET`) is
-/// unrestricted.
+/// scope today, global, but the gate is written to cover every scope there ever is), plus the
+/// server's own `[user_secrets]` policy (`docs/byo-credentials.md` §4.1, ADI-MONO-178) — the
+/// `/api/secrets/mine/*` routes are a member's own scope and are deliberately not named here
+/// (§7: they are separate paths, not a carved-out exception); the run-limit setting; and creating
+/// a hive service. Everything else (including every `GET`) is unrestricted.
 fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Option<Response> {
     let blocked = path.starts_with("/api/system")
         || path.starts_with("/api/update")
@@ -652,6 +660,7 @@ fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Optio
                     | "/api/secrets/set-oauth"
                     | "/api/secrets/remove"
                     | "/api/secrets/refresh"
+                    | "/api/secrets/policy"
             ))
         || (method == "POST" && path == "/api/agents/limit")
         || (method == "POST" && path == "/api/hive/create");
@@ -832,7 +841,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/llm/backends/save") => handlers::save_llm_backend(agents, &req.body),
         ("POST", "/api/llm/backends/delete") => handlers::delete_llm_backend(agents, &req.body),
         // Sends a billed request without changing holds.
-        ("POST", "/api/llm/backends/test") => handlers::test_llm_backend(agents, &req.body),
+        ("POST", "/api/llm/backends/test") => handlers::test_llm_backend(
+            agents,
+            &req.body,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
         ("POST", "/api/llm/holds/release") => handlers::release_llm_hold(agents, &req.body),
         ("POST", "/api/llm/settings") => handlers::save_llm_settings(agents, &req.body),
 
@@ -856,6 +869,26 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/secrets/set-oauth") => handlers::set_oauth_secret(secrets, &req.body),
         ("POST", "/api/secrets/remove") => handlers::remove_secret(secrets, &req.body),
         ("POST", "/api/secrets/reveal") => handlers::reveal_secret(secrets, &req.body),
+        ("GET", "/api/secrets/mine") => {
+            handlers::secrets_mine(secrets, user_scope(projects, fleet_sender(req)).as_deref())
+        }
+        ("POST", "/api/secrets/mine/set") => handlers::set_my_secret(
+            secrets,
+            &req.body,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
+        ("POST", "/api/secrets/mine/remove") => handlers::remove_my_secret(
+            secrets,
+            &req.body,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
+        ("POST", "/api/secrets/mine/settings") => handlers::set_my_settings(
+            secrets,
+            &req.body,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
+        ("GET", "/api/secrets/policy") => handlers::secrets_policy(secrets),
+        ("POST", "/api/secrets/policy") => handlers::set_secrets_policy(secrets, &req.body),
         ("GET", "/api/voice") => handlers::voice(secrets),
         ("POST", "/api/voice/transcribe") => handlers::transcribe(
             secrets,
@@ -1691,6 +1724,29 @@ mod tests {
             member_blocked("POST", "/api/secrets/refresh", b"{}", petname).is_some(),
             "a member must not refresh a global secret"
         );
+    }
+
+    /// ADI-MONO-178 §4.1: the server's own `[user_secrets]` policy is admin-only, exactly like
+    /// the global-scope secrets actions — but the `/mine` routes need no exception carved into
+    /// this list at all, because they are separate paths this list never names (§7).
+    #[test]
+    fn member_blocked_covers_the_policy_route_but_never_the_mine_routes() {
+        let petname = "p42-device";
+        assert!(
+            member_blocked("POST", "/api/secrets/policy", b"{}", petname).is_some(),
+            "a member must not change the server's own user-secrets policy"
+        );
+        for path in [
+            "/api/secrets/mine",
+            "/api/secrets/mine/set",
+            "/api/secrets/mine/remove",
+            "/api/secrets/mine/settings",
+        ] {
+            assert!(
+                member_blocked("POST", path, b"{}", petname).is_none(),
+                "{path} is a member's own scope, never blocked"
+            );
+        }
     }
 
     /// The one `/api/fleet/*` write a member keeps: granting itself an `http:<label>` on its own

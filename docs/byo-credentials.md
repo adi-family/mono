@@ -1057,18 +1057,46 @@ in-memory lease source.
       Written once at `create_as`, never re-derived. NULL reads as "server values only".
 - [x] P1.7 `run_agent` computes `LeaseRef` from `user_scope` only (settle Q4). Test: a body naming
       any user or lease field is ignored.
-- [ ] P1.8 The layer: `spec_in` takes the session's resolved lease values and overlays them in
+- [x] P1.8 The layer: `spec_in` takes the session's resolved lease values and overlays them in
       `attached_secret_env` for `pinned ∩ attached ∩ overridable ∩ shared` only, under the agent's
-      `[env]`. Exercised through an in-memory lease source.
-- [ ] P1.9 The hold fix: per-turn qualified key `#user:<u>` when a user value supplied the
+      `[env]`. Exercised through an in-memory lease source — `lease::LeaseValues`, an
+      object-safe trait installed on an `Agents` with `Agents::with_lease_values`; every `Agents`
+      opened in production carries `None`, so the layer is a no-op everywhere until phase 2 gives
+      `adi-app` a real one. "Shared" (the device's `connections.toml`) doesn't exist yet either;
+      a `LeaseValues::value` answering `Some` already implies it, since that is phase 2's own
+      `Lease.values`' job to guarantee.
+- [x] P1.9 The hold fix: per-turn qualified key `#user:<u>` when a user value supplied the
       credential. The same key in `RunSpec.credential`. Test: a user quota doesn't hold the
-      server's login.
-- [ ] P1.10 `ondemand::resolve_credential` uses the asker's live value for the Test button.
-- [ ] P1.11 `GET /api/secrets/mine`, `POST /api/secrets/mine/{set,remove,settings}`,
+      server's login. `ResolvedBackend::credential_env_name` names the one env var that decides a
+      row's credential (`None` for a settings-file backend); `hold_key_for`/`login_key_for` take
+      the qualifying user. Only the *current* row's key is qualified — a candidate row `fail_over`
+      is weighing a *switch to* is checked unqualified, because whether that row's own next turn
+      would run on a user's value is that turn's own `spec_in` to decide, not this one's guess.
+- [x] P1.10 `ondemand::resolve_credential` uses the asker's live value for the Test button.
+      `ondemand::Asker { user, live }`; `resolve_credential` tries it before the secret/ambient
+      fallback for both `api_key_env` and ambient-login backends, never for a settings file (§5
+      already rules those out). No `missing` handling here — a Test is a one-shot ask, not a
+      queued turn, so "no live value" always and only falls through to the server's own credential,
+      which is `missing = server`'s own answer; `wait`/`fail` are phase 2's turns to park or
+      refuse, not a button's.
+- [x] P1.11 `GET /api/secrets/mine`, `POST /api/secrets/mine/{set,remove,settings}`,
       `POST /api/secrets/policy` (member-blocked). Never reveals. `set` refuses names outside
-      `overridable`, callers without a user scope, and, in phase 1, everything (`501`).
-- [ ] P1.12 CLI: `secrets policy` (local, and `--user --node`), `secrets rm --user --node`, and
-      `secrets set --user --node`, which refuses until phase 2. No `--reveal` or `read` for `--user`.
+      `overridable`, callers without a user scope, and, in phase 1, everything (`501`) — in that
+      order, so the reason given is always the first one that actually applies. `adi-secrets`
+      gained `list_mine`/`remove_mine` (`Scope::User`, metadata only, never `list_all`). Decision:
+      `GET /api/secrets/mine` is deliberately **not** in `adi-app`'s `SHARED_GETS` coalescing list
+      — that key is `method + path + body` with no identity in it, so sharing it would leak one
+      user's own names into another user's concurrent poll of the same empty-body route.
+- [x] P1.12 CLI: `secrets policy` (local, and `--user --node`), `secrets rm --user --node`, and
+      `secrets set --user --node`, which refuses until phase 2. No `--reveal` or `read` for
+      `--user`. `--node` dials `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi` (§4.4's own
+      addressing), `reqwest::blocking` + `Authorization: Basic`. The username is this device's own
+      `FleetRegistry` record for that petname (`auth.user`, stored in the clear); the password is
+      never stored anywhere after pairing (§3.1), so it is prompted for on stderr every call — a
+      stored-and-reused credential (the pattern `adi-app`'s own Fleet Dashboards page uses) was
+      deliberately not reached for, to avoid duplicating that private cache across a crate
+      boundary. `set --user` never makes a request at all: phase 1's answer is fixed, so the CLI
+      gives it locally.
 
 ### Phase 2 — device wraps, the per-connection setting, unlock, leases, revoke, waiting on unlock
 

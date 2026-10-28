@@ -55,7 +55,7 @@ pub use classify::{Classification, classify};
 pub use failover::{Decision, Failure, decide};
 pub use holds::{Hold, HoldKey, Holds};
 pub use migrate::{Move, Plan, Skip};
-pub use ondemand::{TestResult, TestVerdict, test_backend, test_manifest};
+pub use ondemand::{Asker, TestResult, TestVerdict, test_backend, test_manifest};
 pub use prober::{Checked, Prober, Verdict};
 pub use settings::LlmSettings;
 

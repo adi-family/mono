@@ -108,15 +108,30 @@ impl TestVerdict {
     }
 }
 
+/// Who is asking, for the Test button's own user-value check (`docs/byo-credentials.md` §5,
+/// P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`,
+/// and a Test pressed by a local operator or by a mesh peer with no user scope.
+#[derive(Clone, Copy)]
+pub struct Asker<'a> {
+    pub user: &'a str,
+    pub live: &'a dyn crate::LeaseValues,
+}
+
+impl std::fmt::Debug for Asker<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Asker").field("user", &self.user).finish()
+    }
+}
+
 /// Test a saved backend by id.
 ///
 /// # Errors
 /// [`Error::NotFound`] when there is no such backend; otherwise a store error reading it.
-pub fn test_backend(config: &Config, id: &str) -> Result<TestResult> {
+pub fn test_backend(config: &Config, id: &str, asker: Option<Asker<'_>>) -> Result<TestResult> {
     let backend = LlmBackends::with_config(config.clone())
         .get(id)?
         .ok_or_else(|| Error::NotFound(id.to_string()))?;
-    Ok(test_manifest(config, &backend.manifest))
+    Ok(test_manifest(config, &backend.manifest, asker))
 }
 
 /// Test a backend that may not be saved at all — a draft an operator is still typing into the panel.
@@ -127,11 +142,15 @@ pub fn test_backend(config: &Config, id: &str) -> Result<TestResult> {
 /// environment it is started with, and a real run gets that from a secret an agent attached, not
 /// from anything on the backend's own manifest. See [`resolve_credential`].
 #[must_use]
-pub fn test_manifest(config: &Config, manifest: &LlmBackendManifest) -> TestResult {
+pub fn test_manifest(
+    config: &Config,
+    manifest: &LlmBackendManifest,
+    asker: Option<Asker<'_>>,
+) -> TestResult {
     let (prompt, model) = test_prompt(manifest);
 
     let start = Instant::now();
-    let outcome = ask(config, manifest, model, prompt);
+    let outcome = ask(config, manifest, model, prompt, asker);
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
     let (verdict, credential) = match outcome {
@@ -187,6 +206,7 @@ fn ask(
     manifest: &LlmBackendManifest,
     model: &str,
     prompt: &str,
+    asker: Option<Asker<'_>>,
 ) -> std::result::Result<String, (String, String)> {
     match &manifest.runtime {
         Backend::HarnessAdi => {
@@ -198,7 +218,7 @@ fn ask(
         // scoped turn are both beside the point here, so every one of them gets the same plain
         // `--print` ask instead.
         Backend::PtyClaude | Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
-            let credential = match resolve_credential(config, manifest) {
+            let credential = match resolve_credential(config, manifest, asker) {
                 Ok(credential) => credential,
                 Err(message) => return Err((String::new(), message)),
             };
@@ -219,7 +239,7 @@ fn ask(
         // Likewise for `codex`: `codex exec` is the headless one-shot both the pty and the process
         // engine ultimately open a terminal or a child around.
         Backend::PtyCodex | Backend::ProcessCodex => {
-            let credential = match resolve_credential(config, manifest) {
+            let credential = match resolve_credential(config, manifest, asker) {
                 Ok(credential) => credential,
                 Err(message) => return Err((String::new(), message)),
             };
@@ -265,7 +285,7 @@ struct Credential {
 /// persists a `ChatGPT` login in `~/.codex/auth.json`, but that file carries an `OPENAI_API_KEY`
 /// field alongside it: the CLI accepts either, so an `OPENAI_API_KEY` secret is the one worth
 /// checking here rather than assuming a host has already run `codex login` by hand.
-fn ambient_credential_env(runtime: &Backend) -> Option<&'static str> {
+pub(crate) fn ambient_credential_env(runtime: &Backend) -> Option<&'static str> {
     match runtime {
         Backend::PtyClaude | Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
             Some("CLAUDE_CODE_OAUTH_TOKEN")
@@ -292,6 +312,7 @@ fn ambient_credential_env(runtime: &Backend) -> Option<&'static str> {
 fn resolve_credential(
     config: &Config,
     manifest: &LlmBackendManifest,
+    asker: Option<Asker<'_>>,
 ) -> std::result::Result<Credential, String> {
     if let Some(settings) = manifest
         .settings
@@ -311,6 +332,9 @@ fn resolve_credential(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        if let Some(credential) = asker_credential(config, asker, name) {
+            return Ok(credential);
+        }
         return match secrets.reveal(None, name) {
             Ok(Some(value)) => Ok(Credential {
                 description: format!("api_key_env {name}"),
@@ -323,21 +347,41 @@ fn resolve_credential(
         };
     }
     match ambient_credential_env(&manifest.runtime) {
-        Some(name) => match secrets.reveal(None, name) {
-            Ok(Some(value)) => Ok(Credential {
-                description: format!("global secret {name}"),
-                env: Some((name.to_string(), value)),
-            }),
-            _ => Ok(Credential {
-                description: format!("ambient {} login (no {name} secret set)", manifest.runtime),
-                env: None,
-            }),
-        },
+        Some(name) => {
+            if let Some(credential) = asker_credential(config, asker, name) {
+                return Ok(credential);
+            }
+            match secrets.reveal(None, name) {
+                Ok(Some(value)) => Ok(Credential {
+                    description: format!("global secret {name}"),
+                    env: Some((name.to_string(), value)),
+                }),
+                _ => Ok(Credential {
+                    description: format!(
+                        "ambient {} login (no {name} secret set)",
+                        manifest.runtime
+                    ),
+                    env: None,
+                }),
+            }
+        }
         None => Ok(Credential {
             description: format!("ambient {} login", manifest.runtime),
             env: None,
         }),
     }
+}
+
+/// The asker's own live value for `name`, if their lease has one and the server's policy still
+/// allows it (`docs/byo-credentials.md` §5, P1.10) — `None` for every call with no `asker`, which
+/// is every call before phase 2 gives a real [`crate::LeaseValues`] to ask.
+fn asker_credential(config: &Config, asker: Option<Asker<'_>>, name: &str) -> Option<Credential> {
+    let asker = asker?;
+    let value = crate::lease::live_value_for_asker(config, asker.user, asker.live, name)?;
+    Some(Credential {
+        description: format!("{}'s value for {name}", asker.user),
+        env: Some((name.to_string(), value)),
+    })
 }
 
 /// The `claude` CLI in print mode: no built-in tools (`--tools ""`, so a two-token prompt cannot turn
@@ -500,6 +544,7 @@ mod tests {
         let result = test_manifest(
             &scratch_config("unset-runtime"),
             &manifest(Backend::default()),
+            None,
         );
         assert!(
             matches!(&result.verdict, TestVerdict::Failed { error } if error.contains("no runtime set")),
@@ -661,7 +706,7 @@ mod tests {
             settings: Some("~/.claude/settings.glm.json".into()),
             ..manifest(Backend::PtyClaude)
         };
-        let credential = resolve_credential(&scratch_config("settings-credential"), &m)
+        let credential = resolve_credential(&scratch_config("settings-credential"), &m, None)
             .expect("a settings file is enough");
         assert_eq!(
             credential.description,
@@ -679,7 +724,7 @@ mod tests {
             api_key_env: Some("SOME_MISSING_KEY".into()),
             ..manifest(Backend::PtyClaude)
         };
-        let err = resolve_credential(&scratch_config("missing-api-key-env"), &m)
+        let err = resolve_credential(&scratch_config("missing-api-key-env"), &m, None)
             .expect_err("nothing answers to that name");
         assert!(err.contains("SOME_MISSING_KEY"), "{err}");
     }
@@ -694,12 +739,125 @@ mod tests {
             api_key_env: Some("MY_KEY".into()),
             ..manifest(Backend::PtyClaude)
         };
-        let credential = resolve_credential(&config, &m).expect("the secret answers to that name");
+        let credential =
+            resolve_credential(&config, &m, None).expect("the secret answers to that name");
         assert_eq!(credential.description, "api_key_env MY_KEY");
         assert_eq!(
             credential.env,
             Some(("MY_KEY".to_string(), "s3cr3t".to_string()))
         );
+    }
+
+    // -- the asker's own live value (ADI-MONO-178 P1.10) ------------------------------------
+
+    /// An in-memory stand-in for `adi-app`'s own `Lease` table (phase 2) — see
+    /// `lease::tests::FakeLease` for the same fixture used by the run-time layer.
+    #[derive(Debug, Default)]
+    struct FakeLease(std::collections::BTreeMap<(String, String), String>);
+
+    impl FakeLease {
+        fn with(mut self, user: &str, name: &str, value: &str) -> Self {
+            self.0
+                .insert((user.to_string(), name.to_string()), value.to_string());
+            self
+        }
+    }
+
+    impl crate::LeaseValues for FakeLease {
+        fn value(&self, user: &str, name: &str) -> Option<String> {
+            self.0.get(&(user.to_string(), name.to_string())).cloned()
+        }
+    }
+
+    /// The asker's live value wins over the global secret of the same name — the whole point of
+    /// P1.10: the Test button answers for the person who pressed it, not for the server.
+    #[test]
+    fn an_asker_with_a_live_value_is_used_over_the_global_secret() {
+        let config = scratch_config("asker-wins");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["MY_KEY".to_string()],
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&config)
+        .expect("save policy");
+        Secrets::with_config(config.clone())
+            .set(None, "MY_KEY", "server-value", None)
+            .expect("set");
+        let m = LlmBackendManifest {
+            api_key_env: Some("MY_KEY".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let live = FakeLease::default().with("u-aaa", "MY_KEY", "my-own-value");
+
+        let credential = resolve_credential(
+            &config,
+            &m,
+            Some(Asker { user: "u-aaa", live: &live }),
+        )
+        .expect("the asker's value answers");
+        assert_eq!(credential.description, "u-aaa's value for MY_KEY");
+        assert_eq!(
+            credential.env,
+            Some(("MY_KEY".to_string(), "my-own-value".to_string()))
+        );
+    }
+
+    /// An asker with nothing live for this name falls all the way back to the server's own global
+    /// secret, exactly as a caller with no asker at all would.
+    #[test]
+    fn an_asker_with_nothing_live_falls_back_to_the_global_secret() {
+        let config = scratch_config("asker-falls-back");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["MY_KEY".to_string()],
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&config)
+        .expect("save policy");
+        Secrets::with_config(config.clone())
+            .set(None, "MY_KEY", "server-value", None)
+            .expect("set");
+        let m = LlmBackendManifest {
+            api_key_env: Some("MY_KEY".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let live = FakeLease::default();
+
+        let credential = resolve_credential(
+            &config,
+            &m,
+            Some(Asker { user: "u-aaa", live: &live }),
+        )
+        .expect("the server's own secret still answers");
+        assert_eq!(credential.description, "api_key_env MY_KEY");
+        assert_eq!(
+            credential.env,
+            Some(("MY_KEY".to_string(), "server-value".to_string()))
+        );
+    }
+
+    /// The asker's value is never used for a name the server hasn't put on `overridable` — the
+    /// same three-way agreement §2 requires everywhere else this layer applies.
+    #[test]
+    fn an_askers_value_is_ignored_for_a_name_not_on_the_servers_overridable_list() {
+        let config = scratch_config("asker-not-overridable");
+        Secrets::with_config(config.clone())
+            .set(None, "MY_KEY", "server-value", None)
+            .expect("set");
+        let m = LlmBackendManifest {
+            api_key_env: Some("MY_KEY".into()),
+            ..manifest(Backend::PtyClaude)
+        };
+        let live = FakeLease::default().with("u-aaa", "MY_KEY", "my-own-value");
+
+        let credential = resolve_credential(
+            &config,
+            &m,
+            Some(Asker { user: "u-aaa", live: &live }),
+        )
+        .expect("the server's own secret still answers");
+        assert_eq!(credential.description, "api_key_env MY_KEY");
     }
 
     /// The bug this whole module exists to fix: a claude backend naming no credential of its own
@@ -712,7 +870,7 @@ mod tests {
         Secrets::with_config(config.clone())
             .set(None, "CLAUDE_CODE_OAUTH_TOKEN", "tok", None)
             .expect("set");
-        let credential = resolve_credential(&config, &manifest(Backend::HarnessClaudeSdk))
+        let credential = resolve_credential(&config, &manifest(Backend::HarnessClaudeSdk), None)
             .expect("the global secret answers");
         assert_eq!(
             credential.description,
@@ -734,6 +892,7 @@ mod tests {
         let credential = resolve_credential(
             &scratch_config("claude-no-secret"),
             &manifest(Backend::PtyClaude),
+            None,
         )
         .expect("ambient login is a legitimate credential, not an error");
         assert_eq!(
@@ -750,6 +909,7 @@ mod tests {
         let credential = resolve_credential(
             &scratch_config("codex-ambient"),
             &manifest(Backend::ProcessCodex),
+            None,
         )
         .expect("ambient login is a legitimate credential");
         assert_eq!(

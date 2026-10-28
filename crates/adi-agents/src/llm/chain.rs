@@ -110,6 +110,40 @@ impl ResolvedBackend {
         HoldKey::new(&self.credential, &self.model)
     }
 
+    /// The env-var name whose value decides this row's credential, if any — `None` for a
+    /// settings-file backend, whose credential lives in a file the layer cannot reach
+    /// (`docs/byo-credentials.md` §5, §15 Q7). This is the one name §6 means by "a user value
+    /// supplied the credential": the backend's own `api_key_env` when it names one, or the
+    /// runtime's ambient login var when it names neither a settings file nor an `api_key_env`
+    /// (the `runtime:<runtime>` form of [`credential()`](LlmBackendManifest::credential)). A row
+    /// may not override any of `CREDENTIAL_KEYS` (`resolve_row`), so `arguments` here always
+    /// agrees with the backend's own manifest.
+    #[must_use]
+    pub fn credential_env_name(&self) -> Option<&str> {
+        if self.arguments.contains_key("settings") {
+            return None;
+        }
+        if let Some(name) = self.arguments.get("api_key_env").and_then(|v| v.as_str()) {
+            return Some(name);
+        }
+        crate::llm::ondemand::ambient_credential_env(&self.runtime)
+    }
+
+    /// [`hold_key`](Self::hold_key), qualified with `#user:<u>` when `user` supplied the
+    /// credential for this turn (`docs/byo-credentials.md` §6, P1.9); identical to
+    /// [`hold_key`](Self::hold_key) for `None`, which is every turn before phase 2.
+    #[must_use]
+    pub fn hold_key_for(&self, user: Option<&str>) -> HoldKey {
+        HoldKey::new(qualify_credential(&self.credential, user), self.model.clone())
+    }
+
+    /// The login-scoped counterpart of [`hold_key_for`](Self::hold_key_for), for an `auth` failure
+    /// that blocks the whole login rather than one model.
+    #[must_use]
+    pub fn login_key_for(&self, user: Option<&str>) -> HoldKey {
+        HoldKey::login(qualify_credential(&self.credential, user))
+    }
+
     /// This row's configuration laid onto an agent — the one and only way a backend reaches the
     /// runner.
     ///
@@ -375,6 +409,17 @@ impl PinnedChain {
         }
         self.at = index;
         true
+    }
+}
+
+/// Append the user qualifier `docs/byo-credentials.md` §6 defines (`#user:<u>`) to a credential
+/// string when a user's value supplied it for this turn; unqualified otherwise. `#` appears in no
+/// [`credential()`](LlmBackendManifest::credential) form today, and `holds.db` stores the key as
+/// text, so no schema change is needed for it.
+pub(crate) fn qualify_credential(credential: &str, user: Option<&str>) -> String {
+    match user {
+        Some(u) => format!("{credential}#user:{u}"),
+        None => credential.to_string(),
     }
 }
 
@@ -750,6 +795,82 @@ mod tests {
     fn the_hold_keys_of_a_chain_are_collected_once() {
         let chain = ResolvedChain::resolve(&rows(), &three(), None, None).expect("resolve");
         assert_eq!(chain.hold_keys().len(), 3);
+    }
+
+    // -- credential_env_name / hold_key_for / login_key_for (ADI-MONO-178 P1.9) -------------
+
+    #[test]
+    fn credential_env_name_is_none_for_a_settings_file_backend() {
+        // `backend()` sets `settings`, which is `three()`'s "anthropic" entry.
+        let chain = ResolvedChain::resolve(&rows(), &three(), None, None).expect("resolve");
+        assert_eq!(chain.first().credential_env_name(), None);
+    }
+
+    #[test]
+    fn credential_env_name_is_the_backends_own_api_key_env_when_it_names_one() {
+        let catalog = catalog_of(&[(
+            "glm",
+            LlmBackendManifest {
+                runtime: Backend::HarnessClaudeSdk,
+                model: "glm-5.3".into(),
+                api_key_env: Some("Z_AI_API_KEY".into()),
+                ..Default::default()
+            },
+        )]);
+        let chain = ResolvedChain::resolve(&[AgentBackendEntry::new("glm")], &catalog, None, None)
+            .expect("resolve");
+        assert_eq!(chain.first().credential_env_name(), Some("Z_AI_API_KEY"));
+    }
+
+    #[test]
+    fn credential_env_name_falls_back_to_the_runtimes_ambient_login() {
+        let catalog = catalog_of(&[(
+            "codex",
+            LlmBackendManifest {
+                runtime: Backend::ProcessCodex,
+                model: "gpt-5".into(),
+                ..Default::default()
+            },
+        )]);
+        let chain = ResolvedChain::resolve(&[AgentBackendEntry::new("codex")], &catalog, None, None)
+            .expect("resolve");
+        assert_eq!(chain.first().credential_env_name(), Some("OPENAI_API_KEY"));
+    }
+
+    #[test]
+    fn qualify_credential_appends_the_user_only_when_given_one() {
+        assert_eq!(qualify_credential("runtime:harness:claude-sdk", None), "runtime:harness:claude-sdk");
+        assert_eq!(
+            qualify_credential("runtime:harness:claude-sdk", Some("u-aaa")),
+            "runtime:harness:claude-sdk#user:u-aaa"
+        );
+    }
+
+    #[test]
+    fn hold_key_for_and_login_key_for_qualify_the_credential_half_only() {
+        let catalog = catalog_of(&[(
+            "glm",
+            LlmBackendManifest {
+                runtime: Backend::HarnessClaudeSdk,
+                model: "glm-5.3".into(),
+                api_key_env: Some("Z_AI_API_KEY".into()),
+                ..Default::default()
+            },
+        )]);
+        let chain = ResolvedChain::resolve(&[AgentBackendEntry::new("glm")], &catalog, None, None)
+            .expect("resolve");
+        let row = chain.first();
+
+        assert_eq!(row.hold_key_for(None), row.hold_key());
+        let qualified = row.hold_key_for(Some("u-aaa"));
+        assert_eq!(qualified.model, row.model);
+        assert_eq!(qualified.credential, format!("{}#user:u-aaa", row.credential));
+
+        assert_eq!(row.login_key_for(None), HoldKey::login(&row.credential));
+        assert_eq!(
+            row.login_key_for(Some("u-aaa")).credential,
+            format!("{}#user:u-aaa", row.credential)
+        );
     }
 
     #[test]

@@ -5139,6 +5139,91 @@ pub struct RevealedSecret {
     pub value: String,
 }
 
+// MARK: a user's own scope — `/api/secrets/mine/*` and `/api/secrets/policy`
+// (`docs/byo-credentials.md` §7, ADI-MONO-178 P1.11). This scope is write-only: no route here
+// ever returns a value, for an admin or for the user themselves.
+
+/// One of a user's own secret names — `GET /api/secrets/mine`'s list entries. No `project`
+/// field: `<u>` is never a project id (`docs/byo-credentials.md` §4.2), and nothing here needs
+/// one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MySecretDto {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub updated_at: u64,
+}
+
+/// `GET /api/secrets/mine` response: this caller's own names, and the `missing` that would apply
+/// to their next turn (the stricter of the server's and their own, §4.2) — the server's own for
+/// a caller with no user scope, who has no "mine" to speak of but still reads the one answer
+/// that would govern any lease they never get.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MySecretsState {
+    pub names: Vec<MySecretDto>,
+    pub missing: String,
+}
+
+/// `POST /api/secrets/mine/set` — refused in phase 1 (`docs/byo-credentials.md` §7, §15 settled
+/// as 501). Shaped ahead of phase 2's device wraps (§8) so the client's request doesn't have to
+/// change when `set` stops refusing: `ciphertext`/`nonce`/`wraps` travel today but are read by
+/// nothing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SetMySecret {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub ciphertext: String,
+    #[serde(default)]
+    pub nonce: String,
+    #[serde(default)]
+    pub wraps: Vec<serde_json::Value>,
+}
+
+/// `POST /api/secrets/mine/remove` — names one of the caller's own secrets. No `project`: see
+/// [`MySecretDto`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoveMySecret {
+    pub name: String,
+}
+
+/// `POST /api/secrets/mine/settings` — a user's own `missing` preference
+/// (`docs/byo-credentials.md` §4.2). `None` clears it back to "no preference: the server's own
+/// setting governs outright".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetMySettings {
+    #[serde(default)]
+    pub missing: Option<String>,
+}
+
+/// `POST /api/secrets/policy` — the server's own `[user_secrets]` (`docs/byo-credentials.md`
+/// §4.1). Admin-only — on the member gate's blocked list alongside the global-scope secrets
+/// actions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSecretsPolicy {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub overridable: Vec<String>,
+    #[serde(default)]
+    pub missing: String,
+    #[serde(default)]
+    pub max_lease: Option<String>,
+}
+
+/// The state `GET`/`POST /api/secrets/policy` both answer with: the server's policy exactly as
+/// stored. A corrupt file reads as these defaults (§4.1) — it is logged server-side on every
+/// read, but surfacing that parse error to the panel is phase 4's own work (P4.1), not this one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretsPolicyState {
+    pub enabled: bool,
+    pub overridable: Vec<String>,
+    pub missing: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_lease: Option<String>,
+}
+
 // ---- the shared database -------------------------------------------------------------
 //
 // Mirrors `adi_db`'s types as plain DTOs. The store crate itself compiles SQLite in and so is

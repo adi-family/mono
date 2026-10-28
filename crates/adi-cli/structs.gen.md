@@ -1513,6 +1513,10 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
+        user: bool,
+        #[arg(long)]
+        node: Option<String>,
+        #[arg(long)]
         json: bool,
     },
     Get {
@@ -1539,6 +1543,28 @@ pub(crate) enum SecretsCommand {
         global: bool,
         #[arg(long)]
         project: Option<String>,
+        #[arg(long)]
+        user: bool,
+        #[arg(long)]
+        node: Option<String>,
+    },
+    Policy {
+        #[arg(long)]
+        user: bool,
+        #[arg(long)]
+        node: Option<String>,
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        disable: bool,
+        #[arg(long, value_delimiter = ',')]
+        overridable: Option<Vec<String>>,
+        #[arg(long)]
+        missing: Option<String>,
+        #[arg(long = "max-lease")]
+        max_lease: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
 }
 ```

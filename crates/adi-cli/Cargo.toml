@@ -70,6 +70,14 @@ clap = { workspace = true }
 qrcode = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `secrets … --user --node` reaches a paired server's own `/api/secrets/mine/*` through this
+# machine's local mesh gateway (`docs/byo-credentials.md` §4.4, ADI-MONO-178 P1.12) — plain HTTP
+# to loopback, never TLS, but `adi-marketplace` above already pulled blocking reqwest + rustls
+# into this binary, so this is the dependency, not a second copy of it.
+reqwest = { workspace = true, features = ["blocking"] }
+# `reqwest`'s `rustls-no-provider` feature needs a crypto provider installed before any client
+# is built — see `adi-channels::node_api`'s own `ensure_provider`, mirrored here.
+rustls = { workspace = true }
 # `workflows run` mints a fresh request id when the caller doesn't give one — the idempotency key
 # `Engine::start_manual` claims the run under (ADI-MONO-141 §E).
 uuid = { workspace = true }

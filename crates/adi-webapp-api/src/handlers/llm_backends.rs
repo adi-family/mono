@@ -231,8 +231,14 @@ pub fn release_llm_hold(store: &Agents, body: &[u8]) -> Response {
 ///
 /// Always a `200` with the verdict inside — a failed test is a successful answer to "does this
 /// work", not a broken request.
+///
+/// `user` is the asker's mesh user scope (`docs/byo-credentials.md` §5, P1.10) — `None` for a
+/// local caller or a peer with none, in which case this is exactly the test it always was. A
+/// `Some` asker's live value, when their lease has one, answers the test instead of the server's
+/// own credential — `store.lease_values()` is `None` on every `Agents` before phase 2, so in
+/// practice this build always falls through to that server credential regardless.
 #[must_use]
-pub fn test_llm_backend(store: &Agents, body: &[u8]) -> Response {
+pub fn test_llm_backend(store: &Agents, body: &[u8], user: Option<&str>) -> Response {
     let req = require!(body, TestLlmBackend);
     let manifest = if let Some(draft) = req.draft {
         manifest_from(draft)
@@ -244,7 +250,14 @@ pub fn test_llm_backend(store: &Agents, body: &[u8]) -> Response {
             Err(e) => return Response::from(&e),
         }
     };
-    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(store.config(), &manifest)))
+    let asker = user
+        .zip(store.lease_values())
+        .map(|(user, live)| adi_agents::llm::Asker { user, live });
+    ok_json(&test_result_dto(&adi_agents::llm::test_manifest(
+        store.config(),
+        &manifest,
+        asker,
+    )))
 }
 
 // ------------------------------------------------------------------ mapping
@@ -675,7 +688,7 @@ mod tests {
     fn test_by_id_is_a_200_carrying_the_verdict() {
         let store = scratch();
         save(&store, "anthropic", "claude-opus-5", "~/.claude/a.json");
-        let Response { status, body } = test_llm_backend(&store, br#"{"id":"anthropic"}"#);
+        let Response { status, body } = test_llm_backend(&store, br#"{"id":"anthropic"}"#, None);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["verdict"], "failed", "{body}");
@@ -685,7 +698,7 @@ mod tests {
     #[test]
     fn test_by_id_of_an_unknown_backend_is_404() {
         let store = scratch();
-        assert_eq!(test_llm_backend(&store, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(test_llm_backend(&store, br#"{"id":"ghost"}"#, None).status, 404);
     }
 
     /// A draft is tested exactly as sent, whether or not it has ever been saved — and nothing
@@ -696,6 +709,7 @@ mod tests {
         let Response { status, body } = test_llm_backend(
             &store,
             br#"{"draft":{"id":"","runtime":"harness:adi","model":"claude-opus-5"}}"#,
+            None,
         );
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -706,9 +720,9 @@ mod tests {
     #[test]
     fn a_test_body_naming_neither_an_id_nor_a_draft_is_a_400() {
         let store = scratch();
-        assert_eq!(test_llm_backend(&store, b"{}").status, 400);
+        assert_eq!(test_llm_backend(&store, b"{}", None).status, 400);
         assert_eq!(
-            test_llm_backend(&store, br#"{"draft":{"id":"x","runtime":""}}"#).status,
+            test_llm_backend(&store, br#"{"draft":{"id":"x","runtime":""}}"#, None).status,
             400
         );
     }

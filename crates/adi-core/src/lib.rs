@@ -86,7 +86,10 @@ pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects, Rena
 
 pub use projects::{ProjectRenamed, rename_project};
 
-pub use adi_secrets::{Error as SecretsError, Secret, Secrets};
+pub use adi_secrets::{
+    Error as SecretsError, Missing, Secret, Secrets, UserSecretsPolicy, UserSettings,
+    effective_missing,
+};
 
 // Project hooks + workspaces are rooted at a project's directory rather than a global
 // store, so there is no `Adi` accessor: compose `projects().project_dir(id)` with

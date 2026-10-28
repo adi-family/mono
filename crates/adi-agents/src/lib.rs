@@ -83,7 +83,7 @@ pub use events::{
     AgentRunReported, AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused,
     RUN_REPORTED, event_catalog, event_types,
 };
-pub use lease::LeaseRef;
+pub use lease::{LeaseRef, LeaseValues};
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
     AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
@@ -175,9 +175,24 @@ fn turn_gate(config: &Config) -> Result<TurnGuard> {
 }
 
 /// An on-disk agent registry.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Agents {
     config: Config,
+    /// Where a leased turn's live value comes from (`docs/byo-credentials.md` §5, §9, P1.8) —
+    /// `None` for every `Agents` nothing has called [`Agents::with_lease_values`] on, which today
+    /// is all of them: the real source is `adi-app`'s own in-memory `Lease` table, and that table
+    /// doesn't exist until phase 2 (P2.3). See [`LeaseValues`] for why a test installs one here
+    /// instead of this crate depending on `adi-app`.
+    lease_values: Option<std::sync::Arc<dyn LeaseValues>>,
+}
+
+impl std::fmt::Debug for Agents {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Agents")
+            .field("config", &self.config)
+            .field("lease_values", &self.lease_values.is_some())
+            .finish()
+    }
 }
 
 impl Default for Agents {
@@ -384,12 +399,34 @@ impl Agents {
     pub fn open() -> Self {
         Self {
             config: Config::open(),
+            lease_values: None,
         }
     }
 
     #[must_use]
     pub fn with_config(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            lease_values: None,
+        }
+    }
+
+    /// Install the live source a leased turn's layer (`docs/byo-credentials.md` §5, P1.8) and the
+    /// Test button (§5, P1.10) ask for a user's value — a builder, not a setter, since nothing
+    /// outside a test has a real one to give before phase 2.
+    #[must_use]
+    pub fn with_lease_values(mut self, source: std::sync::Arc<dyn LeaseValues>) -> Self {
+        self.lease_values = Some(source);
+        self
+    }
+
+    /// The live lease source installed on this store, or `None` for the ordinary `Agents` every
+    /// launch and turn runs on today. Public so a caller building the Test button's own
+    /// [`llm::Asker`](llm::ondemand::Asker) — which has no other way to reach it — can ask the
+    /// same `Agents` it already holds, rather than this crate growing a second public setter.
+    #[must_use]
+    pub fn lease_values(&self) -> Option<&dyn LeaseValues> {
+        self.lease_values.as_deref()
     }
 
     #[must_use]
@@ -1385,11 +1422,17 @@ impl Agents {
             return Err(Error::AlreadyRunning(name.to_string()));
         }
 
-        let mut spec = self.launch_spec(&agent, working_dir);
-        spec.credential = chain
-            .as_ref()
-            .and_then(llm::PinnedChain::current)
-            .map(|row| row.credential.clone());
+        let mut spec = self.spec_in(
+            &agent,
+            workspace::resolve(&self.config, &agent.manifest, working_dir),
+            lease.as_ref(),
+        );
+        spec.credential = chain.as_ref().and_then(llm::PinnedChain::current).map(|row| {
+            let qualifier = row
+                .credential_env_name()
+                .and_then(|name| self.credential_qualifier(name, lease.as_ref(), &agent.manifest.secrets));
+            llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
+        });
         // Fail before anything is written down: a mistyped argument should leave no session behind.
         runner.check(&spec)?;
         let store = self.sessions();
@@ -2212,12 +2255,17 @@ impl Agents {
         // launched on another model would drift back onto the agent's own from message two.
         let as_launched = as_run(agent, record);
         let agent = &*as_launched;
-        let mut spec = self.spec_in(agent, session_dir(&self.config, record));
-        spec.credential = record
-            .chain
-            .as_ref()
-            .and_then(llm::PinnedChain::current)
-            .map(|row| row.credential.clone());
+        let mut spec = self.spec_in(
+            agent,
+            session_dir(&self.config, record),
+            record.lease.as_ref(),
+        );
+        spec.credential = record.chain.as_ref().and_then(llm::PinnedChain::current).map(|row| {
+            let qualifier = row.credential_env_name().and_then(|name| {
+                self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets)
+            });
+            llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
+        });
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         pin_owner_instructions(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
@@ -2401,6 +2449,7 @@ impl Agents {
         self.spec_in(
             agent,
             workspace::resolve(&self.config, &agent.manifest, run_dir),
+            None,
         )
     }
 
@@ -2419,6 +2468,20 @@ impl Agents {
     /// is answered by that process's own caller, not whichever launched the session originally.
     fn inherited_strip(&self) -> Vec<String> {
         awaits::caller().map_or_else(Vec::new, |caller| self.secret_names_of(&caller.agent))
+    }
+
+    /// `Some(lease.user)` when `name` — the one env var that decides a backend's `credential()`
+    /// — is itself live-supplied by `lease` right now (`docs/byo-credentials.md` §6, P1.9);
+    /// `None` otherwise, which is every call until phase 2 gives [`Self::lease_values`] something
+    /// real to answer with. Thin wrapper over [`lease::qualifier_for`] so [`Self::spec_in`] and
+    /// [`Self::fail_over`] ask the same question the same way.
+    fn credential_qualifier(
+        &self,
+        name: &str,
+        lease: Option<&LeaseRef>,
+        attachments: &[SecretAttachment],
+    ) -> Option<String> {
+        lease::qualifier_for(name, lease, &self.config, attachments, self.lease_values())
     }
 
     /// `name`'s own attached-secret names, or nothing for an agent that no longer exists —
@@ -2452,7 +2515,7 @@ impl Agents {
     /// system prompt, a system message, or nowhere at all for an engine whose "system prompt" is
     /// really its opening user turn — is a fact about the engine, and the runner is the only layer
     /// that knows it.
-    fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf) -> RunSpec {
+    fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf, lease: Option<&LeaseRef>) -> RunSpec {
         let tools = adi_tools::Tools::with_config(self.config.clone());
         let knowledge = knowledge::resolve(&self.config, agent);
         let bin_tools = with_spawn_tool(
@@ -2464,6 +2527,16 @@ impl Agents {
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
         let mut env = attached_secret_env(&self.config, &agent.manifest.secrets);
+        // The user layer (`docs/byo-credentials.md` §5, P1.8): a live value replaces an attached
+        // secret of the same name, in its own slot in the ordering, ahead of everything below.
+        // A no-op for every launch and turn until phase 2 gives `lease_values()` something real.
+        lease::apply(
+            &mut env,
+            lease,
+            &self.config,
+            &agent.manifest.secrets,
+            self.lease_values(),
+        );
         // Point the run at its scope's shared database (a project agent gets that project's), so
         // `adi-db` in its shell and `import … from "@adi/db"` in its `ts` code both resolve without
         // the agent being told where the file is. Secrets are listed first, so a secret named
@@ -2784,6 +2857,12 @@ impl Agents {
         let Some(current) = chain.current().cloned() else {
             return;
         };
+        // Whose value this row's credential ran on for *this* turn (`docs/byo-credentials.md` §6,
+        // P1.9) — `None` on every server until phase 2, and `None` outright for a settings-file
+        // backend, which has no env var to ask about.
+        let qualifier = current
+            .credential_env_name()
+            .and_then(|name| self.credential_qualifier(name, record.lease.as_ref(), &agent.manifest.secrets));
 
         // The provider's own words: the answer text is where the adi loop's `⚠ adi loop error:` line
         // lands, and the terminal reason is what the Claude engines say instead.
@@ -2828,8 +2907,8 @@ impl Agents {
         // tells everyone else not to spend a turn discovering the same limit.
         if found.should_hold() {
             let key = match found.scope {
-                llm::HoldScope::Login => llm::HoldKey::login(&current.credential),
-                llm::HoldScope::Model => current.hold_key(),
+                llm::HoldScope::Login => current.login_key_for(qualifier.as_deref()),
+                llm::HoldScope::Model => current.hold_key_for(qualifier.as_deref()),
             };
             let now = store::now_ms() / 1_000;
             let _ = holds.hold(&llm::Hold {
@@ -5536,6 +5615,156 @@ mod tests {
         assert_eq!(held.set_by, format!("solver/{conv}"));
     }
 
+    /// An in-memory stand-in for `adi-app`'s own `Lease` table (phase 2) — the same fixture
+    /// `lease::tests::FakeLease` and `llm::ondemand::tests::FakeLease` use, repeated here because
+    /// none of the three test modules may depend on another's `#[cfg(test)]` items.
+    #[derive(Debug, Default)]
+    struct FakeLease(std::collections::BTreeMap<(String, String), String>);
+
+    impl FakeLease {
+        fn with(mut self, user: &str, name: &str, value: &str) -> Self {
+            self.0
+                .insert((user.to_string(), name.to_string()), value.to_string());
+            self
+        }
+    }
+
+    impl LeaseValues for FakeLease {
+        fn value(&self, user: &str, name: &str) -> Option<String> {
+            self.0.get(&(user.to_string(), name.to_string())).cloned()
+        }
+    }
+
+    /// ADI-MONO-178 P1.9, the headline case: a quota hit while running on a user's own value holds
+    /// the qualified key, never the server's login — so the server's own login keeps answering for
+    /// every other agent while Igor's quota resets.
+    #[test]
+    fn a_quota_hit_on_a_users_value_holds_the_qualified_key_not_the_servers_login() {
+        let store = scratch("failover-user-hold").with_lease_values(std::sync::Arc::new(
+            FakeLease::default().with("u-igor", "MY_API_KEY", "igors-own-key"),
+        ));
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["MY_API_KEY".to_string()],
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        let backends = llm::LlmBackends::with_config(store.config.clone());
+        backends
+            .save(
+                "glm",
+                llm::LlmBackendManifest {
+                    runtime: "harness:adi".into(),
+                    model: "glm-5.3".into(),
+                    api_key_env: Some("MY_API_KEY".into()),
+                    limit_rules: vec![quota_rule()],
+                    ..llm::LlmBackendManifest::default()
+                },
+            )
+            .expect("save the backend");
+        let mut manifest = spec("harness:adi");
+        manifest.backends = vec![llm::AgentBackendEntry::new("glm")];
+        manifest.secrets = vec![SecretAttachment {
+            project: None,
+            name: "MY_API_KEY".into(),
+        }];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::from("harness:adi"), "/tmp", "go")
+            .expect("open");
+        let chain = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("a chain");
+        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .set_lease(
+                "solver",
+                &record.id,
+                &LeaseRef {
+                    user: "u-igor".to_string(),
+                    names: vec!["MY_API_KEY".to_string()],
+                },
+            )
+            .expect("set lease");
+        sessions
+            .append_turn("solver", &record.id, store::user_turn("go"))
+            .expect("the question");
+
+        store.fail_over(&agent, &sessions, &record.id, &spent(), &store::RunOutcome::default());
+
+        let holds = llm::Holds::with_config(&store.config);
+        let unqualified = holds
+            .blocking(&llm::HoldKey::new("MY_API_KEY", "glm-5.3"))
+            .expect("read the holds");
+        assert!(
+            unqualified.is_none(),
+            "a user quota must never hold the server's own login"
+        );
+        let qualified = holds
+            .blocking(&llm::HoldKey::new("MY_API_KEY#user:u-igor", "glm-5.3"))
+            .expect("read the holds")
+            .expect("the qualified key is held");
+        assert_eq!(qualified.class, llm::LimitClass::Quota);
+    }
+
+    /// The other half: a quota hit while running on the server's own value (no lease, or no live
+    /// value) holds the plain key, and a user's qualified key is untouched by it.
+    #[test]
+    fn a_quota_hit_on_the_servers_value_never_holds_a_users_qualified_key() {
+        let store = scratch("failover-server-hold");
+        let backends = llm::LlmBackends::with_config(store.config.clone());
+        backends
+            .save(
+                "glm",
+                llm::LlmBackendManifest {
+                    runtime: "harness:adi".into(),
+                    model: "glm-5.3".into(),
+                    api_key_env: Some("MY_API_KEY".into()),
+                    limit_rules: vec![quota_rule()],
+                    ..llm::LlmBackendManifest::default()
+                },
+            )
+            .expect("save the backend");
+        let mut manifest = spec("harness:adi");
+        manifest.backends = vec![llm::AgentBackendEntry::new("glm")];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read").expect("the agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::from("harness:adi"), "/tmp", "go")
+            .expect("open");
+        let chain = chain_for(&store.config, &agent, None, None)
+            .expect("resolve")
+            .expect("a chain");
+        sessions.pin_chain("solver", &record.id, &chain).expect("pin");
+        sessions
+            .append_turn("solver", &record.id, store::user_turn("go"))
+            .expect("the question");
+
+        store.fail_over(&agent, &sessions, &record.id, &spent(), &store::RunOutcome::default());
+
+        let holds = llm::Holds::with_config(&store.config);
+        assert!(
+            holds
+                .blocking(&llm::HoldKey::new("MY_API_KEY#user:u-igor", "glm-5.3"))
+                .expect("read the holds")
+                .is_none(),
+            "no lease ran this turn, so no user's qualified key is ever touched"
+        );
+        assert!(
+            holds
+                .blocking(&llm::HoldKey::new("MY_API_KEY", "glm-5.3"))
+                .expect("read the holds")
+                .is_some(),
+            "the server's own login is held"
+        );
+    }
+
     /// The record's backend has to move with the row, or the switch starts the old engine on the
     /// new row's settings — a run configured two ways.
     #[test]
@@ -5806,7 +6035,7 @@ mod tests {
         store.save("solver", manifest).expect("save");
         let agent = store.get("solver").expect("read back").expect("the agent");
 
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
 
         let memory: adi_knowledge::BaseId = "agent:solver/memory".parse().expect("id");
         assert!(
@@ -5864,7 +6093,7 @@ mod tests {
             vec!["sys-tasks".into()],
         );
 
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
 
         assert!(spec.knowledge_note.is_none());
         assert!(
@@ -5896,7 +6125,7 @@ mod tests {
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "helper", "harness:claude-sdk", vec![id]);
 
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
 
         assert_eq!(
             spec.system_prompt.as_deref(),
@@ -5930,7 +6159,7 @@ mod tests {
         let store = scratch("workspace-block");
         let agent = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
 
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
         let note = spec.workspace_note.expect("the location is stated");
 
         assert!(note.contains("# Where you are"), "{note}");
@@ -7828,7 +8057,7 @@ mod tests {
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "coder", "pty:codex", vec![id]);
 
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
         assert_eq!(
             spec.system_prompt.as_deref(),
             Some("You are a careful operator.")
@@ -7851,7 +8080,7 @@ mod tests {
             "harness:claude-sdk",
             vec!["no-such-tool".into()],
         );
-        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf(), None);
         assert!(spec.tools.is_empty(), "{:?}", spec.tools);
     }
 

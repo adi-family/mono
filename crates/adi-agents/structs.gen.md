@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-155 structs · 41 enums · 5 type aliases across 61 files.
+156 structs · 41 enums · 5 type aliases across 61 files.
 
 ## Index
 
@@ -39,7 +39,7 @@
 - [`src/llm/failover.rs`](#srcllmfailoverrs) — `Decision`, `Failure`
 - [`src/llm/holds.rs`](#srcllmholdsrs) — `HoldKey`, `Hold`, `Holds`
 - [`src/llm/migrate.rs`](#srcllmmigraters) — `Move`, `Skip`, `Plan`
-- [`src/llm/ondemand.rs`](#srcllmondemandrs) — `TestResult`, `TestVerdict`, `Credential`
+- [`src/llm/ondemand.rs`](#srcllmondemandrs) — `TestResult`, `TestVerdict`, `Asker`, `Credential`
 - [`src/llm/prober.rs`](#srcllmproberrs) — `Verdict`, `Checked`, `Prober`, `Outcome`
 - [`src/llm/settings.rs`](#srcllmsettingsrs) — `LlmSettings`
 - [`src/marker.rs`](#srcmarkerrs) — `Woke`, `Settled`, `Marker`
@@ -1496,9 +1496,10 @@ struct TurnGuard {
 An on-disk agent registry.
 
 ```rust
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Agents {
     config: Config,
+    lease_values: Option<std::sync::Arc<dyn LeaseValues>>,
 }
 ```
 
@@ -1984,6 +1985,18 @@ pub enum TestVerdict {
     Failed {
         error: String,
     },
+}
+```
+
+### struct `Asker`
+
+Who is asking, for the Test button's own user-value check (`docs/byo-credentials.md` §5, P1.10) — `None` for every caller that isn't asking as a particular user: the CLI's `llm test`, and a Test pressed by a local operator or by a mesh peer with no user scope.
+
+```rust
+#[derive(Clone, Copy)]
+pub struct Asker<'a> {
+    pub user: &'a str,
+    pub live: &'a dyn crate::LeaseValues,
 }
 ```
 
