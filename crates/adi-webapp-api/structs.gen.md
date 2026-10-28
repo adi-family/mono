@@ -4051,6 +4051,8 @@ pub struct Dashboard {
     pub never_started: bool,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub template: Option<String>,
 }
 ```
 
@@ -4066,6 +4068,8 @@ pub struct NewDashboard {
     pub description: Option<String>,
     #[serde(default)]
     pub project: Option<String>,
+    #[serde(default)]
+    pub template: Option<String>,
 }
 ```
 

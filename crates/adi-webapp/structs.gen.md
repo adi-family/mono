@@ -2016,6 +2016,7 @@ The Dashboards page's create form, plus whether the collapsed archive below the 
 pub(crate) struct DashboardsForm {
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
+    pub(crate) template: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_archived: RwSignal<bool>,
     pub(crate) transfer_id: RwSignal<String>,

@@ -4462,6 +4462,10 @@ pub struct Dashboard {
     /// when it names none. The client draws it only if the name is in its own icon set.
     #[serde(default)]
     pub icon: Option<String>,
+    /// Which scaffold it was created from — `None` means the original dependency-free one.
+    /// `#[serde(default)]` so a payload from a server that predates templates still deserializes.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 impl Dashboard {
@@ -4489,6 +4493,12 @@ pub struct NewDashboard {
     /// The project to file the new dashboard under (its id), or `None` to leave it unfiled.
     #[serde(default)]
     pub project: Option<String>,
+    /// Which scaffold to create: `"dashboard"` (dependency-free) or `"vite-react"`. Absent or
+    /// empty keeps the original default, so every caller written before templates existed goes
+    /// on getting the same dashboard it always did. An unrecognised value is a 400 naming the
+    /// valid ones — see `adi_dashboards::TEMPLATES`.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 /// `GET /api/dashboards` — every dashboard, each with live port and running state.

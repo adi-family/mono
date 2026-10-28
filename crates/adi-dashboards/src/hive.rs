@@ -69,6 +69,58 @@ services:
         working_dir: .
 "#;
 
+/// The hive file for a **vite-react** dashboard: same one-origin shape as [`HIVE_TEMPLATE`], but
+/// each service's `working_dir` is its own subdirectory (`frontend`/`backend`, each its own Bun
+/// package) and the command is the package's own `dev` script — `vite` for the frontend, a
+/// watching Bun process for the backend — rather than a bare script path, because this scaffold
+/// has a `package.json` and the dependency-free one does not.
+///
+/// A dashboard on this template never matches [`is_current`] (which requires `working_dir: .`),
+/// and is never rewritten by [`crate::bundle`]'s dependency-free assumptions about the shape
+/// of `frontend/index.ts` — the caller is expected to branch on the manifest's `template` field
+/// before choosing between this and [`hive_yaml`], and to migrate the two shapes separately.
+const HIVE_TEMPLATE_VITE_REACT: &str = r#"# Dashboard hive services — run by the per-user supervisor (~/.adi/mono/dashboards/hive.yaml).
+#
+# One dashboard is one origin. Both services declare the same `proxy.host`: the frontend owns
+# `/`, the backend claims `/api`. The page therefore only ever uses relative URLs and never
+# learns its own address, which is what lets this dashboard work unchanged at `{{HOST}}`, at
+# `<label>.<node>.n.adi` over the mesh, and behind a real domain later — for every viewer, with
+# no substitution. Do not give the backend a host of its own: an absolute backend URL in the page
+# would point at whatever machine the *browser* is on.
+#
+# Each service is its own Bun package (`frontend/package.json`, `backend/package.json`), so
+# `working_dir` is the service's own subdirectory and `run` is its `dev` script rather than a
+# bare file path.
+#
+# No port is declared: adi-hive leases a stable one per service from the ports manager (keyed
+# `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it as $PORT. `vite.config.ts`
+# and `backend/src/index.ts` read it from there — see each file's own header.
+
+version: "1"
+
+services:
+  frontend:
+    restart: always
+    proxy:
+      host: {{HOST}}
+    runner:
+      type: script
+      script:
+        run: bun run dev
+        working_dir: frontend
+
+  backend:
+    restart: always
+    proxy:
+      host: {{HOST}}
+      path: /api
+    runner:
+      type: script
+      script:
+        run: bun run dev
+        working_dir: backend
+"#;
+
 /// The third service, for a dashboard that has a `widget/` directory: its home-screen widgets,
 /// claiming [`WIDGET_PATH`] on the same host — so a widget page reaches the backend at `/api` and
 /// the frontend's modules at `/modules`, same-origin, exactly as the app's own page does.
@@ -105,6 +157,16 @@ pub fn hive_yaml(dir: &Path, host: &str) -> String {
         yaml.push_str(WIDGET_TEMPLATE);
     }
     yaml.replace("{{HOST}}", host)
+}
+
+/// Render the hive file for a **vite-react** dashboard — [`HIVE_TEMPLATE_VITE_REACT`], no widget
+/// service (that scaffold does not offer one). Kept separate from [`hive_yaml`] rather than a
+/// shared function with a template parameter, because the two shapes are not going to gain the
+/// same features at the same rate — the dependency-free one stays bare on purpose, and the
+/// vite-react one is where `bun install`, a build step and a package.json evolve.
+#[must_use]
+pub fn hive_yaml_vite_react(host: &str) -> String {
+    HIVE_TEMPLATE_VITE_REACT.replace("{{HOST}}", host)
 }
 
 /// Whether the dashboard in `dir` serves widgets: whether it has a [`WIDGET_DIR`].
@@ -347,6 +409,28 @@ pub fn is_current(dir: &Path, parsed: &HiveFile) -> bool {
     }
 }
 
+/// Whether a parsed hive file is what [`hive_yaml_vite_react`] would write today: one origin, and
+/// each service's runner rooted in its own subdirectory rather than the dashboard's own `.` — the
+/// one respect in which this scaffold's "current" differs from [`is_current`]'s, which this
+/// deliberately does not share: the dependency-free template's `working_dir: .` would be wrong
+/// here, and this template's `frontend`/`backend` would be wrong there.
+#[must_use]
+pub fn is_current_vite_react(parsed: &HiveFile) -> bool {
+    if !is_one_origin(parsed) {
+        return false;
+    }
+    let working_dir = |svc: &str| {
+        parsed
+            .services
+            .get(svc)
+            .and_then(|s| s.runner.as_ref())
+            .and_then(|r| r.script.as_ref())
+            .and_then(|s| s.working_dir.as_deref())
+            .map(str::trim)
+    };
+    working_dir("frontend") == Some("frontend") && working_dir("backend") == Some("backend")
+}
+
 /// Normalise a `proxy.path` the way adi-hive's router does: `None` (the host's fallback) or a
 /// `/`-rooted prefix with no trailing slash. `/` is the fallback, so it normalises to `None`.
 fn path_claim(raw: Option<&str>) -> Option<String> {
@@ -535,6 +619,27 @@ mod tests {
         assert!(yaml.contains("run: bun run frontend/index.ts"), "{yaml}");
         assert!(yaml.contains("working_dir: .\n"), "{yaml}");
         assert!(!yaml.contains(&dir.display().to_string()), "no absolute path: {yaml}");
+    }
+
+    #[test]
+    fn the_vite_react_template_declares_one_origin_with_its_own_working_dirs() {
+        let yaml = hive_yaml_vite_react("nosh.adi");
+        let root = scratch("vite-react-template");
+        let dir = root.join("nosh");
+        std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), &yaml).expect("write");
+
+        let hive = hive_of(&dir);
+        assert!(is_one_origin(&hive));
+        assert!(is_current_vite_react(&hive));
+        assert!(
+            !is_current(&dir, &hive),
+            "the dependency-free migration must not treat this as its own shape"
+        );
+        assert!(yaml.contains("run: bun run dev"), "{yaml}");
+        assert!(yaml.contains("working_dir: frontend"), "{yaml}");
+        assert!(yaml.contains("working_dir: backend"), "{yaml}");
+        assert!(!yaml.contains("ports:"), "{yaml}");
     }
 
     #[test]

@@ -26,7 +26,10 @@ pub use bundle::{
 };
 pub use hive::{
     API_PATH, HIVE_ARCHIVED, HIVE_LIVE, HOST_ZONE, HiveFile, WIDGET_DIR, WIDGET_PATH,
-    dashboard_host, declared_host, has_widgets, hive_yaml, is_current, is_one_origin, parse_hive,
-    preferred_host,
+    dashboard_host, declared_host, has_widgets, hive_yaml, hive_yaml_vite_react, is_current,
+    is_current_vite_react, is_one_origin, parse_hive, preferred_host,
 };
-pub use manifest::{Manifest, Widget, read_manifest, write_manifest};
+pub use manifest::{
+    Manifest, TEMPLATE_DASHBOARD, TEMPLATE_VITE_REACT, TEMPLATES, Widget, is_known_template,
+    read_manifest, write_manifest,
+};

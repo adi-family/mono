@@ -50,6 +50,12 @@ pub struct Manifest {
     /// it can read whether or not the app is running — framing a widget is what starts it.
     #[serde(default)]
     pub widget: BTreeMap<String, Widget>,
+    /// Which scaffold this dashboard was created from — `None` (or any value a newer scaffold
+    /// doesn't recognise) means the original dependency-free template; `"vite-react"` means the
+    /// Vite + React one. Read by migration to pick the matching entry points, so a vite-react
+    /// dashboard is never rewritten with the dependency-free ones or vice versa.
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 /// One widget an app offers: a page on the app's own origin that the home screen frames.
@@ -70,6 +76,22 @@ pub struct Widget {
     /// A word rather than an enum so a manifest written for a newer screen still parses here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<String>,
+}
+
+/// What `adi-webapp-api`'s create handler scaffolds when a request names no template at all — the
+/// original dependency-free scaffold, kept as the default so every existing caller and every
+/// dashboard created before templates existed goes on meaning the same thing.
+pub const TEMPLATE_DASHBOARD: &str = "dashboard";
+/// The Vite + React scaffold (`crates/adi-webapp-api/templates/vite-react` in the platform repo).
+pub const TEMPLATE_VITE_REACT: &str = "vite-react";
+/// Every template id a create or import request may name, in the order offered to a human (a
+/// template picker lists these, in this order).
+pub const TEMPLATES: &[&str] = &[TEMPLATE_DASHBOARD, TEMPLATE_VITE_REACT];
+
+/// Whether `id` is a template this build knows how to scaffold.
+#[must_use]
+pub fn is_known_template(id: &str) -> bool {
+    TEMPLATES.contains(&id)
 }
 
 /// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
@@ -99,6 +121,7 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
         ("archived_at", manifest.archived_at.map(|ts| ts.to_string())),
         ("moved_to", manifest.moved_to.as_deref().map(toml_string)),
         ("icon", manifest.icon.as_deref().map(toml_string)),
+        ("template", manifest.template.as_deref().map(toml_string)),
     ] {
         if let Some(value) = value {
             out.push_str(key);
@@ -197,6 +220,7 @@ mod tests {
                 moved_to: Some("laptop-b".to_string()),
                 icon: Some("receipt".to_string()),
                 widget: BTreeMap::new(),
+                template: Some("vite-react".to_string()),
             },
         )
         .expect("write");
@@ -206,6 +230,7 @@ mod tests {
         assert!(raw.contains("archived_at = 1786839320\n"), "{raw}");
         assert!(raw.contains("moved_to = \"laptop-b\"\n"), "{raw}");
         assert!(raw.contains("icon = \"receipt\"\n"), "{raw}");
+        assert!(raw.contains("template = \"vite-react\"\n"), "{raw}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
