@@ -80,8 +80,8 @@ pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentGoalClosed, AgentGoalGivenUp, AgentGoalMet, AgentGoalNudged, AgentGoalSet,
     AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunIdle,
-    AgentRunReported, AgentRunStarted, AgentRunStopped, AgentSaved, AgentSpawnRefused,
-    RUN_REPORTED, event_catalog, event_types,
+    AgentRunReported, AgentRunStarted, AgentRunStopped, AgentRunWaitingOnUnlock, AgentSaved,
+    AgentSpawnRefused, RUN_REPORTED, event_catalog, event_types,
 };
 pub use lease::{LeaseRef, LeaseValues};
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
@@ -120,6 +120,13 @@ const MANIFEST_EXT: &str = "toml";
 /// verdict (`completed`, `api_error`, …), and a reader must be able to tell "the model stopped for
 /// this reason" from "there was no model — the command could not be spawned".
 const LAUNCH_FAILED: &str = "launch_failed";
+
+/// The `terminal_reason` of a turn refused because its lease had no live value and the effective
+/// `missing` is `"fail"` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7,
+/// [`fail_turn_for_missing_lease`](Agents::fail_turn_for_missing_lease)) — its own word, distinct
+/// from [`LAUNCH_FAILED`], because a reader who sees it should learn "the key wasn't there", not
+/// "something tried to run and couldn't".
+const LEASE_MISSING_FAILED: &str = "lease_missing";
 
 /// How far back [`Agents::spawn_refusals`] looks for a launch to weigh against the caller's
 /// current `can_spawn` (ADI-MONO-114) — long enough to catch an agent that only launches another
@@ -1433,6 +1440,19 @@ impl Agents {
                 .and_then(|name| self.credential_qualifier(name, lease.as_ref(), &agent.manifest.secrets));
             llm::chain::qualify_credential(&row.credential, qualifier.as_deref())
         });
+        // The unlock check, same as `runner.check` below: fail before anything is written down
+        // (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7). `missing = "wait"` is different —
+        // the body's own answer is to create the session and queue the opening message rather
+        // than refuse it outright (§10, §15 Q2) — so that case is read again, once the session
+        // exists, just below.
+        if let Some(lease::Readiness::Fail { names, .. }) =
+            lease.as_ref().map(|l| lease::readiness(Some(l), &self.config, &agent.manifest.secrets, self.lease_values()))
+        {
+            return Err(Error::Unsupported(format!(
+                "{} isn't unlocked on this server",
+                names.join(", ")
+            )));
+        }
         // Fail before anything is written down: a mistyped argument should leave no session behind.
         runner.check(&spec)?;
         let store = self.sessions();
@@ -1486,6 +1506,28 @@ impl Agents {
         pin_owner_instructions(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
+        // A fresh launch can wait too (`docs/byo-credentials.md` §10, §15 Q2): under
+        // `missing = "wait"`, with no live value for a name this launch needs, the session is
+        // created above exactly as any other launch's is — but its opening message is queued
+        // rather than sent, so it starts for real on the next `advance_queue` that finds the
+        // lease live. Settled here, rather than adding a `Launch` variant: `pid: 0` is already
+        // `launch_of`'s own sentinel for "no local process to name, addressed by `run_id` alone",
+        // and every caller of this launch (`agents run --wait`, `follow_the_run`, the panel) reads
+        // `pid` for display only — none of them dereferences it to find a process. Never for a
+        // terminal: a pty has no queue to park a message in.
+        if runner.as_terminal().is_none()
+            && let Some(lease::Readiness::Wait { user, names }) =
+                lease.as_ref().map(|l| lease::readiness(Some(l), &self.config, &agent.manifest.secrets, self.lease_values()))
+        {
+            store.enqueue(&agent.name, &record.id, message, images, markers, QueueMode::Regular)?;
+            self.note_waiting_on_unlock(&store, &agent.name, &record.id, &user, &names);
+            return Ok(Launch::Process {
+                command: agent.manifest.runtime().to_string(),
+                pid: 0,
+                log: session.log_path().to_path_buf(),
+                run_id: record.id.clone(),
+            });
+        }
         // Run before the opening turn is recorded, and after `name_conversation` — a pre-run
         // command that calls back into the platform is part of *this* conversation, and must be
         // able to say so. A terminal is skipped for the reason its launch message is: nobody typed
@@ -1921,6 +1963,26 @@ impl Agents {
             let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
             return Ok(Sent::Queued { place });
         }
+        // The unlock check runs ahead of the start/queue decision below
+        // (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7): a session waiting on unlock answers
+        // "not startable", exactly like one that is still busy. `wait` and `fail` are not told
+        // apart here — both queue this message rather than start it — because [`advance_queue`]
+        // re-asks the same question on its own *dequeue*, in the order messages were actually
+        // typed: writing the `fail` refusal straight into the transcript from here, ahead of
+        // whatever this session already had queued, would answer a message typed second before
+        // one typed first.
+        if !matches!(
+            lease::readiness(
+                record.lease.as_ref(),
+                &self.config,
+                &agent.manifest.secrets,
+                self.lease_values(),
+            ),
+            lease::Readiness::Ready
+        ) {
+            let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
+            return Ok(Sent::Queued { place });
+        }
         // Idle, but with a queue no read has drained yet: join the back of the line and start its
         // head instead, so messages are always answered in the order they were typed.
         let next = if store.queue_len(name, conv_id) > 0 {
@@ -2208,6 +2270,31 @@ impl Agents {
         if runner.is_alive(&store.session(&agent.name, conv_id)) {
             return false;
         }
+        // The unlock check runs ahead of the dequeue below (`docs/byo-credentials.md` §10,
+        // ADI-MONO-181 P2.7): a parked turn must not be one of the ones a failed launch already
+        // drops from the queue, so a session waiting on unlock is read here, before anything is
+        // popped. `missing = "fail"` dequeues on purpose — the queued message *has* had its turn,
+        // the same as any other failed launch, and the refusal is written where the failure
+        // already goes.
+        match lease::readiness(
+            record.lease.as_ref(),
+            &self.config,
+            &agent.manifest.secrets,
+            self.lease_values(),
+        ) {
+            lease::Readiness::Ready => {}
+            lease::Readiness::Wait { user, names } => {
+                self.note_waiting_on_unlock(&store, &agent.name, conv_id, &user, &names);
+                return false;
+            }
+            lease::Readiness::Fail { names, .. } => {
+                let Ok(Some(message)) = store.dequeue(&agent.name, conv_id) else {
+                    return false;
+                };
+                let _ = self.fail_turn_for_missing_lease(&store, &agent.name, conv_id, &message, &names);
+                return true;
+            }
+        }
         // Dropped from the queue *before* the turn starts: a message that fails to launch has still
         // had its turn, and leaving it at the head would retry it on every poll for ever.
         let Ok(Some(message)) = store.dequeue(&agent.name, conv_id) else {
@@ -2357,6 +2444,87 @@ impl Agents {
             Ok(((), event))
         });
         Err(error)
+    }
+
+    /// Announce once that a turn has parked waiting on a lease's unlock
+    /// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.8) — `adi.agents.run.waiting_on_unlock`,
+    /// gated through [`SessionStore::note_lease_wait`] the same way [`note_idle_runs`] gates
+    /// `adi.agents.run.idle`, so a session left parked for an hour is announced once, not every
+    /// poll. The message itself is never touched here: leaving it in the queue (rather than
+    /// dequeuing it, the way [`advance_queue`](Self::advance_queue) does for a real failure) is
+    /// what makes the run read back as [`RunLifecycle::Waiting`] and resumable by nothing more
+    /// than the next unlock.
+    fn note_waiting_on_unlock(
+        &self,
+        store: &SessionStore,
+        agent: &str,
+        run_id: &str,
+        user: &str,
+        names: &[String],
+    ) {
+        let turn = store.turn_count(agent, run_id);
+        let _ = self.with_event(|| {
+            let noted = store.note_lease_wait(agent, run_id, turn).unwrap_or(false);
+            let event = noted.then(|| AgentRunWaitingOnUnlock {
+                agent: agent.to_string(),
+                run_id: run_id.to_string(),
+                user: user.to_string(),
+                names: names.to_vec(),
+            });
+            Ok(((), event))
+        });
+    }
+
+    /// Refuse a turn whose lease has no live value for a name it needs, under `missing = "fail"`
+    /// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — written into the transcript the way
+    /// [`send_or_note_failure`](Self::send_or_note_failure) writes a real launch failure, since
+    /// nothing here ever reaches a runner to fail on its own: the user's own message is recorded
+    /// first (nothing else ever will, since this never reaches `start_turn`), then the refusal as
+    /// the answer, then the same `is_error` outcome a dead launch gets. Always returns `Err` —
+    /// there is no `Ok` shape for "refused before it ever started".
+    fn fail_turn_for_missing_lease(
+        &self,
+        store: &SessionStore,
+        agent: &str,
+        run_id: &str,
+        message: &store::QueuedMessage,
+        names: &[String],
+    ) -> Result<()> {
+        let mut turn = store::user_turn_with(&message.text, message.images.clone());
+        turn.markers.clone_from(&message.markers);
+        store.append_turn(agent, run_id, turn)?;
+
+        let failure = format!("{} isn't unlocked on this server", names.join(", "));
+        let _ = store.append_turn(
+            agent,
+            run_id,
+            assistant_turn(&TurnContent {
+                text: failure.clone(),
+                steps: Vec::new(),
+                metrics: None,
+            }),
+        );
+        let mut outcome =
+            store::RunOutcome::of(None, &failure, store::started_at(run_id), store::now_ms());
+        outcome.terminal_reason = Some(LEASE_MISSING_FAILED.to_string());
+        outcome.is_error = true;
+        let _ = self.with_event(|| {
+            let recorded = store
+                .record_outcome(agent, run_id, &outcome)
+                .unwrap_or(false);
+            let event = recorded.then(|| AgentRunFinished {
+                agent: agent.to_string(),
+                run_id: run_id.to_string(),
+                terminal_reason: outcome.terminal_reason.clone(),
+                is_error: true,
+                duration_ms: outcome.duration_ms,
+                active_ms: None,
+                cost_micro_usd: None,
+                result_head: outcome.result_head.clone(),
+            });
+            Ok(((), event))
+        });
+        Err(Error::Unsupported(failure))
     }
 
     /// Run one turn of a `harness:adi` conversation: read its transcript, call the configured model
@@ -3076,6 +3244,58 @@ impl Agents {
             });
         }
         Ok(stopped)
+    }
+
+    /// Stop every live session on `user`'s lease, subagents included, and clear their queues
+    /// (`docs/byo-credentials.md` §10.1 steps 2-4, ADI-MONO-181 P2.6) — through the same runner
+    /// stop [`Self::stop_run`] uses, but without that function's "the agent still exists" gate: a
+    /// session on a deleted agent's lease is exactly the one nobody else would ever stop. Also
+    /// voids every one of those sessions' `lease_cap` (step 2) — a no-op today since nothing
+    /// mints one yet (phase 3's `ADI_LEASE`, P3.1), written now so revoke does not change shape
+    /// again once it does.
+    ///
+    /// Runs whether or not `user` holds a live lease right now: a restarted `adi-app` has lost
+    /// its table, but a turn started before the restart may still be running with the old values
+    /// in its environment, and that is exactly what this stops. A session that isn't alive —
+    /// parked waiting on unlock, or already finished — is left alone, queue and all (§10.1: "a
+    /// parked session stays parked").
+    ///
+    /// Returns the run ids actually stopped, for `adi.secrets.lease.revoked`'s own payload.
+    pub fn stop_runs_for_lease_user(&self, user: &str) -> Vec<String> {
+        let store = self.sessions();
+        let _ = store.void_lease_cap_for_user(user);
+        let mut stopped = Vec::new();
+        for (agent, run_id) in store.with_lease_user(user) {
+            let Some(record) = store.get(&agent, &run_id) else {
+                continue;
+            };
+            if !Self::session_is_alive(&store, &record) {
+                continue;
+            }
+            let Some(runner) = runner_of(&record) else {
+                continue;
+            };
+            let session = store.session(&agent, &run_id);
+            let was_running = runner
+                .stop(&session, STOP_GRACE)
+                .map(|result| result.was_running)
+                .unwrap_or(false);
+            if !was_running {
+                continue;
+            }
+            let _ = store.clear_queue(&agent, &run_id);
+            let _ = self.with_event(|| {
+                Ok((
+                    (),
+                    Some(AgentRunStopped {
+                        agent: agent.clone(),
+                        run_id: Some(run_id.clone()),
+                    }),
+                ))
+            });
+            stopped.push(run_id);
+        }
+        stopped
     }
 
     /// Delete one run of an agent outright — for an answerable backend, a whole conversation: its
@@ -5763,6 +5983,415 @@ mod tests {
                 .is_some(),
             "the server's own login is held"
         );
+    }
+
+    // -- waiting on unlock, and refusing (ADI-MONO-181 P2.7/P2.8) ---------------------------
+
+    /// A lease'd session with a queued message, `missing = "wait"`, and no live value: the message
+    /// stays in the queue — `advance_queue` never reaches its own `dequeue` — and
+    /// `adi.agents.run.waiting_on_unlock` is published exactly once, with the names that are
+    /// actually missing.
+    #[test]
+    fn advance_queue_leaves_a_waiting_message_queued_and_announces_it_once() {
+        let store = scratch("advance-queue-wait");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Wait,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        let agent = store.get("watcher").expect("get").expect("present");
+
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .expect("set lease");
+        sessions
+            .enqueue("watcher", &conv, "do it", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs[0].state, RunLifecycle::Waiting);
+        assert_eq!(sessions.queue_len("watcher", &conv), 1, "never dequeued");
+
+        let bus = adi_events::Events::with_config(store.config().clone());
+        let found = bus
+            .catch_up("test", 100)
+            .expect("catch up")
+            .into_iter()
+            .find(|e| e.record.name == AgentRunWaitingOnUnlock::NAME)
+            .expect("published once it was noticed");
+        let payload: serde_json::Value =
+            serde_json::from_str(&found.record.payload).expect("json payload");
+        assert_eq!(payload["agent"], "watcher");
+        assert_eq!(payload["run_id"], conv);
+        assert_eq!(payload["user"], "u-aaa");
+        assert_eq!(payload["names"], serde_json::json!(["K"]));
+        bus.ack("test", found.seq).expect("ack");
+
+        // Looking again, nothing has changed, so nothing new is published for it.
+        let _ = store.runs(&agent);
+        assert!(
+            bus.catch_up("test", 100)
+                .expect("catch up")
+                .iter()
+                .all(|e| e.record.name != AgentRunWaitingOnUnlock::NAME),
+            "the same parked turn is not announced twice"
+        );
+    }
+
+    /// The same session, `missing = "fail"`: the queued message *is* dequeued (it has had its
+    /// turn, the same as any other failed launch), and the transcript carries the question, the
+    /// refusal, and a `lease_missing` outcome.
+    #[test]
+    fn advance_queue_under_fail_dequeues_and_writes_the_refusal() {
+        let store = scratch("advance-queue-fail");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Fail,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        let agent = store.get("watcher").expect("get").expect("present");
+
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .expect("set lease");
+        sessions
+            .enqueue("watcher", &conv, "do it", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+
+        let _ = store.runs(&agent);
+        assert_eq!(sessions.queue_len("watcher", &conv), 0, "the message has had its turn");
+        let turns = sessions.turns("watcher", &conv);
+        assert_eq!(turns.len(), 2, "the question and the refusal");
+        assert_eq!(turns[0].text, "do it");
+        assert!(
+            turns[1].text.contains("K isn't unlocked on this server"),
+            "{}",
+            turns[1].text
+        );
+        let outcome = sessions.get("watcher", &conv).expect("get").outcome.expect("recorded");
+        assert!(outcome.is_error);
+        assert_eq!(outcome.terminal_reason.as_deref(), Some("lease_missing"));
+    }
+
+    /// `deliver_with` (a reply, through `Agents::reply`) gates the same way for a *fresh* message
+    /// that has never been queued: a session whose lease isn't live right now answers `Queued`,
+    /// not `Started`, whether the effective `missing` is `"wait"` or `"fail"` — the two are told
+    /// apart only once `advance_queue` dequeues it, in order (the test above covers `fail`'s own
+    /// write-out at that point).
+    #[test]
+    fn reply_queues_rather_than_starts_when_the_lease_isnt_live() {
+        let store = scratch("reply-wait-fail");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .expect("set lease");
+
+        for missing in [adi_secrets::Missing::Wait, adi_secrets::Missing::Fail] {
+            adi_secrets::UserSecretsPolicy {
+                enabled: true,
+                overridable: vec!["K".to_string()],
+                missing,
+                ..adi_secrets::UserSecretsPolicy::default()
+            }
+            .save(&store.config)
+            .expect("save policy");
+            match store.reply("watcher", &conv, "hello") {
+                Ok(Sent::Queued { .. }) => {}
+                other => panic!("{missing:?}: expected Queued, got {other:?}"),
+            }
+            sessions.dequeue("watcher", &conv).expect("drain").expect("was there");
+        }
+    }
+
+    /// `missing = "fail"`: a fresh launch is refused outright, before anything is written down —
+    /// the same contract a mistyped argument already gets (`docs/byo-credentials.md` §10, §15
+    /// Q2, settled here as a refusal rather than an orphaned "created, waiting" session nothing
+    /// could resume).
+    #[test]
+    fn a_fresh_launch_under_missing_fail_is_refused_and_creates_nothing() {
+        let store = scratch("launch-fail");
+        let mut manifest = spec("harness:claude-sdk");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("worker", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Fail,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+
+        let err = store
+            .launch(
+                "worker",
+                "go",
+                &LaunchOptions {
+                    lease: Some(LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] }),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect_err("refused");
+        assert!(err.to_string().contains("K isn't unlocked on this server"), "{err}");
+        assert!(store.sessions().list("worker").is_empty(), "nothing was written down");
+    }
+
+    /// `missing = "wait"`: the opposite call — a fresh launch creates the session (so it is
+    /// addressable, and so `agents run --wait` or the panel have a run to watch) and queues its
+    /// opening message instead of sending it. The `Launch::Process { pid: 0, .. }` it returns is
+    /// the same sentinel [`launch_of`] already uses for "a runner whose engine lives elsewhere
+    /// records no pid" — settling §15 Q2 without a new `Launch` variant.
+    #[test]
+    fn a_fresh_launch_under_missing_wait_creates_the_session_and_queues_its_opening_message() {
+        let store = scratch("launch-wait");
+        let mut manifest = spec("harness:claude-sdk");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("worker", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Wait,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+
+        let launch = store
+            .launch(
+                "worker",
+                "go",
+                &LaunchOptions {
+                    lease: Some(LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] }),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("a parked launch still answers Ok");
+        let Launch::Process { pid, run_id, .. } = launch else {
+            panic!("expected a Process launch, got {launch:?}");
+        };
+        assert_eq!(pid, 0, "no local process to name — addressed by run_id alone");
+
+        let sessions = store.sessions();
+        assert_eq!(sessions.queue_len("worker", &run_id), 1, "queued, not sent");
+        assert!(
+            sessions.turns("worker", &run_id).is_empty(),
+            "nothing is recorded as asked until it actually starts"
+        );
+        let agent = store.get("worker").expect("get").expect("present");
+        let runs = store.runs(&agent);
+        assert_eq!(runs[0].state, RunLifecycle::Waiting);
+    }
+
+    /// End to end, with a **real spawned child** — ADI-MONO-180 stopped at
+    /// `LeaseValues::value()`; this is what's beneath it. No vendor CLI is installed in this
+    /// sandbox, so the "run" is a trivial `/bin/sh` that prints the one env var that matters,
+    /// exactly as `runner::detached::tests::spawn_probe` stands in for a real engine elsewhere in
+    /// this crate — what is under test is the environment a spawned child actually receives, not
+    /// which binary ends up running.
+    ///
+    /// 1. A live lease: the child sees the user's value.
+    /// 2. A revoke (`Agents::stop_runs_for_lease_user`, the server-side half of `mesh lock`) kills
+    ///    a *different*, still-running child on the same lease — subagents included, in spirit:
+    ///    this is the one runner-stop path every session on a lease goes through, parent or
+    ///    child alike (`docs/byo-credentials.md` §10.1).
+    /// 3. A launch after the revoke, with the lease no longer live: `missing = "server"` falls
+    ///    back to the server's own value; `missing = "wait"` parks instead, and resumes — a real
+    ///    `advance_queue` poll, not a re-check of the same fixture — the moment the lease is live
+    ///    again.
+    #[cfg(unix)]
+    #[test]
+    fn end_to_end_a_real_child_sees_the_lease_value_and_a_revoke_stops_it() {
+        use std::path::Path;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let store = scratch("e2e-real-child");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "NAME".into() }];
+        store.save("worker", manifest).expect("save");
+        let secrets = adi_secrets::Secrets::with_config(store.config.clone());
+        secrets
+            .set(None, "NAME", "server-value", None)
+            .expect("save the server's own value");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["NAME".to_string()],
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+
+        let live = Arc::new(FakeLease::default().with("u-igor", "NAME", "user-value"));
+        let store = store.with_lease_values(Arc::clone(&live) as Arc<dyn LeaseValues>);
+        let agent = store.get("worker").expect("get").expect("present");
+        let sessions = store.sessions();
+        let lease = LeaseRef { user: "u-igor".into(), names: vec!["NAME".into()] };
+
+        // Spawn a real child with exactly the environment `start_turn`/`launch_run` would build
+        // for this lease, and read back what it actually saw.
+        let spawn_with_env = |label: &str, extra_sleep: bool| -> (String, u32, u64) {
+            let record = sessions
+                .create("worker", Backend::HarnessAdi, "/tmp", "go")
+                .expect("create");
+            sessions
+                .set_lease("worker", &record.id, &lease)
+                .expect("set lease");
+            let spec = store.spec_in(&agent, PathBuf::from("/tmp"), Some(&lease));
+            let session = sessions.session("worker", &record.id);
+            let script = if extra_sleep {
+                format!("echo \"{label}=$NAME\"; sleep 30")
+            } else {
+                format!("echo \"{label}=$NAME\"")
+            };
+            let child = backends::detached::spawn_child(
+                &sessions.agent_dir("worker"),
+                &record.id,
+                session.log_path(),
+                Path::new("/tmp"),
+                "/usr/bin:/bin",
+                &["/bin/sh".to_string(), "-c".to_string(), script],
+                &spec.env,
+                &spec.inherited_strip,
+                |_| {},
+            )
+            .expect("spawn a real child");
+            session
+                .set_state(serde_json::json!({ "pid": child.pid, "started": child.started }))
+                .expect("record the child");
+            (record.id, child.pid, child.started.unwrap_or(0))
+        };
+
+        // -- 1. a live lease: the real child sees the user's value, not the server's.
+        let (conv_a, _pid_a, _) = spawn_with_env("seen", false);
+        wait_for_exit(&sessions, "worker", &conv_a);
+        let log_a = std::fs::read_to_string(sessions.log_path("worker", &conv_a)).expect("read log");
+        assert!(log_a.contains("seen=user-value"), "{log_a}");
+
+        // -- 2. revoke stops a *second*, still-running session on the same lease.
+        let (conv_b, pid_b, _) = spawn_with_env("long-lived", true);
+        for _ in 0..100 {
+            if backends::detached::pid_alive(pid_b) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(backends::detached::pid_alive(pid_b), "the long-lived child is up");
+        let stopped = store.stop_runs_for_lease_user("u-igor");
+        assert_eq!(stopped, vec![conv_b.clone()]);
+        for _ in 0..100 {
+            if !backends::detached::pid_alive(pid_b) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!backends::detached::pid_alive(pid_b), "the revoke's stop actually killed it");
+        // Running it again against the same user, with nothing left alive, changes nothing and
+        // is not an error (§10.1: "it runs in full even when no lease is in the table" — proven a
+        // layer down in `adi-app`'s own tests; this proves the agents-side half tolerates it too).
+        assert!(store.stop_runs_for_lease_user("u-igor").is_empty());
+
+        // -- 3. after the revoke, the lease is no longer live (the fixture now answers nothing for
+        // this user — standing in for `adi-app`'s table having dropped it).
+        let empty_live: Arc<dyn LeaseValues> = Arc::new(FakeLease::default());
+        let store_after = Agents::with_config(store.config.clone()).with_lease_values(empty_live);
+
+        // `missing = "server"`: a fresh launch's real child falls back to the server's value.
+        let record_c = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        sessions.set_lease("worker", &record_c.id, &lease).expect("set lease");
+        let spec_c = store_after.spec_in(&agent, PathBuf::from("/tmp"), Some(&lease));
+        let session_c = sessions.session("worker", &record_c.id);
+        let child_c = backends::detached::spawn_child(
+            &sessions.agent_dir("worker"),
+            &record_c.id,
+            session_c.log_path(),
+            Path::new("/tmp"),
+            "/usr/bin:/bin",
+            &["/bin/sh".to_string(), "-c".to_string(), "echo \"after=$NAME\"".to_string()],
+            &spec_c.env,
+            &spec_c.inherited_strip,
+            |_| {},
+        )
+        .expect("spawn");
+        session_c
+            .set_state(serde_json::json!({ "pid": child_c.pid, "started": child_c.started }))
+            .expect("record");
+        wait_for_exit(&sessions, "worker", &record_c.id);
+        let log_c = std::fs::read_to_string(sessions.log_path("worker", &record_c.id)).expect("read log");
+        assert!(log_c.contains("after=server-value"), "{log_c}");
+
+        // `missing = "wait"`: a queued turn parks instead of ever reaching a spawn — and resumes,
+        // through the ordinary `advance_queue` poll, the instant the lease is live again.
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["NAME".to_string()],
+            missing: adi_secrets::Missing::Wait,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store_after.config)
+        .expect("save policy");
+        let record_d = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        sessions.set_lease("worker", &record_d.id, &lease).expect("set lease");
+        sessions
+            .enqueue("worker", &record_d.id, "do it", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+        let _ = store_after.runs(&agent);
+        assert_eq!(sessions.queue_len("worker", &record_d.id), 1, "parked, not dequeued");
+
+        // The lease is granted again — the same `Agents`, a live source this time — and the very
+        // next poll (what the app's own listing does twice a second) drains it.
+        let granted: Arc<dyn LeaseValues> = Arc::clone(&live) as Arc<dyn LeaseValues>;
+        let store_granted = Agents::with_config(store.config.clone()).with_lease_values(granted);
+        let _ = store_granted.runs(&agent);
+        assert_eq!(
+            sessions.queue_len("worker", &record_d.id),
+            0,
+            "resumed on its own, no new unlock call needed beyond a live source"
+        );
+    }
+
+    /// Poll until a spawned child's `echo` has actually landed in its log — the simplest "it has
+    /// run" this test needs, since the trivial `sh -c` scripts above exit on their own.
+    /// `spawn_child` always writes a `=== turn started … ===` header line first, so the wait is
+    /// for a *second* line, not merely for the file to contain an `=`.
+    fn wait_for_exit(sessions: &SessionStore, agent: &str, conv: &str) {
+        let path = sessions.log_path(agent, conv);
+        for _ in 0..100 {
+            if let Ok(text) = std::fs::read_to_string(&path)
+                && text.lines().filter(|line| !line.starts_with("===")).count() > 0
+            {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
     }
 
     /// The record's backend has to move with the row, or the switch starts the old engine on the

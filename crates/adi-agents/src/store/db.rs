@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     idle_notified_turn INTEGER,
     lease         TEXT,
     lease_cap     TEXT,
+    lease_wait_notified_turn INTEGER,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -247,6 +248,12 @@ const MIGRATIONS: &[&str] = &[
     // phase 3 on). NULL whenever `lease` is NULL, and also NULL for a leased session until its
     // first turn mints one.
     "ALTER TABLE sessions ADD COLUMN lease_cap TEXT",
+    // How many turns were recorded the last time this session's lease was announced as parked
+    // waiting on unlock (`adi.agents.run.waiting_on_unlock`, ADI-MONO-181 P2.8) — the same
+    // turn-gated dedup `idle_notified_turn` uses for `adi.agents.run.idle`, kept as its own column
+    // because the two events are published independently and must not suppress each other. NULL
+    // for every session ever opened before this existed and for one never parked on a lease.
+    "ALTER TABLE sessions ADD COLUMN lease_wait_notified_turn INTEGER",
 ];
 
 // One connection per thread per database.

@@ -211,6 +211,31 @@ impl Event for AgentRunIdle {
     const NAME: &'static str = "adi.agents.run.idle";
 }
 
+/// `adi.agents.run.waiting_on_unlock` — a turn didn't start because its session's lease has no
+/// live value for a name it needs and the effective `missing` is `"wait"`
+/// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the
+/// run already reads `RunLifecycle::Waiting`, through the same pending-queue set
+/// [`AgentRunIdle`] uses); this is the specific reason, for the rail to show instead of a spinner.
+/// Published once per turn it stays parked — the same [`SessionStore::note_lease_wait`]-gated
+/// shape `idle` uses, in its own column so the two never suppress each other.
+///
+/// [`SessionStore::note_lease_wait`]: crate::store::SessionStore::note_lease_wait
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunWaitingOnUnlock {
+    /// The agent's name.
+    pub agent: String,
+    /// The run that is parked.
+    pub run_id: String,
+    /// The user whose unlock it is waiting on.
+    pub user: String,
+    /// The names it has no live value for right now.
+    pub names: Vec<String>,
+}
+
+impl Event for AgentRunWaitingOnUnlock {
+    const NAME: &'static str = "adi.agents.run.waiting_on_unlock";
+}
+
 /// `adi.agents.spawn.refused` — an `agent:<caller>` launch named a target outside the caller's own
 /// `can_spawn` (ADI-MONO-113). Published either way, `enforce` or `observe`: the field says which
 /// happened, so a subscriber (or an operator watching before flipping the switch) can tell a
@@ -479,6 +504,17 @@ pub fn event_types() -> Vec<EventType> {
             },
         ),
         EventType::of_event(
+            "A turn didn't start because its session's lease has no live value for a name it \
+             needs, under missing = \"wait\" (docs/byo-credentials.md §10).",
+            schema::<AgentRunWaitingOnUnlock>(),
+            &AgentRunWaitingOnUnlock {
+                agent: "my-agent".into(),
+                run_id: "r-1a2b3c".into(),
+                user: "u-7f3kq9".into(),
+                names: vec!["CLAUDE_CODE_OAUTH_TOKEN".into()],
+            },
+        ),
+        EventType::of_event(
             "An agent-to-agent launch named a target outside the caller's own can_spawn.",
             schema::<AgentSpawnRefused>(),
             &AgentSpawnRefused {
@@ -655,6 +691,7 @@ mod tests {
                 "adi.agents.run.stopped",
                 "adi.agents.run.finished",
                 "adi.agents.run.idle",
+                "adi.agents.run.waiting_on_unlock",
                 "adi.agents.spawn.refused",
                 "adi.agents.run.deleted",
                 "adi.agents.run.reported",

@@ -530,6 +530,68 @@ impl SessionStore {
         Ok(changed > 0)
     }
 
+    /// Record that this run's lease-wait state (ADI-MONO-181 P2.8's
+    /// `adi.agents.run.waiting_on_unlock`) has been announced as of `turn`. Returns whether this
+    /// call is the one that changed it — the same turn-gated shape [`note_idle`] uses, and for the
+    /// same reason: a session parked on the same turn for an hour must announce it once, not every
+    /// poll, while a session that resumes and parks again on a later turn is worth a fresh event.
+    /// A separate column from `idle_notified_turn` on purpose: both events can be published for the
+    /// same row on the same poll, and sharing one gate would let whichever ran first silently
+    /// suppress the other.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn note_lease_wait(&self, agent: &str, id: &str, turn: usize) -> Result<bool> {
+        let turn = i64::try_from(turn).unwrap_or(i64::MAX);
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET lease_wait_notified_turn = ?3
+                 WHERE agent = ?1 AND id = ?2
+                   AND (lease_wait_notified_turn IS NULL OR lease_wait_notified_turn != ?3)",
+                rusqlite::params![agent, id, turn],
+            )
+            .map_err(|e| db::sql_err("record a session's lease-wait notice in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Every session whose lease belongs to `user` — a revoke's own query
+    /// (`docs/byo-credentials.md` §10.1 step 3, ADI-MONO-181 P2.6), across every agent in one walk.
+    /// The same shape as [`agents`](Self::agents): it includes sessions of an agent whose
+    /// definition has since been deleted, and children are in it by construction, since each
+    /// child is its own session with `lease.user = <u>` (§11) — there is no tree to walk.
+    #[must_use]
+    pub fn with_lease_user(&self, user: &str) -> Vec<(String, String)> {
+        let Ok(conn) = self.conn() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare_cached(
+            "SELECT agent, id FROM sessions WHERE json_extract(lease, '$.user') = ?1",
+        ) else {
+            return Vec::new();
+        };
+        stmt.query_map([user], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Void every `lease_cap` belonging to `user`'s sessions (§10.1 step 2) — so a launch already
+    /// forwarded on the old capability, landing in the next few milliseconds, is refused rather
+    /// than spawned from a revoked lease. Nothing mints `lease_cap` yet (phase 3's `ADI_LEASE`,
+    /// P3.1), so this is a no-op on every row today; it is written now so the revoke path does not
+    /// have to change again once phase 3 does.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn void_lease_cap_for_user(&self, user: &str) -> Result<usize> {
+        self.conn()?
+            .execute(
+                "UPDATE sessions SET lease_cap = NULL WHERE json_extract(lease, '$.user') = ?1",
+                rusqlite::params![user],
+            )
+            .map_err(|e| db::sql_err("void a user's lease capabilities in", e))
+    }
+
     /// Fasten a resolved backend chain to a session — **once**, on its first turn.
     ///
     /// Returns whether this call was the one that pinned it, on the same first-writer-wins contract
@@ -1557,6 +1619,72 @@ mod tests {
             .lease
             .expect("set");
         assert_eq!(listed, lease);
+    }
+
+    /// ADI-MONO-181 P2.6: `with_lease_user` finds every session on a user's lease, across agents,
+    /// including one whose agent has since been deleted from the store's own view (it never reads
+    /// agent definitions at all, so there is nothing here to simulate that with — the point is
+    /// just that the query is `agent, id` across the whole table, not scoped to one).
+    #[test]
+    fn with_lease_user_finds_every_session_across_agents_and_void_clears_their_cap() {
+        let store = scratch("with-lease-user");
+        let mine = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+        let also_mine = store
+            .create("writer", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+        let someone_elses = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+
+        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        store.set_lease("solver", &mine.id, &lease).expect("set");
+        store.set_lease("writer", &also_mine.id, &lease).expect("set");
+        store
+            .set_lease(
+                "solver",
+                &someone_elses.id,
+                &crate::LeaseRef { user: "u-bbb".to_string(), names: vec!["K".to_string()] },
+            )
+            .expect("set");
+
+        let mut found = store.with_lease_user("u-aaa");
+        found.sort();
+        let mut expected =
+            vec![("solver".to_string(), mine.id.clone()), ("writer".to_string(), also_mine.id.clone())];
+        expected.sort();
+        assert_eq!(found, expected);
+        assert!(store.with_lease_user("u-nobody").is_empty());
+
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE sessions SET lease_cap = 'deadbeef' WHERE agent = 'solver' AND id = ?1",
+                rusqlite::params![&mine.id],
+            )
+            .expect("seed a capability to void");
+        let voided = store.void_lease_cap_for_user("u-aaa").expect("void");
+        assert_eq!(voided, 2, "every session on u-aaa's lease, whether or not it had a capability yet");
+        assert_eq!(store.get("solver", &mine.id).unwrap().lease, Some(lease), "the lease itself is untouched");
+    }
+
+    /// ADI-MONO-181 P2.8: `note_lease_wait` gates on turn count exactly like `note_idle`, and the
+    /// two columns never interfere with each other.
+    #[test]
+    fn note_lease_wait_announces_once_per_turn_and_is_independent_of_note_idle() {
+        let store = scratch("note-lease-wait");
+        let run = store
+            .create("solver", Backend::HarnessAdi, "/tmp/work", "go")
+            .expect("create");
+
+        assert!(store.note_lease_wait("solver", &run.id, 0).expect("first"));
+        assert!(!store.note_lease_wait("solver", &run.id, 0).expect("repeat"), "same turn, no re-announce");
+        assert!(store.note_lease_wait("solver", &run.id, 1).expect("next turn"), "a later turn is fresh");
+
+        // `note_idle` on the very same row and turn is unaffected either way.
+        assert!(store.note_idle("solver", &run.id, 1).expect("idle still announces"));
     }
 
     #[test]

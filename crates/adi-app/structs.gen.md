@@ -4,12 +4,12 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-23 structs · 1 enum · 2 type aliases across 9 files.
+25 structs · 1 enum · 2 type aliases across 9 files.
 
 ## Index
 
 - [`src/awaits.rs`](#srcawaitsrs) — `Posted`
-- [`src/leases.rs`](#srcleasesrs) — `Lease`, `LeaseTable`, `LeaseSummary`, `SessionInfo`, `SealedEntry`, `UnlockRequest`, `RenewRequest`
+- [`src/leases.rs`](#srcleasesrs) — `LeaseGranted`, `LeaseRevoked`, `Lease`, `LeaseTable`, `LeaseSummary`, `SessionInfo`, `SealedEntry`, `UnlockRequest`, `RenewRequest`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`, `EmbeddedHit`
 - [`src/node.rs`](#srcnoders) — `CallError`, `Payload`
@@ -33,6 +33,30 @@ type Posted = (String, String);
 ---
 
 ## `src/leases.rs`
+
+### struct `LeaseGranted`
+
+`adi.secrets.lease.granted` — a device's unlock installed a live lease (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every queued message already waits on — this is purely for the rail and anyone else watching.
+
+```rust
+#[derive(Debug, Serialize)]
+struct LeaseGranted<'a> {
+    user: &'a str,
+    names: &'a [String],
+}
+```
+
+### struct `LeaseRevoked`
+
+`adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer (`docs/byo-credentials.md` §10.1, ADI-MONO-181 P2.6).
+
+```rust
+#[derive(Debug, Serialize)]
+struct LeaseRevoked<'a> {
+    user: &'a str,
+    stopped: &'a [String],
+}
+```
 
 ### struct `Lease`
 

@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-156 structs · 41 enums · 5 type aliases across 61 files.
+157 structs · 42 enums · 5 type aliases across 61 files.
 
 ## Index
 
@@ -27,10 +27,10 @@
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/dispatch.rs`](#srcdispatchrs) — `Dispatched`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentRunWaitingOnUnlock`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
-- [`src/lease.rs`](#srcleasers) — `LeaseRef`
+- [`src/lease.rs`](#srcleasers) — `LeaseRef`, `Readiness`
 - [`src/lib.rs`](#srclibrs) — `TurnGuard`, `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
@@ -1293,6 +1293,20 @@ pub struct AgentRunIdle {
 }
 ```
 
+### struct `AgentRunWaitingOnUnlock`
+
+`adi.agents.run.waiting_on_unlock` — a turn didn't start because its session's lease has no live value for a name it needs and the effective `missing` is `"wait"` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7/P2.8). The message stays in the queue (so the run already reads `RunLifecycle::Waiting`, through the same pending-queue set `AgentRunIdle` uses); this is the specific reason, for the rail to show instead of a spinner. Published once per turn it stays parked — the same `SessionStore::note_lease_wait`-gated shape `idle` uses, in its own column so the two never suppress each other.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunWaitingOnUnlock {
+    pub agent: String,
+    pub run_id: String,
+    pub user: String,
+    pub names: Vec<String>,
+}
+```
+
 ### struct `AgentSpawnRefused`
 
 `adi.agents.spawn.refused` — an `agent:<caller>` launch named a target outside the caller's own `can_spawn` (ADI-MONO-113). Published either way, `enforce` or `observe`: the field says which happened, so a subscriber (or an operator watching before flipping the switch) can tell a launch that was actually stopped from one that only would have been.
@@ -1475,6 +1489,25 @@ Whose lease a session's turns look for, and which names they may use from it —
 pub struct LeaseRef {
     pub user: String,
     pub names: Vec<String>,
+}
+```
+
+### enum `Readiness`
+
+Whether a turn may start at all, for a session whose lease is `lease` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — asked *before* a turn starts, never while building its environment. `Ready` covers every session with no lease, every lease whose narrowed names (the same four-way check `apply` makes, minus the agent's current `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value, and a missing value under `missing = "server"` — in that last case the turn starts exactly as `apply` already leaves it, on the server's own value, with nothing to gate.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Readiness {
+    Ready,
+    Wait {
+        user: String,
+        names: Vec<String>,
+    },
+    Fail {
+        user: String,
+        names: Vec<String>,
+    },
 }
 ```
 

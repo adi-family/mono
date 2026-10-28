@@ -118,6 +118,60 @@ pub(crate) fn qualifier_for(
     live_for(name, lease, &policy, &attached, live).map(|_| lease.user.clone())
 }
 
+/// Whether a turn may start at all, for a session whose lease is `lease`
+/// (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — asked *before* a turn starts, never while
+/// building its environment. `Ready` covers every session with no lease, every lease whose
+/// narrowed names (the same four-way check [`apply`] makes, minus the agent's current
+/// `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value,
+/// and a missing value under `missing = "server"` — in that last case the turn starts exactly as
+/// [`apply`] already leaves it, on the server's own value, with nothing to gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Readiness {
+    Ready,
+    /// Park the turn: `missing = "wait"`, and `names` have no live value right now.
+    Wait { user: String, names: Vec<String> },
+    /// Refuse the turn and say why: `missing = "fail"`, and `names` have no live value right now.
+    Fail { user: String, names: Vec<String> },
+}
+
+pub(crate) fn readiness(
+    lease: Option<&LeaseRef>,
+    config: &adi_config::Config,
+    attachments: &[crate::SecretAttachment],
+    live: Option<&dyn LeaseValues>,
+) -> Readiness {
+    let Some(lease) = lease else {
+        return Readiness::Ready;
+    };
+    let policy = adi_secrets::UserSecretsPolicy::load(config);
+    if !policy.enabled {
+        return Readiness::Ready;
+    }
+    let attached: std::collections::BTreeSet<&str> =
+        attachments.iter().map(|a| a.name.as_str()).collect();
+    // The names this turn would actually ask the lease for, narrowed exactly as `apply` narrows
+    // them, that have no live value right now.
+    let missing: Vec<String> = lease
+        .names
+        .iter()
+        .filter(|name| {
+            attached.contains(name.as_str())
+                && policy.overridable.iter().any(|o| o == *name)
+                && live.is_none_or(|live| live.value(&lease.user, name).is_none())
+        })
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        return Readiness::Ready;
+    }
+    let user_settings = adi_secrets::UserSettings::load(config, &lease.user);
+    match adi_secrets::effective_missing(policy.missing, user_settings.missing) {
+        adi_secrets::Missing::Server => Readiness::Ready,
+        adi_secrets::Missing::Wait => Readiness::Wait { user: lease.user.clone(), names: missing },
+        adi_secrets::Missing::Fail => Readiness::Fail { user: lease.user.clone(), names: missing },
+    }
+}
+
 /// Whether `user`'s lease currently holds a value for `name` the server's policy still allows —
 /// the Test button's own check (`docs/byo-credentials.md` §5, P1.10), which has no agent and so no
 /// attachment allowlist to intersect against the way [`apply`]'s per-name check does.
@@ -354,6 +408,86 @@ mod tests {
             ),
             None,
             "a different name was never supplied by this lease"
+        );
+    }
+
+    // -- readiness (ADI-MONO-181 P2.7) --------------------------------------------------------
+
+    #[test]
+    fn readiness_is_ready_with_no_lease_or_a_fully_live_one() {
+        let config = scratch("readiness-ready");
+        enable(&config, &["K"]);
+        let attachments = vec![attachment("K")];
+        let live = FakeLease::default().with("u-aaa", "K", "v");
+        assert_eq!(readiness(None, &config, &attachments, Some(&live)), Readiness::Ready);
+
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        assert_eq!(
+            readiness(Some(&lease), &config, &attachments, Some(&live)),
+            Readiness::Ready,
+            "a live value for every narrowed name needs no gate"
+        );
+    }
+
+    #[test]
+    fn readiness_is_ready_under_missing_server_however_little_is_live() {
+        let config = scratch("readiness-server");
+        enable(&config, &["K"]); // `missing` defaults to `server`
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let empty_live = FakeLease::default();
+        assert_eq!(
+            readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
+            Readiness::Ready,
+            "server is apply's own fallback, nothing to gate"
+        );
+    }
+
+    #[test]
+    fn readiness_waits_or_fails_on_the_effective_missing_only_for_names_actually_missing() {
+        let config = scratch("readiness-wait-fail");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Wait,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&config)
+        .expect("save policy");
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let empty_live = FakeLease::default();
+        assert_eq!(
+            readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
+            Readiness::Wait { user: "u-aaa".to_string(), names: vec!["K".to_string()] }
+        );
+
+        adi_secrets::UserSettings { missing: Some(adi_secrets::Missing::Fail) }
+            .save(&config, "u-aaa")
+            .expect("save user settings");
+        assert_eq!(
+            readiness(Some(&lease), &config, &[attachment("K")], Some(&empty_live)),
+            Readiness::Fail { user: "u-aaa".to_string(), names: vec!["K".to_string()] },
+            "a user's own setting may tighten the server's wait into a fail"
+        );
+    }
+
+    #[test]
+    fn readiness_ignores_a_name_the_narrowing_already_drops() {
+        let config = scratch("readiness-narrowed-away");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Fail,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&config)
+        .expect("save policy");
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        let empty_live = FakeLease::default();
+        // The agent no longer attaches K — `apply` would leave the server's value alone, so there
+        // is nothing for this turn to wait or fail on either.
+        assert_eq!(
+            readiness(Some(&lease), &config, &[], Some(&empty_live)),
+            Readiness::Ready
         );
     }
 
