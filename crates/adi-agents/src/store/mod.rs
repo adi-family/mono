@@ -46,6 +46,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Backend;
 use crate::error::{Error, Result};
+use crate::lease;
 use crate::progress::TurnContent;
 
 pub use attachments::{
@@ -555,6 +556,89 @@ impl SessionStore {
         Ok(changed > 0)
     }
 
+    /// This session's `ADI_LEASE` capability (`docs/byo-credentials.md` §11's "The capability",
+    /// ADI-MONO-182 P3.1) — minted the first time this is called for a leased session, and the
+    /// same plaintext handed back on every call after, including one in a fresh process after an
+    /// `adi-app` restart: it is read straight off the row, never regenerated, which is what keeps
+    /// [`crate::runner::detached::hash_child_environment`]'s fingerprint — and so a Codex thread —
+    /// stable across every turn of the conversation. `None` for a session with no lease at all;
+    /// there is nothing here for a capability to vouch for.
+    ///
+    /// A revoke (`void_lease_cap_for_user`) clears both `lease_cap` and `lease_cap_secret`
+    /// together, so the next call here, on the next live turn, mints a genuinely fresh pair —
+    /// different bytes, a different hash — which is what gives Codex a new environment to decide
+    /// is a new thread (§15 Q5).
+    ///
+    /// First-writer-wins against a concurrent mint, the same contract [`pin_chain`](Self::pin_chain)
+    /// keeps: the `UPDATE` only lands while `lease_cap_secret` is still NULL, and a caller that loses
+    /// that race reads back whichever mint actually won rather than overwriting it.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn lease_capability(&self, agent: &str, id: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        let Some((has_lease, secret)) = Self::lease_capability_row(&conn, agent, id)? else {
+            return Ok(None);
+        };
+        if !has_lease {
+            return Ok(None);
+        }
+        if let Some(secret) = secret {
+            return Ok(Some(secret));
+        }
+        let minted = lease::new_capability();
+        let hash = lease::capability_hash(&minted);
+        let changed = conn
+            .execute(
+                "UPDATE sessions SET lease_cap = ?3, lease_cap_secret = ?4
+                 WHERE agent = ?1 AND id = ?2 AND lease_cap_secret IS NULL",
+                rusqlite::params![agent, id, hash, minted],
+            )
+            .map_err(|e| db::sql_err("mint a session's lease capability in", e))?;
+        if changed > 0 {
+            return Ok(Some(minted));
+        }
+        // Lost the race to another mint: read back what it wrote.
+        Ok(Self::lease_capability_row(&conn, agent, id)?.and_then(|(_, secret)| secret))
+    }
+
+    /// `(has a lease at all, the plaintext capability if one has been minted)` for one row —
+    /// the read [`lease_capability`](Self::lease_capability) does twice, once before minting and
+    /// once after losing the race to mint.
+    fn lease_capability_row(
+        conn: &rusqlite::Connection,
+        agent: &str,
+        id: &str,
+    ) -> Result<Option<(bool, Option<String>)>> {
+        conn.query_row(
+            "SELECT lease, lease_cap_secret FROM sessions WHERE agent = ?1 AND id = ?2",
+            [agent, id],
+            |row| {
+                let lease: Option<String> = row.get(0)?;
+                let secret: Option<String> = row.get(1)?;
+                Ok((lease.is_some(), secret))
+            },
+        )
+        .map(Some)
+        .or_else(|e| if matches!(e, rusqlite::Error::QueryReturnedNoRows) { Ok(None) } else { Err(e) })
+        .map_err(|e| db::sql_err("read a session's lease capability in", e))
+    }
+
+    /// The session a presented `ADI_LEASE` capability names, by its hash alone
+    /// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2: "hashes the capability and looks up the
+    /// session it names"). `None` for a hash no row currently carries — an unknown capability, or
+    /// one a revoke has since voided, since `void_lease_cap_for_user` clears exactly this column.
+    #[must_use]
+    pub fn find_by_lease_cap(&self, hash: &str) -> Option<(String, String)> {
+        let conn = self.conn().ok()?;
+        conn.query_row(
+            "SELECT agent, id FROM sessions WHERE lease_cap = ?1",
+            [hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .ok()
+    }
+
     /// Every session whose lease belongs to `user` — a revoke's own query
     /// (`docs/byo-credentials.md` §10.1 step 3, ADI-MONO-181 P2.6), across every agent in one walk.
     /// The same shape as [`agents`](Self::agents): it includes sessions of an agent whose
@@ -577,16 +661,18 @@ impl SessionStore {
 
     /// Void every `lease_cap` belonging to `user`'s sessions (§10.1 step 2) — so a launch already
     /// forwarded on the old capability, landing in the next few milliseconds, is refused rather
-    /// than spawned from a revoked lease. Nothing mints `lease_cap` yet (phase 3's `ADI_LEASE`,
-    /// P3.1), so this is a no-op on every row today; it is written now so the revoke path does not
-    /// have to change again once phase 3 does.
+    /// than spawned from a revoked lease. Clears `lease_cap_secret` in the same statement
+    /// (ADI-MONO-182 P3.1): the two columns are always NULL together or minted together, and
+    /// leaving the plaintext behind would let [`lease_capability`](Self::lease_capability) hand
+    /// the *old* bytes back out on the very next call, defeating the point of voiding anything.
     ///
     /// # Errors
     /// Returns database errors.
     pub fn void_lease_cap_for_user(&self, user: &str) -> Result<usize> {
         self.conn()?
             .execute(
-                "UPDATE sessions SET lease_cap = NULL WHERE json_extract(lease, '$.user') = ?1",
+                "UPDATE sessions SET lease_cap = NULL, lease_cap_secret = NULL
+                 WHERE json_extract(lease, '$.user') = ?1",
                 rusqlite::params![user],
             )
             .map_err(|e| db::sql_err("void a user's lease capabilities in", e))
@@ -1668,6 +1754,79 @@ mod tests {
         let voided = store.void_lease_cap_for_user("u-aaa").expect("void");
         assert_eq!(voided, 2, "every session on u-aaa's lease, whether or not it had a capability yet");
         assert_eq!(store.get("solver", &mine.id).unwrap().lease, Some(lease), "the lease itself is untouched");
+    }
+
+    /// ADI-MONO-182 P3.1: a session with no lease at all never gets a capability — there is
+    /// nothing for one to vouch for.
+    #[test]
+    fn lease_capability_is_none_without_a_lease() {
+        let store = scratch("lease-capability-no-lease");
+        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        assert_eq!(store.lease_capability("solver", &run.id).expect("read"), None);
+    }
+
+    /// P3.1's headline: minted once, and the same plaintext handed back on every later call —
+    /// across a brand-new `SessionStore` value standing in for a fresh process after an `adi-app`
+    /// restart, since nothing here is cached anywhere but the row itself.
+    #[test]
+    fn lease_capability_mints_once_and_is_stable_across_turns_and_restarts() {
+        let store = scratch("lease-capability-stable");
+        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        store.set_lease("solver", &run.id, &lease).expect("set");
+
+        let first = store.lease_capability("solver", &run.id).expect("mint").expect("a lease is set");
+        let again = store.lease_capability("solver", &run.id).expect("read back").expect("still set");
+        assert_eq!(first, again, "the same session, the same capability, every time");
+
+        // A fresh `SessionStore` value against the same files — the same thing a new process
+        // opening `sessions.db` after a restart would see.
+        let reopened = SessionStore::new(store.dir().to_path_buf());
+        assert_eq!(
+            reopened.lease_capability("solver", &run.id).expect("read after reopening"),
+            Some(first),
+            "stable across a fresh process, not just a fresh call",
+        );
+    }
+
+    /// `find_by_lease_cap` is the reverse lookup `Agents::lease_capability_session` uses
+    /// (`docs/byo-credentials.md` §11, P3.2): given the hash of a presented capability, the
+    /// session that minted it — and nothing for a hash no row carries.
+    #[test]
+    fn find_by_lease_cap_resolves_the_hash_back_to_its_session() {
+        let store = scratch("find-by-lease-cap");
+        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        store.set_lease("solver", &run.id, &lease).expect("set");
+        let capability = store.lease_capability("solver", &run.id).expect("mint").expect("set");
+
+        let hash = lease::capability_hash(&capability);
+        assert_eq!(store.find_by_lease_cap(&hash), Some(("solver".to_string(), run.id.clone())));
+        assert_eq!(
+            store.find_by_lease_cap(&lease::capability_hash("something-else")),
+            None,
+            "an unrelated capability resolves nothing"
+        );
+    }
+
+    /// A revoke (`void_lease_cap_for_user`) clears the plaintext along with the hash, so the next
+    /// mint is genuinely fresh — different bytes, a different hash — rather than handing the same,
+    /// supposedly-voided capability back out (`docs/byo-credentials.md` §10.1, §15 Q5).
+    #[test]
+    fn lease_capability_is_reminted_with_a_different_value_after_a_revoke() {
+        let store = scratch("lease-capability-remint");
+        let run = store.create("solver", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        let lease = crate::LeaseRef { user: "u-aaa".to_string(), names: vec!["K".to_string()] };
+        store.set_lease("solver", &run.id, &lease).expect("set");
+        let before = store.lease_capability("solver", &run.id).expect("mint").expect("set");
+        let hash_before = lease::capability_hash(&before);
+
+        store.void_lease_cap_for_user("u-aaa").expect("void");
+        assert_eq!(store.find_by_lease_cap(&hash_before), None, "the old capability stops resolving");
+
+        let after = store.lease_capability("solver", &run.id).expect("remint").expect("still leased");
+        assert_ne!(before, after, "a genuinely fresh capability, not the same bytes recovered");
+        assert_eq!(store.find_by_lease_cap(&lease::capability_hash(&after)), Some(("solver".to_string(), run.id.clone())));
     }
 
     /// ADI-MONO-181 P2.8: `note_lease_wait` gates on turn count exactly like `note_idle`, and the

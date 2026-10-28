@@ -650,10 +650,18 @@ mod tests {
     }
 
     /// An empty strip list still drops every `ADI_*` — the one rule [`scrub_ambient`] never needs
-    /// data to apply.
+    /// data to apply. `ADI_LEASE`/`ADI_LEASE_URL` (`docs/byo-credentials.md` §11, ADI-MONO-182
+    /// P3.1) need no special case of their own for exactly this reason: they are `ADI_*`, so a
+    /// child this process spawns with no `LaunchOptions::lease` of its own — `env -u ADI_LEASE
+    /// adi-mono agents run …`, or simply a launch nothing ever gave one — never inherits a
+    /// capability it was never provisioned with, the same way it never inherited a server secret
+    /// before P3.1 existed.
     #[test]
     fn scrub_ambient_strips_adi_star_even_with_an_empty_strip_list() {
-        let ambient = vec![("ADI_LEASE".to_string(), "cap".to_string())];
+        let ambient = vec![
+            ("ADI_LEASE".to_string(), "cap".to_string()),
+            ("ADI_LEASE_URL".to_string(), "http://127.0.0.1:8000".to_string()),
+        ];
         assert!(scrub_ambient(ambient, &[]).is_empty());
     }
 

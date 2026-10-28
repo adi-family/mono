@@ -5,7 +5,46 @@
 //! layering item, P1.8, and phases 2–3 beyond it). A session with a lease reference and
 //! `[user_secrets] enabled = false` behaves exactly like one with none.
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
+
+/// The env var a child reads to forward a launch onto its parent's lease
+/// (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182 P3.1) — the one thing
+/// [`crate::backends::detached::scrub_ambient`] already strips unconditionally, with every other
+/// `ADI_*` run-identity variable, so an unleased child never inherits it by accident.
+pub const CAP_ENV: &str = "ADI_LEASE";
+/// Where to forward a launch carrying [`CAP_ENV`] — always `adi-app`'s own loopback address, never
+/// a mesh address: the capability is honoured only from loopback (§11, P3.2).
+pub const CAP_URL_ENV: &str = "ADI_LEASE_URL";
+
+/// A fresh, unguessable `ADI_LEASE` capability: 32 random bytes, base64url-encoded with no padding
+/// (`docs/byo-credentials.md` §11). Built from two v4 UUIDs rather than a dedicated RNG crate —
+/// this crate already mints one per harness turn ([`crate::backends::harness`]), and 32 bytes of
+/// UUID randomness is exactly 256 bits, the same size [`capability_hash`] produces.
+pub(crate) fn new_capability() -> String {
+    let mut bytes = [0u8; 32];
+    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// What `sessions.lease_cap` stores for a capability: its SHA-256, hex-encoded
+/// (`docs/byo-credentials.md` §11) — a presented `X-Adi-Lease` header is looked up by this hash
+/// ([`crate::store::SessionStore::find_by_lease_cap`]) rather than by a plaintext scan, and the
+/// one-way function means a dump of `sessions.db` alone cannot be replayed as a capability.
+pub(crate) fn capability_hash(capability: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(capability.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        // Writing into a `String` cannot fail.
+        write!(&mut hex, "{byte:02x}").expect("write a digest");
+    }
+    hex
+}
 
 /// Whose lease a session's turns look for, and which names they may use from it — resolved once
 /// at [`crate::store::SessionStore::create_as`] and never re-derived, the same reason
@@ -21,6 +60,21 @@ pub struct LeaseRef {
     /// `overridable`, and the live lease's shared names) but never widens it — a name absent here
     /// can never later apply to this session.
     pub names: Vec<String>,
+}
+
+/// What a presented `ADI_LEASE` capability resolves to: the session that minted it, and the user
+/// whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — everything
+/// `run_agent` needs to launch a child on the same lease without trusting anything a forwarded
+/// request's body says. See [`crate::Agents::lease_capability_session`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseCapability {
+    /// The agent whose session minted this capability — the caller a forwarded launch is weighed
+    /// against, in the same `agent:<name>` vocabulary [`crate::launcher::by_caller`] uses.
+    pub agent: String,
+    /// The session (run) that minted it.
+    pub run_id: String,
+    /// The minted user id whose lease the forwarded launch inherits.
+    pub user: String,
 }
 
 /// Where a session's lease asks for a user's **live** value (`docs/byo-credentials.md` §5, §9) —

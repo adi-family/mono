@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-157 structs · 42 enums · 5 type aliases across 61 files.
+158 structs · 42 enums · 5 type aliases across 61 files.
 
 ## Index
 
@@ -30,7 +30,7 @@
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunIdle`, `AgentRunWaitingOnUnlock`, `AgentSpawnRefused`, `AgentRunDeleted`, `AgentRunReported`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`, `AgentGoalMet`, `AgentGoalGivenUp`
 - [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
-- [`src/lease.rs`](#srcleasers) — `LeaseRef`, `Readiness`
+- [`src/lease.rs`](#srcleasers) — `LeaseRef`, `LeaseCapability`, `Readiness`
 - [`src/lib.rs`](#srclibrs) — `TurnGuard`, `Agents`, `Pending`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `SpawnPolicy`, `RunLoad`
 - [`src/llm/backend.rs`](#srcllmbackendrs) — `LimitClass`, `HoldScope`, `Resume`, `LimitRule`, `Probe`, `LlmBackendManifest`, `LlmBackend`, `LlmBackends`
@@ -1492,6 +1492,19 @@ pub struct LeaseRef {
 }
 ```
 
+### struct `LeaseCapability`
+
+What a presented `ADI_LEASE` capability resolves to: the session that minted it, and the user whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — everything `run_agent` needs to launch a child on the same lease without trusting anything a forwarded request's body says. See `crate::Agents::lease_capability_session`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseCapability {
+    pub agent: String,
+    pub run_id: String,
+    pub user: String,
+}
+```
+
 ### enum `Readiness`
 
 Whether a turn may start at all, for a session whose lease is `lease` (`docs/byo-credentials.md` §10, ADI-MONO-181 P2.7) — asked *before* a turn starts, never while building its environment. `Ready` covers every session with no lease, every lease whose narrowed names (the same four-way check `apply` makes, minus the agent's current `[env]`, which has no bearing on whether a *secret* slot is filled) already have a live value, and a missing value under `missing = "server"` — in that last case the turn starts exactly as `apply` already leaves it, on the server's own value, with nothing to gate.
@@ -1533,6 +1546,7 @@ An on-disk agent registry.
 pub struct Agents {
     config: Config,
     lease_values: Option<std::sync::Arc<dyn LeaseValues>>,
+    lease_url: Option<String>,
 }
 ```
 

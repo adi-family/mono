@@ -87,6 +87,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     idle_notified_turn INTEGER,
     lease         TEXT,
     lease_cap     TEXT,
+    lease_cap_secret TEXT,
     lease_wait_notified_turn INTEGER,
     PRIMARY KEY (agent, id)
 );
@@ -248,6 +249,16 @@ const MIGRATIONS: &[&str] = &[
     // phase 3 on). NULL whenever `lease` is NULL, and also NULL for a leased session until its
     // first turn mints one.
     "ALTER TABLE sessions ADD COLUMN lease_cap TEXT",
+    // The plaintext half of the capability `lease_cap` hashes (ADI-MONO-182 P3.1) — kept so the
+    // *same* `ADI_LEASE` can be handed to every later turn's child, which is what keeps
+    // `hash_child_environment`'s fingerprint (and so a Codex thread) stable across them. `lease_cap`
+    // alone cannot answer that: SHA-256 has no inverse, and a reverse lookup from an incoming
+    // `X-Adi-Lease` header to the session it names needs exactly that one-way column indexed and
+    // exact-matched, which is the only reason it exists separately from this one. Both are NULL
+    // together, and `Agents::stop_runs_for_lease_user`'s revoke clears both together too, so the
+    // next mint after a revoke is genuinely fresh rather than the same bytes recovered. See
+    // `SessionStore::lease_capability`.
+    "ALTER TABLE sessions ADD COLUMN lease_cap_secret TEXT",
     // How many turns were recorded the last time this session's lease was announced as parked
     // waiting on unlock (`adi.agents.run.waiting_on_unlock`, ADI-MONO-181 P2.8) — the same
     // turn-gated dedup `idle_notified_turn` uses for `adi.agents.run.idle`, kept as its own column

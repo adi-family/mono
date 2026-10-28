@@ -83,7 +83,7 @@ pub use events::{
     AgentRunReported, AgentRunStarted, AgentRunStopped, AgentRunWaitingOnUnlock, AgentSaved,
     AgentSpawnRefused, RUN_REPORTED, event_catalog, event_types,
 };
-pub use lease::{LeaseRef, LeaseValues};
+pub use lease::{CAP_ENV as LEASE_CAP_ENV, CAP_URL_ENV as LEASE_CAP_URL_ENV, LeaseCapability, LeaseRef, LeaseValues};
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad, SpawnPolicy};
 pub use llm::{
     AgentBackendEntry, Classification, Hold, HoldKey, HoldScope, Holds, LimitClass, LimitRule,
@@ -190,7 +190,18 @@ pub struct Agents {
     /// is all of them: the real source is `adi-app`'s own in-memory `Lease` table, and that table
     /// doesn't exist until phase 2 (P2.3). See [`LeaseValues`] for why a test installs one here
     /// instead of this crate depending on `adi-app`.
+    ///
+    /// Doubles, from phase 3 on, as *which process this is*: `adi-app`'s own `Agents` is the only
+    /// one anything ever calls [`Agents::with_lease_values`] on, so `Some` here also means "this is
+    /// the one process §11 says is allowed to start a leased turn" — see `apply_lease_capability`
+    /// and the P3.4 gate in `deliver_with`/`advance_queue`.
     lease_values: Option<std::sync::Arc<dyn LeaseValues>>,
+    /// Where a child forwards `adi-mono agents run` to reach this lease
+    /// (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182 P3.1) —
+    /// `http://127.0.0.1:<adi-app's own port>`, pushed into a leased run's environment as
+    /// [`lease::CAP_URL_ENV`] beside its capability. `None` everywhere `lease_values` is `None`,
+    /// for the same reason: there is nowhere on loopback for a forwarded request to land.
+    lease_url: Option<String>,
 }
 
 impl std::fmt::Debug for Agents {
@@ -198,6 +209,7 @@ impl std::fmt::Debug for Agents {
         f.debug_struct("Agents")
             .field("config", &self.config)
             .field("lease_values", &self.lease_values.is_some())
+            .field("lease_url", &self.lease_url)
             .finish()
     }
 }
@@ -407,6 +419,7 @@ impl Agents {
         Self {
             config: Config::open(),
             lease_values: None,
+            lease_url: None,
         }
     }
 
@@ -415,6 +428,7 @@ impl Agents {
         Self {
             config,
             lease_values: None,
+            lease_url: None,
         }
     }
 
@@ -434,6 +448,21 @@ impl Agents {
     #[must_use]
     pub fn lease_values(&self) -> Option<&dyn LeaseValues> {
         self.lease_values.as_deref()
+    }
+
+    /// Install the loopback address a leased run's children forward `adi-mono agents run` to
+    /// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.1) — `adi-app` calls this with its own
+    /// listener's address; nothing else has anywhere for a forwarded launch to land.
+    #[must_use]
+    pub fn with_lease_url(mut self, url: String) -> Self {
+        self.lease_url = Some(url);
+        self
+    }
+
+    /// The address installed by [`Self::with_lease_url`], or `None` everywhere nothing has.
+    #[must_use]
+    pub fn lease_url(&self) -> Option<&str> {
+        self.lease_url.as_deref()
     }
 
     #[must_use]
@@ -1505,6 +1534,7 @@ impl Agents {
         freeze_owner_instructions(&store, &agent.name, &record.id, owner_instructions);
         pin_owner_instructions(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
+        self.apply_lease_capability(&mut spec, &store, &agent.name, &record.id);
         let session = store.session(&agent.name, &record.id);
         // A fresh launch can wait too (`docs/byo-credentials.md` §10, §15 Q2): under
         // `missing = "wait"`, with no live value for a name this launch needs, the session is
@@ -1971,15 +2001,23 @@ impl Agents {
         // typed: writing the `fail` refusal straight into the transcript from here, ahead of
         // whatever this session already had queued, would answer a message typed second before
         // one typed first.
-        if !matches!(
-            lease::readiness(
-                record.lease.as_ref(),
-                &self.config,
-                &agent.manifest.secrets,
-                self.lease_values(),
-            ),
-            lease::Readiness::Ready
-        ) {
+        //
+        // Stronger than that check, and asked first: a leased session never starts outside
+        // `adi-app`'s own `Agents` at all, whatever `missing` would otherwise say
+        // (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.4) — `lease_values().is_none()` here
+        // does not mean "server values are fine", it means "this process is not the one allowed
+        // to decide that".
+        if (record.lease.is_some() && self.lease_values().is_none())
+            || !matches!(
+                lease::readiness(
+                    record.lease.as_ref(),
+                    &self.config,
+                    &agent.manifest.secrets,
+                    self.lease_values(),
+                ),
+                lease::Readiness::Ready
+            )
+        {
             let place = store.enqueue(name, conv_id, message, images, markers, mode)?;
             return Ok(Sent::Queued { place });
         }
@@ -2270,6 +2308,13 @@ impl Agents {
         if runner.is_alive(&store.session(&agent.name, conv_id)) {
             return false;
         }
+        // Stronger than the unlock check just below, and asked first: a leased session never
+        // starts outside `adi-app`'s own `Agents` (`docs/byo-credentials.md` §11, ADI-MONO-182
+        // P3.4) — see `deliver_with`'s own copy of this comment for why `lease_values().is_none()`
+        // is not read as "server values are fine" here.
+        if record.lease.is_some() && self.lease_values().is_none() {
+            return false;
+        }
         // The unlock check runs ahead of the dequeue below (`docs/byo-credentials.md` §10,
         // ADI-MONO-181 P2.7): a parked turn must not be one of the ones a failed launch already
         // drops from the queue, so a session waiting on unlock is read here, before anything is
@@ -2356,6 +2401,7 @@ impl Agents {
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         pin_owner_instructions(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
+        self.apply_lease_capability(&mut spec, store, &agent.name, &record.id);
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
@@ -2650,6 +2696,43 @@ impl Agents {
         attachments: &[SecretAttachment],
     ) -> Option<String> {
         lease::qualifier_for(name, lease, &self.config, attachments, self.lease_values())
+    }
+
+    /// Push this session's `ADI_LEASE`/`ADI_LEASE_URL` onto `spec`, after `name_conversation` and
+    /// with the same precedence (`docs/byo-credentials.md` §11's "The capability", ADI-MONO-182
+    /// P3.1). A no-op for a session with no lease — [`store::SessionStore::lease_capability`]
+    /// answers `None` — and for every `Agents` nothing has called [`Self::with_lease_url`] on,
+    /// which today is every process but `adi-app`: there is nowhere on loopback for a forwarded
+    /// launch to land, so pushing a capability nobody can redeem would be worse than pushing
+    /// nothing.
+    fn apply_lease_capability(
+        &self,
+        spec: &mut RunSpec,
+        store: &SessionStore,
+        agent: &str,
+        id: &str,
+    ) {
+        let Some(url) = self.lease_url() else { return };
+        let Ok(Some(capability)) = store.lease_capability(agent, id) else {
+            return;
+        };
+        spec.env.push((lease::CAP_ENV.to_string(), capability));
+        spec.env.push((lease::CAP_URL_ENV.to_string(), url.to_string()));
+    }
+
+    /// What a presented `X-Adi-Lease` capability resolves to: the session that minted it, and the
+    /// user whose lease it names (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2). `None` for an
+    /// unknown capability, or one a revoke has since voided — `store::SessionStore::find_by_lease_cap`
+    /// answers nothing for either, since both read the same way from outside: the caller must
+    /// answer `403`, never fall back to the server's own values, because a capability is either
+    /// right or a bug/forgery.
+    #[must_use]
+    pub fn lease_capability_session(&self, capability: &str) -> Option<LeaseCapability> {
+        let hash = lease::capability_hash(capability);
+        let store = self.sessions();
+        let (agent, id) = store.find_by_lease_cap(&hash)?;
+        let lease = store.get(&agent, &id)?.lease?;
+        Some(LeaseCapability { agent, run_id: id, user: lease.user })
     }
 
     /// `name`'s own attached-secret names, or nothing for an agent that no longer exists —
@@ -5993,7 +6076,12 @@ mod tests {
     /// actually missing.
     #[test]
     fn advance_queue_leaves_a_waiting_message_queued_and_announces_it_once() {
-        let store = scratch("advance-queue-wait");
+        // A source installed with nothing live for this user, not no source at all: this test is
+        // about `missing = "wait"`'s own gate, not ADI-MONO-182 P3.4's stronger "not `adi-app`"
+        // one — see that gate's own tests for a bare `scratch` (no source) never starting a leased
+        // turn at all, whatever `missing` says.
+        let store = scratch("advance-queue-wait")
+            .with_lease_values(std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>);
         let mut manifest = spec("harness:adi");
         manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
         store.save("watcher", manifest).expect("save");
@@ -6054,7 +6142,9 @@ mod tests {
     /// refusal, and a `lease_missing` outcome.
     #[test]
     fn advance_queue_under_fail_dequeues_and_writes_the_refusal() {
-        let store = scratch("advance-queue-fail");
+        // See the `wait` test just above for why this installs an empty source rather than none.
+        let store = scratch("advance-queue-fail")
+            .with_lease_values(std::sync::Arc::new(FakeLease::default()) as std::sync::Arc<dyn LeaseValues>);
         let mut manifest = spec("harness:adi");
         manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
         store.save("watcher", manifest).expect("save");
@@ -6130,6 +6220,251 @@ mod tests {
             }
             sessions.dequeue("watcher", &conv).expect("drain").expect("was there");
         }
+    }
+
+    /// ADI-MONO-182 P3.5: a reply runs on the *session's* `lease.user`, whoever sends it — there
+    /// is no parameter anywhere on [`Agents::reply`]/[`Agents::reply_as`] for a replier's own
+    /// identity to reach this computation at all (`markers` tags who spoke in the transcript,
+    /// nothing about whose credential the turn asks for). Proved by the only way a wrong read
+    /// would be observable: a live source holding a value for a *different* user ("B") but
+    /// nothing for the session's actual lease user ("A") still fails under `missing = "fail"` —
+    /// if the reply had consulted anyone but A, it would have found B's value live and started.
+    #[test]
+    fn a_reply_runs_on_the_sessions_lease_user_never_a_different_ones() {
+        let store = scratch("p3-5-reply-lease-user");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Fail,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        // "B" has a live value; the session's own lease user, "A" ("u-aaa"), does not.
+        let live: std::sync::Arc<dyn LeaseValues> =
+            std::sync::Arc::new(FakeLease::default().with("u-bbb", "K", "bbbs-value"));
+        let store = store.with_lease_values(live);
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("watcher", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create")
+            .id;
+        sessions
+            .set_lease("watcher", &conv, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .expect("set lease");
+
+        // "B" replies — a marker naming an entirely different person than the lease's own user —
+        // through the same `reply_as` `reply_run` calls, with `missing = "fail"` queued.
+        sessions
+            .enqueue("watcher", &conv, "hello from B", &[], &[Marker::From { node: "laptop-b".into(), user: "u-bbb".into() }], QueueMode::Regular)
+            .expect("enqueue");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let _ = store.runs(&agent);
+
+        let outcome = sessions.get("watcher", &conv).expect("get").outcome.expect("recorded");
+        assert!(outcome.is_error, "A's lease has no live value, so the turn must fail");
+        assert_eq!(outcome.terminal_reason.as_deref(), Some(LEASE_MISSING_FAILED));
+        let turns = sessions.turns("watcher", &conv);
+        assert!(
+            turns.last().expect("the refusal").text.contains("K isn't unlocked on this server"),
+            "B's live value for K was never consulted, even though one exists"
+        );
+    }
+
+    /// ADI-MONO-182 P3.6: a forged `$ADI_AGENT`/`$ADI_RUN_ID` claiming to be a leased parent's
+    /// child gets nothing from it. `launched_by` is exactly what a forged caller controls — the
+    /// same string `launcher::by_caller()` would hand a real child, reused here as `agent:<name>`
+    /// without any of the machinery that would actually make it true — and a plain, in-process
+    /// `launch` (what the CLI does whenever `$ADI_LEASE` is unset) never computes a `LeaseRef` at
+    /// all: only `run_agent`/`run_agent_leased`'s own HTTP paths do (`docs/byo-credentials.md`
+    /// §11: "`ADI_AGENT` and `ADI_RUN_ID` are plain environment variables. Any process can set
+    /// them... Caller identity for a leased launch therefore can't come from them.").
+    #[test]
+    #[cfg(unix)]
+    fn a_forged_launched_by_claiming_a_leased_parent_gets_no_lease() {
+        let store = scratch("p3-6-forged-launched-by");
+        let (bin, _argv_file) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        store.save("worker", m).expect("save");
+
+        let run_id = match store
+            .launch(
+                "worker",
+                "go",
+                &LaunchOptions {
+                    launched_by: Some("agent:some-leased-parent"),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("a plain, in-process launch")
+        {
+            Launch::Process { run_id, .. } => run_id,
+            Launch::Pty { .. } => unreachable!("a process backend is not a pane"),
+        };
+        let record = store.sessions().get("worker", &run_id).expect("the session");
+        assert_eq!(record.launched_by, "agent:some-leased-parent");
+        assert_eq!(
+            record.lease, None,
+            "a plain in-process launch never computes a lease, forged caller or not"
+        );
+    }
+
+    /// ADI-MONO-182 P3.6: expiry parks every session of a leased tree, together, under
+    /// `missing = "wait"` — a parent and a child alike, with no tree to walk because each is its
+    /// own session on the same `lease.user` by construction — and a later renew resumes all of
+    /// them on the very next `advance_queue` poll, the same `runs()` call an await wake, a goal
+    /// nudge or a failover re-ask would also land through (`docs/byo-credentials.md` §11: "A
+    /// child launched after the lease expired... meets `missing` like any other").
+    #[test]
+    fn expiry_parks_every_session_in_a_leased_tree_and_a_live_source_resumes_all_of_them() {
+        let store = scratch("p3-6-expiry-tree");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Wait,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        let empty: std::sync::Arc<dyn LeaseValues> = std::sync::Arc::new(FakeLease::default());
+        let store = store.with_lease_values(empty);
+        let sessions = store.sessions();
+        let lease = LeaseRef { user: "u-igor".into(), names: vec!["K".into()] };
+
+        let parent = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
+        sessions.set_lease("watcher", &parent, &lease).expect("set lease");
+        let child = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
+        sessions.set_lease("watcher", &child, &lease).expect("set lease");
+        for id in [&parent, &child] {
+            sessions
+                .enqueue("watcher", id, "do it", &[], &[], QueueMode::Regular)
+                .expect("enqueue");
+        }
+
+        let agent = store.get("watcher").expect("get").expect("present");
+        let _ = store.runs(&agent);
+        assert_eq!(sessions.queue_len("watcher", &parent), 1, "parked, not dequeued");
+        assert_eq!(sessions.queue_len("watcher", &child), 1, "parked too — the whole tree, together");
+
+        // The lease is live again — the same thing a renew gives it — and the very next poll
+        // drains both, no distinction between the parent and the child.
+        let live: std::sync::Arc<dyn LeaseValues> =
+            std::sync::Arc::new(FakeLease::default().with("u-igor", "K", "renewed-value"));
+        let store_renewed = Agents::with_config(store.config.clone()).with_lease_values(live);
+        let _ = store_renewed.runs(&agent);
+        assert_eq!(sessions.queue_len("watcher", &parent), 0, "resumed on its own");
+        assert_eq!(
+            sessions.queue_len("watcher", &child),
+            0,
+            "resumed too, no distinction from the parent"
+        );
+    }
+
+    /// ADI-MONO-182 P3.4: a leased session's turn never starts outside `adi-app`'s own `Agents`,
+    /// *even under* `missing = "server"` — the one case `lease::readiness` alone answers `Ready`
+    /// for any `Agents` (the phase 3 intro paragraph's own gap). An `Agents` nothing has called
+    /// `with_lease_values` on queues both a reply and a queued turn rather than starting either,
+    /// though the server's own value would otherwise have been a perfectly safe answer.
+    #[test]
+    fn a_leased_turn_never_starts_without_a_lease_source_even_under_missing_server() {
+        let store = scratch("p3-4-no-source");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "K".into() }];
+        store.save("watcher", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["K".to_string()],
+            missing: adi_secrets::Missing::Server,
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let sessions = store.sessions();
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+
+        // A fresh reply: `deliver_with` must queue it, not start it.
+        let conv = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create").id;
+        sessions.set_lease("watcher", &conv, &lease).expect("set lease");
+        match store.reply("watcher", &conv, "hello") {
+            Ok(Sent::Queued { .. }) => {}
+            other => panic!("expected Queued even under missing=server, got {other:?}"),
+        }
+        assert!(
+            sessions.turns("watcher", &conv).is_empty(),
+            "nothing was started, so nothing was asked"
+        );
+
+        // A message already queued: `advance_queue` must leave it queued too.
+        sessions
+            .enqueue("watcher", &conv, "hello", &[], &[], QueueMode::Regular)
+            .expect("enqueue");
+        let _ = store.runs(&agent);
+        assert_eq!(sessions.queue_len("watcher", &conv), 2, "neither message was dequeued");
+
+        // The same `Agents`, with a lease source installed (standing in for `adi-app`) and a live
+        // value: now it starts, same policy and same session.
+        let live: std::sync::Arc<dyn LeaseValues> =
+            std::sync::Arc::new(FakeLease::default().with("u-aaa", "K", "live-value"));
+        let store = Agents::with_config(store.config.clone()).with_lease_values(live);
+        let agent = store.get("watcher").expect("get").expect("present");
+        let _ = store.runs(&agent);
+        assert!(
+            sessions.queue_len("watcher", &conv) < 2,
+            "adi-app's own Agents may start it, where the ordinary `Agents` above could not even \
+             try — one poll dequeues at least the head of the line"
+        );
+    }
+
+    /// ADI-MONO-182 P3.1: `apply_lease_capability` pushes `ADI_LEASE`/`ADI_LEASE_URL` after
+    /// `ADI_RUN_ID`, with the same precedence `name_conversation` already gives it — and only once
+    /// both a lease and a `lease_url` are installed. Exercised directly rather than through a real
+    /// launch, the same reason the `lease` module's own tests call `apply`/`readiness` directly:
+    /// this is a private method, and the behaviour under test has nothing to do with which engine
+    /// a launch would actually run.
+    #[test]
+    fn apply_lease_capability_pushes_after_run_id_and_only_with_both_a_lease_and_a_url() {
+        let store = scratch("apply-lease-capability");
+        store.save("watcher", spec("harness:adi")).expect("save");
+        let agent = store.get("watcher").expect("get").expect("present");
+        let sessions = store.sessions();
+        let run = sessions.create("watcher", Backend::HarnessAdi, "/tmp", "go").expect("create");
+        let mut spec = store.spec_in(&agent, PathBuf::from("/tmp"), None);
+        spec.env.clear();
+        name_conversation(&mut spec, &run.id);
+
+        // No lease at all: untouched.
+        store.apply_lease_capability(&mut spec, &sessions, "watcher", &run.id);
+        assert_eq!(spec.env, vec![(workspace::CONV_ENV.to_string(), run.id.clone())]);
+
+        // A lease, but no `lease_url` installed on this `Agents`: still untouched — nowhere for a
+        // forwarded launch to land.
+        let lease = LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] };
+        sessions.set_lease("watcher", &run.id, &lease).expect("set lease");
+        store.apply_lease_capability(&mut spec, &sessions, "watcher", &run.id);
+        assert_eq!(spec.env, vec![(workspace::CONV_ENV.to_string(), run.id.clone())]);
+
+        // Both present: pushed after `ADI_RUN_ID`, and stable across a second call.
+        let store = store.with_lease_url("http://127.0.0.1:1234".to_string());
+        store.apply_lease_capability(&mut spec, &sessions, "watcher", &run.id);
+        assert_eq!(spec.env.len(), 3, "ADI_RUN_ID, ADI_LEASE, ADI_LEASE_URL");
+        assert_eq!(spec.env[0].0, workspace::CONV_ENV);
+        assert_eq!(spec.env[1].0, lease::CAP_ENV);
+        assert_eq!(spec.env[2], (lease::CAP_URL_ENV.to_string(), "http://127.0.0.1:1234".to_string()));
+        let capability = spec.env[1].1.clone();
+
+        let mut spec2 = store.spec_in(&agent, PathBuf::from("/tmp"), None);
+        spec2.env.clear();
+        name_conversation(&mut spec2, &run.id);
+        store.apply_lease_capability(&mut spec2, &sessions, "watcher", &run.id);
+        assert_eq!(spec2.env[1].1, capability, "the same capability on a second call");
     }
 
     /// `missing = "fail"`: a fresh launch is refused outright, before anything is written down —
@@ -6392,6 +6727,146 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    /// Phase 3's own extension of the end-to-end test just above (`docs/byo-credentials.md` §11,
+    /// ADI-MONO-182 P3.1/P3.2/P3.6): a **grandchild** of a leased run gets the user's value too,
+    /// resolved at each hop by the exact mechanism `run_agent_leased` uses —
+    /// [`Agents::lease_capability_session`] — from nothing but the parent's own minted capability,
+    /// never anything a forged `ADI_RUN_ID` or a forwarded request's body could claim. A revoke
+    /// then stops every real process in the tree at once, parent included, and the capability of
+    /// every session in it stops resolving.
+    ///
+    /// The HTTP forwarding `adi-mono agents run`/`run_agent_leased` actually do is `adi-cli`'s and
+    /// `adi-webapp-api`'s own, tested there; what is under test here is the `adi-agents` primitive
+    /// underneath both — the same split the test above draws between a real spawned child and the
+    /// backend that would really run it.
+    #[cfg(unix)]
+    #[test]
+    fn a_grandchild_of_a_leased_run_gets_the_users_value_and_a_revoke_stops_the_whole_tree() {
+        use std::path::Path;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let store = scratch("e2e-grandchild");
+        let mut manifest = spec("harness:adi");
+        manifest.secrets = vec![SecretAttachment { project: None, name: "NAME".into() }];
+        store.save("worker", manifest).expect("save");
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: vec!["NAME".to_string()],
+            ..adi_secrets::UserSecretsPolicy::default()
+        }
+        .save(&store.config)
+        .expect("save policy");
+
+        let live = Arc::new(FakeLease::default().with("u-igor", "NAME", "user-value"));
+        let store = store.with_lease_values(Arc::clone(&live) as Arc<dyn LeaseValues>);
+        let agent = store.get("worker").expect("get").expect("present");
+        let sessions = store.sessions();
+
+        // One generation: open a session on `lease`, mint its capability, and spawn a real,
+        // long-lived child that prints `$NAME` and sleeps — standing in for the agent run a
+        // forwarded launch would actually start. Returns the session id, the capability it
+        // minted (what a child of *this* session would forward as `$ADI_LEASE`), and the pid.
+        let spawn_generation = |label: &str, lease: &LeaseRef| -> (String, String, u32) {
+            let record = sessions.create("worker", Backend::HarnessAdi, "/tmp", "go").expect("create");
+            sessions.set_lease("worker", &record.id, lease).expect("set lease");
+            let cap = sessions
+                .lease_capability("worker", &record.id)
+                .expect("mint")
+                .expect("a leased session always gets one");
+            let mut spec = store.spec_in(&agent, PathBuf::from("/tmp"), Some(lease));
+            spec.env.push((lease::CAP_ENV.to_string(), cap.clone()));
+            let session = sessions.session("worker", &record.id);
+            let child = backends::detached::spawn_child(
+                &sessions.agent_dir("worker"),
+                &record.id,
+                session.log_path(),
+                Path::new("/tmp"),
+                "/usr/bin:/bin",
+                &[
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    format!("echo \"{label}=$NAME\"; sleep 30"),
+                ],
+                &spec.env,
+                &spec.inherited_strip,
+                |_| {},
+            )
+            .expect("spawn a real child");
+            session
+                .set_state(serde_json::json!({ "pid": child.pid, "started": child.started }))
+                .expect("record the child");
+            (record.id, cap, child.pid)
+        };
+
+        let top = LeaseRef { user: "u-igor".into(), names: vec!["NAME".into()] };
+        let (parent_id, parent_cap, parent_pid) = spawn_generation("parent", &top);
+
+        // The child's own lease is resolved from the *parent's* capability alone — exactly what
+        // `run_agent_leased` hands a forwarded launch, never anything the request's body claims.
+        let resolved = store
+            .lease_capability_session(&parent_cap)
+            .expect("the parent's capability resolves");
+        assert_eq!(resolved.agent, "worker");
+        assert_eq!(resolved.run_id, parent_id);
+        assert_eq!(resolved.user, "u-igor");
+        let child_lease = LeaseRef { user: resolved.user, names: vec!["NAME".into()] };
+        let (child_id, child_cap, child_pid) = spawn_generation("child", &child_lease);
+
+        // The grandchild resolves the same way, one hop further — from the *child's* capability.
+        let resolved2 = store
+            .lease_capability_session(&child_cap)
+            .expect("the child's capability resolves");
+        assert_eq!(resolved2.run_id, child_id);
+        let grandchild_lease = LeaseRef { user: resolved2.user, names: vec!["NAME".into()] };
+        let (grandchild_id, _grandchild_cap, grandchild_pid) =
+            spawn_generation("grandchild", &grandchild_lease);
+
+        for pid in [parent_pid, child_pid, grandchild_pid] {
+            let mut alive = false;
+            for _ in 0..100 {
+                if backends::detached::pid_alive(pid) {
+                    alive = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(alive, "pid {pid} should be up");
+        }
+        for (id, label) in [(&parent_id, "parent"), (&child_id, "child"), (&grandchild_id, "grandchild")] {
+            wait_for_exit(&sessions, "worker", id);
+            let log = std::fs::read_to_string(sessions.log_path("worker", id)).expect("read log");
+            assert!(log.contains(&format!("{label}=user-value")), "{label}: {log}");
+        }
+
+        // A revoke stops every running turn on the lease, the whole tree at once: parent, child and
+        // grandchild are each their own session with `lease.user = "u-igor"` by construction, so
+        // there is no tree to walk (`docs/byo-credentials.md` §10.1 step 3).
+        let mut stopped = store.stop_runs_for_lease_user("u-igor");
+        stopped.sort();
+        let mut expected = vec![parent_id.clone(), child_id.clone(), grandchild_id.clone()];
+        expected.sort();
+        assert_eq!(stopped, expected);
+
+        for pid in [parent_pid, child_pid, grandchild_pid] {
+            let mut dead = false;
+            for _ in 0..100 {
+                if !backends::detached::pid_alive(pid) {
+                    dead = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert!(dead, "pid {pid} should have been killed by the revoke");
+        }
+
+        // No new child can start on it: every capability in the tree is void, so a forwarded
+        // launch from a process that hasn't died yet is refused (§11, "When the lease is revoked
+        // under a child").
+        assert!(store.lease_capability_session(&parent_cap).is_none());
+        assert!(store.lease_capability_session(&child_cap).is_none());
     }
 
     /// The record's backend has to move with the row, or the switch starts the old engine on the
