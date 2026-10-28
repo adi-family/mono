@@ -5152,6 +5152,16 @@ pub struct MySecretDto {
     #[serde(default)]
     pub description: Option<String>,
     pub updated_at: u64,
+    /// Still sealed under this device's own DEK — never a plaintext. Present so a device's
+    /// unlock path (`docs/byo-credentials.md` §9 step 2) can read its own wraps straight off
+    /// this same `GET /api/secrets/mine` without a second route; the "My keys" panel page (§7,
+    /// P4.2) simply has nothing to do with these fields.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub nonce: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ciphertext: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wraps: Vec<WrapDto>,
 }
 
 /// `GET /api/secrets/mine` response: this caller's own names, and the `missing` that would apply
@@ -5164,10 +5174,10 @@ pub struct MySecretsState {
     pub missing: String,
 }
 
-/// `POST /api/secrets/mine/set` — refused in phase 1 (`docs/byo-credentials.md` §7, §15 settled
-/// as 501). Shaped ahead of phase 2's device wraps (§8) so the client's request doesn't have to
-/// change when `set` stops refusing: `ciphertext`/`nonce`/`wraps` travel today but are read by
-/// nothing.
+/// `POST /api/secrets/mine/set` — a value already sealed on the caller's own device
+/// (`docs/byo-credentials.md` §7, §8, ADI-MONO-180 P2.1): `ciphertext`/`nonce` are the value
+/// sealed under a fresh DEK, and `wraps` is that DEK sealed to the device(s) that may unwrap it
+/// (exactly one in v1). The server stores exactly this; it never decrypts any of it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SetMySecret {
     pub name: String,
@@ -5178,7 +5188,18 @@ pub struct SetMySecret {
     #[serde(default)]
     pub nonce: String,
     #[serde(default)]
-    pub wraps: Vec<serde_json::Value>,
+    pub wraps: Vec<WrapDto>,
+}
+
+/// One device's wrapped copy of a user secret's DEK, on the wire — the JSON mirror of
+/// `adi_secrets::Wrap` (§8). A separate type, not a re-export, for the same reason every other
+/// DTO in this module is its own type: the wire shape is this crate's to keep stable even if the
+/// store's internal one changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WrapDto {
+    pub kind: String,
+    pub nonce: String,
+    pub wrapped: String,
 }
 
 /// `POST /api/secrets/mine/remove` — names one of the caller's own secrets. No `project`: see

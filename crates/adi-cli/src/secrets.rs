@@ -1,11 +1,13 @@
 //! The `secrets` command group: set / get / list / remove encrypted secrets in the global or
 //! a per-project scope. Values are stored encrypted; only `get --reveal` ever prints one.
 //!
-//! `policy`, and `--user --node` on `rm`/`set`, are the BYO-credentials verbs
-//! (`docs/byo-credentials.md` §4.4, ADI-MONO-178 P1.12): a user's own scope on a paired server,
-//! reached through this machine's local mesh gateway the way `docs/fleet.md` §10's dashboard
-//! transfer addresses one — `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi`. There is no
-//! `--reveal` or `read` for `--user`: a user scope is write-only everywhere (§7).
+//! `policy`, `leases`, and `--user --node` on `rm`/`set`, are the BYO-credentials verbs
+//! (`docs/byo-credentials.md` §4.4, ADI-MONO-178 P1.12 / ADI-MONO-180 P2.5): a user's own scope
+//! on a paired server, reached through this machine's local mesh gateway the way `docs/fleet.md`
+//! §10's dashboard transfer addresses one — `127.0.0.1:<gateway port>` with
+//! `Host: app.<node>.n.adi`. `set --user` seals the value on this device before it ever leaves
+//! (§8, P2.1/P2.2) — the server stores exactly what it is handed and never decrypts it. There is
+//! no `--reveal` or `read` for `--user`: a user scope is write-only everywhere (§7).
 
 use adi_core::{Adi, Missing, Secret, Secrets, UserSecretsPolicy};
 use clap::Subcommand;
@@ -15,7 +17,7 @@ use crate::format::{print_json, resolve_scope, scope_label};
 /// How long a `--node` request waits before giving up — generous for a loopback hop plus a QUIC
 /// round trip to the peer, short enough that an unreachable or unpaired node fails as that rather
 /// than hanging the shell.
-const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+pub(crate) const NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SecretsCommand {
@@ -45,9 +47,8 @@ pub(crate) enum SecretsCommand {
         global: bool,
         #[arg(long)]
         project: Option<String>,
-        /// Set this value in *your own* scope on `--node`, not this machine's. Refused until
-        /// phase 2 (`docs/byo-credentials.md` §7, §8): a user value can only be stored wrapped to
-        /// the device, and the wraps don't exist in this build.
+        /// Set this value in *your own* scope on `--node`, not this machine's — sealed on this
+        /// device before it leaves (`docs/byo-credentials.md` §7, §8).
         #[arg(long)]
         user: bool,
         /// The paired server to reach, over this machine's local mesh gateway. Required with
@@ -123,6 +124,15 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Live leases (`docs/byo-credentials.md` §7, §9, ADI-MONO-180 P2.5): on a paired server
+    /// (`--node`), the caller's own; this device's own admin listing of every live lease on its
+    /// own server isn't wired up yet (`--node` is required here for now).
+    Leases {
+        #[arg(long)]
+        node: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Dispatch a `secrets` subcommand over the adi-core facade, surfacing any store error as a
@@ -159,14 +169,15 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
         } => {
             if user {
                 let node = require_node(node.as_deref())?;
-                // §7: "set --user refuses until phase 2 … and sends nothing" — no request is
-                // made at all, exactly as the server's own route would answer if asked.
-                let message =
-                    "user values need device wraps, which this build doesn't have".to_string();
+                let value = match value {
+                    Some(v) => v,
+                    None => read_stdin_value()?,
+                };
+                let answer = set_user_secret(&node, &name, &value, description.as_deref())?;
                 if json {
-                    print_json(&serde_json::json!({ "ok": false, "error": message }));
+                    print_json(&answer);
                 } else {
-                    println!("{node}: {message}");
+                    println!("{node}: set {name} in your own scope there.");
                 }
                 return Ok(());
             }
@@ -286,13 +297,53 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
             max_lease,
             json,
         )?,
+        SecretsCommand::Leases { node, json } => run_leases(node, json)?,
+    }
+    Ok(())
+}
+
+/// `secrets leases --node <server>` — the caller's own live leases there (§7). The local,
+/// no-`--node` admin listing of every lease on this machine's own server has no established way
+/// for this CLI to reach a *running* `adi-app` process yet (leases live only in its memory, never
+/// on disk) — refused for now rather than guessed at.
+fn run_leases(node: Option<String>, json: bool) -> Result<(), String> {
+    let Some(node) = node else {
+        return Err(
+            "the local admin listing isn't available from this CLI yet — pass --node <server> \
+             for your own leases there"
+                .to_string(),
+        );
+    };
+    let answer = node_request(&node, "GET", "/api/leases", None)?;
+    if json {
+        print_json(&answer);
+    } else {
+        let leases = answer["leases"].as_array().cloned().unwrap_or_default();
+        if leases.is_empty() {
+            println!("{node}: no live leases.");
+        }
+        for lease in leases {
+            println!(
+                "{node}: {} ({}) — {} — lease {} — last seen {}s ago",
+                lease["user"].as_str().unwrap_or("?"),
+                lease["petname"].as_str().unwrap_or("?"),
+                lease["names"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default(),
+                lease["lease"].as_str().unwrap_or("?"),
+                lease["last_seen_secs_ago"].as_u64().unwrap_or(0),
+            );
+        }
     }
     Ok(())
 }
 
 /// `--node` needs `--user` to make sense of, and the reverse too: there is no user scope on
-/// your own machine to reach with it (`docs/byo-credentials.md` §4.4).
-fn require_node(node: Option<&str>) -> Result<String, String> {
+/// your own machine to reach with it (`docs/byo-credentials.md` §4.4). Reused by `mesh
+/// share`/`unlock`/`lock` (ADI-MONO-180 P2.5), which need exactly the same node for exactly the
+/// same reason, even though none of them takes a `--user` flag of their own.
+pub(crate) fn require_node(node: Option<&str>) -> Result<String, String> {
     node.map(str::to_string)
         .ok_or_else(|| "--user needs --node: there is no user scope on your own machine".to_string())
 }
@@ -409,18 +460,16 @@ fn print_policy_answer(node: &str, answer: &serde_json::Value, json: bool) {
 /// (`adi_mesh::auth::Credential::user`, "stored in the clear"). The password is never kept
 /// anywhere after pairing (`docs/fleet.md` §3.1: "neither side stores it; both store its
 /// verifier"), so [`read_password`] asks for it fresh every time.
-fn node_username(node: &str) -> Result<String, String> {
-    let registry = adi_mesh::fleet::FleetRegistry::load().map_err(|e| e.to_string())?;
-    let record = registry.get(node).ok_or_else(|| {
-        format!("not paired with {node} — see `adi-mono mesh list`")
-    })?;
-    Ok(record.auth.user.clone())
+pub(crate) fn node_username(node: &str) -> Result<String, String> {
+    adi_mesh::node_api::node_username(node)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("not paired with {node} — see `adi-mono mesh list`"))
 }
 
 /// Prompt for `node`'s password on stderr, so a piped stdout stays clean of it. Plain text, not
 /// hidden — the same trade `secrets set`'s stdin convenience already makes, and there is no
 /// terminal-echo crate in this binary's dependency tree to hide it with.
-fn read_password(node: &str) -> Result<String, String> {
+pub(crate) fn read_password(node: &str) -> Result<String, String> {
     use std::io::Write as _;
     eprint!("Password for {node}: ");
     std::io::stderr().flush().ok();
@@ -435,23 +484,10 @@ fn read_password(node: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn gateway_client() -> Result<reqwest::blocking::Client, String> {
-    // `adi-channels`' own `node_api` client does the same before its first request — reqwest's
-    // `rustls-no-provider` feature needs one installed before any TLS-capable client is built,
-    // even though every request this function makes is plain `http://` to loopback.
-    rustls::crypto::ring::default_provider().install_default().ok();
-    reqwest::blocking::Client::builder()
-        .no_proxy()
-        .timeout(NODE_TIMEOUT)
-        .build()
-        .map_err(|e| e.to_string())
-}
-
 /// One request to `node`'s own `app` service, through this machine's local mesh gateway —
-/// `docs/fleet.md` §10's addressing, byte for byte: `127.0.0.1:<gateway port>` with
-/// `Host: app.<node>.n.adi`, exactly what the front door would forward for the same path typed
-/// into a browser there.
-fn node_request(
+/// `docs/fleet.md` §10's addressing (`adi_mesh::node_api`, lifted out of this module when the
+/// BYO-credentials `mesh` verbs needed the same capability, ADI-MONO-180 P2.5).
+pub(crate) fn node_request(
     node: &str,
     method: &str,
     path: &str,
@@ -459,32 +495,40 @@ fn node_request(
 ) -> Result<serde_json::Value, String> {
     let username = node_username(node)?;
     let password = read_password(node)?;
-    let client = gateway_client()?;
-    let url = format!("http://{}{path}", adi_config::mesh_gateway_addr());
-    let mut request = match method {
-        "GET" => client.get(&url),
-        "POST" => client.post(&url),
-        other => return Err(format!("unsupported method {other}")),
-    };
-    request = request
-        .header(reqwest::header::HOST, format!("app.{node}.n.adi"))
-        .basic_auth(username, Some(password));
-    if let Some(body) = body {
-        request = request.json(body);
-    }
-    let response = request
-        .send()
-        .map_err(|e| format!("reaching {node} through the local mesh gateway: {e}"))?;
-    let status = response.status();
-    let text = response.text().map_err(|e| e.to_string())?;
-    if !status.is_success() {
-        let message = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v["error"].as_str().map(str::to_string))
-            .unwrap_or_else(|| format!("{status} {text}"));
-        return Err(format!("{node}: {message}"));
-    }
-    serde_json::from_str(&text).map_err(|e| format!("{node}'s answer wasn't JSON: {e}"))
+    let client = adi_mesh::node_api::gateway_client(NODE_TIMEOUT).map_err(|e| e.to_string())?;
+    adi_mesh::node_api::node_request(&client, node, &username, &password, method, path, body)
+        .map_err(|e| e.to_string())
+}
+
+/// Seal `value` on this device and upload it to `node`'s own scope (`docs/byo-credentials.md`
+/// §8, ADI-MONO-180 P2.1/P2.2): a fresh DEK seals the value, this device's own key-wrapping key
+/// (`adi_mesh::devicekey`) wraps the DEK, and only the sealed result crosses the wire. `name` is
+/// the AAD label — stable for as long as this device calls `node` by this petname, and never
+/// checked by the server, which never opens either seal (§8's whole point).
+fn set_user_secret(
+    node: &str,
+    name: &str,
+    value: &str,
+    description: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let wrap_key = adi_mesh::devicekey::load_or_create().map_err(|e| e.to_string())?;
+    let dek = adi_secrets::wrap::generate_dek();
+    let (nonce, ciphertext) =
+        adi_secrets::wrap::seal_value(&dek, node, name, value.as_bytes()).map_err(|e| e.to_string())?;
+    let (wrap_nonce, wrapped) =
+        adi_secrets::wrap::wrap_dek(&wrap_key, node, name, &dek).map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "name": name,
+        "description": description,
+        "nonce": nonce,
+        "ciphertext": ciphertext,
+        "wraps": [{
+            "kind": adi_mesh::devicekey::KIND,
+            "nonce": wrap_nonce,
+            "wrapped": wrapped,
+        }],
+    });
+    node_request(node, "POST", "/api/secrets/mine/set", Some(&body))
 }
 
 /// Read a secret value from stdin, dropping a single trailing newline so a piped
@@ -615,6 +659,29 @@ mod tests {
             }
             other => panic!("not a Policy: {other:?}"),
         }
+    }
+
+    #[test]
+    fn leases_takes_an_optional_node() {
+        match parse(&["leases"]) {
+            SecretsCommand::Leases { node, json } => {
+                assert!(node.is_none() && !json);
+            }
+            other => panic!("not a Leases: {other:?}"),
+        }
+        match parse(&["leases", "--node", "box-b", "--json"]) {
+            SecretsCommand::Leases { node, json } => {
+                assert_eq!(node, Some("box-b".to_string()));
+                assert!(json);
+            }
+            other => panic!("not a Leases: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn run_leases_without_node_refuses_before_any_network_call() {
+        let err = run_leases(None, false).expect_err("refused");
+        assert!(err.contains("--node"), "{err}");
     }
 
     #[test]

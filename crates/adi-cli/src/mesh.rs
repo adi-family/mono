@@ -28,6 +28,7 @@ use adi_mesh::node::{self, NodeConfig};
 use clap::Subcommand;
 
 use crate::format::print_json;
+use crate::secrets;
 
 /// Make the front door's TLS node list agree with the registry.
 ///
@@ -204,6 +205,42 @@ pub(crate) enum MeshCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Edit this device's own BYO-credentials settings for one server connection
+    /// (`docs/byo-credentials.md` §4.3, §4.4, ADI-MONO-180 P2.5) — writes `connections.toml` only;
+    /// nothing is sent until the next `mesh unlock`.
+    Share {
+        /// The paired server this applies to.
+        server: String,
+        /// Which of this device's own values this server may lease, replacing the list. Omit to
+        /// leave it as it was.
+        #[arg(value_delimiter = ',')]
+        names: Vec<String>,
+        /// `0` (only while connected), `"<n>h"`, or `"forever"`. Omit to leave it as it was.
+        #[arg(long)]
+        lease: Option<String>,
+        #[arg(long)]
+        auto_unlock: bool,
+        #[arg(long, conflicts_with = "auto_unlock")]
+        no_auto_unlock: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Unlock this device's shared values on `server` now (`docs/byo-credentials.md` §9):
+    /// unwraps each shared value with this device's own key, reseals it to the server's session,
+    /// and uploads it.
+    Unlock {
+        server: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke this device's lease on `server` now (`docs/byo-credentials.md` §10.1): drops the
+    /// lease there and voids its capability. Leaves `connections.toml` alone, so the next connect
+    /// re-unlocks under `auto_unlock`.
+    Lock {
+        server: String,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Dispatch a `mesh` subcommand over the mesh store.
@@ -247,6 +284,16 @@ pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
             username,
         } => set_passwd(&petname, password.as_deref(), username.as_deref()),
         MeshCommand::Name { nickname, json } => name(nickname.as_deref(), json),
+        MeshCommand::Share {
+            server,
+            names,
+            lease,
+            auto_unlock,
+            no_auto_unlock,
+            json,
+        } => share(&server, names, lease, auto_unlock, no_auto_unlock, json),
+        MeshCommand::Unlock { server, json } => unlock(&server, json),
+        MeshCommand::Lock { server, json } => lock(&server, json),
     }
 }
 
@@ -566,6 +613,10 @@ fn rename(from: &str, to: &str) -> Result<(), String> {
     if renamed.is_ok() {
         record_front_door(from, false);
         record_front_door(to, true);
+        // `connections.toml` (`docs/byo-credentials.md` §4.3) is keyed by the same petname but
+        // lives in its own file, so the registry's own rename never moves it — the one coupling
+        // between the two files, run here rather than inside `FleetRegistry::rename` itself.
+        move_connection(from, to);
     }
     renamed
 }
@@ -581,8 +632,30 @@ fn unpair(petname: &str) -> Result<(), String> {
     // Only after the registry saved: this is bookkeeping about a pairing that already changed.
     if unpaired.is_ok() {
         record_front_door(petname, false);
+        drop_connection(petname);
     }
     unpaired
+}
+
+/// Move this device's own `connections.toml` entry (if it has one) when a petname is renamed
+/// locally — best-effort: a failure here is a second problem worth logging, never a reason to
+/// undo the rename that already succeeded.
+fn move_connection(from: &str, to: &str) {
+    let Ok(mut connections) = adi_mesh::connections::Connections::load() else {
+        return;
+    };
+    connections.rename(from, to);
+    let _ = connections.save();
+}
+
+/// Delete this device's own `connections.toml` entry (if it has one) when a petname is unpaired.
+fn drop_connection(petname: &str) {
+    let Ok(mut connections) = adi_mesh::connections::Connections::load() else {
+        return;
+    };
+    if connections.remove(petname) {
+        let _ = connections.save();
+    }
 }
 
 fn add_grant(petname: &str, raw: &str) -> Result<(), String> {
@@ -694,6 +767,200 @@ fn name(nickname: Option<&str>, json: bool) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+// -- BYO-credentials: share / unlock / lock (docs/byo-credentials.md §4.4, ADI-MONO-180 P2.5) --
+
+/// `mesh share` — edits this device's own `connections.toml` only (§4.3). Omitted flags leave
+/// the stored setting as it was, the same convention `secrets policy`'s local edit uses.
+#[allow(clippy::too_many_arguments)]
+fn share(
+    server: &str,
+    names: Vec<String>,
+    lease: Option<String>,
+    auto_unlock: bool,
+    no_auto_unlock: bool,
+    json: bool,
+) -> Result<(), String> {
+    let lease_length = match &lease {
+        Some(raw) => Some(raw.parse::<adi_mesh::connections::LeaseLength>().map_err(|e| e.to_string())?),
+        None => None,
+    };
+    let mut connections = adi_mesh::connections::Connections::load().map_err(|e| e.to_string())?;
+    connections.edit_secrets(server, |s| {
+        if !names.is_empty() {
+            s.share.clone_from(&names);
+        }
+        if let Some(length) = lease_length {
+            s.lease = length;
+        }
+        if auto_unlock {
+            s.auto_unlock = true;
+        }
+        if no_auto_unlock {
+            s.auto_unlock = false;
+        }
+    });
+    connections.save().map_err(|e| e.to_string())?;
+
+    let settings = connections.get(server).expect("just edited").secrets.clone();
+    if json {
+        print_json(&serde_json::json!({
+            "server": server,
+            "share": settings.share,
+            "lease": settings.lease.to_string(),
+            "auto_unlock": settings.auto_unlock,
+        }));
+    } else {
+        println!(
+            "{server}: share=[{}] lease={} auto_unlock={}",
+            settings.share.join(","),
+            settings.lease,
+            settings.auto_unlock
+        );
+        println!("Nothing is sent until the next `adi-mono mesh unlock {server}`.");
+    }
+    Ok(())
+}
+
+/// One password prompt, reused for every call `unlock`/`lock` makes to `server` — the session
+/// concept ADI-MONO-178's memory asked P2.5 for, short of a real server-issued token: a user
+/// still authenticates with their credential, but only once per CLI invocation rather than once
+/// per HTTP call.
+fn open_session(server: &str) -> Result<(adi_mesh::node_api::GatewayClient, String, String), String> {
+    let username = secrets::node_username(server)?;
+    let password = secrets::read_password(server)?;
+    let client = adi_mesh::node_api::gateway_client(secrets::NODE_TIMEOUT).map_err(|e| e.to_string())?;
+    Ok((client, username, password))
+}
+
+fn in_session(
+    session: &(adi_mesh::node_api::GatewayClient, String, String),
+    server: &str,
+    method: &str,
+    path: &str,
+    body: Option<&serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let (client, username, password) = session;
+    adi_mesh::node_api::node_request(client, server, username, password, method, path, body)
+        .map_err(|e| e.to_string())
+}
+
+/// `mesh unlock` (§9): unwrap every shared value this device has stored on `server`, reseal each
+/// to `server`'s current session key, and upload the result.
+fn unlock(server: &str, json: bool) -> Result<(), String> {
+    let connections = adi_mesh::connections::Connections::load().map_err(|e| e.to_string())?;
+    let shared = connections
+        .get(server)
+        .map(|c| c.secrets.share.clone())
+        .unwrap_or_default();
+    if shared.is_empty() {
+        return Err(format!(
+            "{server}: nothing is shared yet — see `adi-mono mesh share {server} <NAME>`"
+        ));
+    }
+
+    let session = open_session(server)?;
+    let info = in_session(&session, server, "GET", "/api/leases/session", None)?;
+    let user = info["user"].as_str().ok_or_else(|| format!("{server}: no user scope to unlock"))?;
+    let epoch = info["epoch"].as_str().ok_or_else(|| format!("{server}: malformed session answer"))?;
+    let session_public = decode_b64_32(info["public_key"].as_str().unwrap_or_default())
+        .map_err(|()| format!("{server}: malformed session public key"))?;
+
+    let mine = in_session(&session, server, "GET", "/api/secrets/mine", None)?;
+    let wrap_key = adi_mesh::devicekey::load_or_create().map_err(|e| e.to_string())?;
+    let device = adi_mesh::identity::endpoint_id()
+        .map_err(|e| e.to_string())?
+        .to_string();
+
+    let mut sealed = Vec::new();
+    for entry in mine["names"].as_array().cloned().unwrap_or_default() {
+        let Some(name) = entry["name"].as_str() else { continue };
+        if !shared.iter().any(|n| n == name) {
+            continue;
+        }
+        let Some(wrap) = entry["wraps"].as_array().and_then(|w| w.first()) else {
+            continue; // nothing wrapped under this name yet (e.g. `secrets rm --user` ran since).
+        };
+        let Ok(dek) = adi_secrets::wrap::unwrap_dek(
+            &wrap_key,
+            server,
+            name,
+            wrap["nonce"].as_str().unwrap_or_default(),
+            wrap["wrapped"].as_str().unwrap_or_default(),
+        ) else {
+            continue; // wrapped by a different device, or corrupt — skip rather than abort.
+        };
+        let Ok(plaintext) = adi_secrets::wrap::open_value(
+            &dek,
+            server,
+            name,
+            entry["nonce"].as_str().unwrap_or_default(),
+            entry["ciphertext"].as_str().unwrap_or_default(),
+        ) else {
+            continue;
+        };
+        let aad = format!("user:{user}/{name}|{epoch}|{device}");
+        let Ok(seal) = adi_mesh::lease_seal::seal(&session_public, &aad, &plaintext) else {
+            continue;
+        };
+        sealed.push(serde_json::json!({
+            "name": name,
+            "device_public": encode_b64(&seal.device_public),
+            "nonce": seal.nonce,
+            "ciphertext": seal.ciphertext,
+        }));
+    }
+    if sealed.is_empty() {
+        return Err(format!(
+            "{server}: none of the shared names have a value stored there yet — \
+             see `adi-mono secrets set <NAME> --user --node {server}`"
+        ));
+    }
+
+    let lease = connections.get(server).map_or_else(
+        || adi_mesh::connections::LeaseLength::Connected.to_string(),
+        |c| c.secrets.lease.to_string(),
+    );
+    let body = serde_json::json!({ "epoch": epoch, "lease": lease, "sealed": sealed });
+    let answer = in_session(&session, server, "POST", "/api/leases/unlock", Some(&body))?;
+    if json {
+        print_json(&answer);
+    } else {
+        let names = answer["names"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        println!("{server}: unlocked [{names}], lease {}", answer["lease"].as_str().unwrap_or("?"));
+    }
+    Ok(())
+}
+
+/// `mesh lock` (§10.1 step 1 only — stopping the sessions it provisioned is ADI-MONO-181's).
+fn lock(server: &str, json: bool) -> Result<(), String> {
+    let answer = secrets::node_request(server, "POST", "/api/leases/revoke", None)?;
+    if json {
+        print_json(&answer);
+    } else if answer["revoked"].as_bool().unwrap_or(false) {
+        println!("{server}: lease revoked.");
+    } else {
+        println!("{server}: no live lease to revoke.");
+    }
+    Ok(())
+}
+
+fn decode_b64_32(text: &str) -> Result<[u8; 32], ()> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .ok()
+        .and_then(|b| b.try_into().ok())
+        .ok_or(())
+}
+
+fn encode_b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 // -- helpers ---------------------------------------------------------------------------------
@@ -996,6 +1263,69 @@ mod tests {
         }
         rejects(&["acceptname", "laptop-b"]);
         rejects(&["accept_name", "laptop-b"]);
+    }
+
+    // -- BYO-credentials (ADI-MONO-180 P2.5) ----------------------------------------------
+
+    #[test]
+    fn share_takes_the_server_names_and_lease_flags() {
+        match parse(&[
+            "share",
+            "box-b",
+            "CLAUDE_CODE_OAUTH_TOKEN,ANTHROPIC_API_KEY",
+            "--lease",
+            "24h",
+            "--auto-unlock",
+        ]) {
+            MeshCommand::Share {
+                server,
+                names,
+                lease,
+                auto_unlock,
+                no_auto_unlock,
+                json,
+            } => {
+                assert_eq!(server, "box-b");
+                assert_eq!(
+                    names,
+                    vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string(), "ANTHROPIC_API_KEY".to_string()]
+                );
+                assert_eq!(lease, Some("24h".to_string()));
+                assert!(auto_unlock && !no_auto_unlock && !json);
+            }
+            other => panic!("expected share, got {other:?}"),
+        }
+
+        // No names, no lease: every flag is optional, leaving the stored setting alone.
+        match parse(&["share", "box-b"]) {
+            MeshCommand::Share { names, lease, .. } => {
+                assert!(names.is_empty());
+                assert!(lease.is_none());
+            }
+            other => panic!("expected share, got {other:?}"),
+        }
+
+        rejects(&["share", "box-b", "K", "--auto-unlock", "--no-auto-unlock"]);
+    }
+
+    #[test]
+    fn unlock_and_lock_take_the_server_positionally() {
+        match parse(&["unlock", "box-b"]) {
+            MeshCommand::Unlock { server, json } => {
+                assert_eq!(server, "box-b");
+                assert!(!json);
+            }
+            other => panic!("expected unlock, got {other:?}"),
+        }
+        match parse(&["lock", "box-b", "--json"]) {
+            MeshCommand::Lock { server, json } => {
+                assert_eq!(server, "box-b");
+                assert!(json);
+            }
+            other => panic!("expected lock, got {other:?}"),
+        }
+        rejects(&["unlock"]);
+        rejects(&["lock"]);
     }
 
     /// The password must be a flag, never positional: `mesh passwd laptop-b hunter2` has to be a

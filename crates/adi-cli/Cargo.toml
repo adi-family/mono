@@ -25,6 +25,14 @@ adi-core = { workspace = true }
 # CLI, which would only move the same code behind a name nobody has on the node.
 adi-mesh = { workspace = true }
 
+# `secrets set --user --node` and `mesh unlock` do the device-side sealing themselves
+# (`docs/byo-credentials.md` §8/§9, ADI-MONO-180 P2.1/P2.5) — `adi_secrets::wrap`'s pure crypto
+# helpers, reached directly rather than through `adi-core`'s store facade, since there is no
+# store operation here at all until the sealed result is already in hand.
+adi-secrets = { workspace = true }
+# `mesh unlock`'s sealed `device_public`/session public key are base64 on the wire.
+base64 = { workspace = true }
+
 # The `indexer` command group. This is what pulls tree-sitter and the candle embedding stack into
 # `adi-mono` — a deliberate trade, the same one `mesh` makes: the index is what an agent reaches
 # for to find code, and an agent has this binary and nothing else. To shed the weight, build
@@ -70,14 +78,6 @@ clap = { workspace = true }
 qrcode = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-# `secrets … --user --node` reaches a paired server's own `/api/secrets/mine/*` through this
-# machine's local mesh gateway (`docs/byo-credentials.md` §4.4, ADI-MONO-178 P1.12) — plain HTTP
-# to loopback, never TLS, but `adi-marketplace` above already pulled blocking reqwest + rustls
-# into this binary, so this is the dependency, not a second copy of it.
-reqwest = { workspace = true, features = ["blocking"] }
-# `reqwest`'s `rustls-no-provider` feature needs a crypto provider installed before any client
-# is built — see `adi-channels::node_api`'s own `ensure_provider`, mirrored here.
-rustls = { workspace = true }
 # `workflows run` mints a fresh request id when the caller doesn't give one — the idempotency key
 # `Engine::start_manual` claims the run under (ADI-MONO-141 §E).
 uuid = { workspace = true }

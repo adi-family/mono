@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! GET  /api/secrets/mine            → { names, missing }         — never a value
-//! POST /api/secrets/mine/set        → 501 until phase 2 (§8)
+//! POST /api/secrets/mine/set        → store a value already sealed on the caller's device (§8)
 //! POST /api/secrets/mine/remove     → delete one of the caller's own
 //! POST /api/secrets/mine/settings   → the caller's own `missing` preference
 //! POST /api/secrets/policy          → the server's `[user_secrets]` — admin-only
@@ -14,11 +14,11 @@
 //! alone, never from a request body. There is no `user` field on any request type here for
 //! exactly that reason.
 
-use adi_secrets::{Missing, Secrets, UserSecretsPolicy, UserSettings, effective_missing};
+use adi_secrets::{Missing, Secrets, UserSecretsPolicy, UserSettings, Wrap, effective_missing};
 
 use crate::types::{
     MySecretDto, MySecretsState, RemoveMySecret, SecretsPolicyState, SetMySecret, SetMySettings,
-    SetSecretsPolicy,
+    SetSecretsPolicy, WrapDto,
 };
 
 use super::response::{FromBody, Response, error, ok_json};
@@ -53,13 +53,24 @@ pub fn secrets_mine(store: &Secrets, user: Option<&str>) -> Response {
             missing: missing_str(policy.missing),
         });
     };
-    let names = match store.list_mine(user) {
+    let names = match store.list_mine_wrapped(user) {
         Ok(list) => list
             .into_iter()
             .map(|s| MySecretDto {
                 name: s.name,
                 description: s.description,
                 updated_at: s.updated_at,
+                nonce: s.nonce,
+                ciphertext: s.ciphertext,
+                wraps: s
+                    .wraps
+                    .into_iter()
+                    .map(|w| WrapDto {
+                        kind: w.kind,
+                        nonce: w.nonce,
+                        wrapped: w.wrapped,
+                    })
+                    .collect(),
             })
             .collect(),
         Err(e) => return Response::from(&e),
@@ -71,16 +82,17 @@ pub fn secrets_mine(store: &Secrets, user: Option<&str>) -> Response {
     })
 }
 
-/// `POST /api/secrets/mine/set` — refused outright in phase 1 (`docs/byo-credentials.md` §7,
-/// §15 Q1 settled). The checks `set` will make in phase 2 run first and in the order the spec
-/// states them, so the *reason* for a refusal is always the first one that actually applies,
-/// never masked by the blanket 501 underneath it: a caller with no user scope, a disabled
-/// policy, and a name outside `overridable` are each still worth saying, even though every path
-/// here ends the same way until phase 2's device wraps exist.
+/// `POST /api/secrets/mine/set` — store a value already sealed on the caller's own device
+/// (`docs/byo-credentials.md` §7, §8, ADI-MONO-180 P2.1). The checks run in the order the spec
+/// states them, so the *reason* for a refusal is always the first one that actually applies: a
+/// caller with no user scope, a disabled policy, a name outside `overridable`, and finally a
+/// request with no wrap at all (`wraps` must carry exactly the one device wrap v1 supports,
+/// §8: "one DEK per secret, one wrap"). Nothing here decrypts `ciphertext`/`nonce`/`wraps` — the
+/// plaintext never reached this process, and this route doesn't make it start now.
 #[must_use]
 pub fn set_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Response {
     let req = require!(body, SetMySecret);
-    let Some(_user) = user else {
+    let Some(user) = user else {
         return error(400, "a local caller has no user scope to set a value in");
     };
     let policy = UserSecretsPolicy::load(store.config());
@@ -93,7 +105,28 @@ pub fn set_my_secret(store: &Secrets, body: &[u8], user: Option<&str>) -> Respon
             &format!("{} is not on this server's overridable list", req.name),
         );
     }
-    error(501, "user values need device wraps, which this build doesn't have")
+    if req.wraps.len() != 1 {
+        return error(
+            400,
+            "expected exactly one device wrap in `wraps` (one DEK per secret, one wrap in v1)",
+        );
+    }
+    if req.nonce.is_empty() || req.ciphertext.is_empty() {
+        return error(400, "a sealed value needs both `nonce` and `ciphertext`");
+    }
+    let wraps = req
+        .wraps
+        .into_iter()
+        .map(|w| Wrap {
+            kind: w.kind,
+            nonce: w.nonce,
+            wrapped: w.wrapped,
+        })
+        .collect();
+    match store.set_wrapped(user, &req.name, req.description.as_deref(), req.nonce, req.ciphertext, wraps) {
+        Ok(_) => secrets_mine(store, Some(user)),
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// `POST /api/secrets/mine/remove` — works from phase 1: deletes one of the caller's own, if any.
@@ -245,16 +278,37 @@ mod tests {
         assert_eq!(v["missing"], "server");
     }
 
+    /// `GET /mine` now carries the sealed `nonce`/`ciphertext`/`wraps` on purpose (§9 step 2: a
+    /// device's own unlock path reads its wraps straight off this route) — what it must never
+    /// carry, still, is the plaintext underneath them.
     #[test]
-    fn get_mine_never_reveals_a_value() {
+    fn get_mine_carries_the_wraps_but_never_the_plaintext() {
         let store = scratch("never-reveals");
-        set_scoped_for_test(&store, "u-aaa", "CLAUDE_CODE_OAUTH_TOKEN");
+        let dek = adi_secrets::wrap::generate_dek();
+        let (nonce, ciphertext) =
+            adi_secrets::wrap::seal_value(&dek, "u-aaa", "CLAUDE_CODE_OAUTH_TOKEN", b"sk-mine").expect("seal");
+        store
+            .set_wrapped(
+                "u-aaa",
+                "CLAUDE_CODE_OAUTH_TOKEN",
+                None,
+                nonce,
+                ciphertext,
+                vec![adi_secrets::Wrap {
+                    kind: "device-key-v1".to_string(),
+                    nonce: "wn".to_string(),
+                    wrapped: "wc".to_string(),
+                }],
+            )
+            .expect("set_wrapped");
 
         let Response { status, body } = secrets_mine(&store, Some("u-aaa"));
         assert_eq!(status, 200);
-        assert!(!body.contains("ciphertext"), "{body}");
+        assert!(!body.contains("sk-mine"), "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["names"][0]["name"], "CLAUDE_CODE_OAUTH_TOKEN");
+        assert!(v["names"][0]["ciphertext"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_eq!(v["names"][0]["wraps"][0]["kind"], "device-key-v1");
     }
 
     #[test]
@@ -299,10 +353,11 @@ mod tests {
         );
     }
 
-    /// Every path refuses, as documented, but each for its own stated reason — not the 501
-    /// alone — and only the fully-valid request reaches it.
+    /// Every path refuses, as documented, but each for its own stated reason — and only the
+    /// fully-valid, fully-wrapped request actually stores anything (ADI-MONO-180 P2.1: `set` no
+    /// longer stops at a blanket refusal once it has a wrap to store).
     #[test]
-    fn set_my_secret_refuses_in_phase_1_for_the_right_reason_each_time() {
+    fn set_my_secret_refuses_in_order_then_succeeds_with_a_wrap() {
         let store = scratch("set-refuses");
 
         assert_eq!(
@@ -322,10 +377,33 @@ mod tests {
         assert_eq!(status, 400, "{body}");
         assert!(body.contains("overridable"), "{body}");
 
-        let Response { status, body } =
-            set_my_secret(&store, br#"{"name":"ANTHROPIC_API_KEY"}"#, Some("u-aaa"));
-        assert_eq!(status, 501, "{body}");
-        assert!(body.contains("device wraps"), "{body}");
+        let Response { status, body } = set_my_secret(
+            &store,
+            br#"{"name":"ANTHROPIC_API_KEY","nonce":"n","ciphertext":"c","wraps":[]}"#,
+            Some("u-aaa"),
+        );
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("exactly one"), "{body}");
+
+        let req = br#"{"name":"ANTHROPIC_API_KEY","nonce":"n","ciphertext":"c",
+            "wraps":[{"kind":"device-key-v1","nonce":"wn","wrapped":"wc"}]}"#;
+        let Response { status, body } = set_my_secret(&store, req, Some("u-aaa"));
+        assert_eq!(status, 200, "{body}");
+
+        let names = store.list_mine("u-aaa").expect("list");
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].name, "ANTHROPIC_API_KEY");
+    }
+
+    #[test]
+    fn set_my_secret_refuses_a_request_missing_the_sealed_value() {
+        let store = scratch("set-no-value");
+        enable(&store, &["ANTHROPIC_API_KEY"]);
+        let req = br#"{"name":"ANTHROPIC_API_KEY",
+            "wraps":[{"kind":"device-key-v1","nonce":"wn","wrapped":"wc"}]}"#;
+        let Response { status, body } = set_my_secret(&store, req, Some("u-aaa"));
+        assert_eq!(status, 400, "{body}");
+        assert!(body.contains("nonce") || body.contains("ciphertext"), "{body}");
     }
 
     #[test]
