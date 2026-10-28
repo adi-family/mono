@@ -318,8 +318,17 @@ pub fn set_auto_title(store: &Agents, body: &[u8]) -> Response {
 /// just have it act on a placeholder and do nothing, so that is rejected (400) rather than silently
 /// run. Whether later replies continue the thread is a runner capability (`process:codex` and both
 /// harness engines do; `process:claude` does not).
+/// `user` is the launching peer's user scope (`adi_mesh`'s `user_scope`, `docs/byo-credentials.md`
+/// §3.2) — computed by the caller from the mesh registry alone, **never** from `body`. There is no
+/// `user` or `lease` field on [`RunAgent`] for exactly that reason: a lease names whose credential
+/// a run may spend, and a field the peer controls must never decide that (§5, §15 Q6).
 #[must_use]
-pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -> Response {
+pub fn run_agent(
+    store: &Agents,
+    body: &[u8],
+    sender: Option<FleetSender<'_>>,
+    user: Option<String>,
+) -> Response {
     let req = require!(body, RunAgent);
     let name = req.name.trim();
     let message = req.message.trim();
@@ -377,6 +386,10 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty());
+    // Computed from `user` (the caller's mesh identity, never the body — see this function's own
+    // doc) and the agent as resolved above. `None` whenever `user` is `None`, which is every
+    // launch today: an automation, a local caller, or a mesh peer with no user scope.
+    let lease = lease_for(store, &agent.manifest, user);
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
     let launch = store.launch(
@@ -393,6 +406,7 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
             markers: &markers,
             start_at: start_at.as_ref(),
             only,
+            lease,
         },
     );
     let launch = match launch {
@@ -422,6 +436,42 @@ pub fn run_agent(store: &Agents, body: &[u8], sender: Option<FleetSender<'_>>) -
         }),
         Err(e) => Response::from(&e),
     }
+}
+
+/// Whose lease a launch of `agent` should record, and which names (`docs/byo-credentials.md` §5,
+/// §11, ADI-MONO-177 P1.7). `None` unless all three hold: `user` is `Some` (the launch carries a
+/// mesh identity with a user scope), the server's `[user_secrets]` policy is `enabled`, and the
+/// agent attaches at least one name the policy also lists as `overridable`.
+///
+/// **Recorded whether or not that user has ever stored a value for one of those names** — §15
+/// Q4's two readings, settled here in favour of the first: a lease names what a conversation is
+/// *allowed* to look for, not what it already has stored, which is what makes `missing = "fail"`
+/// mean "the server never pays for this member" rather than "unless they happen to have brought
+/// nothing yet". Phase 1 ships no way to store a value at all, so in this build every such lease
+/// is permanently un-live — see `UserSecretsPolicy`'s own doc for what `missing` does about that,
+/// landing in a later phase.
+fn lease_for(
+    store: &Agents,
+    agent: &adi_agents::StoredAgentManifest,
+    user: Option<String>,
+) -> Option<adi_agents::LeaseRef> {
+    let user = user?;
+    let policy = adi_secrets::UserSecretsPolicy::load(store.config());
+    if !policy.enabled {
+        return None;
+    }
+    let names: Vec<String> = agent
+        .secrets
+        .iter()
+        .map(|attachment| attachment.name.clone())
+        .filter(|name| policy.overridable.contains(name))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if names.is_empty() {
+        return None;
+    }
+    Some(adi_agents::LeaseRef { user, names })
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first (each Run is an independent
@@ -4866,6 +4916,116 @@ mod tests {
             None,
             "paired, but nothing to add"
         );
+    }
+
+    // -- the lease reference (ADI-MONO-177 P1.7) -------------------------------------------
+
+    fn attaching(names: &[&str]) -> adi_agents::StoredAgentManifest {
+        adi_agents::StoredAgentManifest {
+            secrets: names
+                .iter()
+                .map(|name| SecretAttachment {
+                    project: None,
+                    name: name.to_string(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn enable_overridable(store: &Agents, names: &[&str]) {
+        adi_secrets::UserSecretsPolicy {
+            enabled: true,
+            overridable: names.iter().map(|n| n.to_string()).collect(),
+            ..Default::default()
+        }
+        .save(store.config())
+        .expect("save policy");
+    }
+
+    #[test]
+    fn lease_for_is_none_without_a_user_scope() {
+        let store = scratch("lease-no-user");
+        enable_overridable(&store, &["CLAUDE_CODE_OAUTH_TOKEN"]);
+        let agent = attaching(&["CLAUDE_CODE_OAUTH_TOKEN"]);
+        assert_eq!(
+            lease_for(&store, &agent, None),
+            None,
+            "no mesh identity with a user scope, no lease — a local or automation launch"
+        );
+    }
+
+    #[test]
+    fn lease_for_is_none_when_the_policy_is_disabled() {
+        let store = scratch("lease-disabled");
+        // `enabled` defaults to `false`, and nothing here turns it on.
+        let agent = attaching(&["CLAUDE_CODE_OAUTH_TOKEN"]);
+        assert_eq!(
+            lease_for(&store, &agent, Some("u-aaa".to_string())),
+            None,
+            "the server has never turned the feature on"
+        );
+    }
+
+    #[test]
+    fn lease_for_is_none_when_nothing_attached_is_overridable() {
+        let store = scratch("lease-no-overlap");
+        enable_overridable(&store, &["ANTHROPIC_API_KEY"]);
+        let agent = attaching(&["CLAUDE_CODE_OAUTH_TOKEN"]);
+        assert_eq!(
+            lease_for(&store, &agent, Some("u-aaa".to_string())),
+            None,
+            "the agent attaches nothing the server allows a user to replace"
+        );
+    }
+
+    #[test]
+    fn lease_for_names_the_intersection_of_attached_and_overridable() {
+        let store = scratch("lease-intersection");
+        enable_overridable(&store, &["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
+        let agent = attaching(&["CLAUDE_CODE_OAUTH_TOKEN", "SOME_OTHER_SECRET"]);
+        assert_eq!(
+            lease_for(&store, &agent, Some("u-aaa".to_string())),
+            Some(adi_agents::LeaseRef {
+                user: "u-aaa".to_string(),
+                names: vec!["CLAUDE_CODE_OAUTH_TOKEN".to_string()],
+            }),
+            "only the name both the agent attaches and the server allows"
+        );
+    }
+
+    /// §15 Q4, settled: a lease is recorded whether or not the user has ever stored a value for
+    /// one of its names — which this build cannot even test by storing one, since phase 1 ships
+    /// no way to. The lease names what the conversation is *allowed* to look for.
+    #[test]
+    fn lease_for_does_not_require_a_stored_value() {
+        let store = scratch("lease-no-storage-needed");
+        enable_overridable(&store, &["CLAUDE_CODE_OAUTH_TOKEN"]);
+        let agent = attaching(&["CLAUDE_CODE_OAUTH_TOKEN"]);
+        assert!(lease_for(&store, &agent, Some("u-aaa".to_string())).is_some());
+    }
+
+    /// ADI-MONO-177 P1.7: `RunAgent` has no `user` or `lease` field for a body to put them in —
+    /// the struct's own shape is what makes `run_agent` incapable of reading either from the
+    /// request, not a check the handler performs. A body that tries anyway parses as if the extra
+    /// fields were never sent, and `run_agent`'s `user` argument is the only source `lease_for`
+    /// ever sees.
+    #[test]
+    fn a_run_bodys_user_and_lease_fields_have_nowhere_to_land() {
+        let json = br#"{
+            "name": "solver",
+            "message": "go",
+            "user": "u-evil",
+            "lease": { "user": "u-forged", "names": ["ANYTHING"] }
+        }"#;
+        let req: RunAgent = serde_json::from_slice(json).expect("parses despite the extra fields");
+        assert_eq!(req.name, "solver");
+        assert_eq!(req.message, "go");
+        // Round-tripping back to JSON proves the extra fields were never captured anywhere on the
+        // type — there is no field whose value could be `"u-evil"` or the forged lease.
+        let rewritten = serde_json::to_value(&req).expect("serialize");
+        assert!(rewritten.get("user").is_none());
+        assert!(rewritten.get("lease").is_none());
     }
 }
 

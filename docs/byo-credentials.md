@@ -895,17 +895,27 @@ Buttons are sugar over §4's settings. Each one writes settings and adds no beha
 ## 15. Open questions
 
 Each is either a place the code contradicts the design, or a decision the design leaves open. None
-is settled by this document. The three rounds of decisions on ADI-MONO-173 settled the earlier list's
-questions on the default username, the revoke verb's name, where the device setting lives, the
-strictness order, a corrupt policy, revoke stopping in-flight turns, replies from someone else,
-phase 1 without wraps, enrolling a second device, and the inherited environment (now
-ADI-MONO-175). Those are in the body, and the rest are renumbered here.
+is settled by this document, except Q1, Q4 and Q15 below, settled during ADI-MONO-177's phase 1
+implementation and so written down here rather than left open underneath it. The three rounds of
+decisions on ADI-MONO-173 settled the earlier list's questions on the default username, the revoke
+verb's name, where the device setting lives, the strictness order, a corrupt policy, revoke
+stopping in-flight turns, replies from someone else, phase 1 without wraps, enrolling a second
+device, and the inherited environment (now ADI-MONO-175). Those are in the body, and the rest are
+renumbered here.
 
 **Q1 — `users/<u>/settings.toml` collides with a secret named `settings`.** `validate_name` accepts
 lowercase (`secret.rs:124-133`). Options: refuse `settings` as an `overridable` name (a real env
 var is almost never lowercase), or move the file out of the scope directory
 (`users/<u>.settings.toml`, or `users/<u>/.settings.toml`, which `validate_name` rejects as a
 secret name).
+
+**Settled by ADI-MONO-177: the second option.** The file is `users/<u>/.settings.toml` — inside the
+scope directory (so it moves and is deleted with the rest of `<u>`'s own files, by rename and
+unpair alike), but under a name `validate_name` can never accept: the leading `.` is neither an
+ASCII letter nor `_`, so no secret a user could ever `set --user` can land on this path, however the
+operator's `overridable` list is written. That beats refusing `settings` as an `overridable` name,
+which would depend on an operator remembering to keep it off the list rather than making the
+collision impossible by construction.
 
 **Q2 — A launch that can't start yet.** Under `wait`, a fresh launch with no live value creates the
 session and queues its opening message (§10). `Launch` is `Pty | Process { pid, log, run_id }`
@@ -924,6 +934,15 @@ member launch of an agent attaching an `overridable` name, so a member with no s
 meets `missing` and, under `fail`, can't run those agents on this server. That is what makes `fail`
 the partner sandbox's "the server never pays for a member". The other reading records a `LeaseRef`
 only when the user has stored a value for at least one of the names.
+
+**Settled by ADI-MONO-177: the first reading — §5's, as already written.** `run_agent` computes a
+`LeaseRef` from the launch's user scope, the server's `[user_secrets]` policy, and the agent's own
+`attached ∩ overridable` names alone; whether that user has ever stored a value for one of those
+names never enters the computation, and phase 1 ships no way to check that even if it wanted to
+(nothing in phase 1 lets a user store a value at all). A lease names what a conversation is
+*allowed* to look for, not what it already has — which is the only reading under which `fail`
+means "the server never pays for this member" rather than "unless they happen to have brought
+nothing yet". See `lease_for` in `adi-webapp-api`.
 
 **Q5 — Changing credentials mid-conversation breaks Codex threads.** Under `missing = "server"`,
 a conversation alternates between the user's value and the server's as the lease comes and goes.
@@ -985,6 +1004,16 @@ nothing" (the server's `missing` applies, and the user's runs may land on the se
 what they had asked not to happen) or "as if it said `fail`" (the user's leased work stops until
 they fix it).
 
+**Settled by ADI-MONO-177: "as if it said nothing", logged.** The per-user file can only ever
+*tighten* the server's own `missing`, never loosen it — so an unreadable one defers to the
+server's policy exactly the way a missing one does, rather than guessing at the strictest possible
+reading on the user's behalf. The server's own policy still governs: a server on `fail` is
+unaffected by this either way, and a server on `server` or `wait` is where the difference would
+show. The cost is stated plainly, as it is for the server's own corrupt-file reading (§4.1): a typo in a
+user's own policy file silently drops them back onto whatever the server already does, rather than
+stopping their work outright. It is logged on every read so the condition is visible rather than
+merely safe. See `UserSettings::load` in `adi-secrets`.
+
 **Doc drift noticed, not fixed here (ADI-MONO-174 covers it):** `docs/fleet.md` §11 says
 `Secrets::resolve` "injects every global secret into every agent run's environment". Runs use the
 attachment allowlist now, and only triggers get the whole set (§5). §8a describes the member gate
@@ -999,9 +1028,9 @@ Two prerequisites, then four phases. Each item ships with unit tests in the same
 
 ### Before phase 1
 
-- [ ] P0.1 ADI-MONO-174: `set-oauth` and `refresh` on the member gate, and the `docs/fleet.md`
+- [x] P0.1 ADI-MONO-174: `set-oauth` and `refresh` on the member gate, and the `docs/fleet.md`
       §8a/§11 wording.
-- [ ] P0.2 ADI-MONO-175: a CLI-spawned child no longer inherits its parent's attached secrets or
+- [x] P0.2 ADI-MONO-175: a CLI-spawned child no longer inherits its parent's attached secrets or
       `ADI_*` run identity.
 
 ### Phase 1 — plumbing only: policy, storage, the hold-key fix, the own-scope API and CLI, the random pairing id
@@ -1009,24 +1038,24 @@ Two prerequisites, then four phases. Each item ships with unit tests in the same
 Nothing in phase 1 lets a user store a value. Every piece is exercised through tests and an
 in-memory lease source.
 
-- [ ] P1.1 `adi-mesh`: `decide` mints `u-<26 base32>` where it used `PAIR_USER`, returned in
+- [x] P1.1 `adi-mesh`: `decide` mints `u-<26 base32>` where it used `PAIR_USER`, returned in
       `Accepted.username`. `NodeRecord.minted_user`, set only by `decide` for an id it minted. A
       re-pair keeps a minted id and replaces an `adi` one. Tests: two no-body pairings get distinct
       ids; a re-pair keeps the id and rotates the password; a pinned username and a `record_viewer`
       record have `minted_user = false`; a legacy record reads `false`.
-- [ ] P1.2 `adi-app`: `user_scope(projects, sender)` beside `peer_role`, `Some(<u>)` only for a
+- [x] P1.2 `adi-app`: `user_scope(projects, sender)` beside `peer_role`, `Some(<u>)` only for a
       `minted_user` record whose `auth.user` matches the header. `None` for `adi`, a local caller,
       an unknown petname or an unreadable registry.
-- [ ] P1.3 `adi-secrets`: `Scope::User`, `users/<u>/` paths, AAD `user:<u>/<NAME>`. `list_all`
+- [x] P1.3 `adi-secrets`: `Scope::User`, `users/<u>/` paths, AAD `user:<u>/<NAME>`. `list_all`
       skips `users/`. A user ciphertext copied into global or another user's scope fails to open.
-- [ ] P1.4 `secrets/settings.toml` `[user_secrets]` (`enabled`, `overridable`, `missing`,
+- [x] P1.4 `secrets/settings.toml` `[user_secrets]` (`enabled`, `overridable`, `missing`,
       `max_lease`), read per launch and per turn. A corrupt file reads as `enabled = false`, logged
       and shown.
-- [ ] P1.5 `users/<u>/settings.toml` with `missing` clamped stricter-only, `server < wait < fail`
+- [x] P1.5 `users/<u>/settings.toml` with `missing` clamped stricter-only, `server < wait < fail`
       (settle Q1, Q15).
-- [ ] P1.6 `SessionRecord::lease` (`LeaseRef`) and `sessions.lease_cap`, with their `ALTER TABLE`s.
+- [x] P1.6 `SessionRecord::lease` (`LeaseRef`) and `sessions.lease_cap`, with their `ALTER TABLE`s.
       Written once at `create_as`, never re-derived. NULL reads as "server values only".
-- [ ] P1.7 `run_agent` computes `LeaseRef` from `user_scope` only (settle Q4). Test: a body naming
+- [x] P1.7 `run_agent` computes `LeaseRef` from `user_scope` only (settle Q4). Test: a body naming
       any user or lease field is ignored.
 - [ ] P1.8 The layer: `spec_in` takes the session's resolved lease values and overlays them in
       `attached_secret_env` for `pinned ∩ attached ∩ overridable ∩ shared` only, under the agent's
