@@ -329,6 +329,42 @@ pub fn run_agent(
     sender: Option<FleetSender<'_>>,
     user: Option<String>,
 ) -> Response {
+    run_agent_as(store, body, sender, user, None)
+}
+
+/// `POST /api/agents/run` forwarded from a child carrying `$ADI_LEASE`
+/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2) — the loopback-only counterpart to
+/// [`run_agent`]'s mesh/local path. `capability` names the session whose lease a child is asking
+/// to inherit; this function trusts nothing else about the forwarded request to decide who that
+/// child's caller is or whose lease it gets.
+///
+/// An unknown or voided capability is `403`, never a silent fall-through to the server's own
+/// values: a capability that fails to resolve is either a bug or a forgery, and §11's own "The
+/// capability" is explicit that it must never be read the other way.
+#[must_use]
+pub fn run_agent_leased(store: &Agents, body: &[u8], capability: &str) -> Response {
+    let Some(resolved) = store.lease_capability_session(capability) else {
+        return error(403, "unknown or voided lease capability");
+    };
+    // Ignores the body's own `launched_by` entirely, and weighs `can_spawn` against the parent
+    // named by the capability's own session, never whatever `ADI_AGENT` the forwarding process
+    // claims (§11: "This also hardens ADI-MONO-113's `spawn_policy`, which today believes
+    // whatever `ADI_AGENT` says").
+    let forced_launched_by = format!("{}{}", adi_agents::launcher::AGENT_PREFIX, resolved.agent);
+    run_agent_as(store, body, None, Some(resolved.user), Some(forced_launched_by))
+}
+
+/// The shared body of [`run_agent`] and [`run_agent_leased`]. `forced_launched_by`, when given,
+/// overrides the body's own `launched_by` outright — the leased path's own rule — and is attached
+/// unchanged, skipping [`attribute_human`], since it already names an `agent:<name>` caller rather
+/// than a person.
+fn run_agent_as(
+    store: &Agents,
+    body: &[u8],
+    sender: Option<FleetSender<'_>>,
+    user: Option<String>,
+    forced_launched_by: Option<String>,
+) -> Response {
     let req = require!(body, RunAgent);
     let name = req.name.trim();
     let message = req.message.trim();
@@ -351,15 +387,21 @@ pub fn run_agent(
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty());
-    // Absent is a person: this endpoint is what the control panel presses, and everything else that
-    // launches an agent has its own path (the CLI, which reads its caller from the environment).
-    let launched_by = req
-        .launched_by
-        .as_deref()
-        .map(str::trim)
-        .filter(|by| !by.is_empty())
-        .unwrap_or(adi_agents::launcher::HUMAN);
-    let launched_by = attribute_human(launched_by, sender);
+    let launched_by = match forced_launched_by {
+        Some(forced) => forced,
+        None => {
+            // Absent is a person: this endpoint is what the control panel presses, and everything
+            // else that launches an agent has its own path (the CLI, which reads its caller from
+            // the environment).
+            let launched_by = req
+                .launched_by
+                .as_deref()
+                .map(str::trim)
+                .filter(|by| !by.is_empty())
+                .unwrap_or(adi_agents::launcher::HUMAN);
+            attribute_human(launched_by, sender)
+        }
+    };
     // What this one run runs the agent *as* — see `adi_agents::overrides` for why an absent key and
     // an empty one mean different things. Nothing sent is the ordinary launch.
     let overrides = req.overrides.as_ref().map(|o| adi_agents::RunOverrides {

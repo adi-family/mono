@@ -688,6 +688,54 @@ mod tests {
         assert_eq!(status, 404);
     }
 
+    /// ADI-MONO-182 P3.2: an unknown or voided `X-Adi-Lease` capability is `403`, never a silent
+    /// fall-through — `run_agent_leased` has no server-values default to fall back to the way
+    /// `missing = "server"` does, because a capability is either right or a bug/forgery.
+    #[test]
+    fn run_agent_leased_refuses_an_unknown_capability() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#, None);
+        let Response { status, body } =
+            run_agent_leased(&store, br#"{"name":"solver"}"#, "not-a-real-capability");
+        assert_eq!(status, 403);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("lease"), "{body}");
+    }
+
+    /// A capability that *does* resolve carries the launch past the capability check and into the
+    /// ordinary launch path — `get_agent`'s own `404` for an agent that doesn't exist is what
+    /// proves it got that far, as distinct from `run_agent_leased`'s own `403` for the capability
+    /// itself. The body's `launched_by` ("human:someone-else") is sent on purpose and must have no
+    /// bearing on anything: §11 says this path ignores it outright.
+    #[test]
+    fn run_agent_leased_with_a_valid_capability_reaches_the_ordinary_launch_path() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"runner","backend":"pty:claude"}"#, None);
+
+        let sessions = SessionStore::new(store.config().module("sessions").dir());
+        let parent = sessions
+            .create("runner", Backend::from("pty:claude"), "/tmp", "go")
+            .expect("open a session");
+        sessions
+            .set_lease(
+                "runner",
+                &parent.id,
+                &adi_agents::LeaseRef { user: "u-igor".to_string(), names: vec![] },
+            )
+            .expect("set lease");
+        let capability = sessions
+            .lease_capability("runner", &parent.id)
+            .expect("mint")
+            .expect("a leased session always gets one");
+
+        let Response { status, .. } = run_agent_leased(
+            &store,
+            br#"{"name":"ghost","launched_by":"human:someone-else"}"#,
+            &capability,
+        );
+        assert_eq!(status, 404, "the capability resolved; the agent it named did not exist");
+    }
+
     #[test]
     fn peek_reports_not_running_for_a_sessionless_agent() {
         let store = temp_agents();
