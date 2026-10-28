@@ -60,11 +60,11 @@ pub struct DashboardBundle {
     /// [`icon`](Self::icon). Absent from a bundle packed by an older panel.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub widget: std::collections::BTreeMap<String, crate::Widget>,
-    /// Which scaffold it was created from (see [`crate::Manifest::template`]). Carried so the
-    /// receiving machine's migration treats the copy as the same template it already was —
-    /// without this, a vite-react dashboard's hive file (two services named exactly like the
-    /// dependency-free scaffold's) would read as that template's and be rewritten to it. Absent
-    /// from a bundle packed by an older panel, which only ever packed the dependency-free one.
+    /// Which scaffold it was created from (see [`crate::Manifest::created_from`]). Purely
+    /// informational on this side too — which scaffold the copy actually is gets decided from
+    /// what lands on disk, never from this field — but it is carried across so the receiving
+    /// machine's own `config.toml` names the same thing the sender's did. Absent from a bundle
+    /// packed by an older panel, which only ever packed the dependency-free one.
     #[serde(default)]
     pub template: Option<String>,
     pub files: Vec<BundleFile>,

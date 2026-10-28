@@ -52,10 +52,12 @@ pub struct Manifest {
     pub widget: BTreeMap<String, Widget>,
     /// Which scaffold this dashboard was created from — `None` (or any value a newer scaffold
     /// doesn't recognise) means the original dependency-free template; `"vite-react"` means the
-    /// Vite + React one. Read by migration to pick the matching entry points, so a vite-react
-    /// dashboard is never rewritten with the dependency-free ones or vice versa.
+    /// Vite + React one. Purely informational: read by no code. Which scaffold a dashboard
+    /// actually is gets decided from what is on disk (the shape of its `.adi/hive.yaml`, or
+    /// whether `frontend/package.json` exists) — never from this field, which a dashboard's own
+    /// owner is free to edit or clear without changing how it behaves.
     #[serde(default)]
-    pub template: Option<String>,
+    pub created_from: Option<String>,
 }
 
 /// One widget an app offers: a page on the app's own origin that the home screen frames.
@@ -121,7 +123,7 @@ pub fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
         ("archived_at", manifest.archived_at.map(|ts| ts.to_string())),
         ("moved_to", manifest.moved_to.as_deref().map(toml_string)),
         ("icon", manifest.icon.as_deref().map(toml_string)),
-        ("template", manifest.template.as_deref().map(toml_string)),
+        ("created_from", manifest.created_from.as_deref().map(toml_string)),
     ] {
         if let Some(value) = value {
             out.push_str(key);
@@ -220,7 +222,7 @@ mod tests {
                 moved_to: Some("laptop-b".to_string()),
                 icon: Some("receipt".to_string()),
                 widget: BTreeMap::new(),
-                template: Some("vite-react".to_string()),
+                created_from: Some("vite-react".to_string()),
             },
         )
         .expect("write");
@@ -230,7 +232,7 @@ mod tests {
         assert!(raw.contains("archived_at = 1786839320\n"), "{raw}");
         assert!(raw.contains("moved_to = \"laptop-b\"\n"), "{raw}");
         assert!(raw.contains("icon = \"receipt\"\n"), "{raw}");
-        assert!(raw.contains("template = \"vite-react\"\n"), "{raw}");
+        assert!(raw.contains("created_from = \"vite-react\"\n"), "{raw}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

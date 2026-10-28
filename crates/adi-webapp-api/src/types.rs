@@ -4463,9 +4463,11 @@ pub struct Dashboard {
     #[serde(default)]
     pub icon: Option<String>,
     /// Which scaffold it was created from — `None` means the original dependency-free one.
-    /// `#[serde(default)]` so a payload from a server that predates templates still deserializes.
+    /// Purely informational, same as in `config.toml`: nothing reads this to decide how the
+    /// dashboard behaves. `#[serde(default)]` so a payload from a server that predates it still
+    /// deserializes.
     #[serde(default)]
-    pub template: Option<String>,
+    pub created_from: Option<String>,
 }
 
 impl Dashboard {

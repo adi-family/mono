@@ -23,7 +23,7 @@ use adi_dashboards::{
     BundleError, CollectError, DashboardBundle, HIVE_ARCHIVED, HIVE_LIVE, MAX_BUNDLE_FILES,
     Manifest, TEMPLATE_DASHBOARD, TEMPLATE_VITE_REACT, TEMPLATES, WIDGET_DIR, dashboard_host,
     declared_host, decode_bundle, has_widgets, hive_yaml, hive_yaml_vite_react, is_current,
-    is_current_vite_react, is_known_template, parse_hive, preferred_host, read_manifest,
+    is_known_template, parse_hive, preferred_host, read_manifest,
     valid_id, write_import, write_manifest,
 };
 use adi_ports_manager::Ports;
@@ -70,8 +70,9 @@ static WIDGET_INDEX_TS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
 
 // MARK: the vite-react scaffold (ADI-MONO-186) — a second template beside the dependency-free
 // one above, for an app whose UI or API has outgrown one file per panel / one file per route.
-// Its own files, its own generation stamps; [`migrate_vite_react`] is the only thing that ever
-// rewrites them, and it never touches a dependency-free dashboard or vice versa.
+// Its files are written once, at [`scaffold_vite_react`], and never rewritten after that (see
+// [`is_vite_react`], ADI-MONO-193) — unlike the dependency-free scaffold, there is no migration
+// path for this one at all.
 const VITE_FRONTEND_PACKAGE_JSON: &str =
     include_str!("../../templates/vite-react/frontend/package.json");
 const VITE_FRONTEND_VITE_CONFIG_TS: &str =
@@ -399,7 +400,7 @@ fn scaffold(
             moved_to: None,
             icon: None,
             widget: std::collections::BTreeMap::new(),
-            template: None,
+            created_from: None,
         },
     )?;
     let host = dashboard_host(dir, name);
@@ -408,10 +409,10 @@ fn scaffold(
 }
 
 /// Write the full vite-react scaffold into `dir` — the frontend and backend Bun packages, their
-/// one worked example each, and the manifest naming [`TEMPLATE_VITE_REACT`] so migration and the
-/// listing both know which shape this directory is. Does **not** run `bun install`; the caller
-/// does that once the files are down, and reports a failure rather than leaving a dashboard that
-/// looks created but cannot run.
+/// one worked example each, and a manifest naming [`TEMPLATE_VITE_REACT`] purely for a human to
+/// read in `config.toml`; [`is_vite_react`] is what actually tells this shape apart from the
+/// dependency-free one. Does **not** run `bun install`; the caller does that once the files are
+/// down, and reports a failure rather than leaving a dashboard that looks created but cannot run.
 fn scaffold_vite_react(
     dir: &Path,
     name: &str,
@@ -525,7 +526,7 @@ fn scaffold_vite_react(
             moved_to: None,
             icon: None,
             widget: std::collections::BTreeMap::new(),
-            template: Some(TEMPLATE_VITE_REACT.to_string()),
+            created_from: Some(TEMPLATE_VITE_REACT.to_string()),
         },
     )?;
     let host = dashboard_host(dir, name);
@@ -579,12 +580,13 @@ const FRONTEND_ENTRY_STAMP: &str = "// adi-frontend-entry: 1";
 const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
 const WIDGET_ENTRY_STAMP: &str = "// adi-widget-entry: 1";
 
-/// The vite-react scaffold's own stamps — a separate set, because its generated files are
-/// different files with a different shape. See [`migrate_vite_react`].
-const VITE_SHELL_STAMP: &str = "<!-- adi-vite-shell: 1";
-const VITE_CONFIG_STAMP: &str = "// adi-vite-config: 1";
-const VITE_FRONTEND_ENTRY_STAMP: &str = "// adi-vite-frontend-entry: 1";
-const VITE_BACKEND_ENTRY_STAMP: &str = "// adi-vite-backend-entry: 1";
+/// Whether `dir` is a **vite-react** dashboard — decided from what is actually on disk, never
+/// from the manifest's `created_from` (purely informational, read by no code): a dependency-free
+/// scaffold never has `frontend/package.json`, because its frontend is a bare `index.ts`, not a
+/// Bun package of its own.
+fn is_vite_react(dir: &Path) -> bool {
+    dir.join("frontend").join("package.json").is_file()
+}
 
 /// Bring a dashboard's generated files up to the current templates, in place, the next time it is
 /// read or listed. There is no separate migration command: a dashboard is a directory, and the
@@ -597,12 +599,12 @@ const VITE_BACKEND_ENTRY_STAMP: &str = "// adi-vite-backend-entry: 1";
 /// It rewrites **generated** files only: the hive file and the three fixed entry points. The panels
 /// and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent authored,
 /// and are never read here, let alone written.
+///
+/// A vite-react dashboard's files are created once and never rewritten after that (no migration
+/// path exists for that scaffold at all) — this is the guard that keeps this function's rewrites
+/// from ever reaching one.
 fn migrate(dir: &Path, name: &str) {
-    // Guards against ever rewriting a vite-react dashboard, even if a future caller forgets to
-    // branch on the manifest first — [`read_dashboard`] already does, but a migration that
-    // overwrites files on disk is worth double-checking rather than trusting every caller to get
-    // right forever.
-    if read_manifest(dir).template.as_deref() == Some(TEMPLATE_VITE_REACT) {
+    if is_vite_react(dir) {
         return;
     }
     migrate_hive(dir, name);
@@ -683,66 +685,6 @@ fn migrate_hive(dir: &Path, name: &str) {
     let _ = std::fs::write(path, hive_yaml(dir, &host));
 }
 
-/// The vite-react scaffold's counterpart to [`migrate`] — brought up to date **instead of**
-/// [`migrate`], never after or alongside it. The two templates' "generated" files, hive shape and
-/// "is this current" tests are all different, so sharing one migration path would mean teaching
-/// [`migrate`] to tell the shapes apart or, worse, rewriting one template's files with the
-/// other's — the regression VR-1's tests exist to catch. The caller (see [`read_dashboard`])
-/// branches on the manifest's `template` before choosing between the two.
-///
-/// Touches only the hive file and the three stamped entry points
-/// (`frontend/index.html`, `frontend/vite.config.ts`, `frontend/src/main.tsx`,
-/// `backend/src/index.ts`) — everything else (`package.json`, `src/App.tsx`, `src/app.ts`,
-/// `src/routes/*.ts`, `src/pages/**`, `src/components/**`) is what an agent wrote or what
-/// `bun install` resolved, and is never read here.
-fn migrate_vite_react(dir: &Path, name: &str) {
-    // The mirror image of the guard in [`migrate`]: never rewrite a dashboard that is not
-    // actually this template, even if a future caller forgets to check first.
-    if read_manifest(dir).template.as_deref() != Some(TEMPLATE_VITE_REACT) {
-        return;
-    }
-    migrate_vite_react_hive(dir, name);
-    let frontend = dir.join("frontend");
-    restamp_entry_point(
-        &frontend.join("index.html"),
-        VITE_SHELL_STAMP,
-        VITE_FRONTEND_INDEX_HTML,
-    );
-    restamp_entry_point(
-        &frontend.join("vite.config.ts"),
-        VITE_CONFIG_STAMP,
-        VITE_FRONTEND_VITE_CONFIG_TS,
-    );
-    restamp_entry_point(
-        &frontend.join("src").join("main.tsx"),
-        VITE_FRONTEND_ENTRY_STAMP,
-        VITE_FRONTEND_MAIN_TSX,
-    );
-    restamp_entry_point(
-        &dir.join("backend").join("src").join("index.ts"),
-        VITE_BACKEND_ENTRY_STAMP,
-        VITE_BACKEND_INDEX_TS,
-    );
-}
-
-/// [`migrate_hive`]'s vite-react counterpart: same "keep a hand-picked host, leave an
-/// unrecognised shape alone" rules, checked against [`is_current_vite_react`] and written with
-/// [`hive_yaml_vite_react`] instead of the dependency-free pair.
-fn migrate_vite_react_hive(dir: &Path, name: &str) {
-    let Some((path, parsed)) = parse_hive(dir) else {
-        return;
-    };
-    let services: Vec<&str> = parsed.services.keys().map(String::as_str).collect();
-    if services != ["backend", "frontend"] {
-        return;
-    }
-    if is_current_vite_react(&parsed) {
-        return;
-    }
-    let host = declared_host(dir).unwrap_or_else(|| dashboard_host(dir, name));
-    let _ = std::fs::write(path, hive_yaml_vite_react(&host));
-}
-
 // MARK: moving a dashboard to another machine
 
 /// Pack a dashboard's authored files into a [`DashboardBundle`] ready to POST at another machine.
@@ -778,7 +720,7 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
         host: declared_host(&dir),
         icon: manifest.icon,
         widget: manifest.widget,
-        template: manifest.template,
+        template: manifest.created_from,
         files,
     })
 }
@@ -864,12 +806,11 @@ pub fn import_dashboard(
                 .filter(|i| !i.is_empty())
                 .map(str::to_string),
             widget: bundle.widget,
-            // Only a template this build actually knows how to migrate — a bundle from newer
-            // software naming one we have never heard of would otherwise get written down and
-            // then read back as if it meant the dependency-free scaffold's shape, which it does
-            // not. `None` here means exactly that: migrate the dependency-free way, same as a
-            // bundle from before templates existed.
-            template: bundle
+            // Purely informational, same as everywhere else this field lives — which scaffold
+            // the landed copy actually is gets decided from what is on disk, never from this.
+            // Only a name this build recognises is kept, so a bundle from newer software naming
+            // a scaffold we have never heard of does not leave a nonsense value behind.
+            created_from: bundle
                 .template
                 .as_deref()
                 .filter(|t| adi_dashboards::is_known_template(t))
@@ -989,10 +930,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
 
     let manifest = read_manifest(dir);
     let name = manifest.name.as_deref().unwrap_or(&id);
-    match manifest.template.as_deref() {
-        Some(TEMPLATE_VITE_REACT) => migrate_vite_react(dir, name),
-        _ => migrate(dir, name),
-    }
+    migrate(dir, name);
 
     // The ports manager is the source of truth adi-hive allocated from, so read it rather than
     // the hive.yaml (which deliberately declares no ports).
@@ -1026,7 +964,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         icon: manifest.icon,
         dir: dir.display().to_string(),
         id,
-        template: manifest.template,
+        created_from: manifest.created_from,
     }
 }
 
@@ -1053,7 +991,7 @@ fn ts_stems(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adi_dashboards::{BundleFile, is_one_origin};
+    use adi_dashboards::{BundleFile, is_current_vite_react, is_one_origin};
     use base64::Engine as _;
 
     /// A dashboards root of this test's own, under the system temp dir — never the user's store.
@@ -2048,7 +1986,7 @@ mod tests {
         let omitted = create_dashboard(&cfg, &ports, br#"{"name":"Nosh"}"#);
         assert_eq!(omitted.status, 200, "{}", omitted.body);
         let omitted: Dashboard = serde_json::from_str(&omitted.body).expect("dashboard DTO");
-        assert_eq!(omitted.template, None, "no caller asked for a template");
+        assert_eq!(omitted.created_from, None, "no caller asked for a template");
         assert!(PathBuf::from(&omitted.dir).join("frontend").join("index.ts").exists());
         assert!(!PathBuf::from(&omitted.dir).join("frontend").join("package.json").exists());
 
@@ -2060,7 +1998,7 @@ mod tests {
         // caller named it or left it to the default — which is what "unchanged" means for a
         // dashboard already on disk: it is bit-for-bit indistinguishable from one created before
         // templates existed at all.
-        assert_eq!(named.template, None);
+        assert_eq!(named.created_from, None);
         assert_eq!(
             std::fs::read_to_string(PathBuf::from(&named.dir).join("frontend").join("index.ts"))
                 .expect("entry point"),
@@ -2118,7 +2056,7 @@ mod tests {
         assert!(!dir.join("backend").join("index.ts").exists());
 
         let manifest = read_manifest(&dir);
-        assert_eq!(manifest.template.as_deref(), Some(TEMPLATE_VITE_REACT));
+        assert_eq!(manifest.created_from.as_deref(), Some(TEMPLATE_VITE_REACT));
 
         // The typed RPC path: a route file registers at "/", `app.ts` mounts it, the frontend's
         // client imports the type by relative path — all present, none of it absolute.
@@ -2140,70 +2078,131 @@ mod tests {
         let dir = root.join("nosh");
         scaffold_vite_react(&dir, "Nosh", "", None).expect("scaffold");
 
-        // What an agent would have added or changed: a route, a page, and a dependency bump.
-        let app_ts = dir.join("backend").join("src").join("app.ts");
-        std::fs::write(&app_ts, "// agent's own routing\n").expect("edit app.ts");
-        let package_json = dir.join("frontend").join("package.json");
-        std::fs::write(&package_json, "{\"name\":\"agent-edited\"}\n").expect("edit package.json");
-        let home_tsx = dir
-            .join("frontend")
-            .join("src")
-            .join("pages")
-            .join("Home.tsx");
-        std::fs::write(&home_tsx, "// agent's own page\n").expect("edit page");
+        // Every generated file, left as an agent's edit or an earlier generation would have left
+        // it — including the four that once carried a restamping marker (ADI-MONO-193: the
+        // platform creates a vite-react dashboard's files once and never rewrites them again,
+        // so none of this is migration's to touch).
+        let edits = [
+            (
+                dir.join("backend").join("src").join("app.ts"),
+                "// agent's own routing\n",
+            ),
+            (
+                dir.join("frontend").join("package.json"),
+                "{\"name\":\"agent-edited\"}\n",
+            ),
+            (
+                dir.join("frontend")
+                    .join("src")
+                    .join("pages")
+                    .join("Home.tsx"),
+                "// agent's own page\n",
+            ),
+            (
+                dir.join("backend").join("src").join("index.ts"),
+                "// some earlier generation\n",
+            ),
+            (
+                dir.join("frontend").join("vite.config.ts"),
+                "// some earlier generation\n",
+            ),
+            (
+                dir.join("frontend").join("src").join("main.tsx"),
+                "// some earlier generation\n",
+            ),
+            (
+                dir.join("frontend").join("index.html"),
+                "<!doctype html><html><head></head></html>\n",
+            ),
+        ];
+        for (path, contents) in &edits {
+            std::fs::write(path, contents).expect("edit");
+        }
 
-        migrate_vite_react(&dir, "Nosh");
+        migrate(&dir, "Nosh");
         // And the poll behind this must not touch them a second time either.
-        migrate_vite_react(&dir, "Nosh");
+        migrate(&dir, "Nosh");
 
-        assert_eq!(
-            std::fs::read_to_string(&app_ts).expect("app.ts"),
-            "// agent's own routing\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&package_json).expect("package.json"),
-            "{\"name\":\"agent-edited\"}\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&home_tsx).expect("page"),
-            "// agent's own page\n"
-        );
-
-        // The stamped entry points, by contrast, are exactly what migration is for — restamped
-        // even though nothing here was ever behind in this test, which is the idempotence a
-        // poll relies on.
-        assert_eq!(
-            std::fs::read_to_string(dir.join("backend").join("src").join("index.ts"))
-                .expect("entry point"),
-            VITE_BACKEND_INDEX_TS
-        );
+        for (path, contents) in &edits {
+            assert_eq!(
+                std::fs::read_to_string(path).expect("file"),
+                *contents,
+                "{} was rewritten",
+                path.display()
+            );
+        }
     }
 
     #[test]
-    fn a_dependency_free_dashboard_is_never_migrated_as_vite_react_and_the_reverse() {
+    fn migration_tells_the_two_scaffolds_apart_from_disk_not_from_the_manifest() {
         let root = scratch("template-isolation");
 
-        let dep_free = root.join("old");
-        scaffold(&dep_free, "Old", "", None).expect("scaffold");
-        migrate_vite_react(&dep_free, "Old");
-        assert_eq!(
-            std::fs::read_to_string(dep_free.join("frontend").join("index.ts")).expect("entry"),
-            FRONTEND_INDEX_TS,
-            "migrate_vite_react must not have touched a dependency-free dashboard"
-        );
-        assert!(!dep_free.join("frontend").join("src").join("main.tsx").exists());
-
+        // A vite-react dashboard whose manifest carries no `created_from` at all — the decision
+        // this guards: migration must still recognise it from disk, not go looking for the field.
         let vite = root.join("new");
         scaffold_vite_react(&vite, "New", "", None).expect("scaffold");
+        let mut manifest = read_manifest(&vite);
+        manifest.created_from = None;
+        write_manifest(&vite, &manifest).expect("strip created_from");
+
         migrate(&vite, "New");
+        assert!(
+            !vite.join("frontend").join("index.ts").exists(),
+            "migrate must not have treated a created_from-less vite-react dashboard as \
+             dependency-free"
+        );
         assert_eq!(
-            std::fs::read_to_string(
-                vite.join("backend").join("src").join("index.ts")
-            )
-            .expect("entry"),
+            std::fs::read_to_string(vite.join("backend").join("src").join("index.ts"))
+                .expect("entry"),
             VITE_BACKEND_INDEX_TS,
             "migrate must not have touched a vite-react dashboard"
         );
-        assert!(!vite.join("backend").join("index.ts").exists());
+
+        // And a dependency-free dashboard is migrated exactly as it always was.
+        let dep_free = root.join("old");
+        scaffold(&dep_free, "Old", "", None).expect("scaffold");
+        migrate(&dep_free, "Old");
+        assert_eq!(
+            std::fs::read_to_string(dep_free.join("frontend").join("index.ts")).expect("entry"),
+            FRONTEND_INDEX_TS
+        );
+        assert!(!dep_free.join("frontend").join("src").join("main.tsx").exists());
+    }
+
+    #[test]
+    fn nothing_reads_created_from_a_dashboard_with_it_removed_behaves_the_same() {
+        let (cfg, ports) = store("no-created-from");
+        let root = cfg.module("dashboards").dir().to_path_buf();
+        std::fs::create_dir_all(&root).expect("dashboards root");
+        let dir = root.join("nosh");
+        scaffold_vite_react(&dir, "Nosh", "", None).expect("scaffold");
+
+        // Strip the field entirely, the way an owner editing `config.toml` by hand might.
+        let raw = std::fs::read_to_string(dir.join("config.toml")).expect("config.toml");
+        assert!(raw.contains("created_from"), "{raw}");
+        let stripped = raw
+            .lines()
+            .filter(|line| !line.starts_with("created_from"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.join("config.toml"), stripped).expect("strip the field");
+
+        let entry_before =
+            std::fs::read_to_string(dir.join("backend").join("src").join("index.ts"))
+                .expect("entry point");
+
+        let listed = listed(&cfg, &ports);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].created_from, None, "the field really is gone");
+        assert!(
+            !dir.join("frontend").join("index.ts").exists(),
+            "a listing must not have treated this as the dependency-free scaffold"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("backend").join("src").join("index.ts"))
+                .expect("entry point"),
+            entry_before,
+            "unaffected either way: migration decides from disk, not from this field"
+        );
     }
 }
