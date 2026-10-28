@@ -7,8 +7,12 @@ import { Hono } from "hono";
 
 import { statusRoute } from "./routes/status";
 import { echoRoute } from "./routes/echo";
+import { notesRoute } from "./routes/notes";
 
-const app = new Hono().route("/status", statusRoute).route("/echo", echoRoute);
+const app = new Hono()
+  .route("/status", statusRoute)
+  .route("/echo", echoRoute)
+  .route("/notes", notesRoute);
 
 // What `frontend/src/lib/api.ts`'s `hc<AppType>("/api")` imports — the single source of truth
 // the typed client is checked against. Never import anything *from* `index.ts` here: that file

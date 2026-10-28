@@ -19,6 +19,7 @@ frontend/              a Vite + React app, its own Bun package
       utils.ts              shadcn's `cn()` helper
     components/ui/          >>> shadcn components live here <<<
     pages/                  >>> agents add pages here <<<
+    types/                  >>> ambient .d.ts stubs for backend deps — see below <<<
 backend/                a Hono app on Bun, its own Bun package
   src/
     index.ts                entry — runs `app.ts` on the leased port   (do not edit)
@@ -79,6 +80,30 @@ const { data } = useQuery({
 
 `api` is `hc<AppType>("/api")` — every property after it is a path segment, and `$get`/`$post`/…
 are the Hono RPC client's method calls, inferred from what `app.ts` actually mounts.
+
+## Use the shared SQLite store
+
+`backend/src/routes/notes.ts` is a worked example against the platform's shared database —
+`@adi/db`, documented fully in `guides/db.md`. The same file every tool, trigger and agent script
+reads and writes, so **name a table for what it holds and who owns it** (`dashboard_notes`, not
+`notes`) and never `drop`/`alter` one you did not create.
+
+```ts
+import { query, run } from "@adi/db";
+
+run("create table if not exists dashboard_notes (id integer primary key, body text, at integer)");
+const recent = query<{ body: string }>("select body from dashboard_notes order by at desc limit 5");
+```
+
+**One wrinkle, already handled for you**: `@adi/db`'s own implementation imports `bun:sqlite`
+and Node's `process`/`fs`/`os`/`path`. That is fine for the backend's own typecheck — but a route
+using it, once mounted on `app.ts`, is pulled into the *frontend's* typecheck too (for `AppType`'s
+structural type alone), and that program has no `@types/bun`. `frontend/tsconfig.app.json` remaps
+`"@adi/db"` to a small stub (`frontend/src/types/adi-db.d.ts`) declaring just its public
+functions, so the frontend never has to resolve the real implementation. Reach for the same trick
+— a `paths` remap to a tiny ambient `.d.ts` — for any other backend dependency you chain into
+`app.ts` whose own types need a Node or Bun global; a route that stays to Hono, zod and
+Web-platform globals (`routes/status.ts`, `routes/echo.ts`) never needs one.
 
 ### Relative paths only — never a host, never a port
 

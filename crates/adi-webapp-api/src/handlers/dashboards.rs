@@ -102,6 +102,8 @@ const VITE_FRONTEND_CARD_TSX: &str =
     include_str!("../../templates/vite-react/frontend/src/components/ui/card.tsx");
 const VITE_FRONTEND_HOME_TSX: &str =
     include_str!("../../templates/vite-react/frontend/src/pages/Home.tsx");
+const VITE_FRONTEND_ADI_DB_DTS: &str =
+    include_str!("../../templates/vite-react/frontend/src/types/adi-db.d.ts");
 const VITE_BACKEND_PACKAGE_JSON: &str =
     include_str!("../../templates/vite-react/backend/package.json");
 const VITE_BACKEND_TSCONFIG_JSON: &str =
@@ -112,6 +114,8 @@ const VITE_BACKEND_ROUTE_STATUS: &str =
     include_str!("../../templates/vite-react/backend/src/routes/status.ts");
 const VITE_BACKEND_ROUTE_ECHO: &str =
     include_str!("../../templates/vite-react/backend/src/routes/echo.ts");
+const VITE_BACKEND_ROUTE_NOTES: &str =
+    include_str!("../../templates/vite-react/backend/src/routes/notes.ts");
 const VITE_BACKEND_ROUTE_STATUS_TEST: &str =
     include_str!("../../templates/vite-react/backend/src/routes/status.test.ts");
 const VITE_README: &str = include_str!("../../templates/vite-react/README.md");
@@ -419,6 +423,7 @@ fn scaffold_vite_react(
     std::fs::create_dir_all(frontend.join("src").join("lib"))?;
     std::fs::create_dir_all(frontend.join("src").join("components").join("ui"))?;
     std::fs::create_dir_all(frontend.join("src").join("pages"))?;
+    std::fs::create_dir_all(frontend.join("src").join("types"))?;
     std::fs::create_dir_all(backend.join("src").join("routes"))?;
     std::fs::create_dir_all(dir.join(".adi"))?;
 
@@ -474,6 +479,10 @@ fn scaffold_vite_react(
             frontend.join("src").join("pages").join("Home.tsx"),
             VITE_FRONTEND_HOME_TSX,
         ),
+        (
+            frontend.join("src").join("types").join("adi-db.d.ts"),
+            VITE_FRONTEND_ADI_DB_DTS,
+        ),
         (backend.join("package.json"), VITE_BACKEND_PACKAGE_JSON),
         (backend.join("tsconfig.json"), VITE_BACKEND_TSCONFIG_JSON),
         (backend.join("src").join("index.ts"), VITE_BACKEND_INDEX_TS),
@@ -485,6 +494,10 @@ fn scaffold_vite_react(
         (
             backend.join("src").join("routes").join("echo.ts"),
             VITE_BACKEND_ROUTE_ECHO,
+        ),
+        (
+            backend.join("src").join("routes").join("notes.ts"),
+            VITE_BACKEND_ROUTE_NOTES,
         ),
         (
             backend.join("src").join("routes").join("status.test.ts"),
@@ -2093,6 +2106,14 @@ mod tests {
         assert!(dir.join("frontend").join("package.json").exists());
         assert!(dir.join("backend").join("package.json").exists());
         assert!(dir.join("frontend").join("src").join("vite-env.d.ts").exists());
+        assert!(dir.join("backend").join("src").join("routes").join("notes.ts").exists());
+        // The frontend never resolves @adi/db for real — only the stub `paths` remaps to.
+        assert!(dir.join("frontend").join("src").join("types").join("adi-db.d.ts").exists());
+        let tsconfig_app = std::fs::read_to_string(
+            dir.join("frontend").join("tsconfig.app.json"),
+        )
+        .expect("tsconfig.app.json");
+        assert!(tsconfig_app.contains(r#""@adi/db": ["./src/types/adi-db.d.ts"]"#), "{tsconfig_app}");
         assert!(!dir.join("frontend").join("index.ts").exists());
         assert!(!dir.join("backend").join("index.ts").exists());
 

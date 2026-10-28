@@ -19,7 +19,9 @@
     // No `baseUrl` — `typescript` 7.0.2 removed it; a `paths` value is resolved against the
     // tsconfig file's own directory now, which is exactly what `baseUrl: "."` meant here.
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // See src/types/adi-db.d.ts for why this one is remapped rather than resolved for real.
+      "@adi/db": ["./src/types/adi-db.d.ts"]
     }
   },
   "include": ["src"]
