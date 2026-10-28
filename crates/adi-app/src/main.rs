@@ -617,8 +617,10 @@ fn member_refusal(projects: &Projects, req: &http::Request) -> Option<Response> 
 
 /// The routes a member may never reach — `/api/system/*`, `/api/update/*`, `/api/licence*`,
 /// `/api/mesh*`; every `/api/fleet/*` write except adding an `http:<label>` grant to its own
-/// record; the global secrets actions; the run-limit setting; and creating a hive service.
-/// Everything else (including every `GET`) is unrestricted.
+/// record; every secrets action that can read, write or refresh a secret (there is only one
+/// scope today, global, but the gate is written to cover every scope there ever is); the
+/// run-limit setting; and creating a hive service. Everything else (including every `GET`) is
+/// unrestricted.
 fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Option<Response> {
     let blocked = path.starts_with("/api/system")
         || path.starts_with("/api/update")
@@ -630,7 +632,11 @@ fn member_blocked(method: &str, path: &str, body: &[u8], petname: &str) -> Optio
         || (method == "POST"
             && matches!(
                 path,
-                "/api/secrets/reveal" | "/api/secrets/set" | "/api/secrets/remove"
+                "/api/secrets/reveal"
+                    | "/api/secrets/set"
+                    | "/api/secrets/set-oauth"
+                    | "/api/secrets/remove"
+                    | "/api/secrets/refresh"
             ))
         || (method == "POST" && path == "/api/agents/limit")
         || (method == "POST" && path == "/api/hive/create");
@@ -1507,9 +1513,10 @@ mod tests {
     }
 
     /// The exact route list ADI-MONO-171 G3 names: system/update/licence/mesh outright, every
-    /// fleet write except granting itself an `http:<label>`, the global secrets actions, the
-    /// run-limit setting, and creating a hive service. Everything else — including every `GET` —
-    /// is unrestricted.
+    /// fleet write except granting itself an `http:<label>`, every secrets action — including
+    /// `set-oauth` and `refresh`, both missing from this gate until ADI-MONO-174 — the run-limit
+    /// setting, and creating a hive service. Everything else — including every `GET` — is
+    /// unrestricted.
     #[test]
     fn member_blocked_matches_the_documented_route_list() {
         let petname = "p42-device";
@@ -1523,7 +1530,9 @@ mod tests {
             ("POST", "/api/mesh/start"),
             ("POST", "/api/secrets/reveal"),
             ("POST", "/api/secrets/set"),
+            ("POST", "/api/secrets/set-oauth"),
             ("POST", "/api/secrets/remove"),
+            ("POST", "/api/secrets/refresh"),
             ("POST", "/api/agents/limit"),
             ("POST", "/api/hive/create"),
             ("POST", "/api/fleet/unpair"),
@@ -1553,6 +1562,22 @@ mod tests {
                 "{method} {path} should be open to a member"
             );
         }
+    }
+
+    /// ADI-MONO-174: `/api/secrets/set-oauth` and `/api/secrets/refresh` let a member overwrite
+    /// or refresh a global OAuth secret (e.g. `CLAUDE_CODE_OAUTH_TOKEN`) because they were absent
+    /// from `member_blocked`, unlike the sibling `set`/`remove`/`reveal` routes.
+    #[test]
+    fn member_blocked_covers_set_oauth_and_refresh_like_the_other_secrets_routes() {
+        let petname = "p42-device";
+        assert!(
+            member_blocked("POST", "/api/secrets/set-oauth", b"{}", petname).is_some(),
+            "a member must not overwrite a global OAuth secret"
+        );
+        assert!(
+            member_blocked("POST", "/api/secrets/refresh", b"{}", petname).is_some(),
+            "a member must not refresh a global secret"
+        );
     }
 
     /// The one `/api/fleet/*` write a member keeps: granting itself an `http:<label>` on its own

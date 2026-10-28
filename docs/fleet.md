@@ -386,8 +386,10 @@ been. `GET /api/fleet` reports both.
 **A member is a peer with less than the full run of the panel.** `adi-app`'s dispatch refuses a
 member on: `/api/system/*`, `/api/update/*`, `/api/licence*`, `/api/mesh*` outright; every
 `/api/fleet/*` write except granting itself an `http:<label>` on its own record (the one thing the
-fleet page already let a peer do for a scratch dashboard — "listing may also grant"); the global
-`/api/secrets/{reveal,set,remove}`; `/api/agents/limit`; and creating a hive service. Within
+fleet page already let a peer do for a scratch dashboard — "listing may also grant"); every
+secrets action — `/api/secrets/{reveal,set,set-oauth,remove,refresh}`, covering every scope the
+store has, not only the global one (ADI-MONO-174 added `set-oauth` and `refresh` to the gate,
+missing until then); `/api/agents/limit`; and creating a hive service. Within
 sessions and agents, a member may stop, delete or hide only a run with `launched_by ==
 human:<self>` (`self` being the username on its credential — see the header below), and may edit
 or delete only an agent it created (`created_by`). Everyone, admin or member, can still read and
@@ -594,9 +596,11 @@ This is `apps/ios` on a desktop, and the reasoning is the phone's
 - **This machine keeps the node's password, and that is the one departure from §8.** A transfer asks
   per transfer and stores nothing, which is right for a button pressed once; a rail refreshes, so
   re-prompting would make it unusable. The credential goes into `adi-secrets` (XChaCha20-Poly1305
-  under a `0600` master key) in a reserved **scope**, never as a global secret: `Secrets::resolve`
-  injects every global secret into every agent run's environment, and a node's password has no
-  business in a subprocess's env. It is checked against the node before it is stored — a credential
+  under a `0600` master key) in a reserved **scope**, never as a global secret: an agent run only
+  ever gets the secrets its `[[secrets]]` names, decrypted by `attached_secret_env`
+  (`adi-agents/src/lib.rs`) — `Secrets::resolve` (`adi-secrets/src/lib.rs`) is what triggers call
+  to get the whole global-and-project set, and a node's password has no business in either a
+  subprocess's env or a trigger's. It is checked against the node before it is stored — a credential
   that does not work is worse than none, because the rail would then report a fault where the answer
   is a password. Nothing puts it back on the wire: the DTO says only whether a node is locked.
 - **And once kept, it is spent on the way out.** An unlocked node's links used to open a browser
