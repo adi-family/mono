@@ -234,8 +234,12 @@ async fn main() -> anyhow::Result<()> {
     // before `Agents::open` so the same `Arc` goes into both `App` and `Agents::with_lease_values`.
     let leases = Arc::new(leases::LeaseTable::default());
     let lease_session = adi_mesh::lease_seal::SessionKey::generate();
-    let agents =
-        Agents::open().with_lease_values(Arc::clone(&leases) as Arc<dyn adi_agents::LeaseValues>);
+    // Where a leased run's children forward `adi-mono agents run` to reach this very lease
+    // (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.1) — always loopback, never the address a
+    // peer would dial this node at, because the capability is honoured only from loopback (P3.2).
+    let agents = Agents::open()
+        .with_lease_values(Arc::clone(&leases) as Arc<dyn adi_agents::LeaseValues>)
+        .with_lease_url(format!("http://127.0.0.1:{}", local.port()));
     // Migrate before consumers read definitions; log failures so the panel remains usable.
     match adi_agents::migrations::on_boot(&agents) {
         Ok(applied) => {
@@ -644,6 +648,18 @@ fn user_scope(projects: &Projects, sender: Option<handlers::FleetSender<'_>>) ->
     record.user.clone().filter(|_| record.auth.user == sender.user)
 }
 
+/// A presented `X-Adi-Lease` capability, but only when `sender` is `None`
+/// (`docs/byo-credentials.md` §11, ADI-MONO-182 P3.2): a capability that leaked into a transcript
+/// must never be replayable by a mesh peer, so a request the gateway attached identity headers to
+/// never reads this header at all, whatever it also carries. `sender` is read off the same request
+/// rather than re-derived, so this agrees with whichever branch [`fleet_sender`] already took.
+fn lease_capability_header<'a>(
+    req: &'a http::Request,
+    sender: Option<handlers::FleetSender<'_>>,
+) -> Option<&'a str> {
+    sender.is_none().then(|| req.header("x-adi-lease")).flatten()
+}
+
 /// The caller's own `EndpointId`, from this machine's own pairing record of them — part of a
 /// BYO-credentials unlock's AAD (`docs/byo-credentials.md` §9, `adi_mesh::lease_seal`), never
 /// taken from anything the request itself claims. `None` under exactly the same conditions
@@ -984,7 +1000,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         }
         ("POST", "/api/agents/run") => {
             let sender = fleet_sender(req);
-            handlers::run_agent(agents, &req.body, sender, user_scope(projects, sender))
+            match lease_capability_header(req, sender) {
+                Some(capability) => handlers::run_agent_leased(agents, &req.body, capability),
+                None => handlers::run_agent(agents, &req.body, sender, user_scope(projects, sender)),
+            }
         }
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/spawn-policy") => handlers::set_spawn_policy(agents, &req.body),
@@ -1951,6 +1970,42 @@ mod tests {
         assert!(
             fleet_sender(&no_petname).is_none(),
             "a node header with no petname is not a fleet sender"
+        );
+    }
+
+    /// ADI-MONO-182 P3.2/P3.4: the capability is accepted only from loopback, never over the
+    /// mesh — the same request carrying `X-Adi-Lease` reads differently depending only on whether
+    /// the gateway also attached a `FleetSender` to it.
+    #[test]
+    fn lease_capability_header_is_read_only_without_a_fleet_sender() {
+        let mut local = request("POST", "/api/agents/run", "{}");
+        local
+            .headers
+            .insert("x-adi-lease".to_string(), "cap-123".to_string());
+        assert_eq!(
+            lease_capability_header(&local, fleet_sender(&local)),
+            Some("cap-123"),
+            "a loopback request with no mesh identity reads it"
+        );
+
+        let mut forwarded = local;
+        forwarded
+            .headers
+            .insert("x-adi-fleet-node".to_string(), "laptop-b".to_string());
+        forwarded
+            .headers
+            .insert("x-adi-fleet-user".to_string(), "igor".to_string());
+        forwarded
+            .headers
+            .insert("x-adi-fleet-petname".to_string(), "laptop-b".to_string());
+        assert!(
+            lease_capability_header(&forwarded, fleet_sender(&forwarded)).is_none(),
+            "the same header carried over the mesh is never honoured"
+        );
+
+        assert!(
+            lease_capability_header(&request("POST", "/api/agents/run", "{}"), None).is_none(),
+            "no header, nothing to read"
         );
     }
 
