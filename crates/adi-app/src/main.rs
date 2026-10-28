@@ -6,6 +6,7 @@
 mod awaits;
 mod channels;
 mod event_log;
+mod lease_worker;
 mod leases;
 mod live;
 mod node;
@@ -289,6 +290,10 @@ async fn main() -> anyhow::Result<()> {
     );
     event_log::start(tasks.clone(), events.clone());
     prober::start(agents.clone());
+    // The device side of auto-unlocking a server connection (`docs/byo-credentials.md` §9,
+    // ADI-MONO-180 P2.4's own gap, closed by ADI-MONO-181) — this machine acting as a paired
+    // peer dialling *out*, independent of whether this machine's own `[user_secrets]` is enabled.
+    lease_worker::start(secrets.clone());
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
@@ -819,10 +824,20 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             handlers::fleet_invite_cancel(projects.config(), &req.body)
         }
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
-        ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
+        ("POST", "/api/fleet/unpair") => handlers::fleet_unpair_revoking(
+            projects.config(),
+            &req.body,
+            |user| {
+                leases::revoke_user(leases, agents, events, user);
+            },
+        ),
         // Unpair only after both directions have been dropped.
-        ("POST", "/api/fleet/sources/drop") => viewer::drop_source(projects, secrets, &req.body),
-        ("POST", "/api/fleet/viewers/drop") => viewer::drop_viewer(projects, secrets, &req.body),
+        ("POST", "/api/fleet/sources/drop") => {
+            viewer::drop_source(projects, secrets, agents, leases, events, &req.body)
+        }
+        ("POST", "/api/fleet/viewers/drop") => {
+            viewer::drop_viewer(projects, secrets, agents, leases, events, &req.body)
+        }
         ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),
         ("POST", "/api/fleet/grants/remove") => {
             handlers::fleet_revoke(projects.config(), &req.body)
@@ -923,6 +938,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             leases,
             lease_session,
             projects.config(),
+            events,
             user_scope(projects, fleet_sender(req)).as_deref(),
             fleet_sender(req).map(|s| s.petname),
             sender_device_key(projects, fleet_sender(req)).as_deref(),
@@ -934,9 +950,12 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             user_scope(projects, fleet_sender(req)).as_deref(),
             &req.body,
         ),
-        ("POST", "/api/leases/revoke") => {
-            leases::revoke(leases, user_scope(projects, fleet_sender(req)).as_deref())
-        }
+        ("POST", "/api/leases/revoke") => leases::revoke(
+            leases,
+            agents,
+            events,
+            user_scope(projects, fleet_sender(req)).as_deref(),
+        ),
         ("GET", "/api/leases") => leases::list(
             leases,
             peer_role(projects, fleet_sender(req)).is_admin(),

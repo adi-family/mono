@@ -169,8 +169,18 @@ pub(crate) async fn forget(secrets: &Secrets, body: &[u8]) -> Response {
 }
 
 /// Drop the source and its stored password.
-pub(crate) fn drop_source(projects: &Projects, secrets: &Secrets, body: &[u8]) -> Response {
-    let response = handlers::fleet_drop_source(projects.config(), body);
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drop_source(
+    projects: &Projects,
+    secrets: &Secrets,
+    agents: &adi_agents::Agents,
+    leases: &crate::leases::LeaseTable,
+    events: &adi_events::Events,
+    body: &[u8],
+) -> Response {
+    let response = handlers::fleet_drop_source_revoking(projects.config(), body, |user| {
+        crate::leases::revoke_user(leases, agents, events, user);
+    });
     if response.status == 200
         && let Ok(node) = serde_json::from_slice::<FleetRef>(body)
     {
@@ -180,8 +190,18 @@ pub(crate) fn drop_source(projects: &Projects, secrets: &Secrets, body: &[u8]) -
 }
 
 /// Drop the viewer; retain its password if it is still a source.
-pub(crate) fn drop_viewer(projects: &Projects, secrets: &Secrets, body: &[u8]) -> Response {
-    let response = handlers::fleet_drop_viewer(projects.config(), body);
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn drop_viewer(
+    projects: &Projects,
+    secrets: &Secrets,
+    agents: &adi_agents::Agents,
+    leases: &crate::leases::LeaseTable,
+    events: &adi_events::Events,
+    body: &[u8],
+) -> Response {
+    let response = handlers::fleet_drop_viewer_revoking(projects.config(), body, |user| {
+        crate::leases::revoke_user(leases, agents, events, user);
+    });
     if response.status == 200
         && let Ok(node) = serde_json::from_slice::<FleetRef>(body)
         && let Ok(state) = serde_json::from_str::<FleetState>(&response.body)

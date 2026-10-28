@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use adi_config::Config;
+use adi_events::{Event, Events};
 use adi_mesh::connections::LeaseLength;
 use adi_mesh::lease_seal::SessionKey;
 use adi_secrets::UserSecretsPolicy;
@@ -24,6 +25,32 @@ use adi_webapp_api::handlers::{self, Response};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
+
+/// `adi.secrets.lease.granted` — a device's unlock installed a live lease (`docs/byo-credentials.md`
+/// §10, ADI-MONO-181 P2.8). Nothing in this process subscribes to it: a session parked on this
+/// user's lease resumes on the next `advance_queue` poll regardless, the same lazy clock every
+/// queued message already waits on — this is purely for the rail and anyone else watching.
+#[derive(Debug, Serialize)]
+struct LeaseGranted<'a> {
+    user: &'a str,
+    names: &'a [String],
+}
+
+impl Event for LeaseGranted<'_> {
+    const NAME: &'static str = "adi.secrets.lease.granted";
+}
+
+/// `adi.secrets.lease.revoked` — `mesh lock` or unpairing a user's last peer
+/// (`docs/byo-credentials.md` §10.1, ADI-MONO-181 P2.6).
+#[derive(Debug, Serialize)]
+struct LeaseRevoked<'a> {
+    user: &'a str,
+    stopped: &'a [String],
+}
+
+impl Event for LeaseRevoked<'_> {
+    const NAME: &'static str = "adi.secrets.lease.revoked";
+}
 
 /// `lease = "0"`'s grace after the last renew — generous enough that a renew loop's own interval
 /// (seconds, not minutes) never races it, short enough that a device that genuinely went away is
@@ -207,12 +234,14 @@ struct UnlockRequest {
 
 /// `POST /api/leases/unlock` (§9 step 4). `device_key` is the caller's `EndpointId`, from the
 /// gateway's own pairing record — part of every sealed value's AAD (`lease_seal`'s own doc),
-/// never taken from the request body.
+/// never taken from the request body. `events` is only for `adi.secrets.lease.granted`
+/// (ADI-MONO-181 P2.8) — nothing here depends on it being delivered; see [`LeaseGranted`].
 #[allow(clippy::too_many_arguments)]
 pub fn unlock(
     table: &LeaseTable,
     session: &SessionKey,
     config: &Config,
+    events: &Events,
     user: Option<&str>,
     petname: Option<&str>,
     device_key: Option<&str>,
@@ -262,6 +291,7 @@ pub fn unlock(
     }
     let names: Vec<String> = values.keys().cloned().collect();
     table.unlock(user, petname, values, clamped);
+    let _ = events.emit_event(&LeaseGranted { user, names: &names });
     handlers::ok_json(&serde_json::json!({ "ok": true, "names": names, "lease": clamped.to_string() }))
 }
 
@@ -294,14 +324,28 @@ pub fn renew(table: &LeaseTable, session: &SessionKey, user: Option<&str>, body:
     }
 }
 
-/// `POST /api/leases/revoke` (`mesh lock`, §4.4, §10.1). Drops the lease and answers whether one
-/// was there — stopping the sessions it provisioned is ADI-MONO-181's own job (§10.1 steps 2-5);
-/// this only does step 1.
-pub fn revoke(table: &LeaseTable, user: Option<&str>) -> Response {
+/// The full §10.1 sequence, shared by `POST /api/leases/revoke` below and by unpairing a user's
+/// last peer (`docs/byo-credentials.md` §3.2, ADI-MONO-181 P2.6's own "also on unpair"
+/// requirement): drop the lease (step 1), then — through `Agents::stop_runs_for_lease_user`, which
+/// voids every one of the user's `lease_cap`s and finds every session across every agent — stop
+/// each one still alive (steps 2-4), and publish `adi.secrets.lease.revoked` (step 5). Runs in full
+/// even when `table` holds nothing for `user`: `stop_runs_for_lease_user` only reads `sessions.db`,
+/// so a restarted `adi-app` with an empty table still stops whatever was started before it came
+/// back up. Returns whether a *live lease* was there to drop — the run ids actually stopped are
+/// in the published event, not here.
+pub fn revoke_user(table: &LeaseTable, agents: &adi_agents::Agents, events: &Events, user: &str) -> bool {
+    let had_lease = table.revoke(user);
+    let stopped = agents.stop_runs_for_lease_user(user);
+    let _ = events.emit_event(&LeaseRevoked { user, stopped: &stopped });
+    had_lease
+}
+
+/// `POST /api/leases/revoke` (`mesh lock`, §4.4, §10.1).
+pub fn revoke(table: &LeaseTable, agents: &adi_agents::Agents, events: &Events, user: Option<&str>) -> Response {
     let Some(user) = user else {
         return handlers::error(403, "no user scope to revoke");
     };
-    let revoked = table.revoke(user);
+    let revoked = revoke_user(table, agents, events, user);
     handlers::ok_json(&serde_json::json!({ "ok": true, "revoked": revoked }))
 }
 
@@ -342,6 +386,14 @@ mod tests {
         .expect("save policy");
     }
 
+    fn events_for(config: &Config) -> Events {
+        Events::with_config(config.clone())
+    }
+
+    fn agents_for(config: &Config) -> adi_agents::Agents {
+        adi_agents::Agents::with_config(config.clone())
+    }
+
     /// Seal one value exactly as a device would, including the AAD this server-side `unlock`
     /// reconstructs — the harness every test below shares.
     fn seal_one(
@@ -372,6 +424,7 @@ mod tests {
     #[test]
     fn unlock_opens_the_sealed_values_and_installs_a_live_lease() {
         let config = scratch("unlock-basic");
+        let events = events_for(&config);
         enable(&config, &["CLAUDE_CODE_OAUTH_TOKEN"]);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
@@ -385,6 +438,7 @@ mod tests {
             &table,
             &session,
             &config,
+            &events,
             Some("u-aaa"),
             Some("laptop"),
             Some("dev-1"),
@@ -400,6 +454,7 @@ mod tests {
     #[test]
     fn unlock_drops_a_name_not_on_the_overridable_list() {
         let config = scratch("unlock-not-overridable");
+        let events = events_for(&config);
         enable(&config, &["CLAUDE_CODE_OAUTH_TOKEN"]);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
@@ -409,22 +464,24 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "NOT_OVERRIDABLE", "v")],
         });
-        let resp = unlock(&table, &session, &config, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
         assert_eq!(resp.status, 400, "{}", resp.body);
     }
 
     #[test]
     fn unlock_refuses_while_the_feature_is_off() {
         let config = scratch("unlock-disabled");
+        let events = events_for(&config);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
-        let resp = unlock(&table, &session, &config, Some("u-aaa"), Some("laptop"), Some("dev-1"), b"{}");
+        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), b"{}");
         assert_eq!(resp.status, 400);
     }
 
     #[test]
     fn unlock_clamps_the_lease_to_the_servers_max() {
         let config = scratch("unlock-clamp");
+        let events = events_for(&config);
         enable(&config, &["K"]);
         UserSecretsPolicy {
             enabled: true,
@@ -441,7 +498,7 @@ mod tests {
             "lease": "forever",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "K", "v")],
         });
-        let resp = unlock(&table, &session, &config, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
         assert_eq!(resp.status, 200, "{}", resp.body);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["lease"], "24h");
@@ -450,6 +507,7 @@ mod tests {
     #[test]
     fn unlock_refuses_a_stale_epoch() {
         let config = scratch("unlock-stale-epoch");
+        let events = events_for(&config);
         enable(&config, &["K"]);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
@@ -458,13 +516,14 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", "not-the-real-epoch", "K", "v")],
         });
-        let resp = unlock(&table, &session, &config, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        let resp = unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
         assert_eq!(resp.status, 409);
     }
 
     #[test]
     fn renew_moves_last_seen_and_refuses_an_unknown_epoch() {
         let config = scratch("renew");
+        let events = events_for(&config);
         enable(&config, &["K"]);
         let table = LeaseTable::default();
         let session = SessionKey::generate();
@@ -473,7 +532,7 @@ mod tests {
             "lease": "0",
             "sealed": [seal_one(&session, "u-aaa", "dev-1", session.epoch(), "K", "v")],
         });
-        unlock(&table, &session, &config, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
+        unlock(&table, &session, &config, &events, Some("u-aaa"), Some("laptop"), Some("dev-1"), body.to_string().as_bytes());
 
         let ok = renew(&table, &session, Some("u-aaa"), serde_json::json!({"epoch": session.epoch()}).to_string().as_bytes());
         assert_eq!(ok.status, 200, "{}", ok.body);
@@ -502,6 +561,9 @@ mod tests {
 
     #[test]
     fn revoke_drops_the_lease_and_runs_even_with_nothing_there() {
+        let config = scratch("revoke-nothing");
+        let events = events_for(&config);
+        let agents = agents_for(&config);
         let table = LeaseTable::default();
         table.unlock(
             "u-aaa",
@@ -509,17 +571,61 @@ mod tests {
             BTreeMap::from([("K".to_string(), Zeroizing::new("v".to_string()))]),
             LeaseLength::Forever,
         );
-        let resp = revoke(&table, Some("u-aaa"));
+        let resp = revoke(&table, &agents, &events, Some("u-aaa"));
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["revoked"], true);
         assert_eq!(adi_agents::LeaseValues::value(&table, "u-aaa", "K"), None);
 
         // Running again with nothing in the table is not an error.
-        let resp = revoke(&table, Some("u-aaa"));
+        let resp = revoke(&table, &agents, &events, Some("u-aaa"));
         assert_eq!(resp.status, 200);
         let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
         assert_eq!(v["revoked"], false);
+    }
+
+    /// ADI-MONO-181 P2.6, wired for real: `revoke` doesn't just drop the table entry, it goes
+    /// through `Agents::stop_runs_for_lease_user` — proven against a real spawned child, kept
+    /// alive and then actually killed, in `adi_agents::tests::end_to_end_a_real_child_…` — and
+    /// publishes `adi.secrets.lease.revoked` either way. This proves the wiring at this layer: a
+    /// session on the user's lease that was never started (so `stop_runs_for_lease_user`
+    /// correctly leaves it alone — a parked session stays parked, §10.1) still turns up in the
+    /// published event's `stopped` list as *not* among them, and the whole thing runs with no
+    /// lease in the table at all — the restart case §10.1 names explicitly.
+    #[test]
+    fn revoke_runs_the_full_sequence_even_with_nothing_in_the_table() {
+        use adi_agents::store::SessionStore;
+        use adi_agents::{Backend, LeaseRef};
+
+        let config = scratch("revoke-live-session");
+        let agents = agents_for(&config);
+        let events = events_for(&config);
+        let sessions = SessionStore::new(config.module("sessions").dir());
+        let record = sessions
+            .create("worker", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+        sessions
+            .set_lease("worker", &record.id, &LeaseRef { user: "u-aaa".into(), names: vec!["K".into()] })
+            .expect("set lease");
+
+        // No lease in `LeaseTable` at all — the restart case §10.1 names explicitly.
+        let table = LeaseTable::default();
+        let resp = revoke(&table, &agents, &events, Some("u-aaa"));
+        let v: serde_json::Value = serde_json::from_str(&resp.body).unwrap();
+        assert_eq!(v["revoked"], false, "nothing was in the table to begin with");
+
+        let published = events.catch_up("test", 10).expect("catch up");
+        let revoked = published
+            .iter()
+            .find(|e| e.record.name == LeaseRevoked::NAME)
+            .expect("published even with nothing in the table");
+        let payload: serde_json::Value = serde_json::from_str(&revoked.record.payload).unwrap();
+        assert_eq!(payload["user"], "u-aaa");
+        assert_eq!(
+            payload["stopped"],
+            serde_json::json!([]),
+            "a session that never started is left alone, not reported as stopped"
+        );
     }
 
     #[test]
@@ -555,6 +661,8 @@ mod tests {
         use adi_secrets::Secrets;
 
         let config = scratch("e2e");
+        let events = events_for(&config);
+        let agents = agents_for(&config);
         let secrets = Secrets::with_config(config.clone());
         enable(&config, &["CLAUDE_CODE_OAUTH_TOKEN"]);
         let user = "u-e2e";
@@ -631,6 +739,7 @@ mod tests {
             &table,
             &session,
             &config,
+            &events,
             Some(user),
             Some(server_petname),
             Some(device_label),
@@ -648,7 +757,7 @@ mod tests {
         );
 
         // -- `mesh lock`: drop the lease and void it.
-        let revoke_resp = revoke(&table, Some(user));
+        let revoke_resp = revoke(&table, &agents, &events, Some(user));
         assert_eq!(revoke_resp.status, 200);
 
         // -- the next launch: no live value, so `lease::apply` leaves the server's own value in

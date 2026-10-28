@@ -352,22 +352,33 @@ fn move_connection(store: &Config, from: &str, to: &str) {
 /// 400 for an unusable body, 404 when no node goes by that petname here.
 #[must_use]
 pub fn fleet_unpair(store: &Config, body: &[u8]) -> Response {
+    fleet_unpair_revoking(store, body, |_user| {})
+}
+
+/// [`fleet_unpair`], calling `on_user_removed(user)` exactly when this unpair deleted a user's
+/// whole scope — the last peer sharing it (`docs/byo-credentials.md` §3.2) — so a caller that
+/// actually holds a lease table and a runner (`adi-app`) can revoke it and stop every run on it
+/// (§10.1, ADI-MONO-181 P2.6). The plain [`fleet_unpair`] above is every other caller, including
+/// every existing test, which has nothing to act on that with.
+pub fn fleet_unpair_revoking(store: &Config, body: &[u8], on_user_removed: impl FnOnce(&str)) -> Response {
     let petname = match node_ref(body) {
         Ok(petname) => petname,
         Err(response) => return response,
     };
+    let mut on_user_removed = Some(on_user_removed);
     fleet_edit(store, move |registry| {
-        unpair_and_forget_user(store, registry, &petname)
+        unpair_and_forget_user(store, registry, &petname, &mut on_user_removed)
             .map(|_| ())
             .ok_or_else(|| not_paired(&petname))
     })
 }
 
 /// [`FleetRegistry::unpair`], and — only when that was the **last** peer still carrying a user id
-/// here — delete `secrets/users/<id>/` (`docs/byo-credentials.md` §3, ADI-MONO-179). The id is
-/// never reissued, so this is the one moment it is safe to delete what it names; a second peer
-/// still sharing the id (the partner sandbox's several devices pinned to one `p<uid>`) keeps the
-/// storage alive.
+/// here — delete `secrets/users/<id>/` (`docs/byo-credentials.md` §3, ADI-MONO-179) and call
+/// `on_user_removed` (ADI-MONO-181 P2.6's own hook; a no-op for every caller with nothing to
+/// revoke). The id is never reissued, so this is the one moment it is safe to delete what it
+/// names; a second peer still sharing the id (the partner sandbox's several devices pinned to one
+/// `p<uid>`) keeps the storage alive, and is not told anything.
 ///
 /// A deletion failure is swallowed, not surfaced: the unpair itself already succeeded, and an
 /// operator who asked to forget a node should not be told to go check `secrets/` by hand.
@@ -375,12 +386,16 @@ fn unpair_and_forget_user(
     store: &Config,
     registry: &mut FleetRegistry,
     petname: &str,
+    on_user_removed: &mut Option<impl FnOnce(&str)>,
 ) -> Option<adi_mesh::fleet::NodeRecord> {
     let record = registry.unpair(petname)?;
     if let Some(user) = &record.user
         && !registry.has_user(user)
     {
         let _ = adi_secrets::Secrets::with_config(store.clone()).forget_user(user);
+        if let Some(notify) = on_user_removed.take() {
+            notify(user);
+        }
     }
     // This box's own `connections.toml` entry for `petname`, if any (`docs/byo-credentials.md`
     // §4.3) — the other half of the coupling `move_connection` handles for a rename.
@@ -405,14 +420,25 @@ fn unpair_and_forget_user(
 /// the dropped list cannot be written.
 #[must_use]
 pub fn fleet_drop_source(store: &Config, body: &[u8]) -> Response {
+    fleet_drop_source_revoking(store, body, |_user| {})
+}
+
+/// [`fleet_drop_source`], with the same `on_user_removed` hook [`fleet_unpair_revoking`] takes —
+/// dropping the last grant ends the pairing outright, which is exactly the unpair §3.2 means.
+pub fn fleet_drop_source_revoking(
+    store: &Config,
+    body: &[u8],
+    on_user_removed: impl FnOnce(&str),
+) -> Response {
     let petname = match node_ref(body) {
         Ok(petname) => petname,
         Err(response) => return response,
     };
+    let mut on_user_removed = Some(on_user_removed);
     fleet_edit(store, move |registry| {
         let record = registry.get(&petname).ok_or_else(|| not_paired(&petname))?;
         if record.grants.is_empty() {
-            unpair_and_forget_user(store, registry, &petname);
+            unpair_and_forget_user(store, registry, &petname, &mut on_user_removed);
             return Ok(());
         }
         let mut dropped = DroppedSources::load(store);
@@ -433,11 +459,21 @@ pub fn fleet_drop_source(store: &Config, body: &[u8]) -> Response {
 /// 400 for an unusable body, 404 when no node goes by that petname here.
 #[must_use]
 pub fn fleet_drop_viewer(store: &Config, body: &[u8]) -> Response {
+    fleet_drop_viewer_revoking(store, body, |_user| {})
+}
+
+/// [`fleet_drop_viewer`], with the same `on_user_removed` hook [`fleet_unpair_revoking`] takes.
+pub fn fleet_drop_viewer_revoking(
+    store: &Config,
+    body: &[u8],
+    on_user_removed: impl FnOnce(&str),
+) -> Response {
     let petname = match node_ref(body) {
         Ok(petname) => petname,
         Err(response) => return response,
     };
     let mut dropped = DroppedSources::load(store);
+    let mut on_user_removed = Some(on_user_removed);
     fleet_edit(store, move |registry| {
         let record = registry
             .get_mut(&petname)
@@ -448,7 +484,7 @@ pub fn fleet_drop_viewer(store: &Config, body: &[u8]) -> Response {
         }
         // The entry is for a pairing about to be gone; nothing could ever match it again.
         dropped.remove(&record.key, record.paired_at);
-        unpair_and_forget_user(store, registry, &petname);
+        unpair_and_forget_user(store, registry, &petname, &mut on_user_removed);
         dropped
             .save(store)
             .map_err(|e| error(500, &format!("writing the dropped sources: {e}")))
@@ -1120,6 +1156,30 @@ mod tests {
         let _ = fleet_unpair(&store, br#"{"petname":"phone-b"}"#);
 
         assert!(!user_dir.exists(), "now the last peer is gone too");
+    }
+
+    /// ADI-MONO-181 P2.6's own hook: `on_user_removed` fires exactly when unpairing actually
+    /// deleted a user's scope — the last peer — and names that user; it is silent for every
+    /// other unpair, including one of two peers still sharing the id.
+    #[test]
+    fn unpair_revoking_calls_its_hook_only_on_the_last_peer() {
+        let store = temp_store();
+        pair(&store, "laptop-b", "laptop-b", &[], false);
+        pair(&store, "phone-b", "phone-b", &[], false);
+        pair_with_user(&store, "laptop-b", "u-aaa");
+        pair_with_user(&store, "phone-b", "u-aaa");
+
+        let mut notified = None;
+        let _ = fleet_unpair_revoking(&store, br#"{"petname":"laptop-b"}"#, |user| {
+            notified = Some(user.to_string());
+        });
+        assert_eq!(notified, None, "phone-b still carries u-aaa — not the last peer yet");
+
+        let mut notified = None;
+        let _ = fleet_unpair_revoking(&store, br#"{"petname":"phone-b"}"#, |user| {
+            notified = Some(user.to_string());
+        });
+        assert_eq!(notified, Some("u-aaa".to_string()));
     }
 
     #[test]
