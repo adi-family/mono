@@ -1003,6 +1003,13 @@ the user's `missing` policy locally. That means the CLI reading `sessions.lease_
 settings files itself, and under `server` it would launch in-process with the server's values. That
 works, but it moves credentials without the app ever seeing the launch.
 
+**Settled by ADI-MONO-182: refuse, exactly as the body already said.** `run_leased` treats a
+connection failure, a non-2xx answer and an answer that isn't JSON identically — all three refuse
+the launch outright, with no reading of `sessions.lease_cap` or either settings file from this
+process. The alternative's own appeal (the launch still happens, just locally) is also its own
+defect: it would let a credential move onto a run `adi-app` never saw, which is the one thing §11
+says must never happen, restart or not.
+
 **Q4 — Does `missing` cover a user who never stored a value?** §5 records a `LeaseRef` for every
 member launch of an agent attaching an `overridable` name, so a member with no stored value at all
 meets `missing` and, under `fail`, can't run those agents on this server. That is what makes `fail`
@@ -1024,6 +1031,14 @@ a conversation alternates between the user's value and the server's as the lease
 new Codex thread, and the qualified hold key (§6) makes `codex_credential` refuse a resume across
 them anyway. A revoke has the same effect through the re-minted capability (§10.1). Accept that, or
 pin a session to whichever source its first turn used?
+
+**Settled by ADI-MONO-182: accept it.** Pinning would mean the capability (and so
+`ADI_LEASE`/`ADI_LEASE_URL`, and so the env `hash_child_environment` fingerprints) staying put
+across a value it no longer names, which is a worse lie than a fresh thread: the environment
+*did* change, and a Codex thread that silently kept resuming across that change would be running
+on a prompt built under a different credential than the one that is now live. A revoke's own
+re-mint (P3.1) makes the same call for the same reason — "fresh bytes" is the mechanism that keeps
+this honest, not a side effect to work around.
 
 **Q6 — The `launched_by` body field.** `run_agent` records whatever `launched_by` the body sends
 (`handlers/agents.rs:347-353`). This spec keeps the lease off that path, but the field still lets a
@@ -1354,44 +1369,139 @@ in-memory lease source.
 
 ### Phase 3 — subagent and turn inheritance of the lease
 
-**What ADI-MONO-181 leaves exactly here, for this phase to build on.** `adi_agents::lease::
-readiness` (P2.7) already asks "does this turn's lease hold a live value for every name it
-needs, right now" and answers `Ready`/`Wait`/`Fail` purely from the server's `missing` policy —
-it has no opinion on *which process* is asking, and under `missing = "server"` it answers `Ready`
-for any `Agents`, `lease_values()` or not, because the server fallback is the same value
-wherever it runs. **P3.4 is a different, stronger rule, still to add**: regardless of what
-`readiness` says, a leased session's turn must not start at all in a process that isn't
-`adi-app`'s own `Agents` (`lease_values()` is `None` there today only because nothing has called
-`with_lease_values` on it — `None` doesn't yet *mean* "refuse," which is what P3.4 has to make it
-mean, exactly where the body already says: `deliver_with` → `Sent::Queued`, `advance_queue` →
-`false` before dequeue). Until P3.4 lands, a leased session answered from `agents answer` or a
-CLI listing on this same machine will start a turn under `missing = "server"` — on the server's
-own value, same as `adi-app` would give it, so nothing is misattributed, but not yet routed
-through the one process §11 says should be doing the routing. `fail_turn_for_missing_lease` and
-`note_waiting_on_unlock` (P2.7/P2.8, both `Agents` methods) are safe to call from any process
-that reaches them; they write to `sessions.db`, not to anything process-local.
+**What ADI-MONO-181 left here, and what ADI-MONO-182 built on it.** `adi_agents::lease::
+readiness` (P2.7) already asked "does this turn's lease hold a live value for every name it
+needs, right now" and answered `Ready`/`Wait`/`Fail` purely from the server's `missing` policy —
+it had no opinion on *which process* is asking, and under `missing = "server"` it answered
+`Ready` for any `Agents`, `lease_values()` or not, because the server fallback is the same value
+wherever it runs. **P3.4 is the stronger rule this phase adds**: regardless of what `readiness`
+says, a leased session's turn now never starts in a process that isn't `adi-app`'s own `Agents` —
+`deliver_with` and `advance_queue` each check `record.lease.is_some() && self.lease_values().
+is_none()` before `readiness` is even asked, and queue (or answer `false`) on it unconditionally.
+Before P3.4 landed, a leased session answered from `agents answer` or a CLI listing on this same
+machine would start a turn under `missing = "server"` — on the server's own value, same as
+`adi-app` would give it, so nothing was misattributed, but not routed through the one process §11
+says should be doing the routing. `fail_turn_for_missing_lease` and `note_waiting_on_unlock`
+(P2.7/P2.8, both `Agents` methods) stay safe to call from any process that reaches them; they
+write to `sessions.db`, not to anything process-local.
 
-- [ ] P3.1 Capability: minted per leased session, SHA-256 in `sessions.lease_cap`, `ADI_LEASE` and
+- [x] P3.1 Capability: minted per leased session, SHA-256 in `sessions.lease_cap`, `ADI_LEASE` and
       `ADI_LEASE_URL` pushed after `ADI_RUN_ID`, stable across turns and app restarts, re-minted
       after a revoke (settle Q5). `SessionStore::void_lease_cap_for_user` (ADI-MONO-181, §10.1
       step 2) already clears the column on revoke — it has simply had nothing to clear until now.
-- [ ] P3.2 `run_agent` honours `X-Adi-Lease` only without a `FleetSender`. It derives `launched_by`
+      **ADI-MONO-182.** `SessionStore::lease_capability` mints 32 random bytes
+      (`lease::new_capability`, two v4 UUIDs concatenated — this crate already mints one per
+      harness turn, so that beat a new RNG dependency) the first time it is asked for a leased
+      session with none yet, and hands the *same* plaintext back on every later call, including
+      one against a freshly opened `SessionStore` standing in for a process after a restart —
+      because it is read straight off the row, never regenerated. The row carries two columns, not
+      the one the body sketched: `lease_cap` is `sha256(capability)`, hex, the exact-match index
+      `Agents::lease_capability_session`/`SessionStore::find_by_lease_cap` resolve an incoming
+      header by; `lease_cap_secret` is the plaintext itself, needed because turn N+1 has to hand a
+      *spawned child* the identical bytes turn N did (`hash_child_environment`'s fingerprint, and
+      so Codex thread resumption, depends on it) and a SHA-256 has no inverse to recover that from.
+      Both are `NULL` together and minted together; `void_lease_cap_for_user` (§10.1, ADI-MONO-181)
+      now clears both, so the next mint after a revoke is genuinely fresh bytes, not the old ones
+      recovered — proven by `lease_capability_is_reminted_with_a_different_value_after_a_revoke`.
+      `Agents::apply_lease_capability` is the thing that actually pushes `ADI_LEASE`/
+      `ADI_LEASE_URL` onto a spec, right after `name_conversation` at both call sites
+      (`launch_run`, `start_turn`) — a no-op without a lease *and* without
+      `Agents::with_lease_url` installed, which only `adi-app`'s own `main()` calls (alongside
+      `with_lease_values`, at its own loopback address). Settles Q5: accepted outright, not worked
+      around — a revoke or a switch between the server's value and a user's one is a genuine
+      change to the turn's environment, and a fresh Codex thread is the right response to a
+      credential that changed under it, exactly as `hash_child_environment` already treats any
+      other env change.
+- [x] P3.2 `run_agent` honours `X-Adi-Lease` only without a `FleetSender`. It derives `launched_by`
       and the `can_spawn` caller from the capability's session and builds the child's `LeaseRef`
       from the child's own attachments. An unknown or voided capability is `403`.
-- [ ] P3.3 `adi-mono agents run` forwards to `$ADI_LEASE_URL` when `ADI_LEASE` is set, and refuses
+      **ADI-MONO-182.** `Agents::lease_capability_session` (hash the presented capability, look up
+      the session by `find_by_lease_cap`, read back `{agent, run_id, user}` from its `lease`
+      column) is the one new primitive; everything else reuses what phase 1 already built.
+      `adi-webapp-api`'s `run_agent_leased` calls it, and on a hit forces `launched_by =
+      "agent:<that session's agent>"` — the exact string `launcher::by_caller()` already uses, so
+      `launch_run`'s existing `can_spawn` weighing (§11, "this also hardens ADI-MONO-113's
+      `spawn_policy`") needed no change at all — and passes that session's `lease.user` through to
+      `lease_for`, which (unchanged since ADI-MONO-177) builds the *child's* own `LeaseRef` from
+      that user and the child's own `attached ∩ overridable`. The body's own `launched_by` is
+      never read in this path. `run_agent`/`run_agent_leased` share one body, `run_agent_as`, that
+      takes an optional forced `launched_by`; `adi-app`'s dispatch picks between them with
+      `lease_capability_header(req, sender)` — `Some` only when `fleet_sender(req)` is `None`,
+      which is P3.2's and the task's own "loopback only, never over the mesh" requirement, read
+      straight off the same gate `fleet_sender` already decides with.
+- [x] P3.3 `adi-mono agents run` forwards to `$ADI_LEASE_URL` when `ADI_LEASE` is set, and refuses
       when the app is unreachable (settle Q3).
-- [ ] P3.4 Only `adi-app`'s `Agents` carries a lease source. Elsewhere a leased session's turn is
+      **ADI-MONO-182.** `AgentsCommand::Run` checks `$ADI_LEASE` before anything else; when it is
+      set (and `$ADI_LEASE_URL` is too — their absence together would mean phase 3 never ran,
+      their absence apart is treated as the same refusal) it calls `run_leased` instead of
+      `store.launch(..)`, POSTing the same shape `RunAgent` deserializes, with
+      `X-Adi-Lease: $ADI_LEASE`, over `adi_mesh::node_api::gateway_client` — reused for its
+      already-built-and-justified blocking `reqwest` client, not for its mesh-gateway addressing,
+      since this hits `$ADI_LEASE_URL` directly on loopback. **Settles Q3**, as the body already
+      argued: any error reaching, or a non-2xx/non-JSON answer from, `adi-app` is a refusal,
+      never a fall-through to an in-process launch on the server's own values — proven against a
+      bound-then-dropped port the way `secrets leases`' own unreachable-port test already does for
+      the parallel case. `--wait` and the follow-up wake both work unmodified: both key their
+      polling on `run_id` alone, which this process reads out of the *same* `sessions.db`
+      `adi-app` just wrote to, exactly as the body's own "the CLI prints the answer exactly as it
+      prints a local launch today" said they would.
+- [x] P3.4 Only `adi-app`'s `Agents` carries a lease source. Elsewhere a leased session's turn is
       queued, never started (`deliver_with` → `Sent::Queued`; `advance_queue` → `false` before
       dequeue). See this phase's own intro above — this is additional to, not replaced by,
       P2.7's `readiness` gate.
-- [ ] P3.5 A reply, from anyone, runs on the session's `lease.user`. Test: member B's reply into A's
+      **ADI-MONO-182.** One extra condition ahead of the `readiness` match in each of
+      `deliver_with` and `advance_queue`: `record.lease.is_some() && self.lease_values().is_none()`
+      queues (or answers `false`) unconditionally, before `readiness` is even asked — which is
+      what makes this *stronger* than P2.7's gate rather than a restatement of it: under
+      `missing = "server"`, `readiness` alone would answer `Ready` for exactly this `Agents`, and
+      did, until now. Two ADI-MONO-181 tests that exercised the `wait`/`fail` gates through a bare
+      `scratch()` `Agents` (no source at all) had to move to an *installed, empty* `FakeLease`
+      source instead — the distinction this phase draws is new, and "no source" now means
+      something stronger than "nothing is live right now."
+- [x] P3.5 A reply, from anyone, runs on the session's `lease.user`. Test: member B's reply into A's
       leased conversation gets A's value, and B's own lease is never consulted.
-- [ ] P3.6 Tests: a grandchild of a leased run gets the user's value for a name it attaches; a child
+      **ADI-MONO-182.** No code changed here — `reply_run`/`Agents::reply_as` never took a `user`
+      or lease parameter to begin with, so there is no channel for a replier's own identity to
+      reach this computation at all; `markers` only ever tags who spoke in the transcript. Proved
+      the only way a wrong read would be *observable*: a live source holding a value for a
+      different user ("B") but nothing for the session's actual `lease.user` ("A") still fails
+      under `missing = "fail"` when "B" replies — if the reply had consulted anyone but A, it
+      would have found B's value live and started instead.
+- [x] P3.6 Tests: a grandchild of a leased run gets the user's value for a name it attaches; a child
       that doesn't attach the name gets nothing; a forged `ADI_RUN_ID` without the capability gets
       server values; an `env -u ADI_LEASE` launch inherits nothing (ADI-MONO-175's strip, pinned for
       the user layer, with `hash_child_environment` matching); expiry under a child parks the whole
       tree under `wait` and resumes it on renew; a revoke stops the whole tree; an await wake, a
       queued message and a failover re-ask of a leased session all run on the lease.
+      **ADI-MONO-182, all in `adi-agents` unless noted.**
+      `a_grandchild_of_a_leased_run_gets_the_users_value_and_a_revoke_stops_the_whole_tree` spawns
+      three *real* child processes, one per generation, resolving each one's own lease from
+      nothing but its parent's minted capability (`Agents::lease_capability_session` — the exact
+      primitive `run_agent_leased` uses, exercised here without the HTTP hop, which is
+      `adi-webapp-api`'s own to test) — proving the grandchild case and, in its second half, that
+      a revoke stops every real process in the tree at once and voids every capability in it, so
+      none can start a new child afterwards. "A child that doesn't attach the name gets nothing" is
+      `lease.rs`'s own `a_name_the_agent_does_not_attach_is_never_added` (phase 1): the check is
+      per-agent, not per-generation, so nothing about being a child changes it, and a second copy
+      would prove nothing new. "A forged `ADI_RUN_ID`" is
+      `a_forged_launched_by_claiming_a_leased_parent_gets_no_lease`: a plain, in-process `launch`
+      (what the CLI runs whenever `$ADI_LEASE` is unset) never computes a `LeaseRef` regardless of
+      what `launched_by` claims, because only `run_agent`/`run_agent_leased`'s own HTTP paths ever
+      do. `env -u ADI_LEASE` inheriting nothing needed no new mechanism to test, only a sharper
+      existing one: `scrub_ambient_strips_adi_star_even_with_an_empty_strip_list` already named
+      `ADI_LEASE` as its example before this phase existed, now joined by `ADI_LEASE_URL`, and
+      `hash_child_environment` is proven to agree with `scrub_ambient` by construction (it calls
+      the same function on the same inputs, stated in its own doc comment) rather than by a second
+      test duplicating the first. "Expiry under a child parks the whole tree... and resumes it on
+      renew" is `expiry_parks_every_session_in_a_leased_tree_and_a_live_source_resumes_all_of_them`
+      — a parent and a child, parked together under `wait` with an empty source, resumed together
+      the instant a live one answers again. The await-wake/queued-message/failover-re-ask claim is
+      structural, not a fourth test of the same gate: `awaits::wake` calls `Agents::deliver`, which
+      is `deliver_with` under a different name, and `advance_queue` is literally the function a
+      transcript read or a run listing calls to drain a queued message — both already carry
+      P3.4's gate and P2.7's `readiness` check, proven directly by this phase's own `deliver_with`/
+      `advance_queue` tests above; nothing about *why* a turn is being started reaches either
+      function differently.
 
 ### Phase 4 — the panel for the settings
 
