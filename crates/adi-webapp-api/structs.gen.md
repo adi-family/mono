@@ -4052,7 +4052,7 @@ pub struct Dashboard {
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]
-    pub template: Option<String>,
+    pub created_from: Option<String>,
 }
 ```
 

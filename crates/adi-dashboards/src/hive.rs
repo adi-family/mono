@@ -71,14 +71,15 @@ services:
 
 /// The hive file for a **vite-react** dashboard: same one-origin shape as [`HIVE_TEMPLATE`], but
 /// each service's `working_dir` is its own subdirectory (`frontend`/`backend`, each its own Bun
-/// package) and the command is the package's own `dev` script — `vite` for the frontend, a
-/// watching Bun process for the backend — rather than a bare script path, because this scaffold
-/// has a `package.json` and the dependency-free one does not.
+/// package) and `run` names the real command directly — `bun x vite` for the frontend,
+/// `bun --watch src/index.ts` for the backend — rather than a package-script indirection: the
+/// hive file has to say exactly what runs, not point at a `package.json` that says it instead.
 ///
 /// A dashboard on this template never matches [`is_current`] (which requires `working_dir: .`),
 /// and is never rewritten by [`crate::bundle`]'s dependency-free assumptions about the shape
-/// of `frontend/index.ts` — the caller is expected to branch on the manifest's `template` field
-/// before choosing between this and [`hive_yaml`], and to migrate the two shapes separately.
+/// of `frontend/index.ts` — the caller is expected to tell the two scaffolds apart from what is
+/// actually on disk before choosing between this and [`hive_yaml`], and to migrate the two shapes
+/// separately.
 const HIVE_TEMPLATE_VITE_REACT: &str = r#"# Dashboard hive services — run by the per-user supervisor (~/.adi/mono/dashboards/hive.yaml).
 #
 # One dashboard is one origin. Both services declare the same `proxy.host`: the frontend owns
@@ -89,8 +90,9 @@ const HIVE_TEMPLATE_VITE_REACT: &str = r#"# Dashboard hive services — run by t
 # would point at whatever machine the *browser* is on.
 #
 # Each service is its own Bun package (`frontend/package.json`, `backend/package.json`), so
-# `working_dir` is the service's own subdirectory and `run` is its `dev` script rather than a
-# bare file path.
+# `working_dir` is the service's own subdirectory. `frontend` runs Vite's dev server directly
+# (configured by `frontend/vite.config.ts`); `backend` runs its entry point,
+# `backend/src/index.ts`, under `bun --watch` so an edit restarts it.
 #
 # No port is declared: adi-hive leases a stable one per service from the ports manager (keyed
 # `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it as $PORT. `vite.config.ts`
@@ -106,7 +108,7 @@ services:
     runner:
       type: script
       script:
-        run: bun run dev
+        run: bun x vite
         working_dir: frontend
 
   backend:
@@ -117,7 +119,7 @@ services:
     runner:
       type: script
       script:
-        run: bun run dev
+        run: bun --watch src/index.ts
         working_dir: backend
 "#;
 
@@ -636,9 +638,13 @@ mod tests {
             !is_current(&dir, &hive),
             "the dependency-free migration must not treat this as its own shape"
         );
-        assert!(yaml.contains("run: bun run dev"), "{yaml}");
+        // The hive file names the real command directly — no package.json `dev` script between
+        // the supervisor and what actually runs.
+        assert!(yaml.contains("run: bun x vite"), "{yaml}");
+        assert!(yaml.contains("run: bun --watch src/index.ts"), "{yaml}");
         assert!(yaml.contains("working_dir: frontend"), "{yaml}");
         assert!(yaml.contains("working_dir: backend"), "{yaml}");
+        assert!(!yaml.contains("bun run dev"), "{yaml}");
         assert!(!yaml.contains("ports:"), "{yaml}");
     }
 

@@ -199,7 +199,7 @@ pub struct Manifest {
     #[serde(default)]
     pub widget: BTreeMap<String, Widget>,
     #[serde(default)]
-    pub template: Option<String>,
+    pub created_from: Option<String>,
 }
 ```
 
