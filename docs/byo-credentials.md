@@ -6,12 +6,17 @@ Read this before touching `crates/adi-secrets`, the run environment in `crates/a
 launch paths in `adi-cli` and `adi-webapp-api`.
 
 Status: **design, not built.** The design is task ADI-MONO-173. This revision follows the scope
-revision of 2026-10-28 at the top of that task, which replaces the original design wherever the two
-conflict. Two consequences: there is no "who pays" concept anywhere in this document, and values
-reach runs as plain environment variables, not through the LLM gateway. Line numbers are as of
-`main` at e5ec3b7 (the code is unchanged from 63ebf74). Wherever the code contradicts the design,
-or the design leaves something undecided, the point is listed under §15 "Open questions" and **not**
-settled here.
+revision of 2026-10-28 and the third round of decisions on the same day, both at the top of that
+task, which replace the original design wherever they conflict with it. Three consequences: there
+is no "who pays" concept anywhere in this document; values reach runs as plain environment
+variables, not through the LLM gateway; and the user is a random id minted per paired peer, so one
+peer is one user. Line numbers are as of `main` at 82ff81b (the code is unchanged from 63ebf74).
+Wherever the code contradicts the design, or the design leaves something undecided, the point is
+listed under §15 "Open questions" and **not** settled here.
+
+**Two fixes land before any of this:** ADI-MONO-174 (the member gate misses two secrets routes,
+§7) and ADI-MONO-175 (a CLI-spawned child inherits its parent's whole environment, §11). Both are
+security fixes that stand on their own, and phase 1 assumes both.
 
 ## 1. The problem
 
@@ -47,7 +52,7 @@ before a user value reaches a run:
    (§4.3, §9).
 
 **The settings are the feature.** One policy file on the server, one small file per user, and one
-table per server connection on each of the user's devices decide everything. The CLI verbs in §4.4
+table per server connection on the user's device decide everything. The CLI verbs in §4.4
 edit them. Buttons and presets are a later layer on top of them (§14) and add no behaviour of their
 own.
 
@@ -63,24 +68,95 @@ serves exactly one request per connection (`adi-webapp-api/src/http.rs:2`, `Conn
 headers are attached to the first head on a stream, and on the panel there is no second head.
 Anything that moves an identity-bearing endpoint behind a keep-alive server has to re-check this.
 
-**The user is the credential username, one per person.** `<u>` in this document is
-`X-Adi-Fleet-User`, which is the pairing record's `auth.user` (`gateway.rs:817`). It is registry
-data, not something the peer asserts. It is the name that already groups one person's devices,
-because §8's "one wrap per device" needs several devices per person. It is also what
-`launched_by = human:<u>` and ADI-MONO-171's ownership checks already use (`asking_user`,
-`adi-webapp-api/src/handlers/agents.rs:1384`). The partner-sandbox plan sets it per person
-(`p<uid>`) and pairs each device under its own petname (`p<uid>-<4hex>`).
+**The user is the credential username, and it is a random id minted for each paired peer.**
+`<u>` in this document is `X-Adi-Fleet-User`, which is the server's pairing record's `auth.user`
+(`gateway.rs:816-819`). It is registry data, not something the peer sends with a request. It is
+also what `launched_by = human:<u>` and ADI-MONO-171's ownership checks already use
+(`asking_user`, `adi-webapp-api/src/handlers/agents.rs:1384`).
+
+**One peer is one user in v1.** A person's Mac and their browser client are two pairings, so they
+are two users, each with its own values and its own lease. Grouping several devices under one
+person is later work. Everything below is simpler for it: a user has exactly one device, so a lease
+belongs to one device, revoking it is revoking that device, and §8 needs one wrap per value.
 
 - **Never `X-Adi-Fleet-Node`.** That is the peer's self-declared nickname, and `docs/fleet.md` §2
   rule 3 lets a clash rename it.
-- **Never the petname.** A petname names one device. A user who unlocked on a laptop must still
-  hold their lease when they reply from their phone.
-- **The default username names nobody.** Every pairing defaults to `PAIR_USER = "adi"`
-  (`adi-mesh/src/join.rs:112`), whose doc says it "carries no security weight". The browser client
-  records the same default (`adi-mesh-client/src/store.rs`, `NodeRecord::username`). Two members
-  paired without an explicit username share one name. §15 Q1 covers how to treat that name.
-- **A local caller has no user scope.** A request with no `FleetSender` (the panel on loopback, or a
-  terminal) is the machine's own operator, and the operator's secrets are the global ones.
+- **Never the petname as the key.** The petname is what the server calls the peer, and an operator
+  can rename it (`FleetRegistry::rename`). A user scope keyed on it would move with the rename.
+  The panel shows the petname as the user's label, because a random id means nothing to a reader.
+- **A local caller is the owner and has no user layer.** A request with no `FleetSender` (the panel
+  on loopback, or a terminal on the server) is the machine's own operator, whose secrets are the
+  global ones.
+
+### 3.1 Where the username comes from today
+
+The username is decided by whichever side **minted the invite**, and the other side copies it:
+
+1. `join::decide` runs on the minter. It takes `spec.username` from the invite, or falls back to
+   `PAIR_USER = "adi"` (`adi-mesh/src/join.rs:619`, the constant at `:112`), and stores it with the
+   password in the minter's record of the dialler (`record.set_password(username, password)`,
+   `:631`).
+2. The reply carries it back: `JoinReply::Accepted(Accepted { username, .. })` (`:472-476`,
+   built at `:640-646`).
+3. The dialler files the minter with the same credential, in `record_viewer`
+   (`record.set_password(&accepted.username, ..)`, `:740`). The browser client stores the same
+   field on its own `NodeRecord` (`adi-mesh-client/src/invite.rs:104`, `store.rs:50-51`) and sends
+   it as Basic auth (`bridge.rs:204`).
+4. On every request the receiving side's gateway attaches its record's `auth.user` as
+   `X-Adi-Fleet-User` (`gateway.rs:816-819`). `Credential::user` is stored in the clear in
+   `fleet.toml` (`auth.rs:117`).
+
+The no-body invite, which is what the webapp's "mint a code" button sends
+(`adi-webapp-api/src/handlers/fleet.rs:127-130`), therefore pairs every peer as `adi`. Two members
+paired that way are the same user to everything that reads the header today, ADI-MONO-171's
+ownership checks included: each can stop or delete the other's runs as "their own". The doc on
+`PAIR_USER` says the username "carries no security weight". That stopped being true when
+ADI-MONO-171's ownership checks started reading it.
+
+### 3.2 The change: a random user id, minted by the server
+
+**`decide` mints a random id where it used to write `PAIR_USER`,** and it is returned in
+`Accepted.username` as the username is today. Neither the wire format nor any dialler changes:
+the Mac's `record_viewer` and the browser client already store whatever `Accepted.username` says.
+
+```
+u-<26 characters, lowercase Crockford base32>      130 random bits, e.g. u-7f3kq9…
+```
+
+- **The form is chosen for where it goes.** It is a Basic-auth username (no `:`), a path segment
+  under `secrets/users/` (it passes `validate_project`'s filesystem-name rule, `secret.rs:136-138`),
+  part of an AAD, and the tail of `launched_by = human:<u>`. Lowercase base32 has no ambiguous
+  glyphs, which matters because `mesh join` prints it for a person to retype into a browser prompt
+  (`adi-cli/src/mesh.rs:417`). That is the cost of the change: the old prompt took `adi` from memory.
+- **Random, not derived.** Not from the peer's key, which would make the id the same on every server
+  the peer pairs with and so link the user across fleets. Not from the petname, which can be renamed.
+- **The record remembers that this machine minted it.** `NodeRecord` gains
+  `minted_user: bool` (`fleet.rs:392`, a plain value, so it goes before `auth` per the field-order
+  note). Only `decide` sets it, and only for an id it generated itself. `#[serde(default)]` makes
+  every existing record `false`.
+- **A user scope needs `minted_user`.** `adi-app` gains `user_scope(projects, sender)` beside
+  `peer_role` (`adi-app/src/main.rs:596`). It loads the registry, finds the sender's petname, and
+  answers `Some(auth.user)` only when `minted_user` is set and the header's user matches the record.
+  Anything else answers `None`, which means "no user layer: the server's values". On doubt it
+  trusts the peer with less, as `peer_role` does when it defaults to `Member`.
+
+That rule gives the decided answers directly:
+
+| peer | `auth.user` | user scope |
+|---|---|---|
+| paired after this ships, no username in the invite | `u-…`, minted by `decide` | yes |
+| paired before this ships | `adi` | **none until re-paired** |
+| filed by `record_viewer`, because the server dialled the peer's invite | whatever the peer's side minted | none (§15 Q14) |
+| an invite that pins `username` | the pinned name | none in v1 (§15 Q13) |
+| a local caller | — | none: the owner, on global secrets |
+
+**A re-pair keeps a minted id.** `decide` rotates the username on a re-pair today (`:628-631`).
+Re-inviting a peer to rotate a lost password must not orphan the values stored under its id, so a
+re-pair of a record with `minted_user` keeps `auth.user` and rotates only the password. A re-pair
+of an `adi` record mints a fresh id, which is how a legacy pairing gets a user scope.
+
+**Unpairing ends the user.** The id is never reissued, so unpairing the peer revokes its lease
+(§10.1) and deletes `secrets/users/<u>/`. Nothing else could ever open those wraps.
 
 ## 4. The settings layer
 
@@ -113,10 +189,14 @@ for `llm/settings.toml`: an operator who narrows the list expects the next turn 
 `POST /api/secrets/policy`, which joins the member gate's list (`member_blocked`,
 `adi-app/src/main.rs:622-635`).
 
-**How an unreadable file is treated is open.** `LlmSettings::load` reads a corrupt file as its
-defaults (`llm/settings.rs:49`). Here the defaults are `enabled = false`, which turns the feature
-off and puts every member back on the server's credentials. That is the opposite of what an
-operator who set `missing = "fail"` wanted. §15 Q12.
+**An unreadable `[user_secrets]` fails closed: the feature is off.** A file that doesn't parse
+reads as `enabled = false`. No user value reaches any run, unlocks are refused, and every run uses
+the server's values. That matches `LlmSettings::load`, which reads a corrupt file as its defaults
+(`llm/settings.rs:49`), and it is the decided reading of "closed": when the server can't tell
+which names a user may replace, it replaces none. The cost is stated plainly: a server whose policy
+said `missing = "fail"` puts every member back on its own credentials until the file is fixed. So
+the parse error is logged on every read and shown on the panel's Secrets page, and
+`adi-mono secrets policy` prints it instead of the defaults.
 
 ### 4.2 Per user: `secrets/users/<u>/`
 
@@ -125,7 +205,7 @@ operator who set `missing = "fail"` wanted. §15 Q12.
   settings.toml                          §4.1
   global/<NAME>.toml                     today
   projects/<project-id>/<NAME>.toml      today
-  users/<u>/<NAME>.toml                  new: one user value, wrapped to their devices (§8)
+  users/<u>/<NAME>.toml                  new: one user value, wrapped to their device (§8)
   users/<u>/settings.toml                new: that user's own policy
 ```
 
@@ -136,13 +216,15 @@ missing = "wait"     # may only be stricter than the server's
 
 - **The per-user `missing` may only tighten.** The order is `server` < `wait` < `fail`, and the
   effective value is the stricter of the server's and the user's. A user can say "never put my runs
-  on the server's key" (`wait` or `fail` where the server says `server`). They can't loosen a server
-  that says `fail`. That ordering is this spec's reading of "only stricter" (§15 Q5).
+  on the server's key" (`wait` or `fail` where the server says `server`). A user on `wait` under a
+  server on `fail` gets `fail`, so they can't loosen a server either. `fail` ranks above `wait`
+  because it is the one that also stops work from piling up behind a missing value.
 - **A user value can only exist for an `overridable` name.** `set` refuses any other name. If the
   operator later removes a name from the list, the stored value stays on disk and is never applied.
 - **`settings.toml` collides with a secret name.** Secret names are env-var identifiers, and
   `validate_name` accepts lowercase (`secret.rs:124-133`), so a secret called `settings` would be
-  stored as `users/<u>/settings.toml`. §15 Q4.
+  stored as `users/<u>/settings.toml`. §15 Q1.
+- **How an unreadable `users/<u>/settings.toml` reads is open.** §15 Q15.
 
 **The scope is a real third variant, not a reserved project id.** `adi-app` keeps node passwords in
 a pseudo-project called `fleet-nodes` (`adi-app/src/viewer.rs:27`). That works because nothing
@@ -162,6 +244,7 @@ device, separately for each server connection.** It is applied every time the de
 Nobody is prompted per run.
 
 ```toml
+# ~/.adi/mono/mesh/connections.toml, on the user's device
 [connections.<server>.secrets]
 share       = ["CLAUDE_CODE_OAUTH_TOKEN"]   # which of my values this server may lease; default []
 lease       = "24h"                         # 0 | "<n>h" | "forever"; default 0
@@ -179,10 +262,18 @@ auto_unlock = true                          # unlock on connect without asking; 
 - **The device decides and the server enforces.** The policy travels with the unlock (§9 step 4).
   The device can't be relied on to say "stop" after it has gone offline, which is exactly when the
   clock matters, so the server runs the clock.
-- **Where the table lives is open.** The design names it `[connections.<server>.secrets]`. The tree
-  has no `connections` table. What this machine knows about each paired peer is
-  `[nodes.<petname>]` in `fleet.toml` (`NodeRecord`, `adi-mesh/src/fleet.rs:392`), and the browser
-  client keeps its own `NodeRecord` list in IndexedDB (`adi-mesh-client/src/store.rs`). §15 Q3.
+- **It lives in its own file, not in `fleet.toml`.** On a Mac (or any `adi-mono` device) it is
+  `connections.toml` in the `mesh` module directory, beside `fleet.toml` (`MODULE = "mesh"`,
+  `adi-mesh/src/config.rs:15`; `FLEET_FILE`, `fleet.rs:49`), keyed by the server's petname. The
+  pairing record (`[nodes.<petname>]`, `NodeRecord`, `fleet.rs:392`) stays what it is: the
+  registry, which the mesh rewrites on every pair, rename and grant. A user's choice about their
+  own values has no business in a file the mesh owns, and a separate file means no code that saves
+  the registry can lose it. In the browser client it is a separate IndexedDB object store keyed by
+  petname, not a field on the client's `NodeRecord` (`adi-mesh-client/src/store.rs`), for the same
+  reason.
+- **A rename moves it, an unpair deletes it.** The key is the petname, so `FleetRegistry::rename`
+  (`fleet.rs:896`) and unpair each touch `connections.toml` too. That is the one coupling between
+  the two files.
 
 ### 4.4 The verbs
 
@@ -202,7 +293,7 @@ adi-mono secrets policy --user --node <server> --missing wait          # my own 
 adi-mono secrets leases --node <server>                               # my leases there
 adi-mono mesh share  <server> CLAUDE_CODE_OAUTH_TOKEN --lease 24h --auto-unlock
 adi-mono mesh unlock <server>                                         # unlock now
-adi-mono mesh revoke <server>                                         # drop my lease there now
+adi-mono mesh lock   <server>                                         # revoke my lease there now (§10.1)
 ```
 
 - **The `--node` verbs go over the mesh.** `adi-mono secrets` acts on the local store through the
@@ -211,13 +302,21 @@ adi-mono mesh revoke <server>                                         # drop my 
   mesh gateway, addressed the way a dashboard transfer is (`docs/fleet.md` §10):
   `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi`. `--user` without `--node` is refused,
   because there is no user scope on your own machine.
+- **`secrets set --user` refuses until phase 2.** Phase 1 ships the scope and the API, but a value
+  can only be stored wrapped to the device (§8), and the wraps land in phase 2. Until then the verb
+  answers "user values need device wraps, which this build doesn't have" and sends nothing.
+  `secrets rm --user` and `secrets policy --user` work from phase 1.
 - **No reveal, ever.** There is no `secrets get --reveal --user` and no `secrets read --user`.
   `secrets read` is "the value-returning primitive an agent uses" (`adi-cli/src/secrets.rs:55`), and
   a user scope must never be readable that way.
-- **`mesh revoke` is already taken.** It removes a grant from a peer:
-  `adi-mono mesh revoke <petname> <grant>` (`adi-cli/src/mesh.rs:173-178`). §15 Q2.
-- **`mesh share` writes the device's own table (§4.3)** and nothing else. It sends nothing until the
-  next unlock.
+- **The lease verb is `mesh lock`, not `mesh revoke`.** `adi-mono mesh revoke <petname> <grant>`
+  already removes a grant from a peer (`adi-cli/src/mesh.rs:173-178`), and overloading it would
+  make one typo the difference between "stop my runs" and "cut this peer off". `lock` is the
+  opposite of `unlock`, which is the pair a user reads them as. It leaves the device's table alone,
+  so under `auto_unlock` the next connect unlocks again. To stop that, set `share = []` or
+  `auto_unlock = false` with `mesh share`.
+- **`mesh share` writes the device's own `connections.toml` (§4.3)** and nothing else. It sends
+  nothing until the next unlock.
 
 ## 5. Where a user value reaches a run
 
@@ -257,8 +356,9 @@ the user's value, and nothing can add a name.
 **Which runs get a lease reference at all.** A session records `lease = { user: <u>, names }` at
 creation (§11) when:
 
-- it was launched by a person over the mesh: `run_agent` with a `FleetSender` whose user is
-  `<u>` (`adi-webapp-api/src/handlers/agents.rs:322`), or by a run that already holds one (§11);
+- it was launched by a person over the mesh: `run_agent` with a `FleetSender` for which
+  `user_scope` answers `Some(<u>)` (§3.2, `adi-webapp-api/src/handlers/agents.rs:322`), or by a run
+  that already holds one (§11);
 - `[user_secrets] enabled` is set; and
 - the agent attaches at least one `overridable` name.
 
@@ -272,9 +372,9 @@ and use the server's values. That covers task dispatch (`dispatch.rs:289-296`), 
 request body (`handlers/agents.rs:347-353`), and `attribute_human` (`:1394`) enriches only the bare
 word `human`. Anything else passes through untouched. A peer can send
 `"launched_by": "human:someone-else"` today and the store records it. That is harmless for a listing
-filter and would be fatal here. So the lease's user is computed from `FleetSender` alone, and
-`LaunchOptions` gains a `lease` field that no HTTP handler fills from JSON. The `launched_by`
-forgery itself is §15 Q14.
+filter and would be fatal here. So the lease's user is computed from `FleetSender` and the
+registry alone (`user_scope`), and `LaunchOptions` gains a `lease` field that no HTTP handler fills
+from JSON. The `launched_by` forgery itself is §15 Q6.
 
 **The panel's Test button tests the asker's value.** `ondemand::resolve_credential`
 (`llm/ondemand.rs:292`) reaches for the *global* secret of the runtime's ambient env var
@@ -283,7 +383,7 @@ lease value for that name when there is one, under the same `missing` rule.
 
 **Settings-file backends are out of reach.** A backend that names `settings =
 "~/.claude/settings.glm.json"` carries its credential in a file, and its hold key is that file
-(`llm/backend.rs:267-268`). The layer overrides env vars by name. It doesn't rewrite files. §15 Q15.
+(`llm/backend.rs:267-268`). The layer overrides env vars by name. It doesn't rewrite files. §15 Q7.
 
 ## 6. Holds: the key fix
 
@@ -324,10 +424,10 @@ logins.
 (`llm/prober.rs:160`) looks for a backend whose `credential()` equals the hold's. A qualified key
 matches none, so the hold is reported `Unreachable` and waits out its own deadline, which is what
 every vendor-CLI hold already does. A probe is a billed request, so probing a user's hold would
-spend the user's quota and need their lease. §15 Q16.
+spend the user's quota and need their lease. §15 Q8.
 
-**The panel's hold list shows a qualified key as "a user's subscription"**, and shows the username
-only to that user. "Igor's quota is spent until 18:40" isn't the operator's to publish to every
+**The panel's hold list shows a qualified key as "a user's subscription"**, and shows which user
+(by petname, §3) only to that user. "Igor's quota is spent until 18:40" isn't the operator's to publish to every
 member.
 
 ## 7. The own-scope API: write-only
@@ -337,7 +437,7 @@ their own names and metadata. No API ever reveals a user value. That holds for a
 user themselves. With device wraps the server couldn't reveal a value at rest anyway (§8).
 
 ```
-GET  /api/secrets/mine                 → { names: [{ name, description, devices, updated_at }], missing }
+GET  /api/secrets/mine                 → { names: [{ name, description, updated_at }], missing }
 POST /api/secrets/mine/set             { name, description?, ciphertext, nonce, wraps[] }
 POST /api/secrets/mine/remove          { name }
 POST /api/secrets/mine/settings        { missing }
@@ -350,19 +450,23 @@ GET  /api/leases                       → my live leases (an admin: all of them
   refuses a member on exactly `/api/secrets/{reveal,set,remove}`. The `/mine` routes are separate
   paths, so they need no exception carved into that list. `POST /api/secrets/policy` is added to the
   list (§4.1).
-- **`set` refuses names not in `overridable`**, and refuses everything while `enabled = false`.
+- **`set` refuses names not in `overridable`**, refuses everything while `enabled = false`, and
+  refuses a caller with no user scope (§3.2).
+- **In phase 1 `set` refuses everything.** It accepts only wrapped values (§8), and the wraps are
+  phase 2. The route, its checks and its tests ship in phase 1, and the answer is
+  `501 user values need device wraps`. `remove`, `settings` and `GET /mine` work.
 - **`GET /api/secrets` never shows a user scope.** It is `list_all`, which doesn't walk `users/`.
 
-**ADI-MONO-174.** Reading the member gate for this spec turned up two routes missing from it:
-`POST /api/secrets/set-oauth` (`main.rs:835`) and `POST /api/secrets/refresh` (`main.rs:464`).
-A member can therefore overwrite or refresh a *global* OAuth secret today, including the very
-`CLAUDE_CODE_OAUTH_TOKEN` this spec is about. It is filed and confirmed as ADI-MONO-174, a security
-fix that is independent of this work and should land first. That task also refreshes the stale
-`docs/fleet.md` §8a/§11 wording.
+**ADI-MONO-174 lands before phase 1.** Reading the member gate for this spec turned up two routes
+missing from it: `POST /api/secrets/set-oauth` (`main.rs:835`) and `POST /api/secrets/refresh`
+(`main.rs:464`). A member can therefore overwrite or refresh a *global* OAuth secret today,
+including the very `CLAUDE_CODE_OAUTH_TOKEN` this spec is about. A user scope that members can
+write to would be pointless beside a global scope they can also write to. That task also refreshes
+the stale `docs/fleet.md` §8a/§11 wording.
 
 ## 8. Device wraps
 
-A user value is stored on the server in a form only the user's devices can open:
+A user value is stored on the server in a form only the user's device can open:
 
 ```toml
 # secrets/users/<u>/CLAUDE_CODE_OAUTH_TOKEN.toml
@@ -372,16 +476,19 @@ ciphertext  = "…"           # XChaCha20-Poly1305, AAD "user:<u>/CLAUDE_CODE_OA
 created_at  = 1793000000
 updated_at  = 1793000000
 
-[[wraps]]                   # one per device: the DEK, sealed to that device's key
-device  = "<petname>"
+[[wraps]]                   # the DEK, sealed to the device's key; exactly one in v1
 kind    = "keychain-v1"     # | "webauthn-prf-v1"
 nonce   = "…"
 wrapped = "…"
 ```
 
-- **One DEK per secret, one wrap per device.** Adding or losing a device touches only the wraps.
-  Setting a new value mints a new DEK and new wraps. Plaintext never reaches the server on the way
-  in: the device seals before it sends.
+- **One DEK per secret, one wrap.** A user is one peer (§3), so there is one device to wrap to.
+  `wraps` is still an array, so grouping several devices under one person later adds entries
+  rather than changing the format. Setting a new value mints a new DEK and a new wrap. Plaintext
+  never reaches the server on the way in: the device seals before it sends.
+- **A new device is a new user.** It pairs, gets its own id, and enters its own values. There is
+  no enrolment of a second device into an existing user in v1, so the question of how a new device
+  gets a DEK it can't unwrap doesn't arise yet.
 - **The server's master key is not involved.** Today's crypto seals with a master key kept in a
   `0600` file beside the ciphertext (`crypto.rs:8-11`), readable by the Unix user every agent run
   on the box runs as. A user value sealed that way would be readable by any run, whenever it liked.
@@ -394,14 +501,13 @@ wrapped = "…"
 - **macOS: a key in the Keychain.** A random 256-bit key-wrapping key, stored as a Keychain item
   with device-only accessibility. **No macOS Keychain code exists in the tree today.** Only
   `apps/ios/AdiFleet/Keychain.swift` does, so it is added to `adi-app`, which is the device on a Mac.
+  Whether the separate `adi-mono` binary can use that item is §15 Q12.
 - **Browser client: WebAuthn PRF.** A passkey with the `prf` extension, its output put through HKDF
   into the key-wrapping key. Nothing of the kind exists in `crates/adi-mesh-client` today.
 - **The unwrap runs in device-owned code, never in the server's panel.** A node's panel is HTML and
   wasm *served by the node*, and a server can change a page it serves to keep the plaintext it was
   trusted to unwrap. So unlocking happens in the Mac's own `adi-app` and in the browser client's own
   shell, never inside the iframe rendering `app.<node>.n.adi`.
-- **Enrolling a second device** needs the DEK, and only an already-enrolled device can unwrap it.
-  §15 Q17.
 
 ## 9. Unlock and leases
 
@@ -421,13 +527,13 @@ device                                         server: adi-app (in memory)
 4  POST /api/leases/unlock { lease, sealed[] } → checks AAD user == header user, names ⊆ overridable,
                                                  clamps lease to max_lease, opens, keeps a Lease
 5  POST /api/leases/renew  every H seconds     → last_seen := now
-6  POST /api/leases/revoke (or unpair)         → lease dropped at once
+6  POST /api/leases/revoke (mesh lock, unpair) → lease dropped, capabilities void, runs stopped (§10.1)
 ```
 
 - **The routes are `/api/leases/*`, not `/api/mesh/*`.** `member_blocked` refuses a member every
   `/api/mesh*` path (`main.rs:626`), and unlocking is exactly what a member does.
 - **"Re-encrypted to the server session" is read as: to an ephemeral key `adi-app` generates at boot
-  and never writes down.** A restart makes every earlier unlock undecryptable on its own. §15 Q18.
+  and never writes down.** A restart makes every earlier unlock undecryptable on its own. §15 Q9.
 - **QUIC already encrypts the hop.** `adi/mesh/http/1` runs inside a QUIC connection between the
   device's key and the node's key, and the relay sees only ciphertext (`docs/fleet.md` §9). The seal
   in step 3 keeps plaintext out of anything that logs request bodies on the way in.
@@ -436,16 +542,16 @@ The lease, in `adi-app`'s memory only:
 
 ```rust
 struct Lease {
-    user: String,                                   // <u>
-    device: String,                                 // the petname that unlocked; revoke and expiry are per device
+    user: String,                                   // <u>; the table is keyed by it, one lease per user
+    petname: String,                                // the peer that unlocked, for display and the unpair hook
     values: BTreeMap<String, Zeroizing<String>>,    // NAME → value, NAME ∈ shared ∩ overridable
     lease: LeaseLength,                             // 0 | hours | forever, after the max_lease clamp
     last_seen: Instant,                             // steps 1, 4, 5
 }
 ```
 
-- **A user's value for a name is live while *any* of their devices holds it.** Revoking one
-  device's lease leaves another device's in place.
+- **One lease per user.** A user is one peer (§3), so a second unlock from the same peer replaces
+  the lease in place rather than adding one beside it.
 - **Leases live in `adi-app` because `adi-app` starts the runs.** Every in-app launch and turn
   (§11) reads them in-process. Nothing else on the box can read them except through §11's
   capability.
@@ -459,7 +565,7 @@ struct Lease {
   keyed on the *nickname*, uses a 60-second window (`ACTIVE_WINDOW_SECS`, `activity.rs:25`), and
   sits in a database every agent can write. None of that fits a lease, whose `last_seen` lives in
   `adi-app`'s memory and is keyed by the petname that renewed.
-- **The heartbeat `H` and the grace for `lease = 0`** are §15 Q19.
+- **The heartbeat `H` and the grace for `lease = 0`** are §15 Q10.
 
 ## 10. Missing values: waiting on unlock, and auto-resume
 
@@ -491,7 +597,7 @@ session waiting on unlock answers "not startable", exactly like one that is stil
 
 **A fresh launch can wait too.** Under `wait`, a launch whose first turn has no live value creates
 the session and queues its opening message instead of sending it. `Launch` has no variant for
-"created, not started" (`run.rs:22-34`). §15 Q6.
+"created, not started" (`run.rs:22-34`). §15 Q2.
 
 **It resumes by itself.** When `adi-app` accepts an unlock or a renew that brings `<u>`'s values
 back, it publishes `adi.secrets.lease.granted { user, names }`. The sessions whose `lease.user` is
@@ -500,9 +606,61 @@ back, it publishes `adi.secrets.lease.granted { user, names }`. The sessions who
 delivery an await wake uses. `adi.secrets.lease.revoked` and `adi.secrets.lease.expired` exist for
 the rail and anyone watching.
 
-**A lease that ends never cuts a turn in half.** A value already in a running process's environment
-can't be withdrawn. The turn in flight finishes on what it was started with, and the check applies
-from the next turn on. Whether an explicit revoke should also stop in-flight turns is §15 Q7.
+**A lease that *expires* never cuts a turn in half.** Expiry is the device going quiet, not the
+user asking for anything, so the turn in flight finishes on what it was started with and the check
+applies from the next turn on. The same holds for a server restart, which ends every lease. A
+*revoke* is different, and is the next section.
+
+### 10.1 Revoke stops everything that uses the lease
+
+A revoke is the user saying "stop using my key now". A value already in a running process's
+environment can't be withdrawn from it, so the only way to honour that is to stop the process. **A
+revoke invalidates the lease's capabilities and stops the running turn of every session provisioned
+from the lease, subagents included.** It doesn't merely park the next turn.
+
+It is triggered by `POST /api/leases/revoke` (`mesh lock`, §4.4) and by unpairing the peer on the
+server (§3.2). It runs in full even when no lease is in the table: after an `adi-app` restart the
+lease is gone, but turns started before the restart may still be running with the values in their
+environment, and those are what the user wants stopped. `adi-app` does this, in order:
+
+1. **Drop the lease** from the table and zero its values. From here no new turn can get them.
+2. **Void the capabilities.** Every session whose `lease.user` is `<u>` has `sessions.lease_cap`
+   set to NULL (§11). A run still alive that forwards `adi-mono agents run` in the next few
+   milliseconds gets `403`, so a dying parent can't start a fresh child on the lease. Steps 1 and 2
+   hold the lease table's write lock. The launch path holds its read lock from the capability
+   check until the child's row is written at `create_as`, so a launch either finished before the
+   revoke, and step 3 finds it, or fails.
+3. **Find the sessions.** The store gains `SessionStore::with_lease_user(<u>)`, one query across
+   every agent: `SELECT agent, id FROM sessions WHERE json_extract(lease, '$.user') = ?1`. It is
+   the same shape as `agents()` (`store/mod.rs:401-412`), a walk of `sessions` that includes agents
+   whose definition has since been deleted. Children are in it by construction: each child is its
+   own session with `lease.user = <u>` (§11), so the tree needs no walking.
+4. **Stop the live ones, through the existing stop path.** For each session that
+   `session_is_alive` reports alive (`lib.rs:1088-1091`), `adi-app` calls the same runner stop
+   `Agents::stop_run` uses (`lib.rs:2922-2953`): `runner.stop(.., STOP_GRACE)` (5 s, `lib.rs:133`),
+   then `clear_queue`, then the `AgentRunStopped` event, so the rail shows it the way it shows a
+   press of Stop. `stop_run` itself returns `false` early for an agent that no longer exists
+   (`lib.rs:2926-2928`), and a deleted agent's live run is exactly the run nobody else will stop, so
+   revoke goes through a variant without that gate. The runner already comes from the record, not
+   the agent (`:2929-2932`).
+5. **Publish `adi.secrets.lease.revoked { user, stopped: [run_id] }`.**
+
+What that means in practice:
+
+- **It stops a turn that ran on the server's value too.** Under `missing = "server"` a session can
+  be lease-referenced and running on the server's value. The store doesn't record which source a
+  running turn got, and after an `adi-app` restart the app couldn't know anyway, since detached runs
+  outlive it. The user asked for everything provisioned from their lease to stop, and stopping one
+  turn too many is the safe side of that.
+- **A parked session stays parked.** A session waiting on unlock isn't running anything and holds
+  no value, so step 4 leaves it alone and its queue survives. It resumes on the next unlock like
+  any other parked session. A session whose turn step 4 stopped has its queue cleared, as a manual
+  Stop does.
+- **The next turn gets a new capability.** A session whose `lease_cap` was voided gets a fresh one
+  minted the next time a turn of it starts on a live lease. For Codex that changes the child
+  environment's hash, so the conversation continues in a new thread (§15 Q5).
+- **Expiry isn't revoke.** A lease that runs out of `lease` time, or a server restart, doesn't stop
+  anything (above). Only an explicit act does.
 
 ## 11. Subagent inheritance
 
@@ -527,12 +685,16 @@ Two facts about the code decide the design:
    `Agents::launch` in its own process, and the child's caller is read from `ADI_AGENT` /
    `ADI_RUN_ID` (`launcher::by_caller`, `launcher.rs:46`; `awaits::caller`, `awaits.rs:689-700`).
    Leases live in `adi-app`'s memory (§9), so a process outside `adi-app` can't provision them.
-2. **Nothing scrubs the inherited environment.** `spawn_child` sets the run's env over whatever the
-   spawning process already has, with no `env_clear` (`backends/detached.rs:82-91`). The pty runner
-   does the same (`runner/pty.rs:122-128`). `effective_env` says so outright: "the last explicit run
-   value wins over the app server's inherited environment" (`runner/detached.rs:1431-1433`). So a child
-   the CLI spawns inside a leased run inherits the *parent's whole environment*, including user
-   values under names the child doesn't attach.
+2. **On `main` nothing scrubs the inherited environment.** `spawn_child` sets the run's env over
+   whatever the spawning process already has, with no `env_clear` (`backends/detached.rs:82-91`).
+   The pty runner does the same (`runner/pty.rs:122-128`). `effective_env` says so outright: "the
+   last explicit run value wins over the app server's inherited environment"
+   (`runner/detached.rs:1431-1433`). So a child the CLI spawns inside a run inherits the *parent's
+   whole environment*, including secrets the child's agent doesn't attach. That already defeats the
+   per-agent allowlist for server secrets, before any user value exists. It is ADI-MONO-175, which
+   strips the parent's attached-secret names and `ADI_*` run identity before the spawn and lands
+   **before phase 1**. This design assumes it: once it lands, the only way a child gets a user
+   value is to be provisioned with one.
 
 So: **leased work is started only by `adi-app`, and every other process either forwards to it or
 leaves the work queued for it.**
@@ -582,9 +744,11 @@ id appears in every listing. Caller identity for a leased launch therefore can't
   transcript can't be replayed by a member over the mesh. A capability that matches no session is
   refused with `403`. It never silently falls back to the server's values, because a wrong
   capability is either a bug or a forgery.
-- **It authenticates the session, not the lease.** It stays valid while its session exists, whether
-  or not the user's lease is live at that moment. Liveness is §10's per-turn question. Deleting the
-  session kills its capability, and children keep their own.
+- **It is the lease's token for that session.** It stays valid while its session exists, whether or
+  not the lease is live at that moment, because liveness is §10's per-turn question and an expired
+  lease must not orphan a tree that will resume. Two things end it: deleting the session, and a
+  revoke, which voids the capability of every session on the lease at once (§10.1). Children keep
+  their own capabilities, and a revoke voids those too, because they are on the same lease.
 
 ### The paths, one by one
 
@@ -608,20 +772,29 @@ does the following:
 The CLI prints the answer exactly as it prints a local launch today, and `follow_the_run`
 (`agents.rs:1485`) registers the wake locally as before. A grandchild repeats this with the child's
 capability, so inheritance is transitive by construction. If the app can't be reached, the CLI
-refuses rather than launching in-process on different credentials (§15 Q8).
+refuses rather than launching in-process on different credentials (§15 Q3).
 
 **A run launches a child with `ADI_LEASE` removed** (`env -u ADI_LEASE adi-mono agents run …`). The
 CLI launches in-process, as any lease-less launch does today, and the child gets no `LeaseRef`.
-Because of fact 2 above, the child would still inherit the parent's user values ambiently. So
-`spawn_child` and the pty launch **remove every `overridable` name, `ADI_LEASE` and `ADI_LEASE_URL`
-from the inherited environment** before applying the run's own. `hash_child_environment` applies
-the same removal, so the fingerprint matches what the child sees. A run that opts out of
-inheritance gets the server's values, never the parent's by accident.
+With ADI-MONO-175 in place the spawn strips the parent's attached-secret names, which include every
+name a user value replaced, and `ADI_*`, which includes `ADI_LEASE` and `ADI_LEASE_URL`. Phase 3
+adds a test that pins this down for the user layer. `hash_child_environment` has to apply the same
+removal, so the fingerprint matches what the child sees. A run that opts out of inheritance gets the
+server's values, never the parent's by accident.
 
 **A later turn: reply, answer, await wake, question default, goal nudge, failover re-ask, queued
 message.** All of them reach `start_turn` through `deliver_with` or `advance_queue`. `start_turn`
 reads `record.lease`, resolves values from the live lease (§10), and re-applies the session's own
-stored capability. The `Agents` that `adi-app` builds (`adi-app/src/main.rs:225`) carries a lease
+stored capability (minting a fresh one if a revoke voided it, §10.1).
+
+**A reply runs on the conversation's lease, whoever sends it.** `docs/fleet.md` §8a lets any peer
+reply into any conversation. `reply_run` (`handlers/agents.rs:857`) already carries the replier
+into `Agents::reply_as` only as a conversation marker (`sender_marker`, `:864`), and that stays
+so: the replier's own `user_scope` is never consulted for the lease. The turn looks for the
+session's `lease.user` and nobody else's. There is no per-replier switching. A
+conversation keeps one source of values for its life, and a turn never changes whose key it runs on
+because of who typed. The cost is in §12: member B can spend member A's lease by talking in A's
+chat. The `Agents` that `adi-app` builds (`adi-app/src/main.rs:225`) carries a lease
 source. Every other `Agents` has none, and for a session whose `lease` is set it **doesn't start the
 turn**. `deliver_with` enqueues and answers `Sent::Queued`, and `advance_queue` returns `false`
 before dequeuing. The app's listing drains it within a second. So `adi-mono agents answer` typed
@@ -632,18 +805,27 @@ can never start a leased turn on the wrong environment.
 capability and never set `LeaseRef`. A leased run that files a task which dispatch later picks up
 has handed work to the server's values. That is the revision's rule, not a gap.
 
-### When the lease ends under a child
+### When the lease expires under a child
 
 - **The running turn of every session in the tree finishes** on the environment it started with
   (§10).
 - **The next turn of any of them**, parent, child or grandchild, is checked on its own and gets the
   same `missing` answer. All of them share one `user`, so under `wait` the whole tree parks together
   and resumes together on `adi.secrets.lease.granted`.
-- **A child launched after the lease ended** still inherits the `LeaseRef`, because the parent's
+- **A child launched after the lease expired** still inherits the `LeaseRef`, because the parent's
   capability is still valid. Its first turn meets `missing` like any other: on server values under
   `server`, created and parked under `wait`, refused with a message under `fail`.
-- **Revoking doesn't orphan anything.** The sessions keep their `LeaseRef`, and a later unlock by the
-  same user brings the whole tree back.
+
+### When the lease is revoked under a child
+
+- **Every running turn in the tree is stopped**, the parent's and every descendant's, because
+  every one of them is a session with `lease.user = <u>` (§10.1 step 3). Nothing in the tree goes
+  on running on the revoked value.
+- **No new child can start on it.** Every capability in the tree is void, so a forwarded launch from
+  a process that hasn't died yet is refused with `403`.
+- **The tree isn't orphaned.** The sessions keep their `LeaseRef`. A later unlock by the same user
+  makes their *next* turns startable again, with fresh capabilities. Stopped turns aren't re-run:
+  as with a manual Stop, the conversation moves when somebody sends it something.
 
 ## 12. Threat model and honest limits
 
@@ -651,12 +833,13 @@ Values reach runs as environment variables. Within that mechanism, this is what 
 
 | who | can | cannot |
 |---|---|---|
-| **another member of the server** | read your transcripts (unchanged, `docs/fleet.md` §8a), including any value an agent of yours printed; reply into your conversation, so its next turn runs on your lease (§15 Q9) | reveal your values through any API; set, replace or remove yours; start a run on your lease (the user comes from the headers, and `X-Adi-Lease` is ignored over the mesh) |
-| **any agent run on the server** (same Unix user) | read every leased run's `/proc/<pid>/environ` (readable on this host), so your values and that run's `ADI_LEASE`, for as long as those runs live; use a stolen capability on loopback to launch runs on your lease; read the master key, so every global | read a user value at rest (it is wrapped to devices); obtain your value while none of your leased runs is alive |
+| **another member of the server** | read your transcripts (unchanged, `docs/fleet.md` §8a), including any value an agent of yours printed; reply into your conversation, and its next turn runs on your lease, by design (§11) | reveal your values through any API; set, replace or remove yours; start a *new* conversation on your lease (the user comes from the registry, and `X-Adi-Lease` is ignored over the mesh) |
+| **a member paired before this ships** (username `adi`) | run on the server's values, as today | get a user scope, or be mistaken for another `adi` member's scope, until re-paired (§3.2) |
+| **any agent run on the server** (same Unix user) | read every leased run's `/proc/<pid>/environ` (readable on this host), so your values and that run's `ADI_LEASE`, for as long as those runs live; use a stolen capability on loopback to launch runs on your lease; read the master key, so every global | read a user value at rest (it is wrapped to the device); obtain your value while none of your leased runs is alive |
 | **the server's operator, or root** | everything above, plus `adi-app`'s memory while a lease is live, and change the code so the next unlock is kept | read your value while no lease is live and no code has been changed |
 | **the network and the relay** | see that two keys talk | read anything: QUIC end to end, plus the seal to the session key |
-| **a thief with your device** | unlock on your behalf until you revoke | — revoke from another device, or unpair its petname on the server; its wraps are deleted and its lease ends |
-| **an agent run on your own device** | edit your device's per-connection table (`fleet.toml` is readable and writable by that Unix user), or ask your local `adi-app` to unlock | read the device key out of the Keychain without the item's access rule |
+| **a thief with your device** | unlock on your behalf, since in v1 the device *is* the user | — the server's operator unpairs its petname: the lease is revoked and its runs stopped (§10.1), and `users/<u>/` is deleted (§3.2). There is no "revoke from your other device" in v1, because your other device is another user |
+| **an agent run on your own device** | edit your device's `connections.toml` (readable and writable by that Unix user), or ask your local `adi-app` to unlock | read the device key out of the Keychain without the item's access rule |
 
 The limits, said plainly:
 
@@ -664,7 +847,12 @@ The limits, said plainly:
   today.** It sits in the environment of every leased run, readable by every process running as
   the server's Unix user, and printable into a transcript by the agent itself. The lease bounds
   *when new runs get it*. It doesn't bound what a run that had it did with it. Revoking on the
-  device stops new turns. It can't un-leak a value. Revoke at the provider.
+  device stops every run that had it (§10.1), but it can't un-leak a value a run already copied or
+  printed. Revoke at the provider.
+- **Replying spends the conversation owner's lease.** Any member who can reply into your
+  conversation can make it take another turn on your key. That is the decided trade (§11): one
+  source of values per conversation, and the member gate's collaborative read-and-reply model
+  unchanged. A member who must not do that shouldn't be on a server where you lease.
 - **Inheritance is attribution with a capability, not isolation.** The capability stops a run from
   *guessing* its way onto someone's lease by setting `ADI_RUN_ID`. It doesn't stop a co-resident
   process from *reading* a capability, because the Unix user that can read it can read the values
@@ -701,124 +889,101 @@ Buttons are sugar over §4's settings. Each one writes settings and adds no beha
 | **Lease: while connected** | device | `lease = 0`, `auto_unlock = true` |
 | **Lease: N hours** | device | `lease = "<N>h"`, `auto_unlock = true` |
 | **Lease: until revoked** | device | `lease = "forever"`, `auto_unlock = true` (clamped to `max_lease`) |
-| **Revoke now** | device | the revoke verb (§4.4, §15 Q2), which leaves the table alone, so the next connect re-unlocks under `auto_unlock` |
+| **Revoke now** | device | `mesh lock <server>` (§4.4, §10.1): stops every run on the lease, and leaves the table alone, so the next connect re-unlocks under `auto_unlock` |
 | **Never use the server's key for me** | device or "My keys" | `users/<u>/settings.toml`, `missing = "wait"` |
 
 ## 15. Open questions
 
 Each is either a place the code contradicts the design, or a decision the design leaves open. None
-is settled by this document.
+is settled by this document. The three rounds of decisions on ADI-MONO-173 settled the earlier list's
+questions on the default username, the revoke verb's name, where the device setting lives, the
+strictness order, a corrupt policy, revoke stopping in-flight turns, replies from someone else,
+phase 1 without wraps, enrolling a second device, and the inherited environment (now
+ADI-MONO-175). Those are in the body, and the rest are renumbered here.
 
-**Q1 — The default username.** `<u>` is the credential username (§3), but every pairing defaults to
-`adi` (`join.rs:112`) and the browser client records the same (`adi-mesh-client/src/store.rs`). A
-suggestion, not a decision: a peer whose username is `PAIR_USER` gets no user scope, and its
-launches record no lease. Otherwise every default-paired member shares one scope and one set of
-leases.
-
-**Q2 — `mesh revoke` already exists.** `adi-mono mesh revoke <petname> <grant>` removes a grant
-(`adi-cli/src/mesh.rs:173-178`). Options: a flag (`mesh revoke <server> --lease`), telling the
-cases apart by arity (one argument = the lease, which is fragile), or another verb for the lease
-(`mesh lock`, the opposite of `unlock`).
-
-**Q3 — Where `[connections.<server>.secrets]` lives.** On a Mac, a new `secrets` sub-table on the
-server's `[nodes.<petname>]` record in `fleet.toml` (`fleet.rs:392`, whose field-order note
-already requires sub-tables last), or a separate device-side file keyed by petname. In the browser
-client, a field on its own `NodeRecord` (`adi-mesh-client/src/store.rs`). The design's name implies
-a new file. The code's natural home is the existing record.
-
-**Q4 — `users/<u>/settings.toml` collides with a secret named `settings`.** `validate_name` accepts
+**Q1 — `users/<u>/settings.toml` collides with a secret named `settings`.** `validate_name` accepts
 lowercase (`secret.rs:124-133`). Options: refuse `settings` as an `overridable` name (a real env
 var is almost never lowercase), or move the file out of the scope directory
 (`users/<u>.settings.toml`, or `users/<u>/.settings.toml`, which `validate_name` rejects as a
 secret name).
 
-**Q5 — Ordering of "stricter".** This spec reads `server` < `wait` < `fail`. One could argue `fail`
-and `wait` are equally strict, both refusing the server's key and differing only in whether the
-work parks. If they are, a user on `wait` under a server on `fail` needs a rule.
-
-**Q6 — A launch that can't start yet.** Under `wait`, a fresh launch with no live value creates the
+**Q2 — A launch that can't start yet.** Under `wait`, a fresh launch with no live value creates the
 session and queues its opening message (§10). `Launch` is `Pty | Process { pid, log, run_id }`
 (`run.rs:22-34`). There is no "created, waiting" shape, and `adi-mono agents run --wait`,
 `follow_the_run` and the panel all expect a process. Add a variant, or refuse such a launch with
 "unlock first"?
 
-**Q7 — Does revoke stop in-flight turns?** A value in a running process can't be withdrawn, and
-§10 lets the turn finish. The original design said a revoke cuts the turn (true only with the
-gateway). Options: revoke stops new turns only (this spec's default), or revoke also stops every
-running turn whose session's `lease.user` is the revoker ("revoke and stop").
-
-**Q8 — The CLI when the app is unreachable.** A leased run's `agents run` forwards to `adi-app`
+**Q3 — The CLI when the app is unreachable.** A leased run's `agents run` forwards to `adi-app`
 (§11). If the app is down or restarting, this spec refuses the launch. The alternative is to apply
 the user's `missing` policy locally. That means the CLI reading `sessions.lease_cap` and both
 settings files itself, and under `server` it would launch in-process with the server's values. That
 works, but it moves credentials without the app ever seeing the launch.
 
-**Q9 — A reply from someone else runs on the session's lease.** §8a lets any peer reply into any
-conversation, and every later turn looks up the session's `lease.user`. Member B can therefore run
-turns on user A's subscription by talking in A's chat. Is that intended, or should a reply from a
-different human into a leased session be refused, or run that turn on the server's values?
-
-**Q10 — Does "missing" cover a user who never stored a value?** §5 records a `LeaseRef` for every
+**Q4 — Does `missing` cover a user who never stored a value?** §5 records a `LeaseRef` for every
 member launch of an agent attaching an `overridable` name, so a member with no stored value at all
 meets `missing` and, under `fail`, can't run those agents on this server. That is what makes `fail`
 the partner sandbox's "the server never pays for a member". The other reading records a `LeaseRef`
 only when the user has stored a value for at least one of the names.
 
-**Q11 — Phase 1 has no device wraps.** The checklist puts the user scope, policy and own-scope API
-in phase 1 and wraps in phase 2. Without wraps, the only way phase 1 could store a value is the
-master key, which is the `always` mode v1 drops. This spec's proposal: phase 1 ships the scope, the
-policy, the layering with an in-memory lease source used by tests, and the API, with
-`/api/secrets/mine/set` refusing until wraps land. Phase 1 is plumbing, and phase 2 is the first
-phase a user can actually use.
-
-**Q12 — `[user_secrets]` in a corrupt file.** Read as defaults, it means `enabled = false`, and
-every member is back on the server's credentials. A server that said `missing = "fail"` would start
-paying for everyone. Fail closed (treat as `enabled = true, missing = "fail"` with an empty
-`overridable`, which in effect refuses member launches of attaching agents), or match
-`LlmSettings::load` and fail open?
-
-**Q13 — Changing credentials mid-conversation breaks Codex threads.** Under `missing = "server"`,
+**Q5 — Changing credentials mid-conversation breaks Codex threads.** Under `missing = "server"`,
 a conversation alternates between the user's value and the server's as the lease comes and goes.
 `hash_child_environment` (`runner/detached.rs:1402`) covers every value, so each switch starts a
 new Codex thread, and the qualified hold key (§6) makes `codex_credential` refuse a resume across
-them anyway. Accept that, or pin a session to whichever source its first turn used?
+them anyway. A revoke has the same effect through the re-minted capability (§10.1). Accept that, or
+pin a session to whichever source its first turn used?
 
-**Q14 — The `launched_by` body field.** `run_agent` records whatever `launched_by` the body sends
+**Q6 — The `launched_by` body field.** `run_agent` records whatever `launched_by` the body sends
 (`handlers/agents.rs:347-353`). This spec keeps the lease off that path, but the field still lets a
 member stamp `human:<someone>` on a run, which defeats ADI-MONO-171's `member_run_refusal`
-(`:2235`) the other way round. Fix it here or separately?
+(`:2235`) the other way round. With random user ids a forger has to learn the victim's id first,
+but ids appear on run cards. Fix it here or separately?
 
-**Q15 — Settings-file backends.** A user value can't override a credential that lives in a settings
+**Q7 — Settings-file backends.** A user value can't override a credential that lives in a settings
 file (§5). Is BYO limited to env-named credentials (`api_key_env`, or the runtime's ambient var),
 or should a user value beat a settings file's own `env` block?
 
-**Q16 — Probing user-scoped holds.** The prober can't match a qualified key (`prober.rs:160`), so a
+**Q8 — Probing user-scoped holds.** The prober can't match a qualified key (`prober.rs:160`), so a
 user's hold waits out its deadline. Probing would spend the user's quota and need their lease.
 Leave it `Unreachable`?
 
-**Q17 — Enrolling a new device.** A wrap needs the DEK, and only an enrolled device can unwrap it.
-Wrap from an existing device (both online), or re-enter the value on the new one? Symmetric
-Keychain and PRF wraps can't be made *to* a device by anyone else. On a Mac, a Keychain item
-created by `adi-app` may prompt or refuse when the separate `adi-mono` binary asks for it, so
-`secrets set --user` may have to go through the local app.
-
-**Q18 — "Re-encrypted to the server session".** Read here as: sealed by the device to an ephemeral
+**Q9 — "Re-encrypted to the server session".** Read here as: sealed by the device to an ephemeral
 key `adi-app` generates at boot (§9). If the mesh connection's own keys were meant, §9's flow
 changes.
 
-**Q19 — Numbers.** The renew interval `H`, the grace after the last renew for `lease = 0`, and
+**Q10 — Numbers.** The renew interval `H`, the grace after the last renew for `lease = 0`, and
 whether an absent `max_lease` really means "no cap".
 
-**Q20 — Codex and a user key.** `ambient_credential_env` assumes `OPENAI_API_KEY`
+**Q11 — Codex and a user key.** `ambient_credential_env` assumes `OPENAI_API_KEY`
 (`ondemand.rs:273`). The Codex runner knows `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN`
 (`runner/detached.rs:773-776`) and binds the host's `auth.json` login whenever one exists. Whether
 a user's key actually takes precedence over the host's `codex login`, and whether user-keyed Codex
 runs need their own `CODEX_HOME`, has to be shown before Codex is BYO.
 
-**Q21 — The same inheritance carries server secrets today.** Fact 2 in §11 isn't specific to user
-values. A CLI-spawned child inherits its parent's *server* secrets too, under names the child's
-allowlist doesn't include. §11 scrubs only `overridable` names and the capability. Widen the scrub
-to every attached secret name (a separate fix), or leave it?
+**Q12 — The Keychain key and the `adi-mono` binary.** The device key is a Keychain item `adi-app`
+creates (§8). On a Mac, the separate `adi-mono` binary asking for that item may get a prompt or a
+refusal, so `secrets set --user` and `mesh unlock` from a terminal may have to go through the local
+`adi-app` instead of opening the Keychain themselves. To be shown on a signed build before phase 2.
+
+**Q13 — An invite that pins `username`.** `InviteSpec.username` (`join.rs:265-267`) lets the minter
+choose the username, and the partner-sandbox plan uses it to give one person (`p<uid>`) several
+devices. That is exactly the device grouping "one peer = one user" puts off, and a pinned name can
+be given to two peers. This spec gives a pinned username **no user scope** in v1 (§3.2), which
+leaves the partner sandbox without BYO until it stops pinning or grouping is built. The
+alternatives: honour a pin as a user id and have `decide` refuse a pin another record already
+carries, or have the sandbox stop pinning and keep `p<uid>` in `labels` instead.
+
+**Q14 — The server dialling a device's invite.** When the server spends an invite the *device*
+minted, the server files the device through `record_viewer`, and the username is whatever the
+device's side chose (`join.rs:740`). The design says the id is "minted at pairing and returned in
+the join response", which describes the server minting. A device-chosen id could equal another
+user's, so this spec gives such a record no user scope (`minted_user` stays `false`, §3.2). Is that
+enough, or should the server refuse to be the dialler for a peer that wants a user scope?
+
+**Q15 — An unreadable `users/<u>/settings.toml`.** The server policy fails closed by turning the
+feature off (§4.1). The per-user file can only tighten, so the analogous readings are "as if it said
+nothing" (the server's `missing` applies, and the user's runs may land on the server's key, which is
+what they had asked not to happen) or "as if it said `fail`" (the user's leased work stops until
+they fix it).
 
 **Doc drift noticed, not fixed here (ADI-MONO-174 covers it):** `docs/fleet.md` §11 says
 `Secrets::resolve` "injects every global secret into every agent run's environment". Runs use the
@@ -829,81 +994,108 @@ as covering "the global" secrets actions, but the code covers every scope.
 
 ## Checklist
 
-Four phases. Each item ships with unit tests in the same file, as in `docs/fleet.md`.
+Two prerequisites, then four phases. Each item ships with unit tests in the same file, as in
+`docs/fleet.md`.
 
-### Phase 1 — the user scope, server policy, the hold-key fix, the own-scope API and CLI
+### Before phase 1
 
-- [ ] P1.1 `adi-secrets`: `Scope::User`, `users/<u>/` paths, AAD `user:<u>/<NAME>`. `list_all`
+- [ ] P0.1 ADI-MONO-174: `set-oauth` and `refresh` on the member gate, and the `docs/fleet.md`
+      §8a/§11 wording.
+- [ ] P0.2 ADI-MONO-175: a CLI-spawned child no longer inherits its parent's attached secrets or
+      `ADI_*` run identity.
+
+### Phase 1 — plumbing only: policy, storage, the hold-key fix, the own-scope API and CLI, the random pairing id
+
+Nothing in phase 1 lets a user store a value. Every piece is exercised through tests and an
+in-memory lease source.
+
+- [ ] P1.1 `adi-mesh`: `decide` mints `u-<26 base32>` where it used `PAIR_USER`, returned in
+      `Accepted.username`. `NodeRecord.minted_user`, set only by `decide` for an id it minted. A
+      re-pair keeps a minted id and replaces an `adi` one. Tests: two no-body pairings get distinct
+      ids; a re-pair keeps the id and rotates the password; a pinned username and a `record_viewer`
+      record have `minted_user = false`; a legacy record reads `false`.
+- [ ] P1.2 `adi-app`: `user_scope(projects, sender)` beside `peer_role`, `Some(<u>)` only for a
+      `minted_user` record whose `auth.user` matches the header. `None` for `adi`, a local caller,
+      an unknown petname or an unreadable registry.
+- [ ] P1.3 `adi-secrets`: `Scope::User`, `users/<u>/` paths, AAD `user:<u>/<NAME>`. `list_all`
       skips `users/`. A user ciphertext copied into global or another user's scope fails to open.
-- [ ] P1.2 `secrets/settings.toml` `[user_secrets]` (`enabled`, `overridable`, `missing`,
-      `max_lease`), read per launch and per turn. Settle Q12 for the unreadable case first.
-- [ ] P1.3 `users/<u>/settings.toml` with `missing` clamped to stricter-only (settle Q4, Q5).
-- [ ] P1.4 `SessionRecord::lease` (`LeaseRef`) and `sessions.lease_cap`, with their `ALTER TABLE`s.
+- [ ] P1.4 `secrets/settings.toml` `[user_secrets]` (`enabled`, `overridable`, `missing`,
+      `max_lease`), read per launch and per turn. A corrupt file reads as `enabled = false`, logged
+      and shown.
+- [ ] P1.5 `users/<u>/settings.toml` with `missing` clamped stricter-only, `server < wait < fail`
+      (settle Q1, Q15).
+- [ ] P1.6 `SessionRecord::lease` (`LeaseRef`) and `sessions.lease_cap`, with their `ALTER TABLE`s.
       Written once at `create_as`, never re-derived. NULL reads as "server values only".
-- [ ] P1.5 `run_agent` computes `LeaseRef` from `FleetSender` only (settle Q1, Q10). Test: a body
-      naming any user or lease field is ignored.
-- [ ] P1.6 The layer: `spec_in` takes the session's resolved lease values and overlays them in
+- [ ] P1.7 `run_agent` computes `LeaseRef` from `user_scope` only (settle Q4). Test: a body naming
+      any user or lease field is ignored.
+- [ ] P1.8 The layer: `spec_in` takes the session's resolved lease values and overlays them in
       `attached_secret_env` for `pinned ∩ attached ∩ overridable ∩ shared` only, under the agent's
       `[env]`. Exercised through an in-memory lease source.
-- [ ] P1.7 The hold fix: per-turn qualified key `#user:<u>` when a user value supplied the
+- [ ] P1.9 The hold fix: per-turn qualified key `#user:<u>` when a user value supplied the
       credential. The same key in `RunSpec.credential`. Test: a user quota doesn't hold the
       server's login.
-- [ ] P1.8 `ondemand::resolve_credential` uses the asker's live value for the Test button.
-- [ ] P1.9 `GET /api/secrets/mine`, `POST /api/secrets/mine/{set,remove,settings}`,
+- [ ] P1.10 `ondemand::resolve_credential` uses the asker's live value for the Test button.
+- [ ] P1.11 `GET /api/secrets/mine`, `POST /api/secrets/mine/{set,remove,settings}`,
       `POST /api/secrets/policy` (member-blocked). Never reveals. `set` refuses names outside
-      `overridable` (and, per Q11, until wraps exist).
-- [ ] P1.10 CLI: `secrets policy` (local, and `--user --node`), `secrets {set,rm} --user --node`.
-      No `--reveal` or `read` for `--user`.
-- [ ] P1.11 ADI-MONO-174 (member gate for `set-oauth` and `refresh`) landed first.
+      `overridable`, callers without a user scope, and, in phase 1, everything (`501`).
+- [ ] P1.12 CLI: `secrets policy` (local, and `--user --node`), `secrets rm --user --node`, and
+      `secrets set --user --node`, which refuses until phase 2. No `--reveal` or `read` for `--user`.
 
-### Phase 2 — device wraps, the per-connection setting, unlock and leases, waiting on unlock
+### Phase 2 — device wraps, the per-connection setting, unlock, leases, revoke, waiting on unlock
 
-- [ ] P2.1 The wrapped manifest: DEK, per-device `[[wraps]]`. `set` accepts wraps only. Plaintext
-      never reaches the server.
+- [ ] P2.1 The wrapped manifest: DEK and one `[[wraps]]` entry. `set` accepts wraps only, and stops
+      refusing. Plaintext never reaches the server.
 - [ ] P2.2 macOS device key in the Keychain (`adi-app`), WebAuthn PRF device key in
-      `adi-mesh-client`. The unwrap runs in device-owned code only (settle Q17).
+      `adi-mesh-client`. The unwrap runs in device-owned code only (settle Q12).
 - [ ] P2.3 `adi-app`'s ephemeral session key, `/api/leases/{session,unlock,renew,revoke}` and
-      `GET /api/leases`, the in-memory `Lease` with zeroize. `max_lease` clamp. Restart answers
-      "unknown epoch".
-- [ ] P2.4 The device's `[connections.<server>.secrets]` (settle Q3), the renew worker in the
-      device's `adi-app`, TTL from last seen, immediate revoke.
-- [ ] P2.5 CLI: `mesh share`, `mesh unlock`, the revoke verb (settle Q2), `secrets leases`.
-- [ ] P2.6 `missing` per turn: `server` / `wait` / `fail`. The unlock check runs before `dequeue` in
+      `GET /api/leases`, the in-memory `Lease`, one per user, with zeroize. `max_lease` clamp.
+      Restart answers "unknown epoch" (settle Q9, Q10).
+- [ ] P2.4 The device's `connections.toml` in the `mesh` module dir (and its own object store in the
+      browser client), moved by a rename and deleted by an unpair. The renew worker in the device's
+      `adi-app`, TTL from last seen.
+- [ ] P2.5 CLI: `mesh share`, `mesh unlock`, `mesh lock`, `secrets leases`.
+- [ ] P2.6 Revoke (§10.1): drop the lease, void every `lease_cap` of `<u>`,
+      `SessionStore::with_lease_user`, stop each live session through the runner stop without the
+      agent-exists gate, `adi.secrets.lease.revoked`. Also on unpair, which deletes `users/<u>/`.
+      Runs with no lease in the table. Tests: a running turn and a running child are both stopped; a
+      parked session keeps its queue; a forwarded launch after the revoke gets `403`.
+- [ ] P2.7 `missing` per turn: `server` / `wait` / `fail`. The unlock check runs before `dequeue` in
       `advance_queue` and before the start decision in `deliver_with`.
-- [ ] P2.7 Waiting on unlock: queue-held turn, `RunLifecycle::Waiting`,
+- [ ] P2.8 Waiting on unlock: queue-held turn, `RunLifecycle::Waiting`,
       `adi.agents.run.waiting_on_unlock`. Resume on `adi.secrets.lease.granted`. A fresh launch that
-      waits (settle Q6). Revoke behaviour for in-flight turns (settle Q7).
+      waits (settle Q2).
 
 ### Phase 3 — subagent and turn inheritance of the lease
 
 - [ ] P3.1 Capability: minted per leased session, SHA-256 in `sessions.lease_cap`, `ADI_LEASE` and
-      `ADI_LEASE_URL` pushed after `ADI_RUN_ID`, stable across turns and app restarts.
+      `ADI_LEASE_URL` pushed after `ADI_RUN_ID`, stable across turns and app restarts, re-minted
+      after a revoke (settle Q5).
 - [ ] P3.2 `run_agent` honours `X-Adi-Lease` only without a `FleetSender`. It derives `launched_by`
       and the `can_spawn` caller from the capability's session and builds the child's `LeaseRef`
-      from the child's own attachments. An unknown capability is `403`.
+      from the child's own attachments. An unknown or voided capability is `403`.
 - [ ] P3.3 `adi-mono agents run` forwards to `$ADI_LEASE_URL` when `ADI_LEASE` is set, and refuses
-      when the app is unreachable (settle Q8).
+      when the app is unreachable (settle Q3).
 - [ ] P3.4 Only `adi-app`'s `Agents` carries a lease source. Elsewhere a leased session's turn is
       queued, never started (`deliver_with` → `Sent::Queued`; `advance_queue` → `false` before
       dequeue).
-- [ ] P3.5 The scrub: `spawn_child`, the pty launch and `hash_child_environment` remove every
-      `overridable` name plus `ADI_LEASE` / `ADI_LEASE_URL` from the inherited env (settle Q21 for
-      the wider scrub).
+- [ ] P3.5 A reply, from anyone, runs on the session's `lease.user`. Test: member B's reply into A's
+      leased conversation gets A's value, and B's own lease is never consulted.
 - [ ] P3.6 Tests: a grandchild of a leased run gets the user's value for a name it attaches; a child
       that doesn't attach the name gets nothing; a forged `ADI_RUN_ID` without the capability gets
-      server values; an `env -u ADI_LEASE` launch inherits nothing; expiry under a child parks the
-      whole tree under `wait` and resumes it on renew; an await wake, a queued message and a
-      failover re-ask of a leased session all run on the lease.
+      server values; an `env -u ADI_LEASE` launch inherits nothing (ADI-MONO-175's strip, pinned for
+      the user layer, with `hash_child_environment` matching); expiry under a child parks the whole
+      tree under `wait` and resumes it on renew; a revoke stops the whole tree; an await wake, a
+      queued message and a failover re-ask of a leased session all run on the lease.
 
 ### Phase 4 — the panel for the settings
 
 - [ ] P4.1 Server: the `[user_secrets]` policy on the Secrets page (enabled, overridable names,
-      missing, max lease). Live leases listed by user, device, names and expiry.
-- [ ] P4.2 "My keys" (own scope): names, devices, last updated, remove, my `missing`. Never shows a
-      value.
+      missing, max lease, and the parse error when there is one). Live leases listed by user
+      (shown by petname), names and expiry.
+- [ ] P4.2 "My keys" (own scope): names, last updated, remove, my `missing`. Never shows a value.
 - [ ] P4.3 Device: the per-connection setting on the Mac's Fleet row for that server and in the
       browser client's node settings: share, lease (off / while connected / N hours / until
       revoked), auto-unlock, revoke now.
-- [ ] P4.4 "Waiting for <u> to unlock" in the rail, and a user's held subscription shown
-      anonymised to everyone but its owner.
+- [ ] P4.4 "Waiting for <petname> to unlock" in the rail, "stopped: key revoked" on revoked runs, and
+      a user's held subscription shown anonymised to everyone but its owner.
 - [ ] P4.5 The presets of §14, once the settings above have shipped.
