@@ -578,6 +578,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-templates"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "adi-tools"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "adi-templates"
+description = "The on-disk contract of ~/.adi/mono/templates/<id>/template.toml: what a dashboard template says to run to create one, and how that command actually runs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

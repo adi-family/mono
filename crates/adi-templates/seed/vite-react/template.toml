@@ -1,0 +1,5 @@
+id       = "vite-react"
+label    = "Vite + React 19 + Hono"
+engine   = "bash"
+requires = ["bun"]
+command  = 'bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR" && bun "$ADI_DASHBOARD_DIR/scripts/adi-init.ts"'

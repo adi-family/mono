@@ -1,0 +1,5 @@
+id       = "plain"
+label    = "Dependency-free (bun, no build step)"
+engine   = "bash"
+requires = ["bun"]
+command  = 'bun create adi-family/dashboard-plain "$ADI_DASHBOARD_DIR" && bun "$ADI_DASHBOARD_DIR/scripts/adi-init.ts"'
