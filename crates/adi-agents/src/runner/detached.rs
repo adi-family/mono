@@ -130,19 +130,33 @@ impl DetachedRunner {
                 let previous_thread = codex_thread(&state, session);
                 let same_credential =
                     state.codex_credential.as_deref() == Some(identity.credential.as_str());
-                if same_credential
-                    && (state
-                        .codex_auth_context
-                        .as_deref()
-                        .is_some_and(|stored| identity.auth_context.as_deref() != Some(stored))
-                        || identity.auth_context.is_none())
-                    && previous_thread.is_some()
-                {
-                    return Err(Error::Launch(
-                        "cannot safely resume the Codex conversation: its login/session context \
-                         changed or cannot be verified; start a new conversation"
-                            .to_string(),
-                    ));
+                // Split by which half is actually true, so the message says which: a mismatch
+                // between two fingerprints ADI *did* compute (an account switch, a token rewrite)
+                // is a real context change, never confused with this turn's identity being
+                // unobtainable in the first place (an unaudited CLI, a remotely policy-routed
+                // plan) — ADI-MONO-211.
+                if same_credential && previous_thread.is_some() {
+                    match (
+                        state.codex_auth_context.as_deref(),
+                        identity.auth_context.as_deref(),
+                    ) {
+                        (_, None) => {
+                            return Err(Error::Launch(format!(
+                                "cannot safely resume the Codex conversation: {}; start a new \
+                                 conversation",
+                                codex_unverifiable_reason(spec)
+                            )));
+                        }
+                        (Some(stored), Some(current)) if stored != current => {
+                            return Err(Error::Launch(
+                                "cannot safely resume the Codex conversation: its login/session \
+                                 context changed since this thread's last turn; start a new \
+                                 conversation"
+                                    .to_string(),
+                            ));
+                        }
+                        _ => {}
+                    }
                 }
                 let cont = if !session_id.trim().is_empty() {
                     CodexContinuation::Resume {
@@ -365,11 +379,20 @@ impl Runner for DetachedRunner {
             Backend::ProcessCodex => {
                 let identity = codex_identity.expect("the Codex runner computes its identity");
                 state.codex_credential = Some(identity.credential);
-                state.codex_auth_context = Some(
-                    identity
-                        .auth_context
-                        .unwrap_or_else(|| CODEX_AUTH_UNVERIFIABLE.to_string()),
-                );
+                state.codex_auth_context = Some(identity.auth_context.unwrap_or_else(|| {
+                    // This turn is still allowed to run — a single-turn Codex agent is common
+                    // and must not be blocked by a check that only matters for a second turn.
+                    // But nothing re-checks this between now and that second turn's `argv`, up
+                    // to 40 minutes later at an await wake (ADI-MONO-211), so say it here instead
+                    // of leaving the operator to find out only then.
+                    tracing::warn!(
+                        session = %session.id(),
+                        "Codex conversation starting without a verifiable login/session \
+                         context; a follow-up turn will refuse to resume it: {}",
+                        codex_unverifiable_reason(spec)
+                    );
+                    CODEX_AUTH_UNVERIFIABLE.to_string()
+                }));
                 // A credential switch deliberately starts a new thread. Drop the old login's id
                 // immediately; the new one is captured from this child's `thread.started` event.
                 state.codex_thread_id = (!session_id.is_empty()).then_some(session_id);
@@ -714,6 +737,37 @@ fn codex_auth_context(spec: &RunSpec) -> Option<String> {
     codex_auth_context_with_preferences(spec, managed_preferences)
 }
 
+/// Why [`codex_auth_context`] came back `None`, for an `argv` refusal to report instead of the
+/// generic "cannot be verified". Checked only on this already-failing turn, against the two
+/// causes a ChatGPT login actually hits in practice (an unaudited CLI build, a plan whose policy
+/// Codex fetches remotely) — everything else `codex_auth_context` refuses for still gets an
+/// honest, if less specific, answer.
+///
+/// Deliberately re-derives these from the CLI and `auth.json` rather than threading a reason out
+/// of `codex_auth_context_with_preferences`'s half-dozen early returns: that would turn every one
+/// of its ~40 existing callers and tests into a reason-carrying type for one error message. The
+/// cost is a second bounded `codex --version` probe when the version is in fact the cause — paid
+/// once, on a turn that is refusing to run anyway.
+fn codex_unverifiable_reason(spec: &RunSpec) -> String {
+    if let Some(path) = resolve_codex_executable(spec)
+        && let Some(version) = codex_version_output(&path, spec)
+        && !codex_audited_oauth_semantics(&version)
+    {
+        let shown = String::from_utf8_lossy(&version).trim().to_string();
+        return format!("{shown} is not a version ADI has verified for resume");
+    }
+    let plan = codex_home(spec).and_then(|codex_home| {
+        let bytes = std::fs::read(codex_home.join("auth.json")).ok()?;
+        let auth: Value = serde_json::from_slice(&bytes).ok()?;
+        let id_token = auth.get("tokens")?.get("id_token")?.as_str()?;
+        chatgpt_id_claims(id_token)?.plan
+    });
+    if plan.as_deref().is_some_and(cloud_config_eligible_plan) {
+        return "this plan type receives remote workspace policy between turns".to_string();
+    }
+    "its login/session context cannot be verified locally".to_string()
+}
+
 fn codex_auth_context_with_preferences(
     spec: &RunSpec,
     managed_preferences: CodexManagedPreferences,
@@ -789,7 +843,7 @@ fn codex_auth_context_with_preferences(
         let auth_file = hash_auth_file(
             &mut digest,
             &codex_home.join("auth.json"),
-            codex_v0154_oauth_semantics(&codex_version),
+            codex_audited_oauth_semantics(&codex_version),
         );
         if auth_file.cloud_config_eligible || (!direct_auth_present && !auth_file.present) {
             return None;
@@ -1238,11 +1292,26 @@ fn hash_codex_executable(digest: &mut Sha256, spec: &RunSpec) -> Option<Vec<u8>>
     Some(version)
 }
 
-/// The refresh/cloud-policy ordering below is audited against the 0.154 CLI. A version digest
-/// protects an existing thread across upgrades, but a brand-new thread under a later CLI has no
-/// older digest to compare. Restrict only refreshable ChatGPT auth to the semantics we reproduced;
-/// API-key and statically bound custom-provider sessions remain version-agnostic.
-fn codex_v0154_oauth_semantics(version_output: &[u8]) -> bool {
+/// The refresh/cloud-policy ordering below was audited against the 0.154 CLI and reconfirmed,
+/// byte-for-byte, through 0.163 (ADI-MONO-211) by diffing the `rust-v0.154.0` .. `rust-v0.163.0`
+/// tags of github.com/openai/codex: `codex-rs/login/src/auth/manager.rs` (`AuthManager::auth` —
+/// refresh always runs before any cloud-policy decision — and `should_refresh_proactively`'s
+/// 5-minute access-token / 8-day `last_refresh` windows, both exact-same operators), the JWT
+/// parsing `parse_jwt_expiration`/`decode_jwt_payload` lean on in `codex-rs/login/src/
+/// token_data.rs`, `codex-rs/cloud-config/src/service.rs`'s `cloud_config_eligible_auth` (still
+/// gated on business-like/education-like/enterprise plans), and the plan-string parsing in
+/// `codex-rs/protocol/src/auth.rs` that [`cloud_config_eligible_plan`] mirrors. The only change in
+/// that range was an unrelated new individual-plan SKU (`ProMax`). A version digest protects an
+/// existing thread across upgrades, but a brand-new thread under a later CLI has no older digest
+/// to compare, so anything outside the audited range is refused rather than assumed safe —
+/// re-run that diff and widen the range by hand before trusting a CLI past 0.163; this is a
+/// point-in-time check, not a continuously maintained compatibility matrix. Restrict only
+/// refreshable ChatGPT auth to the semantics we reproduced; API-key and statically bound
+/// custom-provider sessions remain version-agnostic.
+fn codex_audited_oauth_semantics(version_output: &[u8]) -> bool {
+    const MIN_AUDITED_MINOR: u64 = 154;
+    const MAX_AUDITED_MINOR: u64 = 163;
+
     let Ok(output) = std::str::from_utf8(version_output) else {
         return false;
     };
@@ -1260,7 +1329,11 @@ fn codex_v0154_oauth_semantics(version_output: &[u8]) -> bool {
     let mut parts = core.split('.');
     matches!(
         (parts.next(), parts.next(), parts.next(), parts.next()),
-        (Some("0"), Some("154"), Some(patch), None) if patch.parse::<u64>().is_ok()
+        (Some("0"), Some(minor), Some(patch), None)
+            if minor
+                .parse::<u64>()
+                .is_ok_and(|minor| (MIN_AUDITED_MINOR..=MAX_AUDITED_MINOR).contains(&minor))
+                && patch.parse::<u64>().is_ok()
     )
 }
 
@@ -1722,8 +1795,9 @@ fn hash_auth_file(
 const CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_SECONDS: i128 = 5 * 60;
 const CHATGPT_TOKEN_REFRESH_INTERVAL_SECONDS: i128 = 8 * 24 * 60 * 60;
 
-/// Whether v0.154's `AuthManager::auth` will refresh this ChatGPT login before cloud policy is
-/// selected. `None` means the stored shape cannot be matched safely and therefore fails closed.
+/// Whether `AuthManager::auth` will refresh this ChatGPT login before cloud policy is selected,
+/// per the 0.154-0.163 audit on [`codex_audited_oauth_semantics`]. `None` means the stored shape
+/// cannot be matched safely and therefore fails closed.
 ///
 /// Codex prefers a parseable access-token `exp`. A malformed JWT or one without `exp` falls back
 /// to the top-level `last_refresh`; an absent timestamp means no proactive refresh. Keep that order
@@ -2489,11 +2563,19 @@ mod tests {
     fn codex_oauth_requires_the_audited_cli_line_but_api_keys_do_not() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        assert!(codex_v0154_oauth_semantics(b"codex-cli 0.154.0\n"));
-        assert!(codex_v0154_oauth_semantics(
+        assert!(codex_audited_oauth_semantics(b"codex-cli 0.154.0\n"));
+        assert!(codex_audited_oauth_semantics(
             b"codex-cli 0.154.7-preview.1\n"
         ));
-        assert!(!codex_v0154_oauth_semantics(b"codex-cli 0.155.0\n"));
+        assert!(codex_audited_oauth_semantics(b"codex-cli 0.163.0\n"));
+        assert!(codex_audited_oauth_semantics(b"codex-cli 0.158.2\n"));
+        assert!(!codex_audited_oauth_semantics(b"codex-cli 0.153.4\n"));
+        assert!(!codex_audited_oauth_semantics(b"codex-cli 0.164.0\n"));
+        assert!(!codex_audited_oauth_semantics(b"codex-cli 1.154.0\n"));
+        assert!(!codex_audited_oauth_semantics(b"codex-cli 0.154\n"));
+        assert!(!codex_audited_oauth_semantics(b"codex-cli notaversion\n"));
+        assert!(!codex_audited_oauth_semantics(b"not-codex-cli 0.158.0\n"));
+        assert!(!codex_audited_oauth_semantics(b""));
 
         let session = FakeSession::new("codex-unaudited-oauth-version");
         let root = session.log.parent().expect("scratch");
@@ -2501,7 +2583,7 @@ mod tests {
         let bin = root.join("bin");
         std::fs::create_dir_all(&bin).expect("bin dir");
         let executable = bin.join("codex");
-        std::fs::write(&executable, b"#!/bin/sh\necho codex-cli 0.155.0\n")
+        std::fs::write(&executable, b"#!/bin/sh\necho codex-cli 0.170.0\n")
             .expect("future Codex executable");
         let mut permissions = executable.metadata().expect("metadata").permissions();
         permissions.set_mode(0o755);
@@ -2532,6 +2614,170 @@ mod tests {
         assert!(
             codex_auth_context(&run).is_some(),
             "static API-key identity does not depend on OAuth refresh semantics",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_unverifiable_reason_names_the_unaudited_cli_version() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let session = FakeSession::new("codex-unverifiable-reason-version");
+        let root = session.log.parent().expect("scratch");
+        let home = root.join("codex-home");
+        let bin = root.join("bin");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+        let executable = bin.join("codex");
+        std::fs::write(&executable, b"#!/bin/sh\necho codex-cli 0.170.0\n")
+            .expect("future Codex executable");
+        let mut permissions = executable.metadata().expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("executable permission");
+        let mut run = spec(json!({}));
+        run.path = bin.to_string_lossy().into_owned();
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        write_codex_auth(&home, "account-a", "user-a", "not-near-expiry");
+
+        let reason = codex_unverifiable_reason(&run);
+        assert!(
+            reason.contains("codex-cli 0.170.0") && reason.contains("not a version ADI has verified for resume"),
+            "names the CLI version, not a generic can't-verify: {reason:?}",
+        );
+    }
+
+    #[test]
+    fn codex_unverifiable_reason_names_a_cloud_managed_plan() {
+        let session = FakeSession::new("codex-unverifiable-reason-plan");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        write_codex_auth_with_plan(&home, "workspace-a", "user-a", "business", "access-one");
+
+        let reason = codex_unverifiable_reason(&run);
+        assert_eq!(
+            reason, "this plan type receives remote workspace policy between turns",
+            "names the plan, not a generic can't-verify",
+        );
+    }
+
+    /// Real-environment check for ADI-MONO-211, not a fixture: this host's actual
+    /// `~/.codex/auth.json` (a ChatGPT login under the installed `codex-cli`) must now produce a
+    /// verifiable auth context, where it was always `None` before the version gate widened.
+    /// Ignored by default because it depends on this machine rather than a controlled fixture;
+    /// run it explicitly with `cargo test -p adi-agents --lib -- --ignored
+    /// real_codex_login_is_now_verifiable_on_this_host`. Asserts only `Some`/`None` — never the
+    /// context value itself, which is a token-derived digest.
+    #[test]
+    #[ignore = "depends on this machine's real ~/.codex and installed codex binary"]
+    fn real_codex_login_is_now_verifiable_on_this_host() {
+        let mut run = spec(json!({}));
+        run.path = std::env::var("PATH").expect("a real PATH to find the installed codex on");
+        assert!(
+            codex_auth_context(&run).is_some(),
+            "this host's real login should verify under the now-audited CLI version",
+        );
+    }
+
+    /// The bug this whole fix exists for (ADI-MONO-211): turn 1 of a cloud-managed ChatGPT login
+    /// still has to run — a single-turn Codex agent is a normal thing to have — but a second turn
+    /// must learn *why* it cannot resume without waiting for an await wake to find out.
+    #[test]
+    fn a_cloud_managed_chatgpt_login_runs_its_first_turn_but_names_itself_unresumable() {
+        struct RecordingSubscriber {
+            warnings: Arc<Mutex<Vec<String>>>,
+        }
+        impl tracing::Subscriber for RecordingSubscriber {
+            fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+                *metadata.level() <= tracing::Level::WARN
+            }
+            fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {
+            }
+            fn event(&self, event: &tracing::Event<'_>) {
+                struct Message(String);
+                impl tracing::field::Visit for Message {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        if field.name() == "message" {
+                            use std::fmt::Write as _;
+                            let _ = write!(self.0, "{value:?}");
+                        }
+                    }
+                }
+                if *event.metadata().level() != tracing::Level::WARN {
+                    return;
+                }
+                let mut message = Message(String::new());
+                event.record(&mut message);
+                self.warnings.lock().expect("lock").push(message.0);
+            }
+            fn enter(&self, _span: &tracing::span::Id) {}
+            fn exit(&self, _span: &tracing::span::Id) {}
+        }
+
+        let runner = DetachedRunner::new(Backend::ProcessCodex);
+        let session = FakeSession::new("codex-cloud-plan-first-turn");
+        let home = session.log.parent().expect("scratch").join("codex-home");
+        let mut run = spec(json!({}));
+        run.credential = Some("openai-cloud".into());
+        run.env.push((
+            "CODEX_HOME".to_string(),
+            home.to_string_lossy().into_owned(),
+        ));
+        write_codex_auth_with_plan(&home, "workspace-a", "user-a", "business", "access-one");
+
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = RecordingSubscriber {
+            warnings: Arc::clone(&warnings),
+        };
+        tracing::subscriber::with_default(subscriber, || {
+            runner
+                .send(&run, &session, "go")
+                .expect("a single-turn run is not blocked by an unverifiable login");
+        });
+        let logged = warnings.lock().expect("lock").join("\n");
+        assert!(
+            logged.contains("follow-up turn will refuse to resume")
+                && logged.contains("remote workspace policy"),
+            "turn 1 did not say a follow-up turn cannot resume it: {logged:?}",
+        );
+
+        let mut state = State::read(&session);
+        assert_eq!(
+            state.codex_auth_context.as_deref(),
+            Some(CODEX_AUTH_UNVERIFIABLE),
+            "turn 1 still ran and recorded the sentinel, same as before this fix",
+        );
+
+        // The real second turn's `previous_thread` comes from the first child's announced
+        // thread id, captured asynchronously as it runs; fix it here instead of racing a real
+        // spawned process, same as the other resume tests in this module.
+        state.codex_thread_id = Some("thread-x".to_string());
+        session
+            .set_state(state.clone().into_value())
+            .expect("record a thread id for turn 2");
+
+        let identity = CodexIdentity::of(&run);
+        let session_id = runner.engine_session_id_with_identity(&state, &session, Some(&identity));
+        assert!(
+            matches!(
+                runner.argv(&run, &session, "continue", &session_id, Some(&identity)),
+                Err(Error::Launch(message))
+                    if message.contains("this plan type receives remote workspace policy")
+            ),
+            "turn 2 gets the same specific reason turn 1 already warned about",
         );
     }
 
@@ -3270,7 +3516,7 @@ mod tests {
                 "",
                 Some(&changed_identity),
             ),
-            Err(Error::Launch(message)) if message.contains("changed or cannot be verified")
+            Err(Error::Launch(message)) if message.contains("context changed since this thread's last turn")
         ));
     }
 

@@ -22,6 +22,17 @@ extraction script cares about.
 
 ### Fixed
 
+- **Codex-backed agents signed in with ChatGPT now survive a follow-up turn (ADI-MONO-211).**
+  An await wake, a goal check, or any other follow-up message used to refuse every time with
+  "cannot safely resume the Codex conversation" — the resume check only trusted codex-cli
+  0.154.x, and newer installs are common; it now trusts 0.154 through 0.163, re-verified to
+  behave the same across that range. A refusal now names the real reason instead of claiming
+  the login changed: either an installed codex-cli outside the audited range, or an account
+  plan whose workspace policy Codex fetches remotely between turns. The first turn of a
+  conversation that can't be verified now logs a warning that a follow-up turn will refuse to
+  resume it, rather than that only surfacing at the later turn. A conversation already stuck
+  this way stays stuck — start a new one. A codex-cli newer than 0.163 is still refused until
+  it has been checked and added to the range.
 - **Backgrounding `adi-mono agents run` no longer costs a second wake (ADI-MONO-163).** A job
   started with `Bash(background: true)` registers an await of its own, watching the job's
   process exit. When the command running inside it is itself something that starts a second,
