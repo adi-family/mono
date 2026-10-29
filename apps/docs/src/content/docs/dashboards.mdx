@@ -12,20 +12,67 @@ address the moment it's created.
 
 ## Why it exists
 
-An agent that builds you something you want to actually look at — a table of results, a small
-control panel for a job it's running — needs somewhere to put a UI. A dashboard is that
-somewhere: create one, and an agent (or you) drops a `frontend/modules/<name>.ts` for a panel or
-a `backend/routes/<name>.ts` for an endpoint, and it hot-reloads. No build step, no deploy.
+Use a dashboard for results tables or job controls. Add panels in `frontend/modules/<name>.ts`
+and endpoints in `backend/routes/<name>.ts`; changes hot-reload, with no build step and no
+deploy.
 
 ## Do it
 
-Panel: `/dashboards`. API: `POST /api/dashboards/create` (`{ "name", "description" }`) —
-scaffolds the files, and the supervisor leases ports and starts both servers within seconds.
+Panel: `/dashboards`. API: `POST /api/dashboards/create` (`{ "name", "description", "template" }`)
+— runs the chosen template (below) and leases ports; both services start on the first request.
+Leave `template` out for a dependency-free scaffold with no build step.
 
 Edit `frontend/modules/*.ts` and `backend/routes/*.ts` directly; those two directories are the
-only ones never regenerated. Everything else (`frontend/index.ts`, `backend/index.ts`, the
-`.adi/hive.yaml`) is generated and gets rewritten on migration — read the scaffold's own
-`README.md` for the exact shape a module or route has to export.
+only ones a template or migration never touches. Read the scaffold's own `README.md` for the
+exact shape a module or route has to export.
+
+## Templates <Flags>Expert area</Flags>
+
+Creating a dashboard runs a shell command — there's no compiled-in scaffold. Each template is
+defined in `~/.adi/mono/templates/<id>/template.toml`:
+
+```toml
+label    = "Vite + React 19 + Hono"
+engine   = "bash"
+requires = ["bun"]
+command  = 'bun create adi-family/dashboard-vite-react "$ADI_DASHBOARD_DIR" && bun "$ADI_DASHBOARD_DIR/scripts/adi-init.ts"'
+```
+
+`id` is the directory's name, never a field in the file. `engine` says how `command` runs —
+`"bash"` (`bash -c '<command>'`) is the only one today. `requires` lists the CLIs `command`
+needs on `PATH`. Creation fails before the command runs if a required CLI is missing; the error
+names it. `command` is the literal shell command — nothing substitutes into its text, so
+there's no `ref` or version field; a template pins whatever it wants inside `command` itself.
+
+`command` runs with four environment variables, and nothing else is passed to it:
+
+| Variable | Value |
+| --- | --- |
+| `ADI_DASHBOARD_DIR` | the directory the command must create |
+| `ADI_DASHBOARD_ID` | the new dashboard's id |
+| `ADI_DASHBOARD_HOST` | its `<id>.adi` host |
+| `ADI_TEMPLATE_DIR` | `~/.adi/mono/templates/<id>/`, for a template's own `files/` |
+
+It's responsible for the whole dashboard, including its own `.adi/hive.yaml` — the API only
+writes `config.toml`'s `name`, `description`, and `[created_from]` (the template id and the
+exact command run) once the command succeeds. `[created_from]` is informational only; nothing
+reads it back, and nothing ever rewrites a created dashboard afterwards.
+
+Two templates are included: `plain` (dependency-free) and `vite-react`. They run `bun create`
+against `adi-family/dashboard-plain` and `adi-family/dashboard-vite-react`, respectively.
+`GET /api/dashboards/templates` lists every template installed on this machine, with which ones
+this machine is actually able to run.
+
+A create can fail three ways: an unknown `template` id is a 400 listing the ids that do exist; a
+missing `requires` CLI is a 400 naming it, before anything runs; a command that exits non-zero is
+a 500 — the half-made directory is removed, and the response carries the command's own output.
+
+### Installing more <Flags>Enterprise interest</Flags>
+
+Review `template.toml` as you would any script. [[Marketplace|The marketplace]] installs
+templates by copying their folders into `templates/` when requested by id; nothing else about
+creating a dashboard changes. Point the marketplace at your own bundle repository to offer only
+templates you've written or vetted, instead of the two included ones.
 
 ## One origin, relative paths only <Flags>Expert area</Flags>
 
